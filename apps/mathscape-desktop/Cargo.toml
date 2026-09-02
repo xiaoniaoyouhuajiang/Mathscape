@@ -1,0 +1,17 @@
+[package]
+name = "mathscape-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mathscape-domain.workspace = true
+mathscape-graph.workspace = true
+mathscape-orchestrator.workspace = true
+mathscape-query.workspace = true
+mathscape-store-sqlite.workspace = true
+
+[lints]
+workspace = true
+
