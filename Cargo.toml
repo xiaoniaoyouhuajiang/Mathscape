@@ -19,7 +19,7 @@ mathscape-store-sqlite = { path = "crates/mathscape-store-sqlite" }
 mathscape-tool-lean = { path = "crates/mathscape-tool-lean" }
 mathscape-tool-marker = { path = "crates/mathscape-tool-marker" }
 mathscape-validation = { path = "crates/mathscape-validation" }
+serde = { version = "1", features = ["derive"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-

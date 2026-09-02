@@ -1,13 +1,17 @@
-//! Authoritative Mathscape domain types and mutation contracts.
+//! Authoritative Mathscape domain identities and mutation contracts.
+//!
+//! This crate is deliberately independent of SQLite, the desktop UI, LLM
+//! providers, Marker, and Lean. It defines the narrow waist that all writers
+//! must cross before data can enter the canonical map.
 
-/// Identifies a logical object across all of its revisions.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct StableId(pub String);
+mod entity;
+mod error;
+mod id;
+mod patch;
+mod relation;
 
-/// Identifies one immutable revision of a logical object.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct RevisionId(pub String);
-
-/// Identifies the atomic commit that accepted a map patch.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct CommitId(pub String);
+pub use entity::{EntityEnvelope, EntityHeader, EntityKind, LifecycleStatus};
+pub use error::DomainError;
+pub use id::{ActorRef, CommitId, RevisionId, SchemaVersion, StableId, Timestamp};
+pub use patch::{MapOperation, MapPatch};
+pub use relation::{EndpointRole, RelationEndpoint, RelationRecord};
