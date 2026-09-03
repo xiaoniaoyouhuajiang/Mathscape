@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DomainError, EntityHeader, StableId};
+use crate::{DomainError, EntityHeader, EntityPayload, PayloadShape, StableId};
 
 /// Semantic role occupied by one endpoint in a relation or hyperedge.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -75,7 +75,7 @@ impl RelationEndpoint {
     }
 }
 
-/// A first-class binary relation or hyperedge with its own revision and payload.
+/// A first-class relation, hyperedge, or provenance event with its own revision.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RelationRecord<P> {
     header: EntityHeader,
@@ -83,12 +83,25 @@ pub struct RelationRecord<P> {
     payload: P,
 }
 
-impl<P> RelationRecord<P> {
+impl<P: EntityPayload> RelationRecord<P> {
     pub fn new(
         header: EntityHeader,
         endpoints: Vec<RelationEndpoint>,
         payload: P,
     ) -> Result<Self, DomainError> {
+        let actual_shape = payload.payload_shape();
+        if actual_shape != PayloadShape::Relation {
+            return Err(DomainError::PayloadShapeMismatch {
+                expected: PayloadShape::Relation,
+                actual: actual_shape,
+            });
+        }
+        let expected = payload.entity_kind();
+        let actual = header.kind();
+        if expected != actual {
+            return Err(DomainError::EntityKindMismatch { expected, actual });
+        }
+
         let relation = Self {
             header,
             endpoints,
@@ -97,9 +110,11 @@ impl<P> RelationRecord<P> {
         relation.validate()?;
         Ok(relation)
     }
+}
 
+impl<P> RelationRecord<P> {
     pub fn validate(&self) -> Result<(), DomainError> {
-        if self.endpoints.len() < 2 {
+        if self.endpoints.is_empty() {
             return Err(DomainError::TooFewRelationEndpoints {
                 actual: self.endpoints.len(),
             });
@@ -157,6 +172,19 @@ mod tests {
 
     use super::*;
 
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct TestInference;
+
+    impl EntityPayload for TestInference {
+        fn entity_kind(&self) -> EntityKind {
+            EntityKind::Inference
+        }
+
+        fn payload_shape(&self) -> PayloadShape {
+            PayloadShape::Relation
+        }
+    }
+
     fn header() -> EntityHeader {
         EntityHeader::new(
             StableId::parse("mathscape:inference/example").unwrap(),
@@ -187,7 +215,7 @@ mod tests {
                 endpoint("premise", "mathscape:state/b", Some(1)),
                 endpoint("conclusion", "mathscape:state/c", None),
             ],
-            (),
+            TestInference,
         )
         .unwrap();
 
@@ -195,15 +223,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_relations_with_too_few_endpoints() {
-        let error = RelationRecord::new(
-            header(),
-            vec![endpoint("source", "mathscape:state/a", None)],
-            (),
-        )
-        .unwrap_err();
+    fn rejects_relations_without_endpoints() {
+        let error = RelationRecord::new(header(), vec![], TestInference).unwrap_err();
 
-        assert_eq!(error, DomainError::TooFewRelationEndpoints { actual: 1 });
+        assert_eq!(error, DomainError::TooFewRelationEndpoints { actual: 0 });
     }
 
     #[test]
@@ -214,7 +237,7 @@ mod tests {
                 endpoint("premise", "mathscape:state/a", None),
                 endpoint("premise", "mathscape:state/b", None),
             ],
-            (),
+            TestInference,
         )
         .unwrap_err();
         assert_eq!(
@@ -230,7 +253,7 @@ mod tests {
                 endpoint("premise", "mathscape:state/a", Some(0)),
                 endpoint("premise", "mathscape:state/b", Some(0)),
             ],
-            (),
+            TestInference,
         )
         .unwrap_err();
         assert_eq!(

@@ -148,6 +148,39 @@ impl From<RevisionId> for String {
     }
 }
 
+/// Content identity of an immutable artifact or normalized text block.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ContentHash(RevisionId);
+
+impl ContentHash {
+    pub fn from_revision(revision: RevisionId) -> Self {
+        Self(revision)
+    }
+
+    pub fn parse(value: impl Into<String>) -> Result<Self, DomainError> {
+        RevisionId::parse(value).map(Self)
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl fmt::Display for ContentHash {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromStr for ContentHash {
+    type Err = DomainError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
 /// Content-addressed identity of an atomic accepted patch.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]

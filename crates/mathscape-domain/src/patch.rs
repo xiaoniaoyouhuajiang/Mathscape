@@ -171,15 +171,26 @@ impl<P> MapPatch<P> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{EntityHeader, EntityKind, LifecycleStatus, SchemaVersion, Timestamp};
+    use crate::{
+        EntityHeader, EntityKind, EntityPayload, LifecycleStatus, SchemaVersion, Timestamp,
+    };
 
     use super::*;
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct TestSemanticEntity;
+
+    impl EntityPayload for TestSemanticEntity {
+        fn entity_kind(&self) -> EntityKind {
+            EntityKind::SemanticEntity
+        }
+    }
 
     fn revision(digit: char) -> RevisionId {
         RevisionId::parse(format!("sha256:{}", digit.to_string().repeat(64))).unwrap()
     }
 
-    fn entity(id: &str, revision_id: RevisionId) -> EntityEnvelope<()> {
+    fn entity(id: &str, revision_id: RevisionId) -> EntityEnvelope<TestSemanticEntity> {
         EntityEnvelope::new(
             EntityHeader::new(
                 StableId::parse(id).unwrap(),
@@ -191,13 +202,14 @@ mod tests {
                 ActorRef::parse("domain-test").unwrap(),
                 None,
             ),
-            (),
+            TestSemanticEntity,
         )
+        .unwrap()
     }
 
     #[test]
     fn rejects_empty_patches() {
-        let error = MapPatch::<()>::new(
+        let error = MapPatch::<TestSemanticEntity>::new(
             None,
             ActorRef::parse("domain-test").unwrap(),
             None,
