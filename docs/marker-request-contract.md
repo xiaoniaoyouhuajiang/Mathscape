@@ -157,4 +157,6 @@ diagnostics but can never be promoted through this predicate.
 
 The scanner performs no copying, deletion, stable-ID allocation, Artifact Pool
 registration, or database write. Artifact Pool promotion and conversion-record
-construction stay in later orchestration slices.
+construction stay in later orchestration slices. Promotion must follow the
+Managed staging, rehashing, atomic-promotion, and SQLite transaction boundary in
+[`artifact-pool-boundary.md`](artifact-pool-boundary.md).

@@ -22,7 +22,11 @@ SourceWork -> SourceEdition -> SourceArtifact
                          SourceSemanticUnit
 ```
 
-`ArtifactLocation` is deliberately stored outside immutable artifact payloads.
+`SourceArtifact` keeps an immutable content identity while its descriptive
+metadata may receive audited revisions. `ArtifactLocation` is deliberately
+stored outside artifact payloads; availability and integrity will become derived
+operational state backed by append-only location checks in the Artifact Pool
+slice. The implemented payload fields are transitional until that migration.
 `SourceUnitRelation` normalizes its source, target, and evidence spans as
 role-labelled relation endpoints. See `docs/source-layer-v1.md` for the
 canonical-versus-derived boundary.

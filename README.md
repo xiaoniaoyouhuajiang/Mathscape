@@ -18,6 +18,9 @@ testdata/   进入版本管理、供默认测试直接使用的轻量固定产�
 
 大型 PDF 与实验语料位于仓库外部，通过 `MATHSCAPE_CORPUS_ROOT` 定位；默认测试不得依赖该变量。`testdata/` 只保存足以复现解析和扫描行为的小型派生产物及其来源摘要。
 
+Artifact Pool 的长期存储、可搬迁 Workspace 和 Managed/External 边界见
+[`docs/artifact-pool-boundary.md`](docs/artifact-pool-boundary.md)。
+
 ## 当前命令
 
 ```sh

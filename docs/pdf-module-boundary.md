@@ -25,6 +25,12 @@ selection, and conversion tools such as Marker.
 - Construction of `SourceSemanticUnit`, R/D/T/X, or other map entities.
 - HTTP, Tauri commands, and other UI transport concerns.
 
+For Managed content, callers resolve the Artifact through the explicit
+Workspace root and pass the resulting local handle/path into this module.
+`mathscape-pdf` must not persist that resolved absolute path or treat it as the
+Artifact identity. Storage and portability rules are defined in
+[`artifact-pool-boundary.md`](artifact-pool-boundary.md).
+
 Marker remains an external semantic-conversion adapter. Orchestration chooses a
 PDF selection, invokes Marker, and maps observed outputs into domain entities.
 

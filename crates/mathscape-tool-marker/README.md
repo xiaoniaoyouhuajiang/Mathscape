@@ -18,4 +18,5 @@ The current slice provides:
 - explicit exclusion of Marker LLM rewriting.
 
 Artifact Pool promotion is the next implementation slice. See
-[`../../docs/marker-request-contract.md`](../../docs/marker-request-contract.md).
+[`../../docs/marker-request-contract.md`](../../docs/marker-request-contract.md)
+and [`../../docs/artifact-pool-boundary.md`](../../docs/artifact-pool-boundary.md).

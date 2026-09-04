@@ -7,7 +7,8 @@ This document records the first canonical source model implemented by
 
 - `SourceWork`: abstract bibliographic work.
 - `SourceEdition`: concrete edition of a work.
-- `SourceArtifact`: immutable content registered by SHA-256 identity.
+- `SourceArtifact`: content-identified artifact whose hash and byte size are
+  immutable while descriptive metadata can receive audited revisions.
 - `ConversionRun`: auditable derivation from input artifacts to output artifacts.
 - `SourceSpan`: smallest physically locatable evidence region.
 - `SourceSemanticUnit`: smallest independently referable mathematical speech act.
@@ -16,6 +17,8 @@ This document records the first canonical source model implemented by
 ## Value and operational records
 
 - `ArtifactLocation` is mutable catalog state, not part of immutable artifact content.
+- `ArtifactCheck` is the planned append-only authority for location integrity;
+  availability is derived from locations and their checks.
 - `PageCoordinate` stores zero-based PDF index, optional Marker page ID, and optional
   printed label without assuming they agree.
 - `ByteRange` uses UTF-8 byte offsets and half-open intervals.
@@ -34,7 +37,21 @@ revision.
 
 Artifact locations are independent records because moving or mirroring a file
 does not change its content identity. The artifact key is currently identical to
-its SHA-256 content hash.
+its SHA-256 content hash. A user-selected import path is ingestion provenance,
+not a durable runtime location. Normal imports promote an owned staging copy into
+the Managed Artifact Pool and must not depend on the original path afterward.
+
+The implemented `SourceArtifact` payload still carries `availability` and
+`integrity` fields. They are transitional in-memory fields and must not become
+the long-term operational authority in SQLite. The Artifact Pool slice will move
+that authority to `ArtifactLocation` plus append-only `ArtifactCheck` records
+while retaining `SourceArtifact` as the caller-facing aggregate.
+
+Managed storage is the default. External locations are reserved for explicit
+reference-only workflows such as very large or institutionally managed corpora;
+they must never become an implicit fallback when ordinary import fails. See
+[`artifact-pool-boundary.md`](artifact-pool-boundary.md) for the workspace,
+promotion, portability, and persistence contract.
 
 `SourceUnitRelation` stores source, target, and evidence as normalized endpoints:
 
@@ -65,7 +82,8 @@ and header kind.
 
 ## Deferred structures
 
-`IngestionJob`, `DocumentIndex`, `MapBuildUnit`, `SelectionSlice`, parse issues,
-and boundary issues are intentionally deferred to the next source/workflow slice.
+`IngestionJob`, `IngestionSource`, `ArtifactCheck`, `DocumentIndex`,
+`MapBuildUnit`, `SelectionSlice`, portability reports, parse issues, and boundary
+issues are intentionally deferred to the next source/workflow slice.
 Region candidates and quality summaries remain derived orchestration data unless
 experiments demonstrate a need to promote them.
