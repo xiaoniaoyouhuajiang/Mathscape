@@ -116,6 +116,8 @@ pub enum ConversionExitStatus {
     Succeeded,
     Failed,
     Partial,
+    TimedOut,
+    Cancelled,
 }
 
 /// One immutable, auditable invocation that derives artifacts from artifacts.

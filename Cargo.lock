@@ -698,6 +698,7 @@ name = "mathscape-orchestrator"
 version = "0.1.0"
 dependencies = [
  "mathscape-domain",
+ "mathscape-pdf",
  "mathscape-validation",
 ]
 

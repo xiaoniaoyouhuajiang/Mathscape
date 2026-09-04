@@ -140,6 +140,20 @@ impl PdfSelection {
         ranges
     }
 
+    /// Splits an arbitrary ordered selection into independently contiguous
+    /// selections without changing physical page indices.
+    pub fn contiguous_slices(&self) -> Vec<Self> {
+        self.ranges()
+            .into_iter()
+            .map(|range| Self {
+                page_count: self.page_count,
+                pages: (range.first().get()..=range.last().get())
+                    .map(PdfPageIndex::new)
+                    .collect(),
+            })
+            .collect()
+    }
+
     pub(crate) fn one_based_pages(&self) -> impl Iterator<Item = u32> + '_ {
         self.pages.iter().map(|page| page.to_one_based())
     }
@@ -177,5 +191,34 @@ mod tests {
             PdfSelection::inclusive_range(4, PdfPageIndex::new(1), PdfPageIndex::new(4)),
             Err(PdfError::PageOutOfBounds { .. })
         ));
+    }
+
+    #[test]
+    fn selection_splits_into_contiguous_slices_without_renumbering_pages() {
+        let selection = PdfSelection::from_pages(
+            20,
+            vec![1, 2, 3, 8, 12, 13]
+                .into_iter()
+                .map(PdfPageIndex::new)
+                .collect(),
+        )
+        .unwrap();
+
+        let slices = selection.contiguous_slices();
+        assert_eq!(slices.len(), 3);
+        assert_eq!(
+            slices[0].pages(),
+            &[
+                PdfPageIndex::new(1),
+                PdfPageIndex::new(2),
+                PdfPageIndex::new(3)
+            ]
+        );
+        assert_eq!(slices[1].pages(), &[PdfPageIndex::new(8)]);
+        assert_eq!(
+            slices[2].pages(),
+            &[PdfPageIndex::new(12), PdfPageIndex::new(13)]
+        );
+        assert!(slices.iter().all(|slice| slice.page_count() == 20));
     }
 }

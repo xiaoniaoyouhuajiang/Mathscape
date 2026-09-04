@@ -8,6 +8,10 @@ pub enum MarkerRequestError {
     EmptyPath { field: &'static str },
     #[error("{field} path must be absolute: {path:?}")]
     RelativePath { field: &'static str, path: PathBuf },
+    #[error(
+        "one Marker request must contain exactly one contiguous page range; received {range_count}"
+    )]
+    NonContiguousSelection { range_count: usize },
     #[error("Marker source PDF and output root must be different paths")]
     ConflictingPaths,
 }

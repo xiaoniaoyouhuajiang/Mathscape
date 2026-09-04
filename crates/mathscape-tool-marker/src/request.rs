@@ -15,6 +15,7 @@ use crate::{
 pub struct MarkerRequest {
     source_pdf: PathBuf,
     selection: PdfSelection,
+    page_range: MarkerPageRange,
     profile: MarkerProfile,
 }
 
@@ -24,9 +25,12 @@ impl MarkerRequest {
         selection: PdfSelection,
         profile: MarkerProfile,
     ) -> Result<Self, MarkerRequestError> {
+        let source_pdf = validate_absolute_path(source_pdf.into(), "marker.source_pdf")?;
+        let page_range = MarkerPageRange::try_from_selection(&selection)?;
         Ok(Self {
-            source_pdf: validate_absolute_path(source_pdf.into(), "marker.source_pdf")?,
+            source_pdf,
             selection,
+            page_range,
             profile,
         })
     }
@@ -37,6 +41,10 @@ impl MarkerRequest {
 
     pub const fn selection(&self) -> &PdfSelection {
         &self.selection
+    }
+
+    pub const fn page_range(&self) -> &MarkerPageRange {
+        &self.page_range
     }
 
     pub const fn profile(&self) -> MarkerProfile {
@@ -55,11 +63,10 @@ impl MarkerRequest {
         if self.source_pdf == output_root {
             return Err(MarkerRequestError::ConflictingPaths);
         }
-        let page_range = MarkerPageRange::from_selection(&self.selection);
         let arguments = vec![
             self.source_pdf.clone().into_os_string(),
             OsString::from("--page_range"),
-            OsString::from(page_range.as_str()),
+            OsString::from(self.page_range.as_str()),
             OsString::from("--output_format"),
             OsString::from("markdown"),
             OsString::from("--mode"),
@@ -73,7 +80,7 @@ impl MarkerRequest {
             arguments,
             source_pdf: self.source_pdf.clone(),
             output_root,
-            page_range,
+            page_range: self.page_range.clone(),
             profile: self.profile,
         })
     }
@@ -137,14 +144,7 @@ mod tests {
     }
 
     fn selection() -> PdfSelection {
-        PdfSelection::from_pages(
-            24,
-            vec![1, 2, 3, 8]
-                .into_iter()
-                .map(PdfPageIndex::new)
-                .collect(),
-        )
-        .unwrap()
+        PdfSelection::inclusive_range(24, PdfPageIndex::new(1), PdfPageIndex::new(3)).unwrap()
     }
 
     #[test]
@@ -159,13 +159,13 @@ mod tests {
         assert_eq!(command.program(), installation.executable());
         assert_eq!(command.source_pdf(), source);
         assert_eq!(command.output_root(), output);
-        assert_eq!(command.page_range().as_str(), "1-3,8");
+        assert_eq!(command.page_range().as_str(), "1-3");
         assert_eq!(
             command.arguments(),
             &[
                 source.clone().into_os_string(),
                 OsString::from("--page_range"),
-                OsString::from("1-3,8"),
+                OsString::from("1-3"),
                 OsString::from("--output_format"),
                 OsString::from("markdown"),
                 OsString::from("--mode"),
@@ -228,6 +228,27 @@ mod tests {
         assert!(matches!(
             request.prepare(&installation, source),
             Err(MarkerRequestError::ConflictingPaths)
+        ));
+    }
+
+    #[test]
+    fn rejects_a_non_contiguous_selection_before_execution() {
+        let selection = PdfSelection::from_pages(
+            24,
+            vec![1, 2, 3, 8]
+                .into_iter()
+                .map(PdfPageIndex::new)
+                .collect(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            MarkerRequest::new(
+                absolute_test_path("book.pdf"),
+                selection,
+                MarkerProfile::MathOcrV1,
+            ),
+            Err(MarkerRequestError::NonContiguousSelection { range_count: 2 })
         ));
     }
 }

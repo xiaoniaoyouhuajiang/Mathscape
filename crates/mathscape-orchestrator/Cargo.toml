@@ -7,8 +7,8 @@ license.workspace = true
 
 [dependencies]
 mathscape-domain.workspace = true
+mathscape-pdf.workspace = true
 mathscape-validation.workspace = true
 
 [lints]
 workspace = true
-

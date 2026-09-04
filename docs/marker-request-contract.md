@@ -44,7 +44,7 @@ will be a separately versioned profile and derived artifact.
 ```text
 <absolute-marker-single>
 <absolute-source-pdf>
---page_range <zero-based-compressed-selection>
+--page_range <one-zero-based-contiguous-range>
 --output_format markdown
 --mode <fast|balanced>
 --output_dir <absolute-run-staging-root>
@@ -59,6 +59,20 @@ exclude the adapter's own log files.
 The request API accepts no arbitrary extra arguments. Any behavior change must
 be represented by a new profile ID so stored conversion provenance remains
 meaningful.
+
+## Selection planning boundary
+
+`PdfSelection` may represent an arbitrary ordered set of pages because preview,
+inspection, and user-facing batch selection need that flexibility. One
+`MarkerRequest`, however, must contain exactly one contiguous range. A request
+with multiple ranges is rejected before staging allocation or process startup.
+
+`mathscape-orchestrator::ConversionSelectionPlan` deterministically splits a
+user selection into ordered `ConversionSlice` values. Every slice preserves the
+original zero-based physical page indices and becomes an independent request,
+run, and derived Markdown context. Cross-slice relationships belong to later
+source-semantic extraction and map alignment, not to artificial Markdown
+concatenation.
 
 ## Owned staging directories
 

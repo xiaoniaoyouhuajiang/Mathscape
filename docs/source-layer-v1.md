@@ -54,7 +54,9 @@ output[n]  -> SourceArtifact
 
 Failed runs may contain only input endpoints. Successful runs must contain at
 least one output, and an immutable artifact cannot be both input and output of
-the same run.
+the same run. Conversion exit status distinguishes ordinary failure, partial
+output, timeout, and cooperative cancellation so tool execution can be recorded
+without collapsing operationally different outcomes.
 
 Every payload declares both an `EntityKind` and a `PayloadShape`. Checked
 constructors reject relation/event payloads placed in `EntityEnvelope`, ordinary

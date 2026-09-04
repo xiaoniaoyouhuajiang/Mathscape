@@ -6,7 +6,7 @@ The current slice provides:
 
 - absolute installation and input-path contracts;
 - two versioned Markdown conversion profiles;
-- exact zero-based `PdfSelection` conversion;
+- exact zero-based conversion of one contiguous `PdfSelection` per request;
 - shell-free `MarkerCommandSpec` construction;
 - Marker 2 installation and executable preflight;
 - uniquely owned per-run staging directories;
