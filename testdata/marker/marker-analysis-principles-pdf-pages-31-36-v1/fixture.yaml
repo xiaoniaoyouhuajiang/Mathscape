@@ -1,0 +1,44 @@
+schema_version: mathscape.marker-product-fixture.v1
+
+fixture:
+  id: marker-analysis-principles-pdf-pages-31-36-v1
+  purpose: real_marker_product_scanner_regression
+
+source:
+  corpus_root_env: MATHSCAPE_CORPUS_ROOT
+  relative_path: textbooks/大学数学-数学分析原理与方法_含目录.pdf
+  sha256: 8daeba7deb1fa29fedbaf6c5ebdf0db2e1e6b99e7fb227d6941f489c70ae61ef
+  byte_size: 37621943
+  pdf_page_count: 443
+
+selection:
+  requested_viewer_pages: "31-36"
+  viewer_page_numbering: one_based_physical
+  mathscape_page_indices: "30-35"
+  mathscape_page_indexing: zero_based
+  marker_page_range: "30-35"
+
+generation:
+  execution_path: mathscape-tool-marker
+  marker_version: "2.0.0"
+  profile_id: mathscape.marker.math-ocr.v1
+  mode: balanced
+  output_format: markdown
+  redo_inline_math: omitted
+  use_llm: omitted
+
+products:
+  - role: primary_markdown
+    path: run/大学数学-数学分析原理与方法_含目录/大学数学-数学分析原理与方法_含目录.md
+    media_type: text/markdown
+    byte_size: 17444
+    sha256: 86e31cb218d5b1d403cb620fd647cf328f1a710d4d02861d8056015749d465fe
+  - role: metadata
+    path: run/大学数学-数学分析原理与方法_含目录/大学数学-数学分析原理与方法_含目录_meta.json
+    media_type: application/json
+    byte_size: 5051
+    sha256: 85c6f2a2bd248049453e045c4efe79b1fa4b3d86a45c84bb71ad1070fd5963ce
+
+diagnostics:
+  committed: false
+  reason: logs contain machine-local staging paths and nondeterministic timing

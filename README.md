@@ -13,7 +13,10 @@ frontend/   将嵌入桌面产物的 Web 前端
 prompts/    有版本的 LLM prompt 与结构化输出契约
 migrations/ SQLite schema migration
 docs/       Mathscape 自身的工程文档
+testdata/   进入版本管理、供默认测试直接使用的轻量固定产物
 ```
+
+大型 PDF 与实验语料位于仓库外部，通过 `MATHSCAPE_CORPUS_ROOT` 定位；默认测试不得依赖该变量。`testdata/` 只保存足以复现解析和扫描行为的小型派生产物及其来源摘要。
 
 ## 当前命令
 
@@ -22,4 +25,3 @@ cargo check --workspace
 cargo test --workspace
 cargo run -p mathscape-cli
 ```
-

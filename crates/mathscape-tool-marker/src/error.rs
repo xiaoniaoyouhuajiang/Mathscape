@@ -73,6 +73,40 @@ pub enum MarkerExecutionError {
     UnsupportedVersion { expected: u64, actual: u64 },
 }
 
+/// Failure to safely enumerate or fingerprint one completed run directory.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum MarkerProductScanError {
+    #[error("invalid product scan limit {field}: it must be greater than zero")]
+    InvalidLimit { field: &'static str },
+    #[error("Marker source path has no file stem: {0:?}")]
+    MissingSourceStem(PathBuf),
+    #[error("failed to inspect Marker product path {path:?}: {source}")]
+    Access {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("Marker product path is a symbolic link and will not be followed: {0:?}")]
+    SymbolicLink(PathBuf),
+    #[error("Marker product path is neither a regular file nor a directory: {0:?}")]
+    UnsupportedFileType(PathBuf),
+    #[error("Marker product tree exceeds the configured depth {maximum} at {path:?}")]
+    MaximumDepthExceeded { maximum: usize, path: PathBuf },
+    #[error("Marker run contains more than the configured {maximum} files")]
+    MaximumFileCountExceeded { maximum: usize },
+    #[error("Marker run exceeds the configured total size of {maximum} bytes")]
+    MaximumTotalBytesExceeded { maximum: u64 },
+    #[error(
+        "Marker product changed while it was being scanned at {path:?}: expected {expected_bytes} bytes, read {actual_bytes}"
+    )]
+    ProductChanged {
+        path: PathBuf,
+        expected_bytes: u64,
+        actual_bytes: u64,
+    },
+}
+
 pub(crate) fn validate_absolute_path(
     path: PathBuf,
     field: &'static str,

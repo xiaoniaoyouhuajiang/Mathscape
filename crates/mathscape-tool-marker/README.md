@@ -11,8 +11,11 @@ The current slice provides:
 - Marker 2 installation and executable preflight;
 - uniquely owned per-run staging directories;
 - timeout and cooperative cancellation with Unix process-group shutdown;
-- full on-disk logs plus bounded in-memory previews; and
+- full on-disk logs plus bounded in-memory previews;
+- deterministic product inventory with path safety, roles, media types, sizes,
+  and SHA-256 digests;
+- strict primary Markdown/metadata validation and a promotion-readiness result;
 - explicit exclusion of Marker LLM rewriting.
 
-Product inventory is the next implementation slice. See
+Artifact Pool promotion is the next implementation slice. See
 [`../../docs/marker-request-contract.md`](../../docs/marker-request-contract.md).

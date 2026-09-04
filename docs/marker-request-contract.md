@@ -119,10 +119,42 @@ hard-killed parent cannot universally guarantee cleanup of such third-party
 processes; keeping graceful interruption as the first phase gives Marker the
 opportunity to perform its own shutdown.
 
-## Deferred product handling
+## Product inventory
 
-The next slice will recursively inventory the owned output root, identify the
-primary Markdown and generated assets, compute hashes and media types, reject
-unsafe paths or ambiguous primaries, and expose the resulting manifest to
-`mathscape-pdf`/the ingestion orchestrator. Artifact Pool promotion stays
-outside this adapter.
+Marker 2.0 writes the fixed Markdown profile under a source-named directory:
+
+```text
+<run-root>/
+  marker.stdout.log
+  marker.stderr.log
+  <source-stem>/
+    <source-stem>.md
+    <source-stem>_meta.json
+    <zero-or-more extracted images>
+```
+
+`MarkerProductScanner` recursively inventories only the owned run root. It
+rejects symbolic links and unsupported file types, enforces configurable file
+count, total-byte, and directory-depth limits, and detects file-size changes
+while hashing. Paths are retained relative to the run root and sorted before
+the inventory is returned. Artifact Pool promotion must verify the digest again
+before accepting a file because the inventory itself does not lock staging
+files against later modification.
+
+Each file records its role, media type, byte size, and a streaming SHA-256
+digest. The two adapter logs are classified as diagnostics and excluded by
+`derived_products`; they remain available in the complete inventory. The
+expected Markdown and metadata paths are derived from the input PDF stem rather
+than guessed from arbitrary extensions. Missing expected files, additional
+Markdown/metadata candidates, or derived files outside the expected output
+directory become structured inventory issues.
+
+The inventory schema identifier is
+`mathscape.marker-product-inventory.v1`. `is_promotable` is true only when the
+child run succeeded, both expected primary files exist, and no structural issue
+was found. Failed, timed-out, and cancelled runs can still be scanned for
+diagnostics but can never be promoted through this predicate.
+
+The scanner performs no copying, deletion, stable-ID allocation, Artifact Pool
+registration, or database write. Artifact Pool promotion and conversion-record
+construction stay in later orchestration slices.
