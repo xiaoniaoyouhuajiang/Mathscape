@@ -47,6 +47,13 @@ interface PdfImportResult {
 
 type MarkerProfileChoice = "fast_native_v1" | "math_ocr_v1";
 
+interface ParseRequest {
+  artifact_id: string;
+  first_page: number;
+  last_page: number;
+  profile: MarkerProfileChoice;
+}
+
 interface ParsedArtifactOutput {
   artifact_id: string;
   role: string;
@@ -108,9 +115,14 @@ app.innerHTML = `
         </div>
         <section class="workspace-card">
           <span class="field-label">Workspace</span>
+          <strong id="workspace-name" class="import-name">我的数学景观</strong>
+          <details class="technical-details">
+          <summary>技术详情</summary>
           <code id="workspace-id">正在初始化…</code>
+          <button id="copy-workspace-id" class="copy-button" type="button">复制 ID</button>
           <span class="field-label">本地路径</span>
           <p id="workspace-root" class="path-value">—</p>
+          </details>
         </section>
         <section class="marker-card">
           <div class="runtime-heading">
@@ -169,6 +181,7 @@ const serviceState = requiredElement<HTMLElement>("#service-state");
 const artifactCount = requiredElement<HTMLElement>("#artifact-count");
 const conversionCount = requiredElement<HTMLElement>("#conversion-count");
 const workspaceId = requiredElement<HTMLElement>("#workspace-id");
+const workspaceName = requiredElement<HTMLElement>("#workspace-name");
 const workspaceRoot = requiredElement<HTMLElement>("#workspace-root");
 const graphContainer = requiredElement<HTMLElement>("#graph");
 const emptyState = requiredElement<HTMLElement>("#empty-state");
@@ -182,9 +195,63 @@ const toast = requiredElement<HTMLElement>("#toast");
 
 let graphCore: Core | null = null;
 let toastTimer: number | undefined;
+let activeParse: ParseRequest | null = null;
+let submittingParse = false;
+let pollingParse = false;
+let selectedNode: IncidenceNode | undefined;
+let currentSnapshot: DesktopSnapshot | undefined;
 
 importButton.addEventListener("click", () => void importPdf());
+requiredElement<HTMLButtonElement>("#copy-workspace-id").addEventListener("click", () => {
+  void copyIdentifier(workspaceId.textContent ?? "");
+});
 void loadSnapshot();
+window.setInterval(() => void syncParseState(), 1000);
+
+async function syncParseState(): Promise<void> {
+  if (submittingParse || pollingParse) return;
+  pollingParse = true;
+  try {
+    const task = await invoke<ParseRequest | null>("get_active_parse");
+    if (submittingParse) return;
+    const finished = activeParse !== null && task === null;
+    if (JSON.stringify(task) !== JSON.stringify(activeParse)) {
+      activeParse = task;
+      refreshParseState();
+      if (finished) {
+        lastParse.replaceChildren(
+          textElement("span", "field-label", "后台任务已结束"),
+          textElement("p", "", "正在重新读取来源图；转换结果以目录记录为准。"),
+        );
+        await loadSnapshot();
+      }
+    }
+  } catch {
+    // A transient IPC error must not clear the last known running task.
+  } finally {
+    pollingParse = false;
+  }
+}
+
+function refreshParseState(): void {
+  if (activeParse !== null) {
+    const task = activeParse;
+    lastParse.replaceChildren(
+      textElement("span", "field-label", "正在解析"),
+      textElement("strong", "import-name",
+        currentSnapshot?.pdf_artifacts.find(pdf => pdf.artifact_id === task.artifact_id)?.filename ?? "PDF"),
+      textElement("p", "", `PDF 第 ${task.first_page}–${task.last_page} 页 · ${task.profile}`),
+    );
+    setBusy(true, `Marker 正在解析第 ${task.first_page}–${task.last_page} 页`);
+  } else {
+    setBusy(false);
+  }
+  if (selectedNode !== undefined && currentSnapshot !== undefined) {
+    renderNodeDetail(selectedNode,
+      currentSnapshot.pdf_artifacts.find(pdf => pdf.artifact_id === selectedNode?.domain_id),
+      currentSnapshot.marker);
+  }
+}
 
 async function loadSnapshot(): Promise<void> {
   setBusy(true, "正在读取 Workspace");
@@ -226,9 +293,13 @@ async function importPdf(): Promise<void> {
 }
 
 function renderSnapshot(snapshot: DesktopSnapshot): void {
+  currentSnapshot = snapshot;
   artifactCount.textContent = snapshot.artifact_count.toString();
   conversionCount.textContent = snapshot.conversion_count.toString();
   workspaceId.textContent = snapshot.workspace_id;
+  const folder = snapshot.workspace_root.split(/[\\/]/).filter(Boolean).at(-1);
+  workspaceName.textContent = !folder || folder === "workspace" ? "我的数学景观" : folder;
+  workspaceName.title = workspaceName.textContent;
   workspaceRoot.textContent = snapshot.workspace_root;
   renderMarkerStatus(snapshot.marker);
 
@@ -241,12 +312,14 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
       (node) => node.id === selected.id(),
     );
     if (model !== undefined) {
+      selectedNode = model;
       const pdf = snapshot.pdf_artifacts.find(
         (artifact) => artifact.artifact_id === model.domain_id,
       );
       renderNodeDetail(model, pdf, snapshot.marker);
     }
   });
+  refreshParseState();
 }
 
 function renderImportResult(result: PdfImportResult): void {
@@ -273,13 +346,23 @@ function renderNodeDetail(
     textElement("span", "kind-pill", node.element_kind),
     textElement("h3", "detail-title", node.label),
     definitionList([
-      ["Domain ID", node.domain_id ?? "—"],
       ["类型", node.domain_kind ?? "—"],
       ["层级", node.layer],
       ["生命周期", node.lifecycle ?? "—"],
       ["摘要", node.summary ?? "—"],
     ]),
   );
+  const technical = document.createElement("details");
+  technical.className = "technical-details";
+  technical.append(textElement("summary", "", "技术详情"));
+  technical.append(textElement("code", "identifier-value", node.domain_id ?? "—"));
+  if (node.domain_id !== null) {
+    const copy = textElement("button", "copy-button", "复制 ID");
+    copy.type = "button";
+    copy.addEventListener("click", () => void copyIdentifier(node.domain_id!));
+    technical.append(copy);
+  }
+  nodeDetail.append(technical);
   if (pdf !== undefined) {
     nodeDetail.append(createParseForm(pdf, marker));
   }
@@ -296,6 +379,13 @@ function createParseForm(
   range.className = "range-fields";
   const firstPage = pageInput("起始页", 1, pdf.page_count);
   const lastPage = pageInput("结束页", pdf.page_count ?? 1, pdf.page_count);
+  const running = activeParse?.artifact_id === pdf.artifact_id ? activeParse : null;
+  if (running !== null) {
+    firstPage.input.value = String(running.first_page);
+    lastPage.input.value = String(running.last_page);
+  }
+  firstPage.input.disabled = activeParse !== null;
+  lastPage.input.disabled = activeParse !== null;
   range.append(firstPage.label, lastPage.label);
 
   const profileLabel = document.createElement("label");
@@ -307,12 +397,18 @@ function createParseForm(
     new Option("Fast native", "fast_native_v1"),
   );
   profileLabel.append(profile);
+  if (running !== null) profile.value = running.profile;
+  profile.disabled = activeParse !== null;
 
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.className = "parse-button";
   submit.textContent = marker.ready ? "解析选定页面" : "Marker 尚未就绪";
   submit.disabled = !marker.ready || pdf.page_count === null;
+  if (activeParse !== null) {
+    submit.disabled = true;
+    submit.textContent = running !== null ? "正在解析…" : "请等待当前解析完成";
+  }
   const note = textElement(
     "p",
     "form-note",
@@ -374,6 +470,12 @@ async function parsePdf(
   profile: MarkerProfileChoice,
   submit: HTMLButtonElement,
 ): Promise<void> {
+  if (activeParse !== null || submittingParse) return;
+  submittingParse = true;
+  activeParse = {
+    artifact_id: pdf.artifact_id, first_page: firstPage, last_page: lastPage, profile,
+  };
+  refreshParseState();
   setBusy(true, `Marker 正在解析第 ${firstPage}–${lastPage} 页`);
   submit.disabled = true;
   submit.textContent = "正在解析…";
@@ -396,7 +498,15 @@ async function parsePdf(
     submit.disabled = false;
     submit.textContent = "解析选定页面";
     showToast(errorMessage(error), "error");
+    lastParse.replaceChildren(
+      textElement("span", "field-label", "解析失败"),
+      textElement("p", "", errorMessage(error)),
+    );
   } finally {
+    activeParse = null;
+    submittingParse = false;
+    refreshParseState();
+    void syncParseState();
     setBusy(false);
   }
 }
@@ -458,6 +568,10 @@ function requiredElement<T extends Element>(selector: string): T {
 }
 
 function setBusy(busy: boolean, message = ""): void {
+  if (activeParse !== null) {
+    busy = true;
+    message = `Marker 正在解析第 ${activeParse.first_page}–${activeParse.last_page} 页`;
+  }
   importButton.disabled = busy;
   importButton.classList.toggle("is-busy", busy);
   if (busy) {
@@ -477,6 +591,15 @@ function showToast(message: string, kind: "success" | "error"): void {
 
 function errorMessage(error: unknown): string {
   return typeof error === "string" ? error : "发生了未知错误";
+}
+
+async function copyIdentifier(value: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(value);
+    showToast("已复制完整 ID", "success");
+  } catch {
+    showToast("剪贴板不可用，请展开技术详情后选择 ID 复制。", "error");
+  }
 }
 
 function contentKindLabel(kind: PdfImportResult["content_kind"]): string {

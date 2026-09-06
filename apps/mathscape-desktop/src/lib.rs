@@ -1,6 +1,7 @@
 use std::{
     env,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use mathscape_artifact::{
@@ -32,6 +33,7 @@ const MARKER_EXECUTABLE_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_MARKER_EXECUTABL
 pub struct DesktopService {
     workspace_root: PathBuf,
     marker: Option<MarkerInstallation>,
+    active_parse: Arc<Mutex<Option<ParsePdfRequest>>>,
 }
 
 impl DesktopService {
@@ -64,6 +66,7 @@ impl DesktopService {
         Ok(Self {
             workspace_root,
             marker,
+            active_parse: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -174,6 +177,7 @@ impl DesktopService {
         &self,
         request: &ParsePdfRequest,
     ) -> Result<PdfParseResult, DesktopServiceError> {
+        let _permit = self.begin_parse(request)?;
         let installation = self
             .marker
             .as_ref()
@@ -307,6 +311,69 @@ impl DesktopService {
                 problem: Some(error.to_string()),
             },
         }
+    }
+
+    pub fn active_parse(&self) -> Option<ParsePdfRequest> {
+        self.active_parse
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    fn begin_parse(&self, request: &ParsePdfRequest) -> Result<ParsePermit, DesktopServiceError> {
+        let mut active = self.active_parse.lock().unwrap_or_else(|e| e.into_inner());
+        if active.is_some() {
+            return Err(DesktopServiceError::ParseAlreadyRunning);
+        }
+        *active = Some(request.clone());
+        Ok(ParsePermit(self.active_parse.clone()))
+    }
+}
+
+struct ParsePermit(Arc<Mutex<Option<ParsePdfRequest>>>);
+
+#[cfg(test)]
+mod task_tests {
+    use super::*;
+
+    #[test]
+    fn cloned_services_exclude_concurrent_submissions_and_release_on_drop() {
+        let service = DesktopService {
+            workspace_root: PathBuf::new(),
+            marker: None,
+            active_parse: Arc::new(Mutex::new(None)),
+        };
+        let request = ParsePdfRequest::new("test:pdf", 2, 4, MarkerProfileChoice::MathOcrV1);
+        let permit = service.begin_parse(&request).unwrap();
+        let other = service.clone();
+        let submitted = request.clone();
+        std::thread::spawn(move || {
+            assert_eq!(other.active_parse(), Some(submitted.clone()));
+            assert!(matches!(
+                other.parse_pdf(&submitted),
+                Err(DesktopServiceError::ParseAlreadyRunning)
+            ));
+        })
+        .join()
+        .unwrap();
+        drop(permit);
+        assert_eq!(service.active_parse(), None);
+        assert!(matches!(
+            service.parse_pdf(&request),
+            Err(DesktopServiceError::MarkerNotConfigured)
+        ));
+        assert_eq!(
+            service.active_parse(),
+            None,
+            "failure must release the reservation"
+        );
+        assert!(service.begin_parse(&request).is_ok());
+    }
+}
+
+impl Drop for ParsePermit {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -443,7 +510,7 @@ impl MarkerProfileChoice {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct ParsePdfRequest {
     artifact_id: String,
     first_page: u32,
@@ -505,6 +572,8 @@ impl PdfParseResult {
 
 #[derive(Debug, Error)]
 pub enum DesktopServiceError {
+    #[error("已有 PDF 解析任务正在运行，请等待完成后再提交")]
+    ParseAlreadyRunning,
     #[error("only PDF files can be imported: {0}")]
     UnsupportedImportType(PathBuf),
     #[error("the selected PDF has no valid UTF-8 filename: {0}")]
@@ -592,6 +661,11 @@ async fn choose_and_import_pdf(
 }
 
 #[tauri::command]
+fn get_active_parse(state: State<'_, DesktopState>) -> Option<ParsePdfRequest> {
+    state.service.active_parse()
+}
+
+#[tauri::command]
 async fn parse_pdf(
     state: State<'_, DesktopState>,
     request: ParsePdfRequest,
@@ -618,6 +692,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_desktop_snapshot,
             choose_and_import_pdf,
+            get_active_parse,
             parse_pdf
         ])
         .run(tauri::generate_context!())

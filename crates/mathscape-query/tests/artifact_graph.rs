@@ -182,7 +182,25 @@ fn reads_the_catalog_and_projects_conversion_hyperedges() {
     assert_eq!(projection.relations().len(), 1);
     let projected_conversion = &projection.relations()[0];
     assert_eq!(projected_conversion.relation_id(), &conversion_id);
-    assert_eq!(projected_conversion.label(), "marker_single 2.0.0");
+    assert_eq!(projected_conversion.label(), "source · PDF 1–2 页 · 解析");
+    assert!(
+        projected_conversion
+            .summary_ref()
+            .unwrap()
+            .contains("marker_single 2.0.0")
+    );
+    assert!(
+        projection
+            .nodes()
+            .iter()
+            .any(|node| node.label() == "source · PDF 1–2 页 · 解析正文")
+    );
+    assert!(
+        projection
+            .nodes()
+            .iter()
+            .any(|node| node.label() == "source · PDF 1–2 页 · 解析元数据")
+    );
     assert_eq!(projected_conversion.endpoints().len(), 3);
     assert_eq!(
         projected_conversion

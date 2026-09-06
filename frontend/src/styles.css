@@ -407,6 +407,36 @@ code {
   font-weight: 400;
 }
 
+.technical-details {
+  margin-top: 14px;
+  color: #8593a1;
+  font-size: 11px;
+}
+
+.technical-details summary {
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+
+.identifier-value {
+  display: block;
+  overflow-wrap: anywhere;
+  user-select: text;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.copy-button {
+  display: block;
+  margin: 8px 0 14px;
+  padding: 4px 8px;
+  border: 1px solid #34434e;
+  border-radius: 5px;
+  background: #111b23;
+  color: #bdc9d1;
+  cursor: pointer;
+}
+
 .definition-list {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
