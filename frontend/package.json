@@ -3,12 +3,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "dev": "vite --host 127.0.0.1 --port 1420",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "tauri:dev": "cd ../apps/mathscape-desktop && ../../frontend/node_modules/.bin/tauri dev",
+    "tauri:dev:local": "cd ../apps/mathscape-desktop && MATHSCAPE_WORKSPACE_ROOT=\"$PWD/../../.mathscape-dev/workspace\" ../../frontend/node_modules/.bin/tauri dev",
+    "tauri:build": "cd ../apps/mathscape-desktop && ../../frontend/node_modules/.bin/tauri build"
   },
   "dependencies": {
+    "@tauri-apps/api": "2.11.1",
     "cytoscape": "3.34.2"
   },
   "devDependencies": {
-    "typescript": "7.0.2"
+    "@tauri-apps/cli": "2.11.4",
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
   }
 }

@@ -6,4 +6,12 @@
 并将超边确定性展开为 incidence graph；前端只负责将 incidence nodes/edges
 转换为 Cytoscape.js elements，不在浏览器中重新解释数学关系语义。
 
-当前仅建立图数据契约和适配器，Desktop 页面骨架将在应用用例入口完成后接入。
+当前 Desktop 已接入 Tauri 服务，支持选择 PDF、导入 Managed Artifact Pool、
+读取 SQLite Catalog，并将最新来源层 incidence graph 交给 Cytoscape.js 渲染。
+
+```sh
+npm install
+npm run typecheck
+npm run build
+npm run tauri:dev:local
+```

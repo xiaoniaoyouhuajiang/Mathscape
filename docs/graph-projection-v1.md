@@ -177,6 +177,30 @@ data.directed
 
 图算法应运行在 Rust 投影或权威查询结果上。前端 Cytoscape.js 的布局坐标不是数学信息，也不能进入语义判断。
 
+## Artifact Catalog 投影
+
+`SqliteArtifactStore::read_catalog_snapshot` 在一个 SQLite 读事务中恢复：
+
+```text
+当前 SourceArtifact revision
+ArtifactLocation 当前状态
+ConversionRun 完整参数
+ConversionRun input/output endpoints
+```
+
+所有字符串、JSON 字段和枚举值都会重新经过 Domain 构造器与存储不变量校验。`ArtifactGraphProjector` 接收这一类型化快照并支持 Source 与 Provenance Lens：
+
+```text
+SQLite Catalog
+  -> ArtifactCatalogSnapshot
+  -> ArtifactGraphProjector
+  -> GraphProjection
+  -> IncidenceGraph
+  -> Cytoscape.js
+```
+
+Projector 不访问裸 SQL。Artifact 显示为 entity node，ConversionRun 显示为 relation node；`input` endpoint 使用 `into_relation`，`output` endpoint 使用 `out_of_relation`。
+
 ## 版本与演进
 
 首版 wire schema 为：
@@ -189,9 +213,8 @@ mathscape.graph-projection.v1
 
 本规范暂不包含：
 
-- SQLite 图查询实现；
-- Artifact catalog 到 Source Lens 的 projector；
 - fixture 到语义 Lens 的 projector；
+- 语义层和对齐层 SQLite 图查询；
 - 布局持久化；
 - 二元关系折叠；
 - 大地图分块和渐进加载协议。

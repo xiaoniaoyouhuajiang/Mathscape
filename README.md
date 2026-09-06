@@ -28,3 +28,17 @@ cargo check --workspace
 cargo test --workspace
 cargo run -p mathscape-cli
 ```
+
+## Desktop 开发
+
+安装前端依赖后，可从仓库根目录运行：
+
+```sh
+npm --prefix frontend install
+npm --prefix frontend run tauri:dev:local
+```
+
+`tauri:dev:local` 将自包含 Workspace 放在仓库的 `.mathscape-dev/workspace/`
+中，该目录已被 Git 忽略，便于直接检查 SQLite、对象池与调试状态。普通
+`tauri:dev` 则使用操作系统应用数据目录；也可以通过
+`MATHSCAPE_WORKSPACE_ROOT` 显式指定任意 Workspace。

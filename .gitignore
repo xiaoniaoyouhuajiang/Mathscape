@@ -6,4 +6,5 @@
 *.sqlite3-wal
 .DS_Store
 .env
-
+.mathscape-dev/
+/apps/mathscape-desktop/gen/

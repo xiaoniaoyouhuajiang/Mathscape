@@ -7,7 +7,12 @@ license.workspace = true
 
 [dependencies]
 mathscape-domain.workspace = true
+mathscape-graph.workspace = true
+mathscape-store-sqlite.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+mathscape-artifact.workspace = true
 
 [lints]
 workspace = true
-

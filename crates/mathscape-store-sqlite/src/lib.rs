@@ -3,6 +3,8 @@
 //! Artifact bytes remain in the managed filesystem pool. This crate owns only
 //! authoritative metadata and provenance transactions.
 
+mod read;
+
 use std::path::Path;
 
 use mathscape_domain::{
@@ -13,6 +15,8 @@ use mathscape_domain::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
+
+pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 
 const ARTIFACT_POOL_MIGRATION: &str = include_str!("../../../migrations/0001_artifact_pool.sql");
 
@@ -297,6 +301,12 @@ impl SqliteArtifactStore {
         find_artifact_by_hash_in(&self.connection, hash)
     }
 
+    /// Reads one transactionally consistent snapshot for graph projection and
+    /// other read-only application views.
+    pub fn read_catalog_snapshot(&self) -> Result<ArtifactCatalogSnapshot, SqliteStoreError> {
+        read::catalog_snapshot(&self.connection)
+    }
+
     pub fn register_check(
         &mut self,
         check: &ArtifactCheck,
@@ -563,6 +573,19 @@ fn rights_status(value: mathscape_domain::RightsStatus) -> &'static str {
     }
 }
 
+fn parse_rights_status(value: &str) -> Result<mathscape_domain::RightsStatus, SqliteStoreError> {
+    use mathscape_domain::RightsStatus;
+    match value {
+        "unknown" => Ok(RightsStatus::Unknown),
+        "not_assessed" => Ok(RightsStatus::NotAssessed),
+        "derivative_of_unassessed_source" => Ok(RightsStatus::DerivativeOfUnassessedSource),
+        "permitted" => Ok(RightsStatus::Permitted),
+        "restricted" => Ok(RightsStatus::Restricted),
+        "prohibited" => Ok(RightsStatus::Prohibited),
+        _ => Err(invalid("artifact_revision.rights_status", value)),
+    }
+}
+
 fn storage_kind(value: StorageKind) -> &'static str {
     match value {
         StorageKind::Managed => "managed",
@@ -588,6 +611,16 @@ fn location_role(value: LocationRole) -> &'static str {
         LocationRole::Mirror => "mirror",
         LocationRole::Cache => "cache",
         LocationRole::External => "external",
+    }
+}
+
+fn parse_location_role(value: &str) -> Result<LocationRole, SqliteStoreError> {
+    match value {
+        "primary" => Ok(LocationRole::Primary),
+        "mirror" => Ok(LocationRole::Mirror),
+        "cache" => Ok(LocationRole::Cache),
+        "external" => Ok(LocationRole::External),
+        _ => Err(invalid("artifact_location.role", value)),
     }
 }
 
@@ -638,10 +671,32 @@ fn lifecycle(value: LifecycleStatus) -> Result<&'static str, SqliteStoreError> {
     }
 }
 
+fn parse_lifecycle(value: &str) -> Result<LifecycleStatus, SqliteStoreError> {
+    match value {
+        "draft" => Ok(LifecycleStatus::Draft),
+        "candidate" => Ok(LifecycleStatus::Candidate),
+        "active" => Ok(LifecycleStatus::Active),
+        "superseded" => Ok(LifecycleStatus::Superseded),
+        "rejected" => Ok(LifecycleStatus::Rejected),
+        "deprecated" => Ok(LifecycleStatus::Deprecated),
+        "parse_error" => Ok(LifecycleStatus::ParseError),
+        "semantic_error" => Ok(LifecycleStatus::SemanticError),
+        _ => Err(invalid("entity.lifecycle", value)),
+    }
+}
+
 fn page_index_base(value: PageIndexBase) -> &'static str {
     match value {
         PageIndexBase::Zero => "zero",
         PageIndexBase::One => "one",
+    }
+}
+
+fn parse_page_index_base(value: &str) -> Result<PageIndexBase, SqliteStoreError> {
+    match value {
+        "zero" => Ok(PageIndexBase::Zero),
+        "one" => Ok(PageIndexBase::One),
+        _ => Err(invalid("conversion.page_index_base", value)),
     }
 }
 
@@ -653,6 +708,15 @@ fn command_record_status(value: CommandRecordStatus) -> &'static str {
     }
 }
 
+fn parse_command_record_status(value: &str) -> Result<CommandRecordStatus, SqliteStoreError> {
+    match value {
+        "recorded" => Ok(CommandRecordStatus::Recorded),
+        "reconstructed_from_artifacts" => Ok(CommandRecordStatus::ReconstructedFromArtifacts),
+        "unavailable" => Ok(CommandRecordStatus::Unavailable),
+        _ => Err(invalid("conversion.command_record_status", value)),
+    }
+}
+
 fn conversion_exit_status(value: ConversionExitStatus) -> &'static str {
     match value {
         ConversionExitStatus::Succeeded => "succeeded",
@@ -660,6 +724,17 @@ fn conversion_exit_status(value: ConversionExitStatus) -> &'static str {
         ConversionExitStatus::Partial => "partial",
         ConversionExitStatus::TimedOut => "timed_out",
         ConversionExitStatus::Cancelled => "cancelled",
+    }
+}
+
+fn parse_conversion_exit_status(value: &str) -> Result<ConversionExitStatus, SqliteStoreError> {
+    match value {
+        "succeeded" => Ok(ConversionExitStatus::Succeeded),
+        "failed" => Ok(ConversionExitStatus::Failed),
+        "partial" => Ok(ConversionExitStatus::Partial),
+        "timed_out" => Ok(ConversionExitStatus::TimedOut),
+        "cancelled" => Ok(ConversionExitStatus::Cancelled),
+        _ => Err(invalid("conversion.exit_status", value)),
     }
 }
 
