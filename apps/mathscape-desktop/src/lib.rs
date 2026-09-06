@@ -6,25 +6,53 @@ use std::{
 use mathscape_artifact::{
     ArtifactImportOutcome, ArtifactMetadata, ArtifactPool, ArtifactPoolError,
 };
-use mathscape_domain::{ActorRef, MediaType, RightsRecord, RightsStatus};
+use mathscape_domain::{ActorRef, MediaType, RightsRecord, RightsStatus, StableId};
 use mathscape_graph::{GraphProjectionError, IncidenceGraph, ProjectionLens};
-use mathscape_pdf::{ClassificationMode, PdfContentKind, PdfEngine, PdfError, PdfOpenOptions};
+use mathscape_orchestrator::{MarkerPromotionError, promote_marker_inventory};
+use mathscape_pdf::{
+    ClassificationMode, PdfContentKind, PdfEngine, PdfError, PdfOpenOptions, PdfPageIndex,
+    PdfSelection,
+};
 use mathscape_query::{ArtifactGraphProjectionError, ArtifactGraphProjector};
 use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
-use serde::Serialize;
+use mathscape_tool_marker::{
+    MarkerCancellation, MarkerExecutionError, MarkerInstallation, MarkerProductRole,
+    MarkerProductScanError, MarkerProductScanner, MarkerProfile, MarkerRequest, MarkerRequestError,
+    MarkerRunStatus, MarkerRunner, MarkerStagingArea,
+};
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use thiserror::Error;
 
 const WORKSPACE_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_WORKSPACE_ROOT";
+const MARKER_EXECUTABLE_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_MARKER_EXECUTABLE";
 
 #[derive(Clone, Debug)]
 pub struct DesktopService {
     workspace_root: PathBuf,
+    marker: Option<MarkerInstallation>,
 }
 
 impl DesktopService {
     pub fn open(workspace_root: impl AsRef<Path>) -> Result<Self, DesktopServiceError> {
+        Self::open_configured(workspace_root, None)
+    }
+
+    pub fn open_with_marker(
+        workspace_root: impl AsRef<Path>,
+        marker_executable: impl Into<PathBuf>,
+    ) -> Result<Self, DesktopServiceError> {
+        Self::open_configured(
+            workspace_root,
+            Some(MarkerInstallation::new(marker_executable.into())?),
+        )
+    }
+
+    fn open_configured(
+        workspace_root: impl AsRef<Path>,
+        marker: Option<MarkerInstallation>,
+    ) -> Result<Self, DesktopServiceError> {
         let requested = workspace_root.as_ref();
         let pool = if requested.join("workspace.toml").exists() {
             ArtifactPool::open(requested)?
@@ -33,7 +61,10 @@ impl DesktopService {
         };
         let workspace_root = pool.workspace().path().to_owned();
         drop(pool);
-        Ok(Self { workspace_root })
+        Ok(Self {
+            workspace_root,
+            marker,
+        })
     }
 
     pub fn workspace_root(&self) -> &Path {
@@ -49,6 +80,22 @@ impl DesktopService {
         let catalog = store.read_catalog_snapshot()?;
         let artifact_count = catalog.artifacts().len();
         let conversion_count = catalog.conversions().len();
+        let pdf_artifacts = catalog
+            .artifacts()
+            .iter()
+            .filter_map(|record| {
+                let entity = record.entity();
+                let artifact = entity.payload();
+                (artifact.media_type().as_str() == "application/pdf").then(|| PdfArtifactSummary {
+                    artifact_id: entity.header().stable_id().as_str().to_owned(),
+                    filename: artifact
+                        .original_filename()
+                        .unwrap_or("Unnamed PDF")
+                        .to_owned(),
+                    page_count: artifact.page_count(),
+                })
+            })
+            .collect();
         let projection = ArtifactGraphProjector.project(&catalog, ProjectionLens::Source)?;
         let graph = IncidenceGraph::project(&projection);
 
@@ -57,6 +104,8 @@ impl DesktopService {
             workspace_root: self.workspace_root.display().to_string(),
             artifact_count,
             conversion_count,
+            marker: self.marker_status(),
+            pdf_artifacts,
             graph,
         })
     }
@@ -120,6 +169,145 @@ impl DesktopService {
             snapshot: self.snapshot()?,
         })
     }
+
+    pub fn parse_pdf(
+        &self,
+        request: &ParsePdfRequest,
+    ) -> Result<PdfParseResult, DesktopServiceError> {
+        let installation = self
+            .marker
+            .as_ref()
+            .ok_or(DesktopServiceError::MarkerNotConfigured)?;
+        let artifact_id = StableId::parse(request.artifact_id.clone())?;
+        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        let catalog = store.read_catalog_snapshot()?;
+        let source = catalog
+            .artifacts()
+            .iter()
+            .find(|record| record.entity().header().stable_id() == &artifact_id)
+            .ok_or_else(|| DesktopServiceError::UnknownArtifact(artifact_id.clone()))?;
+        if source.entity().payload().media_type().as_str() != "application/pdf" {
+            return Err(DesktopServiceError::ArtifactIsNotPdf(artifact_id));
+        }
+        let page_count = source
+            .entity()
+            .payload()
+            .page_count()
+            .ok_or_else(|| DesktopServiceError::MissingPdfPageCount(artifact_id.clone()))?;
+        if request.first_page == 0
+            || request.last_page < request.first_page
+            || request.last_page > page_count
+        {
+            return Err(DesktopServiceError::InvalidParsePageRange {
+                first: request.first_page,
+                last: request.last_page,
+                page_count,
+            });
+        }
+        let selection = PdfSelection::inclusive_range(
+            page_count,
+            PdfPageIndex::new(request.first_page - 1),
+            PdfPageIndex::new(request.last_page - 1),
+        )?;
+        drop(store);
+
+        let pool = ArtifactPool::open(&self.workspace_root)?;
+        let managed_pdf = pool.managed_path(&artifact_id)?;
+        let staging = MarkerStagingArea::new(pool.workspace().cache_path().join("marker-runs"))?;
+        drop(pool);
+
+        let profile = request.profile.marker_profile();
+        let marker_request = MarkerRequest::new(managed_pdf, selection, profile)?;
+        let runner = MarkerRunner::default();
+        let probe = runner.probe(installation)?;
+        let run = runner.execute(
+            installation,
+            &marker_request,
+            &staging,
+            &MarkerCancellation::new(),
+        )?;
+        if run.status() != MarkerRunStatus::Succeeded {
+            return Err(DesktopServiceError::MarkerRunFailed {
+                status: run.status(),
+                staging: run.staging().path().to_owned(),
+                diagnostics: bounded_diagnostics(run.stderr().preview_lossy()),
+            });
+        }
+        let elapsed_ms = u64::try_from(run.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let inventory = MarkerProductScanner::default().scan(&run)?;
+        if !inventory.is_promotable() {
+            return Err(DesktopServiceError::MarkerInventoryNotPromotable {
+                staging: run.staging().path().to_owned(),
+                issues: format!("{:?}", inventory.issues()),
+            });
+        }
+
+        let mut pool = ArtifactPool::open(&self.workspace_root)?;
+        let promotion = promote_marker_inventory(
+            &mut pool,
+            &run,
+            &inventory,
+            &artifact_id,
+            Some(probe.version().raw()),
+            ActorRef::parse("mathscape-desktop")?,
+        )?;
+        let outputs = promotion
+            .outputs()
+            .iter()
+            .map(|output| ParsedArtifactOutput {
+                artifact_id: output.artifact().stable_id().as_str().to_owned(),
+                role: marker_product_role_label(output.role()),
+                relative_path: output.relative_path().display().to_string(),
+                byte_size: output.artifact().byte_size(),
+            })
+            .collect();
+        let conversion_id = promotion.conversion_id().as_str().to_owned();
+        drop(pool);
+        let cleanup_warning = run.cleanup().err().map(|error| error.to_string());
+
+        Ok(PdfParseResult {
+            conversion_id,
+            input_artifact_id: artifact_id.as_str().to_owned(),
+            first_page: request.first_page,
+            last_page: request.last_page,
+            profile: request.profile,
+            marker_version: probe.version().raw().to_owned(),
+            elapsed_ms,
+            outputs,
+            cleanup_warning,
+            snapshot: self.snapshot()?,
+        })
+    }
+
+    fn marker_status(&self) -> MarkerRuntimeStatus {
+        let Some(installation) = self.marker.as_ref() else {
+            return MarkerRuntimeStatus {
+                configured: false,
+                ready: false,
+                executable: None,
+                version: None,
+                problem: Some(format!(
+                    "set {MARKER_EXECUTABLE_ENVIRONMENT_VARIABLE} to an absolute marker_single path"
+                )),
+            };
+        };
+        match MarkerRunner::default().probe(installation) {
+            Ok(probe) => MarkerRuntimeStatus {
+                configured: true,
+                ready: true,
+                executable: Some(probe.executable().display().to_string()),
+                version: Some(probe.version().raw().to_owned()),
+                problem: None,
+            },
+            Err(error) => MarkerRuntimeStatus {
+                configured: true,
+                ready: false,
+                executable: Some(installation.executable().display().to_string()),
+                version: None,
+                problem: Some(error.to_string()),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -135,6 +323,8 @@ pub struct DesktopSnapshot {
     workspace_root: String,
     artifact_count: usize,
     conversion_count: usize,
+    marker: MarkerRuntimeStatus,
+    pdf_artifacts: Vec<PdfArtifactSummary>,
     graph: IncidenceGraph,
 }
 
@@ -151,8 +341,56 @@ impl DesktopSnapshot {
         self.conversion_count
     }
 
+    pub fn marker(&self) -> &MarkerRuntimeStatus {
+        &self.marker
+    }
+
+    pub fn pdf_artifacts(&self) -> &[PdfArtifactSummary] {
+        &self.pdf_artifacts
+    }
+
     pub fn graph(&self) -> &IncidenceGraph {
         &self.graph
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MarkerRuntimeStatus {
+    configured: bool,
+    ready: bool,
+    executable: Option<String>,
+    version: Option<String>,
+    problem: Option<String>,
+}
+
+impl MarkerRuntimeStatus {
+    pub fn is_configured(&self) -> bool {
+        self.configured
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.ready
+    }
+
+    pub fn version(&self) -> Option<&str> {
+        self.version.as_deref()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PdfArtifactSummary {
+    artifact_id: String,
+    filename: String,
+    page_count: Option<u32>,
+}
+
+impl PdfArtifactSummary {
+    pub fn artifact_id(&self) -> &str {
+        &self.artifact_id
+    }
+
+    pub fn page_count(&self) -> Option<u32> {
+        self.page_count
     }
 }
 
@@ -189,12 +427,110 @@ impl PdfImportResult {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkerProfileChoice {
+    FastNativeV1,
+    MathOcrV1,
+}
+
+impl MarkerProfileChoice {
+    const fn marker_profile(self) -> MarkerProfile {
+        match self {
+            Self::FastNativeV1 => MarkerProfile::FastNativeV1,
+            Self::MathOcrV1 => MarkerProfile::MathOcrV1,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct ParsePdfRequest {
+    artifact_id: String,
+    first_page: u32,
+    last_page: u32,
+    profile: MarkerProfileChoice,
+}
+
+impl ParsePdfRequest {
+    pub fn new(
+        artifact_id: impl Into<String>,
+        first_page: u32,
+        last_page: u32,
+        profile: MarkerProfileChoice,
+    ) -> Self {
+        Self {
+            artifact_id: artifact_id.into(),
+            first_page,
+            last_page,
+            profile,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ParsedArtifactOutput {
+    artifact_id: String,
+    role: &'static str,
+    relative_path: String,
+    byte_size: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PdfParseResult {
+    conversion_id: String,
+    input_artifact_id: String,
+    first_page: u32,
+    last_page: u32,
+    profile: MarkerProfileChoice,
+    marker_version: String,
+    elapsed_ms: u64,
+    outputs: Vec<ParsedArtifactOutput>,
+    cleanup_warning: Option<String>,
+    snapshot: DesktopSnapshot,
+}
+
+impl PdfParseResult {
+    pub fn conversion_id(&self) -> &str {
+        &self.conversion_id
+    }
+
+    pub fn outputs(&self) -> &[ParsedArtifactOutput] {
+        &self.outputs
+    }
+
+    pub fn snapshot(&self) -> &DesktopSnapshot {
+        &self.snapshot
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum DesktopServiceError {
     #[error("only PDF files can be imported: {0}")]
     UnsupportedImportType(PathBuf),
     #[error("the selected PDF has no valid UTF-8 filename: {0}")]
     InvalidFilename(PathBuf),
+    #[error("Marker is not configured; set {MARKER_EXECUTABLE_ENVIRONMENT_VARIABLE}")]
+    MarkerNotConfigured,
+    #[error("Artifact does not exist in the current Workspace: {0}")]
+    UnknownArtifact(StableId),
+    #[error("Artifact is not a PDF and cannot be sent to Marker: {0}")]
+    ArtifactIsNotPdf(StableId),
+    #[error("PDF Artifact has no stored page count: {0}")]
+    MissingPdfPageCount(StableId),
+    #[error("invalid 1-based PDF page range {first}-{last}; document contains {page_count} pages")]
+    InvalidParsePageRange {
+        first: u32,
+        last: u32,
+        page_count: u32,
+    },
+    #[error("Marker run ended with {status:?}; diagnostics remain at {staging}: {diagnostics}")]
+    MarkerRunFailed {
+        status: MarkerRunStatus,
+        staging: PathBuf,
+        diagnostics: String,
+    },
+    #[error("Marker products are incomplete at {staging}; issues: {issues}")]
+    MarkerInventoryNotPromotable { staging: PathBuf, issues: String },
     #[error("Artifact Pool operation failed: {0}")]
     Artifact(#[from] ArtifactPoolError),
     #[error("PDF inspection failed: {0}")]
@@ -207,6 +543,14 @@ pub enum DesktopServiceError {
     Graph(#[from] GraphProjectionError),
     #[error("domain validation failed: {0}")]
     Domain(#[from] mathscape_domain::DomainError),
+    #[error("Marker request is invalid: {0}")]
+    MarkerRequest(#[from] MarkerRequestError),
+    #[error("Marker execution failed: {0}")]
+    MarkerExecution(#[from] MarkerExecutionError),
+    #[error("Marker product scan failed: {0}")]
+    MarkerScan(#[from] MarkerProductScanError),
+    #[error("Marker product promotion failed: {0}")]
+    MarkerPromotion(#[from] MarkerPromotionError),
 }
 
 #[derive(Clone)]
@@ -247,18 +591,34 @@ async fn choose_and_import_pdf(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+async fn parse_pdf(
+    state: State<'_, DesktopState>,
+    request: ParsePdfRequest,
+) -> Result<PdfParseResult, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.parse_pdf(&request))
+        .await
+        .map_err(|error| format!("PDF parse worker failed: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let root = workspace_root(app.handle())?;
-            let service = DesktopService::open(root)?;
+            let service = match env::var_os(MARKER_EXECUTABLE_ENVIRONMENT_VARIABLE) {
+                Some(path) if !path.is_empty() => DesktopService::open_with_marker(root, path)?,
+                _ => DesktopService::open(root)?,
+            };
             app.manage(DesktopState { service });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_desktop_snapshot,
-            choose_and_import_pdf
+            choose_and_import_pdf,
+            parse_pdf
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Mathscape desktop application");
@@ -278,4 +638,28 @@ fn pdf_content_kind_label(kind: PdfContentKind) -> &'static str {
         PdfContentKind::ImageBased => "image_based",
         PdfContentKind::Mixed => "mixed",
     }
+}
+
+fn marker_product_role_label(role: MarkerProductRole) -> &'static str {
+    match role {
+        MarkerProductRole::PrimaryMarkdown => "primary_markdown",
+        MarkerProductRole::MarkdownCandidate => "markdown_candidate",
+        MarkerProductRole::Metadata => "metadata",
+        MarkerProductRole::Image => "image",
+        MarkerProductRole::SupportingFile => "supporting_file",
+        MarkerProductRole::DiagnosticLog => "diagnostic_log",
+    }
+}
+
+fn bounded_diagnostics(value: String) -> String {
+    const MAXIMUM_CHARACTERS: usize = 4_000;
+    let character_count = value.chars().count();
+    if character_count <= MAXIMUM_CHARACTERS {
+        return value;
+    }
+    let tail = value
+        .chars()
+        .skip(character_count - MAXIMUM_CHARACTERS)
+        .collect::<String>();
+    format!("…{tail}")
 }

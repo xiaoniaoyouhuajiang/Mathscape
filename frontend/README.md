@@ -8,6 +8,8 @@
 
 当前 Desktop 已接入 Tauri 服务，支持选择 PDF、导入 Managed Artifact Pool、
 读取 SQLite Catalog，并将最新来源层 incidence graph 交给 Cytoscape.js 渲染。
+配置 Marker 后，选择 PDF 节点还可以在右栏提交连续页码范围，并在解析完成后
+直接看到派生产物及 ConversionRun。
 
 ```sh
 npm install

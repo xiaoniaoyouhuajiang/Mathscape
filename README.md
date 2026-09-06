@@ -42,3 +42,13 @@ npm --prefix frontend run tauri:dev:local
 中，该目录已被 Git 忽略，便于直接检查 SQLite、对象池与调试状态。普通
 `tauri:dev` 则使用操作系统应用数据目录；也可以通过
 `MATHSCAPE_WORKSPACE_ROOT` 显式指定任意 Workspace。
+
+要在 Desktop 中启用 PDF 解析，需要把固定 Marker 安装入口显式传给应用：
+
+```sh
+MATHSCAPE_MARKER_EXECUTABLE=/absolute/path/to/marker/bin/marker_single \
+  npm --prefix frontend run tauri:dev:local
+```
+
+应用会使用该环境自己的 Python 探测 `marker-pdf` 版本；当前固定 profiles 支持
+Marker 2.x。选择来源图中的 PDF Artifact 后，可在右栏触发连续页码范围解析。

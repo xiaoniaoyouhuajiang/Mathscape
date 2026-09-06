@@ -2115,6 +2115,7 @@ dependencies = [
  "mathscape-pdf",
  "mathscape-query",
  "mathscape-store-sqlite",
+ "mathscape-tool-marker",
  "serde",
  "tauri",
  "tauri-build",

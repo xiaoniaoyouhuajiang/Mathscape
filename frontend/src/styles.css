@@ -184,6 +184,7 @@ code {
 
 .stat-card,
 .workspace-card,
+.marker-card,
 .import-card {
   border: 1px solid #2a3742;
   border-radius: 12px;
@@ -209,6 +210,7 @@ code {
 }
 
 .workspace-card,
+.marker-card,
 .import-card {
   padding: 15px;
 }
@@ -229,6 +231,45 @@ code {
 
 .import-card {
   margin-top: 14px;
+}
+
+.marker-card {
+  margin-top: 14px;
+}
+
+.runtime-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.runtime-state {
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: #d2b377;
+  background: #392f1d;
+  font-size: 9px;
+}
+
+.runtime-state.is-ready {
+  color: #a5d8cd;
+  background: #193b35;
+}
+
+.runtime-version {
+  display: block;
+  margin-top: 10px;
+  color: #c7d5d7;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.runtime-problem {
+  margin: 7px 0 0;
+  overflow-wrap: anywhere;
+  color: #7f8e99;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .import-card p {
@@ -383,6 +424,74 @@ code {
   overflow-wrap: anywhere;
   color: #bdc9d1;
   line-height: 1.45;
+}
+
+.parse-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #2b3741;
+}
+
+.range-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
+.form-field {
+  display: grid;
+  gap: 6px;
+  color: #84939f;
+  font-size: 10px;
+}
+
+.form-field input,
+.form-field select {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid #34434e;
+  border-radius: 7px;
+  outline: none;
+  color: #d4e0e2;
+  background: #0e171e;
+}
+
+.form-field input:focus,
+.form-field select:focus {
+  border-color: #5f8c84;
+}
+
+.profile-field {
+  margin-top: 1px;
+}
+
+.parse-button {
+  min-height: 36px;
+  border: 1px solid #507a72;
+  border-radius: 8px;
+  color: #d9eeea;
+  background: #214f49;
+  cursor: pointer;
+}
+
+.parse-button:hover:not(:disabled) {
+  background: #286158;
+}
+
+.parse-button:disabled {
+  color: #76858c;
+  background: #1b262c;
+  cursor: not-allowed;
+}
+
+.form-note {
+  margin: 0;
+  color: #6f7e89;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .toast {

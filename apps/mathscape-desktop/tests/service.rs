@@ -6,7 +6,12 @@ use std::{
 };
 
 use lopdf::{Document, Object, Stream, content::Content, content::Operation, dictionary};
-use mathscape_desktop::{DesktopService, DesktopServiceError, PdfImportOutcome};
+use mathscape_desktop::{
+    DesktopService, DesktopServiceError, MarkerProfileChoice, ParsePdfRequest, PdfImportOutcome,
+};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -105,6 +110,67 @@ fn rejects_non_pdf_imports_before_artifact_registration() {
     directory.cleanup();
 }
 
+#[cfg(unix)]
+#[test]
+fn parses_a_managed_pdf_promotes_products_and_refreshes_the_conversion_graph() {
+    let directory = TestDirectory::create("marker-parse");
+    let source = directory.path().join("analysis.pdf");
+    write_pdf(&source);
+    let runtime = directory.path().join("marker-runtime");
+    let bin = runtime.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let marker = bin.join("marker_single");
+    let python = bin.join("python");
+    write_executable(&python, "#!/bin/sh\nprintf '2.1.0'\n");
+    write_executable(
+        &marker,
+        r#"#!/bin/sh
+source_path="$1"
+output_root=''
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --output_dir) output_root="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+source_name="${source_path##*/}"
+source_stem="${source_name%.*}"
+mkdir -p "$output_root/$source_stem"
+printf '# Converted analysis\n' > "$output_root/$source_stem/$source_stem.md"
+printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_stem}_meta.json"
+"#,
+    );
+
+    let workspace = directory.path().join("workspace");
+    let service = DesktopService::open_with_marker(&workspace, &marker).unwrap();
+    assert!(service.snapshot().unwrap().marker().is_ready());
+    let imported = service.import_pdf(&source).unwrap();
+    let request =
+        ParsePdfRequest::new(imported.artifact_id(), 1, 1, MarkerProfileChoice::MathOcrV1);
+
+    let parsed = service.parse_pdf(&request).unwrap();
+    assert!(
+        parsed
+            .conversion_id()
+            .starts_with("mathscape:conversion/marker/")
+    );
+    assert_eq!(parsed.outputs().len(), 2);
+    assert_eq!(parsed.snapshot().artifact_count(), 3);
+    assert_eq!(parsed.snapshot().conversion_count(), 1);
+    assert_eq!(parsed.snapshot().graph().nodes().len(), 4);
+    assert_eq!(parsed.snapshot().graph().edges().len(), 3);
+    assert_eq!(parsed.snapshot().pdf_artifacts().len(), 1);
+    assert_eq!(parsed.snapshot().pdf_artifacts()[0].page_count(), Some(1));
+    assert!(
+        fs::read_dir(workspace.join("cache/marker-runs"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+
+    directory.cleanup();
+}
+
 fn write_pdf(path: &Path) {
     let mut document = Document::with_version("1.5");
     let pages_id = document.new_object_id();
@@ -156,4 +222,12 @@ fn write_pdf(path: &Path) {
     document.trailer.set("Info", info_id);
     document.compress();
     document.save(path).unwrap();
+}
+
+#[cfg(unix)]
+fn write_executable(path: &Path, content: &str) {
+    fs::write(path, content).unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
 }

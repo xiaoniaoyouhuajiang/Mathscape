@@ -22,6 +22,25 @@ DesktopService.import_pdf
 Cytoscape.js
 ```
 
+## Marker 解析触发
+
+Marker 作为显式外部依赖配置，不允许前端提交任意可执行文件或命令参数：
+
+```text
+MATHSCAPE_MARKER_EXECUTABLE=/absolute/path/to/marker_single
+```
+
+应用启动后通过 Marker 自身 Python 环境读取 `marker-pdf` 版本。只有版本探测通过
+时，PDF 节点的解析按钮才可用。解析请求只包含：
+
+- 输入 Artifact 稳定 ID；
+- 1-based、首尾均包含的连续 PDF 页码范围；
+- `fast_native_v1` 或 `math_ocr_v1` 固定 profile。
+
+服务将其转换为 0-based `PdfSelection`，并依次执行：解析 Managed PDF、扫描隔离
+staging、校验固定产物布局、按 digest 提升产物、写入 `ConversionRun`、清理成功
+run、刷新来源图。执行失败或清单不完整时不会开始产物提升，并保留 staging 诊断。
+
 ## 服务边界
 
 - 前端不能直接读取任意文件、SQLite 或 Artifact Pool。
@@ -42,6 +61,6 @@ Cytoscape.js
 ## 当前限制
 
 - 只接受未加密的本地 PDF；密码输入尚未进入 UI 契约。
-- 当前导入只创建 `SourceArtifact`，不会自动运行 Marker，因此尚无
-  `ConversionRun`。后续解析入口应复用当前 Workspace 和投影刷新路径。
+- Marker 解析当前是等待型 Desktop 命令，UI 会保持响应但尚无逐页进度事件和
+  取消按钮；Kernel 已使用可取消 runner，后续可在应用层登记活动任务。
 - PDF 页面内嵌预览尚未实现；当前右栏只展示图节点元数据。

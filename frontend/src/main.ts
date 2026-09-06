@@ -10,7 +10,23 @@ interface DesktopSnapshot {
   workspace_root: string;
   artifact_count: number;
   conversion_count: number;
+  marker: MarkerRuntimeStatus;
+  pdf_artifacts: PdfArtifactSummary[];
   graph: IncidenceGraph;
+}
+
+interface MarkerRuntimeStatus {
+  configured: boolean;
+  ready: boolean;
+  executable: string | null;
+  version: string | null;
+  problem: string | null;
+}
+
+interface PdfArtifactSummary {
+  artifact_id: string;
+  filename: string;
+  page_count: number | null;
 }
 
 type PdfImportOutcome = "inserted" | "deduplicated";
@@ -26,6 +42,28 @@ interface PdfImportResult {
   classification_confidence: number;
   sampled_ocr_page_count: number;
   outcome: PdfImportOutcome;
+  snapshot: DesktopSnapshot;
+}
+
+type MarkerProfileChoice = "fast_native_v1" | "math_ocr_v1";
+
+interface ParsedArtifactOutput {
+  artifact_id: string;
+  role: string;
+  relative_path: string;
+  byte_size: number;
+}
+
+interface PdfParseResult {
+  conversion_id: string;
+  input_artifact_id: string;
+  first_page: number;
+  last_page: number;
+  profile: MarkerProfileChoice;
+  marker_version: string;
+  elapsed_ms: number;
+  outputs: ParsedArtifactOutput[];
+  cleanup_warning: string | null;
   snapshot: DesktopSnapshot;
 }
 
@@ -74,9 +112,21 @@ app.innerHTML = `
           <span class="field-label">本地路径</span>
           <p id="workspace-root" class="path-value">—</p>
         </section>
+        <section class="marker-card">
+          <div class="runtime-heading">
+            <span class="field-label">Marker Runtime</span>
+            <span id="marker-state" class="runtime-state">检查中</span>
+          </div>
+          <strong id="marker-version" class="runtime-version">—</strong>
+          <p id="marker-problem" class="runtime-problem">正在探测本地 Marker 环境。</p>
+        </section>
         <section id="last-import" class="import-card is-empty">
           <span class="field-label">最近一次导入</span>
           <p>选择一份 PDF，将其复制到自包含 Artifact Pool。</p>
+        </section>
+        <section id="last-parse" class="import-card is-empty">
+          <span class="field-label">最近一次解析</span>
+          <p>选择图中的 PDF 节点以配置连续页码范围。</p>
         </section>
       </aside>
 
@@ -124,6 +174,10 @@ const graphContainer = requiredElement<HTMLElement>("#graph");
 const emptyState = requiredElement<HTMLElement>("#empty-state");
 const nodeDetail = requiredElement<HTMLElement>("#node-detail");
 const lastImport = requiredElement<HTMLElement>("#last-import");
+const lastParse = requiredElement<HTMLElement>("#last-parse");
+const markerState = requiredElement<HTMLElement>("#marker-state");
+const markerVersion = requiredElement<HTMLElement>("#marker-version");
+const markerProblem = requiredElement<HTMLElement>("#marker-problem");
 const toast = requiredElement<HTMLElement>("#toast");
 
 let graphCore: Core | null = null;
@@ -176,6 +230,7 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
   conversionCount.textContent = snapshot.conversion_count.toString();
   workspaceId.textContent = snapshot.workspace_id;
   workspaceRoot.textContent = snapshot.workspace_root;
+  renderMarkerStatus(snapshot.marker);
 
   graphCore?.destroy();
   graphCore = mountCytoscapeGraph(graphContainer, snapshot.graph);
@@ -186,7 +241,10 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
       (node) => node.id === selected.id(),
     );
     if (model !== undefined) {
-      renderNodeDetail(model);
+      const pdf = snapshot.pdf_artifacts.find(
+        (artifact) => artifact.artifact_id === model.domain_id,
+      );
+      renderNodeDetail(model, pdf, snapshot.marker);
     }
   });
 }
@@ -205,7 +263,11 @@ function renderImportResult(result: PdfImportResult): void {
   );
 }
 
-function renderNodeDetail(node: IncidenceNode): void {
+function renderNodeDetail(
+  node: IncidenceNode,
+  pdf: PdfArtifactSummary | undefined,
+  marker: MarkerRuntimeStatus,
+): void {
   nodeDetail.classList.remove("empty-detail");
   nodeDetail.replaceChildren(
     textElement("span", "kind-pill", node.element_kind),
@@ -218,6 +280,153 @@ function renderNodeDetail(node: IncidenceNode): void {
       ["摘要", node.summary ?? "—"],
     ]),
   );
+  if (pdf !== undefined) {
+    nodeDetail.append(createParseForm(pdf, marker));
+  }
+}
+
+function createParseForm(
+  pdf: PdfArtifactSummary,
+  marker: MarkerRuntimeStatus,
+): HTMLFormElement {
+  const form = document.createElement("form");
+  form.className = "parse-form";
+  const heading = textElement("span", "field-label", "Marker 解析范围");
+  const range = document.createElement("div");
+  range.className = "range-fields";
+  const firstPage = pageInput("起始页", 1, pdf.page_count);
+  const lastPage = pageInput("结束页", pdf.page_count ?? 1, pdf.page_count);
+  range.append(firstPage.label, lastPage.label);
+
+  const profileLabel = document.createElement("label");
+  profileLabel.className = "form-field profile-field";
+  profileLabel.append(textElement("span", "", "识别策略"));
+  const profile = document.createElement("select");
+  profile.append(
+    new Option("Math OCR · balanced", "math_ocr_v1"),
+    new Option("Fast native", "fast_native_v1"),
+  );
+  profileLabel.append(profile);
+
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.className = "parse-button";
+  submit.textContent = marker.ready ? "解析选定页面" : "Marker 尚未就绪";
+  submit.disabled = !marker.ready || pdf.page_count === null;
+  const note = textElement(
+    "p",
+    "form-note",
+    pdf.page_count === null
+      ? "该 Artifact 缺少页数，暂不能构造安全页码范围。"
+      : `页码按 PDF 页面计算，共 ${pdf.page_count} 页；一次请求必须连续。`,
+  );
+  form.append(heading, range, profileLabel, submit, note);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const first = firstPage.input.valueAsNumber;
+    const last = lastPage.input.valueAsNumber;
+    if (
+      !Number.isInteger(first) ||
+      !Number.isInteger(last) ||
+      first < 1 ||
+      last < first ||
+      pdf.page_count === null ||
+      last > pdf.page_count
+    ) {
+      showToast("请输入 PDF 页数范围内的连续页码。", "error");
+      return;
+    }
+    void parsePdf(
+      pdf,
+      first,
+      last,
+      profile.value as MarkerProfileChoice,
+      submit,
+    );
+  });
+  return form;
+}
+
+function pageInput(
+  caption: string,
+  value: number,
+  maximum: number | null,
+): { label: HTMLLabelElement; input: HTMLInputElement } {
+  const label = document.createElement("label");
+  label.className = "form-field";
+  label.append(textElement("span", "", caption));
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "1";
+  input.step = "1";
+  input.value = value.toString();
+  if (maximum !== null) {
+    input.max = maximum.toString();
+  }
+  label.append(input);
+  return { label, input };
+}
+
+async function parsePdf(
+  pdf: PdfArtifactSummary,
+  firstPage: number,
+  lastPage: number,
+  profile: MarkerProfileChoice,
+  submit: HTMLButtonElement,
+): Promise<void> {
+  setBusy(true, `Marker 正在解析第 ${firstPage}–${lastPage} 页`);
+  submit.disabled = true;
+  submit.textContent = "正在解析…";
+  try {
+    const result = await invoke<PdfParseResult>("parse_pdf", {
+      request: {
+        artifact_id: pdf.artifact_id,
+        first_page: firstPage,
+        last_page: lastPage,
+        profile,
+      },
+    });
+    renderSnapshot(result.snapshot);
+    renderParseResult(result, pdf.filename);
+    showToast(
+      `已解析 ${pdf.filename} 第 ${firstPage}–${lastPage} 页，生成 ${result.outputs.length} 个产物`,
+      "success",
+    );
+  } catch (error: unknown) {
+    submit.disabled = false;
+    submit.textContent = "解析选定页面";
+    showToast(errorMessage(error), "error");
+  } finally {
+    setBusy(false);
+  }
+}
+
+function renderMarkerStatus(marker: MarkerRuntimeStatus): void {
+  markerState.textContent = marker.ready ? "可用" : marker.configured ? "异常" : "未配置";
+  markerState.classList.toggle("is-ready", marker.ready);
+  markerVersion.textContent = marker.version === null ? "—" : `marker-pdf ${marker.version}`;
+  markerProblem.textContent = marker.ready
+    ? marker.executable ?? "Marker 已通过版本探测"
+    : marker.problem ?? "Marker 不可用";
+}
+
+function renderParseResult(result: PdfParseResult, filename: string): void {
+  lastParse.classList.remove("is-empty");
+  lastParse.replaceChildren(
+    textElement("span", "field-label", "最近一次解析"),
+    textElement("strong", "import-name", filename),
+    definitionList([
+      ["页面", `${result.first_page}–${result.last_page}`],
+      ["Profile", result.profile],
+      ["产物", `${result.outputs.length}`],
+      ["耗时", formatDuration(result.elapsed_ms)],
+    ]),
+  );
+  if (result.cleanup_warning !== null) {
+    lastParse.append(
+      textElement("p", "runtime-problem", result.cleanup_warning),
+    );
+  }
 }
 
 function definitionList(rows: ReadonlyArray<readonly [string, string]>): HTMLElement {
@@ -277,4 +486,12 @@ function contentKindLabel(kind: PdfImportResult["content_kind"]): string {
     image_based: "图像型",
     mixed: "混合型",
   }[kind];
+}
+
+function formatDuration(milliseconds: number): string {
+  if (milliseconds < 1_000) {
+    return `${milliseconds} ms`;
+  }
+  const seconds = milliseconds / 1_000;
+  return seconds < 60 ? `${seconds.toFixed(1)} s` : `${(seconds / 60).toFixed(1)} min`;
 }
