@@ -28,6 +28,9 @@ Rust Domain Kernel ---- Rust orchestration
 Artifact Pool 的聚合、目录布局、Managed/External 策略和自包含性契约见
 [`artifact-pool-boundary.md`](artifact-pool-boundary.md)。External 只作为未来显式启用的扩展模式，首版业务入口只接受 Managed 导入。
 
+应用图视图、超边的 incidence graph 展开以及 renderer 边界见
+[`graph-projection-v1.md`](graph-projection-v1.md)。
+
 ## 初始里程碑
 
 导入 `epsilon-n-cesaro-v1` fixture，保存稳定 ID、来源定位和关系语义，通过统一校验，并能查询来源链与 R/D/T/X 邻域。

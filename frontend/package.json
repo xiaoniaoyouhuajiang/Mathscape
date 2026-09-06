@@ -1,0 +1,14 @@
+{
+  "name": "mathscape-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "cytoscape": "3.34.2"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

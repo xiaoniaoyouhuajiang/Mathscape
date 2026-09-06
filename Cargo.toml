@@ -23,6 +23,7 @@ mathscape-tool-marker = { path = "crates/mathscape-tool-marker" }
 mathscape-validation = { path = "crates/mathscape-validation" }
 lopdf = "0.42"
 pdf-inspector = { version = "=1.17.0", default-features = false }
+petgraph = { version = "0.8.3", default-features = false, features = ["stable_graph", "std"] }
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
