@@ -1,0 +1,4 @@
+# Keep bundled native dependencies aligned with Rust's macOS deployment target.
+# Existing developer/CI overrides remain authoritative.
+[env]
+MACOSX_DEPLOYMENT_TARGET = { value = "11.0", force = false }

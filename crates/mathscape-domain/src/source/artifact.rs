@@ -58,25 +58,6 @@ impl From<MediaType> for String {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ArtifactAvailability {
-    Managed,
-    ExternallyManaged,
-    Restricted,
-    Missing,
-    Quarantined,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum IntegrityStatus {
-    Unchecked,
-    Valid,
-    Corrupted,
-    Unavailable,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum RightsStatus {
     Unknown,
     NotAssessed,
@@ -130,8 +111,6 @@ pub struct SourceArtifact {
     media_type: MediaType,
     content_hash: ContentHash,
     byte_size: u64,
-    availability: ArtifactAvailability,
-    integrity: IntegrityStatus,
     original_filename: Option<String>,
     page_count: Option<u32>,
     rights: RightsRecord,
@@ -144,8 +123,6 @@ impl SourceArtifact {
         media_type: MediaType,
         content_hash: ContentHash,
         byte_size: u64,
-        availability: ArtifactAvailability,
-        integrity: IntegrityStatus,
         original_filename: Option<String>,
         page_count: Option<u32>,
         rights: RightsRecord,
@@ -159,8 +136,6 @@ impl SourceArtifact {
             media_type,
             content_hash,
             byte_size,
-            availability,
-            integrity,
             original_filename,
             page_count,
             rights,
@@ -186,14 +161,6 @@ impl SourceArtifact {
 
     pub fn byte_size(&self) -> u64 {
         self.byte_size
-    }
-
-    pub fn availability(&self) -> ArtifactAvailability {
-        self.availability
-    }
-
-    pub fn integrity(&self) -> IntegrityStatus {
-        self.integrity
     }
 
     pub fn original_filename(&self) -> Option<&str> {
@@ -251,7 +218,7 @@ impl From<ArtifactUri> for String {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StorageKind {
-    Local,
+    Managed,
     ObjectStore,
     External,
     Archive,
@@ -264,6 +231,7 @@ pub enum LocationStatus {
     Missing,
     Corrupted,
     AccessDenied,
+    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -278,6 +246,7 @@ pub enum LocationRole {
 /// Mutable operational location kept outside immutable artifact revisions.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactLocation {
+    location_id: StableId,
     artifact: StableId,
     storage_kind: StorageKind,
     uri: ArtifactUri,
@@ -290,6 +259,7 @@ pub struct ArtifactLocation {
 impl ArtifactLocation {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        location_id: StableId,
         artifact: StableId,
         storage_kind: StorageKind,
         uri: ArtifactUri,
@@ -299,6 +269,7 @@ impl ArtifactLocation {
         status: LocationStatus,
     ) -> Self {
         Self {
+            location_id,
             artifact,
             storage_kind,
             uri,
@@ -307,6 +278,10 @@ impl ArtifactLocation {
             last_verified_at,
             status,
         }
+    }
+
+    pub fn location_id(&self) -> &StableId {
+        &self.location_id
     }
 
     pub fn artifact(&self) -> &StableId {
@@ -338,6 +313,87 @@ impl ArtifactLocation {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactCheckResult {
+    Valid,
+    Missing,
+    Corrupted,
+    AccessDenied,
+    Unavailable,
+}
+
+/// One append-only observation of bytes reachable through an ArtifactLocation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ArtifactCheck {
+    check_id: StableId,
+    location: StableId,
+    checked_at: Timestamp,
+    observed_hash: Option<ContentHash>,
+    observed_size: Option<u64>,
+    result: ArtifactCheckResult,
+    checker_version: String,
+}
+
+impl ArtifactCheck {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        check_id: StableId,
+        location: StableId,
+        checked_at: Timestamp,
+        observed_hash: Option<ContentHash>,
+        observed_size: Option<u64>,
+        result: ArtifactCheckResult,
+        checker_version: String,
+    ) -> Result<Self, DomainError> {
+        ensure_non_blank(&checker_version, "artifact_check.checker_version")?;
+        if result == ArtifactCheckResult::Valid
+            && (observed_hash.is_none() || observed_size.is_none())
+        {
+            return Err(DomainError::InconsistentState {
+                field: "artifact_check.valid_observation",
+            });
+        }
+        Ok(Self {
+            check_id,
+            location,
+            checked_at,
+            observed_hash,
+            observed_size,
+            result,
+            checker_version,
+        })
+    }
+
+    pub fn check_id(&self) -> &StableId {
+        &self.check_id
+    }
+
+    pub fn location(&self) -> &StableId {
+        &self.location
+    }
+
+    pub fn checked_at(&self) -> &Timestamp {
+        &self.checked_at
+    }
+
+    pub fn observed_hash(&self) -> Option<&ContentHash> {
+        self.observed_hash.as_ref()
+    }
+
+    pub fn observed_size(&self) -> Option<u64> {
+        self.observed_size
+    }
+
+    pub fn result(&self) -> ArtifactCheckResult {
+        self.result
+    }
+
+    pub fn checker_version(&self) -> &str {
+        &self.checker_version
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,8 +412,6 @@ mod tests {
             MediaType::parse("application/pdf").unwrap(),
             hash.clone(),
             37_621_943,
-            ArtifactAvailability::Managed,
-            IntegrityStatus::Valid,
             Some("大学数学-数学分析原理与方法_含目录.pdf".to_owned()),
             Some(443),
             RightsRecord::new(
@@ -376,9 +430,13 @@ mod tests {
     #[test]
     fn artifact_location_is_independent_of_content_identity() {
         let location = ArtifactLocation::new(
+            StableId::parse("mathscape:location/source-a-pdf-primary").unwrap(),
             StableId::parse("emir-fixture:artifact/source-a-pdf").unwrap(),
-            StorageKind::Local,
-            ArtifactUri::parse("workspace:data/textbooks/source-a.pdf").unwrap(),
+            StorageKind::Managed,
+            ArtifactUri::parse(
+                "pool:sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap(),
             1,
             LocationRole::Primary,
             None,
@@ -386,7 +444,27 @@ mod tests {
         );
         assert_eq!(
             location.uri().as_str(),
-            "workspace:data/textbooks/source-a.pdf"
+            "pool:sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+    }
+
+    #[test]
+    fn valid_check_requires_a_complete_observation() {
+        let error = ArtifactCheck::new(
+            StableId::parse("mathscape:check/example").unwrap(),
+            StableId::parse("mathscape:location/example").unwrap(),
+            Timestamp::parse("2026-09-04T00:00:00+08:00").unwrap(),
+            None,
+            Some(42),
+            ArtifactCheckResult::Valid,
+            "mathscape-artifact/0.1.0".to_owned(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            DomainError::InconsistentState {
+                field: "artifact_check.valid_observation"
+            }
         );
     }
 }

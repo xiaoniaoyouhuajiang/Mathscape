@@ -4,7 +4,11 @@ use crate::MarkerRequestError;
 
 /// Validated value for Marker's zero-based `--page_range` option.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MarkerPageRange(String);
+pub struct MarkerPageRange {
+    first: u32,
+    last: u32,
+    value: String,
+}
 
 impl MarkerPageRange {
     pub fn try_from_selection(selection: &PdfSelection) -> Result<Self, MarkerRequestError> {
@@ -22,11 +26,19 @@ impl MarkerPageRange {
         } else {
             format!("{first}-{last}")
         };
-        Ok(Self(value))
+        Ok(Self { first, last, value })
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.value
+    }
+
+    pub const fn first(&self) -> u32 {
+        self.first
+    }
+
+    pub const fn last(&self) -> u32 {
+        self.last
     }
 }
 

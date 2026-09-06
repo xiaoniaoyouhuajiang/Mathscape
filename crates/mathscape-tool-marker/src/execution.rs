@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use crate::{
@@ -139,6 +139,8 @@ pub struct MarkerRun {
     status: MarkerRunStatus,
     exit_code: Option<i32>,
     elapsed: Duration,
+    started_at: SystemTime,
+    finished_at: SystemTime,
     stdout: CapturedLog,
     stderr: CapturedLog,
     forced_termination: bool,
@@ -163,6 +165,14 @@ impl MarkerRun {
 
     pub const fn elapsed(&self) -> Duration {
         self.elapsed
+    }
+
+    pub const fn started_at(&self) -> SystemTime {
+        self.started_at
+    }
+
+    pub const fn finished_at(&self) -> SystemTime {
+        self.finished_at
     }
 
     pub const fn stdout(&self) -> &CapturedLog {
@@ -230,6 +240,7 @@ impl MarkerRunner {
         let stderr_path = staging.path().join("marker.stderr.log");
         let stdout_file = create_log(&stdout_path)?;
         let stderr_file = create_log(&stderr_path)?;
+        let started_at = SystemTime::now();
         let started = Instant::now();
 
         if cancellation.is_cancelled() {
@@ -239,6 +250,7 @@ impl MarkerRunner {
                 MarkerRunStatus::Cancelled,
                 None,
                 started.elapsed(),
+                started_at,
                 stdout_path,
                 stderr_path,
                 false,
@@ -308,6 +320,7 @@ impl MarkerRunner {
             status,
             exit_status.and_then(|status| status.code()),
             started.elapsed(),
+            started_at,
             stdout_path,
             stderr_path,
             forced_termination,
@@ -322,6 +335,7 @@ impl MarkerRunner {
         status: MarkerRunStatus,
         exit_code: Option<i32>,
         elapsed: Duration,
+        started_at: SystemTime,
         stdout_path: PathBuf,
         stderr_path: PathBuf,
         forced_termination: bool,
@@ -332,6 +346,8 @@ impl MarkerRunner {
             status,
             exit_code,
             elapsed,
+            started_at,
+            finished_at: SystemTime::now(),
             stdout: capture_log(stdout_path, self.options.captured_log_bytes)?,
             stderr: capture_log(stderr_path, self.options.captured_log_bytes)?,
             forced_termination,

@@ -1,6 +1,6 @@
 # Artifact Pool boundary and persistence contract
 
-本文档规定 Mathscape Artifact Pool 的长期边界。它描述目标契约，不表示其中所有结构已经实现；当前实现状态以各 crate 文档为准。
+本文档规定 Mathscape Artifact Pool 的长期边界，并记录首个 Managed 实现切片。当前实现状态仍以各 crate 文档和测试为准。
 
 ## 核心目标
 
@@ -198,19 +198,25 @@ Workspace 关闭后可以整体移动到其他路径。应用从新的 Workspace
 managed artifacts
 external artifacts
 missing artifacts
+corrupted artifacts
+unavailable artifacts
 bytes required to hydrate
 self_contained
 ```
 
-只有不存在未解决的 External 依赖和 Missing Managed 对象时，Workspace 才能声明 `self_contained = true`。导出时可选择 hydrate、保留链接、排除依赖或中止。
+只有不存在未解决的 External 依赖，以及 Missing、Corrupted 或 Unavailable Managed 对象时，Workspace 才能声明 `self_contained = true`。导出时可选择 hydrate、保留链接、排除依赖或中止。
 
 ## 首个实现切片
 
-1. `WorkspaceRoot` 和安全的 `pool:` URI 解析。
-2. Managed object layout、staging、流式哈希、去重和原子提升。
-3. `SourceArtifact`、`ArtifactLocation` 与 `ArtifactCheck` 的 SQLite migrations。
-4. 将 `availability` 和 `integrity` 的权威状态从 `SourceArtifact` payload 移到位置/检查层。
-5. Marker inventory 提升时二次校验摘要，并在同一工作流中登记 `ConversionRun`。
-6. Workspace portability audit。
+以下内容已实现：
+
+1. `WorkspaceRoot`、稳定 Workspace ID 和安全的 `pool:` URI 解析；
+2. Managed object layout、owned staging、流式哈希、去重、quarantine 和原子无覆盖提升；
+3. `SourceArtifact`、`ArtifactLocation` 与 `ArtifactCheck` 的 SQLite v1 migration；
+4. 将 `availability` 和 `integrity` 的权威状态从 `SourceArtifact` payload 移到位置/检查层；
+5. Marker inventory 提升时二次校验摘要，并在同一工作流中登记 `ConversionRun`；
+6. Workspace portability audit、改路径重开和对象完整性验证。
+
+对象文件先于 SQLite 登记完成提升。若数据库事务失败，结果是一个不可见、按内容寻址的 orphan object，而不是指向缺失字节的目录记录；相同导入可以通过摘要去重后安全重试。后续垃圾回收器负责发现和清理超过保护期的 orphan object。
 
 External 内容导入、远程对象存储、垃圾回收与 live workspace export 均在上述边界稳定后实现。

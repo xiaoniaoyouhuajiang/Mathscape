@@ -17,7 +17,7 @@ This document records the first canonical source model implemented by
 ## Value and operational records
 
 - `ArtifactLocation` is mutable catalog state, not part of immutable artifact content.
-- `ArtifactCheck` is the planned append-only authority for location integrity;
+- `ArtifactCheck` is the append-only authority for location integrity;
   availability is derived from locations and their checks.
 - `PageCoordinate` stores zero-based PDF index, optional Marker page ID, and optional
   printed label without assuming they agree.
@@ -41,11 +41,10 @@ its SHA-256 content hash. A user-selected import path is ingestion provenance,
 not a durable runtime location. Normal imports promote an owned staging copy into
 the Managed Artifact Pool and must not depend on the original path afterward.
 
-The implemented `SourceArtifact` payload still carries `availability` and
-`integrity` fields. They are transitional in-memory fields and must not become
-the long-term operational authority in SQLite. The Artifact Pool slice will move
-that authority to `ArtifactLocation` plus append-only `ArtifactCheck` records
-while retaining `SourceArtifact` as the caller-facing aggregate.
+`SourceArtifact` no longer carries global `availability` or `integrity` fields.
+Operational authority lives in `ArtifactLocation` plus append-only
+`ArtifactCheck` records, while `SourceArtifact` remains the caller-facing
+content and descriptive-metadata aggregate.
 
 Managed storage is the default. External locations are reserved for explicit
 reference-only workflows such as very large or institutionally managed corpora;
@@ -82,7 +81,7 @@ and header kind.
 
 ## Deferred structures
 
-`IngestionJob`, `IngestionSource`, `ArtifactCheck`, `DocumentIndex`,
+`IngestionJob`, `IngestionSource`, `DocumentIndex`,
 `MapBuildUnit`, `SelectionSlice`, portability reports, parse issues, and boundary
 issues are intentionally deferred to the next source/workflow slice.
 Region candidates and quality summaries remain derived orchestration data unless
