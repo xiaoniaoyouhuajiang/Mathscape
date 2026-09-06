@@ -2117,6 +2117,7 @@ dependencies = [
  "mathscape-store-sqlite",
  "mathscape-tool-marker",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -2165,6 +2166,8 @@ dependencies = [
  "mathscape-pdf",
  "mathscape-tool-marker",
  "mathscape-validation",
+ "serde",
+ "serde_json",
  "sha2",
  "thiserror 2.0.20",
 ]

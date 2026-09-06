@@ -115,6 +115,28 @@ fn managed_import_is_deduplicated_and_survives_workspace_move() {
     let reopened = ArtifactPool::open(&moved_workspace).unwrap();
     assert_eq!(reopened.workspace().workspace_id(), &workspace_id);
     assert_eq!(
+        reopened.read_bytes(first.stable_id(), 0, 5).unwrap(),
+        b"%PDF-"
+    );
+    assert_eq!(
+        reopened.read_bytes(first.stable_id(), 9, 1024).unwrap(),
+        b"portable artifact\n"
+    );
+    assert!(
+        reopened
+            .read_bytes(first.stable_id(), first.byte_size(), 1)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        reopened.read_bytes(first.stable_id(), u64::MAX, 1),
+        Err(ArtifactPoolError::InvalidReadRange)
+    ));
+    assert!(matches!(
+        reopened.read_bytes(first.stable_id(), 0, 0),
+        Err(ArtifactPoolError::InvalidReadRange)
+    ));
+    assert_eq!(
         fs::read(reopened.managed_path(first.stable_id()).unwrap()).unwrap(),
         b"%PDF-1.7\nportable artifact\n"
     );
@@ -235,6 +257,10 @@ fn managed_locations_never_follow_symbolic_links() {
 
     assert!(matches!(
         pool.managed_path(artifact.stable_id()),
+        Err(ArtifactPoolError::UnsafeManagedPath(_))
+    ));
+    assert!(matches!(
+        pool.read_bytes(artifact.stable_id(), 0, 5),
         Err(ArtifactPoolError::UnsafeManagedPath(_))
     ));
     assert_eq!(

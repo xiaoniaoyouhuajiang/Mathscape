@@ -76,6 +76,31 @@ fn imports_a_pdf_into_a_reopenable_workspace_and_refreshes_the_graph() {
     fs::remove_file(&source).unwrap();
     let reopened = DesktopService::open(&workspace).unwrap();
     assert_eq!(reopened.snapshot().unwrap().artifact_count(), 1);
+    assert_eq!(
+        reopened
+            .read_artifact_bytes(imported.artifact_id(), 0, 5)
+            .unwrap(),
+        b"%PDF-"
+    );
+    let info =
+        serde_json::to_value(reopened.content_info(imported.artifact_id()).unwrap()).unwrap();
+    assert_eq!(info["media_type"], "application/pdf");
+    let size = info["byte_size"].as_u64().unwrap();
+    assert!(
+        reopened
+            .read_artifact_bytes(imported.artifact_id(), size + 1, 1)
+            .is_err()
+    );
+    assert!(
+        reopened
+            .read_artifact_bytes(imported.artifact_id(), 0, 4 * 1024 * 1024 + 1)
+            .is_err()
+    );
+    assert!(
+        reopened
+            .read_artifact_bytes("unknown:artifact", 0, 1)
+            .is_err()
+    );
     drop(reopened);
     directory.cleanup();
 }
@@ -135,8 +160,9 @@ while [ "$#" -gt 0 ]; do
 done
 source_name="${source_path##*/}"
 source_stem="${source_name%.*}"
-mkdir -p "$output_root/$source_stem"
-printf '# Converted analysis\n' > "$output_root/$source_stem/$source_stem.md"
+mkdir -p "$output_root/$source_stem/images"
+printf '# Converted analysis\n![plot](images/plot.png)\n' > "$output_root/$source_stem/$source_stem.md"
+printf '\211PNG\r\n\032\n' > "$output_root/$source_stem/images/plot.png"
 printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_stem}_meta.json"
 "#,
     );
@@ -154,11 +180,45 @@ printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_
             .conversion_id()
             .starts_with("mathscape:conversion/marker/")
     );
-    assert_eq!(parsed.outputs().len(), 2);
-    assert_eq!(parsed.snapshot().artifact_count(), 3);
+    assert_eq!(parsed.outputs().len(), 3);
+    let result = serde_json::to_value(&parsed).unwrap();
+    let markdown_id = result["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|output| output["role"] == "primary_markdown")
+        .unwrap()["artifact_id"]
+        .as_str()
+        .unwrap();
+    // Read after the successful run's staging has already been removed.
+    let reopened = DesktopService::open(&workspace).unwrap();
+    let info = serde_json::to_value(reopened.content_info(markdown_id).unwrap()).unwrap();
+    let paths = info["contexts"][0]["paths"].as_array().unwrap();
+    assert_eq!(paths.len(), 3);
+    let image = paths
+        .iter()
+        .find(|p| p["path"].as_str().unwrap().ends_with("/images/plot.png"))
+        .unwrap();
+    // The storage fixture uses a PNG signature; image decoding is covered in the browser test.
+    let image_id = image["artifact_id"].as_str().unwrap();
+    assert_eq!(
+        reopened.read_artifact_bytes(image_id, 0, 1024).unwrap(),
+        b"\x89PNG\r\n\x1a\n"
+    );
+    assert_eq!(
+        serde_json::to_value(reopened.content_info(image_id).unwrap()).unwrap()["media_type"],
+        "image/png"
+    );
+    assert_eq!(info["contexts"][0]["conversion_id"], parsed.conversion_id());
+    assert!(
+        String::from_utf8(reopened.read_artifact_bytes(markdown_id, 0, 1024).unwrap())
+            .unwrap()
+            .contains("Converted analysis")
+    );
+    assert_eq!(parsed.snapshot().artifact_count(), 4);
     assert_eq!(parsed.snapshot().conversion_count(), 1);
-    assert_eq!(parsed.snapshot().graph().nodes().len(), 4);
-    assert_eq!(parsed.snapshot().graph().edges().len(), 3);
+    assert_eq!(parsed.snapshot().graph().nodes().len(), 5);
+    assert_eq!(parsed.snapshot().graph().edges().len(), 4);
     assert_eq!(parsed.snapshot().pdf_artifacts().len(), 1);
     assert_eq!(parsed.snapshot().pdf_artifacts()[0].page_count(), Some(1));
     assert!(

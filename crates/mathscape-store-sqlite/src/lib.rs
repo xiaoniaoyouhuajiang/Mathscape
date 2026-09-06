@@ -374,14 +374,35 @@ impl SqliteArtifactStore {
     }
 
     pub fn artifact_locations(&self) -> Result<Vec<StoredArtifactLocation>, SqliteStoreError> {
-        let mut statement = self.connection.prepare(
+        self.query_artifact_locations(None)
+    }
+
+    /// Indexed lookup for bounded content reads; avoids loading the whole pool catalog.
+    pub fn artifact_locations_for(
+        &self,
+        artifact_id: &StableId,
+    ) -> Result<Vec<StoredArtifactLocation>, SqliteStoreError> {
+        self.query_artifact_locations(Some(artifact_id))
+    }
+
+    fn query_artifact_locations(
+        &self,
+        artifact_id: Option<&StableId>,
+    ) -> Result<Vec<StoredArtifactLocation>, SqliteStoreError> {
+        let filter = if artifact_id.is_some() {
+            "WHERE l.artifact_id = ?1"
+        } else {
+            "WHERE ?1 IS NULL"
+        };
+        let mut statement = self.connection.prepare(&format!(
             "SELECT l.location_id, l.artifact_id, a.content_hash, a.byte_size,
                     l.storage_kind, l.uri, l.current_status
              FROM artifact_locations l
              JOIN artifacts a ON a.artifact_id = l.artifact_id
+             {filter}
              ORDER BY l.artifact_id, l.priority, l.location_id",
-        )?;
-        let rows = statement.query_map([], |row| {
+        ))?;
+        let rows = statement.query_map([artifact_id.map(StableId::as_str)], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,

@@ -7,4 +7,5 @@
 .DS_Store
 .env
 .mathscape-dev/
+.test-runs/
 /apps/mathscape-desktop/gen/

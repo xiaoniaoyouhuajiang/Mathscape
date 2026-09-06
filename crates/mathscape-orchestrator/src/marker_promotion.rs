@@ -11,14 +11,25 @@ use mathscape_domain::{
     SchemaVersion, StableId, Timestamp,
 };
 use mathscape_tool_marker::{MarkerProductInventory, MarkerProductRole, MarkerRun};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+pub const PRODUCT_PATHS_KEY: &str = "mathscape.product-paths.v1";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProductPath {
+    pub path: String,
+    pub artifact_id: StableId,
+}
 
 const SCHEMA_VERSION: &str = "mathscape-marker-promotion-1";
 static PROMOTION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Error)]
 pub enum MarkerPromotionError {
+    #[error("could not serialize product paths: {0}")]
+    ProductPaths(#[from] serde_json::Error),
     #[error("Marker product inventory is not promotable")]
     InventoryNotPromotable,
     #[error("Marker product inventory does not belong to the supplied run")]
@@ -118,6 +129,19 @@ pub fn promote_marker_inventory(
 
     let page_range = run.command().page_range();
     let mut additional_options = BTreeMap::new();
+    let paths: Vec<_> = outputs
+        .iter()
+        .map(|output| ProductPath {
+            path: output
+                .relative_path
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/"),
+            artifact_id: output.artifact.stable_id().clone(),
+        })
+        .collect();
+    additional_options.insert(PRODUCT_PATHS_KEY.to_owned(), serde_json::to_string(&paths)?);
     additional_options.insert(
         "marker_profile".to_owned(),
         run.command().profile().id().to_owned(),

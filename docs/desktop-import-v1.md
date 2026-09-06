@@ -75,4 +75,5 @@ Desktop 的服务实例共享一个解析占用状态，后端在检查和执行
 - 只接受未加密的本地 PDF；密码输入尚未进入 UI 契约。
 - Marker 解析当前是等待型 Desktop 命令，UI 会保持响应但尚无逐页进度事件和
   取消按钮；Kernel 已使用可取消 runner，后续可在应用层登记活动任务。
-- PDF 页面内嵌预览尚未实现；当前右栏只展示图节点元数据。
+- Artifact 节点可通过右栏“阅读文件”打开中央阅读视图；点击“地图”返回关系图。
+  PDF、Markdown、图片和文本的读取契约见 [Artifact 阅读 v1](artifact-reading-v1.md)。

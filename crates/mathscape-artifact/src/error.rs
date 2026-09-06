@@ -5,6 +5,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ArtifactPoolError {
+    #[error(
+        "invalid artifact read range: length must be 1..=4 MiB and offset must not exceed file size"
+    )]
+    InvalidReadRange,
     #[error("{operation} failed for {path}: {source}")]
     Io {
         operation: &'static str,

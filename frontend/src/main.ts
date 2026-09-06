@@ -4,6 +4,7 @@ import type { Core, NodeSingular } from "cytoscape";
 import { mountCytoscapeGraph } from "./graph/cytoscape";
 import type { IncidenceGraph, IncidenceNode } from "./graph/projection";
 import "./styles.css";
+import { ArtifactReader } from "./reader/reader";
 
 interface DesktopSnapshot {
   workspace_id: string;
@@ -149,11 +150,13 @@ app.innerHTML = `
             <h2>Artifact / Conversion</h2>
           </div>
           <div class="legend" aria-label="图例">
+            <button id="show-map" class="reader-tab" type="button">地图</button>
             <span><i class="legend-dot entity"></i>Artifact</span>
             <span><i class="legend-dot relation"></i>Conversion</span>
           </div>
         </div>
         <div id="graph" class="graph-canvas"></div>
+        <section id="reader" class="reader-panel" aria-label="文件阅读器" hidden></section>
         <div id="empty-state" class="empty-state">
           <strong>景观尚未生成</strong>
           <span>导入第一份 PDF 后，来源节点会出现在这里。</span>
@@ -192,6 +195,13 @@ const markerState = requiredElement<HTMLElement>("#marker-state");
 const markerVersion = requiredElement<HTMLElement>("#marker-version");
 const markerProblem = requiredElement<HTMLElement>("#marker-problem");
 const toast = requiredElement<HTMLElement>("#toast");
+const readerHost = requiredElement<HTMLElement>("#reader");
+const reader = new ArtifactReader(readerHost);
+requiredElement<HTMLButtonElement>("#show-map").onclick = () => {
+  reader.close();
+  readerHost.hidden = true;
+  graphCore?.resize();
+};
 
 let graphCore: Core | null = null;
 let toastTimer: number | undefined;
@@ -363,6 +373,15 @@ function renderNodeDetail(
     technical.append(copy);
   }
   nodeDetail.append(technical);
+  if (node.domain_kind === "SourceArtifact" && node.domain_id !== null) {
+    const read = textElement("button", "parse-button", "阅读文件");
+    read.type = "button";
+    read.onclick = () => {
+      readerHost.hidden = false;
+      void reader.open(node.domain_id!, node.label);
+    };
+    nodeDetail.append(read);
+  }
   if (pdf !== undefined) {
     nodeDetail.append(createParseForm(pdf, marker));
   }

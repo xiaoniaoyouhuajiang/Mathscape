@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     fs::{self, File, OpenOptions},
-    io::{BufReader, Read, Write},
+    io::{BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process,
     sync::atomic::{AtomicU64, Ordering},
@@ -481,7 +481,7 @@ impl ArtifactPool {
     pub fn managed_path(&self, artifact_id: &StableId) -> Result<PathBuf, ArtifactPoolError> {
         let location = self
             .catalog
-            .artifact_locations()?
+            .artifact_locations_for(artifact_id)?
             .into_iter()
             .find(|location| {
                 location.artifact_id() == artifact_id
@@ -493,6 +493,33 @@ impl ArtifactPool {
         let path = self.workspace.resolve_pool_uri(location.uri())?;
         ensure_regular_nonsymlink(&path)?;
         Ok(path)
+    }
+
+    /// Bounded in-memory reads of registered managed content. No caller-supplied path.
+    pub fn read_bytes(
+        &self,
+        artifact_id: &StableId,
+        offset: u64,
+        length: u32,
+    ) -> Result<Vec<u8>, ArtifactPoolError> {
+        if length == 0 || length > 4 * 1024 * 1024 {
+            return Err(ArtifactPoolError::InvalidReadRange);
+        }
+        let path = self.managed_path(artifact_id)?;
+        let mut file =
+            File::open(&path).map_err(|e| io_error("open artifact for reading", &path, e))?;
+        let size = file
+            .metadata()
+            .map_err(|e| io_error("inspect artifact length", &path, e))?
+            .len();
+        if offset > size {
+            return Err(ArtifactPoolError::InvalidReadRange);
+        }
+        let mut bytes = vec![0; u64::from(length).min(size - offset) as usize];
+        file.seek(SeekFrom::Start(offset))
+            .and_then(|_| file.read_exact(&mut bytes))
+            .map_err(|e| io_error("read artifact bytes", &path, e))?;
+        Ok(bytes)
     }
 }
 

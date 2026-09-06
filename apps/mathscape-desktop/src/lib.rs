@@ -1,3 +1,6 @@
+mod content;
+pub use content::{ArtifactContentInfo, ContentContext};
+
 use std::{
     env,
     path::{Path, PathBuf},
@@ -690,6 +693,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            content::get_artifact_content_info,
+            content::read_artifact_bytes,
             get_desktop_snapshot,
             choose_and_import_pdf,
             get_active_parse,
