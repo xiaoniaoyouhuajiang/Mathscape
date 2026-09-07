@@ -63,3 +63,55 @@ test("virtual path boundary, read errors, JSON and switching during a load", asy
   await page.evaluate(async () => (window as any).harness.reader.open("missing", "Missing"));
   await expect(page.locator("#reader")).toContainText("Artifact 不存在");
 });
+
+test("Markdown block endpoints, raw source, full selection and review policy", async ({ page }) => {
+  await page.evaluate(async () => (window as any).harness.reader.open("md", "选择测试"));
+  await expect(page.getByRole("button", { name: "设置起点" })).toBeDisabled();
+  await page.getByLabel("原文块 2", { exact: true }).click();
+  await page.getByRole("button", { name: "设置起点" }).click();
+  // Click the actual rendered KaTeX, not a copy of the source formula.
+  await page.getByLabel("原文块 3", { exact: true }).locator(".katex").click();
+  await page.getByRole("button", { name: "设置终点" }).click();
+  await expect(page.locator(".is-selected-block")).toHaveCount(2);
+  await page.getByRole("button", { name: "校验选区" }).click();
+  await expect(page.locator(".selection-panel [role=status]")).toContainText("选区已校验");
+  await expect(page.locator(".selection-source")).toContainText("\\frac{1}{n}");
+  const request = await page.evaluate(() => (window as any).harness.selectionRequests.at(-1));
+  expect(request.selector).toEqual({ kind: "block_range", first: "test-block-1", last: "test-block-2" });
+  expect(request.admission).toBe("review_before_publish");
+  await page.getByRole("button", { name: "查看原文" }).click();
+  await page.getByRole("button", { name: "查看渲染" }).click();
+  await expect(page.locator(".is-selected-block")).toHaveCount(2);
+  await page.getByRole("button", { name: "选择全文" }).click();
+  await page.getByLabel("后续入图方式").selectOption("automatic_candidate");
+  await page.getByRole("button", { name: "校验选区" }).click();
+  await expect(page.locator(".selection-source")).toContainText("# Math reader 中文😀");
+  expect(await page.evaluate(() => (window as any).harness.selectionRequests.at(-1).selector.kind)).toBe("whole_document");
+  await page.getByRole("button", { name: "清除选择" }).click();
+  await expect(page.getByRole("button", { name: "校验选区" })).toBeDisabled();
+});
+
+test("reversed endpoints, stale async validation, context switch and errors", async ({ page }) => {
+  await page.evaluate(async () => (window as any).harness.reader.open("md", "选择测试"));
+  await page.getByLabel("原文块 3", { exact: true }).focus();
+  await page.getByLabel("原文块 3", { exact: true }).press("Enter");
+  await page.getByRole("button", { name: "设置起点" }).click();
+  await page.getByLabel("原文块 1", { exact: true }).click();
+  await page.getByRole("button", { name: "设置终点" }).click();
+  await expect(page.getByRole("button", { name: "校验选区" })).toBeDisabled();
+  await expect(page.locator(".selection-panel [role=status]")).toContainText("终点必须");
+  await page.getByRole("button", { name: "选择全文" }).click();
+  await page.evaluate(() => { (window as any).harness.behavior.selectionDelay = 300; });
+  await page.getByRole("button", { name: "校验选区" }).click();
+  await page.getByRole("button", { name: "清除选择" }).click();
+  await page.waitForTimeout(400);
+  await expect(page.locator(".selection-source")).toBeHidden();
+  await page.getByRole("button", { name: "选择全文" }).click();
+  await page.getByLabel("转换来源").selectOption("1");
+  await expect(page.getByRole("button", { name: "校验选区" })).toBeDisabled();
+  await page.getByRole("button", { name: "选择全文" }).click();
+  await page.evaluate(() => { (window as any).harness.behavior.failSelection = true; });
+  await page.getByRole("button", { name: "校验选区" }).click();
+  await expect(page.locator(".selection-panel [role=status]")).toContainText("输入快照已改变");
+  expect(await page.evaluate(() => (window as any).harness.selectionRequests.at(-1).snapshot.conversion_id)).toBe("conversion-two");
+});

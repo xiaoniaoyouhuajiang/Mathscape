@@ -2,6 +2,7 @@ import { getDocument, GlobalWorkerOptions, PDFDataRangeTransport, type PDFDocume
 import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import { contentInfo, readRange, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
 import { markdownRenderer } from "./markdown";
+import { markdownDocument, MarkdownSelection } from "./selection";
 import "./reader.css";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -167,9 +168,8 @@ export class ArtifactReader {
   }
 
   private async markdown(info: ContentInfo, generation: number): Promise<void> {
-    const bytes = await readSmallFile(info);
+    let document = await markdownDocument(info.artifact_id, info.contexts[0]?.conversion_id ?? null);
     if (generation !== this.generation) return;
-    const source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     const controls = element("div"); controls.className = "reader-controls";
     const raw = element("button", "查看原文");
     const contextSelect = element("select");
@@ -179,12 +179,34 @@ export class ArtifactReader {
     if (info.contexts.length > 1) controls.append(contextSelect);
     const article = element("article"); article.className = "markdown-body";
     this.host.append(controls, article);
+    let selection = new MarkdownSelection(document, article);
+    controls.after(selection.panel);
+    this.disposeDocument = () => selection.dispose();
     let rawMode = false, version = 0;
     const render = async (): Promise<void> => {
       const current = ++version;
       this.revokeImages();
-      if (rawMode) { article.replaceChildren(element("pre", source)); return; }
-      article.innerHTML = markdownRenderer().render(source);
+      if (rawMode) { article.replaceChildren(element("pre", document.source)); return; }
+      const md = markdownRenderer();
+      const environment = {};
+      // Parse the full source once to retain reference-style link/image definitions.
+      md.parse(document.source, environment);
+      const sourceBytes = new TextEncoder().encode(document.source);
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      article.replaceChildren();
+      document.blocks.forEach((block, i) => {
+        const wrapper = element("div");
+        wrapper.className = "source-block";
+        wrapper.dataset.sourceBlock = block.id;
+        wrapper.tabIndex = 0;
+        wrapper.setAttribute("aria-label", `原文块 ${i + 1}`);
+        wrapper.title = `第 ${i + 1} 块 · ${block.kind} · UTF-8 [${block.range.start}, ${block.range.end})`;
+        const text = decoder.decode(sourceBytes.subarray(block.range.start, block.range.end));
+        wrapper.innerHTML = md.render(text, environment);
+        if (!wrapper.innerHTML.trim()) wrapper.append(element("pre", text));
+        article.append(wrapper);
+      });
+      selection.refresh();
       article.querySelectorAll("a").forEach(link => {
         link.removeAttribute("href");
         link.title = "链接导航尚未启用";
@@ -214,7 +236,23 @@ export class ArtifactReader {
       }
     };
     raw.onclick = () => { rawMode = !rawMode; raw.textContent = rawMode ? "查看渲染" : "查看原文"; void render(); };
-    contextSelect.onchange = () => void render();
+    contextSelect.onchange = () => {
+      const current = ++version;
+      selection.dispose();
+      this.revokeImages();
+      article.textContent = "正在切换转换来源…";
+      raw.disabled = true;
+      void markdownDocument(info.artifact_id, info.contexts[Number(contextSelect.value)]?.conversion_id ?? null).then(data => {
+        if (generation !== this.generation || current !== version) return;
+        document = data;
+        selection = new MarkdownSelection(document, article);
+        controls.after(selection.panel);
+        raw.disabled = false;
+        return render();
+      }).catch(error => {
+        if (generation === this.generation && current === version) article.textContent = String(error);
+      });
+    };
     await render();
   }
 }

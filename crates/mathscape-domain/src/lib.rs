@@ -4,6 +4,7 @@
 //! providers, Marker, and Lean. It defines the narrow waist that all writers
 //! must cross before data can enter the canonical map.
 
+mod discovery;
 mod entity;
 mod error;
 mod id;
@@ -12,6 +13,7 @@ mod relation;
 mod source;
 mod trust;
 
+pub use discovery::*;
 pub use entity::{
     EntityEnvelope, EntityHeader, EntityKind, EntityPayload, LifecycleStatus, PayloadShape,
 };

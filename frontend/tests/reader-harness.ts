@@ -2,6 +2,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { ArtifactReader } from "../src/reader/reader";
 import { markdownRenderer } from "../src/reader/markdown";
 import { resolveProductPath, readRange, type ContentInfo } from "../src/reader/content";
+import type { AnchoredMarkdown, SelectionRequest } from "../src/reader/selection";
 
 // Tiny reproducible PDF: two pages and one outline entry, no copyrighted assets.
 function samplePdf(): Uint8Array {
@@ -26,7 +27,7 @@ function samplePdf(): Uint8Array {
   return new TextEncoder().encode(data);
 }
 
-const markdown = String.raw`# Math reader
+const markdown = String.raw`# Math reader 中文😀
 
 Inline $x^2$ and \(a_n\to a\).
 
@@ -58,16 +59,44 @@ const files: Record<string, { media: string; bytes: Uint8Array }> = {
   bad: { media: "application/pdf", bytes: new TextEncoder().encode("not a PDF") },
 };
 const reads: { id: string; offset: number; length: number }[] = [];
+const selectionRequests: SelectionRequest[] = [];
+const behavior = { selectionDelay: 0, failSelection: false };
+// Predetermined IPC double, not a second implementation of backend segmentation.
+function anchored(conversion: string): AnchoredMarkdown {
+  const starts = ["# Math reader", "Inline $", "$$\n", "\\[\n", "![Diagram]", "<script>", "~~~tex"].map(marker => markdown.indexOf(marker));
+  return {
+    snapshot: { artifact_id: "md", conversion_id: conversion, content_hash: "test-hash", anchor_scheme: "mathscape-markdown-blocks-1", fingerprint: "test-" + conversion },
+    source: markdown,
+    blocks: starts.map((start, i) => ({ id: "test-block-" + i, kind: "text", range: {
+      start: new TextEncoder().encode(markdown.slice(0, start)).length,
+      end: new TextEncoder().encode(markdown.slice(0, starts[i + 1] ?? markdown.length)).length,
+    } })),
+  };
+}
 mockIPC((command, payload) => {
+  if (command === "resolve_markdown_selection") {
+    const request = (payload as { request: SelectionRequest }).request;
+    selectionRequests.push(request);
+    const doc = anchored(request.snapshot.conversion_id!);
+    const selector = request.selector;
+    const first = selector.kind === "whole_document" ? 0 : doc.blocks.findIndex(b => b.id === selector.first);
+    const last = selector.kind === "whole_document" ? doc.blocks.length - 1 : doc.blocks.findIndex(b => b.id === selector.last);
+    const range = { start: doc.blocks[first].range.start, end: doc.blocks[last].range.end };
+    return new Promise((resolve, reject) => setTimeout(() => {
+      if (behavior.failSelection) return reject("测试：输入快照已改变");
+      resolve({ request, range, block_ids: doc.blocks.slice(first, last + 1).map(b => b.id), raw_text: new TextDecoder().decode(new TextEncoder().encode(markdown).slice(range.start, range.end)), context_ranges: [], input_fingerprint: "test-input" });
+    }, behavior.selectionDelay));
+  }
+  if (command === "get_markdown_document") return anchored((payload as { conversionId: string }).conversionId);
   const args = payload as { artifactId: string; offset: number; length: number };
   const file = files[args.artifactId];
   if (!file) throw new Error("Artifact 不存在");
   if (command === "get_artifact_content_info") return {
     artifact_id: args.artifactId, media_type: file.media, byte_size: file.bytes.length,
-    contexts: args.artifactId === "md" ? [{ conversion_id: "conversion", paths: [
+    contexts: args.artifactId === "md" ? ["conversion", "conversion-two"].map(conversion_id => ({ conversion_id, paths: [
       { path: "book/book.md", artifact_id: "md" },
       { path: "book/images/plot.png", artifact_id: "png" },
-    ] }] : [],
+    ] })) : [],
   } satisfies ContentInfo;
   if (command === "read_artifact_bytes") {
     reads.push({ id: args.artifactId, offset: args.offset, length: args.length });
@@ -78,5 +107,5 @@ mockIPC((command, payload) => {
 
 const reader = new ArtifactReader(document.querySelector<HTMLElement>("#reader")!);
 Object.assign(window, {
-  harness: { reader, reads, resolveProductPath, readRange, render: (source: string) => markdownRenderer().render(source) },
+  harness: { reader, reads, resolveProductPath, readRange, selectionRequests, behavior, render: (source: string) => markdownRenderer().render(source) },
 });

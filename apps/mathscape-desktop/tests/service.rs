@@ -9,6 +9,9 @@ use lopdf::{Document, Object, Stream, content::Content, content::Operation, dict
 use mathscape_desktop::{
     DesktopService, DesktopServiceError, MarkerProfileChoice, ParsePdfRequest, PdfImportOutcome,
 };
+use mathscape_domain::{
+    DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest, SourceSelector,
+};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -210,6 +213,42 @@ printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_
         "image/png"
     );
     assert_eq!(info["contexts"][0]["conversion_id"], parsed.conversion_id());
+    let anchored = reopened
+        .markdown_document(markdown_id, Some(parsed.conversion_id()))
+        .unwrap();
+    assert!(anchored.source.contains("Converted analysis"));
+    assert_eq!(anchored.blocks.len(), 2);
+    let request = DiscoverySelectionRequest {
+        version: DISCOVERY_SELECTION_VERSION.into(),
+        snapshot: anchored.snapshot.clone(),
+        selector: SourceSelector::WholeDocument,
+        admission: DiscoveryAdmission::ReviewBeforePublish,
+    };
+    let selected = reopened
+        .resolve_markdown_selection(request.clone())
+        .unwrap();
+    assert_eq!(selected.raw_text, anchored.source);
+    assert_eq!(selected.range.end, anchored.source.len() as u64);
+    assert!(reopened.markdown_document(markdown_id, None).is_err());
+    assert!(
+        reopened
+            .markdown_document(markdown_id, Some("test:foreign-conversion"))
+            .is_err()
+    );
+    assert!(
+        reopened
+            .markdown_document(imported.artifact_id(), None)
+            .is_err()
+    );
+    let mut invalid = request.clone();
+    invalid.snapshot.anchor_scheme = "unknown-version".into();
+    assert!(reopened.resolve_markdown_selection(invalid).is_err());
+    let mut invalid = request;
+    invalid.selector = SourceSelector::BlockRange {
+        first: "foreign-block".into(),
+        last: "foreign-block".into(),
+    };
+    assert!(reopened.resolve_markdown_selection(invalid).is_err());
     assert!(
         String::from_utf8(reopened.read_artifact_bytes(markdown_id, 0, 1024).unwrap())
             .unwrap()

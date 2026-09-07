@@ -20,3 +20,10 @@
 .markdown-body table { border-collapse: collapse; }
 .markdown-body th, .markdown-body td { border: 1px solid #c5ccd1; padding: 5px 10px; }
 .reader-image { color: #8c4d38; }
+.selection-panel { position: sticky; top: 0; z-index: 1; background: #131c24; border: 1px solid #45606c; padding: 10px; margin: 0 0 12px; font-size: 12px; }
+.selection-panel p { margin: 4px 0 10px; }
+.selection-source { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.source-block { border-left: 3px solid transparent; padding: 3px 10px; margin: 3px 0; cursor: pointer; }
+.source-block:hover { background: #edf0f4; }
+.source-block.is-selected-block { background: #e1f0e9; border-left-color: #268065; }
+.source-block.is-current-block, .source-block:focus-visible { outline: 2px solid #567ebb; outline-offset: -2px; }
