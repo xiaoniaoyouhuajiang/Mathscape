@@ -2,13 +2,14 @@
 //! Range authorization, coverage, reference closure and evidence require a validator.
 //! These DTOs deliberately do not implement EntityPayload or convert into a MapPatch.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     ContentHash, SourceSelector, SourceUnitKind, SourceUnitRelationKind, UnitCompleteness,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum DiscoveryProposalVersion {
     #[serde(rename = "mathscape-discovery-proposal-1")]
     V1,
@@ -16,7 +17,7 @@ pub enum DiscoveryProposalVersion {
 
 /// References only blocks visible in DiscoveryInput. Whole-document authority is
 /// reserved for user selection; a producer must name explicit endpoints.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DiscoverySelector {
     BlockRange {
@@ -52,7 +53,7 @@ impl From<DiscoverySelector> for SourceSelector {
 }
 
 /// Discovery excludes proof steps; proofs are first identified as whole units.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryUnitKind {
     Section,
@@ -88,7 +89,7 @@ impl From<DiscoveryUnitKind> for SourceUnitKind {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryUnitProposal {
     /// Proposal-local handle, never a map StableId. Syntax/uniqueness checked later.
@@ -103,7 +104,7 @@ pub struct DiscoveryUnitProposal {
     pub completeness: UnitCompleteness,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryRelationKind {
     Proves,
@@ -127,7 +128,7 @@ impl From<DiscoveryRelationKind> for SourceUnitRelationKind {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryRelationProposal {
     pub source: String,
@@ -138,7 +139,7 @@ pub struct DiscoveryRelationProposal {
     pub basis: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryReferenceProposal {
     pub source: String,
@@ -149,7 +150,9 @@ pub struct DiscoveryReferenceProposal {
     pub target: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryIssueKind {
     LeftTruncated,
@@ -165,7 +168,7 @@ pub enum DiscoveryIssueKind {
 
 /// A requested source lookup, never permission to open arbitrary files or URLs.
 /// Empty struct variants ensure Serde rejects extra fields even without payloads.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DiscoveryContextRequest {
     Before {},
@@ -174,7 +177,7 @@ pub enum DiscoveryContextRequest {
     LocalReference { target_label: String },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryIssueProposal {
     pub kind: DiscoveryIssueKind,
@@ -185,7 +188,7 @@ pub struct DiscoveryIssueProposal {
     pub context_request: Option<DiscoveryContextRequest>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DiscoveryCoverageDisposition {
     /// Producer claims it examined the region; not proof of exhaustive discovery.
@@ -197,14 +200,14 @@ pub enum DiscoveryCoverageDisposition {
     Unprocessed { reason: String },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryCoverageProposal {
     pub selector: DiscoverySelector,
     pub disposition: DiscoveryCoverageDisposition,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryProposal {
     pub version: DiscoveryProposalVersion,

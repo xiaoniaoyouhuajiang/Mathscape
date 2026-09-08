@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 mathscape-artifact.workspace = true
 mathscape-domain.workspace = true
+mathscape-llm.workspace = true
 mathscape-pdf.workspace = true
 mathscape-tool-marker.workspace = true
 mathscape-validation.workspace = true
@@ -15,7 +16,11 @@ sha2.workspace = true
 pulldown-cmark.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+schemars.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+jsonschema = { version = "=0.55.0", default-features = false }
 
 [lints]
 workspace = true

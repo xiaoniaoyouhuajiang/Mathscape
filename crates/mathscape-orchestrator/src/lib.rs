@@ -1,6 +1,7 @@
 //! Versioned, observable workflows for ingestion, extraction, and formalization.
 
 mod discovery_input;
+mod discovery_prompt;
 mod discovery_validation;
 mod markdown_anchors;
 mod marker_promotion;
@@ -9,6 +10,11 @@ mod selection_plan;
 pub use discovery_input::{
     DEFAULT_DISCOVERY_INPUT_BLOCKS, DEFAULT_DISCOVERY_INPUT_BYTES, DiscoveryInputError,
     DiscoveryInputLimits, build_discovery_input,
+};
+pub use discovery_prompt::{
+    DISCOVERY_PROMPT_MANIFEST, DISCOVERY_SYSTEM_PROMPT, DiscoveryPromptManifest,
+    PreparedDiscoveryRequest, build_discovery_request, discovery_output_schema,
+    discovery_prompt_manifest,
 };
 pub use discovery_validation::{
     DEFAULT_PROPOSAL_ITEMS_PER_COLLECTION, DEFAULT_PROPOSAL_SELECTORS,

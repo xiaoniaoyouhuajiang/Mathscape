@@ -153,6 +153,19 @@ impl From<RevisionId> for String {
 #[serde(transparent)]
 pub struct ContentHash(RevisionId);
 
+impl schemars::JsonSchema for ContentHash {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ContentHash".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^sha256:[0-9a-fA-F]{64}$"
+        })
+    }
+}
+
 impl ContentHash {
     pub fn from_revision(revision: RevisionId) -> Self {
         Self(revision)

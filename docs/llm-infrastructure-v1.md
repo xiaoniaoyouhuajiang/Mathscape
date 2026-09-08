@@ -99,7 +99,8 @@ SQLite schema v2 已增加第一类表，第二类仍待实现：
 
 ## 下一步接入顺序
 
-1. 为 DiscoveryProposal 及其嵌套 DTO 补 `JsonSchema`，实现版本化 Discovery prompt producer。
+1. DiscoveryProposal 的 `JsonSchema`、版本化 [Prompt 包](../prompts/source-discovery/v1/README.md)
+   与离线 `build_discovery_request` 已完成；下一步实现实际调用与响应处理的 Discovery producer。
 2. 用 `ScriptedLlmBackend` 完成 `DiscoveryInput → proposal → validate` 的离线集成测试。
 3. 增加 run SQLite repository 及 LLM 任务状态；profile、钥匙串和 Desktop 设置已完成。
 4. 增加 orchestrator 的取消、预算、退避和一次有界 repair policy。

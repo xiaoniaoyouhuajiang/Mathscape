@@ -38,6 +38,9 @@ LLM profile、运行期凭据、单次调用与编排层的边界见
 Desktop 配置页、SQLite profile 与系统钥匙串的边界见
 [`desktop-llm-settings-v1.md`](desktop-llm-settings-v1.md)。
 
+内容发现结果如何经接受、来源登记进入图，再按需补充数学语义，见
+[`生成、登记与晋升草案`](discovery-registration-promotion-draft.md)；其中 Domain 修订尚未实施。
+
 ## 初始里程碑
 
 导入 `epsilon-n-cesaro-v1` fixture，保存稳定 ID、来源定位和关系语义，通过统一校验，并能查询来源链与 R/D/T/X 邻域。

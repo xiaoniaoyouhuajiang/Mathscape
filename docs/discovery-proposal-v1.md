@@ -1,6 +1,7 @@
 # Discovery Proposal v1：最小输出契约
 
-状态：Rust DTO、选择器授权解析和确定性验证器已实现；LLM 调用和保存待实现。
+状态：Rust DTO、选择器授权解析、确定性验证器、输出 Schema、版本化 Prompt 与离线请求
+构建器已实现；LLM 调用和保存待实现。
 日期：2026-09-08。上位设计为工作区 `docs/rdtx/source-content-discovery-draft.md`；
 本文件将其中的输出示意收敛为当前工程契约。
 
@@ -34,8 +35,9 @@ TrustRecord、EntityPayload 或 MapPatch 转换。字段如下：
 | issues | 问题类型、可空的受影响单元、证据、观察、可空的补上下文请求 |
 | coverage | 区域选择器，以及 processed / skipped / unprocessed |
 
-五个集合均必须出现，可以为空；不能用遗漏集合表示“没有发现”。可选字段允许 null 或省略，
-序列化时统一输出 null。未知字段在各层拒绝，不接受模型添加的 stable_id、trust、字节偏移等。
+五个集合均必须出现，可以为空；不能用遗漏集合表示“没有发现”。Domain 解码允许可选字段
+为 null 或省略，序列化时统一输出 null；生产输出 Schema 更严格，要求这些字段显式出现。
+未知字段在各层拒绝，不接受模型添加的 stable_id、trust、字节偏移等。
 引用和关系仅支持提案内 unit temp_id，首版不支持凭空引用已有图节点。
 
 运行 ID、请求 ID、模型、prompt 版本、预算、重试次数、人工审核/自动发布策略由系统调用
@@ -82,7 +84,7 @@ reference.target 非空仅表示模型提出一个本地候选目标，不等于
 
 coverage 的 processed 表示模型声称遍历了区域，不保证所有单元都被找到；skipped 适用于
 已看过但无须建单元的页眉等内容，必须说明原因；unprocessed 表示未处理，必须说明原因。
-未来验证器应要求 requested 内全部非空白内容被覆盖，纯空白间隙由程序核算；context
+当前验证器要求 requested 内全部非空白内容被覆盖，纯空白间隙由程序核算；context
 不得冒充 requested 完成覆盖。覆盖应无互相冲突的重复区间，不能用单位计数推导完成。
 空 units + 未说明的 coverage 缺口不能视为成功。
 
@@ -114,6 +116,21 @@ JSON 反序列化只保证形状；空字符串、重复 ID、缺失证据、未
 的 Edition、SourceSpan、DialectScope 条件，并保留发现候选到正式对象的映射。
 Markdown 独立定位的 SourceSpan 契约仍待修订，本次没有通过虚构 PDF 页码绕过此条件。
 
+后续修订方向见 [`内容结构生成、来源登记与语义晋升草案`](discovery-registration-promotion-draft.md)：
+建议允许上下文未解析的来源单元先受控登记，将完整 DialectScope 的构建延后。
+该草案区分接受决策与数学可信性；它尚未改变上述当前 Domain 的必填条件。
+
+## Schema 与 Prompt
+
+版本化资源见 [Source Discovery v1](../prompts/source-discovery/v1/README.md)。输出 Schema
+从 DTO 的 JsonSchema 序列化契约派生，并通过测试锁定已发布快照，避免两套字段手工漂移。
+形状校验和确定性来源校验分工不变；Schema 不承担范围授权或数学正确性判断。
+
+`build_discovery_request(document, selection, limits)` 返回验证过的 DiscoveryInput、
+供应商中立 LlmRequest、manifest 与 Prompt 指纹。固定指令在 system 消息，材料 JSON 在
+user 消息；输出使用 JSON Schema，无工具调用。此接口不发送请求、不保存候选、不改变
+接受状态；响应处理、运行记录与发布仍由后续 Producer/application 实现。
+
 ## 最小样例与验证
 
 仓库样例为 `crates/mathscape-domain/tests/fixtures/discovery-proposal.json`，对应自编原文：
@@ -133,4 +150,5 @@ coverage 缺口、partial、完整性和规模限制。
 cargo test -p mathscape-domain --test discovery_proposal
 cargo test -p mathscape-orchestrator --test discovery_input
 cargo test -p mathscape-orchestrator --test discovery_validation
+cargo test -p mathscape-orchestrator --test discovery_prompt
 ```
