@@ -1,0 +1,157 @@
+use mathscape_llm::{
+    CapabilitySupport, CredentialRef, GenaiBackend, GenaiBackendOptions, LLM_PROFILE_VERSION,
+    LlmBackend, LlmCapabilities, LlmErrorKind, LlmGenerationOptions, LlmMessage, LlmProfile,
+    LlmRequest, LlmResponseFormat, LlmRole, LlmTask, LlmToolChoice, MemoryCredentialResolver,
+    WireProtocol,
+};
+use secrecy::SecretString;
+use serde_json::json;
+use std::{sync::Arc, time::Duration};
+use url::Url;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{body_partial_json, header, method, path},
+};
+
+fn request() -> LlmRequest {
+    LlmRequest {
+        task: LlmTask {
+            kind: "source_discovery".to_string(),
+            version: "1".to_string(),
+            input_fingerprint: None,
+        },
+        messages: vec![
+            LlmMessage::text(LlmRole::System, "Return only valid JSON."),
+            LlmMessage::text(LlmRole::User, "Extract the selected source."),
+        ],
+        tools: Vec::new(),
+        tool_choice: LlmToolChoice::Auto,
+        response_format: LlmResponseFormat::JsonSchema {
+            name: "discovery".to_string(),
+            description: None,
+            schema: json!({
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+                "additionalProperties": false
+            }),
+        },
+        options: LlmGenerationOptions {
+            temperature: Some(0.0),
+            max_output_tokens: Some(256),
+            capture_raw_response: true,
+            ..LlmGenerationOptions::default()
+        },
+    }
+}
+
+fn profile(server: &MockServer) -> LlmProfile {
+    LlmProfile {
+        version: LLM_PROFILE_VERSION.to_string(),
+        id: "relay-test".to_string(),
+        provider: "custom-relay".to_string(),
+        wire_protocol: WireProtocol::OpenAiChatCompletions,
+        model: "relay-model".to_string(),
+        endpoint: Some(Url::parse(&format!("{}/v1/", server.uri())).unwrap()),
+        credential: Some(CredentialRef::new("relay-test-key").unwrap()),
+        capabilities: LlmCapabilities {
+            structured_output: CapabilitySupport::Supported,
+            usage: CapabilitySupport::Supported,
+            ..LlmCapabilities::default()
+        },
+    }
+}
+
+fn credentials() -> Arc<MemoryCredentialResolver> {
+    let resolver = Arc::new(MemoryCredentialResolver::default());
+    resolver
+        .insert(
+            CredentialRef::new("relay-test-key").unwrap(),
+            SecretString::from("fixture-secret".to_string()),
+        )
+        .unwrap();
+    resolver
+}
+
+#[tokio::test]
+async fn custom_openai_compatible_endpoint_receives_structured_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(header("authorization", "Bearer fixture-secret"))
+        .and(body_partial_json(json!({
+            "model": "relay-model",
+            "temperature": 0.0,
+            "max_tokens": 256
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "chatcmpl-fixture",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "relay-model-v2",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "{\"ok\":true}"},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 5,
+                "total_tokens": 16
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let backend = GenaiBackend::new(
+        profile(&server),
+        credentials(),
+        GenaiBackendOptions {
+            timeout: Duration::from_secs(5),
+            connect_timeout: Duration::from_secs(2),
+        },
+    )
+    .unwrap();
+    let response = backend.execute(request()).await.unwrap();
+
+    assert_eq!(response.text().as_deref(), Some(r#"{"ok":true}"#));
+    assert_eq!(response.target.provider_model, "relay-model-v2");
+    assert_eq!(response.usage.input_tokens, Some(11));
+    assert_eq!(response.usage.total_tokens, Some(16));
+    assert!(response.raw_response.is_some());
+
+    let received = server.received_requests().await.unwrap();
+    let body: serde_json::Value = received[0].body_json().unwrap();
+    assert_eq!(body["response_format"]["type"], "json_schema");
+    assert_eq!(body["response_format"]["json_schema"]["name"], "discovery");
+}
+
+#[tokio::test]
+async fn rate_limit_is_classified_and_retry_after_is_preserved() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "3")
+                .set_body_json(json!({"error": {"message": "slow down"}})),
+        )
+        .mount(&server)
+        .await;
+    let backend = GenaiBackend::new(
+        profile(&server),
+        credentials(),
+        GenaiBackendOptions::default(),
+    )
+    .unwrap();
+
+    let error = backend.execute(request()).await.unwrap_err();
+    assert_eq!(error.kind(), LlmErrorKind::RateLimited);
+    assert!(matches!(
+        error,
+        mathscape_llm::LlmError::RateLimited {
+            retry_after_ms: Some(3000)
+        }
+    ));
+}
