@@ -10,6 +10,7 @@ build = "build.rs"
 mathscape-artifact.workspace = true
 mathscape-domain.workspace = true
 mathscape-graph.workspace = true
+mathscape-llm = { workspace = true, features = ["keyring"] }
 mathscape-orchestrator.workspace = true
 mathscape-pdf.workspace = true
 mathscape-query.workspace = true
@@ -17,15 +18,19 @@ mathscape-store-sqlite.workspace = true
 mathscape-tool-marker.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+secrecy.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 thiserror.workspace = true
+url.workspace = true
 
 [build-dependencies]
 tauri-build.workspace = true
 
 [dev-dependencies]
 lopdf.workspace = true
+tokio.workspace = true
+wiremock.workspace = true
 
 [lints]
 workspace = true

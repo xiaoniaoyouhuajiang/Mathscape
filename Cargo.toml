@@ -10,6 +10,7 @@ license = "UNLICENSED"
 
 [workspace.dependencies]
 genai = "=0.6.5"
+keyring = "=4.2.0"
 mathscape-artifact = { path = "crates/mathscape-artifact" }
 mathscape-domain = { path = "crates/mathscape-domain" }
 mathscape-fixture = { path = "crates/mathscape-fixture" }

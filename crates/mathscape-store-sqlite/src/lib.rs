@@ -13,12 +13,15 @@ use mathscape_domain::{
     LocationStatus, PageIndexBase, SourceArtifact, SourcePayload, SourceRelation, StableId,
     StorageKind,
 };
+use mathscape_llm::LlmProfile;
 use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
 
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 
 const ARTIFACT_POOL_MIGRATION: &str = include_str!("../../../migrations/0001_artifact_pool.sql");
+const LLM_PROFILES_MIGRATION: &str = include_str!("../../../migrations/0002_llm_profiles.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -40,6 +43,8 @@ pub enum SqliteStoreError {
     ArtifactInvariant(&'static str),
     #[error("expected a ConversionRun relation")]
     ExpectedConversionRun,
+    #[error("LLM profile is invalid: {0}")]
+    InvalidLlmProfile(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,6 +115,22 @@ pub enum RegistrationOutcome {
     Existing,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredLlmProfile {
+    profile: LlmProfile,
+    is_default: bool,
+}
+
+impl StoredLlmProfile {
+    pub fn profile(&self) -> &LlmProfile {
+        &self.profile
+    }
+
+    pub const fn is_default(&self) -> bool {
+        self.is_default
+    }
+}
+
 pub struct SqliteArtifactStore {
     connection: Connection,
 }
@@ -129,12 +150,21 @@ impl SqliteArtifactStore {
         connection.pragma_update(None, "synchronous", "FULL")?;
         let version = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match version {
-            0 => connection.execute_batch(ARTIFACT_POOL_MIGRATION)?,
-            1 => validate_schema(&connection)?,
+            0 => {
+                connection.execute_batch(ARTIFACT_POOL_MIGRATION)?;
+                connection.execute_batch(LLM_PROFILES_MIGRATION)?;
+                validate_schema(&connection)?;
+            }
+            1 => {
+                validate_artifact_schema(&connection)?;
+                connection.execute_batch(LLM_PROFILES_MIGRATION)?;
+                validate_schema(&connection)?;
+            }
+            2 => validate_schema(&connection)?,
             actual => {
                 return Err(SqliteStoreError::UnsupportedSchemaVersion {
                     actual,
-                    supported: 1,
+                    supported: SUPPORTED_SCHEMA_VERSION,
                 });
             }
         }
@@ -526,6 +556,101 @@ impl SqliteArtifactStore {
                 })?;
         rust_u64(count, "conversion_count")
     }
+
+    pub fn list_llm_profiles(&self) -> Result<Vec<StoredLlmProfile>, SqliteStoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT profile_id, profile_json, is_default
+             FROM llm_profiles
+             ORDER BY is_default DESC, profile_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut profiles = Vec::new();
+        for row in rows {
+            let (profile_id, profile_json, is_default) = row?;
+            let profile: LlmProfile = serde_json::from_str(&profile_json)?;
+            profile
+                .validate()
+                .map_err(|error| SqliteStoreError::InvalidLlmProfile(error.to_string()))?;
+            if profile.id != profile_id {
+                return Err(SqliteStoreError::InvalidLlmProfile(format!(
+                    "row id '{profile_id}' does not match payload id '{}'",
+                    profile.id
+                )));
+            }
+            profiles.push(StoredLlmProfile {
+                profile,
+                is_default: sqlite_bool(is_default, "llm_profiles.is_default")?,
+            });
+        }
+        Ok(profiles)
+    }
+
+    pub fn llm_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<Option<StoredLlmProfile>, SqliteStoreError> {
+        Ok(self
+            .list_llm_profiles()?
+            .into_iter()
+            .find(|stored| stored.profile.id == profile_id))
+    }
+
+    pub fn default_llm_profile(&self) -> Result<Option<StoredLlmProfile>, SqliteStoreError> {
+        Ok(self
+            .list_llm_profiles()?
+            .into_iter()
+            .find(StoredLlmProfile::is_default))
+    }
+
+    pub fn upsert_llm_profile(
+        &mut self,
+        profile: &LlmProfile,
+        make_default: bool,
+    ) -> Result<StoredLlmProfile, SqliteStoreError> {
+        profile
+            .validate()
+            .map_err(|error| SqliteStoreError::InvalidLlmProfile(error.to_string()))?;
+        let profile_json = serde_json::to_string(profile)?;
+        let transaction = self.connection.transaction()?;
+        let existing_default = transaction
+            .query_row(
+                "SELECT is_default FROM llm_profiles WHERE profile_id = ?1",
+                [profile.id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|value| sqlite_bool(value, "llm_profiles.is_default"))
+            .transpose()?
+            .unwrap_or(false);
+        let profile_count =
+            transaction.query_row("SELECT COUNT(*) FROM llm_profiles", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+        let is_default = make_default || existing_default || profile_count == 0;
+        if is_default {
+            transaction.execute("UPDATE llm_profiles SET is_default = 0", [])?;
+        }
+        transaction.execute(
+            "INSERT INTO llm_profiles (profile_id, profile_json, is_default)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(profile_id) DO UPDATE SET
+                profile_json = excluded.profile_json,
+                is_default = excluded.is_default,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+            params![profile.id, profile_json, i64::from(is_default)],
+        )?;
+        transaction.commit()?;
+        Ok(StoredLlmProfile {
+            profile: profile.clone(),
+            is_default,
+        })
+    }
 }
 
 fn find_artifact_by_hash_in(
@@ -555,7 +680,7 @@ fn find_artifact_by_hash_in(
     .transpose()
 }
 
-fn validate_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
+fn validate_artifact_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
     let name = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 1",
@@ -571,6 +696,23 @@ fn validate_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
     Ok(())
 }
 
+fn validate_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
+    validate_artifact_schema(connection)?;
+    let name = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 2",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if name.as_deref() != Some("llm_profiles_v1") {
+        return Err(SqliteStoreError::InvalidSchema(
+            "migration 2 is absent or has an unexpected name",
+        ));
+    }
+    Ok(())
+}
+
 fn sqlite_u64(value: u64, field: &'static str) -> Result<i64, SqliteStoreError> {
     i64::try_from(value).map_err(|_| SqliteStoreError::IntegerRange { field, value })
 }
@@ -580,6 +722,17 @@ fn rust_u64(value: i64, field: &'static str) -> Result<u64, SqliteStoreError> {
         field,
         value: value.to_string(),
     })
+}
+
+fn sqlite_bool(value: i64, field: &'static str) -> Result<bool, SqliteStoreError> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(SqliteStoreError::InvalidStoredValue {
+            field,
+            value: value.to_string(),
+        }),
+    }
 }
 
 fn rights_status(value: mathscape_domain::RightsStatus) -> &'static str {

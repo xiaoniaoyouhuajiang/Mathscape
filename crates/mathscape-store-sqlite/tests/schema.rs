@@ -5,8 +5,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use mathscape_llm::{
+    CapabilitySupport, CredentialRef, LLM_PROFILE_VERSION, LlmCapabilities, LlmProfile,
+    WireProtocol,
+};
 use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
 use rusqlite::Connection;
+use url::Url;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -42,7 +47,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 1",
@@ -51,6 +56,14 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
         )
         .unwrap();
     assert_eq!(migration, "artifact_pool_v1");
+    let llm_migration = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 2",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(llm_migration, "llm_profiles_v1");
     drop(connection);
     drop(SqliteArtifactStore::open(&database).unwrap());
     cleanup(&directory);
@@ -68,8 +81,65 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::open(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 1
+            supported: 2
         })
     ));
+    cleanup(&directory);
+}
+
+#[test]
+fn upgrades_an_existing_artifact_pool_database_to_llm_profiles() {
+    let directory = test_directory("upgrade-v1");
+    let database = directory.join("catalog.sqlite3");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(include_str!("../../../migrations/0001_artifact_pool.sql"))
+        .unwrap();
+    drop(connection);
+
+    drop(SqliteArtifactStore::open(&database).unwrap());
+    let connection = Connection::open(&database).unwrap();
+    let version = connection
+        .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+        .unwrap();
+    assert_eq!(version, 2);
+    let migration = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 2",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(migration, "llm_profiles_v1");
+    cleanup(&directory);
+}
+
+#[test]
+fn persists_versioned_llm_profiles_without_secret_material() {
+    let directory = test_directory("llm-profile");
+    let database = directory.join("catalog.sqlite3");
+    let mut store = SqliteArtifactStore::open(&database).unwrap();
+    let profile = LlmProfile {
+        version: LLM_PROFILE_VERSION.to_string(),
+        id: "research-default".to_string(),
+        provider: "custom-relay".to_string(),
+        wire_protocol: WireProtocol::OpenAiChatCompletions,
+        model: "fixture-model".to_string(),
+        endpoint: Some(Url::parse("https://relay.example/v1/").unwrap()),
+        credential: Some(CredentialRef::new("workspace:research-default").unwrap()),
+        capabilities: LlmCapabilities {
+            structured_output: CapabilitySupport::Supported,
+            ..LlmCapabilities::default()
+        },
+    };
+    let stored = store.upsert_llm_profile(&profile, true).unwrap();
+    assert!(stored.is_default());
+    drop(store);
+
+    let store = SqliteArtifactStore::open(&database).unwrap();
+    let reopened = store.default_llm_profile().unwrap().unwrap();
+    assert_eq!(reopened.profile(), &profile);
+    let bytes = fs::read(&database).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("fixture-secret"));
     cleanup(&directory);
 }

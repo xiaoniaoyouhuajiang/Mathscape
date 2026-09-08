@@ -1,7 +1,7 @@
 # LLM 接入基础设施 v1
 
-状态：供应商中立契约、`genai` 单次调用适配器、结构化输出辅助和确定性测试后端已实现；
-Discovery producer、运行记录持久化、桌面设置页与 agent runtime 待实现。
+状态：供应商中立契约、`genai` 单次调用适配器、结构化输出辅助、确定性测试后端、
+profile 持久化和桌面设置页已实现；Discovery producer、运行记录持久化与 agent runtime 待实现。
 日期：2026-09-08。
 
 ## 目标与边界
@@ -62,8 +62,9 @@ token usage、响应 ID、实际模型身份、耗时及可选原始响应。供
 ### 密钥
 
 profile 只保存 `CredentialRef`，绝不保存 API key。`CredentialResolver` 在调用时解析引用；
-当前 `MemoryCredentialResolver` 仅供进程运行期与测试使用，并对 Debug 输出脱敏。桌面应用
-应另行实现系统钥匙串 resolver，在 profile SQLite 行中仍只记录引用。
+当前 `MemoryCredentialResolver` 仅供进程运行期与测试使用，并对 Debug 输出脱敏。Desktop
+使用 `KeyringCredentialStore`：macOS 写入 Keychain Services，Windows 写入 Credential Manager，
+受支持的 Linux 桌面写入 Secret Service；profile SQLite 行中仍只记录引用。
 
 请求、错误和运行日志不得包含 Authorization header 或解析后的 secret。原始模型响应可能
 含用户材料，因此 `capture_raw_response` 默认关闭；若为审计开启，应按 workspace 私有数据
@@ -86,9 +87,9 @@ usage 和限流分类，不依赖真实供应商。
 
 ## 持久化建议
 
-v1 尚未增加 SQLite 表。接入应用层时建议分为两类：
+SQLite schema v2 已增加第一类表，第二类仍待实现：
 
-- `llm_profiles`：可编辑配置，仅含 profile、endpoint、模型和 credential reference；
+- `llm_profiles`（已实现）：可编辑配置，仅含 profile、endpoint、模型和 credential reference；
 - `llm_runs`：不可变调用事实，关联任务、输入指纹、prompt/契约版本、profile、解析后的模型
   身份、时间、状态、尝试序号、usage 和错误类别。
 
@@ -100,7 +101,7 @@ v1 尚未增加 SQLite 表。接入应用层时建议分为两类：
 
 1. 为 DiscoveryProposal 及其嵌套 DTO 补 `JsonSchema`，实现版本化 Discovery prompt producer。
 2. 用 `ScriptedLlmBackend` 完成 `DiscoveryInput → proposal → validate` 的离线集成测试。
-3. 增加 profile/run SQLite repository 与系统钥匙串 resolver，再接 Desktop 设置及任务状态。
+3. 增加 run SQLite repository 及 LLM 任务状态；profile、钥匙串和 Desktop 设置已完成。
 4. 增加 orchestrator 的取消、预算、退避和一次有界 repair policy。
 5. 当 Lean/图分析需要多轮工具循环时，在同一 `LlmBackend` 契约之上增加 agent runtime；
    不让 agent 框架成为 Domain 或存储依赖。

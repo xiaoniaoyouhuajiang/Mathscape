@@ -35,6 +35,8 @@ Artifact Pool 的聚合、目录布局、Managed/External 策略和自包含性�
 
 LLM profile、运行期凭据、单次调用与编排层的边界见
 [`llm-infrastructure-v1.md`](llm-infrastructure-v1.md)。
+Desktop 配置页、SQLite profile 与系统钥匙串的边界见
+[`desktop-llm-settings-v1.md`](desktop-llm-settings-v1.md)。
 
 ## 初始里程碑
 

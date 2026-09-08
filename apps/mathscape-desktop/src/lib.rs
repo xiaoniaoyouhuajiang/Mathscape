@@ -1,5 +1,9 @@
 mod content;
+mod llm_settings;
 pub use content::{ArtifactContentInfo, ContentContext};
+pub use llm_settings::{
+    LlmConnectionTest, LlmProfileView, LlmSettingsSnapshot, SaveLlmProfileRequest,
+};
 
 use std::{
     env,
@@ -12,6 +16,7 @@ use mathscape_artifact::{
 };
 use mathscape_domain::{ActorRef, MediaType, RightsRecord, RightsStatus, StableId};
 use mathscape_graph::{GraphProjectionError, IncidenceGraph, ProjectionLens};
+use mathscape_llm::{CredentialStore, KeyringCredentialStore};
 use mathscape_orchestrator::{MarkerPromotionError, promote_marker_inventory};
 use mathscape_pdf::{
     ClassificationMode, PdfContentKind, PdfEngine, PdfError, PdfOpenOptions, PdfPageIndex,
@@ -31,11 +36,13 @@ use thiserror::Error;
 
 const WORKSPACE_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_WORKSPACE_ROOT";
 const MARKER_EXECUTABLE_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_MARKER_EXECUTABLE";
+const KEYRING_SERVICE: &str = "app.mathscape.desktop.llm";
 
 #[derive(Clone, Debug)]
 pub struct DesktopService {
     workspace_root: PathBuf,
     marker: Option<MarkerInstallation>,
+    credentials: Arc<dyn CredentialStore>,
     active_parse: Arc<Mutex<Option<ParsePdfRequest>>>,
 }
 
@@ -58,6 +65,22 @@ impl DesktopService {
         workspace_root: impl AsRef<Path>,
         marker: Option<MarkerInstallation>,
     ) -> Result<Self, DesktopServiceError> {
+        let credentials = Arc::new(KeyringCredentialStore::new(KEYRING_SERVICE)?);
+        Self::open_with_components(workspace_root, marker, credentials)
+    }
+
+    pub fn open_with_credential_store(
+        workspace_root: impl AsRef<Path>,
+        credentials: Arc<dyn CredentialStore>,
+    ) -> Result<Self, DesktopServiceError> {
+        Self::open_with_components(workspace_root, None, credentials)
+    }
+
+    fn open_with_components(
+        workspace_root: impl AsRef<Path>,
+        marker: Option<MarkerInstallation>,
+        credentials: Arc<dyn CredentialStore>,
+    ) -> Result<Self, DesktopServiceError> {
         let requested = workspace_root.as_ref();
         let pool = if requested.join("workspace.toml").exists() {
             ArtifactPool::open(requested)?
@@ -66,9 +89,15 @@ impl DesktopService {
         };
         let workspace_root = pool.workspace().path().to_owned();
         drop(pool);
+        // Apply migrations before independent frontend commands can race to
+        // initialize the same new Workspace database.
+        drop(SqliteArtifactStore::open(
+            &workspace_root.join("mathscape.sqlite3"),
+        )?);
         Ok(Self {
             workspace_root,
             marker,
+            credentials,
             active_parse: Arc::new(Mutex::new(None)),
         })
     }
@@ -344,6 +373,7 @@ mod task_tests {
         let service = DesktopService {
             workspace_root: PathBuf::new(),
             marker: None,
+            credentials: Arc::new(mathscape_llm::MemoryCredentialResolver::default()),
             active_parse: Arc::new(Mutex::new(None)),
         };
         let request = ParsePdfRequest::new("test:pdf", 2, 4, MarkerProfileChoice::MathOcrV1);
@@ -623,6 +653,8 @@ pub enum DesktopServiceError {
     MarkerScan(#[from] MarkerProductScanError),
     #[error("Marker product promotion failed: {0}")]
     MarkerPromotion(#[from] MarkerPromotionError),
+    #[error("LLM credential store failed: {0}")]
+    Credential(#[from] mathscape_llm::CredentialError),
 }
 
 #[derive(Clone)]
@@ -698,6 +730,9 @@ pub fn run() {
             content::prepare_discovery_input,
             content::get_artifact_content_info,
             content::read_artifact_bytes,
+            llm_settings::get_llm_settings,
+            llm_settings::save_llm_profile,
+            llm_settings::test_llm_profile,
             get_desktop_snapshot,
             choose_and_import_pdf,
             get_active_parse,

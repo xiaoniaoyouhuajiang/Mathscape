@@ -1,9 +1,9 @@
 use mathscape_llm::{
-    CapabilitySupport, CredentialRef, GenaiBackendOptions, LLM_PROFILE_VERSION, LlmBackend,
-    LlmCapabilities, LlmError, LlmErrorKind, LlmFinishReason, LlmGenerationOptions, LlmMessage,
-    LlmProfile, LlmRequest, LlmResolvedTarget, LlmResponse, LlmResponseFormat, LlmResponsePart,
-    LlmRole, LlmTask, LlmToolChoice, LlmUsage, MemoryCredentialResolver, ScriptedLlmBackend,
-    WireProtocol, execute_typed, response_format_for,
+    CapabilitySupport, CredentialRef, CredentialResolver, CredentialStore, GenaiBackendOptions,
+    LLM_PROFILE_VERSION, LlmBackend, LlmCapabilities, LlmError, LlmErrorKind, LlmFinishReason,
+    LlmGenerationOptions, LlmMessage, LlmProfile, LlmRequest, LlmResolvedTarget, LlmResponse,
+    LlmResponseFormat, LlmResponsePart, LlmRole, LlmTask, LlmToolChoice, LlmUsage,
+    MemoryCredentialResolver, ScriptedLlmBackend, WireProtocol, execute_typed, response_format_for,
 };
 use schemars::JsonSchema;
 use secrecy::SecretString;
@@ -96,6 +96,14 @@ fn credentials_are_referenced_and_debug_redacted() {
     let debug = format!("{resolver:?}");
     assert!(debug.contains("REDACTED"));
     assert!(!debug.contains("top-secret"));
+    resolver
+        .delete(&CredentialRef::new("profile:test").unwrap())
+        .unwrap();
+    assert!(
+        resolver
+            .resolve(&CredentialRef::new("profile:test").unwrap())
+            .is_err()
+    );
 }
 
 #[tokio::test]

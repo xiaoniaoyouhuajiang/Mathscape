@@ -7,9 +7,13 @@ license.workspace = true
 
 [dependencies]
 mathscape-domain.workspace = true
+mathscape-llm.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+url.workspace = true
 
 [lints]
 workspace = true

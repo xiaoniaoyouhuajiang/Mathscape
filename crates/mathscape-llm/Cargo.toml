@@ -5,8 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+keyring = ["dep:keyring"]
+
 [dependencies]
 genai.workspace = true
+keyring = { workspace = true, optional = true }
 mathscape-domain.workspace = true
 schemars.workspace = true
 secrecy.workspace = true

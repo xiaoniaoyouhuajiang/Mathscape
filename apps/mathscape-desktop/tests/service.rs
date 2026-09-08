@@ -1,7 +1,10 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -11,6 +14,11 @@ use mathscape_desktop::{
 };
 use mathscape_domain::{
     DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest, SourceSelector,
+};
+use mathscape_llm::{CredentialRef, CredentialResolver, MemoryCredentialResolver};
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{header, method, path},
 };
 
 #[cfg(unix)]
@@ -46,6 +54,108 @@ impl TestDirectory {
         fs::remove_dir_all(self.0).unwrap();
         let _ = fs::remove_dir(parent);
     }
+}
+
+#[test]
+fn persists_llm_profile_while_keeping_api_key_out_of_sqlite() {
+    let directory = TestDirectory::create("llm-settings");
+    let workspace = directory.path().join("workspace");
+    let credentials = Arc::new(MemoryCredentialResolver::default());
+    let service =
+        DesktopService::open_with_credential_store(&workspace, credentials.clone()).unwrap();
+    let request = serde_json::from_value(serde_json::json!({
+        "profile_id": "desktop-default",
+        "provider": "custom-relay",
+        "wire_protocol": "open_ai_chat_completions",
+        "model": "fixture-model",
+        "endpoint": "https://relay.example/v1",
+        "api_key": "fixture-secret-never-in-sqlite",
+        "clear_api_key": false,
+        "make_default": true
+    }))
+    .unwrap();
+    let snapshot = service.save_llm_profile(request).unwrap();
+    let value = serde_json::to_value(snapshot).unwrap();
+    assert_eq!(value["default_profile_id"], "desktop-default");
+    assert_eq!(
+        value["profiles"][0]["endpoint"],
+        "https://relay.example/v1/"
+    );
+    assert_eq!(value["profiles"][0]["has_credential"], true);
+
+    let workspace_id = service.snapshot().unwrap().workspace_id().to_string();
+    let reference = CredentialRef::new(format!("{workspace_id}:desktop-default")).unwrap();
+    assert!(credentials.resolve(&reference).is_ok());
+    let database = fs::read(workspace.join("mathscape.sqlite3")).unwrap();
+    assert!(!String::from_utf8_lossy(&database).contains("fixture-secret-never-in-sqlite"));
+
+    let reopened =
+        DesktopService::open_with_credential_store(&workspace, credentials.clone()).unwrap();
+    let value = serde_json::to_value(reopened.llm_settings().unwrap()).unwrap();
+    assert_eq!(value["profiles"][0]["model"], "fixture-model");
+
+    let clear = serde_json::from_value(serde_json::json!({
+        "profile_id": "desktop-default",
+        "provider": "custom-relay",
+        "wire_protocol": "open_ai_chat_completions",
+        "model": "fixture-model",
+        "endpoint": "https://relay.example/v1/",
+        "api_key": null,
+        "clear_api_key": true,
+        "make_default": true
+    }))
+    .unwrap();
+    reopened.save_llm_profile(clear).unwrap();
+    assert!(credentials.resolve(&reference).is_err());
+    directory.cleanup();
+}
+
+#[tokio::test]
+async fn tests_a_persisted_llm_profile_through_the_desktop_service() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(header("authorization", "Bearer desktop-fixture-secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "chatcmpl-desktop-fixture",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "resolved-fixture-model",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "MATHSCAPE_OK"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let directory = TestDirectory::create("llm-connection");
+    let credentials = Arc::new(MemoryCredentialResolver::default());
+    let service =
+        DesktopService::open_with_credential_store(directory.path().join("workspace"), credentials)
+            .unwrap();
+    let request = serde_json::from_value(serde_json::json!({
+        "profile_id": "desktop-default",
+        "provider": "custom-relay",
+        "wire_protocol": "open_ai_chat_completions",
+        "model": "requested-fixture-model",
+        "endpoint": format!("{}/v1/", server.uri()),
+        "api_key": "desktop-fixture-secret",
+        "clear_api_key": false,
+        "make_default": true
+    }))
+    .unwrap();
+    service.save_llm_profile(request).unwrap();
+
+    let tested = serde_json::to_value(service.test_llm_profile(None).await.unwrap()).unwrap();
+    assert_eq!(tested["profile_id"], "desktop-default");
+    assert_eq!(tested["provider_model"], "resolved-fixture-model");
+    assert_eq!(tested["response_preview"], "MATHSCAPE_OK");
+    assert_eq!(tested["input_tokens"], 9);
+    directory.cleanup();
 }
 
 #[test]

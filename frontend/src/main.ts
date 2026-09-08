@@ -5,6 +5,7 @@ import { mountCytoscapeGraph } from "./graph/cytoscape";
 import type { IncidenceGraph, IncidenceNode } from "./graph/projection";
 import "./styles.css";
 import { ArtifactReader } from "./reader/reader";
+import { LlmSettingsController } from "./llm/settings";
 
 interface DesktopSnapshot {
   workspace_id: string;
@@ -92,6 +93,10 @@ app.innerHTML = `
       </div>
       <div class="topbar-actions">
         <span id="service-state" class="service-state">正在连接本地内核</span>
+        <button id="llm-settings-button" class="settings-button" type="button">
+          <span class="settings-dot" aria-hidden="true"></span>
+          <span id="llm-settings-label">LLM 未配置</span>
+        </button>
         <button id="import-pdf" class="primary-button" type="button">
           <span aria-hidden="true">＋</span> 导入 PDF
         </button>
@@ -175,6 +180,7 @@ app.innerHTML = `
       </aside>
     </main>
 
+    <div id="llm-settings-host"></div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
 `;
@@ -197,6 +203,12 @@ const markerProblem = requiredElement<HTMLElement>("#marker-problem");
 const toast = requiredElement<HTMLElement>("#toast");
 const readerHost = requiredElement<HTMLElement>("#reader");
 const reader = new ArtifactReader(readerHost);
+const llmSettings = new LlmSettingsController(
+  requiredElement<HTMLElement>("#llm-settings-host"),
+  requiredElement<HTMLButtonElement>("#llm-settings-button"),
+  requiredElement<HTMLElement>("#llm-settings-label"),
+  showToast,
+);
 requiredElement<HTMLButtonElement>("#show-map").onclick = () => {
   reader.close();
   readerHost.hidden = true;
@@ -216,6 +228,7 @@ requiredElement<HTMLButtonElement>("#copy-workspace-id").addEventListener("click
   void copyIdentifier(workspaceId.textContent ?? "");
 });
 void loadSnapshot();
+void llmSettings.loadSummary();
 window.setInterval(() => void syncParseState(), 1000);
 
 async function syncParseState(): Promise<void> {
