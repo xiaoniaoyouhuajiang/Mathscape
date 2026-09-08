@@ -15,9 +15,20 @@ export interface SelectionRequest {
   selector: SourceSelector;
   admission: "review_before_publish" | "automatic_candidate";
 }
-export interface ResolvedSelection {
-  request: SelectionRequest; range: TextRange; block_ids: string[]; raw_text: string;
-  context_ranges: TextRange[]; input_fingerprint: string;
+export type DiscoveryInputSegment = {
+  segment_kind: "block"; block_id: string; structural_kind: string;
+  physical_range: TextRange; source_range: TextRange; text: string;
+} | { segment_kind: "gap"; source_range: TextRange; text: string };
+export interface DiscoveryInput {
+  version: "mathscape-discovery-input-2";
+  snapshot: MarkdownSnapshot;
+  selection_fingerprint: string;
+  fingerprint: string;
+  requested: { source_range: TextRange; segments: DiscoveryInputSegment[] };
+  context: { source_range: TextRange; segments: DiscoveryInputSegment[] }[];
+  boundary: {
+    at_document_start: boolean; at_document_end: boolean;
+  };
 }
 
 export function markdownDocument(id: string, conversion: string | null): Promise<AnchoredMarkdown> {
@@ -48,7 +59,7 @@ export class MarkdownSelection {
     this.panel.className = "selection-panel";
     this.panel.setAttribute("aria-label", "来源发现选区");
     const instructions = document.createElement("p");
-    instructions.textContent = "点击正文块，再设置起点和终点；列表、表格和公式按整块选择。此处仅校验输入，尚未调用 LLM 或入图。";
+    instructions.textContent = "点击正文块，再设置起点和终点；列表、表格和公式按整块选择。此处仅构建发现输入，尚未调用 LLM 或入图。";
     const controls = document.createElement("div"); controls.className = "reader-controls";
     const button = (text: string, run: () => void): HTMLButtonElement => {
       const b = document.createElement("button"); b.type = "button"; b.textContent = text;
@@ -63,7 +74,7 @@ export class MarkdownSelection {
     this.policy.add(new Option("后续：自动加入候选图（未人工审核）", "automatic_candidate"));
     this.policy.onchange = () => this.changed();
     controls.append(this.policy);
-    this.validate = button("校验选区", () => void this.resolve());
+    this.validate = button("构建发现输入", () => void this.resolve());
     this.status.setAttribute("role", "status");
     this.result.className = "selection-source";
     this.result.hidden = true;
@@ -107,7 +118,7 @@ export class MarkdownSelection {
       block.classList.toggle("is-selected-block", valid && i >= this.first && i <= this.last);
     });
     this.status.textContent = this.feedback ?? (valid
-      ? `已选择${this.whole ? "全文" : `第 ${this.first + 1}～${this.last + 1} 块`}，尚未校验。`
+      ? `已选择${this.whole ? "全文" : `第 ${this.first + 1}～${this.last + 1} 块`}，尚未构建发现输入。`
       : this.first >= 0 && this.last >= 0 ? "终点必须位于起点之后，请重新设置。" : "尚未选择完整范围。");
   }
 
@@ -121,13 +132,15 @@ export class MarkdownSelection {
     };
     this.pending = true; this.feedback = "后端正在核对原文锚点…"; this.refresh();
     try {
-      const result = await invoke<ResolvedSelection>("resolve_markdown_selection", { request });
+      const result = await invoke<DiscoveryInput>("prepare_discovery_input", { request });
       if (this.disposed || version !== this.version) return;
-      this.feedback = `选区已校验：${result.block_ids.length} 块，UTF-8 字节 [${result.range.start}, ${result.range.end})。尚未启动来源发现或入图。`;
-      this.result.textContent = result.raw_text;
+      const range = result.requested.source_range;
+      const blockCount = result.requested.segments.filter(segment => segment.segment_kind === "block").length;
+      this.feedback = `发现输入已构建：${blockCount} 块、${range.end - range.start} 字节，原文区间 [${range.start}, ${range.end})。尚未启动 LLM 或入图。`;
+      this.result.textContent = result.requested.segments.map(segment => segment.text).join("");
       this.result.hidden = false;
     } catch (error) {
-      if (!this.disposed && version === this.version) this.feedback = "选区校验失败：" + String(error);
+      if (!this.disposed && version === this.version) this.feedback = "发现输入构建失败：" + String(error);
     } finally {
       if (!this.disposed && version === this.version) { this.pending = false; this.refresh(); }
     }

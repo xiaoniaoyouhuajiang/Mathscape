@@ -8,6 +8,7 @@ use crate::{ContentHash, StableId};
 
 pub const MARKDOWN_ANCHOR_SCHEME: &str = "mathscape-markdown-blocks-1";
 pub const DISCOVERY_SELECTION_VERSION: &str = "mathscape-discovery-selection-1";
+pub const DISCOVERY_INPUT_VERSION: &str = "mathscape-discovery-input-2";
 
 /// Zero-based UTF-8 bytes, end exclusive. Validity depends on the source text.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -83,7 +84,90 @@ pub struct ResolvedDiscoverySelection {
     pub range: TextByteRange,
     pub block_ids: Vec<String>,
     pub raw_text: String,
-    /// Preparation only: no automatic context expansion in v1.
-    pub context_ranges: Vec<TextByteRange>,
     pub input_fingerprint: ContentHash,
+}
+
+/// A lossless partition of one region. Block segments can be referenced by a
+/// producer; gaps retain the original bytes between blocks for replay.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "segment_kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DiscoveryInputSegment {
+    Block {
+        block_id: String,
+        structural_kind: String,
+        /// Complete physical block, even if only part is visible in this input.
+        physical_range: TextByteRange,
+        /// Portion of the physical block included in this input.
+        source_range: TextByteRange,
+        text: String,
+    },
+    Gap {
+        source_range: TextByteRange,
+        text: String,
+    },
+}
+
+impl DiscoveryInputSegment {
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Block { text, .. } | Self::Gap { text, .. } => text,
+        }
+    }
+
+    /// Physical clipping only; says nothing about mathematical completeness.
+    pub fn clipped_start(&self) -> bool {
+        matches!(self, Self::Block { physical_range, source_range, .. }
+            if source_range.start > physical_range.start)
+    }
+
+    pub fn clipped_end(&self) -> bool {
+        matches!(self, Self::Block { physical_range, source_range, .. }
+            if source_range.end < physical_range.end)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryInputRegion {
+    pub source_range: TextByteRange,
+    pub segments: Vec<DiscoveryInputSegment>,
+}
+
+impl DiscoveryInputRegion {
+    /// Counts actual payload bytes; does not certify that ranges match the text.
+    pub fn utf8_bytes(&self) -> usize {
+        self.segments
+            .iter()
+            .map(|segment| segment.text().len())
+            .sum()
+    }
+
+    pub fn block_count(&self) -> usize {
+        self.segments
+            .iter()
+            .filter(|segment| matches!(segment, DiscoveryInputSegment::Block { .. }))
+            .count()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryInputBoundary {
+    pub at_document_start: bool,
+    pub at_document_end: bool,
+}
+
+/// Provider-neutral, replayable source payload prepared for discovery. It does
+/// not include admission policy so automatic publication cannot bias extraction.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryInput {
+    pub version: String,
+    pub snapshot: MarkdownSnapshot,
+    pub selection_fingerprint: ContentHash,
+    pub fingerprint: ContentHash,
+    pub requested: DiscoveryInputRegion,
+    /// Currently empty; future context must remain distinguishable from requested text.
+    pub context: Vec<DiscoveryInputRegion>,
+    pub boundary: DiscoveryInputBoundary,
 }

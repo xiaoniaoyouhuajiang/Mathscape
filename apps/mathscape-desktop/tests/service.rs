@@ -229,6 +229,30 @@ printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_
         .unwrap();
     assert_eq!(selected.raw_text, anchored.source);
     assert_eq!(selected.range.end, anchored.source.len() as u64);
+    let discovery_input = reopened.prepare_discovery_input(request.clone()).unwrap();
+    let reconstructed = discovery_input
+        .requested
+        .segments
+        .iter()
+        .map(mathscape_domain::DiscoveryInputSegment::text)
+        .collect::<String>();
+    assert_eq!(reconstructed, anchored.source);
+    assert_eq!(
+        discovery_input.requested.utf8_bytes(),
+        anchored.source.len()
+    );
+    assert_eq!(
+        discovery_input.requested.block_count(),
+        anchored.blocks.len()
+    );
+    assert_eq!(
+        discovery_input.selection_fingerprint,
+        selected.input_fingerprint
+    );
+    let serialized_input = serde_json::to_value(&discovery_input).unwrap();
+    assert_eq!(serialized_input["version"], "mathscape-discovery-input-2");
+    assert!(serialized_input.get("admission").is_none());
+    assert!(serialized_input.get("request").is_none());
     assert!(reopened.markdown_document(markdown_id, None).is_err());
     assert!(
         reopened

@@ -1,10 +1,11 @@
 use mathscape_artifact::ArtifactPool;
 use mathscape_domain::{
-    AnchoredMarkdown, ContentHash, DiscoverySelectionRequest, ResolvedDiscoverySelection,
-    SourcePayload, StableId,
+    AnchoredMarkdown, ContentHash, DiscoveryInput, DiscoverySelectionRequest,
+    ResolvedDiscoverySelection, SourcePayload, StableId,
 };
 use mathscape_orchestrator::{
-    MAX_MARKDOWN_BYTES, PRODUCT_PATHS_KEY, ProductPath, anchor_markdown, resolve_selection,
+    DiscoveryInputLimits, MAX_MARKDOWN_BYTES, PRODUCT_PATHS_KEY, ProductPath, anchor_markdown,
+    build_discovery_input, resolve_selection,
 };
 use mathscape_store_sqlite::SqliteArtifactStore;
 use serde::Serialize;
@@ -161,6 +162,23 @@ impl DesktopService {
         )?;
         resolve_selection(&document, request).map_err(|e| e.to_string())
     }
+
+    pub fn prepare_discovery_input(
+        &self,
+        request: DiscoverySelectionRequest,
+    ) -> Result<DiscoveryInput, String> {
+        let document = self.markdown_document(
+            request.snapshot.artifact_id.as_str(),
+            request
+                .snapshot
+                .conversion_id
+                .as_ref()
+                .map(StableId::as_str),
+        )?;
+        let selection = resolve_selection(&document, request).map_err(|e| e.to_string())?;
+        build_discovery_input(&document, &selection, DiscoveryInputLimits::default())
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]
@@ -184,6 +202,17 @@ pub async fn resolve_markdown_selection(
 ) -> Result<ResolvedDiscoverySelection, String> {
     let service = state.service.clone();
     tauri::async_runtime::spawn_blocking(move || service.resolve_markdown_selection(request))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn prepare_discovery_input(
+    state: State<'_, DesktopState>,
+    request: DiscoverySelectionRequest,
+) -> Result<DiscoveryInput, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.prepare_discovery_input(request))
         .await
         .map_err(|e| e.to_string())?
 }

@@ -48,7 +48,6 @@ fn stable_utf8_ranges_keep_crlf_and_repeated_text_distinct() {
     let all = resolve_selection(&doc, request(&doc, SourceSelector::WholeDocument)).unwrap();
     assert_eq!(all.raw_text, source);
     assert_eq!(all.range.end, source.len() as u64);
-    assert!(all.context_ranges.is_empty());
 }
 
 #[test]

@@ -5,6 +5,7 @@
 //! must cross before data can enter the canonical map.
 
 mod discovery;
+mod discovery_proposal;
 mod entity;
 mod error;
 mod id;
@@ -14,6 +15,7 @@ mod source;
 mod trust;
 
 pub use discovery::*;
+pub use discovery_proposal::*;
 pub use entity::{
     EntityEnvelope, EntityHeader, EntityKind, EntityPayload, LifecycleStatus, PayloadShape,
 };

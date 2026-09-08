@@ -1,6 +1,7 @@
 # 来源发现：最小选区契约 v1
 
-本版本实现 Markdown 选区与物理锚点解析，不调用 LLM、不保存发现成果，也不创建来源或语义节点。
+本版本实现 Markdown 选区、物理锚点解析和 producer 前的 `DiscoveryInput` 构建，不调用 LLM、
+不保存发现成果，也不创建来源或语义节点。
 上位设计位于工作区 `docs/rdtx/source-content-discovery-draft.md`。这份文档记录已落地的范围，
 不表示草案中的 producer、审核、批量调度已经实现。
 
@@ -9,7 +10,7 @@
 打开 Markdown 的“阅读文件”，点击正文块，再使用“设置起点”“设置终点”；也可直接
 “选择全文”。高亮表示选定的连续块范围，描边表示当前点击的块。Enter/空格可选中获得焦点的块。
 
-“校验选区”请求 Rust 重新加载原文、核对快照并解析锚点，随后显示实际将处理的 Markdown
+“构建发现输入”请求 Rust 重新加载原文、核对快照并解析锚点，随后显示实际将处理的 Markdown
 和 UTF-8 字节区间。终点在起点之前时不可校验。清除选区、切换文件或转换来源会使旧结果失效。
 原文/渲染切换保留选区；原文模式不是字符级编辑器，暂不能在原文中拖选字符来改端点。
 
@@ -22,6 +23,8 @@
   SourceSemanticUnit，不要求虚构 Edition 或 DialectScope。反序列化本身不代表校验通过。
 - `mathscape-orchestrator::anchor_markdown`：从原始字符串计算确定性物理块和快照。
 - `mathscape-orchestrator::resolve_selection`：在可信锚定文档上解析选择器并生成有限输入。
+- `mathscape-orchestrator::build_discovery_input`：把已解析范围构造成保留物理块、间隙和边界
+  信息的无损 producer 输入，并执行独立的输入规模限制。
 - Desktop：从受管 Artifact 读取真实字节、核验媒体类型/哈希/转换归属，再调用上述函数。
 - Frontend：按后端块边界渲染并提交块 ID；不从 DOM 或 KaTeX 显示内容倒推原文位置。
 
@@ -73,8 +76,43 @@ admission
 出现）、反向端点或空白选区均拒绝，不做模糊定位。
 
 响应包含原请求、解析后的 range、涉及的 block_ids、raw_text、input_fingerprint。
-`context_ranges` 首版固定为空，不自动扩大用户范围，也不声称数学边界已经闭合。
-响应目前仅驻留当前阅读会话，不写 SQLite、不创建持久 request/run。
+选区解析不自动扩大用户范围，也不声称数学边界已经闭合；上下文只在 DiscoveryInput.context 表达。
+该解析接口是内部可复用能力；Desktop 当前从用户操作直接调用下述输入构建接口。
+
+### prepare_discovery_input
+
+参数仍为上述 `request`。服务端不会接受客户端拼装的已解析结果，而是重新读取受管 Artifact、
+校验快照、解析选择器，再调用构建器。响应为：
+
+```text
+DiscoveryInput
+  version = mathscape-discovery-input-2
+  snapshot
+  selection_fingerprint
+  fingerprint
+  requested
+    source_range
+    segments[]
+      block {block_id, structural_kind, physical_range, source_range, text}
+      或 gap {source_range, text}
+  context[]              当前固定为空
+  boundary {at_document_start, at_document_end}
+```
+
+`segments` 按原文顺序覆盖整个选区；拼接其中的 `text` 必须逐字节恢复所选 UTF-8 原文。
+`gap` 保存块之间未独立建块的空白或源码，避免 producer 获得一份被悄悄改写的材料。
+块内 quote 选择保留块的物理区间，以 `source_range` 说明实际可见部分。裁切状态通过
+segment.clipped_start()/clipped_end() 计算；字节数和块数通过 region.utf8_bytes()/block_count()
+计算，不再序列化。boundary 只表示 Markdown 文件首尾，不承诺数学单元完整或前后材料可访问。
+
+2026-09-08 精简删除了重复统计、裁切和前后存在性字段，输入契约由 v1 升为 v2，重新构建
+输入会生成新指纹。Markdown 分块版本与选区请求 v1 保持兼容；旧内存响应应重新获取，
+不复用旧输入指纹。提案输出类型见 [Discovery Proposal v1](discovery-proposal-v1.md)。
+
+默认 producer 限制为 128 KiB 和 512 个相交物理块。超限会整体拒绝，绝不截断；未来批量
+处理应由显式分片/任务规划完成。`DiscoveryInput` 不携带 `admission`，因为审核或自动发布是
+提案的处置策略，不应影响模型看到的数学材料或输入指纹。当前结果不写 SQLite，也不创建
+持久 request/run。
 
 ## 身份与校验
 
@@ -83,7 +121,8 @@ admission
 
 快照指纹同时绑定 Artifact、内容、转换上下文和锚点版本。后端不信任客户端提交的哈希与块 ID：
 每次校验都重新从已登记受管文件构建文档，并比较完整快照。异文件块、旧版本和错误转换被拒绝。
-最终输入指纹绑定快照及规范化区间；不同选择器解析到同一区间时输入身份相同。
+选区指纹绑定快照及规范化区间；不同选择器解析到同一区间时选区身份相同。
+发现输入指纹进一步绑定契约版本、选区指纹及无损 segments，因此 producer 可据此去重。
 入图策略不改变数学输入指纹，但完整请求中保留策略，未来任务提交仍需独立处理策略变更。
 
 ## 分块与显示边界

@@ -1,0 +1,39 @@
+{
+  "version": "mathscape-discovery-proposal-1",
+  "input_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "units": [
+    {
+      "temp_id": "u-problem",
+      "unit_kind": "problem",
+      "source_label": "1",
+      "source_title": null,
+      "display_title": "常数列的极限",
+      "selectors": [{"kind": "block_range", "first": "b-problem", "last": "b-problem"}],
+      "parent": null,
+      "completeness": "complete"
+    },
+    {
+      "temp_id": "u-solution",
+      "unit_kind": "solution",
+      "source_label": null,
+      "source_title": null,
+      "display_title": "用极限定义验证常数列收敛",
+      "selectors": [{"kind": "block_range", "first": "b-solution", "last": "b-solution"}],
+      "parent": "u-problem",
+      "completeness": "complete"
+    }
+  ],
+  "relations": [{
+    "source": "u-solution",
+    "target": "u-problem",
+    "relation": "solves",
+    "evidence": [{"kind": "quote_range", "first": "b-solution", "start_quote": "解答：", "last": "b-solution", "end_quote": "因此收敛于 $a$。"}],
+    "basis": "解答紧随唯一习题，结论与题目要求相同。"
+  }],
+  "references": [],
+  "issues": [],
+  "coverage": [{
+    "selector": {"kind": "block_range", "first": "b-problem", "last": "b-solution"},
+    "disposition": {"status": "processed"}
+  }]
+}

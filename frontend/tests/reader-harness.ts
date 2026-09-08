@@ -74,7 +74,7 @@ function anchored(conversion: string): AnchoredMarkdown {
   };
 }
 mockIPC((command, payload) => {
-  if (command === "resolve_markdown_selection") {
+  if (command === "prepare_discovery_input") {
     const request = (payload as { request: SelectionRequest }).request;
     selectionRequests.push(request);
     const doc = anchored(request.snapshot.conversion_id!);
@@ -84,7 +84,16 @@ mockIPC((command, payload) => {
     const range = { start: doc.blocks[first].range.start, end: doc.blocks[last].range.end };
     return new Promise((resolve, reject) => setTimeout(() => {
       if (behavior.failSelection) return reject("测试：输入快照已改变");
-      resolve({ request, range, block_ids: doc.blocks.slice(first, last + 1).map(b => b.id), raw_text: new TextDecoder().decode(new TextEncoder().encode(markdown).slice(range.start, range.end)), context_ranges: [], input_fingerprint: "test-input" });
+      resolve({
+        version: "mathscape-discovery-input-2", snapshot: request.snapshot,
+        selection_fingerprint: "test-selection", fingerprint: "test-input",
+        requested: { source_range: range, segments: doc.blocks.slice(first, last + 1).map(block => ({
+          segment_kind: "block", block_id: block.id, structural_kind: block.kind,
+          physical_range: block.range, source_range: block.range,
+          text: new TextDecoder().decode(files.md.bytes.slice(block.range.start, block.range.end)),
+        })) },
+        context: [], boundary: { at_document_start: range.start === 0, at_document_end: range.end === files.md.bytes.length },
+      });
     }, behavior.selectionDelay));
   }
   if (command === "get_markdown_document") return anchored((payload as { conversionId: string }).conversionId);

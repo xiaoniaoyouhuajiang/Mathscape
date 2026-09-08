@@ -277,7 +277,6 @@ pub fn resolve_selection(
         range,
         block_ids,
         raw_text,
-        context_ranges: vec![],
         input_fingerprint,
     })
 }

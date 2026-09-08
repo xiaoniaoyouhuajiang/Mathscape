@@ -695,6 +695,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             content::get_markdown_document,
             content::resolve_markdown_selection,
+            content::prepare_discovery_input,
             content::get_artifact_content_info,
             content::read_artifact_bytes,
             get_desktop_snapshot,
