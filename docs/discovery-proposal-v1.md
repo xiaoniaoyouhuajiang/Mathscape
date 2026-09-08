@@ -1,6 +1,6 @@
 # Discovery Proposal v1：最小输出契约
 
-状态：Rust DTO 与序列化测试已实现；选择器授权解析、确定性验证器、LLM 调用和保存待实现。
+状态：Rust DTO、选择器授权解析和确定性验证器已实现；LLM 调用和保存待实现。
 日期：2026-09-08。上位设计为工作区 `docs/rdtx/source-content-discovery-draft.md`；
 本文件将其中的输出示意收敛为当前工程契约。
 
@@ -48,14 +48,15 @@ TrustRecord、EntityPayload 或 MapPatch 转换。字段如下：
 `DiscoverySelector` 仅允许 block_range 和 quote_range，可转换为既有 SourceSelector
 以复用语法；该转换不代表选区已获授权。producer 不允许使用 whole_document。
 
-未来提案解析器必须以实际 DiscoveryInput 的可见区间为边界：
+提案解析器以实际 DiscoveryInput 的可见区间为边界：
 
 - 块 ID 必须出现在该输入中；知道完整 Artifact 的块 ID 不赋予读取权限。
 - 块范围按原文位置解释，不能按字符串 ID 排序。
 - 完整块范围若伸出已选范围则拒绝，不能静默裁切；块内选区使用 quote_range。
 - quote 在对应块的可见片段中必须精确、唯一，并解析到原始 UTF-8 字节区间；不能匹配
   输入未提供的文本。零匹配、重复匹配、逆序、跨越未提供区域都返回诊断。
-- requested/context 的权限和覆盖角色分开检查；当前构建器 context 为空。
+- requested/context 的权限和覆盖角色分开；当前 v2 构建器和验证器要求 context 为空，
+  后续引入上下文时须升级契约和指纹。
 
 因此，不能只调用现有面向整份 AnchoredMarkdown 的 resolve_selection 就声称提案已验证。
 
@@ -85,19 +86,28 @@ coverage 的 processed 表示模型声称遍历了区域，不保证所有单元
 不得冒充 requested 完成覆盖。覆盖应无互相冲突的重复区间，不能用单位计数推导完成。
 空 units + 未说明的 coverage 缺口不能视为成功。
 
-## 验证与保存的后续接口
+## 已实现的验证接口
 
-下一步实现 `validate_discovery_proposal(input, proposal, limits)`：
+`mathscape_orchestrator::validate_discovery_proposal(input, proposal, limits)` 已实现：
 
 1. 校验输入版本/指纹、输入可信来源、输出字节/对象/字符串数量限制。
 2. 检查临时 ID 非空、唯一，所有引用闭合，父链无环。
 3. 解析获授权选择器，检查 evidence、标签/标题与引用原文的定位。
-4. 检查关系端点、父子归属、合理重叠、完整性与问题的一致性。
-5. 归一化覆盖并输出机器可处理的诊断；语义证据是否充分仍需模型或人工审查。
+4. 检查关系方向与端点类型、证据归属、父链、重叠、完整性与 issue 的一致性。
+5. 归一化 coverage，要求非空白 requested 文本全部有处置，并输出全部结构化诊断。
 
-JSON 反序列化只保证形状；空字符串、重复 ID、缺失证据、未知目标、错误指纹、数学错误
-仍可能通过 DTO 解码。这些检查必须由验证器承担。运行时读取响应的体积限制还应在解码前执行。
-本次不提供可以被误用成“已验证”的公开结果类型或提交接口。
+默认限制为每个集合 1024 项、总计 4096 个选择器、提案序列化后 2 MiB。LLM 响应读取层
+仍须在反序列化前设置独立字节限制。验证成功返回不可从外部字段构造的
+`ValidatedDiscoveryProposal`，其中选择器已经规范化为 UTF-8 字节范围、块 ID 和原文；
+状态为 complete 或 partial。该类型仍不是 EntityPayload，也不能直接生成 MapPatch。
+
+诊断含稳定枚举 code、字段 path 和可读 message，可用于 UI 展示或一次有界修订。当前检查
+覆盖输入完整性与指纹、提案指纹、限制、临时 ID、引用闭合、父链环、选择器授权、原文标签、
+关系类型和证据、引用位置、单元重叠、完整性及 coverage。数学分类是否正确、证据在数学上
+是否充分、是否穷尽所有单元仍需模型或人工判断。
+
+JSON 反序列化只保证形状；空字符串、重复 ID、缺失证据、未知目标和错误指纹会在验证阶段
+被拒绝。数学错误仍可能通过确定性验证。当前没有提交接口。
 
 保存时记录原始提案、诊断、输入与运行来源，系统分配稳定发现身份。自动发布只允许进入
 候选发现视图，不授予审核或形式化状态。后续提升为 SourceSemanticUnit 仍须满足当前 Domain
@@ -115,10 +125,12 @@ Markdown 独立定位的 SourceSpan 契约仍待修订，本次没有通过虚�
 ```
 
 样例的 b-problem、b-solution 和 sha256:111… 是明确的测试占位值，不是已登记 Artifact
-或真实运行指纹。orchestrator 契约测试将它们替换为实际生成的块 ID 与输入指纹，验证与
-当前锚点解析器兼容；该检查仍不替代完整提案验证器。
+或真实运行指纹。orchestrator 测试将它们替换为实际生成的块 ID 与输入指纹，并运行完整
+验证器；另有用例覆盖越权块、裁切块、指纹篡改、父链环、错误关系、证据归属、重叠、
+coverage 缺口、partial、完整性和规模限制。
 
 ```sh
 cargo test -p mathscape-domain --test discovery_proposal
 cargo test -p mathscape-orchestrator --test discovery_input
+cargo test -p mathscape-orchestrator --test discovery_validation
 ```

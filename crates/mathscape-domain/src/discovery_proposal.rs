@@ -149,7 +149,7 @@ pub struct DiscoveryReferenceProposal {
     pub target: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryIssueKind {
     LeftTruncated,

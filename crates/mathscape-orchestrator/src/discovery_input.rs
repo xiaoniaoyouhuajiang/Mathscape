@@ -70,6 +70,17 @@ fn hash<T: Serialize>(value: &T) -> ContentHash {
         .expect("SHA-256 always produces a valid content hash")
 }
 
+pub(crate) fn discovery_input_fingerprint(input: &DiscoveryInput) -> ContentHash {
+    hash(&(
+        &input.version,
+        &input.snapshot,
+        &input.selection_fingerprint,
+        &input.requested,
+        &input.context,
+        &input.boundary,
+    ))
+}
+
 fn checked_range(range: &TextByteRange, source: &str) -> Option<std::ops::Range<usize>> {
     let start = usize::try_from(range.start).ok()?;
     let end = usize::try_from(range.end).ok()?;
@@ -181,16 +192,12 @@ pub fn build_discovery_input(
     if reconstructed != selection.raw_text {
         return Err(DiscoveryInputError::ResolvedSelectionMismatch);
     }
-    let fingerprint = hash(&(
-        DISCOVERY_INPUT_VERSION,
-        &selection.input_fingerprint,
-        &segments,
-    ));
-    Ok(DiscoveryInput {
+    let mut input = DiscoveryInput {
         version: DISCOVERY_INPUT_VERSION.into(),
         snapshot: document.snapshot.clone(),
         selection_fingerprint: selection.input_fingerprint.clone(),
-        fingerprint,
+        // Filled from every producer-visible field below.
+        fingerprint: selection.input_fingerprint.clone(),
         requested: DiscoveryInputRegion {
             source_range: selection.range.clone(),
             segments,
@@ -200,5 +207,7 @@ pub fn build_discovery_input(
             at_document_start: selected.start == 0,
             at_document_end: selected.end == document.source.len(),
         },
-    })
+    };
+    input.fingerprint = discovery_input_fingerprint(&input);
+    Ok(input)
 }
