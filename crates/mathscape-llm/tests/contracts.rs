@@ -14,6 +14,7 @@ use url::Url;
 
 fn profile(endpoint: Option<Url>) -> LlmProfile {
     LlmProfile {
+        display_name: None,
         version: LLM_PROFILE_VERSION.to_string(),
         id: "test-profile".to_string(),
         provider: "test-relay".to_string(),

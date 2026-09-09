@@ -204,6 +204,7 @@ fn persists_versioned_llm_profiles_without_secret_material() {
     let database = directory.join("catalog.sqlite3");
     let mut store = SqliteArtifactStore::open(&database).unwrap();
     let profile = LlmProfile {
+        display_name: None,
         version: LLM_PROFILE_VERSION.to_string(),
         id: "research-default".to_string(),
         provider: "custom-relay".to_string(),

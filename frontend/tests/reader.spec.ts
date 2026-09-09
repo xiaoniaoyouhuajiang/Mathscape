@@ -83,7 +83,7 @@ test("Markdown block endpoints, raw source, full selection and review policy", a
   await page.getByRole("button", { name: "查看渲染" }).click();
   await expect(page.locator(".is-selected-block")).toHaveCount(2);
   await page.getByRole("button", { name: "选择全文" }).click();
-  await page.getByLabel("后续入图方式").selectOption("automatic_candidate");
+  await expect(page.getByLabel("后续入图方式")).toHaveCount(0);
   await page.getByRole("button", { name: "构建发现输入" }).click();
   await expect(page.locator(".selection-source")).toContainText("# Math reader 中文😀");
   expect(await page.evaluate(() => (window as any).harness.selectionRequests.at(-1).selector.kind)).toBe("whole_document");
@@ -112,6 +112,7 @@ test("Markdown selection runs Discovery and shows an unregistered proposal", asy
 });
 
 test("ask-each-run workspace policy requires an explicit admission choice", async ({ page }) => {
+  await page.evaluate(() => { (window as any).harness.behavior.admission = "ask_each_run"; });
   await page.evaluate(async () => (window as any).harness.reader.open("md", "审核策略测试"));
   await page.evaluate(() => window.dispatchEvent(new CustomEvent(
     "mathscape:workspace-settings-changed",
@@ -123,10 +124,26 @@ test("ask-each-run workspace policy requires an explicit admission choice", asyn
     } },
   )));
   await page.getByRole("button", { name: "选择全文" }).click();
-  await expect(page.getByRole("button", { name: "使用 LLM 发现内容" })).toBeDisabled();
-  await expect(page.locator(".selection-panel [role=status]")).toContainText("请为本次运行选择审核方式");
-  await page.getByLabel("后续入图方式").selectOption("review_before_publish");
   await expect(page.getByRole("button", { name: "使用 LLM 发现内容" })).toBeEnabled();
+  await page.getByRole("button", { name: "使用 LLM 发现内容" }).click();
+  await expect(page.locator(".admission-dialog")).toBeVisible();
+  expect(await page.evaluate(() => (window as any).harness.discoveryRequests.length)).toBe(0);
+  await page.getByRole("button", { name: "人工审核", exact: true }).click();
+  await expect(page.locator(".task-status")).toContainText("验证通过");
+});
+
+test("streaming task survives reader changes and minimization", async ({ page }) => {
+  await page.evaluate(async () => { (window as any).harness.behavior.discoveryDelay = 900; await (window as any).harness.reader.open("md", "流式测试"); });
+  await page.getByRole("button", { name: "选择全文" }).click();
+  await page.getByRole("button", { name: "使用 LLM 发现内容" }).click();
+  await expect(page.locator(".task-output")).toContainText('{"units":');
+  await expect(page.locator(".task-reasoning pre")).toHaveText("供应商公开摘要");
+  await page.getByRole("button", { name: "最小化任务" }).click();
+  await page.evaluate(async () => (window as any).harness.reader.open("json", "另一份材料"));
+  await page.locator(".task-launcher").click();
+  await expect(page.locator(".task-status")).toContainText("验证通过");
+  await page.getByText("查看完整结果与验证诊断").click();
+  await expect(page.locator(".task-result")).toContainText("测试命题");
 });
 
 test("reversed endpoints, stale async validation, context switch and errors", async ({ page }) => {

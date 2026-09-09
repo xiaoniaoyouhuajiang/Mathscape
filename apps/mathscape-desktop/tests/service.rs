@@ -29,6 +29,38 @@ use std::os::unix::fs::PermissionsExt;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn named_profiles_survive_reopen_and_default_switch_does_not_edit_credentials() {
+    let directory = TestDirectory::create("named-profiles");
+    let credentials = Arc::new(MemoryCredentialResolver::default());
+    let service =
+        DesktopService::open_with_credential_store(directory.path(), credentials.clone()).unwrap();
+    for (id, name) in [("primary", "主配置"), ("secondary", "备用配置")] {
+        service.save_llm_profile(serde_json::from_value(serde_json::json!({
+            "profile_id": id, "display_name": name, "provider": "custom-relay",
+            "wire_protocol": "open_ai_chat_completions", "model": id,
+            "endpoint": "https://relay.example/v1/", "api_key": format!("fixture-{id}"), "make_default": false
+        })).unwrap()).unwrap();
+    }
+    let initial = serde_json::to_value(service.llm_settings().unwrap()).unwrap();
+    assert_eq!(initial["default_profile_id"], "primary");
+    service.set_default_llm_profile("secondary").unwrap();
+    assert!(service.set_default_llm_profile("missing").is_err());
+    let reopened =
+        DesktopService::open_with_credential_store(directory.path(), credentials).unwrap();
+    let saved = serde_json::to_value(reopened.llm_settings().unwrap()).unwrap();
+    assert_eq!(saved["default_profile_id"], "secondary");
+    assert_eq!(saved["profiles"].as_array().unwrap().len(), 2);
+    assert!(
+        saved["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["has_credential"] == true && p["display_name"].is_string())
+    );
+    directory.cleanup();
+}
+
 struct TestDirectory(PathBuf);
 
 impl TestDirectory {

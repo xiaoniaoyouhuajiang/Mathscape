@@ -18,6 +18,7 @@ const SOURCE: &str = "习题 1：设 $a_n=a$，用定义证明 $a_n$ 收敛于 $
 
 fn profile() -> LlmProfile {
     LlmProfile {
+        display_name: None,
         version: LLM_PROFILE_VERSION.into(),
         id: "discovery-test".into(),
         provider: "openai".into(),

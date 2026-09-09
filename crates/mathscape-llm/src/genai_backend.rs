@@ -42,6 +42,7 @@ impl Default for GenaiBackendOptions {
 pub struct GenaiBackend {
     profile: LlmProfile,
     client: Client,
+    observer: Option<Arc<dyn Fn(&str, &str) + Send + Sync>>,
 }
 
 impl GenaiBackend {
@@ -90,7 +91,14 @@ impl GenaiBackend {
         Ok(Self {
             profile,
             client: builder.build(),
+            observer: None,
         })
+    }
+
+    /// Receives only provider-exposed text/reasoning deltas; no synthetic thinking.
+    pub fn with_stream_observer(mut self, observer: Arc<dyn Fn(&str, &str) + Send + Sync>) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     async fn execute_inner(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
@@ -142,8 +150,18 @@ impl GenaiBackend {
         while let Some(event) = stream.next().await {
             match event.map_err(map_genai_error)? {
                 ChatStreamEvent::Start => {}
-                ChatStreamEvent::Chunk(chunk) => text.push_str(&chunk.content),
-                ChatStreamEvent::ReasoningChunk(chunk) => reasoning.push_str(&chunk.content),
+                ChatStreamEvent::Chunk(chunk) => {
+                    if let Some(observer) = &self.observer {
+                        observer("text", &chunk.content);
+                    }
+                    text.push_str(&chunk.content);
+                }
+                ChatStreamEvent::ReasoningChunk(chunk) => {
+                    if let Some(observer) = &self.observer {
+                        observer("reasoning", &chunk.content);
+                    }
+                    reasoning.push_str(&chunk.content);
+                }
                 ChatStreamEvent::ThoughtSignatureChunk(_) => {
                     // Provider continuation data is retained on captured tool
                     // calls at StreamEnd. Discovery does not issue tools.
@@ -152,6 +170,9 @@ impl GenaiBackend {
                     upsert_streamed_tool_call(&mut streamed_tool_calls, chunk.tool_call);
                 }
                 ChatStreamEvent::End(end) => {
+                    if let Some(observer) = &self.observer {
+                        observer("validating", "");
+                    }
                     stream_end = Some(end);
                     break;
                 }

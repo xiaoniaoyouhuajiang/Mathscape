@@ -6,8 +6,9 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("saves a relay profile, redacts the key and verifies connectivity", async ({ page }) => {
-  await expect(page.locator("#settings-label")).toHaveText("LLM 未配置");
-  await page.getByRole("button", { name: "LLM 未配置" }).click();
+  await expect(page.locator("#settings-label")).toHaveText("设置");
+  await page.locator("#settings-trigger").click();
+  await page.getByLabel("配置名称", { exact: true }).fill("主力中转站");
   await expect(page.getByRole("heading", { name: "Mathscape 设置" })).toBeVisible();
   await page.getByLabel("供应商").selectOption("custom-relay");
   await expect(page.getByLabel("通信协议")).toHaveValue("open_ai_chat_completions");
@@ -19,7 +20,7 @@ test("saves a relay profile, redacts the key and verifies connectivity", async (
   await expect(page.locator(".llm-settings-result")).toContainText("连接成功");
   await expect(page.locator(".llm-settings-result")).toContainText("MATHSCAPE_OK");
   await expect(page.getByLabel("API key")).toHaveValue("");
-  await expect(page.locator("#settings-label")).toHaveText("中转站 · relay-model");
+  await expect(page.locator("#settings-label")).toHaveText("设置");
   const request = await page.evaluate(() => (window as any).harness.saves[0]);
   expect(request.api_key).toBe("fixture-secret");
   expect(request.endpoint).toBe("https://relay.example/v1");
@@ -28,7 +29,7 @@ test("saves a relay profile, redacts the key and verifies connectivity", async (
 });
 
 test("persists workspace review and timeout policy independently of the LLM profile", async ({ page }) => {
-  await page.getByRole("button", { name: "LLM 未配置" }).click();
+  await page.locator("#settings-trigger").click();
   await expect(page.getByLabel("默认审核方式")).toHaveValue("review_before_publish");
   await expect(page.getByLabel("内容发现请求总超时（秒）")).toHaveValue("600");
   await page.getByLabel("默认审核方式").selectOption("ask_each_run");
@@ -48,7 +49,8 @@ test("persists workspace review and timeout policy independently of the LLM prof
 });
 
 test("preserves or explicitly clears a saved credential", async ({ page }) => {
-  await page.getByRole("button", { name: "LLM 未配置" }).click();
+  await page.locator("#settings-trigger").click();
+  await page.getByLabel("配置名称", { exact: true }).fill("主力模型");
   await page.getByLabel("模型 ID").fill("first-model");
   await page.getByLabel("API key").fill("first-secret");
   await page.getByRole("button", { name: "保存配置" }).click();
@@ -64,4 +66,27 @@ test("preserves or explicitly clears a saved credential", async ({ page }) => {
   expect(saves[1].clear_api_key).toBe(false);
   expect(saves[2].clear_api_key).toBe(true);
   await expect(page.locator(".credential-state")).toContainText("尚未保存密钥");
+});
+
+test("creates and edits separate named profiles without switching the default implicitly", async ({ page }) => {
+  await page.locator("#settings-trigger").click();
+  await page.getByLabel("配置名称", { exact: true }).fill("主配置");
+  await page.getByLabel("模型 ID").fill("model-a");
+  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(page.getByLabel("已有配置（选择以编辑）")).toContainText("主配置 · 默认");
+  await page.getByRole("button", { name: "新增配置", exact: true }).click();
+  await page.getByLabel("配置名称", { exact: true }).fill("备用配置");
+  await page.getByLabel("模型 ID").fill("model-b");
+  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(page.getByLabel("已有配置（选择以编辑）")).toContainText("主配置 · 默认");
+  await page.getByRole("button", { name: "将所选配置设为默认" }).click();
+  await expect(page.getByLabel("已有配置（选择以编辑）")).toContainText("备用配置 · 默认");
+  await page.getByLabel("已有配置（选择以编辑）").selectOption({ label: "主配置" });
+  await expect(page.getByLabel("模型 ID")).toHaveValue("model-a");
+  await page.getByLabel("已有配置（选择以编辑）").selectOption("");
+  await page.getByLabel("配置名称", { exact: true }).fill("第三配置");
+  await page.getByLabel("模型 ID").fill("model-c");
+  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(page.getByLabel("已有配置（选择以编辑）").locator("option")).toHaveCount(4);
+  await expect(page.getByLabel("已有配置（选择以编辑）")).toContainText("备用配置 · 默认");
 });

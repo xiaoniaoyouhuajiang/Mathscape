@@ -745,6 +745,7 @@ pub fn run() {
             content::get_artifact_content_info,
             content::read_artifact_bytes,
             llm_settings::get_llm_settings,
+            llm_settings::set_default_llm_profile,
             llm_settings::save_llm_profile,
             llm_settings::test_llm_profile,
             workspace_settings::get_workspace_settings,

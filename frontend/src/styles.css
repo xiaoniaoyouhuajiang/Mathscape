@@ -133,6 +133,10 @@ code {
   opacity: 0.65;
 }
 
+.workspace-grid.sources-collapsed { grid-template-columns: 48px minmax(0, 1fr) 280px; }
+.sources-collapsed .source-panel { padding: 8px; }
+.sources-collapsed .source-panel > :not(#toggle-sources) { display: none; }
+#toggle-sources { cursor: pointer; border: 0; border-radius: 8px; padding: 6px 12px; background: #1e3239; color: #c4e5da; }
 .workspace-grid {
   display: grid;
   min-height: 0;

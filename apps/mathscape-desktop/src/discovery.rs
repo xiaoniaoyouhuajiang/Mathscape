@@ -153,6 +153,14 @@ impl DesktopService {
         &self,
         request: RunDiscoveryRequest,
     ) -> Result<DesktopDiscoveryOutcome, DesktopDiscoveryError> {
+        self.run_discovery_observed(request, None).await
+    }
+
+    async fn run_discovery_observed(
+        &self,
+        request: RunDiscoveryRequest,
+        observer: Option<Arc<dyn Fn(&str, &str) + Send + Sync>>,
+    ) -> Result<DesktopDiscoveryOutcome, DesktopDiscoveryError> {
         let service = self.clone();
         let (prepared, profile, policy) = tauri::async_runtime::spawn_blocking(move || {
             service.prepare_discovery_execution(request)
@@ -167,8 +175,18 @@ impl DesktopService {
             request_timeout_seconds: policy.request_timeout.as_secs(),
         };
         let _permit = self.begin_discovery(task)?;
+        if let Some(observer) = &observer {
+            observer(
+                "started",
+                &format!(
+                    "{} · {}",
+                    profile.display_name.as_deref().unwrap_or(&profile.id),
+                    profile.model
+                ),
+            );
+        }
         let credentials: Arc<dyn mathscape_llm::CredentialResolver> = self.credentials.clone();
-        let backend = GenaiBackend::new(
+        let mut backend = GenaiBackend::new(
             profile,
             credentials,
             GenaiBackendOptions {
@@ -176,6 +194,9 @@ impl DesktopService {
                 connect_timeout: policy.connect_timeout,
             },
         )?;
+        if let Some(observer) = observer {
+            backend = backend.with_stream_observer(observer);
+        }
         let outcome = DiscoveryProducer::new(&backend).produce(prepared).await;
         Ok(desktop_outcome(outcome, policy))
     }
@@ -191,9 +212,18 @@ impl DesktopService {
         ),
         DesktopDiscoveryError,
     > {
-        let admission = request.selection.admission;
+        let settings = self.workspace_settings()?;
+        let admission = match settings.discovery_admission() {
+            crate::DiscoveryAdmissionPreference::ReviewBeforePublish => {
+                DiscoveryAdmission::ReviewBeforePublish
+            }
+            crate::DiscoveryAdmissionPreference::AutomaticCandidate => {
+                DiscoveryAdmission::AutomaticCandidate
+            }
+            crate::DiscoveryAdmissionPreference::AskEachRun => request.selection.admission,
+        };
         let profile = self.selected_llm_profile(request.profile_id.as_deref())?;
-        let policy = self.workspace_settings()?.discovery_policy(admission);
+        let policy = settings.discovery_policy(admission);
         let prepared = self
             .prepare_discovery_request(request.selection)
             .map_err(DesktopDiscoveryError::Input)?;
@@ -483,10 +513,16 @@ pub(crate) fn get_active_discovery(state: State<'_, DesktopState>) -> Option<Act
 pub(crate) async fn run_discovery(
     state: State<'_, DesktopState>,
     request: RunDiscoveryRequest,
+    on_progress: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<DesktopDiscoveryOutcome, String> {
     state
         .service
-        .run_discovery(request)
+        .run_discovery_observed(
+            request,
+            Some(Arc::new(move |kind: &str, text: &str| {
+                let _ = on_progress.send(serde_json::json!({"kind": kind, "text": text}));
+            })),
+        )
         .await
         .map_err(|error| error.to_string())
 }

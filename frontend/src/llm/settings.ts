@@ -17,6 +17,7 @@ type WireProtocol =
   | "ollama_native";
 
 interface LlmProfileView {
+  display_name?: string | null;
   id: string;
   provider: string;
   wire_protocol: WireProtocol;
@@ -82,6 +83,11 @@ export class LlmSettingsController {
   private readonly saveButton: HTMLButtonElement;
   private readonly testButton: HTMLButtonElement;
   private current: LlmProfileView | null = null;
+  private profiles: LlmProfileView[] = [];
+  private defaultId: string | null = null;
+  private draftId = "desktop-default";
+  private profileSelect!: HTMLSelectElement;
+  private profileName!: HTMLInputElement;
 
   constructor(
     host: HTMLElement,
@@ -139,10 +145,13 @@ export class LlmSettingsController {
             <div class="settings-section-heading">
               <div>
                 <span class="settings-eyebrow">MODEL RUNTIME</span>
-                <h3>LLM Profile</h3>
+                <h3>模型连接</h3>
               </div>
               <span class="settings-scope">Workspace + Keychain</span>
             </div>
+            <label class="settings-field"><span>已有配置（选择以编辑）</span><select name="saved-profile"></select></label>
+            <div class="settings-actions"><button type="button" class="new-profile">新增配置</button><button type="button" class="default-profile">将所选配置设为默认</button></div>
+            <label class="settings-field"><span>配置名称</span><input name="profile-name" maxlength="120" required placeholder="例如：APINOMA · 主力模型" /></label>
             <div class="settings-grid">
               <label class="settings-field">
                 <span>供应商</span>
@@ -229,6 +238,30 @@ export class LlmSettingsController {
     this.testButton = required<HTMLButtonElement>(host, ".test-settings");
 
     this.trigger.onclick = () => void this.open();
+    window.addEventListener("mathscape:open-settings", () => void this.open());
+    this.profileSelect = required<HTMLSelectElement>(host, "select[name=saved-profile]");
+    this.profileName = required<HTMLInputElement>(host, "input[name=profile-name]");
+    this.profileSelect.onchange = () => {
+      this.current = this.profiles.find(p => p.id === this.profileSelect.value) ?? null;
+      this.draftId = this.current?.id ?? `profile-${crypto.randomUUID()}`;
+      this.populateForm();
+    };
+    required<HTMLButtonElement>(host, ".new-profile").onclick = () => {
+      this.current = null;
+      this.draftId = `profile-${crypto.randomUUID()}`;
+      this.profileSelect.value = "";
+      this.populateForm();
+      this.profileName.focus();
+    };
+    required<HTMLButtonElement>(host, ".default-profile").onclick = async () => {
+      if (!this.current) { this.showResult("请先保存新配置。", false); return; }
+      this.setBusy(true, "正在切换默认配置…");
+      try {
+        this.applySnapshot(await invoke<LlmSettingsSnapshot>("set_default_llm_profile", { profileId: this.current.id }));
+        this.showResult("默认模型已切换，仅影响后续新任务。", true);
+      } catch (error) { this.showResult(errorMessage(error), false); }
+      finally { this.setBusy(false); }
+    };
     required<HTMLButtonElement>(host, ".settings-close").onclick = () => this.close();
     required<HTMLButtonElement>(host, ".cancel-settings").onclick = () => this.close();
     this.overlay.addEventListener("click", (event) => {
@@ -255,11 +288,9 @@ export class LlmSettingsController {
       const snapshot = await invoke<LlmSettingsSnapshot>("get_llm_settings");
       this.applySnapshot(snapshot);
       this.trigger.classList.toggle("is-configured", this.current !== null);
-      this.triggerLabel.textContent = this.current === null
-        ? "LLM 未配置"
-        : `${providerLabel(this.current.provider)} · ${this.current.model}`;
+      this.triggerLabel.textContent = "设置";
     } catch {
-      this.triggerLabel.textContent = "LLM 配置不可用";
+      this.triggerLabel.textContent = "设置";
       this.trigger.classList.remove("is-configured");
     }
   }
@@ -284,13 +315,19 @@ export class LlmSettingsController {
   }
 
   private applySnapshot(snapshot: LlmSettingsSnapshot): void {
-    this.current = snapshot.profiles.find(
+    this.profiles = snapshot.profiles;
+    this.defaultId = snapshot.default_profile_id;
+    this.current = snapshot.profiles.find(p => p.id === this.draftId) ?? snapshot.profiles.find(
       (profile) => profile.id === snapshot.default_profile_id,
     ) ?? snapshot.profiles[0] ?? null;
+    this.draftId = this.current?.id ?? this.draftId;
+    this.profileSelect.replaceChildren(new Option("新增配置…", ""), ...this.profiles.map(p => new Option(`${p.display_name ?? p.model}${p.id === this.defaultId ? " · 默认" : ""}`, p.id)));
+    this.profileSelect.value = this.current?.id ?? "";
   }
 
   private populateForm(): void {
     const profile = this.current;
+    this.profileName.value = profile?.display_name ?? profile?.model ?? "";
     this.provider.value = profile?.provider ?? "openai";
     if (!(this.provider.value in presets)) this.provider.value = "custom-relay";
     this.protocol.value = profile?.wire_protocol ?? presets[this.provider.value].protocol;
@@ -357,14 +394,15 @@ export class LlmSettingsController {
     try {
       const snapshot = await invoke<LlmSettingsSnapshot>("save_llm_profile", {
         request: {
-          profile_id: this.current?.id ?? "desktop-default",
+          profile_id: this.draftId,
+          display_name: this.profileName.value.trim(),
           provider: this.provider.value,
           wire_protocol: this.protocol.value,
           model: this.model.value,
           endpoint: this.endpoint.value.trim() || null,
           api_key: this.apiKey.value || null,
           clear_api_key: this.clearKey.checked,
-          make_default: true,
+          make_default: false,
         },
       });
       this.applySnapshot(snapshot);
@@ -408,6 +446,8 @@ export class LlmSettingsController {
   }
 
   private setBusy(busy: boolean, message = ""): void {
+    this.form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>("input, select, button").forEach(element => element.disabled = busy);
+    if (!busy) this.apiKey.disabled = this.clearKey.checked;
     this.saveButton.disabled = busy;
     this.testButton.disabled = busy;
     this.saveButton.textContent = busy ? "请稍候…" : "保存配置";

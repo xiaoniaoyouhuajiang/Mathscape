@@ -61,7 +61,7 @@ const files: Record<string, { media: string; bytes: Uint8Array }> = {
 const reads: { id: string; offset: number; length: number }[] = [];
 const selectionRequests: SelectionRequest[] = [];
 const discoveryRequests: SelectionRequest[] = [];
-const behavior = { selectionDelay: 0, discoveryDelay: 0, failSelection: false };
+const behavior = { selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish" };
 // Predetermined IPC double, not a second implementation of backend segmentation.
 function anchored(conversion: string): AnchoredMarkdown {
   const starts = ["# Math reader", "Inline $", "$$\n", "\\[\n", "![Diagram]", "<script>", "~~~tex"].map(marker => markdown.indexOf(marker));
@@ -77,12 +77,16 @@ function anchored(conversion: string): AnchoredMarkdown {
 mockIPC((command, payload) => {
   if (command === "get_workspace_settings") return {
     version: "mathscape-workspace-settings-1",
-    discovery_admission: "review_before_publish",
+    discovery_admission: behavior.admission,
     discovery_timeout_seconds: 600,
     connect_timeout_seconds: 15,
   };
   if (command === "get_active_discovery") return null;
   if (command === "run_discovery") {
+    const channel = (payload as any).onProgress;
+    channel?.onmessage({ kind: "started", text: "测试配置 · test-model" });
+    channel?.onmessage({ kind: "reasoning", text: "供应商公开摘要" });
+    channel?.onmessage({ kind: "text", text: '{"units":' });
     const request = (payload as { request: { selection: SelectionRequest } }).request.selection;
     discoveryRequests.push(request);
     return new Promise(resolve => setTimeout(() => resolve({

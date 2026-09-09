@@ -11,6 +11,8 @@ pub const LLM_PROFILE_VERSION: &str = "mathscape-llm-profile-1";
 pub struct LlmProfile {
     pub version: String,
     pub id: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
     pub provider: String,
     pub wire_protocol: WireProtocol,
     pub model: String,
@@ -29,6 +31,16 @@ impl LlmProfile {
             return Err(ProfileValidationError::Version(self.version.clone()));
         }
         validate_identifier("profile id", &self.id)?;
+        if self.display_name.as_ref().is_some_and(|name| {
+            name.trim().is_empty()
+                || name.chars().count() > 120
+                || name.chars().any(char::is_control)
+        }) {
+            return Err(ProfileValidationError::InvalidField {
+                field: "display_name",
+                message: "must contain 1..=120 non-control characters".into(),
+            });
+        }
         validate_identifier("provider", &self.provider)?;
         if self.model.trim().is_empty() {
             return Err(ProfileValidationError::InvalidField {

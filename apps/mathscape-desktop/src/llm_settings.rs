@@ -26,6 +26,7 @@ pub struct LlmSettingsSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct LlmProfileView {
     id: String,
+    display_name: Option<String>,
     provider: String,
     wire_protocol: WireProtocol,
     model: String,
@@ -39,6 +40,7 @@ impl From<&StoredLlmProfile> for LlmProfileView {
         let profile = stored.profile();
         Self {
             id: profile.id.clone(),
+            display_name: profile.display_name.clone(),
             provider: profile.provider.clone(),
             wire_protocol: profile.wire_protocol,
             model: profile.model.clone(),
@@ -54,6 +56,8 @@ impl From<&StoredLlmProfile> for LlmProfileView {
 pub struct SaveLlmProfileRequest {
     #[serde(default = "default_profile_id")]
     profile_id: String,
+    #[serde(default)]
+    display_name: Option<String>,
     provider: String,
     wire_protocol: WireProtocol,
     model: String,
@@ -120,6 +124,17 @@ pub enum LlmSettingsError {
 }
 
 impl DesktopService {
+    pub fn set_default_llm_profile(
+        &self,
+        id: &str,
+    ) -> Result<LlmSettingsSnapshot, LlmSettingsError> {
+        let mut store = self.llm_store()?;
+        let profile = store
+            .llm_profile(id)?
+            .ok_or_else(|| LlmSettingsError::UnknownProfile(id.into()))?;
+        store.upsert_llm_profile(profile.profile(), true)?;
+        self.llm_settings()
+    }
     pub fn llm_settings(&self) -> Result<LlmSettingsSnapshot, LlmSettingsError> {
         let store = self.llm_store()?;
         let stored = store.list_llm_profiles()?;
@@ -166,6 +181,7 @@ impl DesktopService {
             old_credential.clone()
         };
         let profile = LlmProfile {
+            display_name: request.display_name,
             version: LLM_PROFILE_VERSION.to_string(),
             id: profile_id,
             provider: request.provider.trim().to_ascii_lowercase(),
@@ -292,6 +308,18 @@ fn parse_endpoint(value: Option<&str>) -> Result<Option<Url>, LlmSettingsError> 
     Url::parse(&normalized)
         .map(Some)
         .map_err(|error| LlmSettingsError::InvalidProfile(format!("endpoint is invalid: {error}")))
+}
+
+#[tauri::command]
+pub(crate) async fn set_default_llm_profile(
+    state: State<'_, DesktopState>,
+    profile_id: String,
+) -> Result<LlmSettingsSnapshot, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.set_default_llm_profile(&profile_id))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

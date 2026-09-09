@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { askAdmission, runDiscoveryTask } from "../discovery-task";
 import {
   getWorkspaceSettings,
   WORKSPACE_SETTINGS_CHANGED,
@@ -136,6 +137,7 @@ export class MarkdownSelection {
   private version = 0;
   private disposed = false;
   private pending = false;
+  private launching = false;
   private feedback: string | null = null;
   private discoveryFeedback: string | null = null;
   private activeDiscovery: ActiveDiscoveryTask | null = null;
@@ -147,6 +149,8 @@ export class MarkdownSelection {
   private discoveryResult = document.createElement("section");
   private policy = document.createElement("select");
   private policyTouched = false;
+  private askEachRun = false;
+  private policyLabel = document.createElement("span");
   private discoveryTimeoutSeconds = 600;
   private validate = document.createElement("button");
   private discover: HTMLButtonElement;
@@ -175,7 +179,8 @@ export class MarkdownSelection {
     this.policy.add(new Option("后续：自动加入候选图（未人工审核）", "automatic_candidate"));
     this.policy.value = "review_before_publish";
     this.policy.onchange = () => { this.policyTouched = true; this.changed(); };
-    controls.append(this.policy);
+    controls.append(this.policyLabel);
+    button("修改设置", () => window.dispatchEvent(new Event("mathscape:open-settings")));
     this.validate = button("构建发现输入", () => void this.resolve());
     this.discover = button("使用 LLM 发现内容", () => void this.runDiscovery());
     this.status.setAttribute("role", "status");
@@ -254,7 +259,9 @@ export class MarkdownSelection {
   }
 
   private applyAdmissionPreference(preference: DiscoveryAdmissionPreference): void {
-    this.policy.value = preference === "ask_each_run" ? "" : preference;
+    this.askEachRun = preference === "ask_each_run";
+    this.policy.value = this.askEachRun ? "review_before_publish" : preference;
+    this.policyLabel.textContent = this.askEachRun ? "审核方式：运行时询问" : preference === "automatic_candidate" ? "审核方式：自动候选" : "审核方式：人工审核";
     this.policyTouched = false;
     this.refresh();
   }
@@ -264,7 +271,7 @@ export class MarkdownSelection {
     const admissionSelected = this.policy.value === "review_before_publish"
       || this.policy.value === "automatic_candidate";
     this.validate.disabled = !valid || !admissionSelected || this.pending;
-    this.discover.disabled = !valid || !admissionSelected || this.pending || this.activeDiscovery !== null;
+    this.discover.disabled = !valid || !admissionSelected || this.pending || this.launching || this.activeDiscovery !== null;
     this.policy.disabled = this.pending || this.activeDiscovery !== null;
     this.startButton.disabled = this.endButton.disabled = this.current < 0;
     this.article.querySelectorAll<HTMLElement>("[data-source-block]").forEach(block => {
@@ -342,7 +349,18 @@ export class MarkdownSelection {
   }
 
   private async runDiscovery(): Promise<void> {
-    if (this.pending || this.disposed || this.activeDiscovery !== null) return;
+    if (this.pending || this.launching || this.disposed || this.activeDiscovery !== null) return;
+    this.launching = true; this.refresh();
+    // Read the latest policy even if a settings event was missed.
+    try { this.applyWorkspaceSettings(await getWorkspaceSettings()); }
+    catch { this.launching = false; this.discoveryFeedback = "无法读取运行设置，请稍后重试。"; this.refresh(); return; }
+    if (this.disposed) return;
+    if (this.askEachRun) {
+      const admission = await askAdmission();
+      if (admission === null || this.disposed) { this.launching = false; this.refresh(); return; }
+      this.policy.value = admission;
+    }
+    this.launching = false;
     const selection = this.selectionRequest();
     if (selection === null) return;
     const version = ++this.version;
@@ -352,9 +370,7 @@ export class MarkdownSelection {
     this.discoveryResult.replaceChildren();
     this.refresh();
     try {
-      const outcome = await invoke<DiscoveryOutcome>("run_discovery", {
-        request: { selection, profile_id: null },
-      });
+      const outcome = await runDiscoveryTask<DiscoveryOutcome>({ selection, profile_id: null });
       if (this.disposed || version !== this.version) return;
       this.renderDiscovery(outcome);
     } catch (error) {

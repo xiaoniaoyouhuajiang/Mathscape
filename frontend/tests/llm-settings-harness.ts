@@ -3,6 +3,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { LlmSettingsController } from "../src/llm/settings";
 
 interface Profile {
+  display_name: string;
   id: string;
   provider: string;
   wire_protocol: string;
@@ -34,22 +35,29 @@ mockIPC((command, payload) => {
     return workspaceSettings;
   }
   if (command === "get_llm_settings") return snapshot;
+  if (command === "set_default_llm_profile") {
+    snapshot.default_profile_id = (payload as any).profileId;
+    snapshot.profiles.forEach(p => p.is_default = p.id === snapshot.default_profile_id);
+    return snapshot;
+  }
   if (command === "save_llm_profile") {
     const request = (payload as { request: Record<string, any> }).request;
     saves.push(request);
     const endpoint = request.endpoint && !request.endpoint.endsWith("/")
       ? request.endpoint + "/" : request.endpoint;
+    const old = snapshot.profiles.find(p => p.id === request.profile_id);
     snapshot = {
-      default_profile_id: request.profile_id,
-      profiles: [{
+      default_profile_id: snapshot.default_profile_id ?? request.profile_id,
+      profiles: [...snapshot.profiles.filter(p => p.id !== request.profile_id), {
+        display_name: request.display_name,
         id: request.profile_id,
         provider: request.provider,
         wire_protocol: request.wire_protocol,
         model: request.model,
         endpoint,
-        is_default: true,
+        is_default: (snapshot.default_profile_id ?? request.profile_id) === request.profile_id,
         has_credential: request.clear_api_key ? false
-          : Boolean(request.api_key) || snapshot.profiles[0]?.has_credential === true,
+          : Boolean(request.api_key) || old?.has_credential === true,
       }],
     };
     return snapshot;

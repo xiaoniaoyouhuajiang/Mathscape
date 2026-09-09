@@ -6,6 +6,7 @@ import type { IncidenceGraph, IncidenceNode } from "./graph/projection";
 import "./styles.css";
 import { ArtifactReader } from "./reader/reader";
 import { LlmSettingsController } from "./llm/settings";
+import { mountDiscoveryTask } from "./discovery-task";
 
 interface DesktopSnapshot {
   workspace_id: string;
@@ -94,8 +95,8 @@ app.innerHTML = `
       <div class="topbar-actions">
         <span id="service-state" class="service-state">正在连接本地内核</span>
         <button id="llm-settings-button" class="settings-button" type="button">
-          <span class="settings-dot" aria-hidden="true"></span>
-          <span id="llm-settings-label">LLM 未配置</span>
+          <span aria-hidden="true">⚙</span>
+          <span id="llm-settings-label">设置</span>
         </button>
         <button id="import-pdf" class="primary-button" type="button">
           <span aria-hidden="true">＋</span> 导入 PDF
@@ -105,6 +106,7 @@ app.innerHTML = `
 
     <main class="workspace-grid">
       <aside class="panel source-panel">
+        <button id="toggle-sources" type="button" aria-expanded="true" aria-label="折叠来源目录">‹</button>
         <div class="panel-heading">
           <span class="eyebrow">SOURCE LAYER</span>
           <h1>来源目录</h1>
@@ -186,6 +188,22 @@ app.innerHTML = `
 `;
 
 const importButton = requiredElement<HTMLButtonElement>("#import-pdf");
+mountDiscoveryTask();
+const sourceToggle = requiredElement<HTMLButtonElement>("#toggle-sources");
+const workspaceGrid = requiredElement<HTMLElement>(".workspace-grid");
+const setSourcesCollapsed = (collapsed: boolean) => {
+  workspaceGrid.classList.toggle("sources-collapsed", collapsed);
+  sourceToggle.textContent = collapsed ? "›" : "‹";
+  sourceToggle.setAttribute("aria-expanded", String(!collapsed));
+  sourceToggle.setAttribute("aria-label", collapsed ? "展开来源目录" : "折叠来源目录");
+  window.dispatchEvent(new Event("resize"));
+};
+try { setSourcesCollapsed(localStorage.getItem("mathscape:sources-collapsed") === "true"); } catch { /* Optional presentation preference. */ }
+sourceToggle.onclick = () => {
+  const collapsed = !workspaceGrid.classList.contains("sources-collapsed");
+  setSourcesCollapsed(collapsed);
+  try { localStorage.setItem("mathscape:sources-collapsed", String(collapsed)); } catch { /* Storage may be unavailable. */ }
+};
 const serviceState = requiredElement<HTMLElement>("#service-state");
 const artifactCount = requiredElement<HTMLElement>("#artifact-count");
 const conversionCount = requiredElement<HTMLElement>("#conversion-count");

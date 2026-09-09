@@ -58,6 +58,7 @@ fn request() -> LlmRequest {
 
 fn profile(server: &MockServer) -> LlmProfile {
     LlmProfile {
+        display_name: None,
         version: LLM_PROFILE_VERSION.to_string(),
         id: "relay-test".to_string(),
         provider: "custom-relay".to_string(),
@@ -183,7 +184,25 @@ async fn custom_openai_compatible_stream_collects_structured_json_and_usage() {
         },
     )
     .unwrap();
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = events.clone();
+    let backend = backend.with_stream_observer(Arc::new(move |kind, text| {
+        captured
+            .lock()
+            .unwrap()
+            .push((kind.to_string(), text.to_string()));
+    }));
     let response = backend.execute_stream(request()).await.unwrap();
+    let events = events.lock().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(kind, _)| kind == "text")
+            .map(|(_, text)| text.as_str())
+            .collect::<String>(),
+        r#"{"ok":true}"#
+    );
+    assert_eq!(events.last().unwrap().0, "validating");
 
     assert_eq!(response.text().as_deref(), Some(r#"{"ok":true}"#));
     assert_eq!(response.usage.input_tokens, Some(11));

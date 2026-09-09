@@ -1,0 +1,11 @@
+.task-launcher { position: fixed; bottom: 18px; right: 22px; z-index: 24; padding: 10px 18px; border: 1px solid #42625c; border-radius: 24px; background: #152a29; color: #c4e5da; cursor: pointer; }
+.discovery-task-window { position: fixed; bottom: 68px; right: 22px; width: min(560px, calc(100vw - 44px)); max-height: 70vh; overflow: auto; z-index: 25; background: #111b23; color: #d6e3e0; border: 1px solid #344b50; border-radius: 16px; box-shadow: 0 15px 65px #0008; padding: 18px; }
+.discovery-task-window[hidden] { display: none; }
+.discovery-task-window header { display: flex; justify-content: space-between; align-items: center; }
+.discovery-task-window pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font-size: 12px; line-height: 1.6; }
+.discovery-task-window details { margin-top: 14px; }
+.task-status { font-size: 13px; }
+.admission-dialog { border: 1px solid #344b50; border-radius: 14px; padding: 24px; background: #111b23; color: #d6e3e0; }
+.discovery-task-window button, .admission-dialog button { background: #1e3239; color: #d6e3e0; border: 1px solid #41585e; border-radius: 6px; cursor: pointer; }
+.admission-dialog button { margin: 6px; padding: 8px 16px; }
+.admission-dialog::backdrop { background: #142a3655; }
