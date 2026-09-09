@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::{DiscoveryInputError, DiscoveryInputLimits, build_discovery_input};
+use crate::{
+    DiscoveryInputError, DiscoveryInputLimits, DiscoveryModelInput, SelectorResolver,
+    build_discovery_input,
+};
 
 pub const DISCOVERY_SYSTEM_PROMPT: &str =
     include_str!("../../../prompts/source-discovery/v1/system.md");
@@ -25,6 +28,7 @@ pub struct DiscoveryPromptManifest {
     pub id: String,
     pub version: String,
     pub input_version: String,
+    pub model_input_version: String,
     pub proposal_version: String,
     pub schema_name: String,
     pub system_prompt: String,
@@ -77,6 +81,8 @@ fn normalize_tagged_unions(value: &mut Value) {
 #[derive(Clone, Debug)]
 pub struct PreparedDiscoveryRequest {
     input: DiscoveryInput,
+    model_input: DiscoveryModelInput,
+    selector_resolver: SelectorResolver,
     request: LlmRequest,
     manifest: DiscoveryPromptManifest,
     /// Identity of manifest + system prompt + generated schema, not a complete
@@ -91,6 +97,14 @@ impl PreparedDiscoveryRequest {
 
     pub fn request(&self) -> &LlmRequest {
         &self.request
+    }
+
+    pub fn model_input(&self) -> &DiscoveryModelInput {
+        &self.model_input
+    }
+
+    pub fn selector_resolver(&self) -> &SelectorResolver {
+        &self.selector_resolver
     }
 
     pub fn manifest(&self) -> &DiscoveryPromptManifest {
@@ -108,12 +122,14 @@ impl PreparedDiscoveryRequest {
         LlmRequest,
         DiscoveryPromptManifest,
         ContentHash,
+        SelectorResolver,
     ) {
         (
             self.input,
             self.request,
             self.manifest,
             self.prompt_fingerprint,
+            self.selector_resolver,
         )
     }
 }
@@ -127,6 +143,8 @@ pub fn build_discovery_request(
     limits: DiscoveryInputLimits,
 ) -> Result<PreparedDiscoveryRequest, DiscoveryInputError> {
     let input = build_discovery_input(document, selection, limits)?;
+    let selector_resolver = SelectorResolver::from_input(&input);
+    let model_input = selector_resolver.model_input(&input);
     let manifest = discovery_prompt_manifest();
     let schema = discovery_output_schema();
     let bundle = serde_json::to_vec(&(&manifest, DISCOVERY_SYSTEM_PROMPT, &schema))
@@ -148,7 +166,7 @@ pub fn build_discovery_request(
             LlmMessage::text(LlmRole::System, system),
             LlmMessage::text(
                 LlmRole::User,
-                serde_json::to_string(&input).expect("input is serializable"),
+                serde_json::to_string(&model_input).expect("model input is serializable"),
             ),
         ],
         tools: vec![],
@@ -167,6 +185,8 @@ pub fn build_discovery_request(
     };
     Ok(PreparedDiscoveryRequest {
         input,
+        model_input,
+        selector_resolver,
         request,
         manifest,
         prompt_fingerprint,

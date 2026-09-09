@@ -8,9 +8,11 @@
 ## 处理边界
 
 ```text
-DiscoveryInput → producer → DiscoveryProposal → 确定性验证 → 保存发现结果
-                                    ↓
-                         有界修订或明确失败
+DiscoveryInput → 模型投影/短句柄 → producer → DiscoveryProposal
+                                              ↓
+                                  SelectorResolver → 确定性验证
+                                              ↓
+                                     有界修订或保存发现结果
 
 已保存发现结果 + 相关原文 + 继承环境 → 按需上下文化 → DialectScope
 ```
@@ -48,15 +50,19 @@ TrustRecord、EntityPayload 或 MapPatch 转换。字段如下：
 ## 选择器与类型
 
 `DiscoverySelector` 仅允许 block_range 和 quote_range，可转换为既有 SourceSelector
-以复用语法；该转换不代表选区已获授权。producer 不允许使用 whole_document。
+以复用语法；该转换不代表选区已获授权。producer 不允许使用 whole_document。模型收到的
+块身份是请求局部的 `b1`、`b2` 等短句柄，不是正式哈希；稳定块 ID 和字节范围留在系统侧
+绑定表中。SelectorResolver 在确定性验证前完成句柄绑定，验证成功的选择器仍使用正式哈希。
 
 提案解析器以实际 DiscoveryInput 的可见区间为边界：
 
 - 块 ID 必须出现在该输入中；知道完整 Artifact 的块 ID 不赋予读取权限。
 - 块范围按原文位置解释，不能按字符串 ID 排序。
 - 完整块范围若伸出已选范围则拒绝，不能静默裁切；块内选区使用 quote_range。
-- quote 在对应块的可见片段中必须精确、唯一，并解析到原始 UTF-8 字节区间；不能匹配
-  输入未提供的文本。零匹配、重复匹配、逆序、跨越未提供区域都返回诊断。
+- quote 在对应块的可见片段中必须唯一，并解析到原始 UTF-8 字节区间；不能匹配输入未提供的
+  文本。Resolver 优先精确匹配，仅在精确匹配为零时忽略外围 `$`/`$$`、折叠空白并将
+  `\\quad` 等纯排版间距视为空白。它不改写数学运算符、上下标或否定号。零匹配、重复匹配、
+  逆序、跨越未提供区域都返回诊断。
 - requested/context 的权限和覆盖角色分开；当前 v2 构建器和验证器要求 context 为空，
   后续引入上下文时须升级契约和指纹。
 

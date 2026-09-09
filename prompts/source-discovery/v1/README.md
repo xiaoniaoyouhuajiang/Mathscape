@@ -10,24 +10,33 @@
 - `output.schema.json`：从 Rust DTO 派生的、纳入版本管理的输出 Schema 快照。
 
 `mathscape_orchestrator::build_discovery_request(document, selection, limits)` 先通过现有
-DiscoveryInput 构建器重新验证选区，再返回 `PreparedDiscoveryRequest`：
+DiscoveryInput 构建器重新验证选区，再构造不暴露稳定哈希和字节坐标的模型投影，最后返回
+`PreparedDiscoveryRequest`：
 
 ```text
 AnchoredMarkdown + ResolvedDiscoverySelection
                ↓ 重新解析、验证选区与输入指纹
-DiscoveryInput + system Prompt + output Schema
+DiscoveryInput + SelectorResolver 绑定表
+               ↓ 模型投影：b1/b2/... + 可见文本
+DiscoveryModelInput + system Prompt + output Schema
                ↓
-PreparedDiscoveryRequest { input, request, manifest, prompt_fingerprint }
+PreparedDiscoveryRequest { input, model_input, selector_resolver, request, manifest, prompt_fingerprint }
                ↓ DiscoveryProducer（单次调用）
-LlmBackend → 响应限额/解码 → 确定性验证
+LlmBackend → 响应限额/解码 → SelectorResolver → 确定性验证
                ↓ 后续 application 工作
 接受决策 → 受控来源登记
 ```
 
-system 消息由固定 Prompt 和 Schema 组成；user 消息是序列化的完整 DiscoveryInput，
+system 消息由固定 Prompt 和 Schema 组成；user 消息是序列化的 DiscoveryModelInput，
+只含输入指纹、边界、短句柄、裁切标记和原文，不暴露 Artifact 身份、正式块哈希或字节范围。
 原文不插值到 system 指令中。请求无工具，默认不采集原始响应，不设 temperature。
 JSON Schema 同时放入 `LlmRequest.response_format`；实际供应商是否接受该 Schema 仍需
 后续联调。Producer 不实现静默降级、fallback 或重试策略，也不宣称阻止了所有提示注入。
+
+短句柄仅在一次请求内有效。Producer 将模型选择器交给同一次准备过程生成的绑定表；解析器
+将短句柄恢复为正式块哈希，并且只对外围 `$`/`$$`、空白和纯排版 TeX 间距命令做保守
+规范化。重复 quote、未知句柄或找不到的 quote 明确拒绝，不猜测位置。解析后的正式选择器
+才进入原有授权验证器。旧式响应中的可见正式块 ID 暂时兼容，以便回放已有 fixture。
 
 `prompt_fingerprint` 是 manifest、Prompt 和生成 Schema 的内容哈希。
 输入指纹与 Prompt 指纹都不是完整缓存键，复用时还需考虑模型、生成参数及兼容策略。

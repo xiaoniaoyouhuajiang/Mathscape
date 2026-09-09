@@ -1,6 +1,6 @@
 use mathscape_domain::{
-    DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest, SourceSelector,
-    StableId,
+    DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest, DiscoverySelector,
+    SourceSelector, StableId,
 };
 use mathscape_llm::{
     LLM_PROFILE_VERSION, LlmCapabilities, LlmError, LlmFinishReason, LlmProfile, LlmResolvedTarget,
@@ -49,8 +49,8 @@ fn prepared_fixture() -> (PreparedDiscoveryRequest, String) {
     .unwrap();
     let prepared = build_discovery_request(&document, &selection, Default::default()).unwrap();
     let sample = SAMPLE
-        .replace("b-problem", &document.blocks[0].id)
-        .replace("b-solution", &document.blocks[1].id);
+        .replace("b-problem", "b1")
+        .replace("b-solution", "b2");
     let mut value: serde_json::Value = serde_json::from_str(&sample).unwrap();
     value["input_fingerprint"] = json!(prepared.input().fingerprint);
     (prepared, serde_json::to_string(&value).unwrap())
@@ -95,6 +95,11 @@ async fn produces_and_validates_one_proposal_without_hiding_run_facts() {
         panic!("expected a valid proposal")
     };
     assert_eq!(proposal.units().len(), 2);
+    assert!(matches!(
+        proposal.units()[0].selectors()[0].selector(),
+        DiscoverySelector::BlockRange { first, last }
+            if first.starts_with("block:sha256:") && last.starts_with("block:sha256:")
+    ));
     assert_eq!(proposal.status(), ValidatedProposalStatus::Complete);
     assert_eq!(run.profile_id, "discovery-test");
     let observation = run.response.unwrap();
@@ -102,6 +107,40 @@ async fn produces_and_validates_one_proposal_without_hiding_run_facts() {
     assert_eq!(observation.usage.total_tokens, Some(150));
     assert_eq!(backend.requests().len(), 1);
     assert_eq!(backend.streaming_request_count(), 1);
+}
+
+#[tokio::test]
+async fn reports_unbound_model_handles_before_deterministic_validation() {
+    let (prepared, text) = prepared_fixture();
+    let mut value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    value["units"][0]["selectors"][0]["first"] = json!("invented");
+    let backend = ScriptedLlmBackend::new(
+        profile(),
+        [Ok(response(
+            &serde_json::to_string(&value).unwrap(),
+            completed(),
+        ))],
+    );
+
+    let outcome = DiscoveryProducer::new(&backend).produce(prepared).await;
+    let DiscoveryProductionOutcome::InvalidProposal {
+        proposal: Some(raw),
+        rejection: DiscoveryProposalRejection::SelectorResolution(report),
+        ..
+    } = outcome
+    else {
+        panic!("expected selector resolution rejection")
+    };
+    assert_eq!(
+        serde_json::to_value(&raw.units[0].selectors[0]).unwrap()["first"],
+        "invented"
+    );
+    assert!(
+        report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.path() == "proposal.units[0].selectors[0].first")
+    );
 }
 
 #[tokio::test]

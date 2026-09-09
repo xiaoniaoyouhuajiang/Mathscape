@@ -4,8 +4,9 @@ use mathscape_domain::{
 };
 use mathscape_llm::{LlmMessagePart, LlmResponseFormat, LlmRole};
 use mathscape_orchestrator::{
-    DISCOVERY_SYSTEM_PROMPT, anchor_markdown, build_discovery_request, discovery_output_schema,
-    discovery_prompt_manifest, resolve_selection, validate_discovery_proposal,
+    DISCOVERY_MODEL_INPUT_VERSION, DISCOVERY_SYSTEM_PROMPT, anchor_markdown,
+    build_discovery_request, discovery_output_schema, discovery_prompt_manifest, resolve_selection,
+    validate_discovery_proposal,
 };
 use serde_json::{Value, json};
 
@@ -78,7 +79,9 @@ fn dto_unions_have_disjoint_required_tags_before_normalization() {
 #[test]
 fn manifest_tracks_contract_versions_and_embedded_resources() {
     let manifest = discovery_prompt_manifest();
+    assert_eq!(manifest.version, "2");
     assert_eq!(manifest.input_version, DISCOVERY_INPUT_VERSION);
+    assert_eq!(manifest.model_input_version, DISCOVERY_MODEL_INPUT_VERSION);
     assert_eq!(
         manifest.proposal_version,
         serde_json::to_value(mathscape_domain::DiscoveryProposalVersion::V1).unwrap()
@@ -209,25 +212,28 @@ fn prompt_builds_a_real_input_and_fixture_passes_schema_then_semantic_validator(
     };
     assert_eq!(
         serde_json::from_str::<Value>(text).unwrap(),
-        serde_json::to_value(prepared.input()).unwrap()
+        serde_json::to_value(prepared.model_input()).unwrap()
     );
+    assert!(text.contains("\"block_ref\":\"b1\""));
+    assert!(!text.contains("\"block_id\""));
     let LlmResponseFormat::JsonSchema { name, schema, .. } = &prepared.request().response_format
     else {
         panic!()
     };
     assert_eq!(name, &discovery_prompt_manifest().schema_name);
     let sample = SAMPLE
-        .replace("b-problem", &document.blocks[0].id)
-        .replace("b-solution", &document.blocks[1].id);
+        .replace("b-problem", "b1")
+        .replace("b-solution", "b2");
     let mut value: Value = serde_json::from_str(&sample).unwrap();
     value["input_fingerprint"] = json!(prepared.input().fingerprint);
     assert!(jsonschema::validator_for(schema).unwrap().is_valid(&value));
-    let validated = validate_discovery_proposal(
-        prepared.input(),
-        serde_json::from_value(value).unwrap(),
-        Default::default(),
-    )
-    .unwrap();
+    let proposal = prepared
+        .selector_resolver()
+        .resolve(serde_json::from_value(value).unwrap())
+        .unwrap()
+        .into_proposal();
+    let validated =
+        validate_discovery_proposal(prepared.input(), proposal, Default::default()).unwrap();
     assert_eq!(validated.units().len(), 2);
 
     let mut automatic = selection.clone();

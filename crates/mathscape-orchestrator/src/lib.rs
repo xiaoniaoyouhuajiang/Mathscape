@@ -7,6 +7,7 @@ mod discovery_validation;
 mod markdown_anchors;
 mod marker_promotion;
 mod selection_plan;
+mod selector_resolver;
 
 pub use discovery_input::{
     DEFAULT_DISCOVERY_INPUT_BLOCKS, DEFAULT_DISCOVERY_INPUT_BYTES, DiscoveryInputError,
@@ -36,3 +37,9 @@ pub use marker_promotion::{
     ProductPath, promote_marker_inventory,
 };
 pub use selection_plan::{ConversionSelectionPlan, ConversionSlice};
+pub use selector_resolver::{
+    DISCOVERY_MODEL_INPUT_VERSION, DiscoveryModelInput, DiscoveryModelInputRegion,
+    DiscoveryModelInputSegment, ResolvedSelectorProposal, SelectorBinding, SelectorResolutionCode,
+    SelectorResolutionDiagnostic, SelectorResolutionReport, SelectorResolver, SelectorRewrite,
+    SelectorRewriteKind,
+};

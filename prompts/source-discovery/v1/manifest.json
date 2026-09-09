@@ -1,7 +1,8 @@
 {
   "id": "source-discovery",
-  "version": "1",
+  "version": "2",
   "input_version": "mathscape-discovery-input-2",
+  "model_input_version": "mathscape-discovery-model-input-1",
   "proposal_version": "mathscape-discovery-proposal-1",
   "schema_name": "discovery_proposal_v1",
   "system_prompt": "system.md",

@@ -1,6 +1,6 @@
 # Discovery Producer v1
 
-状态：单次 LLM 调用、响应检查、DTO 解码、规范表示检查和确定性验证已实现；持久化、
+状态：单次 LLM 调用、短句柄绑定、响应检查、DTO 解码、SelectorResolver 和确定性验证已实现；持久化、
 接受、来源登记、自动修订与 Desktop 触发待实现。
 日期：2026-09-08。
 
@@ -13,10 +13,14 @@ key。处理链为：
 ```text
 PreparedDiscoveryRequest
         ↓ 请求契约与输入指纹一致性
-LlmBackend::execute（一次，无重试）
+DiscoveryModelInput（短句柄，不含正式块哈希/字节坐标）
+        ↓
+LlmBackend::execute_stream（一次，无重试）
         ↓ 停止原因、工具调用、文本字节上限
 单个 JSON 对象 → DiscoveryProposal
         ↓ 当前生产契约的规范表示
+SelectorResolver（绑定正式块 ID、唯一 quote、安全排版规范化）
+        ↓
 validate_discovery_proposal
         ↓
 ValidatedDiscoveryProposal | 明确的拒绝/失败
@@ -36,7 +40,9 @@ DialectScope 或 MapPatch。`Valid` 只表示提案通过当前结构和来源�
 - `Failed`：请求自身或 LLM backend 失败，例如配置、鉴权、限流、超时或传输错误。
 
 提案拒绝覆盖 token 上限截断、内容过滤、不可用的停止原因、意外工具调用、空响应、超出
-字节上限、非单个 JSON、非规范 JSON 和确定性验证失败。`Completed`、`StopSequence` 以及
+字节上限、非单个 JSON、非规范 JSON、选择器解析失败和确定性验证失败。选择器解析失败
+保留模型原始短句柄提案，并返回 unknown block ref、quote not found 或 ambiguous quote
+结构化诊断。`Completed`、`StopSequence` 以及
 供应商未给出停止原因时可以继续验证；是否缺少停止原因值得警告由后续运行策略决定。
 
 Domain 为历史输入兼容，允许省略部分 `Option` 字段；当前 Producer 契约要求模型显式输出
@@ -66,8 +72,10 @@ reasoning、完整正文或 raw response，也不是持久化 run schema 或 Tru
 cargo test -p mathscape-orchestrator --test discovery_producer
 ```
 
-覆盖有效提案、backend 失败、非法 JSON、截断、工具调用、响应超限、非规范可选字段和输入
-指纹不匹配。`PreparedDiscoveryRequest` 只能由构建器创建，外部仅有只读访问，避免请求和
-已记录指纹在调用前分离。[Desktop 内容发现](desktop-discovery-v1.md)已接通一次人工触发与
+覆盖有效提案、短句柄到正式块 ID 的恢复、未知句柄、backend 失败、非法 JSON、截断、工具
+调用、响应超限、非规范可选字段和输入指纹不匹配。`PreparedDiscoveryRequest` 只能由构建器
+创建，模型投影与绑定表随请求一起生成并只有只读访问，避免请求和已记录指纹在调用前分离。
+[SelectorResolver](selector-resolver-v1.md)另有独立的投影、歧义和安全规范化回归。
+[Desktop 内容发现](desktop-discovery-v1.md)已接通一次人工触发与
 结果展示；下一步先持久化运行和提案并收集真实模型失败分布，再决定是否增加最多一次、
 携带结构化诊断的 repair。

@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::{
     DiscoveryValidationLimits, DiscoveryValidationReport, PreparedDiscoveryRequest,
-    ValidatedDiscoveryProposal, validate_discovery_proposal,
+    SelectorResolutionReport, ValidatedDiscoveryProposal, validate_discovery_proposal,
 };
 
 pub const DEFAULT_DISCOVERY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -115,6 +115,8 @@ pub enum DiscoveryProposalRejection {
     #[error("Discovery response does not use the canonical producer representation")]
     NonCanonicalJson,
     #[error(transparent)]
+    SelectorResolution(#[from] SelectorResolutionReport),
+    #[error(transparent)]
     Validation(#[from] DiscoveryValidationReport),
 }
 
@@ -172,7 +174,7 @@ impl<'a> DiscoveryProducer<'a> {
             };
         }
 
-        let (input, request, manifest, _) = prepared.into_parts();
+        let (input, request, manifest, _, selector_resolver) = prepared.into_parts();
         // Discovery responses can be large structured documents. Use the
         // streaming boundary so provider SSE traffic keeps intermediary
         // gateways alive; validation still begins only after the final JSON
@@ -241,7 +243,17 @@ impl<'a> DiscoveryProducer<'a> {
         }
 
         let rejected_proposal = proposal.clone();
-        match validate_discovery_proposal(&input, proposal, self.limits.validation) {
+        let resolved = match selector_resolver.resolve(proposal) {
+            Ok(resolved) => resolved.into_proposal(),
+            Err(report) => {
+                return invalid(
+                    Some(rejected_proposal),
+                    DiscoveryProposalRejection::SelectorResolution(report),
+                    run,
+                );
+            }
+        };
+        match validate_discovery_proposal(&input, resolved, self.limits.validation) {
             Ok(proposal) => DiscoveryProductionOutcome::Valid { proposal, run },
             Err(report) => invalid(
                 Some(rejected_proposal),

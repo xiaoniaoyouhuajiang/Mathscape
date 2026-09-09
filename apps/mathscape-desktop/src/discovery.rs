@@ -10,8 +10,8 @@ use mathscape_llm::{
 };
 use mathscape_orchestrator::{
     DiscoveryDiagnostic, DiscoveryProducer, DiscoveryProductionOutcome, DiscoveryProposalRejection,
-    DiscoveryRunSummary, DiscoveryValidationCode, PreparedDiscoveryRequest,
-    ValidatedDiscoveryProposal,
+    DiscoveryRunSummary, DiscoveryValidationCode, PreparedDiscoveryRequest, SelectorResolutionCode,
+    SelectorResolutionDiagnostic, ValidatedDiscoveryProposal,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -276,6 +276,11 @@ fn desktop_outcome(
                     .iter()
                     .map(DesktopDiscoveryDiagnostic::from)
                     .collect(),
+                DiscoveryProposalRejection::SelectorResolution(report) => report
+                    .diagnostics()
+                    .iter()
+                    .map(DesktopDiscoveryDiagnostic::from)
+                    .collect(),
                 _ => vec![],
             };
             DesktopDiscoveryOutcome::InvalidProposal {
@@ -387,6 +392,16 @@ impl From<&DiscoveryDiagnostic> for DesktopDiscoveryDiagnostic {
     }
 }
 
+impl From<&SelectorResolutionDiagnostic> for DesktopDiscoveryDiagnostic {
+    fn from(diagnostic: &SelectorResolutionDiagnostic) -> Self {
+        Self {
+            code: selector_resolution_code(diagnostic.code()),
+            path: diagnostic.path().to_owned(),
+            message: diagnostic.message().to_owned(),
+        }
+    }
+}
+
 fn rejection_kind(rejection: &DiscoveryProposalRejection) -> &'static str {
     match rejection {
         DiscoveryProposalRejection::MaxOutputTokens => "max_output_tokens",
@@ -397,7 +412,16 @@ fn rejection_kind(rejection: &DiscoveryProposalRejection) -> &'static str {
         DiscoveryProposalRejection::ResponseTooLarge { .. } => "response_too_large",
         DiscoveryProposalRejection::InvalidJson { .. } => "invalid_json",
         DiscoveryProposalRejection::NonCanonicalJson => "non_canonical_json",
+        DiscoveryProposalRejection::SelectorResolution(_) => "selector_resolution",
         DiscoveryProposalRejection::Validation(_) => "deterministic_validation",
+    }
+}
+
+fn selector_resolution_code(code: SelectorResolutionCode) -> &'static str {
+    match code {
+        SelectorResolutionCode::UnknownBlockRef => "unknown_block_ref",
+        SelectorResolutionCode::QuoteNotFound => "quote_not_found",
+        SelectorResolutionCode::AmbiguousQuote => "ambiguous_quote",
     }
 }
 
