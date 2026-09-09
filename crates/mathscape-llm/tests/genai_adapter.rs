@@ -30,8 +30,19 @@ fn request() -> LlmRequest {
             name: "discovery".to_string(),
             description: None,
             schema: json!({
+                "$defs": {
+                    "BooleanAnswer": {
+                        "type": "boolean",
+                        "description": "Reusable boolean answer"
+                    }
+                },
                 "type": "object",
-                "properties": {"ok": {"type": "boolean"}},
+                "properties": {
+                    "ok": {
+                        "$ref": "#/$defs/BooleanAnswer",
+                        "description": "Whether discovery succeeded"
+                    }
+                },
                 "required": ["ok"],
                 "additionalProperties": false
             }),
@@ -125,6 +136,16 @@ async fn custom_openai_compatible_endpoint_receives_structured_request() {
     let body: serde_json::Value = received[0].body_json().unwrap();
     assert_eq!(body["response_format"]["type"], "json_schema");
     assert_eq!(body["response_format"]["json_schema"]["name"], "discovery");
+    let wire_schema = &body["response_format"]["json_schema"]["schema"];
+    assert_eq!(
+        wire_schema["properties"]["ok"]["$ref"],
+        "#/$defs/BooleanAnswer"
+    );
+    assert!(wire_schema["properties"]["ok"].get("description").is_none());
+    assert_eq!(
+        wire_schema["$defs"]["BooleanAnswer"]["description"],
+        "Reusable boolean answer"
+    );
 }
 
 #[tokio::test]
@@ -154,4 +175,69 @@ async fn rate_limit_is_classified_and_retry_after_is_preserved() {
             retry_after_ms: Some(3000)
         }
     ));
+}
+
+#[tokio::test]
+async fn structured_provider_error_fields_are_safely_preserved() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "message": "Invalid schema for response_format 'discovery'",
+                "type": "invalid_request_error",
+                "param": "text.format.schema",
+                "code": "invalid_json_schema",
+                "private_diagnostics": "must not reach the UI"
+            },
+            "request_echo": "must not reach the UI"
+        })))
+        .mount(&server)
+        .await;
+    let backend = GenaiBackend::new(
+        profile(&server),
+        credentials(),
+        GenaiBackendOptions::default(),
+    )
+    .unwrap();
+
+    let error = backend.execute(request()).await.unwrap_err();
+    let mathscape_llm::LlmError::Provider {
+        status: Some(400),
+        message,
+    } = error
+    else {
+        panic!("expected an HTTP 400 provider error")
+    };
+    assert!(message.contains("code=invalid_json_schema"));
+    assert!(message.contains("param=text.format.schema"));
+    assert!(message.contains("message=Invalid schema"));
+    assert!(!message.contains("private_diagnostics"));
+    assert!(!message.contains("request_echo"));
+    assert!(!message.contains("must not reach the UI"));
+}
+
+#[tokio::test]
+async fn unstructured_provider_error_body_keeps_the_safe_fallback() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(502).set_body_string("upstream secret-shaped noise"))
+        .mount(&server)
+        .await;
+    let backend = GenaiBackend::new(
+        profile(&server),
+        credentials(),
+        GenaiBackendOptions::default(),
+    )
+    .unwrap();
+
+    let error = backend.execute(request()).await.unwrap_err();
+    assert_eq!(
+        error,
+        mathscape_llm::LlmError::Provider {
+            status: Some(502),
+            message: "provider rejected the request".to_string(),
+        }
+    );
 }

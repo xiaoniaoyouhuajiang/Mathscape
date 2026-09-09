@@ -16,9 +16,23 @@ let snapshot: { profiles: Profile[]; default_profile_id: string | null } = {
   profiles: [], default_profile_id: null,
 };
 const saves: unknown[] = [];
+const workspaceSaves: unknown[] = [];
 const toasts: unknown[] = [];
+let workspaceSettings = {
+  version: "mathscape-workspace-settings-1",
+  discovery_admission: "review_before_publish",
+  discovery_timeout_seconds: 600,
+  connect_timeout_seconds: 15,
+};
 
 mockIPC((command, payload) => {
+  if (command === "get_workspace_settings") return workspaceSettings;
+  if (command === "save_workspace_settings") {
+    const request = (payload as { request: Record<string, any> }).request;
+    workspaceSaves.push(request);
+    workspaceSettings = { version: "mathscape-workspace-settings-1", ...request } as typeof workspaceSettings;
+    return workspaceSettings;
+  }
   if (command === "get_llm_settings") return snapshot;
   if (command === "save_llm_profile") {
     const request = (payload as { request: Record<string, any> }).request;
@@ -58,5 +72,5 @@ const controller = new LlmSettingsController(
   (message, kind) => toasts.push({ message, kind }),
 );
 void controller.loadSummary().then(() => Object.assign(window, {
-  harness: { controller, saves, toasts },
+  harness: { controller, saves, workspaceSaves, toasts },
 }));

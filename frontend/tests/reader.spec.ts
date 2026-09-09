@@ -91,6 +91,44 @@ test("Markdown block endpoints, raw source, full selection and review policy", a
   await expect(page.getByRole("button", { name: "构建发现输入" })).toBeDisabled();
 });
 
+test("Markdown selection runs Discovery and shows an unregistered proposal", async ({ page }) => {
+  await page.evaluate(async () => (window as any).harness.reader.open("md", "发现测试"));
+  await page.getByLabel("原文块 2", { exact: true }).click();
+  await page.getByRole("button", { name: "设置起点" }).click();
+  await page.getByLabel("原文块 2", { exact: true }).click();
+  await page.getByRole("button", { name: "设置终点" }).click();
+  await page.evaluate(() => { (window as any).harness.behavior.discoveryDelay = 150; });
+  await page.getByRole("button", { name: "使用 LLM 发现内容" }).click();
+  await expect(page.getByRole("button", { name: "使用 LLM 发现内容" })).toBeDisabled();
+  await expect(page.locator(".discovery-status")).toContainText("LLM 正在分析");
+  await expect(page.locator(".discovery-result")).toContainText("测试命题");
+  await expect(page.locator(".discovery-status")).toContainText("尚未接受或入图");
+  await expect(page.locator(".discovery-run")).toContainText("150 tokens");
+  const request = await page.evaluate(() => (window as any).harness.discoveryRequests.at(-1));
+  expect(request.selector).toEqual({
+    kind: "block_range", first: "test-block-1", last: "test-block-1",
+  });
+  expect(request.admission).toBe("review_before_publish");
+});
+
+test("ask-each-run workspace policy requires an explicit admission choice", async ({ page }) => {
+  await page.evaluate(async () => (window as any).harness.reader.open("md", "审核策略测试"));
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent(
+    "mathscape:workspace-settings-changed",
+    { detail: {
+      version: "mathscape-workspace-settings-1",
+      discovery_admission: "ask_each_run",
+      discovery_timeout_seconds: 600,
+      connect_timeout_seconds: 15,
+    } },
+  )));
+  await page.getByRole("button", { name: "选择全文" }).click();
+  await expect(page.getByRole("button", { name: "使用 LLM 发现内容" })).toBeDisabled();
+  await expect(page.locator(".selection-panel [role=status]")).toContainText("请为本次运行选择审核方式");
+  await page.getByLabel("后续入图方式").selectOption("review_before_publish");
+  await expect(page.getByRole("button", { name: "使用 LLM 发现内容" })).toBeEnabled();
+});
+
 test("reversed endpoints, stale async validation, context switch and errors", async ({ page }) => {
   await page.evaluate(async () => (window as any).harness.reader.open("md", "选择测试"));
   await page.getByLabel("原文块 3", { exact: true }).focus();

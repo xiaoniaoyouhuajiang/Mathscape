@@ -1,7 +1,7 @@
 # Source Discovery prompt bundle v1
 
-本包完成来源内容发现的输出 Schema、系统 Prompt 和离线请求构建；尚不执行模型调用、
-自动修订、保存或入图。它不构造 DialectScope，也不认证数学结论。
+本包完成来源内容发现的输出 Schema、系统 Prompt、请求构建和单次 Producer；尚不执行
+自动修订、保存、接受或入图。它不构造 DialectScope，也不认证数学结论。
 
 ## 资源与调用
 
@@ -18,14 +18,16 @@ AnchoredMarkdown + ResolvedDiscoverySelection
 DiscoveryInput + system Prompt + output Schema
                ↓
 PreparedDiscoveryRequest { input, request, manifest, prompt_fingerprint }
-               ↓ 后续 Producer 接入（本次未实现）
-LlmBackend → 响应限额/解码 → 确定性验证 → 接受决策 → 受控来源登记
+               ↓ DiscoveryProducer（单次调用）
+LlmBackend → 响应限额/解码 → 确定性验证
+               ↓ 后续 application 工作
+接受决策 → 受控来源登记
 ```
 
 system 消息由固定 Prompt 和 Schema 组成；user 消息是序列化的完整 DiscoveryInput，
 原文不插值到 system 指令中。请求无工具，默认不采集原始响应，不设 temperature。
 JSON Schema 同时放入 `LlmRequest.response_format`；实际供应商是否接受该 Schema 仍需
-后续联调。这里没有实现静默降级、fallback 或重试策略，也不宣称阻止了所有提示注入。
+后续联调。Producer 不实现静默降级、fallback 或重试策略，也不宣称阻止了所有提示注入。
 
 `prompt_fingerprint` 是 manifest、Prompt 和生成 Schema 的内容哈希。
 输入指纹与 Prompt 指纹都不是完整缓存键，复用时还需考虑模型、生成参数及兼容策略。
@@ -62,6 +64,8 @@ cargo test -p mathscape-orchestrator --test discovery_prompt
 输入仍受 DiscoveryInputLimits 约束；输入字节上限不等于模型上下文或输出预算。
 长章节后续需要分批调度，截断响应不能冒充成功，partial 必须有合法 unprocessed coverage。
 
-manifest 的 `max_response_bytes = 2097152` 是后续 Producer 在解码前须执行的响应限额；
-当前构建器不读取响应，尚未实施该限额。模型调用、停止原因检查、响应限额、运行记录、
-一次有界修订及候选保存是下一步工作。当前回归全部离线，不需要 API key 或教材资产。
+manifest 的 `max_response_bytes = 2097152` 已由 Producer 在 JSON 解码前执行，并与 Producer
+本地上限取较小值。它发生在 backend 返回完整响应后，不等同于 transport 的网络 body 限额。
+停止原因检查、DTO 解码、规范表示与确定性验证也已接通。运行记录、一次有界修订、候选保存、
+接受和来源登记仍待实现。当前回归全部离线，不需要 API key 或教材资产。详见
+[Discovery Producer v1](../../../docs/discovery-producer-v1.md)。

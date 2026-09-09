@@ -37,6 +37,10 @@ LLM profile、运行期凭据、单次调用与编排层的边界见
 [`llm-infrastructure-v1.md`](llm-infrastructure-v1.md)。
 Desktop 配置页、SQLite profile 与系统钥匙串的边界见
 [`desktop-llm-settings-v1.md`](desktop-llm-settings-v1.md)。
+来源发现的单次调用、响应拒绝与确定性验证边界见
+[`discovery-producer-v1.md`](discovery-producer-v1.md)。
+Desktop 的 Markdown 选区、活动调用与提案展示见
+[`desktop-discovery-v1.md`](desktop-discovery-v1.md)。
 
 内容发现结果如何经接受、来源登记进入图，再按需补充数学语义，见
 [`生成、登记与晋升草案`](discovery-registration-promotion-draft.md)；其中 Domain 修订尚未实施。

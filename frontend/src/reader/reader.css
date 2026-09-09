@@ -23,6 +23,19 @@
 .selection-panel { position: sticky; top: 0; z-index: 1; background: #131c24; border: 1px solid #45606c; padding: 10px; margin: 0 0 12px; font-size: 12px; }
 .selection-panel p { margin: 4px 0 10px; }
 .selection-source { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.discovery-status { color: #b8d8d2; }
+.discovery-result { margin-top: 10px; border-top: 1px solid #45606c; padding-top: 10px; max-height: 46vh; overflow: auto; }
+.discovery-result h3, .discovery-result h4 { margin: 5px 0 8px; }
+.discovery-summary, .discovery-run { color: #aebdc7; }
+.discovery-units { display: grid; gap: 7px; }
+.discovery-unit { background: #1b2a33; border: 1px solid #35505d; border-radius: 6px; padding: 8px; }
+.discovery-unit strong, .discovery-kind { display: block; }
+.discovery-kind { color: #8fc1b6; margin-top: 3px; }
+.discovery-unit p { margin-bottom: 0; white-space: pre-wrap; }
+.discovery-relations, .discovery-issues { margin: 5px 0 10px; padding-left: 22px; }
+.discovery-json summary { cursor: pointer; color: #9fc8c1; padding: 5px 0; }
+.discovery-json pre { max-height: 240px; overflow: auto; padding: 8px; background: #10181e; user-select: text; }
+.discovery-run { border-top: 1px dotted #45606c; padding-top: 8px; overflow-wrap: anywhere; }
 .source-block { border-left: 3px solid transparent; padding: 3px 10px; margin: 3px 0; cursor: pointer; }
 .source-block:hover { background: #edf0f4; }
 .source-block.is-selected-block { background: #e1f0e9; border-left-color: #268065; }

@@ -13,7 +13,7 @@ use tauri::State;
 use thiserror::Error;
 use url::Url;
 
-use crate::{DesktopService, DesktopState};
+use crate::{DesktopService, DesktopState, workspace_settings::WorkspaceSettingsError};
 
 const DEFAULT_PROFILE_ID: &str = "desktop-default";
 
@@ -115,6 +115,8 @@ pub enum LlmSettingsError {
     NoDefaultProfile,
     #[error("LLM connection test failed: {0}")]
     Llm(#[from] LlmError),
+    #[error(transparent)]
+    WorkspaceSettings(#[from] WorkspaceSettingsError),
 }
 
 impl DesktopService {
@@ -198,23 +200,15 @@ impl DesktopService {
         &self,
         profile_id: Option<&str>,
     ) -> Result<LlmConnectionTest, LlmSettingsError> {
-        let store = self.llm_store()?;
-        let stored = match profile_id {
-            Some(profile_id) => store
-                .llm_profile(profile_id)?
-                .ok_or_else(|| LlmSettingsError::UnknownProfile(profile_id.to_string()))?,
-            None => store
-                .default_llm_profile()?
-                .ok_or(LlmSettingsError::NoDefaultProfile)?,
-        };
-        let profile = stored.profile().clone();
+        let profile = self.selected_llm_profile(profile_id)?;
+        let workspace_settings = self.workspace_settings()?;
         let credentials: Arc<dyn mathscape_llm::CredentialResolver> = self.credentials.clone();
         let backend = GenaiBackend::new(
             profile.clone(),
             credentials,
             GenaiBackendOptions {
                 timeout: Duration::from_secs(45),
-                connect_timeout: Duration::from_secs(10),
+                connect_timeout: Duration::from_secs(workspace_settings.connect_timeout_seconds()),
             },
         )?;
         let response = backend
@@ -254,6 +248,22 @@ impl DesktopService {
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,
         })
+    }
+
+    pub(crate) fn selected_llm_profile(
+        &self,
+        profile_id: Option<&str>,
+    ) -> Result<LlmProfile, LlmSettingsError> {
+        let store = self.llm_store()?;
+        let stored = match profile_id {
+            Some(profile_id) => store
+                .llm_profile(profile_id)?
+                .ok_or_else(|| LlmSettingsError::UnknownProfile(profile_id.to_string()))?,
+            None => store
+                .default_llm_profile()?
+                .ok_or(LlmSettingsError::NoDefaultProfile)?,
+        };
+        Ok(stored.profile().clone())
     }
 
     fn llm_store(&self) -> Result<SqliteArtifactStore, SqliteStoreError> {

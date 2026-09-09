@@ -1,7 +1,7 @@
 # 内容结构生成、来源登记与语义晋升草案
 
-状态：讨论草案，未实现。本文提出来源层契约的后续修订，不表示当前 Domain 构造器或 SQLite
-已经支持这些行为。既有输入、提案和验证接口以
+状态：讨论草案，未实现。内容发现的单次 Producer 已实现；本文提出其后来源层契约的修订，
+不表示当前 Domain 构造器或 SQLite 已经支持接受和登记。既有输入、提案和验证接口以
 [`discovery-proposal-v1.md`](discovery-proposal-v1.md) 为准；数学上下文、语义和对齐的上位模型见
 工作区 [`EMIR 规范`](../../docs/rdtx/emir-source-semantics-alignment.md)。
 
@@ -186,7 +186,7 @@ Markdown 包含“习题 1：证明常数数列收敛”和随后的一段解答
 
 ## 8. 实施与验收顺序
 
-先完成 Schema、版本化 prompt 和 Producer，再完成发现结果与接受记录持久化；随后修订
+Schema、版本化 prompt 和单次 Producer 已完成；下一步完成发现结果与接受记录持久化，随后修订
 上述必要 Domain 约束，实现确定性登记与来源图投影。上下文化和全局对齐作为后续可独立
 调用的任务逐步接入。
 

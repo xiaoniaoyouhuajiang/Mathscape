@@ -9,11 +9,14 @@ use std::{
 };
 
 use lopdf::{Document, Object, Stream, content::Content, content::Operation, dictionary};
+use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_desktop::{
-    DesktopService, DesktopServiceError, MarkerProfileChoice, ParsePdfRequest, PdfImportOutcome,
+    DesktopDiscoveryError, DesktopService, DesktopServiceError, MarkerProfileChoice,
+    ParsePdfRequest, PdfImportOutcome, RunDiscoveryRequest, SaveWorkspaceSettingsRequest,
 };
 use mathscape_domain::{
-    DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest, SourceSelector,
+    ActorRef, DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest,
+    MediaType, RightsRecord, RightsStatus, SourceSelector,
 };
 use mathscape_llm::{CredentialRef, CredentialResolver, MemoryCredentialResolver};
 use wiremock::{
@@ -54,6 +57,42 @@ impl TestDirectory {
         fs::remove_dir_all(self.0).unwrap();
         let _ = fs::remove_dir(parent);
     }
+}
+
+#[test]
+fn persists_validated_workspace_runtime_settings_and_supplies_safe_defaults() {
+    let directory = TestDirectory::create("workspace-settings");
+    let workspace = directory.path().join("workspace");
+    let credentials = Arc::new(MemoryCredentialResolver::default());
+    let service =
+        DesktopService::open_with_credential_store(&workspace, credentials.clone()).unwrap();
+    let defaults = serde_json::to_value(service.workspace_settings().unwrap()).unwrap();
+    assert_eq!(defaults["discovery_admission"], "review_before_publish");
+    assert_eq!(defaults["discovery_timeout_seconds"], 600);
+    assert_eq!(defaults["connect_timeout_seconds"], 15);
+
+    let request: SaveWorkspaceSettingsRequest = serde_json::from_value(serde_json::json!({
+        "discovery_admission": "ask_each_run",
+        "discovery_timeout_seconds": 900,
+        "connect_timeout_seconds": 20
+    }))
+    .unwrap();
+    service.save_workspace_settings(request).unwrap();
+    let reopened = DesktopService::open_with_credential_store(&workspace, credentials).unwrap();
+    let settings = serde_json::to_value(reopened.workspace_settings().unwrap()).unwrap();
+    assert_eq!(settings["version"], "mathscape-workspace-settings-1");
+    assert_eq!(settings["discovery_admission"], "ask_each_run");
+    assert_eq!(settings["discovery_timeout_seconds"], 900);
+    assert_eq!(settings["connect_timeout_seconds"], 20);
+
+    let invalid: SaveWorkspaceSettingsRequest = serde_json::from_value(serde_json::json!({
+        "discovery_admission": "review_before_publish",
+        "discovery_timeout_seconds": 29,
+        "connect_timeout_seconds": 15
+    }))
+    .unwrap();
+    assert!(reopened.save_workspace_settings(invalid).is_err());
+    directory.cleanup();
 }
 
 #[test]
@@ -155,6 +194,139 @@ async fn tests_a_persisted_llm_profile_through_the_desktop_service() {
     assert_eq!(tested["provider_model"], "resolved-fixture-model");
     assert_eq!(tested["response_preview"], "MATHSCAPE_OK");
     assert_eq!(tested["input_tokens"], 9);
+    directory.cleanup();
+}
+
+#[tokio::test]
+async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
+    const SOURCE: &str = "习题 1：设 $a_n=a$，用定义证明 $a_n$ 收敛于 $a$。\n\n解答：任取 $\\epsilon>0$，取 $N=1$。当 $n>N$ 时，$|a_n-a|=0<\\epsilon$。因此收敛于 $a$。\n";
+    const PROPOSAL: &str =
+        include_str!("../../../crates/mathscape-domain/tests/fixtures/discovery-proposal.json");
+
+    let server = MockServer::start().await;
+    let directory = TestDirectory::create("desktop-discovery");
+    let workspace = directory.path().join("workspace");
+    let markdown = directory.path().join("selection.md");
+    fs::write(&markdown, SOURCE).unwrap();
+    let credentials = Arc::new(MemoryCredentialResolver::default());
+    let service =
+        DesktopService::open_with_credential_store(&workspace, credentials.clone()).unwrap();
+
+    let mut pool = ArtifactPool::open(&workspace).unwrap();
+    let imported = pool
+        .import_file(
+            &markdown,
+            ArtifactMetadata::new(
+                None,
+                MediaType::parse("text/markdown").unwrap(),
+                Some("selection.md".into()),
+                None,
+                RightsRecord::new(RightsStatus::NotAssessed, vec![], None).unwrap(),
+            ),
+            ActorRef::parse("desktop-discovery-test").unwrap(),
+        )
+        .unwrap();
+    let markdown_id = imported.stable_id().to_string();
+    drop(pool);
+
+    let profile = serde_json::from_value(serde_json::json!({
+        "profile_id": "desktop-discovery",
+        "provider": "custom-relay",
+        "wire_protocol": "open_ai_chat_completions",
+        "model": "discovery-fixture-model",
+        "endpoint": format!("{}/v1/", server.uri()),
+        "api_key": "desktop-discovery-secret",
+        "clear_api_key": false,
+        "make_default": true
+    }))
+    .unwrap();
+    service.save_llm_profile(profile).unwrap();
+    let settings: SaveWorkspaceSettingsRequest = serde_json::from_value(serde_json::json!({
+        "discovery_admission": "review_before_publish",
+        "discovery_timeout_seconds": 900,
+        "connect_timeout_seconds": 20
+    }))
+    .unwrap();
+    service.save_workspace_settings(settings).unwrap();
+
+    let document = service.markdown_document(&markdown_id, None).unwrap();
+    let selection = DiscoverySelectionRequest {
+        version: DISCOVERY_SELECTION_VERSION.into(),
+        snapshot: document.snapshot.clone(),
+        selector: SourceSelector::WholeDocument,
+        admission: DiscoveryAdmission::ReviewBeforePublish,
+    };
+    let input = service.prepare_discovery_input(selection.clone()).unwrap();
+    let proposal = PROPOSAL
+        .replace("b-problem", &document.blocks[0].id)
+        .replace("b-solution", &document.blocks[1].id)
+        .replace(
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            input.fingerprint.as_str(),
+        );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(header("authorization", "Bearer desktop-discovery-secret"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_millis(120))
+                .set_body_json(serde_json::json!({
+                    "id": "chatcmpl-discovery-fixture",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "resolved-discovery-model",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": proposal},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 500, "completion_tokens": 220, "total_tokens": 720}
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let request = RunDiscoveryRequest::new(selection, None);
+    let worker = {
+        let service = service.clone();
+        let request = request.clone();
+        tokio::spawn(async move { service.run_discovery(request).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    let active = service.active_discovery().unwrap();
+    assert_eq!(active.artifact_id(), markdown_id);
+    assert_eq!(
+        serde_json::to_value(&active).unwrap()["request_timeout_seconds"],
+        900
+    );
+    assert!(matches!(
+        service.run_discovery(request).await,
+        Err(DesktopDiscoveryError::AlreadyRunning)
+    ));
+
+    let outcome = worker.await.unwrap().unwrap();
+    assert!(service.active_discovery().is_none());
+    let value = serde_json::to_value(outcome).unwrap();
+    assert_eq!(value["outcome"], "valid");
+    assert_eq!(value["proposal"]["status"], "complete");
+    assert_eq!(value["proposal"]["units"].as_array().unwrap().len(), 2);
+    assert_eq!(value["proposal"]["relations"][0]["relation"], "solves");
+    assert_eq!(
+        value["run"]["response"]["provider_model"],
+        "resolved-discovery-model"
+    );
+    assert_eq!(value["run"]["response"]["total_tokens"], 720);
+    assert_eq!(value["run"]["admission"], "review_before_publish");
+    assert_eq!(value["run"]["request_timeout_seconds"], 900);
+    assert_eq!(value["run"]["connect_timeout_seconds"], 20);
+    assert_eq!(service.snapshot().unwrap().graph().nodes().len(), 1);
+    let received = server.received_requests().await.unwrap();
+    let body: serde_json::Value = received[0].body_json().unwrap();
+    let fingerprint_schema =
+        &body["response_format"]["json_schema"]["schema"]["properties"]["input_fingerprint"];
+    assert!(fingerprint_schema.get("$ref").is_some());
+    assert!(fingerprint_schema.get("description").is_none());
     directory.cleanup();
 }
 

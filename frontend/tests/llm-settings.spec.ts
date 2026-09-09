@@ -8,7 +8,7 @@ test.beforeEach(async ({ page }) => {
 test("saves a relay profile, redacts the key and verifies connectivity", async ({ page }) => {
   await expect(page.locator("#settings-label")).toHaveText("LLM 未配置");
   await page.getByRole("button", { name: "LLM 未配置" }).click();
-  await expect(page.getByRole("heading", { name: "LLM 配置" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Mathscape 设置" })).toBeVisible();
   await page.getByLabel("供应商").selectOption("custom-relay");
   await expect(page.getByLabel("通信协议")).toHaveValue("open_ai_chat_completions");
   await page.getByLabel("模型 ID").fill("relay-model");
@@ -16,8 +16,8 @@ test("saves a relay profile, redacts the key and verifies connectivity", async (
   await page.getByLabel("API key").fill("fixture-secret");
   await page.getByRole("button", { name: "保存并测试" }).click();
 
-  await expect(page.locator(".settings-result")).toContainText("连接成功");
-  await expect(page.locator(".settings-result")).toContainText("MATHSCAPE_OK");
+  await expect(page.locator(".llm-settings-result")).toContainText("连接成功");
+  await expect(page.locator(".llm-settings-result")).toContainText("MATHSCAPE_OK");
   await expect(page.getByLabel("API key")).toHaveValue("");
   await expect(page.locator("#settings-label")).toHaveText("中转站 · relay-model");
   const request = await page.evaluate(() => (window as any).harness.saves[0]);
@@ -25,6 +25,26 @@ test("saves a relay profile, redacts the key and verifies connectivity", async (
   expect(request.endpoint).toBe("https://relay.example/v1");
   expect(JSON.stringify(await page.evaluate(() => (window as any).harness.controller)))
     .not.toContain("fixture-secret");
+});
+
+test("persists workspace review and timeout policy independently of the LLM profile", async ({ page }) => {
+  await page.getByRole("button", { name: "LLM 未配置" }).click();
+  await expect(page.getByLabel("默认审核方式")).toHaveValue("review_before_publish");
+  await expect(page.getByLabel("内容发现请求总超时（秒）")).toHaveValue("600");
+  await page.getByLabel("默认审核方式").selectOption("ask_each_run");
+  await page.getByLabel("内容发现请求总超时（秒）").fill("900");
+  await page.getByText("高级连接设置").click();
+  await page.getByLabel("连接超时（秒）").fill("20");
+  await page.getByRole("button", { name: "保存运行策略" }).click();
+
+  await expect(page.locator(".workspace-settings-result")).toContainText("运行策略已保存");
+  const request = await page.evaluate(() => (window as any).harness.workspaceSaves[0]);
+  expect(request).toEqual({
+    discovery_admission: "ask_each_run",
+    discovery_timeout_seconds: 900,
+    connect_timeout_seconds: 20,
+  });
+  expect(await page.evaluate(() => (window as any).harness.saves.length)).toBe(0);
 });
 
 test("preserves or explicitly clears a saved credential", async ({ page }) => {

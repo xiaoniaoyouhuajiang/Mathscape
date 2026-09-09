@@ -1,7 +1,7 @@
 # Discovery Proposal v1：最小输出契约
 
-状态：Rust DTO、选择器授权解析、确定性验证器、输出 Schema、版本化 Prompt 与离线请求
-构建器已实现；LLM 调用和保存待实现。
+状态：Rust DTO、选择器授权解析、确定性验证器、输出 Schema、版本化 Prompt、请求构建器
+与单次 LLM Producer 已实现；保存、接受和来源登记待实现。
 日期：2026-09-08。上位设计为工作区 `docs/rdtx/source-content-discovery-draft.md`；
 本文件将其中的输出示意收敛为当前工程契约。
 
@@ -98,8 +98,8 @@ coverage 的 processed 表示模型声称遍历了区域，不保证所有单元
 4. 检查关系方向与端点类型、证据归属、父链、重叠、完整性与 issue 的一致性。
 5. 归一化 coverage，要求非空白 requested 文本全部有处置，并输出全部结构化诊断。
 
-默认限制为每个集合 1024 项、总计 4096 个选择器、提案序列化后 2 MiB。LLM 响应读取层
-仍须在反序列化前设置独立字节限制。验证成功返回不可从外部字段构造的
+默认限制为每个集合 1024 项、总计 4096 个选择器、提案序列化后 2 MiB。Producer 另在
+反序列化前执行正文限制，取本地配置与 Prompt manifest 上限的较小值。验证成功返回不可从外部字段构造的
 `ValidatedDiscoveryProposal`，其中选择器已经规范化为 UTF-8 字节范围、块 ID 和原文；
 状态为 complete 或 partial。该类型仍不是 EntityPayload，也不能直接生成 MapPatch。
 
@@ -128,8 +128,10 @@ Markdown 独立定位的 SourceSpan 契约仍待修订，本次没有通过虚�
 
 `build_discovery_request(document, selection, limits)` 返回验证过的 DiscoveryInput、
 供应商中立 LlmRequest、manifest 与 Prompt 指纹。固定指令在 system 消息，材料 JSON 在
-user 消息；输出使用 JSON Schema，无工具调用。此接口不发送请求、不保存候选、不改变
-接受状态；响应处理、运行记录与发布仍由后续 Producer/application 实现。
+user 消息；输出使用 JSON Schema，无工具调用。`DiscoveryProducer` 通过已有 LlmBackend
+执行一次调用，检查停止原因、响应大小和规范 JSON，再运行确定性验证；它不重试、不保存
+候选、不改变接受状态。详细边界见 [Discovery Producer v1](discovery-producer-v1.md)。
+运行记录、接受与发布仍由后续 application 实现。
 
 ## 最小样例与验证
 
@@ -151,4 +153,5 @@ cargo test -p mathscape-domain --test discovery_proposal
 cargo test -p mathscape-orchestrator --test discovery_input
 cargo test -p mathscape-orchestrator --test discovery_validation
 cargo test -p mathscape-orchestrator --test discovery_prompt
+cargo test -p mathscape-orchestrator --test discovery_producer
 ```

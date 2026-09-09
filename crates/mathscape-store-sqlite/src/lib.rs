@@ -15,13 +15,16 @@ use mathscape_domain::{
 };
 use mathscape_llm::LlmProfile;
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 
 const ARTIFACT_POOL_MIGRATION: &str = include_str!("../../../migrations/0001_artifact_pool.sql");
 const LLM_PROFILES_MIGRATION: &str = include_str!("../../../migrations/0002_llm_profiles.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 2;
+const WORKSPACE_SETTINGS_MIGRATION: &str =
+    include_str!("../../../migrations/0003_workspace_settings.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -153,14 +156,21 @@ impl SqliteArtifactStore {
             0 => {
                 connection.execute_batch(ARTIFACT_POOL_MIGRATION)?;
                 connection.execute_batch(LLM_PROFILES_MIGRATION)?;
+                connection.execute_batch(WORKSPACE_SETTINGS_MIGRATION)?;
                 validate_schema(&connection)?;
             }
             1 => {
                 validate_artifact_schema(&connection)?;
                 connection.execute_batch(LLM_PROFILES_MIGRATION)?;
+                connection.execute_batch(WORKSPACE_SETTINGS_MIGRATION)?;
                 validate_schema(&connection)?;
             }
-            2 => validate_schema(&connection)?,
+            2 => {
+                validate_llm_profiles_schema(&connection)?;
+                connection.execute_batch(WORKSPACE_SETTINGS_MIGRATION)?;
+                validate_schema(&connection)?;
+            }
+            3 => validate_schema(&connection)?,
             actual => {
                 return Err(SqliteStoreError::UnsupportedSchemaVersion {
                     actual,
@@ -651,6 +661,40 @@ impl SqliteArtifactStore {
             is_default,
         })
     }
+
+    /// Loads the singleton versioned settings document owned by the
+    /// application layer. Absence means the application should use defaults.
+    pub fn workspace_settings<T: DeserializeOwned>(&self) -> Result<Option<T>, SqliteStoreError> {
+        let settings = self
+            .connection
+            .query_row(
+                "SELECT settings_json FROM workspace_settings WHERE singleton_id = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        settings
+            .map(|settings| serde_json::from_str(&settings).map_err(SqliteStoreError::from))
+            .transpose()
+    }
+
+    /// Atomically replaces the singleton settings document. Secrets must not
+    /// be represented by the caller's settings type.
+    pub fn save_workspace_settings<T: Serialize>(
+        &mut self,
+        settings: &T,
+    ) -> Result<(), SqliteStoreError> {
+        let settings = serde_json::to_string(settings)?;
+        self.connection.execute(
+            "INSERT INTO workspace_settings (singleton_id, settings_json)
+             VALUES (1, ?1)
+             ON CONFLICT(singleton_id) DO UPDATE SET
+                settings_json = excluded.settings_json,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+            [settings],
+        )?;
+        Ok(())
+    }
 }
 
 fn find_artifact_by_hash_in(
@@ -697,6 +741,23 @@ fn validate_artifact_schema(connection: &Connection) -> Result<(), SqliteStoreEr
 }
 
 fn validate_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
+    validate_llm_profiles_schema(connection)?;
+    let name = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 3",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if name.as_deref() != Some("workspace_settings_v1") {
+        return Err(SqliteStoreError::InvalidSchema(
+            "migration 3 is absent or has an unexpected name",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_llm_profiles_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
     validate_artifact_schema(connection)?;
     let name = connection
         .query_row(

@@ -194,24 +194,24 @@ fn prompt_builds_a_real_input_and_fixture_passes_schema_then_semantic_validator(
     )
     .unwrap();
     let prepared = build_discovery_request(&document, &selection, Default::default()).unwrap();
-    prepared.request.validate().unwrap();
-    assert_eq!(prepared.manifest.input_version, DISCOVERY_INPUT_VERSION);
+    prepared.request().validate().unwrap();
+    assert_eq!(prepared.manifest().input_version, DISCOVERY_INPUT_VERSION);
     assert_eq!(
-        prepared.request.task.input_fingerprint.as_ref(),
-        Some(&prepared.input.fingerprint)
+        prepared.request().task.input_fingerprint.as_ref(),
+        Some(&prepared.input().fingerprint)
     );
-    assert!(prepared.request.tools.is_empty());
-    assert!(!prepared.request.options.capture_raw_response);
-    assert_eq!(prepared.request.messages[0].role, LlmRole::System);
-    assert_eq!(prepared.request.messages[1].role, LlmRole::User);
-    let LlmMessagePart::Text { text } = &prepared.request.messages[1].parts[0] else {
+    assert!(prepared.request().tools.is_empty());
+    assert!(!prepared.request().options.capture_raw_response);
+    assert_eq!(prepared.request().messages[0].role, LlmRole::System);
+    assert_eq!(prepared.request().messages[1].role, LlmRole::User);
+    let LlmMessagePart::Text { text } = &prepared.request().messages[1].parts[0] else {
         panic!()
     };
     assert_eq!(
         serde_json::from_str::<Value>(text).unwrap(),
-        serde_json::to_value(&prepared.input).unwrap()
+        serde_json::to_value(prepared.input()).unwrap()
     );
-    let LlmResponseFormat::JsonSchema { name, schema, .. } = &prepared.request.response_format
+    let LlmResponseFormat::JsonSchema { name, schema, .. } = &prepared.request().response_format
     else {
         panic!()
     };
@@ -220,10 +220,10 @@ fn prompt_builds_a_real_input_and_fixture_passes_schema_then_semantic_validator(
         .replace("b-problem", &document.blocks[0].id)
         .replace("b-solution", &document.blocks[1].id);
     let mut value: Value = serde_json::from_str(&sample).unwrap();
-    value["input_fingerprint"] = json!(prepared.input.fingerprint);
+    value["input_fingerprint"] = json!(prepared.input().fingerprint);
     assert!(jsonschema::validator_for(schema).unwrap().is_valid(&value));
     let validated = validate_discovery_proposal(
-        &prepared.input,
+        prepared.input(),
         serde_json::from_value(value).unwrap(),
         Default::default(),
     )
@@ -233,8 +233,8 @@ fn prompt_builds_a_real_input_and_fixture_passes_schema_then_semantic_validator(
     let mut automatic = selection.clone();
     automatic.request.admission = DiscoveryAdmission::AutomaticCandidate;
     let again = build_discovery_request(&document, &automatic, Default::default()).unwrap();
-    assert_eq!(prepared.request, again.request);
-    assert_eq!(prepared.prompt_fingerprint, again.prompt_fingerprint);
+    assert_eq!(prepared.request(), again.request());
+    assert_eq!(prepared.prompt_fingerprint(), again.prompt_fingerprint());
     let mut stale = selection;
     stale.range.end -= 1;
     assert!(build_discovery_request(&document, &stale, Default::default()).is_err());
@@ -260,12 +260,12 @@ fn source_instructions_stay_in_the_user_payload() {
     )
     .unwrap();
     let prepared = build_discovery_request(&document, &selection, Default::default()).unwrap();
-    let LlmMessagePart::Text { text } = &prepared.request.messages[0].parts[0] else {
+    let LlmMessagePart::Text { text } = &prepared.request().messages[0].parts[0] else {
         panic!()
     };
     assert!(text.starts_with(DISCOVERY_SYSTEM_PROMPT));
     assert!(!text.contains("stable_id=forged"));
-    let LlmMessagePart::Text { text } = &prepared.request.messages[1].parts[0] else {
+    let LlmMessagePart::Text { text } = &prepared.request().messages[1].parts[0] else {
         panic!()
     };
     assert!(text.contains(source));

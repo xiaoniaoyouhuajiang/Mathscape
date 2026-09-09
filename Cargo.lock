@@ -2984,6 +2984,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
@@ -3014,6 +3015,7 @@ dependencies = [
  "mathscape-domain",
  "mathscape-llm",
  "rusqlite",
+ "serde",
  "serde_json",
  "thiserror 2.0.20",
  "url",

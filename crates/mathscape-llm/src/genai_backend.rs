@@ -98,7 +98,7 @@ impl GenaiBackend {
         check_declared_capabilities(&self.profile, &request)?;
 
         let chat_request = to_genai_request(&request)?;
-        let options = to_genai_options(&request);
+        let options = to_genai_options(&request, self.profile.wire_protocol);
         let started = Instant::now();
         let response = self
             .client
@@ -245,7 +245,7 @@ fn to_genai_message(message: &LlmMessage) -> Result<ChatMessage, LlmError> {
     })
 }
 
-fn to_genai_options(request: &LlmRequest) -> ChatOptions {
+fn to_genai_options(request: &LlmRequest, wire_protocol: WireProtocol) -> ChatOptions {
     let LlmGenerationOptions {
         temperature,
         top_p,
@@ -290,12 +290,62 @@ fn to_genai_options(request: &LlmRequest) -> ChatOptions {
             description,
             schema,
         } => {
-            let mut spec = JsonSpec::new(name.clone(), schema.clone());
+            let schema = lower_strict_schema_for_wire_protocol(schema, wire_protocol);
+            let mut spec = JsonSpec::new(name.clone(), schema);
             if let Some(description) = description {
                 spec = spec.with_description(description.clone());
             }
             options.with_response_format(spec)
         }
+    }
+}
+
+/// Lowers the canonical schema to the portable subset accepted by strict
+/// OpenAI-compatible response formats. Draft 2020-12 permits annotation
+/// siblings next to `$ref`, but OpenAI-compatible strict decoders can reject
+/// them. Assertions are deliberately retained; only non-validating metadata
+/// is removed. The canonical schema owned by the caller is never mutated.
+fn lower_strict_schema_for_wire_protocol(
+    schema: &serde_json::Value,
+    wire_protocol: WireProtocol,
+) -> serde_json::Value {
+    let mut schema = schema.clone();
+    if matches!(
+        wire_protocol,
+        WireProtocol::OpenAiChatCompletions | WireProtocol::OpenAiResponses
+    ) {
+        strip_ref_annotation_siblings(&mut schema);
+    }
+    schema
+}
+
+fn strip_ref_annotation_siblings(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if object.contains_key("$ref") {
+                for annotation in [
+                    "title",
+                    "description",
+                    "$comment",
+                    "default",
+                    "examples",
+                    "deprecated",
+                    "readOnly",
+                    "writeOnly",
+                ] {
+                    object.remove(annotation);
+                }
+            }
+            for child in object.values_mut() {
+                strip_ref_annotation_siblings(child);
+            }
+        }
+        serde_json::Value::Array(array) => {
+            for child in array {
+                strip_ref_annotation_siblings(child);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -429,7 +479,7 @@ fn map_genai_error(error: genai::Error) -> LlmError {
         },
         genai::Error::WebAdapterCall { webc_error, .. }
         | genai::Error::WebModelCall { webc_error, .. } => map_web_error(webc_error),
-        genai::Error::HttpError { status, .. } => map_status(status.as_u16(), None),
+        genai::Error::HttpError { status, .. } => map_status(status.as_u16(), None, None),
         genai::Error::AdapterNotSupported { feature, .. } => {
             LlmError::UnsupportedCapability(feature)
         }
@@ -461,14 +511,20 @@ fn map_genai_error(error: genai::Error) -> LlmError {
 fn map_web_error(error: genai::webc::Error) -> LlmError {
     match error {
         genai::webc::Error::ResponseFailedStatus {
-            status, headers, ..
+            status,
+            body,
+            headers,
         } => {
             let retry_after_ms = headers
                 .get("retry-after")
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.parse::<u64>().ok())
                 .and_then(|seconds| seconds.checked_mul(1000));
-            map_status(status.as_u16(), retry_after_ms)
+            map_status(
+                status.as_u16(),
+                retry_after_ms,
+                provider_error_summary(&body),
+            )
         }
         genai::webc::Error::Reqwest(error) if error.is_timeout() => LlmError::Timeout,
         genai::webc::Error::Reqwest(error) => LlmError::Transport(error.to_string()),
@@ -478,13 +534,130 @@ fn map_web_error(error: genai::webc::Error) -> LlmError {
     }
 }
 
-fn map_status(status: u16, retry_after_ms: Option<u64>) -> LlmError {
+fn map_status(
+    status: u16,
+    retry_after_ms: Option<u64>,
+    provider_message: Option<String>,
+) -> LlmError {
     match status {
-        401 | 403 => LlmError::Authentication(format!("provider returned HTTP {status}")),
+        401 | 403 => LlmError::Authentication(
+            provider_message.unwrap_or_else(|| format!("provider returned HTTP {status}")),
+        ),
         429 => LlmError::RateLimited { retry_after_ms },
         _ => LlmError::Provider {
             status: Some(status),
-            message: "provider rejected the request".to_string(),
+            message: provider_message
+                .unwrap_or_else(|| "provider rejected the request".to_string()),
         },
+    }
+}
+
+const PROVIDER_MESSAGE_MAX_CHARS: usize = 1024;
+const PROVIDER_FIELD_MAX_CHARS: usize = 128;
+
+/// Extracts only conventional scalar error fields. Arbitrary response bodies
+/// are not surfaced because gateways may include request echoes or diagnostics
+/// that do not belong in UI messages and logs.
+fn provider_error_summary(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let error = value.get("error").unwrap_or(&value);
+    if let Some(message) = error.as_str() {
+        return bounded_provider_text(message, PROVIDER_MESSAGE_MAX_CHARS);
+    }
+    let object = error.as_object()?;
+    let mut fields = Vec::new();
+    for (name, limit) in [
+        ("code", PROVIDER_FIELD_MAX_CHARS),
+        ("param", PROVIDER_FIELD_MAX_CHARS),
+        ("message", PROVIDER_MESSAGE_MAX_CHARS),
+    ] {
+        let Some(value) = object.get(name).and_then(provider_scalar) else {
+            continue;
+        };
+        let Some(value) = bounded_provider_text(&value, limit) else {
+            continue;
+        };
+        fields.push(format!("{name}={value}"));
+    }
+    (!fields.is_empty()).then(|| fields.join(", "))
+}
+
+fn provider_scalar(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn bounded_provider_text(value: &str, limit: usize) -> Option<String> {
+    let normalized = value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let normalized = normalized.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+    if normalized.chars().count() <= limit {
+        return Some(normalized.to_string());
+    }
+    let mut bounded = normalized.chars().take(limit).collect::<String>();
+    bounded.push('…');
+    Some(bounded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn native_protocol_schema_is_not_lowered() {
+        let schema = json!({
+            "$defs": {"Value": {"type": "string"}},
+            "type": "object",
+            "properties": {
+                "value": {
+                    "$ref": "#/$defs/Value",
+                    "description": "Provider-visible field guidance"
+                }
+            }
+        });
+
+        for protocol in [
+            WireProtocol::AnthropicMessages,
+            WireProtocol::GeminiGenerateContent,
+            WireProtocol::OllamaNative,
+        ] {
+            assert_eq!(
+                lower_strict_schema_for_wire_protocol(&schema, protocol),
+                schema
+            );
+        }
+    }
+
+    #[test]
+    fn provider_error_summary_is_bounded_and_single_line() {
+        let long_message = format!(
+            "first line\n{}",
+            "x".repeat(PROVIDER_MESSAGE_MAX_CHARS + 50)
+        );
+        let body = json!({"error": {"message": long_message}}).to_string();
+        let summary = provider_error_summary(&body).unwrap();
+
+        assert!(!summary.contains('\n'));
+        assert!(summary.ends_with('…'));
+        assert_eq!(
+            summary.chars().count(),
+            "message=".chars().count() + PROVIDER_MESSAGE_MAX_CHARS + 1
+        );
     }
 }

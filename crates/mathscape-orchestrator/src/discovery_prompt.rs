@@ -76,12 +76,46 @@ fn normalize_tagged_unions(value: &mut Value) {
 
 #[derive(Clone, Debug)]
 pub struct PreparedDiscoveryRequest {
-    pub input: DiscoveryInput,
-    pub request: LlmRequest,
-    pub manifest: DiscoveryPromptManifest,
+    input: DiscoveryInput,
+    request: LlmRequest,
+    manifest: DiscoveryPromptManifest,
     /// Identity of manifest + system prompt + generated schema, not a complete
     /// run/cache key (model and generation parameters are separate).
-    pub prompt_fingerprint: ContentHash,
+    prompt_fingerprint: ContentHash,
+}
+
+impl PreparedDiscoveryRequest {
+    pub fn input(&self) -> &DiscoveryInput {
+        &self.input
+    }
+
+    pub fn request(&self) -> &LlmRequest {
+        &self.request
+    }
+
+    pub fn manifest(&self) -> &DiscoveryPromptManifest {
+        &self.manifest
+    }
+
+    pub fn prompt_fingerprint(&self) -> &ContentHash {
+        &self.prompt_fingerprint
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        DiscoveryInput,
+        LlmRequest,
+        DiscoveryPromptManifest,
+        ContentHash,
+    ) {
+        (
+            self.input,
+            self.request,
+            self.manifest,
+            self.prompt_fingerprint,
+        )
+    }
 }
 
 /// Re-resolves the selection against the actual anchored document through the

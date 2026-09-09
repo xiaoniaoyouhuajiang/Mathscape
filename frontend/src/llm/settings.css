@@ -109,6 +109,52 @@
   display: grid;
   gap: 17px;
   padding: 24px 26px 26px;
+  border-top: 1px solid #293640;
+}
+
+.workspace-settings-form {
+  display: grid;
+  gap: 17px;
+  padding: 24px 26px 26px;
+}
+
+.settings-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-section-heading h3 {
+  margin: 4px 0 0;
+  color: #dfe8e9;
+  font: 500 17px Georgia, serif;
+}
+
+.settings-scope {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid #34434e;
+  border-radius: 999px;
+  color: #758690;
+  font-size: 9px;
+}
+
+.settings-advanced {
+  padding: 10px 12px;
+  border: 1px solid #293943;
+  border-radius: 8px;
+  background: #0d171e;
+}
+
+.settings-advanced summary {
+  color: #8fa0aa;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.settings-advanced[open] summary {
+  margin-bottom: 13px;
 }
 
 .settings-grid {
@@ -185,6 +231,10 @@
   justify-content: flex-end;
   gap: 9px;
   padding-top: 5px;
+}
+
+.compact-actions {
+  padding-top: 0;
 }
 
 .settings-actions button {

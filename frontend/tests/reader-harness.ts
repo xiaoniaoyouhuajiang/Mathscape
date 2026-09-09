@@ -60,7 +60,8 @@ const files: Record<string, { media: string; bytes: Uint8Array }> = {
 };
 const reads: { id: string; offset: number; length: number }[] = [];
 const selectionRequests: SelectionRequest[] = [];
-const behavior = { selectionDelay: 0, failSelection: false };
+const discoveryRequests: SelectionRequest[] = [];
+const behavior = { selectionDelay: 0, discoveryDelay: 0, failSelection: false };
 // Predetermined IPC double, not a second implementation of backend segmentation.
 function anchored(conversion: string): AnchoredMarkdown {
   const starts = ["# Math reader", "Inline $", "$$\n", "\\[\n", "![Diagram]", "<script>", "~~~tex"].map(marker => markdown.indexOf(marker));
@@ -74,6 +75,39 @@ function anchored(conversion: string): AnchoredMarkdown {
   };
 }
 mockIPC((command, payload) => {
+  if (command === "get_workspace_settings") return {
+    version: "mathscape-workspace-settings-1",
+    discovery_admission: "review_before_publish",
+    discovery_timeout_seconds: 600,
+    connect_timeout_seconds: 15,
+  };
+  if (command === "get_active_discovery") return null;
+  if (command === "run_discovery") {
+    const request = (payload as { request: { selection: SelectionRequest } }).request.selection;
+    discoveryRequests.push(request);
+    return new Promise(resolve => setTimeout(() => resolve({
+      outcome: "valid",
+      proposal: {
+        status: "complete", input_fingerprint: "test-input",
+        units: [{
+          temp_id: "u1", unit_kind: "statement", source_label: "测试命题",
+          source_title: null, display_title: "收敛命题", selectors: [], parent: null,
+          completeness: "complete", source_excerpt: "Inline $x^2$ and \\(a_n\\to a\\).",
+        }],
+        relations: [], references: [], issues: [], coverage: [],
+      },
+      run: {
+        profile_id: "desktop-default", provider: "test", requested_model: "test-model",
+        admission: request.admission,
+        request_timeout_seconds: 600,
+        connect_timeout_seconds: 15,
+        response: {
+          provider_model: "test-model-v1", finish_reason: "completed",
+          input_tokens: 100, output_tokens: 50, total_tokens: 150, elapsed_ms: 20,
+        },
+      },
+    }), behavior.discoveryDelay));
+  }
   if (command === "prepare_discovery_input") {
     const request = (payload as { request: SelectionRequest }).request;
     selectionRequests.push(request);
@@ -116,5 +150,5 @@ mockIPC((command, payload) => {
 
 const reader = new ArtifactReader(document.querySelector<HTMLElement>("#reader")!);
 Object.assign(window, {
-  harness: { reader, reads, resolveProductPath, readRange, selectionRequests, behavior, render: (source: string) => markdownRenderer().render(source) },
+  harness: { reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, behavior, render: (source: string) => markdownRenderer().render(source) },
 });

@@ -1,8 +1,8 @@
 # LLM 接入基础设施 v1
 
 状态：供应商中立契约、`genai` 单次调用适配器、结构化输出辅助、确定性测试后端、
-profile 持久化和桌面设置页已实现；Discovery producer、运行记录持久化与 agent runtime 待实现。
-日期：2026-09-08。
+profile 持久化、桌面设置页和 Discovery producer 已实现；运行记录持久化与 agent runtime 待实现。
+日期：2026-09-09。
 
 ## 目标与边界
 
@@ -56,6 +56,15 @@ Messages、Gemini GenerateContent、Ollama，以及若干已知供应商和兼�
 token usage、响应 ID、实际模型身份、耗时及可选原始响应。供应商错误规范化为配置、凭据、
 鉴权、限流、超时、传输、供应商拒绝、无效响应和能力不支持等稳定类别。
 
+Domain/producer 持有的 canonical JSON Schema 不因供应商而改变。发送 OpenAI Chat Completions
+或 Responses 严格结构化请求时，适配器会复制并 lowering 为其支持的子集：当前仅移除 `$ref`
+同级的 `title`、`description` 等非验证注解，保留 `$ref`、`$defs` 和所有断言约束；Anthropic、
+Gemini、Ollama 原生协议继续收到原始 Schema。返回内容仍按 canonical DTO 和确定性验证器处理。
+
+HTTP 错误响应只允许提取常见 JSON `error.code`、`error.param` 和 `error.message`，控制字符会被
+归一化且字段有长度上限；未知字段、请求回显和非 JSON 响应体不会进入 UI 或日志。这样既能
+显示供应商的可操作诊断，又不会无边界地传播网关内部信息。
+
 `response_format_for<T>` 从 `schemars::JsonSchema` 生成响应 schema；`execute_typed<T>` 只负责
 一次调用与 JSON 反序列化，不替代 DiscoveryProposal 的确定性验证器。
 
@@ -87,9 +96,10 @@ usage 和限流分类，不依赖真实供应商。
 
 ## 持久化建议
 
-SQLite schema v2 已增加第一类表，第二类仍待实现：
+SQLite schema v3 已增加前两类表，运行事实仍待实现：
 
 - `llm_profiles`（已实现）：可编辑配置，仅含 profile、endpoint、模型和 credential reference；
+- `workspace_settings`（已实现）：singleton 版本化运行策略文档，不包含密钥；
 - `llm_runs`：不可变调用事实，关联任务、输入指纹、prompt/契约版本、profile、解析后的模型
   身份、时间、状态、尝试序号、usage 和错误类别。
 
@@ -99,11 +109,12 @@ SQLite schema v2 已增加第一类表，第二类仍待实现：
 
 ## 下一步接入顺序
 
-1. DiscoveryProposal 的 `JsonSchema`、版本化 [Prompt 包](../prompts/source-discovery/v1/README.md)
-   与离线 `build_discovery_request` 已完成；下一步实现实际调用与响应处理的 Discovery producer。
-2. 用 `ScriptedLlmBackend` 完成 `DiscoveryInput → proposal → validate` 的离线集成测试。
+1. DiscoveryProposal 的 `JsonSchema`、版本化 [Prompt 包](../prompts/source-discovery/v1/README.md)、
+   请求构建与[单次 Producer](discovery-producer-v1.md) 已完成。
+2. `ScriptedLlmBackend` 已覆盖离线集成测试，[Desktop](desktop-discovery-v1.md)也已接通真实
+   backend 调用及有效提案/结构化失败展示；下一步持久化运行与提案。
 3. 增加 run SQLite repository 及 LLM 任务状态；profile、钥匙串和 Desktop 设置已完成。
-4. 增加 orchestrator 的取消、预算、退避和一次有界 repair policy。
+4. 根据真实失败数据增加 orchestrator 的取消、预算、退避和至多一次有界 repair policy。
 5. 当 Lean/图分析需要多轮工具循环时，在同一 `LlmBackend` 契约之上增加 agent runtime；
    不让 agent 框架成为 Domain 或存储依赖。
 

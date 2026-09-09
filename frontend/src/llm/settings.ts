@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import "./settings.css";
+import {
+  announceWorkspaceSettings,
+  getWorkspaceSettings,
+  saveWorkspaceSettings,
+  type DiscoveryAdmissionPreference,
+  type WorkspaceSettings,
+} from "../workspace-settings";
 
 type WireProtocol =
   | "open_ai_chat_completions"
@@ -57,6 +64,12 @@ const presets: Record<string, { protocol: WireProtocol; needsEndpoint: boolean }
 export class LlmSettingsController {
   private readonly overlay: HTMLElement;
   private readonly form: HTMLFormElement;
+  private readonly workspaceForm: HTMLFormElement;
+  private readonly admission: HTMLSelectElement;
+  private readonly discoveryTimeout: HTMLInputElement;
+  private readonly connectTimeout: HTMLInputElement;
+  private readonly workspaceResult: HTMLElement;
+  private readonly workspaceSaveButton: HTMLButtonElement;
   private readonly provider: HTMLSelectElement;
   private readonly protocol: HTMLSelectElement;
   private readonly model: HTMLInputElement;
@@ -78,16 +91,58 @@ export class LlmSettingsController {
   ) {
     host.innerHTML = `
       <div class="settings-overlay" hidden>
-        <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="llm-settings-title">
+        <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="mathscape-settings-title">
           <header class="settings-header">
             <div>
-              <span class="settings-eyebrow">MODEL RUNTIME</span>
-              <h2 id="llm-settings-title">LLM 配置</h2>
-              <p>配置保存于当前 Workspace；API key 仅存入系统钥匙串。</p>
+              <span class="settings-eyebrow">WORKSPACE CONTROL</span>
+              <h2 id="mathscape-settings-title">Mathscape 设置</h2>
+              <p>运行策略随当前 Workspace 保存；API key 仅存入系统钥匙串。</p>
             </div>
             <button class="settings-close" type="button" aria-label="关闭">×</button>
           </header>
+          <form class="workspace-settings-form settings-section">
+            <div class="settings-section-heading">
+              <div>
+                <span class="settings-eyebrow">MAP CONSTRUCTION</span>
+                <h3>内容发现运行策略</h3>
+              </div>
+              <span class="settings-scope">Workspace</span>
+            </div>
+            <label class="settings-field">
+              <span>默认审核方式</span>
+              <select name="discovery-admission">
+                <option value="review_before_publish">始终先人工审核（推荐）</option>
+                <option value="automatic_candidate">后续登记：验证后自动 candidate</option>
+                <option value="ask_each_run">每次运行时选择</option>
+              </select>
+              <small>本阶段记录审核偏好但仍只展示提案；未来登记实现后，自动模式仍必须通过确定性验证且不会直接产生 canonical 实体。</small>
+            </label>
+            <label class="settings-field">
+              <span>内容发现请求总超时（秒）</span>
+              <input name="discovery-timeout" type="number" min="30" max="1800" step="1" required />
+              <small>默认 600 秒。超时不会自动重试，以免产生不可见的重复费用。</small>
+            </label>
+            <details class="settings-advanced">
+              <summary>高级连接设置</summary>
+              <label class="settings-field">
+                <span>连接超时（秒）</span>
+                <input name="connect-timeout" type="number" min="5" max="60" step="1" required />
+                <small>只限制建立网络连接的时间，不限制模型推理时长。</small>
+              </label>
+            </details>
+            <div class="workspace-settings-result settings-result" aria-live="polite" hidden></div>
+            <footer class="settings-actions compact-actions">
+              <button class="settings-primary save-workspace-settings" type="submit">保存运行策略</button>
+            </footer>
+          </form>
           <form class="llm-settings-form">
+            <div class="settings-section-heading">
+              <div>
+                <span class="settings-eyebrow">MODEL RUNTIME</span>
+                <h3>LLM Profile</h3>
+              </div>
+              <span class="settings-scope">Workspace + Keychain</span>
+            </div>
             <div class="settings-grid">
               <label class="settings-field">
                 <span>供应商</span>
@@ -143,7 +198,7 @@ export class LlmSettingsController {
               <span>清除当前 profile 的已保存密钥</span>
             </label>
             <p class="connection-test-note">“保存并测试”会向所选模型发送一个最多 128 output tokens 的短请求。</p>
-            <div class="settings-result" aria-live="polite" hidden></div>
+            <div class="llm-settings-result settings-result" aria-live="polite" hidden></div>
             <footer class="settings-actions">
               <button class="settings-secondary cancel-settings" type="button">取消</button>
               <button class="settings-secondary test-settings" type="button">保存并测试</button>
@@ -155,6 +210,12 @@ export class LlmSettingsController {
     `;
     this.overlay = required<HTMLElement>(host, ".settings-overlay");
     this.form = required<HTMLFormElement>(host, ".llm-settings-form");
+    this.workspaceForm = required<HTMLFormElement>(host, ".workspace-settings-form");
+    this.admission = required<HTMLSelectElement>(host, "select[name=discovery-admission]");
+    this.discoveryTimeout = required<HTMLInputElement>(host, "input[name=discovery-timeout]");
+    this.connectTimeout = required<HTMLInputElement>(host, "input[name=connect-timeout]");
+    this.workspaceResult = required<HTMLElement>(host, ".workspace-settings-result");
+    this.workspaceSaveButton = required<HTMLButtonElement>(host, ".save-workspace-settings");
     this.provider = required<HTMLSelectElement>(host, "select[name=provider]");
     this.protocol = required<HTMLSelectElement>(host, "select[name=protocol]");
     this.model = required<HTMLInputElement>(host, "input[name=model]");
@@ -163,7 +224,7 @@ export class LlmSettingsController {
     this.clearKey = required<HTMLInputElement>(host, "input[name=clear-key]");
     this.credentialState = required<HTMLElement>(host, ".credential-state");
     this.endpointNote = required<HTMLElement>(host, ".endpoint-note");
-    this.result = required<HTMLElement>(host, ".settings-result");
+    this.result = required<HTMLElement>(host, ".llm-settings-result");
     this.saveButton = required<HTMLButtonElement>(host, ".save-settings");
     this.testButton = required<HTMLButtonElement>(host, ".test-settings");
 
@@ -181,6 +242,10 @@ export class LlmSettingsController {
     this.form.onsubmit = (event) => {
       event.preventDefault();
       void this.save(false);
+    };
+    this.workspaceForm.onsubmit = (event) => {
+      event.preventDefault();
+      void this.saveWorkspacePolicy();
     };
     this.testButton.onclick = () => void this.save(true);
   }
@@ -203,8 +268,14 @@ export class LlmSettingsController {
     await this.loadSummary();
     this.populateForm();
     this.result.hidden = true;
+    this.workspaceResult.hidden = true;
     this.overlay.hidden = false;
-    this.model.focus();
+    this.admission.focus();
+    try {
+      this.populateWorkspaceForm(await getWorkspaceSettings());
+    } catch (error: unknown) {
+      this.showWorkspaceResult(errorMessage(error), false);
+    }
   }
 
   private close(): void {
@@ -232,6 +303,43 @@ export class LlmSettingsController {
       ? "系统钥匙串中已有密钥引用；留空保持不变。"
       : "尚未保存密钥；Ollama 等无鉴权服务可留空。";
     this.applyProviderPreset(false);
+  }
+
+  private populateWorkspaceForm(settings: WorkspaceSettings): void {
+    this.admission.value = settings.discovery_admission;
+    this.discoveryTimeout.value = String(settings.discovery_timeout_seconds);
+    this.connectTimeout.value = String(settings.connect_timeout_seconds);
+  }
+
+  private async saveWorkspacePolicy(): Promise<void> {
+    if (!this.workspaceForm.reportValidity()) return;
+    this.workspaceSaveButton.disabled = true;
+    this.workspaceSaveButton.textContent = "正在保存…";
+    this.showWorkspaceResult("正在保存 Workspace 运行策略…", true);
+    try {
+      const settings = await saveWorkspaceSettings({
+        discovery_admission: this.admission.value as DiscoveryAdmissionPreference,
+        discovery_timeout_seconds: this.discoveryTimeout.valueAsNumber,
+        connect_timeout_seconds: this.connectTimeout.valueAsNumber,
+      });
+      this.populateWorkspaceForm(settings);
+      announceWorkspaceSettings(settings);
+      this.showWorkspaceResult("运行策略已保存，后续内容发现任务将使用新超时。", true);
+      this.toast("Workspace 运行策略已保存。", "success");
+    } catch (error: unknown) {
+      const message = errorMessage(error);
+      this.showWorkspaceResult(message, false);
+      this.toast(message, "error");
+    } finally {
+      this.workspaceSaveButton.disabled = false;
+      this.workspaceSaveButton.textContent = "保存运行策略";
+    }
+  }
+
+  private showWorkspaceResult(message: string, success: boolean): void {
+    this.workspaceResult.hidden = false;
+    this.workspaceResult.dataset.kind = success ? "success" : "error";
+    this.workspaceResult.textContent = message;
   }
 
   private applyProviderPreset(changeProtocol = true): void {

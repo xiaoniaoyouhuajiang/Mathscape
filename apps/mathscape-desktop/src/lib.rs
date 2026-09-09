@@ -1,8 +1,19 @@
 mod content;
+mod discovery;
 mod llm_settings;
+mod workspace_settings;
 pub use content::{ArtifactContentInfo, ContentContext};
+pub use discovery::{
+    ActiveDiscoveryTask, DesktopDiscoveryDiagnostic, DesktopDiscoveryError,
+    DesktopDiscoveryOutcome, DesktopDiscoveryProposal, DesktopDiscoveryResponse,
+    DesktopDiscoveryRun, DesktopDiscoveryUnit, RunDiscoveryRequest,
+};
 pub use llm_settings::{
-    LlmConnectionTest, LlmProfileView, LlmSettingsSnapshot, SaveLlmProfileRequest,
+    LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,
+};
+pub use workspace_settings::{
+    DiscoveryAdmissionPreference, SaveWorkspaceSettingsRequest, WORKSPACE_SETTINGS_VERSION,
+    WorkspaceSettings, WorkspaceSettingsError,
 };
 
 use std::{
@@ -44,6 +55,7 @@ pub struct DesktopService {
     marker: Option<MarkerInstallation>,
     credentials: Arc<dyn CredentialStore>,
     active_parse: Arc<Mutex<Option<ParsePdfRequest>>>,
+    active_discovery: Arc<Mutex<Option<ActiveDiscoveryTask>>>,
 }
 
 impl DesktopService {
@@ -99,6 +111,7 @@ impl DesktopService {
             marker,
             credentials,
             active_parse: Arc::new(Mutex::new(None)),
+            active_discovery: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -375,6 +388,7 @@ mod task_tests {
             marker: None,
             credentials: Arc::new(mathscape_llm::MemoryCredentialResolver::default()),
             active_parse: Arc::new(Mutex::new(None)),
+            active_discovery: Arc::new(Mutex::new(None)),
         };
         let request = ParsePdfRequest::new("test:pdf", 2, 4, MarkerProfileChoice::MathOcrV1);
         let permit = service.begin_parse(&request).unwrap();
@@ -733,6 +747,10 @@ pub fn run() {
             llm_settings::get_llm_settings,
             llm_settings::save_llm_profile,
             llm_settings::test_llm_profile,
+            workspace_settings::get_workspace_settings,
+            workspace_settings::save_workspace_settings,
+            discovery::get_active_discovery,
+            discovery::run_discovery,
             get_desktop_snapshot,
             choose_and_import_pdf,
             get_active_parse,

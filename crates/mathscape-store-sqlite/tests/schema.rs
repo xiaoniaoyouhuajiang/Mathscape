@@ -11,6 +11,7 @@ use mathscape_llm::{
 };
 use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -47,7 +48,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 1",
@@ -64,6 +65,14 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
         )
         .unwrap();
     assert_eq!(llm_migration, "llm_profiles_v1");
+    let settings_migration = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 3",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(settings_migration, "workspace_settings_v1");
     drop(connection);
     drop(SqliteArtifactStore::open(&database).unwrap());
     cleanup(&directory);
@@ -81,14 +90,14 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::open(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 2
+            supported: 3
         })
     ));
     cleanup(&directory);
 }
 
 #[test]
-fn upgrades_an_existing_artifact_pool_database_to_llm_profiles() {
+fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let directory = test_directory("upgrade-v1");
     let database = directory.join("catalog.sqlite3");
     let connection = Connection::open(&database).unwrap();
@@ -102,7 +111,7 @@ fn upgrades_an_existing_artifact_pool_database_to_llm_profiles() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -111,6 +120,81 @@ fn upgrades_an_existing_artifact_pool_database_to_llm_profiles() {
         )
         .unwrap();
     assert_eq!(migration, "llm_profiles_v1");
+    let migration = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 3",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(migration, "workspace_settings_v1");
+    cleanup(&directory);
+}
+
+#[test]
+fn upgrades_an_llm_profile_database_to_workspace_settings() {
+    let directory = test_directory("upgrade-v2");
+    let database = directory.join("catalog.sqlite3");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(include_str!("../../../migrations/0001_artifact_pool.sql"))
+        .unwrap();
+    connection
+        .execute_batch(include_str!("../../../migrations/0002_llm_profiles.sql"))
+        .unwrap();
+    drop(connection);
+
+    drop(SqliteArtifactStore::open(&database).unwrap());
+    let connection = Connection::open(&database).unwrap();
+    let version = connection
+        .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+        .unwrap();
+    assert_eq!(version, 3);
+    let migration = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 3",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(migration, "workspace_settings_v1");
+    cleanup(&directory);
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct FixtureSettings {
+    version: String,
+    timeout_seconds: u64,
+}
+
+#[test]
+fn persists_and_replaces_a_versioned_workspace_settings_document() {
+    let directory = test_directory("workspace-settings");
+    let database = directory.join("catalog.sqlite3");
+    let mut store = SqliteArtifactStore::open(&database).unwrap();
+    assert_eq!(store.workspace_settings::<FixtureSettings>().unwrap(), None);
+
+    let mut settings = FixtureSettings {
+        version: "fixture-settings-1".into(),
+        timeout_seconds: 600,
+    };
+    store.save_workspace_settings(&settings).unwrap();
+    settings.timeout_seconds = 900;
+    store.save_workspace_settings(&settings).unwrap();
+    drop(store);
+
+    let store = SqliteArtifactStore::open(&database).unwrap();
+    assert_eq!(
+        store.workspace_settings::<FixtureSettings>().unwrap(),
+        Some(settings)
+    );
+    let connection = Connection::open(&database).unwrap();
+    let count = connection
+        .query_row("SELECT COUNT(*) FROM workspace_settings", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+    assert_eq!(count, 1);
     cleanup(&directory);
 }
 
