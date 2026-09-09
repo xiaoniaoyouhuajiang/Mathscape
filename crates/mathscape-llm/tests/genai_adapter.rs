@@ -149,6 +149,85 @@ async fn custom_openai_compatible_endpoint_receives_structured_request() {
 }
 
 #[tokio::test]
+async fn custom_openai_compatible_stream_collects_structured_json_and_usage() {
+    let server = MockServer::start().await;
+    let sse = concat!(
+        "data: {\"id\":\"chatcmpl-stream\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"relay-model-v2\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"{\\\"ok\\\":\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chatcmpl-stream\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"relay-model-v2\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"true}\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"id\":\"chatcmpl-stream\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"relay-model-v2\",\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":5,\"total_tokens\":16}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(header("authorization", "Bearer fixture-secret"))
+        .and(body_partial_json(json!({
+            "model": "relay-model",
+            "stream": true,
+            "stream_options": {"include_usage": true}
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let backend = GenaiBackend::new(
+        profile(&server),
+        credentials(),
+        GenaiBackendOptions {
+            timeout: Duration::from_secs(5),
+            connect_timeout: Duration::from_secs(2),
+        },
+    )
+    .unwrap();
+    let response = backend.execute_stream(request()).await.unwrap();
+
+    assert_eq!(response.text().as_deref(), Some(r#"{"ok":true}"#));
+    assert_eq!(response.usage.input_tokens, Some(11));
+    assert_eq!(response.usage.output_tokens, Some(5));
+    assert_eq!(response.usage.total_tokens, Some(16));
+    assert!(matches!(
+        response.finish_reason,
+        Some(mathscape_llm::LlmFinishReason::Completed { .. })
+    ));
+    assert!(response.raw_response.is_none());
+
+    let received = server.received_requests().await.unwrap();
+    let body: serde_json::Value = received[0].body_json().unwrap();
+    assert_eq!(body["response_format"]["type"], "json_schema");
+    assert_eq!(body["response_format"]["json_schema"]["name"], "discovery");
+}
+
+#[tokio::test]
+async fn streaming_gateway_status_is_preserved_as_a_provider_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_partial_json(json!({"stream": true})))
+        .respond_with(ResponseTemplate::new(524).set_body_string("gateway timeout page"))
+        .mount(&server)
+        .await;
+    let backend = GenaiBackend::new(
+        profile(&server),
+        credentials(),
+        GenaiBackendOptions::default(),
+    )
+    .unwrap();
+
+    let error = backend.execute_stream(request()).await.unwrap_err();
+    assert_eq!(
+        error,
+        mathscape_llm::LlmError::Provider {
+            status: Some(524),
+            message: "upstream gateway timed out while waiting for the model response".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
 async fn rate_limit_is_classified_and_retry_after_is_preserved() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

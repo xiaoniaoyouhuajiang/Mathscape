@@ -1,6 +1,6 @@
 # LLM 接入基础设施 v1
 
-状态：供应商中立契约、`genai` 单次调用适配器、结构化输出辅助、确定性测试后端、
+状态：供应商中立契约、`genai` 单次及流式调用适配器、结构化输出辅助、确定性测试后端、
 profile 持久化、桌面设置页和 Discovery producer 已实现；运行记录持久化与 agent runtime 待实现。
 日期：2026-09-09。
 
@@ -81,7 +81,12 @@ profile 只保存 `CredentialRef`，绝不保存 API key。`CredentialResolver` 
 
 ## 调用语义
 
-`LlmBackend::execute` 表示一次尝试：适配器设置连接与总请求超时，但不自动重试。这样 429、
+`LlmBackend::execute` 表示一次完整响应尝试；`execute_stream` 表示一次流式传输尝试，并将事件
+收集回同一种 `LlmResponse`。没有原生 streaming 的测试或未来 backend 可使用 trait 的完整
+响应 fallback；`GenaiBackend` 对当前支持协议使用真实 SSE/流式适配器。Discovery 固定调用
+`execute_stream`，但仍只在完整结果到达后解码和验证，流式分片不越过 producer 信任边界。
+
+两种方式都设置连接与总请求超时，且不自动重试。这样 429、
 超时和不合法 JSON 不会在底层产生不可见的额外费用。orchestrator 后续根据任务策略决定：
 
 1. 是否对传输错误退避重试；
@@ -92,7 +97,7 @@ profile 只保存 `CredentialRef`，绝不保存 API key。`CredentialResolver` 
 
 测试和离线开发使用 `ScriptedLlmBackend`：它按队列返回固定结果并记录请求，producer 测试不需
 API key 或网络。协议适配器测试使用进程内 HTTP 模拟服务，验证请求路径、鉴权、结构化输出、
-usage 和限流分类，不依赖真实供应商。
+SSE 分片收集、usage、网关状态保留和限流分类，不依赖真实供应商。
 
 ## 持久化建议
 
@@ -118,5 +123,6 @@ SQLite schema v3 已增加前两类表，运行事实仍待实现：
 5. 当 Lean/图分析需要多轮工具循环时，在同一 `LlmBackend` 契约之上增加 agent runtime；
    不让 agent 框架成为 Domain 或存储依赖。
 
-当前不实现流式 UI、多供应商 fallback、自动模型路由、agent memory 或任意 MCP 工具执行。
-这些能力需在 Discovery 单次结构化调用得到真实成本与失败数据后再设计。
+当前实现流式传输及“流式接收中”状态，不把模型尚未验证的增量 JSON 直接渲染为 Proposal；
+也不实现多供应商 fallback、自动模型路由、agent memory 或任意 MCP 工具执行。这些能力需在
+Discovery 单次结构化调用得到真实成本与失败数据后再设计。

@@ -100,6 +100,7 @@ async fn produces_and_validates_one_proposal_without_hiding_run_facts() {
     assert_eq!(observation.response_id.as_deref(), Some("response-1"));
     assert_eq!(observation.usage.total_tokens, Some(150));
     assert_eq!(backend.requests().len(), 1);
+    assert_eq!(backend.streaming_request_count(), 1);
 }
 
 #[tokio::test]

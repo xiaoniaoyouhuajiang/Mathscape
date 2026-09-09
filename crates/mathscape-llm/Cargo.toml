@@ -10,6 +10,7 @@ default = []
 keyring = ["dep:keyring"]
 
 [dependencies]
+futures.workspace = true
 genai.workspace = true
 keyring = { workspace = true, optional = true }
 mathscape-domain.workspace = true

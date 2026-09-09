@@ -278,7 +278,7 @@ export class MarkdownSelection {
         : "已选择原文范围；请为本次运行选择审核方式。"
       : this.first >= 0 && this.last >= 0 ? "终点必须位于起点之后，请重新设置。" : "尚未选择完整范围。");
     this.discoveryStatus.textContent = this.activeDiscovery !== null
-      ? `内容发现正在运行：${this.activeDiscovery.profile_id} · 最长等待 ${this.activeDiscovery.request_timeout_seconds} 秒`
+      ? `内容发现正在流式接收：${this.activeDiscovery.profile_id} · 最长等待 ${this.activeDiscovery.request_timeout_seconds} 秒`
       : this.discoveryFeedback ?? "";
   }
 
@@ -347,7 +347,7 @@ export class MarkdownSelection {
     if (selection === null) return;
     const version = ++this.version;
     this.pending = true;
-    this.discoveryFeedback = `LLM 正在分析所选原文；最长等待 ${this.discoveryTimeoutSeconds} 秒，结果只会形成待查看提案。`;
+    this.discoveryFeedback = `LLM 正在分析所选原文并流式返回结果；最长等待 ${this.discoveryTimeoutSeconds} 秒，完整 JSON 验证通过后才会形成待查看提案。`;
     this.discoveryResult.hidden = true;
     this.discoveryResult.replaceChildren();
     this.refresh();

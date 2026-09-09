@@ -1,9 +1,11 @@
+use futures::StreamExt;
 use genai::{
     Client, ModelIden,
     adapter::AdapterKind,
     chat::{
-        ChatMessage, ChatOptions, ChatRequest, ChatResponseFormat, ContentPart, JsonSpec,
-        MessageContent, ReasoningEffort, StopReason, Tool, ToolCall, ToolChoice, ToolResponse,
+        ChatMessage, ChatOptions, ChatRequest, ChatResponseFormat, ChatStreamEvent, ContentPart,
+        JsonSpec, MessageContent, ReasoningEffort, StopReason, StreamEnd, Tool, ToolCall,
+        ToolChoice, ToolResponse,
     },
     resolver::{AuthData, Endpoint},
 };
@@ -108,6 +110,79 @@ impl GenaiBackend {
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         from_genai_response(&self.profile, response, elapsed_ms)
     }
+
+    async fn execute_stream_inner(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+        request
+            .validate()
+            .map_err(|error| LlmError::InvalidRequest(error.to_string()))?;
+        check_declared_capabilities(&self.profile, &request)?;
+        if self.profile.capabilities.streaming == CapabilitySupport::Unsupported {
+            return Err(LlmError::UnsupportedCapability("streaming".to_string()));
+        }
+
+        let chat_request = to_genai_request(&request)?;
+        let options = to_genai_options(&request, self.profile.wire_protocol)
+            .with_capture_content(true)
+            .with_capture_reasoning_content(true)
+            .with_capture_tool_calls(true)
+            .with_capture_usage(should_capture_stream_usage(&self.profile));
+        let started = Instant::now();
+        let response = self
+            .client
+            .exec_chat_stream(self.profile.model.as_str(), chat_request, Some(&options))
+            .await
+            .map_err(map_genai_error)?;
+        let model_iden = response.model_iden;
+        let mut stream = response.stream;
+        let mut text = String::new();
+        let mut reasoning = String::new();
+        let mut streamed_tool_calls = Vec::new();
+        let mut stream_end = None;
+
+        while let Some(event) = stream.next().await {
+            match event.map_err(map_genai_error)? {
+                ChatStreamEvent::Start => {}
+                ChatStreamEvent::Chunk(chunk) => text.push_str(&chunk.content),
+                ChatStreamEvent::ReasoningChunk(chunk) => reasoning.push_str(&chunk.content),
+                ChatStreamEvent::ThoughtSignatureChunk(_) => {
+                    // Provider continuation data is retained on captured tool
+                    // calls at StreamEnd. Discovery does not issue tools.
+                }
+                ChatStreamEvent::ToolCallChunk(chunk) => {
+                    upsert_streamed_tool_call(&mut streamed_tool_calls, chunk.tool_call);
+                }
+                ChatStreamEvent::End(end) => {
+                    stream_end = Some(end);
+                    break;
+                }
+            }
+        }
+
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        from_genai_stream(
+            &self.profile,
+            model_iden,
+            text,
+            reasoning,
+            streamed_tool_calls,
+            stream_end,
+            elapsed_ms,
+        )
+    }
+}
+
+fn should_capture_stream_usage(profile: &LlmProfile) -> bool {
+    if profile.capabilities.usage == CapabilitySupport::Unsupported {
+        return false;
+    }
+    // OpenAI Chat Completions requires `stream_options.include_usage` for
+    // streamed usage. Compatibility relays often support `stream: true` but
+    // reject this optional extension; only opt in when their profile declares
+    // usage support explicitly. Other adapters capture usage from their native
+    // event stream without this OpenAI-only request field.
+    !matches!(profile.wire_protocol, WireProtocol::OpenAiChatCompletions)
+        || profile.provider != "custom-relay"
+        || profile.capabilities.usage == CapabilitySupport::Supported
 }
 
 impl LlmBackend for GenaiBackend {
@@ -117,6 +192,10 @@ impl LlmBackend for GenaiBackend {
 
     fn execute<'a>(&'a self, request: LlmRequest) -> LlmFuture<'a> {
         Box::pin(self.execute_inner(request))
+    }
+
+    fn execute_stream<'a>(&'a self, request: LlmRequest) -> LlmFuture<'a> {
+        Box::pin(self.execute_stream_inner(request))
     }
 }
 
@@ -427,6 +506,119 @@ fn from_genai_response(
     })
 }
 
+fn from_genai_stream(
+    profile: &LlmProfile,
+    model_iden: ModelIden,
+    mut text: String,
+    mut reasoning: String,
+    mut streamed_tool_calls: Vec<ToolCall>,
+    stream_end: Option<StreamEnd>,
+    elapsed_ms: u64,
+) -> Result<LlmResponse, LlmError> {
+    let mut usage = LlmUsage::default();
+    let mut finish_reason = None;
+    let mut response_id = None;
+
+    if let Some(end) = stream_end {
+        if let Some(end_usage) = end.captured_usage.as_ref() {
+            usage = map_usage(end_usage);
+        }
+        finish_reason = end.captured_stop_reason.map(map_stop_reason);
+        response_id = end.captured_response_id;
+        if reasoning.is_empty()
+            && let Some(end_reasoning) = end.captured_reasoning_content
+        {
+            reasoning = end_reasoning;
+        }
+        if let Some(content) = end.captured_content {
+            let mut captured_text = String::new();
+            let mut captured_tool_calls = Vec::new();
+            for part in content.into_parts() {
+                match part {
+                    ContentPart::Text(part) => captured_text.push_str(&part),
+                    ContentPart::ToolCall(call) => captured_tool_calls.push(call),
+                    ContentPart::ThoughtSignature(_)
+                    | ContentPart::ReasoningContent(_)
+                    | ContentPart::Binary(_)
+                    | ContentPart::ToolResponse(_)
+                    | ContentPart::Custom(_) => {}
+                }
+            }
+            if text.is_empty() {
+                text = captured_text;
+            }
+            if !captured_tool_calls.is_empty() {
+                streamed_tool_calls = captured_tool_calls;
+            }
+        }
+    }
+
+    let mut parts = Vec::new();
+    if !text.is_empty() {
+        parts.push(LlmResponsePart::Text { text });
+    }
+    parts.extend(streamed_tool_calls.into_iter().map(|call| {
+        let ToolCall {
+            call_id,
+            fn_name,
+            fn_arguments,
+            thought_signatures,
+        } = call;
+        LlmResponsePart::ToolCall {
+            call_id,
+            name: fn_name,
+            arguments: normalize_streamed_arguments(fn_arguments),
+            continuation_tokens: thought_signatures.unwrap_or_default(),
+        }
+    }));
+    if parts.is_empty() {
+        return Err(LlmError::InvalidResponse(
+            "provider stream returned neither text nor tool calls".to_string(),
+        ));
+    }
+
+    let provider_model = model_iden.model_name.to_string();
+    Ok(LlmResponse {
+        target: LlmResolvedTarget {
+            profile_id: profile.id.clone(),
+            provider: profile.provider.clone(),
+            wire_protocol: profile.wire_protocol,
+            requested_model: profile.model.clone(),
+            resolved_model: provider_model.clone(),
+            provider_model,
+        },
+        parts,
+        reasoning: (!reasoning.is_empty()).then_some(reasoning),
+        finish_reason,
+        usage,
+        response_id,
+        elapsed_ms,
+        // Raw SSE frames can contain provider-private diagnostics and are not
+        // retained. The normalized final response is sufficient for Discovery.
+        raw_response: None,
+    })
+}
+
+fn upsert_streamed_tool_call(tool_calls: &mut Vec<ToolCall>, call: ToolCall) {
+    if let Some(existing) = tool_calls
+        .iter_mut()
+        .find(|existing| existing.call_id == call.call_id)
+    {
+        *existing = call;
+    } else {
+        tool_calls.push(call);
+    }
+}
+
+fn normalize_streamed_arguments(arguments: serde_json::Value) -> serde_json::Value {
+    match arguments {
+        serde_json::Value::String(value) => {
+            serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value))
+        }
+        value => value,
+    }
+}
+
 fn map_stop_reason(reason: StopReason) -> LlmFinishReason {
     let raw = reason.raw().to_string();
     match reason {
@@ -489,7 +681,7 @@ fn map_genai_error(error: genai::Error) -> LlmError {
         | genai::Error::ChatResponse { .. }
         | genai::Error::StreamParse { .. }
         | genai::Error::SerdeJson(_) => LlmError::InvalidResponse(error.to_string()),
-        genai::Error::WebStream { error, .. } => LlmError::Transport(error.to_string()),
+        genai::Error::WebStream { error, .. } => map_stream_error(error),
         genai::Error::ChatReqHasNoMessages { .. }
         | genai::Error::LastChatMessageIsNotUser { .. }
         | genai::Error::MessageRoleNotSupported { .. }
@@ -505,6 +697,13 @@ fn map_genai_error(error: genai::Error) -> LlmError {
             status: None,
             message: error.to_string(),
         },
+    }
+}
+
+fn map_stream_error(error: genai::BoxError) -> LlmError {
+    match error.downcast::<genai::Error>() {
+        Ok(error) => map_genai_error(*error),
+        Err(error) => LlmError::Transport(error.to_string()),
     }
 }
 
@@ -544,6 +743,12 @@ fn map_status(
             provider_message.unwrap_or_else(|| format!("provider returned HTTP {status}")),
         ),
         429 => LlmError::RateLimited { retry_after_ms },
+        524 => LlmError::Provider {
+            status: Some(status),
+            message: provider_message.unwrap_or_else(|| {
+                "upstream gateway timed out while waiting for the model response".to_string()
+            }),
+        },
         _ => LlmError::Provider {
             status: Some(status),
             message: provider_message

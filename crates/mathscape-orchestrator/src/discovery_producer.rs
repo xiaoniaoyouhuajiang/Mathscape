@@ -173,7 +173,11 @@ impl<'a> DiscoveryProducer<'a> {
         }
 
         let (input, request, manifest, _) = prepared.into_parts();
-        let response = match self.backend.execute(request).await {
+        // Discovery responses can be large structured documents. Use the
+        // streaming boundary so provider SSE traffic keeps intermediary
+        // gateways alive; validation still begins only after the final JSON
+        // document has been collected.
+        let response = match self.backend.execute_stream(request).await {
             Ok(response) => response,
             Err(error) => return DiscoveryProductionOutcome::Failed { error, run },
         };

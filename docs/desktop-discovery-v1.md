@@ -8,7 +8,7 @@
 
 1. 在阅读视图打开受管 Markdown，选择连续块范围或全文。
 2. 可用“构建发现输入”预览实际原文；点击“使用 LLM 发现内容”调用默认 profile。
-3. 运行期间按钮禁用，其他阅读视图可看到活动任务；Desktop 全局只允许一个发现调用。
+3. 运行期间按钮禁用，其他阅读视图可看到流式接收中的活动任务；Desktop 全局只允许一个发现调用。
 4. 成功时展示单元、原文明示关系、问题、完整 JSON 结果以及模型、token 和耗时摘要。
 5. 非法提案展示拒绝类型与确定性诊断；API/鉴权/限流/超时等显示为调用失败。
 
@@ -19,6 +19,11 @@
 Workspace 设置中心提供人工审核、自动 candidate 和每次询问三种默认方式，并提供 30–1800 秒
 的 Discovery 总超时与 5–60 秒的连接超时。任务启动时解析出的实际 admission 和超时会写入
 返回的运行摘要；活动状态显示最长等待时间。超时不会触发隐式重试。
+
+Discovery 使用供应商协议对应的流式传输，并在内存中收集文本分片。流式分片只是传输进度，
+不会作为部分 Proposal 暴露、保存或入图；只有流结束、完整 JSON 解码并通过 canonical DTO 与
+确定性来源验证后，Desktop 才展示 Proposal。连接测试继续使用短小的非流式请求。供应商若
+不支持所选协议的 streaming，会明确失败，不会隐式再发一次非流式请求。
 
 ## 后端链路
 
@@ -33,7 +38,7 @@ request
 服务端重新读取 Managed Artifact、验证不可变快照、解析选择器并构建
 `PreparedDiscoveryRequest`；浏览器不能提交自制 DiscoveryInput。随后读取 profile，使用系统
 钥匙串中的 credential 和 Workspace 的有效超时策略创建 `GenaiBackend`，交给
-`DiscoveryProducer` 做一次调用和验证。
+`DiscoveryProducer` 做一次流式调用和验证。
 
 返回 `DesktopDiscoveryOutcome`：
 

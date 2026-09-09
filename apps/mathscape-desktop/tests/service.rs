@@ -264,24 +264,26 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
             "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             input.fingerprint.as_str(),
         );
+    let stream_chunk = serde_json::json!({
+        "id": "chatcmpl-discovery-fixture",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "resolved-discovery-model",
+        "choices": [{
+            "index": 0,
+            "delta": {"role": "assistant", "content": proposal},
+            "finish_reason": "stop"
+        }]
+    });
+    let stream_body = format!("data: {stream_chunk}\n\ndata: [DONE]\n\n");
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
         .and(header("authorization", "Bearer desktop-discovery-secret"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_delay(std::time::Duration::from_millis(120))
-                .set_body_json(serde_json::json!({
-                    "id": "chatcmpl-discovery-fixture",
-                    "object": "chat.completion",
-                    "created": 1,
-                    "model": "resolved-discovery-model",
-                    "choices": [{
-                        "index": 0,
-                        "message": {"role": "assistant", "content": proposal},
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 500, "completion_tokens": 220, "total_tokens": 720}
-                })),
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(stream_body),
         )
         .expect(1)
         .mount(&server)
@@ -314,15 +316,17 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     assert_eq!(value["proposal"]["relations"][0]["relation"], "solves");
     assert_eq!(
         value["run"]["response"]["provider_model"],
-        "resolved-discovery-model"
+        "discovery-fixture-model"
     );
-    assert_eq!(value["run"]["response"]["total_tokens"], 720);
+    assert!(value["run"]["response"]["total_tokens"].is_null());
     assert_eq!(value["run"]["admission"], "review_before_publish");
     assert_eq!(value["run"]["request_timeout_seconds"], 900);
     assert_eq!(value["run"]["connect_timeout_seconds"], 20);
     assert_eq!(service.snapshot().unwrap().graph().nodes().len(), 1);
     let received = server.received_requests().await.unwrap();
     let body: serde_json::Value = received[0].body_json().unwrap();
+    assert_eq!(body["stream"], true);
+    assert!(body.get("stream_options").is_none());
     let fingerprint_schema =
         &body["response_format"]["json_schema"]["schema"]["properties"]["input_fingerprint"];
     assert!(fingerprint_schema.get("$ref").is_some());

@@ -13,6 +13,16 @@ pub trait LlmBackend: Send + Sync {
     }
 
     fn execute<'a>(&'a self, request: LlmRequest) -> LlmFuture<'a>;
+
+    /// Executes a request over a streaming transport and collects its events
+    /// into the same provider-neutral final response used by `execute`.
+    ///
+    /// Backends without a native streaming implementation retain a safe
+    /// full-response fallback. Callers therefore choose streaming for latency
+    /// and gateway liveness without coupling orchestration to provider events.
+    fn execute_stream<'a>(&'a self, request: LlmRequest) -> LlmFuture<'a> {
+        self.execute(request)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
