@@ -470,7 +470,9 @@ fn fact_preflight_catches_self_reference_without_resolving_the_bad_quote() {
     let p = prepared(SOURCE);
     let units = proposal(&p);
     let input = SourceFactInput {
-        version: SourceFactInputVersion::V1,
+        version: SourceFactInputVersion::V2,
+        leading_gap: String::new(),
+        boundary: p.model_input().boundary.clone(),
         request_ref: "f1".into(),
         blocks: p.model_input().blocks.clone(),
         units: units

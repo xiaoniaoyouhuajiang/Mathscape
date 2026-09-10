@@ -13,7 +13,7 @@ pub const DISCOVERY_PIPELINE_VERSION: &str = "mathscape-discovery-pipeline-2";
 pub const UNIT_DISCOVERY_VERSION: &str = "mathscape-unit-discovery-1";
 pub const UNIT_DISCOVERY_INPUT_VERSION: &str = "mathscape-unit-discovery-input-1";
 pub const SOURCE_FACT_VERSION: &str = "mathscape-source-facts-1";
-pub const SOURCE_FACT_INPUT_VERSION: &str = "mathscape-source-facts-input-1";
+pub const SOURCE_FACT_INPUT_VERSION: &str = "mathscape-source-facts-input-2";
 pub const DISCOVERY_REPAIR_VERSION: &str = "mathscape-discovery-repair-1";
 pub const STAGED_DISCOVERY_RESULT_VERSION: &str = "mathscape-discovery-result-1";
 
@@ -32,7 +32,11 @@ version!(
     "mathscape-unit-discovery-input-1"
 );
 version!(SourceFactVersion, "mathscape-source-facts-1");
-version!(SourceFactInputVersion, "mathscape-source-facts-input-1");
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum SourceFactInputVersion {
+    #[serde(rename = "mathscape-source-facts-input-2")]
+    V2,
+}
 version!(DiscoveryRepairVersion, "mathscape-discovery-repair-1");
 version!(DiscoveryResultVersion, "mathscape-discovery-result-1");
 
@@ -134,6 +138,8 @@ pub struct FactTask {
 pub struct SourceFactInput {
     pub version: SourceFactInputVersion,
     pub request_ref: String,
+    pub leading_gap: String,
+    pub boundary: StageBoundary,
     pub blocks: Vec<StageBlock>,
     pub units: Vec<FrozenUnitEntry>,
     pub tasks: Vec<FactTask>,

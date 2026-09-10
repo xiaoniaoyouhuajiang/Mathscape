@@ -7,4 +7,5 @@ orchestrator 请求构建接口和单次模型 Producer；结果持久化与接�
 
 分阶段发现 M1 已实现 [Unit Discovery v1](unit-discovery/v1/README.md)；
 [Source Facts v1](source-facts/v1/README.md) 已提供下一阶段使用的 DTO、Prompt、Schema 与
-preflight，完整事实发现编排属于 M2。Desktop 当前仍使用 Source Discovery v3。
+preflight。M2 已完成完整事实发现和 [有界修订](discovery-repair/v1/README.md)，详见
+[M2 实现](../docs/discovery-staged-m2.md)。Desktop 当前仍使用 Source Discovery v3。

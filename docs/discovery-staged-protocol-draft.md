@@ -1,9 +1,13 @@
 # 分阶段来源内容发现协议草案
 
-状态：M1（契约、定位基础与阶段 A）已实现；M2～M4 待实现。尚未替换当前 Desktop 的
+状态：M1、M2 已实现；M3～M4 待实现。尚未替换当前 Desktop 的
 DiscoveryProposal v3。日期：2026-09-10。
 本文定义下一版工作流的阶段、输入输出语义、交接条件与修订边界；字段名作为实现依据，最终
 JSON Schema 由 Rust DTO 生成。开发顺序见 [开发任务](discovery-staged-development-plan.md)。
+
+实施细节见 [M2 说明](discovery-staged-m2.md)。根据后续讨论，每个 B 批次保留完整授权选区
+及其连续顺序，任务只约束提取归属。B 输入升级为 mathscape-source-facts-input-2，增加
+leading_gap、boundary；首次输出事实契约仍为 mathscape-source-facts-1。
 
 ## 1. 目标与范围
 

@@ -47,7 +47,7 @@ impl Default for DiscoveryProducerLimits {
 
 /// Facts available only after a provider returned. Raw content and reasoning
 /// are deliberately excluded from this summary.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct DiscoveryResponseSummary {
     pub target: LlmResolvedTarget,
     pub finish_reason: Option<LlmFinishReason>,
@@ -58,7 +58,7 @@ pub struct DiscoveryResponseSummary {
 
 /// Persistence-neutral observation of one producer attempt. This is not a
 /// trust record and does not imply that a proposal was accepted or registered.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct DiscoveryRunSummary {
     pub task_kind: String,
     pub task_version: String,

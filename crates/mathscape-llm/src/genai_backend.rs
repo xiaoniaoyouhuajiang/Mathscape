@@ -179,6 +179,11 @@ impl GenaiBackend {
             }
         }
 
+        if stream_end.is_none() {
+            return Err(LlmError::Transport(
+                "stream ended without a terminal event".into(),
+            ));
+        }
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         from_genai_stream(
             &self.profile,

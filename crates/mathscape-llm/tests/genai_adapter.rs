@@ -247,6 +247,29 @@ async fn streaming_gateway_status_is_preserved_as_a_provider_error() {
 }
 
 #[tokio::test]
+async fn stream_eof_without_terminal_event_is_transport_failure_even_with_valid_json() {
+    let server = MockServer::start().await;
+    let sse = "data: {\"id\":\"cutoff\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"relay-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"{\\\"ok\\\":true}\"},\"finish_reason\":null}]}\n\n";
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse),
+        )
+        .mount(&server)
+        .await;
+    let backend = GenaiBackend::new(
+        profile(&server),
+        credentials(),
+        GenaiBackendOptions::default(),
+    )
+    .unwrap();
+    let error = backend.execute_stream(request()).await.unwrap_err();
+    assert_eq!(error.kind(), LlmErrorKind::Transport);
+}
+
+#[tokio::test]
 async fn rate_limit_is_classified_and_retry_after_is_preserved() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
