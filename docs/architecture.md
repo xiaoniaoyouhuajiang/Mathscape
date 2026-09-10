@@ -45,6 +45,10 @@ Desktop 的 Markdown 选区、活动调用与提案展示见
 内容发现结果如何经接受、来源登记进入图，再按需补充数学语义，见
 [`生成、登记与晋升草案`](discovery-registration-promotion-draft.md)；其中 Domain 修订尚未实施。
 
+下一版来源发现按“单元发现 → 固定单元表 → 标签、引用与关系发现”拆分，见
+[`分阶段发现协议草案`](discovery-staged-protocol-draft.md)及
+[`开发任务`](discovery-staged-development-plan.md)。当前运行仍使用 DiscoveryProposal v3。
+
 ## 初始里程碑
 
 导入 `epsilon-n-cesaro-v1` fixture，保存稳定 ID、来源定位和关系语义，通过统一校验，并能查询来源链与 R/D/T/X 邻域。

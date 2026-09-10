@@ -49,10 +49,14 @@ pub fn discovery_prompt_manifest() -> DiscoveryPromptManifest {
 /// closed, and internally tagged enum branches use anyOf with disjoint tags.
 /// Domain Deserialize remains backward-compatible with omitted optional fields.
 pub fn discovery_output_schema() -> Value {
+    output_schema_for::<DiscoveryProposal>()
+}
+
+pub(crate) fn output_schema_for<T: schemars::JsonSchema>() -> Value {
     let schema = SchemaSettings::draft2020_12()
         .for_serialize()
         .into_generator()
-        .into_root_schema_for::<DiscoveryProposal>();
+        .into_root_schema_for::<T>();
     let mut schema = serde_json::to_value(schema).expect("schema is serializable");
     normalize_tagged_unions(&mut schema);
     schema

@@ -4,6 +4,9 @@
 `mathscape-selector-intent-2`。v3 没有改变 quote 的 occurrence/prefix/suffix 语义；它收紧了
 来源标签和引用所需的证据精度。
 
+后续分阶段方案见 [分阶段发现协议草案](discovery-staged-protocol-draft.md)。该草案尚未实施，
+不改变本文的 v3 wire contract；当前与历史 v3 响应继续按本文规则解释。
+
 ## 数据路径
 
 ```text

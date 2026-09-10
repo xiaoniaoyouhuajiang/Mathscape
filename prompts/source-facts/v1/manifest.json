@@ -1,0 +1,10 @@
+{
+  "task_kind": "source-facts",
+  "pipeline_version": "mathscape-discovery-pipeline-2",
+  "input_version": "mathscape-source-facts-input-1",
+  "output_version": "mathscape-source-facts-1",
+  "prompt_revision": "1",
+  "schema_name": "source_facts_v1",
+  "max_output_tokens": 8192,
+  "max_response_bytes": 2097152
+}

@@ -85,7 +85,7 @@ impl DiscoveryRunSummary {
         }
     }
 
-    fn observe(&mut self, response: &LlmResponse) {
+    pub(crate) fn observe(&mut self, response: &LlmResponse) {
         self.response = Some(DiscoveryResponseSummary {
             target: response.target.clone(),
             finish_reason: response.finish_reason.clone(),
@@ -264,7 +264,9 @@ impl<'a> DiscoveryProducer<'a> {
     }
 }
 
-fn reject_finish_reason(reason: Option<&LlmFinishReason>) -> Option<DiscoveryProposalRejection> {
+pub(crate) fn reject_finish_reason(
+    reason: Option<&LlmFinishReason>,
+) -> Option<DiscoveryProposalRejection> {
     match reason {
         None | Some(LlmFinishReason::Completed { .. } | LlmFinishReason::StopSequence { .. }) => {
             None
@@ -281,7 +283,7 @@ fn reject_finish_reason(reason: Option<&LlmFinishReason>) -> Option<DiscoveryPro
     }
 }
 
-fn collect_text(
+pub(crate) fn collect_text(
     response: &LlmResponse,
     limit: usize,
 ) -> Result<String, DiscoveryProposalRejection> {

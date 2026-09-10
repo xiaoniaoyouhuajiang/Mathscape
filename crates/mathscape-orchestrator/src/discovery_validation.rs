@@ -23,9 +23,9 @@ pub const DEFAULT_PROPOSAL_SERIALIZED_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DiscoveryValidationLimits {
-    max_items_per_collection: usize,
-    max_total_selectors: usize,
-    max_serialized_bytes: usize,
+    pub(crate) max_items_per_collection: usize,
+    pub(crate) max_total_selectors: usize,
+    pub(crate) max_serialized_bytes: usize,
 }
 
 impl DiscoveryValidationLimits {
@@ -106,7 +106,7 @@ impl DiscoveryValidationReport {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ResolvedDiscoverySelector {
     selector: DiscoverySelector,
     range: TextByteRange,
@@ -346,14 +346,14 @@ fn quote_position(block: &AuthorizedBlock, anchor: &DiscoveryQuoteAnchor) -> Res
     Ok(block.source_range.start + position as u64)
 }
 
-struct AuthorizedRegion {
-    range: TextByteRange,
+pub(crate) struct AuthorizedRegion {
+    pub(crate) range: TextByteRange,
     text: String,
     blocks: Vec<AuthorizedBlock>,
 }
 
 impl AuthorizedRegion {
-    fn text_in(&self, range: &TextByteRange) -> Option<&str> {
+    pub(crate) fn text_in(&self, range: &TextByteRange) -> Option<&str> {
         if range.start < self.range.start || range.end > self.range.end || range.start > range.end {
             return None;
         }
@@ -362,7 +362,10 @@ impl AuthorizedRegion {
         self.text.get(start..end)
     }
 
-    fn resolve(&self, selector: &DiscoverySelector) -> Result<ResolvedDiscoverySelector, String> {
+    pub(crate) fn resolve(
+        &self,
+        selector: &DiscoverySelector,
+    ) -> Result<ResolvedDiscoverySelector, String> {
         let find = |id: &str| {
             self.blocks
                 .iter()
@@ -554,7 +557,7 @@ fn nonblank(value: &str, path: &str, diagnostics: &mut Vec<DiscoveryDiagnostic>)
     }
 }
 
-fn valid_temp_id(value: &str) -> bool {
+pub(crate) fn valid_temp_id(value: &str) -> bool {
     value.len() <= 64
         && value
             .bytes()
@@ -606,7 +609,7 @@ fn resolve_many(
     resolved
 }
 
-fn relation_types_valid(
+pub(crate) fn relation_types_valid(
     relation: DiscoveryRelationKind,
     source: DiscoveryUnitKind,
     target: DiscoveryUnitKind,
@@ -629,7 +632,7 @@ fn relation_types_valid(
     }
 }
 
-fn is_ancestor(parent_by_id: &HashMap<&str, &str>, ancestor: &str, child: &str) -> bool {
+pub(crate) fn is_ancestor(parent_by_id: &HashMap<&str, &str>, ancestor: &str, child: &str) -> bool {
     let mut current = child;
     let mut visited = HashSet::new();
     while let Some(parent) = parent_by_id.get(current).copied() {
@@ -651,17 +654,14 @@ fn units_overlap(a: &[ResolvedDiscoverySelector], b: &[ResolvedDiscoverySelector
     })
 }
 
-/// Validates an untrusted producer proposal against the exact requested region.
-/// A successful value contains normalized byte ranges but grants no map authority.
-pub fn validate_discovery_proposal(
+pub(crate) fn authorize_discovery_input(
     input: &DiscoveryInput,
-    proposal: DiscoveryProposal,
-    limits: DiscoveryValidationLimits,
-) -> Result<ValidatedDiscoveryProposal, DiscoveryValidationReport> {
-    let mut diagnostics = Vec::new();
+    diagnostics: &mut Vec<DiscoveryDiagnostic>,
+) -> Option<AuthorizedRegion> {
+    let initial_errors = diagnostics.len();
     if input.version != DISCOVERY_INPUT_VERSION {
         diagnostic(
-            &mut diagnostics,
+            diagnostics,
             DiscoveryValidationCode::InputVersion,
             "input.version",
             "验证器只接受当前 DiscoveryInput 版本",
@@ -669,7 +669,7 @@ pub fn validate_discovery_proposal(
     }
     if input.snapshot.anchor_scheme != MARKDOWN_ANCHOR_SCHEME || !input.context.is_empty() {
         diagnostic(
-            &mut diagnostics,
+            diagnostics,
             DiscoveryValidationCode::InputIntegrity,
             "input",
             "当前输入必须使用已知 Markdown 锚点方案且 context 为空",
@@ -677,7 +677,7 @@ pub fn validate_discovery_proposal(
     }
     if input.boundary.at_document_start != (input.requested.source_range.start == 0) {
         diagnostic(
-            &mut diagnostics,
+            diagnostics,
             DiscoveryValidationCode::InputIntegrity,
             "input.boundary.at_document_start",
             "文档起点标记与 requested 范围不一致",
@@ -688,13 +688,28 @@ pub fn validate_discovery_proposal(
         || input.fingerprint != discovery_input_fingerprint(input)
     {
         diagnostic(
-            &mut diagnostics,
+            diagnostics,
             DiscoveryValidationCode::InputIntegrity,
             "input.fingerprint",
             "DiscoveryInput 指纹与可见内容不一致",
         );
     }
-    let authorized = validate_region(&input.requested, "input.requested", &mut diagnostics);
+    let authorized = validate_region(&input.requested, "input.requested", diagnostics);
+    if diagnostics.len() != initial_errors {
+        return None;
+    }
+    authorized
+}
+
+/// Validates an untrusted producer proposal against the exact requested region.
+/// A successful value contains normalized byte ranges but grants no map authority.
+pub fn validate_discovery_proposal(
+    input: &DiscoveryInput,
+    proposal: DiscoveryProposal,
+    limits: DiscoveryValidationLimits,
+) -> Result<ValidatedDiscoveryProposal, DiscoveryValidationReport> {
+    let mut diagnostics = Vec::new();
+    let authorized = authorize_discovery_input(input, &mut diagnostics);
 
     if proposal.input_fingerprint != input.fingerprint {
         diagnostic(

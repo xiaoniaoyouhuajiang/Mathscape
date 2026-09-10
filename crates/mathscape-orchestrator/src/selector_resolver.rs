@@ -216,6 +216,22 @@ impl SelectorResolver {
         &self.bindings
     }
 
+    /// Resolve one locator without manufacturing a whole DiscoveryProposal.
+    pub fn resolve_selector(
+        &self,
+        mut selector: DiscoverySelector,
+        path: &str,
+    ) -> Result<(DiscoverySelector, Vec<SelectorRewrite>), SelectorResolutionReport> {
+        let mut diagnostics = Vec::new();
+        let mut rewrites = Vec::new();
+        self.resolve_one(&mut selector, path, &mut diagnostics, &mut rewrites);
+        if diagnostics.is_empty() {
+            Ok((selector, rewrites))
+        } else {
+            Err(SelectorResolutionReport { diagnostics })
+        }
+    }
+
     pub fn model_input(&self, input: &DiscoveryInput) -> DiscoveryModelInput {
         DiscoveryModelInput {
             version: DISCOVERY_MODEL_INPUT_VERSION.into(),
@@ -632,17 +648,7 @@ fn resolve_anchor(
         }
     }
 
-    let exact = overlapping_matches(&binding.text, &anchor.quote)
-        .into_iter()
-        .map(|start| (start, start + anchor.quote.len()))
-        .collect::<Vec<_>>();
-    let (matches, normalized) = if exact.is_empty() {
-        let source = normalize_locator_text(&binding.text, true);
-        let wanted = normalize_locator_text(strip_outer_math_delimiters(&anchor.quote), false);
-        (normalized_matches(&source, &wanted.chars), true)
-    } else {
-        (exact, false)
-    };
+    let (matches, normalized) = locator_matches(&binding.text, &anchor.quote);
     if matches.is_empty() {
         return Err(SelectorResolutionDiagnostic {
             code: SelectorResolutionCode::QuoteNotFound,
@@ -743,6 +749,20 @@ fn normalized_string(text: &str) -> String {
         .chars
         .into_iter()
         .collect()
+}
+
+/// Shared matching policy for v3 quotes and staged single occurrences.
+pub(crate) fn locator_matches(text: &str, quote: &str) -> (Vec<(usize, usize)>, bool) {
+    let exact = overlapping_matches(text, quote)
+        .into_iter()
+        .map(|start| (start, start + quote.len()))
+        .collect::<Vec<_>>();
+    if !exact.is_empty() {
+        return (exact, false);
+    }
+    let source = normalize_locator_text(text, true);
+    let wanted = normalize_locator_text(strip_outer_math_delimiters(quote), false);
+    (normalized_matches(&source, &wanted.chars), true)
 }
 
 fn overlapping_matches(text: &str, needle: &str) -> Vec<usize> {
@@ -858,13 +878,12 @@ fn normalized_matches(source: &NormalizedLocatorText, wanted: &[char]) -> Vec<(u
         .chars
         .windows(wanted.len())
         .enumerate()
-        .filter_map(|(index, window)| {
-            (window == wanted).then(|| {
-                (
-                    source.source_spans[index].0,
-                    source.source_spans[index + wanted.len() - 1].1,
-                )
-            })
+        .filter(|(_, window)| *window == wanted)
+        .map(|(index, _)| {
+            (
+                source.source_spans[index].0,
+                source.source_spans[index + wanted.len() - 1].1,
+            )
         })
         .collect()
 }

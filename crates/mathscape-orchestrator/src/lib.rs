@@ -4,10 +4,17 @@ mod discovery_input;
 mod discovery_producer;
 mod discovery_prompt;
 mod discovery_validation;
+mod fact_preflight;
 mod markdown_anchors;
 mod marker_promotion;
+mod occurrence_resolver;
 mod selection_plan;
 mod selector_resolver;
+mod unit_discovery;
+
+pub use fact_preflight::preflight_source_facts;
+pub use occurrence_resolver::*;
+pub use unit_discovery::*;
 
 pub use discovery_input::{
     DEFAULT_DISCOVERY_INPUT_BLOCKS, DEFAULT_DISCOVERY_INPUT_BYTES, DiscoveryInputError,

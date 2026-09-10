@@ -1,0 +1,47 @@
+{
+  "version": "mathscape-unit-discovery-1",
+  "request_ref": "a1",
+  "units": [
+    {
+      "ref": "u1",
+      "unit_kind": "statement",
+      "display_title": "常数列收敛",
+      "selectors": [
+        {
+          "kind": "block_range",
+          "first": "b1",
+          "last": "b1"
+        }
+      ],
+      "parent": null,
+      "completeness": "complete"
+    },
+    {
+      "ref": "u2",
+      "unit_kind": "proof",
+      "display_title": "常数列收敛的证明",
+      "selectors": [
+        {
+          "kind": "block_range",
+          "first": "b2",
+          "last": "b3"
+        }
+      ],
+      "parent": "u1",
+      "completeness": "complete"
+    }
+  ],
+  "issues": [],
+  "coverage": [
+    {
+      "selector": {
+        "kind": "block_range",
+        "first": "b1",
+        "last": "b3"
+      },
+      "disposition": {
+        "status": "processed"
+      }
+    }
+  ]
+}

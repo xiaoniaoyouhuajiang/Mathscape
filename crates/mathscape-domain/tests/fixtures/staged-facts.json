@@ -1,0 +1,73 @@
+{
+  "version": "mathscape-source-facts-1",
+  "request_ref": "f1",
+  "tasks": [
+    {
+      "task_ref": "t1",
+      "disposition": {
+        "status": "processed"
+      },
+      "source_labels": [
+        {
+          "ref": "m1",
+          "anchor": {
+            "kind": "text_occurrence",
+            "block": "b1",
+            "text": "1",
+            "occurrence": null
+          }
+        }
+      ],
+      "source_title": null,
+      "references": [],
+      "relations": [],
+      "issues": []
+    },
+    {
+      "task_ref": "t2",
+      "disposition": {
+        "status": "processed"
+      },
+      "source_labels": [],
+      "source_title": null,
+      "references": [
+        {
+          "ref": "r1",
+          "anchor": {
+            "kind": "text_occurrence",
+            "block": "b3",
+            "text": "定义 2",
+            "occurrence": 1
+          },
+          "target_hint": null
+        },
+        {
+          "ref": "r2",
+          "anchor": {
+            "kind": "text_occurrence",
+            "block": "b3",
+            "text": "定义 2",
+            "occurrence": 2
+          },
+          "target_hint": null
+        }
+      ],
+      "relations": [
+        {
+          "ref": "e1",
+          "relation": "proves",
+          "target": "u1",
+          "evidence": [
+            {
+              "kind": "block_range",
+              "first": "b2",
+              "last": "b3"
+            }
+          ],
+          "basis": "原文紧随命题给出证明并得出结论。"
+        }
+      ],
+      "issues": []
+    }
+  ]
+}
