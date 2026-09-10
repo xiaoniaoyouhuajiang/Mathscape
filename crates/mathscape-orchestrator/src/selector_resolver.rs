@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use mathscape_domain::{
     ContentHash, DiscoveryInput, DiscoveryInputBoundary, DiscoveryInputRegion,
-    DiscoveryInputSegment, DiscoveryProposal, DiscoverySelector,
+    DiscoveryInputSegment, DiscoveryProposal, DiscoveryQuoteAnchor, DiscoveryQuoteSelector,
+    DiscoverySelector,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -78,6 +79,7 @@ pub enum SelectorResolutionCode {
     UnknownBlockRef,
     QuoteNotFound,
     AmbiguousQuote,
+    InvalidDisambiguator,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -105,6 +107,7 @@ impl SelectorResolutionDiagnostic {
 pub enum SelectorRewriteKind {
     BlockHandle,
     SafeQuoteNormalization,
+    OccurrenceBinding,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -236,6 +239,14 @@ impl SelectorResolver {
         let mut rewrites = Vec::new();
 
         for (unit_index, unit) in proposal.units.iter_mut().enumerate() {
+            for (label_index, label) in unit.source_labels.iter_mut().enumerate() {
+                self.resolve_quote_one(
+                    &mut label.selector,
+                    &format!("proposal.units[{unit_index}].source_labels[{label_index}].selector"),
+                    &mut diagnostics,
+                    &mut rewrites,
+                );
+            }
             self.resolve_many(
                 &mut unit.selectors,
                 &format!("proposal.units[{unit_index}].selectors"),
@@ -252,7 +263,7 @@ impl SelectorResolver {
             );
         }
         for (reference_index, reference) in proposal.references.iter_mut().enumerate() {
-            self.resolve_one(
+            self.resolve_quote_one(
                 &mut reference.selector,
                 &format!("proposal.references[{reference_index}].selector"),
                 &mut diagnostics,
@@ -326,6 +337,19 @@ impl SelectorResolver {
         }
     }
 
+    fn resolve_quote_one(
+        &self,
+        selector: &mut DiscoveryQuoteSelector,
+        path: &str,
+        diagnostics: &mut Vec<SelectorResolutionDiagnostic>,
+        rewrites: &mut Vec<SelectorRewrite>,
+    ) {
+        let mut general = DiscoverySelector::from(selector.clone());
+        self.resolve_one(&mut general, path, diagnostics, rewrites);
+        *selector = DiscoveryQuoteSelector::try_from(general)
+            .expect("a quote-only selector remains quote_range during resolution");
+    }
+
     fn resolve_one(
         &self,
         selector: &mut DiscoverySelector,
@@ -355,9 +379,9 @@ impl SelectorResolver {
             }
             DiscoverySelector::QuoteRange {
                 first,
-                start_quote,
+                start,
                 last,
-                end_quote,
+                end,
             } => {
                 let first_binding = self.resolve_binding(first, &format!("{path}.first"));
                 let last_binding = self.resolve_binding(last, &format!("{path}.last"));
@@ -374,15 +398,14 @@ impl SelectorResolver {
                     }
                 };
 
-                let same_quote =
-                    first_binding.block_id == last_binding.block_id && start_quote == end_quote;
-                if same_quote {
-                    match resolve_quote(first_binding, start_quote, path) {
-                        Ok(resolved_quote) => DiscoverySelector::QuoteRange {
+                let same_anchor = first_binding.block_id == last_binding.block_id && start == end;
+                if same_anchor {
+                    match resolve_anchor(first_binding, start, path) {
+                        Ok(resolved_anchor) => DiscoverySelector::QuoteRange {
                             first: first_binding.block_id.clone(),
-                            start_quote: resolved_quote.clone(),
+                            start: resolved_anchor.clone(),
                             last: last_binding.block_id.clone(),
-                            end_quote: resolved_quote,
+                            end: resolved_anchor,
                         },
                         Err(error) => {
                             diagnostics.push(error);
@@ -390,15 +413,14 @@ impl SelectorResolver {
                         }
                     }
                 } else {
-                    let start =
-                        resolve_quote(first_binding, start_quote, &format!("{path}.start_quote"));
-                    let end = resolve_quote(last_binding, end_quote, &format!("{path}.end_quote"));
+                    let start = resolve_anchor(first_binding, start, &format!("{path}.start"));
+                    let end = resolve_anchor(last_binding, end, &format!("{path}.end"));
                     match (start, end) {
-                        (Ok(start_quote), Ok(end_quote)) => DiscoverySelector::QuoteRange {
+                        (Ok(start), Ok(end)) => DiscoverySelector::QuoteRange {
                             first: first_binding.block_id.clone(),
-                            start_quote,
+                            start,
                             last: last_binding.block_id.clone(),
-                            end_quote,
+                            end,
                         },
                         (start, end) => {
                             if let Err(error) = start {
@@ -488,15 +510,15 @@ fn record_selector_rewrites(
         (
             DiscoverySelector::QuoteRange {
                 first: old_first,
-                start_quote: old_start,
+                start: old_start,
                 last: old_last,
-                end_quote: old_end,
+                end: old_end,
             },
             DiscoverySelector::QuoteRange {
                 first: new_first,
-                start_quote: new_start,
+                start: new_start,
                 last: new_last,
-                end_quote: new_end,
+                end: new_end,
             },
         ) => {
             record_rewrite(
@@ -515,20 +537,48 @@ fn record_selector_rewrites(
             );
             record_rewrite(
                 SelectorRewriteKind::SafeQuoteNormalization,
-                &format!("{path}.start_quote"),
-                old_start,
-                new_start,
+                &format!("{path}.start.quote"),
+                &old_start.quote,
+                &new_start.quote,
+                rewrites,
+            );
+            record_optional_u32_rewrite(
+                &format!("{path}.start.occurrence"),
+                old_start.occurrence,
+                new_start.occurrence,
+                rewrites,
+            );
+            record_optional_u32_rewrite(
+                &format!("{path}.end.occurrence"),
+                old_end.occurrence,
+                new_end.occurrence,
                 rewrites,
             );
             record_rewrite(
                 SelectorRewriteKind::SafeQuoteNormalization,
-                &format!("{path}.end_quote"),
-                old_end,
-                new_end,
+                &format!("{path}.end.quote"),
+                &old_end.quote,
+                &new_end.quote,
                 rewrites,
             );
         }
         _ => unreachable!("selector kind is preserved during resolution"),
+    }
+}
+
+fn record_optional_u32_rewrite(
+    path: &str,
+    original: Option<u32>,
+    resolved: Option<u32>,
+    rewrites: &mut Vec<SelectorRewrite>,
+) {
+    if original != resolved {
+        rewrites.push(SelectorRewrite {
+            kind: SelectorRewriteKind::OccurrenceBinding,
+            path: path.into(),
+            original: original.map_or_else(|| "null".into(), |value| value.to_string()),
+            resolved: resolved.map_or_else(|| "null".into(), |value| value.to_string()),
+        });
     }
 }
 
@@ -549,55 +599,150 @@ fn record_rewrite(
     }
 }
 
-fn resolve_quote(
+pub(crate) const MAX_DISAMBIGUATOR_CHARACTERS: usize = 256;
+
+fn resolve_anchor(
     binding: &SelectorBinding,
-    quote: &str,
+    anchor: &DiscoveryQuoteAnchor,
     path: &str,
-) -> Result<String, SelectorResolutionDiagnostic> {
-    if quote.is_empty() {
+) -> Result<DiscoveryQuoteAnchor, SelectorResolutionDiagnostic> {
+    if anchor.quote.is_empty() {
         return Err(SelectorResolutionDiagnostic {
             code: SelectorResolutionCode::QuoteNotFound,
-            path: path.into(),
+            path: format!("{path}.quote"),
             message: "quote 不能为空".into(),
         });
     }
-    let exact = overlapping_matches(&binding.text, quote);
-    match exact.as_slice() {
-        [start] => return Ok(binding.text[*start..*start + quote.len()].to_owned()),
-        [_, ..] => {
+    if anchor.occurrence == Some(0) {
+        return Err(SelectorResolutionDiagnostic {
+            code: SelectorResolutionCode::InvalidDisambiguator,
+            path: format!("{path}.occurrence"),
+            message: "occurrence 从 1 开始，不能为 0".into(),
+        });
+    }
+    for (name, value) in [("prefix", &anchor.prefix), ("suffix", &anchor.suffix)] {
+        if let Some(value) = value
+            && (value.trim().is_empty() || value.chars().count() > MAX_DISAMBIGUATOR_CHARACTERS)
+        {
             return Err(SelectorResolutionDiagnostic {
-                code: SelectorResolutionCode::AmbiguousQuote,
-                path: path.into(),
-                message: format!(
-                    "quote 在 {} 中精确出现 {} 次，需要更长的原文定位",
-                    binding.handle,
-                    exact.len()
-                ),
+                code: SelectorResolutionCode::InvalidDisambiguator,
+                path: format!("{path}.{name}"),
+                message: format!("{name} 必须为 1..={MAX_DISAMBIGUATOR_CHARACTERS} 个字符"),
             });
         }
-        [] => {}
     }
 
-    let source = normalize_locator_text(&binding.text, true);
-    let wanted = normalize_locator_text(strip_outer_math_delimiters(quote), false);
-    let matches = normalized_matches(&source, &wanted.chars);
-    match matches.as_slice() {
-        [(start, end)] => Ok(binding.text[*start..*end].to_owned()),
-        [_, ..] => Err(SelectorResolutionDiagnostic {
-            code: SelectorResolutionCode::AmbiguousQuote,
-            path: path.into(),
-            message: format!(
-                "quote 经安全排版规范化后在 {} 中出现 {} 次，需要更长的原文定位",
-                binding.handle,
-                matches.len()
-            ),
-        }),
-        [] => Err(SelectorResolutionDiagnostic {
+    let exact = overlapping_matches(&binding.text, &anchor.quote)
+        .into_iter()
+        .map(|start| (start, start + anchor.quote.len()))
+        .collect::<Vec<_>>();
+    let (matches, normalized) = if exact.is_empty() {
+        let source = normalize_locator_text(&binding.text, true);
+        let wanted = normalize_locator_text(strip_outer_math_delimiters(&anchor.quote), false);
+        (normalized_matches(&source, &wanted.chars), true)
+    } else {
+        (exact, false)
+    };
+    if matches.is_empty() {
+        return Err(SelectorResolutionDiagnostic {
             code: SelectorResolutionCode::QuoteNotFound,
-            path: path.into(),
+            path: format!("{path}.quote"),
             message: format!("quote 未在 {} 的可见文本中找到", binding.handle),
-        }),
+        });
     }
+
+    let selected = if let Some(occurrence) = anchor.occurrence {
+        let index = usize::try_from(occurrence - 1).unwrap_or(usize::MAX);
+        let Some(candidate) = matches.get(index).copied() else {
+            return Err(SelectorResolutionDiagnostic {
+                code: SelectorResolutionCode::InvalidDisambiguator,
+                path: format!("{path}.occurrence"),
+                message: format!(
+                    "occurrence={occurrence} 超出 {} 中的 {} 个候选",
+                    binding.handle,
+                    matches.len()
+                ),
+            });
+        };
+        if !context_matches(&binding.text, candidate, anchor) {
+            return Err(SelectorResolutionDiagnostic {
+                code: SelectorResolutionCode::InvalidDisambiguator,
+                path: path.into(),
+                message: "occurrence 指定的候选不满足 prefix/suffix".into(),
+            });
+        }
+        candidate
+    } else {
+        let filtered = matches
+            .iter()
+            .copied()
+            .filter(|candidate| context_matches(&binding.text, *candidate, anchor))
+            .collect::<Vec<_>>();
+        match filtered.as_slice() {
+            [candidate] => *candidate,
+            [] => {
+                return Err(SelectorResolutionDiagnostic {
+                    code: SelectorResolutionCode::QuoteNotFound,
+                    path: path.into(),
+                    message: format!("quote 的候选均不满足 {} 中的 prefix/suffix", binding.handle),
+                });
+            }
+            [_, ..] => {
+                return Err(SelectorResolutionDiagnostic {
+                    code: SelectorResolutionCode::AmbiguousQuote,
+                    path: path.into(),
+                    message: format!(
+                        "quote{}在 {} 中仍有 {} 个候选，需要 occurrence 或更强上下文",
+                        if normalized {
+                            "经安全规范化后"
+                        } else {
+                            ""
+                        },
+                        binding.handle,
+                        filtered.len()
+                    ),
+                });
+            }
+        }
+    };
+
+    let resolved_quote = binding.text[selected.0..selected.1].to_owned();
+    let resolved_occurrence = overlapping_matches(&binding.text, &resolved_quote)
+        .iter()
+        .position(|start| *start == selected.0)
+        .and_then(|index| u32::try_from(index + 1).ok())
+        .expect("the selected exact source substring is one of its own matches");
+    Ok(DiscoveryQuoteAnchor {
+        quote: resolved_quote,
+        occurrence: Some(resolved_occurrence),
+        prefix: anchor.prefix.clone(),
+        suffix: anchor.suffix.clone(),
+    })
+}
+
+pub(crate) fn context_matches(
+    text: &str,
+    candidate: (usize, usize),
+    anchor: &DiscoveryQuoteAnchor,
+) -> bool {
+    let prefix_matches = anchor.prefix.as_ref().is_none_or(|prefix| {
+        let source = normalized_string(&text[..candidate.0]);
+        let wanted = normalized_string(prefix);
+        source.trim_end().ends_with(wanted.trim())
+    });
+    let suffix_matches = anchor.suffix.as_ref().is_none_or(|suffix| {
+        let source = normalized_string(&text[candidate.1..]);
+        let wanted = normalized_string(suffix);
+        source.trim_start().starts_with(wanted.trim())
+    });
+    prefix_matches && suffix_matches
+}
+
+fn normalized_string(text: &str) -> String {
+    normalize_locator_text(text, false)
+        .chars
+        .into_iter()
+        .collect()
 }
 
 fn overlapping_matches(text: &str, needle: &str) -> Vec<usize> {

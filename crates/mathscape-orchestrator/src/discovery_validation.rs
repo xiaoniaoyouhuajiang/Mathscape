@@ -3,15 +3,19 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use mathscape_domain::{
     ContentHash, DISCOVERY_INPUT_VERSION, DiscoveryContextRequest, DiscoveryCoverageDisposition,
     DiscoveryCoverageProposal, DiscoveryInput, DiscoveryInputRegion, DiscoveryInputSegment,
-    DiscoveryIssueKind, DiscoveryIssueProposal, DiscoveryProposal, DiscoveryReferenceProposal,
-    DiscoveryRelationKind, DiscoveryRelationProposal, DiscoverySelector, DiscoveryUnitKind,
+    DiscoveryIssueKind, DiscoveryIssueProposal, DiscoveryProposal, DiscoveryQuoteAnchor,
+    DiscoveryQuoteSelector, DiscoveryReferenceProposal, DiscoveryRelationKind,
+    DiscoveryRelationProposal, DiscoverySelector, DiscoverySourceLabel, DiscoveryUnitKind,
     DiscoveryUnitProposal, MARKDOWN_ANCHOR_SCHEME, TextByteRange, UnitCompleteness,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::discovery_input::discovery_input_fingerprint;
+use crate::{
+    discovery_input::discovery_input_fingerprint,
+    selector_resolver::{MAX_DISAMBIGUATOR_CHARACTERS, context_matches},
+};
 
 pub const DEFAULT_PROPOSAL_ITEMS_PER_COLLECTION: usize = 1_024;
 pub const DEFAULT_PROPOSAL_SELECTORS: usize = 4_096;
@@ -61,6 +65,7 @@ pub enum DiscoveryValidationCode {
     ParentCycle,
     InvalidSelector,
     InvalidRelation,
+    InvalidReference,
     InvalidEvidence,
     InvalidCompleteness,
     OverlappingUnits,
@@ -131,6 +136,7 @@ impl ResolvedDiscoverySelector {
 pub struct ValidatedDiscoveryUnit {
     proposal: DiscoveryUnitProposal,
     selectors: Vec<ResolvedDiscoverySelector>,
+    source_labels: Vec<ValidatedDiscoverySourceLabel>,
 }
 
 impl ValidatedDiscoveryUnit {
@@ -140,6 +146,26 @@ impl ValidatedDiscoveryUnit {
 
     pub fn selectors(&self) -> &[ResolvedDiscoverySelector] {
         &self.selectors
+    }
+
+    pub fn source_labels(&self) -> &[ValidatedDiscoverySourceLabel] {
+        &self.source_labels
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedDiscoverySourceLabel {
+    proposal: DiscoverySourceLabel,
+    selector: ResolvedDiscoverySelector,
+}
+
+impl ValidatedDiscoverySourceLabel {
+    pub fn proposal(&self) -> &DiscoverySourceLabel {
+        &self.proposal
+    }
+
+    pub fn selector(&self) -> &ResolvedDiscoverySelector {
+        &self.selector
     }
 }
 
@@ -262,6 +288,64 @@ struct AuthorizedBlock {
     text: String,
 }
 
+fn quote_occurrences(text: &str, quote: &str) -> Vec<usize> {
+    if quote.is_empty() {
+        return Vec::new();
+    }
+    let mut positions = Vec::new();
+    let mut cursor = 0;
+    while cursor <= text.len().saturating_sub(quote.len()) {
+        let Some(relative) = text[cursor..].find(quote) else {
+            break;
+        };
+        let start = cursor + relative;
+        positions.push(start);
+        cursor = start
+            + text[start..]
+                .chars()
+                .next()
+                .expect("nonempty quote match")
+                .len_utf8();
+    }
+    positions
+}
+
+fn quote_position(block: &AuthorizedBlock, anchor: &DiscoveryQuoteAnchor) -> Result<u64, String> {
+    if anchor.quote.is_empty() {
+        return Err("quote 不能为空".into());
+    }
+    let positions = quote_occurrences(&block.text, &anchor.quote);
+    let position = match anchor.occurrence {
+        Some(0) => return Err("occurrence 从 1 开始，不能为 0".into()),
+        Some(occurrence) => positions
+            .get(usize::try_from(occurrence - 1).unwrap_or(usize::MAX))
+            .copied()
+            .ok_or_else(|| "occurrence 超出 quote 在指定块中的出现次数".to_owned())?,
+        None => match positions.as_slice() {
+            [position] => *position,
+            [] => return Err("quote 未在指定块的可见文本中出现".into()),
+            [_, ..] => return Err("quote 在指定块中不唯一且没有 occurrence".into()),
+        },
+    };
+    for (name, value) in [("prefix", &anchor.prefix), ("suffix", &anchor.suffix)] {
+        if let Some(value) = value
+            && (value.trim().is_empty() || value.chars().count() > MAX_DISAMBIGUATOR_CHARACTERS)
+        {
+            return Err(format!(
+                "{name} 必须为 1..={MAX_DISAMBIGUATOR_CHARACTERS} 个字符"
+            ));
+        }
+    }
+    if !context_matches(
+        &block.text,
+        (position, position + anchor.quote.len()),
+        anchor,
+    ) {
+        return Err("occurrence 指定位置不满足 prefix/suffix".into());
+    }
+    Ok(block.source_range.start + position as u64)
+}
+
 struct AuthorizedRegion {
     range: TextByteRange,
     text: String,
@@ -285,25 +369,6 @@ impl AuthorizedRegion {
                 .position(|block| block.id == id)
                 .ok_or_else(|| format!("块 {id} 不在 requested 授权区域中"))
         };
-        let quote_position = |block: &AuthorizedBlock, quote: &str| -> Result<u64, String> {
-            if quote.is_empty() {
-                return Err("quote 不能为空".into());
-            }
-            let Some(first) = block.text.find(quote) else {
-                return Err("quote 未在指定块的可见文本中出现".into());
-            };
-            let next = first
-                + block.text[first..]
-                    .chars()
-                    .next()
-                    .expect("nonempty quote")
-                    .len_utf8();
-            if block.text[next..].contains(quote) {
-                return Err("quote 在指定块的可见文本中并不唯一".into());
-            }
-            Ok(block.source_range.start + first as u64)
-        };
-
         let (start, end) = match selector {
             DiscoverySelector::BlockRange { first, last } => {
                 let (first_index, last_index) = (find(first)?, find(last)?);
@@ -323,18 +388,18 @@ impl AuthorizedRegion {
             }
             DiscoverySelector::QuoteRange {
                 first,
-                start_quote,
+                start: start_anchor,
                 last,
-                end_quote,
+                end: end_anchor,
             } => {
                 let (first_index, last_index) = (find(first)?, find(last)?);
                 if first_index > last_index {
                     return Err("quote_range 的终点块位于起点块之前".into());
                 }
-                let start = quote_position(&self.blocks[first_index], start_quote)?;
-                let end_start = quote_position(&self.blocks[last_index], end_quote)?;
-                let end = end_start + end_quote.len() as u64;
-                if end_start < start || end < start + start_quote.len() as u64 {
+                let start = quote_position(&self.blocks[first_index], start_anchor)?;
+                let end_start = quote_position(&self.blocks[last_index], end_anchor)?;
+                let end = end_start + end_anchor.quote.len() as u64;
+                if end_start < start || end < start + start_anchor.quote.len() as u64 {
                     return Err("quote_range 的终点位于起点之前".into());
                 }
                 (start, end)
@@ -360,6 +425,13 @@ impl AuthorizedRegion {
             block_ids,
             text,
         })
+    }
+
+    fn resolve_quote(
+        &self,
+        selector: &DiscoveryQuoteSelector,
+    ) -> Result<ResolvedDiscoverySelector, String> {
+        self.resolve(&DiscoverySelector::from(selector.clone()))
     }
 }
 
@@ -655,7 +727,7 @@ pub fn validate_discovery_proposal(
     let selector_count = proposal
         .units
         .iter()
-        .map(|unit| unit.selectors.len())
+        .map(|unit| unit.selectors.len() + unit.source_labels.len())
         .sum::<usize>()
         + proposal
             .relations
@@ -698,6 +770,7 @@ pub fn validate_discovery_proposal(
     };
     let mut unit_index = HashMap::new();
     let mut resolved_units = Vec::with_capacity(proposal.units.len());
+    let mut resolved_source_labels = Vec::with_capacity(proposal.units.len());
     for (index, unit) in proposal.units.iter().enumerate() {
         let path = format!("proposal.units[{index}]");
         if !valid_temp_id(&unit.temp_id) {
@@ -717,7 +790,6 @@ pub fn validate_discovery_proposal(
             );
         }
         for (name, value) in [
-            ("source_label", unit.source_label.as_deref()),
             ("source_title", unit.source_title.as_deref()),
             ("display_title", unit.display_title.as_deref()),
         ] {
@@ -743,22 +815,57 @@ pub fn validate_discovery_proposal(
             .iter()
             .map(|selector| selector.text.as_str())
             .collect::<String>();
-        for (name, value) in [
-            ("source_label", unit.source_label.as_deref()),
-            ("source_title", unit.source_title.as_deref()),
-        ] {
-            if let Some(value) = value
-                && !value.trim().is_empty()
-                && !unit_text.contains(value)
-            {
-                diagnostic(
-                    &mut diagnostics,
-                    DiscoveryValidationCode::InvalidEvidence,
-                    format!("{path}.{name}"),
-                    "声明为原文的字段没有出现在单元选择器文本中",
-                );
+        if let Some(value) = unit.source_title.as_deref()
+            && !value.trim().is_empty()
+            && !unit_text.contains(value)
+        {
+            diagnostic(
+                &mut diagnostics,
+                DiscoveryValidationCode::InvalidEvidence,
+                format!("{path}.source_title"),
+                "声明为原文的字段没有出现在单元选择器文本中",
+            );
+        }
+        let mut labels = Vec::with_capacity(unit.source_labels.len());
+        for (label_index, label) in unit.source_labels.iter().enumerate() {
+            let label_path = format!("{path}.source_labels[{label_index}]");
+            nonblank(
+                &label.surface_form,
+                &format!("{label_path}.surface_form"),
+                &mut diagnostics,
+            );
+            match authorized.resolve_quote(&label.selector) {
+                Ok(selector) => {
+                    if !unit_contains(&resolved, &selector) {
+                        diagnostic(
+                            &mut diagnostics,
+                            DiscoveryValidationCode::InvalidEvidence,
+                            format!("{label_path}.selector"),
+                            "来源标签必须位于所属单元中",
+                        );
+                    }
+                    if !label.surface_form.trim().is_empty() && selector.text != label.surface_form
+                    {
+                        diagnostic(
+                            &mut diagnostics,
+                            DiscoveryValidationCode::InvalidEvidence,
+                            format!("{label_path}.surface_form"),
+                            "来源标签必须与其精确 quote selector 文本完全一致",
+                        );
+                    }
+                    labels.push(selector);
+                }
+                Err(message) => {
+                    diagnostic(
+                        &mut diagnostics,
+                        DiscoveryValidationCode::InvalidSelector,
+                        format!("{label_path}.selector"),
+                        message,
+                    );
+                }
             }
         }
+        resolved_source_labels.push(labels);
         resolved_units.push(resolved);
     }
 
@@ -912,17 +1019,24 @@ pub fn validate_discovery_proposal(
                 "引用者必须是已声明单元",
             );
         }
-        if let Some(target) = reference.target.as_deref()
-            && !unit_index.contains_key(target)
-        {
-            diagnostic(
-                &mut diagnostics,
-                DiscoveryValidationCode::UnknownUnit,
-                format!("{path}.target"),
-                "候选引用目标必须是本提案中的单元",
-            );
+        if let Some(target) = reference.target.as_deref() {
+            if target == reference.source {
+                diagnostic(
+                    &mut diagnostics,
+                    DiscoveryValidationCode::InvalidReference,
+                    format!("{path}.target"),
+                    "引用目标不能与引用者是同一个单元；没有独立目标时应填 null",
+                );
+            } else if !unit_index.contains_key(target) {
+                diagnostic(
+                    &mut diagnostics,
+                    DiscoveryValidationCode::UnknownUnit,
+                    format!("{path}.target"),
+                    "候选引用目标必须是本提案中的单元",
+                );
+            }
         }
-        let selector = match authorized.resolve(&reference.selector) {
+        let selector = match authorized.resolve_quote(&reference.selector) {
             Ok(selector) => selector,
             Err(message) => {
                 diagnostic(
@@ -944,14 +1058,12 @@ pub fn validate_discovery_proposal(
                 "引用出现位置必须位于引用者单元中",
             );
         }
-        if !reference.surface_form.trim().is_empty()
-            && !selector.text.contains(&reference.surface_form)
-        {
+        if !reference.surface_form.trim().is_empty() && selector.text != reference.surface_form {
             diagnostic(
                 &mut diagnostics,
                 DiscoveryValidationCode::InvalidEvidence,
                 format!("{path}.surface_form"),
-                "引用原文没有出现在选择器文本中",
+                "引用原文必须与其精确 quote selector 文本完全一致",
             );
         }
         resolved_references.push(Some(selector));
@@ -1185,9 +1297,20 @@ pub fn validate_discovery_proposal(
         .iter()
         .cloned()
         .zip(resolved_units)
-        .map(|(proposal, selectors)| ValidatedDiscoveryUnit {
-            proposal,
-            selectors,
+        .zip(resolved_source_labels)
+        .map(|((proposal, selectors), source_labels)| {
+            let source_labels = proposal
+                .source_labels
+                .iter()
+                .cloned()
+                .zip(source_labels)
+                .map(|(proposal, selector)| ValidatedDiscoverySourceLabel { proposal, selector })
+                .collect();
+            ValidatedDiscoveryUnit {
+                proposal,
+                selectors,
+                source_labels,
+            }
         })
         .collect();
     let relations = proposal

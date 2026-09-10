@@ -110,7 +110,7 @@ segment.clipped_start()/clipped_end() 计算；字节数和块数通过 region.u
 
 2026-09-08 精简删除了重复统计、裁切和前后存在性字段，输入契约由 v1 升为 v2，重新构建
 输入会生成新指纹。Markdown 分块版本与选区请求 v1 保持兼容；旧内存响应应重新获取，
-不复用旧输入指纹。提案输出类型见 [Discovery Proposal v1](discovery-proposal-v1.md)。
+不复用旧输入指纹。提案输出类型见 [Discovery Proposal v3](discovery-proposal-v3.md)。
 
 默认 producer 限制为 128 KiB 和 512 个相交物理块。超限会整体拒绝，绝不截断；未来批量
 处理应由显式分片/任务规划完成。`DiscoveryInput` 不携带 `admission`，因为审核或自动发布是

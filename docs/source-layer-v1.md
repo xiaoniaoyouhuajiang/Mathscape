@@ -82,8 +82,8 @@ and header kind.
 ## Deferred structures
 
 Discovery transport contracts are defined separately from canonical entities; see
-[`discovery-proposal-v1.md`](discovery-proposal-v1.md). Input v2 derives counts and
-clipping from segments instead of serializing duplicate fields. Proposal v1 is
+[`discovery-proposal-v3.md`](discovery-proposal-v3.md). Input v2 derives counts and
+clipping from segments instead of serializing duplicate fields. Proposal v3 is
 untrusted data and carries no Edition, DialectScope or TrustRecord. Discovery can
 be saved before contextualization; canonical SourceSemanticUnit prerequisites
 remain unchanged. SourceSpan support for Markdown-only locators remains pending.

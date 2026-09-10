@@ -48,7 +48,7 @@ interface ActiveDiscoveryTask {
 interface DiscoveryUnit {
   temp_id: string;
   unit_kind: string;
-  source_label: string | null;
+  source_labels: { surface_form: string; selector: unknown }[];
   source_title: string | null;
   display_title: string | null;
   selectors: unknown[];
@@ -403,7 +403,8 @@ export class MarkdownSelection {
       );
       const units = textElement("div", "discovery-units", "");
       for (const unit of proposal.units) {
-        const title = unit.source_label ?? unit.source_title ?? unit.display_title ?? unit.temp_id;
+        const labels = unit.source_labels.map(label => label.surface_form).join("、");
+        const title = labels || unit.source_title || unit.display_title || unit.temp_id;
         const card = textElement("article", "discovery-unit", "");
         card.append(
           textElement("strong", "", title),

@@ -2,7 +2,7 @@
 
 状态：讨论草案，未实现。内容发现的单次 Producer 已实现；本文提出其后来源层契约的修订，
 不表示当前 Domain 构造器或 SQLite 已经支持接受和登记。既有输入、提案和验证接口以
-[`discovery-proposal-v1.md`](discovery-proposal-v1.md) 为准；数学上下文、语义和对齐的上位模型见
+[`discovery-proposal-v3.md`](discovery-proposal-v3.md) 为准；数学上下文、语义和对齐的上位模型见
 工作区 [`EMIR 规范`](../../docs/rdtx/emir-source-semantics-alignment.md)。
 
 ## 1. 目标与基本决策

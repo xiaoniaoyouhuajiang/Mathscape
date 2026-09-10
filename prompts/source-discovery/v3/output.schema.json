@@ -1,0 +1,558 @@
+{
+  "$defs": {
+    "ContentHash": {
+      "pattern": "^sha256:[0-9a-fA-F]{64}$",
+      "type": "string"
+    },
+    "DiscoveryContextRequest": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "before",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "after",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "enclosing_unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "local_reference",
+              "type": "string"
+            },
+            "target_label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "target_label"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A requested source lookup, never permission to open arbitrary files or URLs.\nEmpty struct variants ensure Serde rejects extra fields even without payloads."
+    },
+    "DiscoveryCoverageDisposition": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "Producer claims it examined the region; not proof of exhaustive discovery.\nAn empty struct variant rejects unknown fields in this tagged object.",
+          "properties": {
+            "status": {
+              "const": "processed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Examined, but no unit is appropriate (e.g. a running header).",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "status": {
+              "const": "skipped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Not examined, for example because the output budget was exhausted.",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "status": {
+              "const": "unprocessed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DiscoveryCoverageProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/DiscoveryCoverageDisposition"
+        },
+        "selector": {
+          "$ref": "#/$defs/DiscoverySelector"
+        }
+      },
+      "required": [
+        "selector",
+        "disposition"
+      ],
+      "type": "object"
+    },
+    "DiscoveryIssueKind": {
+      "enum": [
+        "left_truncated",
+        "right_truncated",
+        "internally_missing",
+        "uncertain_boundary",
+        "uncertain_parent",
+        "ambiguous_reference",
+        "suspected_conversion_error",
+        "missing_context",
+        "uncertain_classification"
+      ],
+      "type": "string"
+    },
+    "DiscoveryIssueProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "context_request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiscoveryContextRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Attached to its issue so range, target and reason are not duplicated."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/DiscoverySelector"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/DiscoveryIssueKind"
+        },
+        "observation": {
+          "type": "string"
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "unit",
+        "evidence",
+        "observation",
+        "context_request"
+      ],
+      "type": "object"
+    },
+    "DiscoveryProposalVersion": {
+      "enum": [
+        "mathscape-discovery-proposal-3"
+      ],
+      "type": "string"
+    },
+    "DiscoveryQuoteAnchor": {
+      "additionalProperties": false,
+      "description": "One boundary intent inside a request-local block. `occurrence` is one-based\namong matches at the resolver's selected matching tier. Prefix and suffix\nconstrain a match but are not included in the resolved source range.",
+      "properties": {
+        "occurrence": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prefix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quote": {
+          "type": "string"
+        },
+        "suffix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "quote",
+        "occurrence",
+        "prefix",
+        "suffix"
+      ],
+      "type": "object"
+    },
+    "DiscoveryQuoteSelector": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "$ref": "#/$defs/DiscoveryQuoteAnchor"
+            },
+            "first": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "quote_range",
+              "type": "string"
+            },
+            "last": {
+              "type": "string"
+            },
+            "start": {
+              "$ref": "#/$defs/DiscoveryQuoteAnchor"
+            }
+          },
+          "required": [
+            "kind",
+            "first",
+            "start",
+            "last",
+            "end"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A source locator whose wire shape can only express `quote_range`. It is used\nwhere a whole Markdown block is too coarse to identify the claimed source\noccurrence, notably source labels and references."
+    },
+    "DiscoveryReferenceProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "selector": {
+          "$ref": "#/$defs/DiscoveryQuoteSelector"
+        },
+        "source": {
+          "type": "string"
+        },
+        "surface_form": {
+          "type": "string"
+        },
+        "target": {
+          "description": "Only a local candidate target, even if the proposal names it confidently.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "source",
+        "selector",
+        "surface_form",
+        "target_label",
+        "target"
+      ],
+      "type": "object"
+    },
+    "DiscoveryRelationKind": {
+      "enum": [
+        "proves",
+        "solves",
+        "hints",
+        "explains",
+        "cites",
+        "applies_method"
+      ],
+      "type": "string"
+    },
+    "DiscoveryRelationProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "description": "Short explanation of the source evidence; not a proof or certification.",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/DiscoverySelector"
+          },
+          "type": "array"
+        },
+        "relation": {
+          "$ref": "#/$defs/DiscoveryRelationKind"
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target",
+        "relation",
+        "evidence",
+        "basis"
+      ],
+      "type": "object"
+    },
+    "DiscoverySelector": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "first": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "block_range",
+              "type": "string"
+            },
+            "last": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "first",
+            "last"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "$ref": "#/$defs/DiscoveryQuoteAnchor"
+            },
+            "first": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "quote_range",
+              "type": "string"
+            },
+            "last": {
+              "type": "string"
+            },
+            "start": {
+              "$ref": "#/$defs/DiscoveryQuoteAnchor"
+            }
+          },
+          "required": [
+            "kind",
+            "first",
+            "start",
+            "last",
+            "end"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "References only blocks visible in DiscoveryInput. Whole-document authority is\nreserved for user selection; a producer must name explicit endpoints."
+    },
+    "DiscoverySourceLabel": {
+      "additionalProperties": false,
+      "description": "A verbatim label declared by the source, anchored to the exact occurrence\nthat labels this unit. Display-only ranges and summaries belong elsewhere.",
+      "properties": {
+        "selector": {
+          "$ref": "#/$defs/DiscoveryQuoteSelector"
+        },
+        "surface_form": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "surface_form",
+        "selector"
+      ],
+      "type": "object"
+    },
+    "DiscoveryUnitKind": {
+      "description": "Discovery excludes proof steps; proofs are first identified as whole units.",
+      "enum": [
+        "section",
+        "definition",
+        "statement",
+        "proof",
+        "problem",
+        "hint",
+        "solution",
+        "example",
+        "remark",
+        "method",
+        "notation",
+        "narrative"
+      ],
+      "type": "string"
+    },
+    "DiscoveryUnitProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "completeness": {
+          "$ref": "#/$defs/UnitCompleteness"
+        },
+        "display_title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "description": "Sole containment record; references another unit's temp_id in this proposal.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selectors": {
+          "items": {
+            "$ref": "#/$defs/DiscoverySelector"
+          },
+          "type": "array"
+        },
+        "source_labels": {
+          "items": {
+            "$ref": "#/$defs/DiscoverySourceLabel"
+          },
+          "type": "array"
+        },
+        "source_title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temp_id": {
+          "description": "Proposal-local handle, never a map StableId. Syntax/uniqueness checked later.",
+          "type": "string"
+        },
+        "unit_kind": {
+          "$ref": "#/$defs/DiscoveryUnitKind"
+        }
+      },
+      "required": [
+        "temp_id",
+        "unit_kind",
+        "source_labels",
+        "source_title",
+        "display_title",
+        "selectors",
+        "parent",
+        "completeness"
+      ],
+      "type": "object"
+    },
+    "UnitCompleteness": {
+      "enum": [
+        "complete",
+        "left_truncated",
+        "right_truncated",
+        "internally_missing",
+        "uncertain"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "coverage": {
+      "items": {
+        "$ref": "#/$defs/DiscoveryCoverageProposal"
+      },
+      "type": "array"
+    },
+    "input_fingerprint": {
+      "$ref": "#/$defs/ContentHash",
+      "description": "Echo DiscoveryInput.fingerprint; the model does not compute it."
+    },
+    "issues": {
+      "items": {
+        "$ref": "#/$defs/DiscoveryIssueProposal"
+      },
+      "type": "array"
+    },
+    "references": {
+      "items": {
+        "$ref": "#/$defs/DiscoveryReferenceProposal"
+      },
+      "type": "array"
+    },
+    "relations": {
+      "items": {
+        "$ref": "#/$defs/DiscoveryRelationProposal"
+      },
+      "type": "array"
+    },
+    "units": {
+      "items": {
+        "$ref": "#/$defs/DiscoveryUnitProposal"
+      },
+      "type": "array"
+    },
+    "version": {
+      "$ref": "#/$defs/DiscoveryProposalVersion"
+    }
+  },
+  "required": [
+    "version",
+    "input_fingerprint",
+    "units",
+    "relations",
+    "references",
+    "issues",
+    "coverage"
+  ],
+  "title": "DiscoveryProposal",
+  "type": "object"
+}

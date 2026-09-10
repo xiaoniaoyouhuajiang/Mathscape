@@ -114,7 +114,7 @@ SQLite schema v3 已增加前两类表，运行事实仍待实现：
 
 ## 下一步接入顺序
 
-1. DiscoveryProposal 的 `JsonSchema`、版本化 [Prompt 包](../prompts/source-discovery/v1/README.md)、
+1. DiscoveryProposal 的 `JsonSchema`、版本化 [Prompt 包](../prompts/source-discovery/v3/README.md)、
    请求构建与[单次 Producer](discovery-producer-v1.md) 已完成。
 2. `ScriptedLlmBackend` 已覆盖离线集成测试，[Desktop](desktop-discovery-v1.md)也已接通真实
    backend 调用及有效提案/结构化失败展示；下一步持久化运行与提案。

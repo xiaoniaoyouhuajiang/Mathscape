@@ -4,7 +4,7 @@ use mathscape_domain::{
 };
 use mathscape_orchestrator::{
     DiscoveryInputError, DiscoveryInputLimits, anchor_markdown, build_discovery_input,
-    resolve_selection,
+    resolve_selection, validate_discovery_proposal,
 };
 
 fn document(source: &str) -> AnchoredMarkdown {
@@ -200,26 +200,8 @@ fn proposal_example_uses_real_input_anchors_without_model_offsets() {
     value["input_fingerprint"] = serde_json::to_value(&input.fingerprint).unwrap();
     let proposal: mathscape_domain::DiscoveryProposal = serde_json::from_value(value).unwrap();
     assert_eq!(proposal.input_fingerprint, input.fingerprint);
-    // Exercises syntax compatibility only; a future proposal validator must also
-    // enforce visible-window authority, closure, coverage and evidence semantics.
-    for selector in proposal
-        .units
-        .iter()
-        .flat_map(|unit| &unit.selectors)
-        .chain(
-            proposal
-                .relations
-                .iter()
-                .flat_map(|relation| &relation.evidence),
-        )
-        .chain(proposal.coverage.iter().map(|coverage| &coverage.selector))
-    {
-        let resolved = resolve(&doc, selector.clone().into());
-        assert!(!resolved.raw_text.is_empty());
-        assert!(resolved.range.start >= input.requested.source_range.start);
-        assert!(resolved.range.end <= input.requested.source_range.end);
-    }
-    let evidence = resolve(&doc, proposal.relations[0].evidence[0].clone().into());
-    assert!(evidence.raw_text.starts_with("解答："));
-    assert!(evidence.raw_text.ends_with("因此收敛于 $a$。"));
+    let validated = validate_discovery_proposal(&input, proposal, Default::default()).unwrap();
+    let evidence = validated.relations()[0].evidence()[0].text();
+    assert!(evidence.starts_with("解答："));
+    assert!(evidence.ends_with("因此收敛于 $a$。"));
 }

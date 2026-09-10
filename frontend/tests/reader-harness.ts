@@ -94,7 +94,8 @@ mockIPC((command, payload) => {
       proposal: {
         status: "complete", input_fingerprint: "test-input",
         units: [{
-          temp_id: "u1", unit_kind: "statement", source_label: "测试命题",
+          temp_id: "u1", unit_kind: "statement",
+          source_labels: [{ surface_form: "测试命题", selector: {} }],
           source_title: null, display_title: "收敛命题", selectors: [], parent: null,
           completeness: "complete", source_excerpt: "Inline $x^2$ and \\(a_n\\to a\\).",
         }],

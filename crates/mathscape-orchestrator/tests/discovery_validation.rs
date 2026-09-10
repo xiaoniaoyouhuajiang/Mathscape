@@ -73,6 +73,11 @@ fn validates_and_normalizes_the_minimal_proposal() {
     assert_eq!(validated.input_fingerprint(), &input.fingerprint);
     assert_eq!(validated.status(), ValidatedProposalStatus::Complete);
     assert_eq!(validated.units().len(), 2);
+    assert_eq!(validated.units()[0].source_labels().len(), 1);
+    assert_eq!(
+        validated.units()[0].source_labels()[0].selector().text(),
+        "1"
+    );
     assert_eq!(validated.relations().len(), 1);
     assert_eq!(validated.coverage().len(), 1);
     assert!(validated.references().is_empty());
@@ -84,6 +89,42 @@ fn validates_and_normalizes_the_minimal_proposal() {
     let evidence = validated.relations()[0].evidence()[0].text();
     assert!(evidence.starts_with("解答："));
     assert!(evidence.ends_with("因此收敛于 $a$。"));
+}
+
+#[test]
+fn source_labels_require_exact_anchored_text_inside_the_unit() {
+    let (_, input, mut proposal) = valid_case();
+    proposal["units"][0]["source_labels"][0]["surface_form"] = json!("习题 1");
+    let report = validate(&input, proposal).unwrap_err();
+    assert!(has(&report, DiscoveryValidationCode::InvalidEvidence));
+
+    let (_, input, mut proposal) = valid_case();
+    let solution_block = proposal["units"][1]["selectors"][0]["first"].clone();
+    proposal["units"][0]["source_labels"][0] = json!({
+        "surface_form":"解答：",
+        "selector":{"kind":"quote_range", "first":solution_block,
+            "start":{"quote":"解答：","occurrence":null,"prefix":null,"suffix":null},
+            "last":proposal["units"][1]["selectors"][0]["last"],
+            "end":{"quote":"解答：","occurrence":null,"prefix":null,"suffix":null}}
+    });
+    let report = validate(&input, proposal).unwrap_err();
+    assert!(has(&report, DiscoveryValidationCode::InvalidEvidence));
+}
+
+#[test]
+fn references_require_exact_text_and_cannot_target_their_source_unit() {
+    let (_, input, mut proposal) = valid_case();
+    let solution_block = proposal["units"][1]["selectors"][0]["first"].clone();
+    proposal["references"] = json!([{
+        "source":"u-solution",
+        "selector":{"kind":"quote_range", "first":solution_block,
+            "start":{"quote":"解答：","occurrence":null,"prefix":null,"suffix":null},
+            "last":proposal["units"][1]["selectors"][0]["last"],
+            "end":{"quote":"解答：","occurrence":null,"prefix":null,"suffix":null}},
+        "surface_form":"解答：", "target_label":null, "target":"u-solution"
+    }]);
+    let report = validate(&input, proposal).unwrap_err();
+    assert!(has(&report, DiscoveryValidationCode::InvalidReference));
 }
 
 #[test]
@@ -122,9 +163,9 @@ fn selectors_are_confined_to_visible_requested_blocks() {
         },
     );
     let proposal: DiscoveryProposal = serde_json::from_value(json!({
-        "version": "mathscape-discovery-proposal-1",
+        "version": "mathscape-discovery-proposal-3",
         "input_fingerprint": input.fingerprint,
-        "units": [{"temp_id": "u", "unit_kind": "narrative", "source_label": null,
+        "units": [{"temp_id": "u", "unit_kind": "narrative", "source_labels": [],
             "source_title": null, "display_title": null,
             "selectors": [{"kind": "block_range", "first": block, "last": block}],
             "parent": null, "completeness": "complete"}],
@@ -134,6 +175,35 @@ fn selectors_are_confined_to_visible_requested_blocks() {
     }))
     .unwrap();
     let report = validate_discovery_proposal(&input, proposal, Default::default()).unwrap_err();
+    assert!(has(&report, DiscoveryValidationCode::InvalidSelector));
+}
+
+#[test]
+fn occurrence_selects_one_repeated_quote_without_including_context() {
+    let doc = document("前式(26)中；后式(26)末。\n");
+    let block = doc.blocks[0].id.clone();
+    let input = input_for(&doc, SourceSelector::WholeDocument);
+    let mut value = json!({
+        "version": "mathscape-discovery-proposal-3",
+        "input_fingerprint": input.fingerprint,
+        "units": [{"temp_id":"u", "unit_kind":"statement", "source_labels":[],
+            "source_title":null, "display_title":null,
+            "selectors":[{"kind":"quote_range", "first":block,
+                "start":{"quote":"式(26)","occurrence":2,"prefix":"后","suffix":"末"},
+                "last":block,
+                "end":{"quote":"式(26)","occurrence":2,"prefix":"后","suffix":"末"}}],
+            "parent":null, "completeness":"complete"}],
+        "relations":[], "references":[], "issues":[],
+        "coverage":[{"selector":{"kind":"block_range", "first":block, "last":block},
+            "disposition":{"status":"processed"}}]
+    });
+    let proposal: DiscoveryProposal = serde_json::from_value(value.clone()).unwrap();
+    let validated = validate_discovery_proposal(&input, proposal, Default::default()).unwrap();
+    assert_eq!(validated.units()[0].selectors()[0].text(), "式(26)");
+
+    value["units"][0]["selectors"][0]["start"]["occurrence"] = json!(3);
+    value["units"][0]["selectors"][0]["end"]["occurrence"] = json!(3);
+    let report = validate(&input, value).unwrap_err();
     assert!(has(&report, DiscoveryValidationCode::InvalidSelector));
 }
 
@@ -158,7 +228,12 @@ fn validates_graph_closure_cycles_relation_types_and_evidence_ownership() {
 
     let (_, input, mut proposal) = valid_case();
     proposal["references"] = json!([{
-        "source": "u-solution", "selector": proposal["units"][1]["selectors"][0],
+        "source": "u-solution", "selector": {
+            "kind":"quote_range", "first": proposal["units"][1]["selectors"][0]["first"],
+            "start":{"quote":"解答：","occurrence":null,"prefix":null,"suffix":null},
+            "last": proposal["units"][1]["selectors"][0]["last"],
+            "end":{"quote":"解答：","occurrence":null,"prefix":null,"suffix":null}
+        },
         "surface_form": "原文中不存在", "target_label": "1", "target": "u-problem"
     }]);
     let report = validate(&input, proposal).unwrap_err();

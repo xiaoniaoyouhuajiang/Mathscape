@@ -31,10 +31,10 @@ fn input(source: &str) -> DiscoveryInput {
 
 fn proposal(input: &DiscoveryInput, selector: serde_json::Value) -> DiscoveryProposal {
     serde_json::from_value(json!({
-        "version": "mathscape-discovery-proposal-1",
+        "version": "mathscape-discovery-proposal-3",
         "input_fingerprint": input.fingerprint,
         "units": [{
-            "temp_id": "u1", "unit_kind": "narrative", "source_label": null,
+            "temp_id": "u1", "unit_kind": "narrative", "source_labels": [],
             "source_title": null, "display_title": null, "selectors": [selector.clone()],
             "parent": null, "completeness": "complete"
         }],
@@ -98,6 +98,44 @@ fn resolver_binds_every_selector_back_to_the_stable_block_id() {
 }
 
 #[test]
+fn resolver_binds_source_label_anchors_and_preserves_plural_labels() {
+    let input = input("公式 (20) 与公式 (21)。\n");
+    let resolver = SelectorResolver::from_input(&input);
+    let mut proposal = proposal(
+        &input,
+        json!({"kind":"block_range", "first":"b1", "last":"b1"}),
+    );
+    proposal.units[0].source_labels = serde_json::from_value(json!([
+        {
+            "surface_form":"(20)",
+            "selector":{"kind":"quote_range", "first":"b1",
+                "start":{"quote":"(20)","occurrence":null,"prefix":null,"suffix":null},
+                "last":"b1",
+                "end":{"quote":"(20)","occurrence":null,"prefix":null,"suffix":null}}
+        },
+        {
+            "surface_form":"(21)",
+            "selector":{"kind":"quote_range", "first":"b1",
+                "start":{"quote":"(21)","occurrence":null,"prefix":null,"suffix":null},
+                "last":"b1",
+                "end":{"quote":"(21)","occurrence":null,"prefix":null,"suffix":null}}
+        }
+    ]))
+    .unwrap();
+
+    let resolved = resolver.resolve(proposal).unwrap();
+    let labels = &resolved.proposal().units[0].source_labels;
+    assert_eq!(labels.len(), 2);
+    let encoded = serde_json::to_value(labels).unwrap();
+    assert_eq!(
+        encoded[0]["selector"]["first"],
+        resolver.bindings()[0].block_id()
+    );
+    assert_eq!(encoded[0]["selector"]["start"]["occurrence"], 1);
+    assert_eq!(encoded[1]["surface_form"], "(21)");
+}
+
+#[test]
 fn visible_canonical_block_ids_remain_replayable_without_rewrites() {
     let input = input("一段完整原文。\n");
     let resolver = SelectorResolver::from_input(&input);
@@ -122,8 +160,10 @@ fn exact_ambiguity_is_reported_instead_of_guessing_an_occurrence() {
     proposal.references.push(
         serde_json::from_value(json!({
             "source":"u1",
-            "selector":{"kind":"quote_range", "first":"b1", "start_quote":"式(26)",
-                "last":"b1", "end_quote":"式(26)"},
+            "selector":{"kind":"quote_range", "first":"b1",
+                "start":{"quote":"式(26)","occurrence":null,"prefix":null,"suffix":null},
+                "last":"b1",
+                "end":{"quote":"式(26)","occurrence":null,"prefix":null,"suffix":null}},
             "surface_form":"式(26)", "target_label":"26", "target":null
         }))
         .unwrap(),
@@ -154,8 +194,9 @@ fn safe_normalization_removes_only_presentation_noise_and_returns_exact_source_t
         serde_json::from_value(json!({
             "kind":"suspected_conversion_error", "unit":"u1",
             "evidence":[{"kind":"quote_range", "first":"b1",
-                "start_quote":"$z - \\bar{z} = 2\\operatorname{Im} z$",
-                "last":"b1", "end_quote":"$z - \\bar{z} = 2\\operatorname{Im} z$"}],
+                "start":{"quote":"$z - \\bar{z} = 2\\operatorname{Im} z$","occurrence":null,"prefix":null,"suffix":null},
+                "last":"b1",
+                "end":{"quote":"$z - \\bar{z} = 2\\operatorname{Im} z$","occurrence":null,"prefix":null,"suffix":null}}],
             "observation":"疑似缺失因子", "context_request":null
         }))
         .unwrap(),
@@ -165,14 +206,21 @@ fn safe_normalization_removes_only_presentation_noise_and_returns_exact_source_t
     let selector = &resolved.proposal().issues[0].evidence[0];
     let encoded = serde_json::to_value(selector).unwrap();
     assert_eq!(
-        encoded["start_quote"],
+        encoded["start"]["quote"],
         "z - \\bar{z} = 2\\operatorname{Im} z"
     );
+    assert_eq!(encoded["start"]["occurrence"], 1);
     assert!(
         resolved
             .rewrites()
             .iter()
             .any(|rewrite| rewrite.kind() == SelectorRewriteKind::SafeQuoteNormalization)
+    );
+    assert!(
+        resolved
+            .rewrites()
+            .iter()
+            .any(|rewrite| rewrite.kind() == SelectorRewriteKind::OccurrenceBinding)
     );
 }
 
@@ -187,8 +235,10 @@ fn normalization_does_not_treat_mathematical_operators_as_equivalent() {
     proposal.issues.push(
         serde_json::from_value(json!({
             "kind":"suspected_conversion_error", "unit":"u1",
-            "evidence":[{"kind":"quote_range", "first":"b1", "start_quote":"$x < 1$",
-                "last":"b1", "end_quote":"$x < 1$"}],
+            "evidence":[{"kind":"quote_range", "first":"b1",
+                "start":{"quote":"$x < 1$","occurrence":null,"prefix":null,"suffix":null},
+                "last":"b1",
+                "end":{"quote":"$x < 1$","occurrence":null,"prefix":null,"suffix":null}}],
             "observation":"不等号可能不同", "context_request":null
         }))
         .unwrap(),
@@ -201,6 +251,61 @@ fn normalization_does_not_treat_mathematical_operators_as_equivalent() {
             .iter()
             .any(|diagnostic| diagnostic.code() == SelectorResolutionCode::QuoteNotFound)
     );
+}
+
+#[test]
+fn occurrence_and_context_disambiguate_without_expanding_the_selected_quote() {
+    let input = input("可得式(26)；从式(26)易推出式(27)。\n");
+    let resolver = SelectorResolver::from_input(&input);
+    let mut proposal = proposal(
+        &input,
+        json!({"kind":"block_range", "first":"b1", "last":"b1"}),
+    );
+    proposal.references.push(
+        serde_json::from_value(json!({
+            "source":"u1",
+            "selector":{"kind":"quote_range", "first":"b1",
+                "start":{"quote":"式(26)","occurrence":2,"prefix":"从","suffix":"易推出"},
+                "last":"b1",
+                "end":{"quote":"式(26)","occurrence":2,"prefix":"从","suffix":"易推出"}},
+            "surface_form":"式(26)", "target_label":"26", "target":null
+        }))
+        .unwrap(),
+    );
+
+    let resolved = resolver.resolve(proposal).unwrap();
+    let selector = serde_json::to_value(&resolved.proposal().references[0].selector).unwrap();
+    assert_eq!(selector["start"]["quote"], "式(26)");
+    assert_eq!(selector["start"]["occurrence"], 2);
+    assert_eq!(selector["start"]["prefix"], "从");
+    assert_eq!(selector["start"]["suffix"], "易推出");
+}
+
+#[test]
+fn zero_or_out_of_range_occurrence_is_rejected() {
+    for occurrence in [0, 3] {
+        let input = input("式(26)与式(26)。\n");
+        let resolver = SelectorResolver::from_input(&input);
+        let mut proposal = proposal(
+            &input,
+            json!({"kind":"block_range", "first":"b1", "last":"b1"}),
+        );
+        proposal.references.push(
+            serde_json::from_value(json!({
+                "source":"u1",
+                "selector":{"kind":"quote_range", "first":"b1",
+                    "start":{"quote":"式(26)","occurrence":occurrence,"prefix":null,"suffix":null},
+                    "last":"b1",
+                    "end":{"quote":"式(26)","occurrence":occurrence,"prefix":null,"suffix":null}},
+                "surface_form":"式(26)", "target_label":"26", "target":null
+            }))
+            .unwrap(),
+        );
+        let report = resolver.resolve(proposal).unwrap_err();
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == SelectorResolutionCode::InvalidDisambiguator
+        }));
+    }
 }
 
 #[test]

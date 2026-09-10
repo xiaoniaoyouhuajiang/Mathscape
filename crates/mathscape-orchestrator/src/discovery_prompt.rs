@@ -18,9 +18,9 @@ use crate::{
 };
 
 pub const DISCOVERY_SYSTEM_PROMPT: &str =
-    include_str!("../../../prompts/source-discovery/v1/system.md");
+    include_str!("../../../prompts/source-discovery/v3/system.md");
 pub const DISCOVERY_PROMPT_MANIFEST: &str =
-    include_str!("../../../prompts/source-discovery/v1/manifest.json");
+    include_str!("../../../prompts/source-discovery/v3/manifest.json");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -30,6 +30,7 @@ pub struct DiscoveryPromptManifest {
     pub input_version: String,
     pub model_input_version: String,
     pub proposal_version: String,
+    pub selector_intent_version: String,
     pub schema_name: String,
     pub system_prompt: String,
     pub output_schema: String,

@@ -1,11 +1,14 @@
 {
-  "version": "mathscape-discovery-proposal-1",
+  "version": "mathscape-discovery-proposal-3",
   "input_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "units": [
     {
       "temp_id": "u-problem",
       "unit_kind": "problem",
-      "source_label": "1",
+      "source_labels": [{
+        "surface_form": "1",
+        "selector": {"kind": "quote_range", "first": "b-problem", "start": {"quote": "1", "occurrence": null, "prefix": null, "suffix": null}, "last": "b-problem", "end": {"quote": "1", "occurrence": null, "prefix": null, "suffix": null}}
+      }],
       "source_title": null,
       "display_title": "常数列的极限",
       "selectors": [{"kind": "block_range", "first": "b-problem", "last": "b-problem"}],
@@ -15,7 +18,7 @@
     {
       "temp_id": "u-solution",
       "unit_kind": "solution",
-      "source_label": null,
+      "source_labels": [],
       "source_title": null,
       "display_title": "用极限定义验证常数列收敛",
       "selectors": [{"kind": "block_range", "first": "b-solution", "last": "b-solution"}],
@@ -27,7 +30,7 @@
     "source": "u-solution",
     "target": "u-problem",
     "relation": "solves",
-    "evidence": [{"kind": "quote_range", "first": "b-solution", "start_quote": "解答：", "last": "b-solution", "end_quote": "因此收敛于 $a$。"}],
+    "evidence": [{"kind": "quote_range", "first": "b-solution", "start": {"quote": "解答：", "occurrence": null, "prefix": null, "suffix": null}, "last": "b-solution", "end": {"quote": "因此收敛于 $a$。", "occurrence": null, "prefix": null, "suffix": null}}],
     "basis": "解答紧随唯一习题，结论与题目要求相同。"
   }],
   "references": [],

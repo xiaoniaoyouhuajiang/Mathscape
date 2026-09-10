@@ -28,8 +28,8 @@ pub use discovery_validation::{
     DEFAULT_PROPOSAL_SERIALIZED_BYTES, DiscoveryDiagnostic, DiscoveryValidationCode,
     DiscoveryValidationLimits, DiscoveryValidationReport, ResolvedDiscoverySelector,
     ValidatedDiscoveryCoverage, ValidatedDiscoveryIssue, ValidatedDiscoveryProposal,
-    ValidatedDiscoveryReference, ValidatedDiscoveryRelation, ValidatedDiscoveryUnit,
-    ValidatedProposalStatus, validate_discovery_proposal,
+    ValidatedDiscoveryReference, ValidatedDiscoveryRelation, ValidatedDiscoverySourceLabel,
+    ValidatedDiscoveryUnit, ValidatedProposalStatus, validate_discovery_proposal,
 };
 pub use markdown_anchors::{AnchorError, MAX_MARKDOWN_BYTES, anchor_markdown, resolve_selection};
 pub use marker_promotion::{

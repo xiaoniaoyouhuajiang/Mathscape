@@ -1,0 +1,15 @@
+{
+  "id": "source-discovery",
+  "version": "4",
+  "input_version": "mathscape-discovery-input-2",
+  "model_input_version": "mathscape-discovery-model-input-1",
+  "proposal_version": "mathscape-discovery-proposal-3",
+  "selector_intent_version": "mathscape-selector-intent-2",
+  "schema_name": "discovery_proposal_v3",
+  "system_prompt": "system.md",
+  "output_schema": "output.schema.json",
+  "schema_dialect": "https://json-schema.org/draft/2020-12/schema",
+  "schema_contract": "serialize-required-source-label-anchors-reference-quote-only",
+  "max_output_tokens": 8192,
+  "max_response_bytes": 2097152
+}

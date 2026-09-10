@@ -422,6 +422,7 @@ fn selector_resolution_code(code: SelectorResolutionCode) -> &'static str {
         SelectorResolutionCode::UnknownBlockRef => "unknown_block_ref",
         SelectorResolutionCode::QuoteNotFound => "quote_not_found",
         SelectorResolutionCode::AmbiguousQuote => "ambiguous_quote",
+        SelectorResolutionCode::InvalidDisambiguator => "invalid_disambiguator",
     }
 }
 
@@ -464,6 +465,7 @@ fn validation_code(code: DiscoveryValidationCode) -> &'static str {
         DiscoveryValidationCode::ParentCycle => "parent_cycle",
         DiscoveryValidationCode::InvalidSelector => "invalid_selector",
         DiscoveryValidationCode::InvalidRelation => "invalid_relation",
+        DiscoveryValidationCode::InvalidReference => "invalid_reference",
         DiscoveryValidationCode::InvalidEvidence => "invalid_evidence",
         DiscoveryValidationCode::InvalidCompleteness => "invalid_completeness",
         DiscoveryValidationCode::OverlappingUnits => "overlapping_units",

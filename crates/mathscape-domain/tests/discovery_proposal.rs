@@ -1,6 +1,6 @@
 use mathscape_domain::{
-    DiscoveryProposal, DiscoveryProposalVersion, DiscoverySelector, SourceSelector, SourceUnitKind,
-    SourceUnitRelationKind,
+    DiscoveryProposal, DiscoveryProposalVersion, DiscoveryQuoteSelector, DiscoverySelector,
+    SourceUnitKind, SourceUnitRelationKind,
 };
 use serde_json::{Value, json};
 
@@ -12,7 +12,7 @@ fn example() -> Value {
 fn proposal_roundtrips_without_gaining_canonical_authority() {
     let value = example();
     let proposal: DiscoveryProposal = serde_json::from_value(value.clone()).unwrap();
-    assert_eq!(proposal.version, DiscoveryProposalVersion::V1);
+    assert_eq!(proposal.version, DiscoveryProposalVersion::V3);
     assert_eq!(
         SourceUnitKind::from(proposal.units[0].unit_kind),
         SourceUnitKind::Problem
@@ -74,6 +74,16 @@ fn refuses_missing_collections_versions_and_out_of_stage_types() {
             "{path}"
         );
     }
+    let mut legacy = example();
+    legacy["version"] = json!("mathscape-discovery-proposal-2");
+    assert!(serde_json::from_value::<DiscoveryProposal>(legacy).is_err());
+
+    let mut missing_labels = example();
+    missing_labels["units"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("source_labels");
+    assert!(serde_json::from_value::<DiscoveryProposal>(missing_labels).is_err());
 }
 
 #[test]
@@ -86,21 +96,40 @@ fn producer_selectors_cannot_request_full_document_or_supply_offsets() {
     }
     let selector: DiscoverySelector = serde_json::from_value(json!({
         "kind": "quote_range", "first": "b1", "last": "b2",
-        "start_quote": "任取", "end_quote": "得证"
+        "start": {"quote": "任取", "occurrence": 2, "prefix": "先", "suffix": null},
+        "end": {"quote": "得证", "occurrence": null, "prefix": null, "suffix": "。"}
     }))
     .unwrap();
-    assert!(matches!(
-        SourceSelector::from(selector),
-        SourceSelector::QuoteRange { .. }
-    ));
+    assert!(matches!(selector, DiscoverySelector::QuoteRange { .. }));
+
+    assert!(
+        serde_json::from_value::<DiscoveryQuoteSelector>(
+            json!({"kind": "block_range", "first": "b1", "last": "b1"})
+        )
+        .is_err()
+    );
+
+    let mut proposal = example();
+    proposal["references"] = json!([{
+        "source": "u-solution",
+        "selector": {"kind": "block_range", "first": "b-solution", "last": "b-solution"},
+        "surface_form": "解答：", "target_label": null, "target": null
+    }]);
+    assert!(serde_json::from_value::<DiscoveryProposal>(proposal).is_err());
 }
 
 #[test]
 fn preserves_unresolved_references_both_cut_edges_and_unprocessed_coverage() {
     let mut value = example();
     let selector = value["units"][1]["selectors"][0].clone();
+    let reference_selector = json!({
+        "kind": "quote_range", "first": "b-solution",
+        "start": {"quote": "解答：", "occurrence": null, "prefix": null, "suffix": null},
+        "last": "b-solution",
+        "end": {"quote": "解答：", "occurrence": null, "prefix": null, "suffix": null}
+    });
     value["references"] = json!([{
-        "source": "u-solution", "selector": selector, "surface_form": "参看定义 1.1",
+        "source": "u-solution", "selector": reference_selector, "surface_form": "解答：",
         "target_label": "1.1", "target": null
     }]);
     value["units"][1]["completeness"] = json!("uncertain");

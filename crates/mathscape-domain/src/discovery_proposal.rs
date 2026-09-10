@@ -5,14 +5,26 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    ContentHash, SourceSelector, SourceUnitKind, SourceUnitRelationKind, UnitCompleteness,
-};
+use crate::{ContentHash, SourceUnitKind, SourceUnitRelationKind, UnitCompleteness};
+
+pub const DISCOVERY_SELECTOR_INTENT_VERSION: &str = "mathscape-selector-intent-2";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum DiscoveryProposalVersion {
-    #[serde(rename = "mathscape-discovery-proposal-1")]
-    V1,
+    #[serde(rename = "mathscape-discovery-proposal-3")]
+    V3,
+}
+
+/// One boundary intent inside a request-local block. `occurrence` is one-based
+/// among matches at the resolver's selected matching tier. Prefix and suffix
+/// constrain a match but are not included in the resolved source range.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryQuoteAnchor {
+    pub quote: String,
+    pub occurrence: Option<u32>,
+    pub prefix: Option<String>,
+    pub suffix: Option<String>,
 }
 
 /// References only blocks visible in DiscoveryInput. Whole-document authority is
@@ -26,30 +38,72 @@ pub enum DiscoverySelector {
     },
     QuoteRange {
         first: String,
-        start_quote: String,
+        start: DiscoveryQuoteAnchor,
         last: String,
-        end_quote: String,
+        end: DiscoveryQuoteAnchor,
     },
 }
 
-/// Syntax reuse only: this conversion does not authorize the selected range.
-impl From<DiscoverySelector> for SourceSelector {
-    fn from(selector: DiscoverySelector) -> Self {
+/// A source locator whose wire shape can only express `quote_range`. It is used
+/// where a whole Markdown block is too coarse to identify the claimed source
+/// occurrence, notably source labels and references.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DiscoveryQuoteSelector {
+    QuoteRange {
+        first: String,
+        start: DiscoveryQuoteAnchor,
+        last: String,
+        end: DiscoveryQuoteAnchor,
+    },
+}
+
+impl From<DiscoveryQuoteSelector> for DiscoverySelector {
+    fn from(selector: DiscoveryQuoteSelector) -> Self {
         match selector {
-            DiscoverySelector::BlockRange { first, last } => Self::BlockRange { first, last },
-            DiscoverySelector::QuoteRange {
+            DiscoveryQuoteSelector::QuoteRange {
                 first,
-                start_quote,
+                start,
                 last,
-                end_quote,
+                end,
             } => Self::QuoteRange {
                 first,
-                start_quote,
+                start,
                 last,
-                end_quote,
+                end,
             },
         }
     }
+}
+
+impl TryFrom<DiscoverySelector> for DiscoveryQuoteSelector {
+    type Error = DiscoverySelector;
+
+    fn try_from(selector: DiscoverySelector) -> Result<Self, Self::Error> {
+        match selector {
+            DiscoverySelector::QuoteRange {
+                first,
+                start,
+                last,
+                end,
+            } => Ok(Self::QuoteRange {
+                first,
+                start,
+                last,
+                end,
+            }),
+            selector @ DiscoverySelector::BlockRange { .. } => Err(selector),
+        }
+    }
+}
+
+/// A verbatim label declared by the source, anchored to the exact occurrence
+/// that labels this unit. Display-only ranges and summaries belong elsewhere.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoverySourceLabel {
+    pub surface_form: String,
+    pub selector: DiscoveryQuoteSelector,
 }
 
 /// Discovery excludes proof steps; proofs are first identified as whole units.
@@ -95,7 +149,7 @@ pub struct DiscoveryUnitProposal {
     /// Proposal-local handle, never a map StableId. Syntax/uniqueness checked later.
     pub temp_id: String,
     pub unit_kind: DiscoveryUnitKind,
-    pub source_label: Option<String>,
+    pub source_labels: Vec<DiscoverySourceLabel>,
     pub source_title: Option<String>,
     pub display_title: Option<String>,
     pub selectors: Vec<DiscoverySelector>,
@@ -143,7 +197,7 @@ pub struct DiscoveryRelationProposal {
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryReferenceProposal {
     pub source: String,
-    pub selector: DiscoverySelector,
+    pub selector: DiscoveryQuoteSelector,
     pub surface_form: String,
     pub target_label: Option<String>,
     /// Only a local candidate target, even if the proposal names it confidently.

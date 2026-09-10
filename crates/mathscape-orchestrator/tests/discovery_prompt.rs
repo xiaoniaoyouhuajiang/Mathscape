@@ -79,12 +79,16 @@ fn dto_unions_have_disjoint_required_tags_before_normalization() {
 #[test]
 fn manifest_tracks_contract_versions_and_embedded_resources() {
     let manifest = discovery_prompt_manifest();
-    assert_eq!(manifest.version, "2");
+    assert_eq!(manifest.version, "4");
     assert_eq!(manifest.input_version, DISCOVERY_INPUT_VERSION);
     assert_eq!(manifest.model_input_version, DISCOVERY_MODEL_INPUT_VERSION);
     assert_eq!(
         manifest.proposal_version,
-        serde_json::to_value(mathscape_domain::DiscoveryProposalVersion::V1).unwrap()
+        serde_json::to_value(mathscape_domain::DiscoveryProposalVersion::V3).unwrap()
+    );
+    assert_eq!(
+        manifest.selector_intent_version,
+        mathscape_domain::DISCOVERY_SELECTOR_INTENT_VERSION
     );
     assert_eq!(
         manifest.schema_dialect,
@@ -100,7 +104,7 @@ fn manifest_tracks_contract_versions_and_embedded_resources() {
 fn published_schema_matches_dto_and_has_closed_required_output_objects() {
     let schema = discovery_output_schema();
     let published: Value = serde_json::from_str(include_str!(
-        "../../../prompts/source-discovery/v1/output.schema.json"
+        "../../../prompts/source-discovery/v3/output.schema.json"
     ))
     .unwrap();
     assert_eq!(
@@ -113,6 +117,19 @@ fn published_schema_matches_dto_and_has_closed_required_output_objects() {
     assert!(validator.is_valid(&example));
     let dto: DiscoveryProposal = serde_json::from_value(example.clone()).unwrap();
     assert!(validator.is_valid(&serde_json::to_value(dto).unwrap()));
+
+    let mut broad_label = example.clone();
+    broad_label["units"][0]["source_labels"][0]["selector"] =
+        json!({"kind":"block_range", "first":"b-problem", "last":"b-problem"});
+    assert!(!validator.is_valid(&broad_label));
+
+    let mut broad_reference = example.clone();
+    broad_reference["references"] = json!([{
+        "source":"u-solution",
+        "selector":{"kind":"block_range", "first":"b-solution", "last":"b-solution"},
+        "surface_form":"解答：", "target_label":null, "target":null
+    }]);
+    assert!(!validator.is_valid(&broad_reference));
 
     for (pointer, replacement) in [
         ("/input_fingerprint", json!("invented")),
