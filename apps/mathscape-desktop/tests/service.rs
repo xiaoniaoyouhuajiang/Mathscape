@@ -20,7 +20,7 @@ use mathscape_domain::{
 };
 use mathscape_llm::{CredentialRef, CredentialResolver, MemoryCredentialResolver};
 use wiremock::{
-    Mock, MockServer, ResponseTemplate,
+    Mock, MockServer, Request, Respond, ResponseTemplate,
     matchers::{header, method, path},
 };
 
@@ -28,6 +28,89 @@ use wiremock::{
 use std::os::unix::fs::PermissionsExt;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Debug)]
+struct StagedDiscoveryResponder;
+
+impl Respond for StagedDiscoveryResponder {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        let schema = body["response_format"]["json_schema"]["name"]
+            .as_str()
+            .unwrap();
+        let content = body["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_str()
+            .unwrap();
+        let input: serde_json::Value = serde_json::from_str(content).unwrap();
+        let proposal = if schema == "unit_discovery_v1" {
+            serde_json::json!({
+                "version": "mathscape-unit-discovery-1",
+                "request_ref": input["request_ref"],
+                "units": [
+                    {"ref":"u1","unit_kind":"problem","display_title":"常数列收敛习题","selectors":[{"kind":"block_range","first":"b1","last":"b1"}],"parent":null,"completeness":"complete"},
+                    {"ref":"u2","unit_kind":"solution","display_title":"常数列收敛解答","selectors":[{"kind":"block_range","first":"b2","last":"b2"}],"parent":"u1","completeness":"complete"}
+                ],
+                "issues": [],
+                "coverage": [{"selector":{"kind":"block_range","first":"b1","last":"b2"},"disposition":{"status":"processed"}}]
+            })
+        } else {
+            assert_eq!(schema, "source_facts_v1");
+            let tasks = input["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|task| {
+                    let block = task["evidence_block_refs"][0].clone();
+                    let labels = (task["owner_unit_ref"] == "u1")
+                        .then(|| serde_json::json!({"ref":"m1","anchor":{"kind":"text_occurrence","block":block.clone(),"text":"习题 1","occurrence":null}}))
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    let references = (task["owner_unit_ref"] == "u1")
+                        .then(|| serde_json::json!({"ref":"r1","anchor":{"kind":"text_occurrence","block":block.clone(),"text":"定义","occurrence":null},"target_hint":null}))
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    let issues = (task["owner_unit_ref"] == "u1")
+                        .then(|| serde_json::json!({
+                            "kind":"missing_context",
+                            "evidence":[{"kind":"block_range","first":block.clone(),"last":block.clone()}],
+                            "observation":"引用的定义不在当前选区中。",
+                            "context_request":{"kind":"local_reference","target_label":"定义"},
+                            "requires_unit_revision":false
+                        }))
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    let relation = (task["owner_unit_ref"] == "u2").then(|| {
+                        serde_json::json!({
+                            "ref":"e1","relation":"solves","target":"u1",
+                            "evidence":[{"kind":"block_range","first":block.clone(),"last":block}],
+                            "basis":"原文给出该习题的解答。"
+                        })
+                    });
+                    serde_json::json!({
+                        "task_ref": task["task_ref"],
+                        "disposition":{"status":"processed"},
+                        "source_labels":labels,"source_title":null,"references":references,
+                        "relations":relation.into_iter().collect::<Vec<_>>(),"issues":issues
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "version":"mathscape-source-facts-1",
+                "request_ref":input["request_ref"],
+                "tasks":tasks
+            })
+        };
+        let chunk = serde_json::json!({
+            "id":"chatcmpl-staged-discovery-fixture",
+            "object":"chat.completion.chunk","created":1,"model":"resolved-discovery-model",
+            "choices":[{"index":0,"delta":{"role":"assistant","content":proposal.to_string()},"finish_reason":"stop"}]
+        });
+        ResponseTemplate::new(200)
+            .set_delay(std::time::Duration::from_millis(120))
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+    }
+}
 
 #[test]
 fn named_profiles_survive_reopen_and_default_switch_does_not_edit_credentials() {
@@ -232,8 +315,6 @@ async fn tests_a_persisted_llm_profile_through_the_desktop_service() {
 #[tokio::test]
 async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     const SOURCE: &str = "习题 1：设 $a_n=a$，用定义证明 $a_n$ 收敛于 $a$。\n\n解答：任取 $\\epsilon>0$，取 $N=1$。当 $n>N$ 时，$|a_n-a|=0<\\epsilon$。因此收敛于 $a$。\n";
-    const PROPOSAL: &str =
-        include_str!("../../../crates/mathscape-domain/tests/fixtures/discovery-proposal.json");
 
     let server = MockServer::start().await;
     let directory = TestDirectory::create("desktop-discovery");
@@ -288,40 +369,15 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
         selector: SourceSelector::WholeDocument,
         admission: DiscoveryAdmission::ReviewBeforePublish,
     };
-    let input = service.prepare_discovery_input(selection.clone()).unwrap();
-    let proposal = PROPOSAL
-        .replace("b-problem", &document.blocks[0].id)
-        .replace("b-solution", &document.blocks[1].id)
-        .replace(
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-            input.fingerprint.as_str(),
-        );
-    let stream_chunk = serde_json::json!({
-        "id": "chatcmpl-discovery-fixture",
-        "object": "chat.completion.chunk",
-        "created": 1,
-        "model": "resolved-discovery-model",
-        "choices": [{
-            "index": 0,
-            "delta": {"role": "assistant", "content": proposal},
-            "finish_reason": "stop"
-        }]
-    });
-    let stream_body = format!("data: {stream_chunk}\n\ndata: [DONE]\n\n");
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
         .and(header("authorization", "Bearer desktop-discovery-secret"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(std::time::Duration::from_millis(120))
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(stream_body),
-        )
-        .expect(1)
+        .respond_with(StagedDiscoveryResponder)
+        .expect(3)
         .mount(&server)
         .await;
 
-    let request = RunDiscoveryRequest::new(selection, None);
+    let request = RunDiscoveryRequest::new(selection.clone(), None);
     let worker = {
         let service = service.clone();
         let request = request.clone();
@@ -335,34 +391,79 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
         900
     );
     assert!(matches!(
-        service.run_discovery(request).await,
+        service.run_discovery(request.clone()).await,
         Err(DesktopDiscoveryError::AlreadyRunning)
     ));
 
     let outcome = worker.await.unwrap().unwrap();
     assert!(service.active_discovery().is_none());
     let value = serde_json::to_value(outcome).unwrap();
-    assert_eq!(value["outcome"], "valid");
-    assert_eq!(value["proposal"]["status"], "complete");
-    assert_eq!(value["proposal"]["units"].as_array().unwrap().len(), 2);
-    assert_eq!(value["proposal"]["relations"][0]["relation"], "solves");
+    assert_eq!(value["outcome"], "completed");
     assert_eq!(
-        value["run"]["response"]["provider_model"],
-        "discovery-fixture-model"
+        value["view"]["version"],
+        "mathscape-desktop-discovery-view-1"
     );
-    assert!(value["run"]["response"]["total_tokens"].is_null());
+    assert_eq!(value["view"]["status"], "completed");
+    assert_eq!(value["view"]["units"].as_array().unwrap().len(), 2);
+    assert_eq!(value["view"]["relations"][0]["relation"], "solves");
+    assert_eq!(value["view"]["units"][0]["title"], "习题 1");
+    assert_eq!(value["view"]["references"][0]["text"], "定义");
+    assert_eq!(value["view"]["references"][0]["status"], "unresolved");
+    assert_eq!(value["view"]["issues"][0]["kind"], "missing_context");
+    assert!(
+        value["view"]["issues"][0]["evidence"][0]["excerpt"]
+            .as_str()
+            .unwrap()
+            .contains("习题 1")
+    );
+    assert_eq!(
+        value["view"]["units"][0]["anchors"][0]["block_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(value["run"]["attempts"], 2);
+    assert!(value["run"]["total_tokens"].is_null());
     assert_eq!(value["run"]["admission"], "review_before_publish");
     assert_eq!(value["run"]["request_timeout_seconds"], 900);
     assert_eq!(value["run"]["connect_timeout_seconds"], 20);
     assert_eq!(service.snapshot().unwrap().graph().nodes().len(), 1);
+
+    let cancelled = {
+        let service = service.clone();
+        let request = RunDiscoveryRequest::new(selection, None);
+        tokio::spawn(async move { service.run_discovery(request).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    assert!(service.cancel_discovery());
+    assert_eq!(
+        serde_json::to_value(service.active_discovery().unwrap()).unwrap()["phase"],
+        "cancelling"
+    );
+    let cancelled = serde_json::to_value(cancelled.await.unwrap().unwrap()).unwrap();
+    assert_eq!(cancelled["outcome"], "cancelled");
+    assert!(service.active_discovery().is_none());
+    assert!(!service.cancel_discovery());
+
     let received = server.received_requests().await.unwrap();
-    let body: serde_json::Value = received[0].body_json().unwrap();
-    assert_eq!(body["stream"], true);
-    assert!(body.get("stream_options").is_none());
-    let fingerprint_schema =
-        &body["response_format"]["json_schema"]["schema"]["properties"]["input_fingerprint"];
-    assert!(fingerprint_schema.get("$ref").is_some());
-    assert!(fingerprint_schema.get("description").is_none());
+    assert_eq!(received.len(), 3);
+    let schema_names = received
+        .iter()
+        .map(|request| {
+            let body: serde_json::Value = request.body_json().unwrap();
+            assert_eq!(body["stream"], true);
+            assert!(body.get("stream_options").is_none());
+            body["response_format"]["json_schema"]["name"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        schema_names,
+        ["unit_discovery_v1", "source_facts_v1", "unit_discovery_v1"]
+    );
     directory.cleanup();
 }
 

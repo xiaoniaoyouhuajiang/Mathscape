@@ -4,8 +4,8 @@ use mathscape_domain::{
     ResolvedDiscoverySelection, SourcePayload, StableId,
 };
 use mathscape_orchestrator::{
-    DiscoveryInputLimits, MAX_MARKDOWN_BYTES, PRODUCT_PATHS_KEY, PreparedDiscoveryRequest,
-    ProductPath, anchor_markdown, build_discovery_input, build_discovery_request,
+    DiscoveryInputLimits, MAX_MARKDOWN_BYTES, PRODUCT_PATHS_KEY, PreparedUnitDiscoveryRequest,
+    ProductPath, anchor_markdown, build_discovery_input, build_unit_discovery_request,
     resolve_selection,
 };
 use mathscape_store_sqlite::SqliteArtifactStore;
@@ -181,10 +181,10 @@ impl DesktopService {
             .map_err(|e| e.to_string())
     }
 
-    pub(crate) fn prepare_discovery_request(
+    pub(crate) fn prepare_unit_discovery_request(
         &self,
         request: DiscoverySelectionRequest,
-    ) -> Result<PreparedDiscoveryRequest, String> {
+    ) -> Result<PreparedUnitDiscoveryRequest, String> {
         let document = self.markdown_document(
             request.snapshot.artifact_id.as_str(),
             request
@@ -194,7 +194,7 @@ impl DesktopService {
                 .map(StableId::as_str),
         )?;
         let selection = resolve_selection(&document, request).map_err(|e| e.to_string())?;
-        build_discovery_request(&document, &selection, DiscoveryInputLimits::default())
+        build_unit_discovery_request(&document, &selection, DiscoveryInputLimits::default())
             .map_err(|e| e.to_string())
     }
 }

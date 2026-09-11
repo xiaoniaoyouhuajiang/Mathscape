@@ -47,7 +47,9 @@ Desktop 的 Markdown 选区、活动调用与提案展示见
 
 下一版来源发现按“单元发现 → 固定单元表 → 标签、引用与关系发现”拆分，见
 [`分阶段发现协议草案`](discovery-staged-protocol-draft.md)及
-[`开发任务`](discovery-staged-development-plan.md)。当前运行仍使用 DiscoveryProposal v3。
+[`开发任务`](discovery-staged-development-plan.md)。Desktop 默认运行、展示投影与 Markdown
+回链已经接入，见 [`M3 Desktop 实现`](desktop-staged-discovery-m3.md)；DiscoveryProposal v3 保留为离线
+回放与比较路径。
 
 ## 初始里程碑
 

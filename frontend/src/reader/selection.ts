@@ -43,44 +43,94 @@ interface ActiveDiscoveryTask {
   input_fingerprint: string;
   profile_id: string;
   request_timeout_seconds: number;
+  phase: string;
+  attempt: number;
+  batch_index: number | null;
+  batch_total: number | null;
+  unit_count: number;
+  completed_tasks: number;
+  total_tasks: number;
+  cancellation_requested: boolean;
 }
 
-interface DiscoveryUnit {
-  temp_id: string;
+interface DiscoveryAnchorView {
+  start: number;
+  end: number;
+  block_ids: string[];
+  excerpt: string;
+}
+
+interface LocatedTextView {
+  fact_ref: string;
+  text: string;
+  anchor: DiscoveryAnchorView;
+  normalized: boolean;
+  precision_review: boolean;
+}
+
+interface DiscoveryUnitView {
+  unit_ref: string;
   unit_kind: string;
-  source_labels: { surface_form: string; selector: unknown }[];
-  source_title: string | null;
+  title: string;
   display_title: string | null;
-  selectors: unknown[];
   parent: string | null;
   completeness: string;
+  fact_status: "processed" | "pending" | "requires_unit_revision";
   source_excerpt: string;
+  anchors: DiscoveryAnchorView[];
+  source_labels: LocatedTextView[];
+  source_title: LocatedTextView | null;
 }
 
-interface DiscoveryRelation {
+interface DiscoveryReferenceView {
+  owner: string;
+  text: string;
+  anchor: DiscoveryAnchorView;
+  status: "unresolved" | "candidate" | "resolved_local" | "ambiguous";
+  candidates: string[];
+  reason: string;
+  origins: string[];
+}
+
+interface DiscoveryRelationView {
   source: string;
   target: string;
   relation: string;
-  evidence: unknown[];
-  basis: string;
+  evidence: DiscoveryAnchorView[];
+  bases: string[];
+  origins: string[];
 }
 
-interface DiscoveryIssue {
+interface DiscoveryIssueView {
+  issue_ref: string;
+  stage: "unit_discovery" | "source_facts";
+  owner: string | null;
   kind: string;
-  unit: string | null;
-  evidence: unknown[];
   observation: string;
-  context_request: unknown | null;
+  requires_unit_revision: boolean;
+  evidence: DiscoveryAnchorView[];
 }
 
-interface DiscoveryProposalView {
-  status: "complete" | "partial";
-  input_fingerprint: string;
-  units: DiscoveryUnit[];
-  relations: DiscoveryRelation[];
-  references: unknown[];
-  issues: DiscoveryIssue[];
-  coverage: unknown[];
+interface DiscoveryDiagnosticView {
+  report: number;
+  code: string;
+  path: string;
+  message: string;
+  checked: boolean;
+}
+
+interface DesktopDiscoveryView {
+  version: "mathscape-desktop-discovery-view-1";
+  status: WorkflowStatus;
+  complete: boolean;
+  source: null | { artifact_id: string; conversion_id: string | null; content_hash: string; input_fingerprint: string };
+  units: DiscoveryUnitView[];
+  references: DiscoveryReferenceView[];
+  relations: DiscoveryRelationView[];
+  issues: DiscoveryIssueView[];
+  pending_tasks: { task_ref: string; owner: string | null }[];
+  diagnostics: DiscoveryDiagnosticView[];
+  attempts: { attempt: number; stage: string; repair: boolean; status: WorkflowStatus; error: string | null; total_tokens: number | null; elapsed_ms: number | null }[];
 }
 
 interface DiscoveryRun {
@@ -90,27 +140,19 @@ interface DiscoveryRun {
   admission: SelectionRequest["admission"];
   request_timeout_seconds: number;
   connect_timeout_seconds: number;
-  response: null | {
-    provider_model: string;
-    finish_reason: string | null;
-    input_tokens: number | null;
-    output_tokens: number | null;
-    total_tokens: number | null;
-    elapsed_ms: number;
-  };
+  attempts: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  elapsed_ms: number;
 }
 
-type DiscoveryOutcome =
-  | { outcome: "valid"; proposal: DiscoveryProposalView; run: DiscoveryRun }
-  | {
-      outcome: "invalid_proposal";
-      proposal: unknown | null;
-      rejection_kind: string;
-      message: string;
-      diagnostics: { code: string; path: string; message: string }[];
-      run: DiscoveryRun;
-    }
-  | { outcome: "failed"; error_kind: string; message: string; run: DiscoveryRun };
+type WorkflowStatus = "running" | "completed" | "partial" | "needs_attention" | "failed" | "cancelled";
+type DiscoveryOutcome = {
+  outcome: WorkflowStatus;
+  view: DesktopDiscoveryView;
+  run: DiscoveryRun;
+};
 
 function textElement<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -147,6 +189,8 @@ export class MarkdownSelection {
   private result = document.createElement("pre");
   private discoveryStatus = document.createElement("p");
   private discoveryResult = document.createElement("section");
+  private anchorPreview = document.createElement("section");
+  private discoverySource: DesktopDiscoveryView["source"] = null;
   private policy = document.createElement("select");
   private policyTouched = false;
   private askEachRun = false;
@@ -190,12 +234,15 @@ export class MarkdownSelection {
     this.result.hidden = true;
     this.discoveryResult.className = "discovery-result";
     this.discoveryResult.hidden = true;
+    this.anchorPreview.className = "discovery-anchor-preview";
+    this.anchorPreview.hidden = true;
     this.panel.append(
       instructions,
       controls,
       this.status,
       this.discoveryStatus,
       this.result,
+      this.anchorPreview,
       this.discoveryResult,
     );
     article.addEventListener("click", this.onClick);
@@ -213,6 +260,7 @@ export class MarkdownSelection {
     this.article.removeEventListener("keydown", this.onKey);
     window.removeEventListener(WORKSPACE_SETTINGS_CHANGED, this.onWorkspaceSettings);
     window.clearInterval(this.discoveryTimer);
+    this.clearAnchorHighlight();
     this.panel.remove();
   }
 
@@ -233,6 +281,9 @@ export class MarkdownSelection {
     this.discoveryFeedback = null;
     this.result.hidden = true; this.result.textContent = ""; this.refresh();
     this.discoveryResult.hidden = true; this.discoveryResult.replaceChildren();
+    this.discoverySource = null;
+    this.anchorPreview.hidden = true; this.anchorPreview.replaceChildren();
+    this.clearAnchorHighlight();
   }
 
   private onWorkspaceSettings = (event: Event): void => {
@@ -285,8 +336,26 @@ export class MarkdownSelection {
         : "已选择原文范围；请为本次运行选择审核方式。"
       : this.first >= 0 && this.last >= 0 ? "终点必须位于起点之后，请重新设置。" : "尚未选择完整范围。");
     this.discoveryStatus.textContent = this.activeDiscovery !== null
-      ? `内容发现正在流式接收：${this.activeDiscovery.profile_id} · 最长等待 ${this.activeDiscovery.request_timeout_seconds} 秒`
+      ? this.activeDiscoveryText(this.activeDiscovery)
       : this.discoveryFeedback ?? "";
+  }
+
+  private activeDiscoveryText(task: ActiveDiscoveryTask): string {
+    const phases: Record<string, string> = {
+      starting: "正在启动",
+      discovering_units: "正在识别数学单元",
+      validating_units: "正在验证单元",
+      planning_facts: "正在规划来源事实任务",
+      discovering_facts: "正在发现标签、引用与关系",
+      validating_facts: "正在验证来源事实",
+      repairing: "正在进行一次有界修订",
+      assembling: "正在组装结果",
+      cancelling: "正在取消",
+      finishing: "正在结束任务",
+    };
+    const batch = task.batch_index && task.batch_total ? ` · 批次 ${task.batch_index}/${task.batch_total}` : "";
+    const facts = task.total_tasks > 0 ? ` · 事实任务 ${task.completed_tasks}/${task.total_tasks}` : "";
+    return `${phases[task.phase] ?? task.phase}${batch}${facts} · ${task.profile_id} · 总期限 ${task.request_timeout_seconds} 秒`;
   }
 
   private async resolve(): Promise<void> {
@@ -390,75 +459,206 @@ export class MarkdownSelection {
   private renderDiscovery(outcome: DiscoveryOutcome): void {
     this.discoveryResult.replaceChildren();
     this.discoveryResult.hidden = false;
-    if (outcome.outcome === "valid") {
-      const proposal = outcome.proposal;
-      this.discoveryFeedback = `内容发现完成：${proposal.units.length} 个单元、${proposal.relations.length} 条关系，状态 ${proposal.status}。结果尚未接受或入图。`;
-      this.discoveryResult.append(
-        textElement("h3", "", "发现提案"),
-        textElement(
-          "p",
-          "discovery-summary",
-          `${proposal.units.length} 个单元 · ${proposal.relations.length} 条关系 · ${proposal.references.length} 个引用 · ${proposal.issues.length} 个问题`,
-        ),
-      );
-      const units = textElement("div", "discovery-units", "");
-      for (const unit of proposal.units) {
-        const labels = unit.source_labels.map(label => label.surface_form).join("、");
-        const title = labels || unit.source_title || unit.display_title || unit.temp_id;
+    const view = outcome.view;
+    this.discoverySource = view.source;
+    const units = view.units;
+    const unitTitles = new Map(units.map(unit => [unit.unit_ref, unit.title]));
+    const relations = view.relations;
+    const references = view.references;
+    const pending = view.pending_tasks;
+    const statusLabels: Record<WorkflowStatus, string> = {
+      running: "运行中", completed: "完成", partial: "部分完成",
+      needs_attention: "需要处理", failed: "失败", cancelled: "已取消",
+    };
+    this.discoveryFeedback = `两阶段内容发现${statusLabels[outcome.outcome]}：${units.length} 个单元、${relations.length} 条关系、${references.length} 个引用。结果尚未接受或入图。`;
+    this.discoveryResult.append(
+      textElement("h3", "", `分阶段发现 · ${statusLabels[outcome.outcome]}`),
+      textElement(
+        "p",
+        "discovery-summary",
+        `${units.length} 个单元 · ${relations.length} 条关系 · ${references.length} 个引用 · ${pending.length} 个待完成任务`,
+      ),
+    );
+    if (units.length > 0) {
+      const cards = textElement("div", "discovery-units", "");
+      for (const unit of units) {
         const card = textElement("article", "discovery-unit", "");
+        const heading = textElement("div", "discovery-unit-heading", "");
+        heading.append(
+          textElement("strong", "", unit.title),
+          this.anchorButtons("定位原文", unit.anchors),
+        );
         card.append(
-          textElement("strong", "", title),
-          textElement(
-            "span",
-            "discovery-kind",
-            `${unit.unit_kind} · ${unit.completeness}${unit.parent ? ` · parent ${unit.parent}` : ""}`,
-          ),
+          heading,
+          textElement("span", "discovery-kind", `${this.unitKindLabel(unit.unit_kind)} · ${this.completenessLabel(unit.completeness)} · ${this.factStatusLabel(unit.fact_status)}${unit.parent ? ` · 隶属 ${unitTitles.get(unit.parent) ?? unit.parent}` : ""}`),
           textElement("p", "", unit.source_excerpt),
         );
-        units.append(card);
-      }
-      this.discoveryResult.append(units);
-      if (proposal.relations.length > 0) {
-        const relations = textElement("ul", "discovery-relations", "");
-        for (const relation of proposal.relations) {
-          relations.append(
-            textElement(
-              "li",
-              "",
-              `${relation.source} —${relation.relation}→ ${relation.target}：${relation.basis}`,
-            ),
-          );
+        if (unit.source_labels.length > 0) {
+          const labels = textElement("div", "discovery-facts", "");
+          unit.source_labels.forEach(label => labels.append(this.factChip("标签", label)));
+          card.append(labels);
         }
-        this.discoveryResult.append(textElement("h4", "", "原文明示关系"), relations);
+        if (unit.source_title) card.append(this.factChip("原文标题", unit.source_title));
+        cards.append(card);
       }
-      if (proposal.issues.length > 0) {
-        const issues = textElement("ul", "discovery-issues", "");
-        proposal.issues.forEach(issue => issues.append(
-          textElement("li", "", `${issue.kind}${issue.unit ? ` · ${issue.unit}` : ""}：${issue.observation}`),
-        ));
-        this.discoveryResult.append(textElement("h4", "", "待处理问题"), issues);
-      }
-      this.discoveryResult.append(this.jsonDetails("查看完整发现结果", proposal));
-    } else if (outcome.outcome === "invalid_proposal") {
-      this.discoveryFeedback = `模型已返回，但提案被拒绝：${outcome.message}`;
-      this.discoveryResult.append(
-        textElement("h3", "", `提案未通过 · ${outcome.rejection_kind}`),
-      );
-      if (outcome.diagnostics.length > 0) {
-        const diagnostics = textElement("ul", "discovery-issues", "");
-        outcome.diagnostics.forEach(item => diagnostics.append(
-          textElement("li", "", `${item.path} · ${item.code}：${item.message}`),
-        ));
-        this.discoveryResult.append(diagnostics);
-      }
-      if (outcome.proposal !== null) {
-        this.discoveryResult.append(this.jsonDetails("查看模型提案", outcome.proposal));
-      }
-    } else {
-      this.discoveryFeedback = `LLM 调用失败（${outcome.error_kind}）：${outcome.message}`;
-      this.discoveryResult.append(textElement("h3", "", "内容发现调用失败"));
+      this.discoveryResult.append(cards);
     }
+
+    if (references.length > 0) {
+      const list = textElement("div", "discovery-reference-list", "");
+      for (const reference of references) {
+        const item = textElement("article", `discovery-reference reference-${reference.status}`, "");
+        const target = reference.candidates.length > 0 ? ` · 候选 ${reference.candidates.map(candidate => unitTitles.get(candidate) ?? candidate).join("、")}` : "";
+        item.append(
+          textElement("strong", "", `${reference.text} · ${this.referenceStatusLabel(reference.status)}`),
+          textElement("p", "", `${unitTitles.get(reference.owner) ?? reference.owner}${target} · ${reference.reason}`),
+          this.anchorButton("查看引用原文", reference.anchor),
+        );
+        list.append(item);
+      }
+      this.discoveryResult.append(textElement("h4", "", "来源引用"), list);
+    }
+
+    if (relations.length > 0) {
+      const list = textElement("ul", "discovery-relations", "");
+      for (const relation of relations) {
+        const item = document.createElement("li");
+        item.append(document.createTextNode(`${unitTitles.get(relation.source) ?? relation.source} —${this.relationLabel(relation.relation)}→ ${unitTitles.get(relation.target) ?? relation.target}：${relation.bases.join("；")}`));
+        if (relation.evidence.length > 0) item.append(" ", this.anchorButtons("证据", relation.evidence));
+        list.append(item);
+      }
+      this.discoveryResult.append(textElement("h4", "", "来源关系"), list);
+    }
+
+    if (view.issues.length > 0) {
+      const list = textElement("ul", "discovery-issues", "");
+      for (const issue of view.issues) {
+        const item = document.createElement("li");
+        item.append(document.createTextNode(`${issue.stage === "unit_discovery" ? "单元识别" : "来源事实"} · ${this.issueKindLabel(issue.kind)}${issue.owner ? ` · ${unitTitles.get(issue.owner) ?? issue.owner}` : ""}：${issue.observation}`));
+        if (issue.evidence.length > 0) item.append(" ", this.anchorButtons("证据", issue.evidence));
+        list.append(item);
+      }
+      this.discoveryResult.append(textElement("h4", "", "来源问题"), list);
+    }
+
+    if (view.diagnostics.length > 0) {
+      const list = textElement("ul", "discovery-issues", "");
+      view.diagnostics.forEach(item => list.append(textElement("li", "", `${item.path} · ${item.code}：${item.message}`)));
+      this.discoveryResult.append(textElement("h4", "", "确定性诊断"), list);
+    }
+    if (pending.length > 0) {
+      this.discoveryResult.append(textElement("p", "discovery-pending", `尚有 ${pending.length} 个事实任务未完成：${pending.map(task => task.owner ?? task.task_ref).join("、")}`));
+    }
+    this.discoveryResult.append(this.jsonDetails("查看完整展示数据", view));
     this.discoveryResult.append(this.runSummary(outcome.run));
+  }
+
+  private factChip(kind: string, fact: LocatedTextView): HTMLElement {
+    const chip = textElement("span", "discovery-fact", `${kind}：${fact.text}`);
+    if (fact.normalized) chip.title = "定位经过安全排版规范化";
+    if (fact.precision_review) chip.classList.add("needs-precision-review");
+    chip.append(" ", this.anchorButton("定位", fact.anchor));
+    return chip;
+  }
+
+  private unitKindLabel(kind: string): string {
+    return ({ section: "章节", definition: "定义", statement: "命题", proof: "证明", problem: "习题", hint: "提示", solution: "解答", example: "例子", remark: "注记", method: "方法", notation: "记号", narrative: "叙述" } as Record<string, string>)[kind] ?? kind;
+  }
+
+  private completenessLabel(value: string): string {
+    return ({ complete: "内容完整", left_truncated: "左侧截断", right_truncated: "右侧截断", internally_missing: "内部缺失", uncertain: "边界待确认" } as Record<string, string>)[value] ?? value;
+  }
+
+  private factStatusLabel(value: DiscoveryUnitView["fact_status"]): string {
+    return ({ processed: "来源事实已验证", pending: "来源事实待发现", requires_unit_revision: "需要修订单元" } as Record<string, string>)[value] ?? value;
+  }
+
+  private referenceStatusLabel(value: DiscoveryReferenceView["status"]): string {
+    return ({ unresolved: "未解析", candidate: "存在候选", resolved_local: "已解析到本地单元", ambiguous: "存在歧义" } as Record<string, string>)[value] ?? value;
+  }
+
+  private relationLabel(value: string): string {
+    return ({ proves: "证明", solves: "解答", hints: "提示", explains: "解释", cites: "引用", applies_method: "应用方法" } as Record<string, string>)[value] ?? value;
+  }
+
+  private issueKindLabel(value: string): string {
+    return ({ left_truncated: "左侧截断", right_truncated: "右侧截断", internally_missing: "内部缺失", uncertain_boundary: "边界待确认", uncertain_parent: "父级待确认", ambiguous_reference: "引用有歧义", suspected_conversion_error: "疑似转换错误", missing_context: "缺少上下文", uncertain_classification: "分类待确认" } as Record<string, string>)[value] ?? value;
+  }
+
+  private anchorButton(label: string, anchor: DiscoveryAnchorView | undefined): HTMLButtonElement {
+    const button = textElement("button", "discovery-anchor-button", label);
+    button.type = "button";
+    button.disabled = anchor === undefined;
+    if (anchor) button.onclick = () => this.focusAnchor(anchor);
+    return button;
+  }
+
+  private anchorButtons(label: string, anchors: DiscoveryAnchorView[]): HTMLElement {
+    const actions = textElement("span", "discovery-anchor-actions", "");
+    anchors.forEach((anchor, index) => actions.append(
+      this.anchorButton(anchors.length === 1 ? label : `${label} ${index + 1}`, anchor),
+    ));
+    return actions;
+  }
+
+  private focusAnchor(anchor: DiscoveryAnchorView): void {
+    const expectedConversion = this.data.snapshot.conversion_id;
+    if (this.discoverySource === null
+      || this.discoverySource.artifact_id !== this.data.snapshot.artifact_id
+      || this.discoverySource.conversion_id !== expectedConversion
+      || this.discoverySource.content_hash !== this.data.snapshot.content_hash) {
+      this.discoveryFeedback = "发现结果不属于当前 Markdown 快照，拒绝应用来源锚点。";
+      this.refresh();
+      return;
+    }
+    const source = new TextEncoder().encode(this.data.source);
+    if (!Number.isSafeInteger(anchor.start) || !Number.isSafeInteger(anchor.end)
+      || anchor.start < 0 || anchor.end <= anchor.start || anchor.end > source.length) {
+      this.discoveryFeedback = "来源锚点已经失效，无法定位到当前 Markdown 快照。";
+      this.refresh();
+      return;
+    }
+    const blocks = this.data.blocks.filter(block => block.range.start < anchor.end && block.range.end > anchor.start);
+    if (blocks.length === 0) {
+      this.discoveryFeedback = "来源锚点不属于当前 Markdown 选区。";
+      this.refresh();
+      return;
+    }
+    this.clearAnchorHighlight();
+    blocks.forEach(block => this.article.querySelector<HTMLElement>(`[data-source-block="${CSS.escape(block.id)}"]`)?.classList.add("is-discovery-anchor-block"));
+    const first = this.article.querySelector<HTMLElement>(`[data-source-block="${CSS.escape(blocks[0].id)}"]`);
+    first?.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const contextStart = blocks[0].range.start;
+    const contextEnd = blocks[blocks.length - 1].range.end;
+    const before = decoder.decode(source.subarray(contextStart, anchor.start));
+    const selected = decoder.decode(source.subarray(anchor.start, anchor.end));
+    const after = decoder.decode(source.subarray(anchor.end, contextEnd));
+    const pre = document.createElement("pre");
+    pre.append(
+      document.createTextNode(this.tail(before, 240)),
+      Object.assign(document.createElement("mark"), { textContent: selected }),
+      document.createTextNode(this.head(after, 240)),
+    );
+    this.anchorPreview.replaceChildren(
+      textElement("strong", "", `Markdown 原文范围 [${anchor.start}, ${anchor.end})`),
+      pre,
+    );
+    this.anchorPreview.hidden = false;
+  }
+
+  private clearAnchorHighlight(): void {
+    this.article.querySelectorAll(".is-discovery-anchor-block").forEach(block => block.classList.remove("is-discovery-anchor-block"));
+  }
+
+  private head(value: string, count: number): string {
+    return [...value].slice(0, count).join("");
+  }
+
+  private tail(value: string, count: number): string {
+    const characters = [...value];
+    return characters.slice(Math.max(0, characters.length - count)).join("");
   }
 
   private jsonDetails(label: string, value: unknown): HTMLDetailsElement {
@@ -472,16 +672,14 @@ export class MarkdownSelection {
   }
 
   private runSummary(run: DiscoveryRun): HTMLElement {
-    const response = run.response;
-    const model = response?.provider_model ?? run.requested_model;
-    const usage = response?.total_tokens === null || response?.total_tokens === undefined
+    const usage = run.total_tokens === null || run.total_tokens === undefined
       ? "token 数未知"
-      : `${response.total_tokens} tokens`;
-    const elapsed = response === null ? "未收到响应" : `${response.elapsed_ms} ms`;
+      : `${run.total_tokens} tokens`;
+    const admission = run.admission === "automatic_candidate" ? "自动候选策略（尚未登记）" : "等待人工审核";
     return textElement(
       "p",
       "discovery-run",
-      `${run.profile_id} · ${model} · ${usage} · ${elapsed} · 总超时 ${run.request_timeout_seconds} 秒`,
+      `${run.profile_id} · ${run.requested_model} · ${run.attempts} 次调用 · ${usage} · ${run.elapsed_ms} ms · 总期限 ${run.request_timeout_seconds} 秒 · ${admission}`,
     );
   }
 }

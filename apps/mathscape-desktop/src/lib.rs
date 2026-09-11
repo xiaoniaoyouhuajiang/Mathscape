@@ -1,13 +1,14 @@
 mod content;
 mod discovery;
+mod discovery_view;
 mod llm_settings;
 mod workspace_settings;
 pub use content::{ArtifactContentInfo, ContentContext};
 pub use discovery::{
-    ActiveDiscoveryTask, DesktopDiscoveryDiagnostic, DesktopDiscoveryError,
-    DesktopDiscoveryOutcome, DesktopDiscoveryProposal, DesktopDiscoveryResponse,
-    DesktopDiscoveryRun, DesktopDiscoveryUnit, RunDiscoveryRequest,
+    ActiveDiscoveryPhase, ActiveDiscoveryTask, DesktopDiscoveryError, DesktopDiscoveryOutcome,
+    DesktopDiscoveryProgress, DesktopDiscoveryRun, RunDiscoveryRequest,
 };
+pub use discovery_view::{DESKTOP_DISCOVERY_VIEW_VERSION, DesktopDiscoveryView};
 pub use llm_settings::{
     LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,
 };
@@ -55,7 +56,7 @@ pub struct DesktopService {
     marker: Option<MarkerInstallation>,
     credentials: Arc<dyn CredentialStore>,
     active_parse: Arc<Mutex<Option<ParsePdfRequest>>>,
-    active_discovery: Arc<Mutex<Option<ActiveDiscoveryTask>>>,
+    active_discovery: Arc<Mutex<Option<discovery::ActiveDiscoveryControl>>>,
 }
 
 impl DesktopService {
@@ -751,6 +752,7 @@ pub fn run() {
             workspace_settings::get_workspace_settings,
             workspace_settings::save_workspace_settings,
             discovery::get_active_discovery,
+            discovery::cancel_discovery,
             discovery::run_discovery,
             get_desktop_snapshot,
             choose_and_import_pdf,

@@ -4,7 +4,7 @@ use mathscape_orchestrator::*;
 use serde_json::{Value, json};
 use std::{
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -226,7 +226,10 @@ impl LlmBackend for Backend {
 #[tokio::test]
 async fn complete_pipeline_uses_fresh_full_context_and_unresolved_is_valid() {
     let backend = Backend::new(Mode::Clean);
-    let mut flow = DiscoveryWorkflow::new(&backend, Default::default());
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    let mut flow = DiscoveryWorkflow::new(&backend, Default::default())
+        .with_observer(Arc::new(move |event| captured.lock().unwrap().push(event)));
     assert_eq!(flow.run(prepared(SOURCE)).await, WorkflowStatus::Completed);
     let result = flow.result().unwrap();
     assert!(result.complete());
@@ -252,6 +255,34 @@ async fn complete_pipeline_uses_fresh_full_context_and_unresolved_is_valid() {
             .collect::<String>();
     assert_eq!(reconstructed, SOURCE);
     assert!(user(&calls[1]).get("original").is_none());
+    drop(calls);
+    let events = events.lock().unwrap();
+    assert!(matches!(
+        events.first(),
+        Some(DiscoveryWorkflowEvent::WorkflowStarted)
+    ));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        DiscoveryWorkflowEvent::FactPlanCreated {
+            batches: 1,
+            tasks: 2
+        }
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        DiscoveryWorkflowEvent::AttemptStarted {
+            stage,
+            batch_index: Some(1),
+            batch_total: Some(1),
+            ..
+        } if stage == "source-facts"
+    )));
+    assert!(matches!(
+        events.last(),
+        Some(DiscoveryWorkflowEvent::WorkflowFinished {
+            status: WorkflowStatus::Completed
+        })
+    ));
 }
 
 #[tokio::test]

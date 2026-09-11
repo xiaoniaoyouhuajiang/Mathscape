@@ -102,8 +102,14 @@ test("Markdown selection runs Discovery and shows an unregistered proposal", asy
   await expect(page.getByRole("button", { name: "使用 LLM 发现内容" })).toBeDisabled();
   await expect(page.locator(".discovery-status")).toContainText("LLM 正在分析");
   await expect(page.locator(".discovery-result")).toContainText("测试命题");
+  await expect(page.locator(".discovery-reference")).toContainText("定义 2 · 未解析");
+  await expect(page.locator(".discovery-relations")).toContainText("测试命题 —证明→ u2");
+  await expect(page.locator(".discovery-issues")).toContainText("定义 2 不在选区中");
   await expect(page.locator(".discovery-status")).toContainText("尚未接受或入图");
   await expect(page.locator(".discovery-run")).toContainText("150 tokens");
+  await page.locator(".discovery-unit").getByRole("button", { name: "定位原文" }).click();
+  await expect(page.getByLabel("原文块 2", { exact: true })).toHaveClass(/is-discovery-anchor-block/);
+  await expect(page.locator(".discovery-anchor-preview mark")).toContainText("Inline $x^2$");
   const request = await page.evaluate(() => (window as any).harness.discoveryRequests.at(-1));
   expect(request.selector).toEqual({
     kind: "block_range", first: "test-block-1", last: "test-block-1",
@@ -129,7 +135,17 @@ test("ask-each-run workspace policy requires an explicit admission choice", asyn
   await expect(page.locator(".admission-dialog")).toBeVisible();
   expect(await page.evaluate(() => (window as any).harness.discoveryRequests.length)).toBe(0);
   await page.getByRole("button", { name: "人工审核", exact: true }).click();
-  await expect(page.locator(".task-status")).toContainText("验证通过");
+  await expect(page.locator(".task-status")).toContainText("两阶段验证完成");
+});
+
+test("partial staged discovery remains visible without claiming missing facts are absent", async ({ page }) => {
+  await page.evaluate(() => { (window as any).harness.behavior.discoveryStatus = "partial"; });
+  await page.evaluate(async () => (window as any).harness.reader.open("md", "部分发现测试"));
+  await page.getByRole("button", { name: "选择全文" }).click();
+  await page.getByRole("button", { name: "使用 LLM 发现内容" }).click();
+  await expect(page.locator(".discovery-status")).toContainText("两阶段内容发现部分完成");
+  await expect(page.locator(".discovery-unit")).toContainText("来源事实待发现");
+  await expect(page.locator(".discovery-pending")).toContainText("尚有 1 个事实任务未完成");
 });
 
 test("streaming task survives reader changes and minimization", async ({ page }) => {
@@ -141,7 +157,7 @@ test("streaming task survives reader changes and minimization", async ({ page })
   await page.getByRole("button", { name: "最小化任务" }).click();
   await page.evaluate(async () => (window as any).harness.reader.open("json", "另一份材料"));
   await page.locator(".task-launcher").click();
-  await expect(page.locator(".task-status")).toContainText("验证通过");
+  await expect(page.locator(".task-status")).toContainText("两阶段验证完成");
   await page.getByText("查看完整结果与验证诊断").click();
   await expect(page.locator(".task-result")).toContainText("测试命题");
 });

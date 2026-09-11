@@ -61,7 +61,7 @@ const files: Record<string, { media: string; bytes: Uint8Array }> = {
 const reads: { id: string; offset: number; length: number }[] = [];
 const selectionRequests: SelectionRequest[] = [];
 const discoveryRequests: SelectionRequest[] = [];
-const behavior = { selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish" };
+const behavior = { selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed" };
 // Predetermined IPC double, not a second implementation of backend segmentation.
 function anchored(conversion: string): AnchoredMarkdown {
   const starts = ["# Math reader", "Inline $", "$$\n", "\\[\n", "![Diagram]", "<script>", "~~~tex"].map(marker => markdown.indexOf(marker));
@@ -82,34 +82,43 @@ mockIPC((command, payload) => {
     connect_timeout_seconds: 15,
   };
   if (command === "get_active_discovery") return null;
+  if (command === "cancel_discovery") return true;
   if (command === "run_discovery") {
     const channel = (payload as any).onProgress;
-    channel?.onmessage({ kind: "started", text: "测试配置 · test-model" });
-    channel?.onmessage({ kind: "reasoning", text: "供应商公开摘要" });
-    channel?.onmessage({ kind: "text", text: '{"units":' });
+    channel?.onmessage({ kind: "started", profile: "测试配置", model: "test-model" });
+    channel?.onmessage({ kind: "workflow_event", event: { kind: "attempt_started", attempt: 1, stage: "unit-discovery", batch_index: null, batch_total: null, repair: false } });
+    channel?.onmessage({ kind: "stream_delta", attempt: 1, stage: "unit-discovery", batch_index: null, batch_total: null, stream: "reasoning", text: "供应商公开摘要" });
+    channel?.onmessage({ kind: "stream_delta", attempt: 1, stage: "unit-discovery", batch_index: null, batch_total: null, stream: "text", text: '{"units":' });
     const request = (payload as { request: { selection: SelectionRequest } }).request.selection;
     discoveryRequests.push(request);
+    const doc = anchored(request.snapshot.conversion_id!);
+    const unitBlock = doc.blocks[1];
+    const anchor = {
+      start: unitBlock.range.start, end: unitBlock.range.end,
+      block_ids: [unitBlock.id], excerpt: "Inline $x^2$ and \\(a_n\\to a\\).",
+    };
     return new Promise(resolve => setTimeout(() => resolve({
-      outcome: "valid",
-      proposal: {
-        status: "complete", input_fingerprint: "test-input",
+      outcome: behavior.discoveryStatus,
+      view: {
+        version: "mathscape-desktop-discovery-view-1", status: behavior.discoveryStatus, complete: behavior.discoveryStatus === "completed",
+        source: { artifact_id: "md", conversion_id: request.snapshot.conversion_id, content_hash: "test-hash", input_fingerprint: "test-input" },
         units: [{
-          temp_id: "u1", unit_kind: "statement",
-          source_labels: [{ surface_form: "测试命题", selector: {} }],
-          source_title: null, display_title: "收敛命题", selectors: [], parent: null,
-          completeness: "complete", source_excerpt: "Inline $x^2$ and \\(a_n\\to a\\).",
+          unit_ref: "u1", unit_kind: "statement", title: "测试命题", display_title: "测试命题",
+          parent: null, completeness: "complete", fact_status: behavior.discoveryStatus === "completed" ? "processed" : "pending",
+          source_excerpt: anchor.excerpt, anchors: [anchor], source_labels: [], source_title: null,
         }],
-        relations: [], references: [], issues: [], coverage: [],
+        references: [{ owner: "u1", text: "定义 2", anchor, status: "unresolved", candidates: [], reason: "no local declaration", origins: ["t1:r1"] }],
+        relations: [{ source: "u1", target: "u2", relation: "proves", evidence: [anchor], bases: ["原文明示证明关系"], origins: ["t1:e1"] }],
+        issues: [{ issue_ref: "t1:i1", stage: "source_facts", owner: "u1", kind: "missing_context", observation: "定义 2 不在选区中", requires_unit_revision: false, evidence: [anchor] }],
+        pending_tasks: behavior.discoveryStatus === "completed" ? [] : [{ task_ref: "t1", owner: "u1" }], diagnostics: [],
+        attempts: [{ attempt: 1, stage: "unit-discovery", repair: false, status: "completed", error: null, total_tokens: 150, elapsed_ms: 20 }],
       },
       run: {
         profile_id: "desktop-default", provider: "test", requested_model: "test-model",
         admission: request.admission,
         request_timeout_seconds: 600,
         connect_timeout_seconds: 15,
-        response: {
-          provider_model: "test-model-v1", finish_reason: "completed",
-          input_tokens: 100, output_tokens: 50, total_tokens: 150, elapsed_ms: 20,
-        },
+        attempts: 1, input_tokens: 100, output_tokens: 50, total_tokens: 150, elapsed_ms: 20,
       },
     }), behavior.discoveryDelay));
   }

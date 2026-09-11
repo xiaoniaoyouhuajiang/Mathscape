@@ -1,6 +1,7 @@
 # 分阶段来源发现开发任务
 
-状态：M1（D1～D3）、M2（D4～D6）已完成；D7～D8 待实现。协议依据见
+状态：M1（D1～D3）、M2（D4～D6）已完成；D7 的 Desktop 执行、结果投影与交互已完成，
+真实多案例比较待执行；D8 待实现。协议依据见
 [分阶段发现协议](discovery-staged-protocol-draft.md)。本计划先打通可回放的两阶段发现，再接
 Desktop；来源登记、SQLite 图写入、DialectScope 与全局对齐不作为这次改造的前置条件。
 
@@ -71,9 +72,12 @@ M2 已完成：完整授权原文进入每个 B 批次、边界分片与 owner �
 标签与本地引用组装、一次有界修订、总期限/调用上限、内存检查点与显式续跑；详见
 [M2 实现与使用](discovery-staged-m2.md)。原文自动扩展、持久恢复和 Desktop 接入仍为后续工作。
 
-**M3（D7）：Desktop 真实模型比较。** 复用已有 profile 和 Marker 产物；记录每阶段总调用数、
-token、耗时与诊断，再决定默认批次大小和是否调整 Prompt。两阶段交接不要求人工批准，
-最终审核策略继续来自 Workspace 设置。
+**M3（D7）：Desktop 真实模型比较。** Desktop 默认入口现已切换到分阶段工作流，复用已有
+profile、流式传输和 Workspace 策略；活动锁覆盖全部阶段，结构化事件、阶段进度、取消、稳定
+展示投影和 Markdown 原文高亮均已接通，见 [M3 Desktop 实现](desktop-staged-discovery-m3.md)
+及 [展示 DTO v1](desktop-discovery-view-v1.md)。现在可以使用 Marker 产物记录各阶段调用数、
+token、耗时与诊断，决定默认批次大小和 Prompt 调整。两阶段交接不要求人工批准，最终审核
+策略继续来自 Workspace 设置。
 
 **M4（D8）：运行可恢复。** 在实验协议稳定后增加持久恢复；受管产物路径相对 Workspace，
 与当前 Artifact Pool 的可搬迁要求一致。运行保存与来源图登记仍是两项不同事务职责。

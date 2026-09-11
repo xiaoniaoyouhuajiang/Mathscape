@@ -7,6 +7,7 @@ use mathscape_llm::*;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     collections::{HashMap, HashSet},
+    sync::Arc,
     time::Duration,
 };
 use tokio::time::{Instant, timeout_at};
@@ -24,7 +25,7 @@ impl Default for DiscoveryWorkflowLimits {
         Self {
             timeout: Duration::from_secs(600),
             max_calls: 32,
-            max_tasks_per_batch: 32,
+            max_tasks_per_batch: 16,
             max_batches: 16,
             max_total_tokens: None,
         }
@@ -41,6 +42,49 @@ pub enum WorkflowStatus {
     Failed,
     Cancelled,
 }
+
+/// Observable lifecycle events for application shells. Raw provider deltas stay
+/// on the LLM backend observer; `AttemptStarted` binds those deltas to a stage.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DiscoveryWorkflowEvent {
+    WorkflowStarted,
+    AttemptStarted {
+        attempt: usize,
+        stage: String,
+        batch_index: Option<usize>,
+        batch_total: Option<usize>,
+        repair: bool,
+    },
+    AttemptFinished {
+        attempt: usize,
+        stage: String,
+        status: WorkflowStatus,
+    },
+    ValidationStarted {
+        stage: String,
+        batch_index: Option<usize>,
+        batch_total: Option<usize>,
+    },
+    UnitCheckpointCreated {
+        units: usize,
+        partial: bool,
+    },
+    FactPlanCreated {
+        batches: usize,
+        tasks: usize,
+    },
+    FactCheckpointUpdated {
+        completed_tasks: usize,
+        total_tasks: usize,
+    },
+    AssemblyStarted,
+    WorkflowFinished {
+        status: WorkflowStatus,
+    },
+}
+
+pub type DiscoveryWorkflowObserver = Arc<dyn Fn(DiscoveryWorkflowEvent) + Send + Sync>;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkflowAttempt {
@@ -78,6 +122,7 @@ pub struct DiscoveryWorkflow<'a> {
     status: WorkflowStatus,
     events: Vec<String>,
     source_input: Option<DiscoveryInput>,
+    observer: Option<DiscoveryWorkflowObserver>,
 }
 impl<'a> DiscoveryWorkflow<'a> {
     pub fn new(backend: &'a dyn LlmBackend, limits: DiscoveryWorkflowLimits) -> Self {
@@ -93,7 +138,37 @@ impl<'a> DiscoveryWorkflow<'a> {
             status: WorkflowStatus::Running,
             events: vec![],
             source_input: None,
+            observer: None,
         }
+    }
+    pub fn with_observer(mut self, observer: DiscoveryWorkflowObserver) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+    fn emit(&self, event: DiscoveryWorkflowEvent) {
+        if let Some(observer) = &self.observer {
+            observer(event);
+        }
+    }
+    fn finish(&mut self, status: WorkflowStatus) -> WorkflowStatus {
+        self.status = status.clone();
+        self.emit(DiscoveryWorkflowEvent::WorkflowFinished {
+            status: status.clone(),
+        });
+        status
+    }
+    fn fact_progress(&self) -> (usize, usize) {
+        let total = self
+            .batches
+            .iter()
+            .flat_map(|batch| &batch.model.tasks)
+            .count();
+        let completed = self
+            .facts
+            .values()
+            .filter(|task| task.processed() && !task.requires_unit_revision())
+            .count();
+        (completed, total)
     }
     pub fn attempts(&self) -> &[WorkflowAttempt] {
         &self.attempts
@@ -112,6 +187,13 @@ impl<'a> DiscoveryWorkflow<'a> {
     }
     pub fn source_input(&self) -> Option<&DiscoveryInput> {
         self.source_input.as_ref()
+    }
+    pub fn planned_task_owner(&self, task_ref: &str) -> Option<&str> {
+        self.batches
+            .iter()
+            .flat_map(|batch| &batch.model.tasks)
+            .find(|task| task.task_ref == task_ref)
+            .map(|task| task.owner_unit_ref.as_str())
     }
     pub fn snapshot(&self) -> DiscoveryWorkflowSnapshot {
         DiscoveryWorkflowSnapshot {
@@ -135,12 +217,12 @@ impl<'a> DiscoveryWorkflow<'a> {
         assemble_discovery(units, &self.batches, facts).ok()
     }
     pub fn cancel(&mut self) {
-        self.status = WorkflowStatus::Cancelled;
         for a in &mut self.attempts {
             if a.status == WorkflowStatus::Running {
                 a.status = WorkflowStatus::Cancelled;
             }
         }
+        self.finish(WorkflowStatus::Cancelled);
     }
 
     async fn call<T: DeserializeOwned + Serialize>(
@@ -148,6 +230,7 @@ impl<'a> DiscoveryWorkflow<'a> {
         request: LlmRequest,
         prompt: ContentHash,
         batch: Option<ContentHash>,
+        batch_position: Option<(usize, usize)>,
         repair: bool,
         deadline: Instant,
     ) -> Result<T, String> {
@@ -188,6 +271,13 @@ impl<'a> DiscoveryWorkflow<'a> {
             status: WorkflowStatus::Running,
             error: None,
         });
+        self.emit(DiscoveryWorkflowEvent::AttemptStarted {
+            attempt: i + 1,
+            stage: self.attempts[i].stage.clone(),
+            batch_index: batch_position.map(|position| position.0),
+            batch_total: batch_position.map(|position| position.1),
+            repair,
+        });
         let response = match timeout_at(deadline, self.backend.execute_stream(request)).await {
             Ok(Ok(r)) => r,
             failure => {
@@ -197,6 +287,11 @@ impl<'a> DiscoveryWorkflow<'a> {
                 };
                 self.attempts[i].status = WorkflowStatus::Failed;
                 self.attempts[i].error = Some(message.clone());
+                self.emit(DiscoveryWorkflowEvent::AttemptFinished {
+                    attempt: i + 1,
+                    stage: self.attempts[i].stage.clone(),
+                    status: WorkflowStatus::Failed,
+                });
                 return Err(message);
             }
         };
@@ -207,11 +302,21 @@ impl<'a> DiscoveryWorkflow<'a> {
         match decode_response::<T>(&response, 2 * 1024 * 1024) {
             Ok(value) => {
                 self.attempts[i].status = WorkflowStatus::Completed;
+                self.emit(DiscoveryWorkflowEvent::AttemptFinished {
+                    attempt: i + 1,
+                    stage: self.attempts[i].stage.clone(),
+                    status: WorkflowStatus::Completed,
+                });
                 Ok(value)
             }
             Err(e) => {
                 self.attempts[i].status = WorkflowStatus::NeedsAttention;
                 self.attempts[i].error = Some(e.clone());
+                self.emit(DiscoveryWorkflowEvent::AttemptFinished {
+                    attempt: i + 1,
+                    stage: self.attempts[i].stage.clone(),
+                    status: WorkflowStatus::NeedsAttention,
+                });
                 Err(e)
             }
         }
@@ -220,13 +325,13 @@ impl<'a> DiscoveryWorkflow<'a> {
     /// Calling again explicitly resumes the same in-memory run; successful tasks
     /// and the frozen A result are retained. Budgets count all attempts.
     pub async fn run(&mut self, prepared: PreparedUnitDiscoveryRequest) -> WorkflowStatus {
+        self.emit(DiscoveryWorkflowEvent::WorkflowStarted);
         if self.limits.max_tasks_per_batch == 0
             || self.limits.max_calls == 0
             || self.limits.max_batches == 0
             || self.limits.timeout.is_zero()
         {
-            self.status = WorkflowStatus::Failed;
-            return self.status.clone();
+            return self.finish(WorkflowStatus::Failed);
         }
         for a in &mut self.attempts {
             if a.status == WorkflowStatus::Running {
@@ -241,8 +346,7 @@ impl<'a> DiscoveryWorkflow<'a> {
         {
             self.events
                 .push("source changed; create a separate workflow".into());
-            self.status = WorkflowStatus::NeedsAttention;
-            return self.status.clone();
+            return self.finish(WorkflowStatus::NeedsAttention);
         }
         self.source_input = Some(prepared.input().clone());
         self.status = WorkflowStatus::Running;
@@ -251,8 +355,7 @@ impl<'a> DiscoveryWorkflow<'a> {
             .values()
             .any(ValidatedFactTask::requires_unit_revision)
         {
-            self.status = WorkflowStatus::NeedsAttention;
-            return self.status.clone();
+            return self.finish(WorkflowStatus::NeedsAttention);
         }
         // An explicit resume retries pending work, not already validated facts.
         self.facts.retain(|_, task| task.processed());
@@ -261,16 +364,16 @@ impl<'a> DiscoveryWorkflow<'a> {
                 .revalidate_checkpoint(&units.checkpoint(), Default::default())
                 .is_err()
             {
-                self.status = WorkflowStatus::NeedsAttention;
                 self.events
                     .push("source or UnitSet changed; start a new workflow".into());
-                return self.status.clone();
+                return self.finish(WorkflowStatus::NeedsAttention);
             }
         } else {
             let raw = match self
                 .call::<UnitDiscoveryProposal>(
                     prepared.request().clone(),
                     prepared.prompt_fingerprint().clone(),
+                    None,
                     None,
                     false,
                     deadline,
@@ -280,18 +383,21 @@ impl<'a> DiscoveryWorkflow<'a> {
                 Ok(p) => p,
                 Err(e) => {
                     self.events.push(e);
-                    self.status = WorkflowStatus::Failed;
-                    return self.status.clone();
+                    return self.finish(WorkflowStatus::Failed);
                 }
             };
             self.events.push("validate units".into());
+            self.emit(DiscoveryWorkflowEvent::ValidationStarted {
+                stage: "unit-discovery".into(),
+                batch_index: None,
+                batch_total: None,
+            });
             match prepared.validate(raw.clone(), Default::default()) {
                 Ok(units) => self.units = Some(units),
                 Err(report) => {
                     self.diagnostics.push(report.clone());
                     if !self.repairs.insert("units".into()) {
-                        self.status = WorkflowStatus::NeedsAttention;
-                        return self.status.clone();
+                        return self.finish(WorkflowStatus::NeedsAttention);
                     }
                     let repair_ref = new_request_ref("repair");
                     let input = DiscoveryRepairInput {
@@ -308,37 +414,40 @@ impl<'a> DiscoveryWorkflow<'a> {
                         prepared.request_fingerprint(),
                     );
                     let response = match self
-                        .call::<DiscoveryRepairResponse>(request, prompt, None, true, deadline)
+                        .call::<DiscoveryRepairResponse>(
+                            request, prompt, None, None, true, deadline,
+                        )
                         .await
                     {
                         Ok(r) => r,
                         Err(e) => {
                             self.events.push(e);
-                            self.status = WorkflowStatus::NeedsAttention;
-                            return self.status.clone();
+                            return self.finish(WorkflowStatus::NeedsAttention);
                         }
                     };
                     if response.repair_ref != repair_ref || response.actions.len() != 1 {
-                        self.status = WorkflowStatus::NeedsAttention;
-                        return self.status.clone();
+                        return self.finish(WorkflowStatus::NeedsAttention);
                     }
                     let Some(DiscoveryRepairAction::ReplaceUnits { proposal }) =
                         response.actions.into_iter().next()
                     else {
-                        self.status = WorkflowStatus::NeedsAttention;
-                        return self.status.clone();
+                        return self.finish(WorkflowStatus::NeedsAttention);
                     };
                     match prepared.validate(*proposal, Default::default()) {
                         Ok(u) => self.units = Some(u),
                         Err(r) => {
                             self.diagnostics.push(r);
-                            self.status = WorkflowStatus::NeedsAttention;
-                            return self.status.clone();
+                            return self.finish(WorkflowStatus::NeedsAttention);
                         }
                     }
                 }
             }
         }
+        let units = self.units.as_ref().expect("validated units");
+        self.emit(DiscoveryWorkflowEvent::UnitCheckpointCreated {
+            units: units.units().len(),
+            partial: units.is_partial(),
+        });
         if self.batches.is_empty() {
             match plan_source_facts(
                 &prepared,
@@ -348,19 +457,27 @@ impl<'a> DiscoveryWorkflow<'a> {
                 Ok(batches) => {
                     if batches.len() > self.limits.max_batches {
                         self.events.push("batch budget exceeded".into());
-                        self.status = WorkflowStatus::Partial;
-                        return self.status.clone();
+                        return self.finish(WorkflowStatus::Partial);
                     }
                     self.batches = batches;
+                    self.emit(DiscoveryWorkflowEvent::FactPlanCreated {
+                        batches: self.batches.len(),
+                        tasks: self
+                            .batches
+                            .iter()
+                            .flat_map(|batch| &batch.model.tasks)
+                            .count(),
+                    });
                 }
                 Err(r) => {
                     self.diagnostics.push(r);
-                    self.status = WorkflowStatus::NeedsAttention;
-                    return self.status.clone();
+                    return self.finish(WorkflowStatus::NeedsAttention);
                 }
             }
         }
-        for batch in self.batches.clone() {
+        let batch_total = self.batches.len();
+        for (batch_offset, batch) in self.batches.clone().into_iter().enumerate() {
+            let batch_position = Some((batch_offset + 1, batch_total));
             if batch
                 .model
                 .tasks
@@ -379,6 +496,7 @@ impl<'a> DiscoveryWorkflow<'a> {
                     batch.request.clone(),
                     batch.prompt_fingerprint.clone(),
                     Some(batch.batch_fingerprint.clone()),
+                    batch_position,
                     false,
                     deadline,
                 )
@@ -391,6 +509,11 @@ impl<'a> DiscoveryWorkflow<'a> {
                 }
             };
             self.events.push("validate source facts".into());
+            self.emit(DiscoveryWorkflowEvent::ValidationStarted {
+                stage: "source-facts".into(),
+                batch_index: batch_position.map(|position| position.0),
+                batch_total: batch_position.map(|position| position.1),
+            });
             let validation = batch.validate(&raw);
             for task in &validation.tasks {
                 self.facts.insert(task.task_ref.clone(), task.clone());
@@ -401,9 +524,13 @@ impl<'a> DiscoveryWorkflow<'a> {
                 .any(ValidatedFactTask::requires_unit_revision)
             {
                 self.events.push("requires_unit_revision".into());
-                self.status = WorkflowStatus::NeedsAttention;
-                return self.status.clone();
+                return self.finish(WorkflowStatus::NeedsAttention);
             }
+            let (completed_tasks, total_tasks) = self.fact_progress();
+            self.emit(DiscoveryWorkflowEvent::FactCheckpointUpdated {
+                completed_tasks,
+                total_tasks,
+            });
             if validation.report.is_valid() {
                 continue;
             }
@@ -452,6 +579,7 @@ impl<'a> DiscoveryWorkflow<'a> {
                     request,
                     prompt,
                     Some(batch.batch_fingerprint.clone()),
+                    batch_position,
                     true,
                     deadline,
                 )
@@ -486,17 +614,22 @@ impl<'a> DiscoveryWorkflow<'a> {
                 .values()
                 .any(ValidatedFactTask::requires_unit_revision)
             {
-                self.status = WorkflowStatus::NeedsAttention;
-                return self.status.clone();
+                return self.finish(WorkflowStatus::NeedsAttention);
             }
+            let (completed_tasks, total_tasks) = self.fact_progress();
+            self.emit(DiscoveryWorkflowEvent::FactCheckpointUpdated {
+                completed_tasks,
+                total_tasks,
+            });
         }
         self.events.push("assemble discovery".into());
-        self.status = match self.result() {
+        self.emit(DiscoveryWorkflowEvent::AssemblyStarted);
+        let status = match self.result() {
             Some(r) if r.complete() => WorkflowStatus::Completed,
             Some(_) => WorkflowStatus::Partial,
             None => WorkflowStatus::NeedsAttention,
         };
-        self.status.clone()
+        self.finish(status)
     }
 }
 

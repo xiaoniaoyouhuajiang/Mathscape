@@ -29,14 +29,32 @@
 .discovery-summary, .discovery-run { color: #aebdc7; }
 .discovery-units { display: grid; gap: 7px; }
 .discovery-unit { background: #1b2a33; border: 1px solid #35505d; border-radius: 6px; padding: 8px; }
+.discovery-unit-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .discovery-unit strong, .discovery-kind { display: block; }
 .discovery-kind { color: #8fc1b6; margin-top: 3px; }
 .discovery-unit p { margin-bottom: 0; white-space: pre-wrap; }
+.discovery-facts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.discovery-fact { border: 1px solid #45606c; border-radius: 999px; padding: 3px 7px; color: #c8ddd9; }
+.discovery-fact.needs-precision-review { border-color: #9b7645; }
+.discovery-anchor-button { background: #223a42; color: #cbe3dd; border: 1px solid #4d6b70; border-radius: 5px; padding: 2px 7px; cursor: pointer; font-size: 11px; }
+.discovery-anchor-actions { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.discovery-anchor-button:disabled { opacity: .4; cursor: default; }
+.discovery-reference-list { display: grid; gap: 6px; }
+.discovery-reference { border-left: 3px solid #65747b; background: #17252d; padding: 7px 9px; }
+.discovery-reference.reference-resolved_local { border-left-color: #4d9a78; }
+.discovery-reference.reference-ambiguous { border-left-color: #b07a42; }
+.discovery-reference.reference-unresolved { border-left-color: #8b5960; }
+.discovery-reference p { margin: 3px 0; }
 .discovery-relations, .discovery-issues { margin: 5px 0 10px; padding-left: 22px; }
+.discovery-pending { color: #e0ba78; }
+.discovery-anchor-preview { margin: 8px 0; border: 1px solid #66837d; border-radius: 6px; padding: 8px; background: #0e191f; }
+.discovery-anchor-preview pre { max-height: 160px; overflow: auto; white-space: pre-wrap; user-select: text; }
+.discovery-anchor-preview mark { background: #ffe37a; color: #1c252b; padding: 1px 0; }
 .discovery-json summary { cursor: pointer; color: #9fc8c1; padding: 5px 0; }
 .discovery-json pre { max-height: 240px; overflow: auto; padding: 8px; background: #10181e; user-select: text; }
 .discovery-run { border-top: 1px dotted #45606c; padding-top: 8px; overflow-wrap: anywhere; }
 .source-block { border-left: 3px solid transparent; padding: 3px 10px; margin: 3px 0; cursor: pointer; }
 .source-block:hover { background: #edf0f4; }
 .source-block.is-selected-block { background: #e1f0e9; border-left-color: #268065; }
+.source-block.is-discovery-anchor-block { background: #fff2bd; border-left-color: #d69b23; box-shadow: inset 0 0 0 1px #e4bf61; }
 .source-block.is-current-block, .source-block:focus-visible { outline: 2px solid #567ebb; outline-offset: -2px; }

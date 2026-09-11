@@ -53,11 +53,17 @@ impl ValidatedFactTask {
     pub fn labels(&self) -> &[LocatedFact] {
         &self.labels
     }
+    pub fn title(&self) -> Option<&LocatedFact> {
+        self.title.as_ref()
+    }
     pub fn references(&self) -> &[LocatedReference] {
         &self.references
     }
     pub fn relations(&self) -> &[LocatedRelation] {
         &self.relations
+    }
+    pub fn issues(&self) -> &[(FactIssue, Vec<ResolvedDiscoverySelector>)] {
+        &self.issues
     }
     pub fn requires_unit_revision(&self) -> bool {
         self.original
@@ -446,6 +452,7 @@ pub struct AssembledRelation {
     pub relation: DiscoveryRelationKind,
     pub evidence: Vec<ResolvedDiscoverySelector>,
     pub origins: Vec<String>,
+    pub bases: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct DiscoveryResult {
@@ -683,6 +690,7 @@ pub fn assemble_discovery(
                 r.relation,
                 &r.evidence,
                 format!("{}:{}", task.task_ref, r.fact_ref),
+                r.basis.clone(),
             );
         }
     }
@@ -695,6 +703,7 @@ pub fn assemble_discovery(
                 DiscoveryRelationKind::Cites,
                 std::slice::from_ref(&r.location),
                 r.origins.join(","),
+                "由唯一解析的局部来源引用生成。".into(),
             );
         }
     }
@@ -715,6 +724,7 @@ fn merge_relation(
     relation: DiscoveryRelationKind,
     evidence: &[ResolvedDiscoverySelector],
     origin: String,
+    basis: String,
 ) {
     if source == target {
         return;
@@ -724,6 +734,9 @@ fn merge_relation(
         .find(|r| r.source == source && r.target == target && r.relation == relation)
     {
         r.origins.push(origin);
+        if !r.bases.contains(&basis) {
+            r.bases.push(basis);
+        }
         for e in evidence {
             if !r.evidence.iter().any(|x| x.range() == e.range()) {
                 r.evidence.push(e.clone());
@@ -736,6 +749,7 @@ fn merge_relation(
             relation,
             evidence: evidence.to_vec(),
             origins: vec![origin],
+            bases: vec![basis],
         });
     }
 }

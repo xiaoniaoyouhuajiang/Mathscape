@@ -259,6 +259,20 @@ pub struct FrozenDiscoveryUnit {
     proposal: UnitProposal,
     selectors: Vec<ResolvedDiscoverySelector>,
 }
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FrozenDiscoveryIssue {
+    proposal: DiscoveryIssueProposal,
+    evidence: Vec<ResolvedDiscoverySelector>,
+}
+impl FrozenDiscoveryIssue {
+    pub fn proposal(&self) -> &DiscoveryIssueProposal {
+        &self.proposal
+    }
+    pub fn evidence(&self) -> &[ResolvedDiscoverySelector] {
+        &self.evidence
+    }
+}
 impl FrozenDiscoveryUnit {
     pub fn proposal(&self) -> &UnitProposal {
         &self.proposal
@@ -274,6 +288,7 @@ pub struct ValidatedUnitSet {
     fingerprint: ContentHash,
     input_fingerprint: ContentHash,
     units: Vec<FrozenDiscoveryUnit>,
+    issues: Vec<FrozenDiscoveryIssue>,
     proposal: UnitDiscoveryProposal,
     rewrites: Vec<SelectorRewrite>,
     partial: bool,
@@ -287,6 +302,9 @@ impl ValidatedUnitSet {
     }
     pub fn units(&self) -> &[FrozenDiscoveryUnit] {
         &self.units
+    }
+    pub fn issues(&self) -> &[FrozenDiscoveryIssue] {
+        &self.issues
     }
     pub fn proposal(&self) -> &UnitDiscoveryProposal {
         &self.proposal
@@ -552,15 +570,18 @@ fn validate_units(
             }
         }
     }
+    let mut issue_ranges = Vec::with_capacity(proposal.issues.len());
     for (i, issue) in proposal.issues.iter_mut().enumerate() {
-        if let Some(evidence) = locate(
+        let evidence = locate(
             &mut issue.evidence,
             &format!("issues[{i}].evidence"),
             &mut report,
-        ) && let Some(unit) = issue
-            .unit
-            .as_deref()
-            .and_then(|id| proposal.units.iter().position(|u| u.unit_ref == id))
+        );
+        if let Some(evidence) = &evidence
+            && let Some(unit) = issue
+                .unit
+                .as_deref()
+                .and_then(|id| proposal.units.iter().position(|u| u.unit_ref == id))
         {
             if let Some(owner) = &ranges[unit] {
                 if evidence.iter().any(|r| !inside(owner, r)) {
@@ -576,6 +597,7 @@ fn validate_units(
                     .push(format!("issues[{i}]: evidence ownership"));
             }
         }
+        issue_ranges.push(evidence);
     }
     for (i, unit) in proposal.units.iter().enumerate() {
         let kinds: BTreeSet<_> = proposal
@@ -707,6 +729,16 @@ fn validate_units(
             selectors: selectors.expect("all ranges passed"),
         })
         .collect();
+    let issues = proposal
+        .issues
+        .iter()
+        .cloned()
+        .zip(issue_ranges)
+        .map(|(proposal, evidence)| FrozenDiscoveryIssue {
+            proposal,
+            evidence: evidence.expect("all issue ranges passed"),
+        })
+        .collect();
     // Canonical occurrence indices and formal block IDs make equivalent locators
     // converge. Request tokens deliberately do not enter the frozen identity.
     let identities: Vec<_> = units
@@ -774,6 +806,7 @@ fn validate_units(
         fingerprint,
         input_fingerprint: prepared.input.fingerprint.clone(),
         units,
+        issues,
         proposal,
         rewrites,
         partial,
