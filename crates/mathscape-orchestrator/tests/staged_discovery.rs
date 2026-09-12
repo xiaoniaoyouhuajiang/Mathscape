@@ -463,6 +463,26 @@ fn authorization_does_not_renumber_occurrences_and_range_cannot_cross_excluded_t
     let all =
         OccurrenceResolver::new(p.input(), vec![p.input().requested.source_range.clone()]).unwrap();
     assert!(all.resolve(&anchor).unwrap().precision_review());
+
+    let p = prepared("标题开始，正文，标题结束。\n");
+    let anchor = TextOccurrence::RangeOccurrence {
+        selector: serde_json::from_value(json!({
+            "kind":"quote_range",
+            "first":"b1",
+            "start":quote("标题开始"),
+            "last":"b1",
+            "end":quote("标题结束。")
+        }))
+        .unwrap(),
+    };
+    let resolver =
+        OccurrenceResolver::new(p.input(), vec![p.input().requested.source_range.clone()]).unwrap();
+    let located = resolver.resolve(&anchor).unwrap();
+    assert!(!located.precision_review());
+    assert_eq!(
+        located.original(),
+        &occurrence("b1", "标题开始，正文，标题结束。", None)
+    );
 }
 
 #[test]
@@ -508,6 +528,33 @@ fn fact_preflight_catches_self_reference_without_resolving_the_bad_quote() {
     let report = preflight_source_facts(&input, &facts);
     assert!(has(&report, "invalid_reference"));
     assert!(!report.not_checked.is_empty());
+}
+
+#[test]
+fn fact_ids_are_assigned_by_the_validator_and_legacy_refs_have_no_authority() {
+    let p = prepared(SOURCE);
+    let units = p
+        .validate(proposal(&p), Default::default())
+        .expect("fixture units validate");
+    let batch = plan_source_facts(&p, &units, 16)
+        .expect("fact plan")
+        .into_iter()
+        .next()
+        .expect("one batch");
+    let mut facts: SourceFactProposal = serde_json::from_str(FACTS).unwrap();
+    facts.request_ref = batch.model_input().request_ref.clone();
+    // Replay compatibility accepts old producer refs, including values which
+    // were formerly rejected. They are never used as validated identities.
+    facts.tasks[0].source_labels[0].fact_ref = "(legacy label)".into();
+    facts.tasks[1].references[0].fact_ref = "duplicate".into();
+    facts.tasks[1].references[1].fact_ref = "duplicate".into();
+    facts.tasks[1].relations[0].fact_ref = "duplicate".into();
+    let validation = batch.validate(&facts);
+    assert!(validation.report.is_valid(), "{:?}", validation.report);
+    assert_eq!(validation.tasks[0].labels()[0].fact_ref, "l1");
+    assert_eq!(validation.tasks[1].references()[0].fact.fact_ref, "r1");
+    assert_eq!(validation.tasks[1].references()[1].fact.fact_ref, "r2");
+    assert_eq!(validation.tasks[1].relations()[0].fact_ref, "rel1");
 }
 
 #[tokio::test]

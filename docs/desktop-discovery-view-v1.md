@@ -15,6 +15,10 @@
 - `issues`：A/B 阶段、owner、问题类型、上下文请求、是否要求修改 UnitSet 及证据。
 - `pending_tasks`、`diagnostics`、`attempts`：未完成任务、确定性检查及精简调用审计。
 
+相同 code、path、message 与检查状态的诊断在展示投影中折叠为一项，并记录 occurrences 与
+reports；底层工作流仍保留每次验证的完整报告。修订输入则按 task 聚合普通字段错误，带候选
+的定位歧义保持独立，以便执行 choose_candidate。
+
 每个 `DesktopSourceAnchorView` 保存绝对 UTF-8 `[start,end)`、相关物理 Markdown block ID 和有界
 摘要。字节范围以 `source.content_hash` 对应的 Artifact 为解释上下文；前端必须在当前 Markdown
 快照上检查边界，不能依据渲染 DOM 文本猜测位置。

@@ -498,7 +498,7 @@ fn local_resolution_waits_for_all_labels_and_rejects_stale_unit_sets() {
     for b in &batches {
         let id = b.model_input().tasks[0].task_ref.clone();
         let anchor = |block: &str, text: &str| json!({"kind":"text_occurrence","block":block,"text":text,"occurrence":null});
-        let f:SourceFactProposal=serde_json::from_value(json!({"version":"mathscape-source-facts-1","request_ref":b.model_input().request_ref,"tasks":[{"task_ref":id,"disposition":{"status":"processed"},"source_labels":if id=="t2"{json!([{"ref":"m1","anchor":anchor("b2","2")}])}else{json!([])},"source_title":null,"references":if id=="t3"{json!([{"ref":"r1","anchor":anchor("b3","定义 2"),"target_hint":null}])}else{json!([])},"relations":[],"issues":[]}]})).unwrap();
+        let f:SourceFactProposal=serde_json::from_value(json!({"version":"mathscape-source-facts-1","request_ref":b.model_input().request_ref,"tasks":[{"task_ref":id,"disposition":{"status":"processed"},"source_labels":if id=="t2"{json!([{"anchor":anchor("b2","2")}])}else{json!([])},"source_title":null,"references":if id=="t3"{json!([{"anchor":anchor("b3","定义 2"),"target_hint":null}])}else{json!([])},"relations":[],"issues":[]}]})).unwrap();
         let v = b.validate(&f);
         assert!(v.report.is_valid(), "{:?}", v.report);
         valid.extend(v.tasks);

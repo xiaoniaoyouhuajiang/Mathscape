@@ -63,10 +63,11 @@ owner_unit_ref、evidence_block_refs、context_block_refs；内部范围由绑�
 计算字节偏移。任务的 evidence/context 句柄集合互斥，context 同时标明是否位于 owner 内部，
 供关系证据检查。任务计划本身参与输入指纹，响应不能修改计划。
 
-A 的 ref 在提案内唯一；B 的 m/r/e ref 在 task_ref 内统一唯一，跨批存储使用
-UnitSet fingerprint + task_ref + ref，不把同名 r1 合并。阶段输出使用封闭对象、必需数组
-和显式 null；未知字段拒绝。基于 ref 的关系只能引用冻结目录，不能引用另一模型响应中未
-交接的临时对象。标题/提及等自由文本也是数据，不作为指令执行。
+A 的 ref 在提案内唯一。B 不再要求模型生成标签、引用和关系的机械 ID；验证器按 task_ref
+及各集合的规范顺序生成 l1/r1/rel1，跨批 origin 使用 UnitSet fingerprint + task_ref +
+系统 ID。旧响应中的事实 ref 只作回放兼容且没有身份权限。阶段输出使用封闭对象、必需数组
+和显式 null；未知字段拒绝。关系目标只能引用冻结目录，不能引用另一模型响应中未交接的
+临时对象。标题/提及等自由文本也是数据，不作为指令执行。
 
 ## 4. 阶段 A：单元发现
 
@@ -144,10 +145,10 @@ disposition、source_labels、source_title、references、relations、issues。�
 
 | 项目 | 最小内容与规则 |
 | --- | --- |
-| source_labels | 每项 ref、anchor；每个原文标签一项，所属单元由任务确定 |
+| source_labels | 每项 anchor；每个原文标签一项，所属单元与临时 ID 由程序确定 |
 | source_title | null 或原文标题的 TextOccurrence；与生成的 display_title 分开 |
-| references | 每项 ref、anchor、target_hint；hint 为目录中的 unit ref 或 null，仅作候选提示 |
-| relations | 每项 ref、relation、target、evidence、basis；source 隐含为任务 owner |
+| references | 每项 anchor、target_hint；hint 为目录中的 unit ref 或 null，仅作候选提示 |
+| relations | 每项 relation、target、evidence、basis；source 与临时 ID 由程序注入 |
 | issues | 当前 owner 的疑点、原文证据和可空 context_request；可报告需要修改单元结构 |
 | disposition | processed / unprocessed(reason)；分批应足够小，首版不接受任务内部隐式半完成 |
 
@@ -189,8 +190,9 @@ text 只写一次；不用另写 surface_form、start.quote 和 end.quote。最�
 
 跨块的单次提及使用首版逃生分支 `range_occurrence`，其 payload 只有一个既有 quote_range
 selector；规范原文从范围读取，不另写 surface_form。允许它是为了处理真实换页/换段拆分，
-不能用它包住整段以掩盖重复引用。跨块或异常宽的提及产生定位精度警告，供修订/审核；程序
-不能仅凭“范围有效”认证其提及边界在语义上正确。常规同块提及必须使用 text_occurrence。
+不能用它包住整段以掩盖重复引用。可解析的同块 range_occurrence 由程序规范化为精确原文
+与 occurrence，不扩大授权；跨块或异常宽的提及产生定位精度警告，供修订/审核。程序不能
+仅凭“范围有效”认证其提及边界在语义上正确。常规同块提及仍应使用 text_occurrence。
 
 ### 6.3 标签和引用的语义
 
@@ -331,16 +333,16 @@ b2～b3。阶段 B 输入包含上述任务表、块表和冻结单元目录。�
   "request_ref": "b_request1",
   "tasks": [
     {"task_ref":"t1","disposition":{"status":"processed"},
-     "source_labels":[{"ref":"m1","anchor":
+     "source_labels":[{"anchor":
        {"kind":"text_occurrence","block":"b1","text":"1","occurrence":null}}],
      "source_title":null,"references":[],"relations":[],"issues":[]},
     {"task_ref":"t2","disposition":{"status":"processed"},
      "source_labels":[],"source_title":null,
      "references":[
-       {"ref":"r1","anchor":{"kind":"text_occurrence","block":"b3","text":"定义 2","occurrence":1},"target_hint":null},
-       {"ref":"r2","anchor":{"kind":"text_occurrence","block":"b3","text":"定义 2","occurrence":2},"target_hint":null}
+       {"anchor":{"kind":"text_occurrence","block":"b3","text":"定义 2","occurrence":1},"target_hint":null},
+       {"anchor":{"kind":"text_occurrence","block":"b3","text":"定义 2","occurrence":2},"target_hint":null}
      ],
-     "relations":[{"ref":"e1","relation":"proves","target":"u1",
+     "relations":[{"relation":"proves","target":"u1",
        "evidence":[{"kind":"block_range","first":"b2","last":"b3"}],
        "basis":"原文在命题后明确给出证明并得出其结论。"}],
      "issues":[]}
@@ -348,7 +350,8 @@ b2～b3。阶段 B 输入包含上述任务表、块表和冻结单元目录。�
 }
 ```
 
-模型不重复生成 source。程序由 t2 得到 source=u2，定位 r1/r2 的两个不同字节范围。
+模型不重复生成 source 或事实 ID。程序由 t2 得到 source=u2，并为两个引用生成 r1/r2，定位
+其不同字节范围。
 定义 2 没有声明目标，两条 reference 都保存为 unresolved；proves(u2,u1) 有真实端点和证据。
 若 occurrence 均为空，程序反馈两个候选供修订，不自行选第一个或生成两次引用。
 

@@ -62,11 +62,11 @@ impl Respond for StagedDiscoveryResponder {
                 .map(|task| {
                     let block = task["evidence_block_refs"][0].clone();
                     let labels = (task["owner_unit_ref"] == "u1")
-                        .then(|| serde_json::json!({"ref":"m1","anchor":{"kind":"text_occurrence","block":block.clone(),"text":"习题 1","occurrence":null}}))
+                        .then(|| serde_json::json!({"anchor":{"kind":"text_occurrence","block":block.clone(),"text":"习题 1","occurrence":null}}))
                         .into_iter()
                         .collect::<Vec<_>>();
                     let references = (task["owner_unit_ref"] == "u1")
-                        .then(|| serde_json::json!({"ref":"r1","anchor":{"kind":"text_occurrence","block":block.clone(),"text":"定义","occurrence":null},"target_hint":null}))
+                        .then(|| serde_json::json!({"anchor":{"kind":"text_occurrence","block":block.clone(),"text":"定义","occurrence":null},"target_hint":null}))
                         .into_iter()
                         .collect::<Vec<_>>();
                     let issues = (task["owner_unit_ref"] == "u1")
@@ -81,7 +81,7 @@ impl Respond for StagedDiscoveryResponder {
                         .collect::<Vec<_>>();
                     let relation = (task["owner_unit_ref"] == "u2").then(|| {
                         serde_json::json!({
-                            "ref":"e1","relation":"solves","target":"u1",
+                            "relation":"solves","target":"u1",
                             "evidence":[{"kind":"block_range","first":block.clone(),"last":block}],
                             "basis":"原文给出该习题的解答。"
                         })

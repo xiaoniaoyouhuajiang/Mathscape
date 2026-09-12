@@ -25,7 +25,7 @@ cargo run -p mathscape-orchestrator --example discovery_workflow_demo --quiet
 
 每个阶段 B 请求都包含完整授权选区，按源顺序发送一次。leading_gap 和 following_gap 保留
 原文间隙，boundary 保留文件边界。增加这两个输入字段后，B 输入版本为
-`mathscape-source-facts-input-2`；B 输出仍为 `mathscape-source-facts-1`，Prompt revision 为 2。
+`mathscape-source-facts-input-2`；B 输出仍为 `mathscape-source-facts-1`，Prompt revision 为 5。
 
 任务归属独立于阅读范围。严格物理嵌套并且有 parent 祖先链时，后代拥有其直接内容，父单元
 只在剩余内容提取；其余原文是可阅读上下文。父子范围物理分离时不扣除。阶段 A 已拒绝兄弟
@@ -43,12 +43,14 @@ cargo run -p mathscape-orchestrator --example discovery_workflow_demo --quiet
 ## 验证、组合和引用状态
 
 B 先检查 envelope 的 request_ref、任务唯一性及任务成员。错误 envelope 整批拒绝；有效
-envelope 下按任务独立验证，失败任务不会使已验证的兄弟任务丢失。验证包括事实 ID、任务
-处置、隐含 source、目标与自指、精确定位、关系端点类型及 owner 证据范围。
+envelope 下按任务独立验证，失败任务不会使已验证的兄弟任务丢失。验证包括任务处置、隐含
+source、目标与自指、精确定位、关系端点类型及 owner 证据范围。标签、引用和关系的临时 ID
+由验证器按任务内集合顺序生成；旧响应中的 ref 可反序列化回放，但不参与身份或合法性判断。
 
 候选提及经 TextOccurrence 定位后保存原文精确文本与字节范围，同时保留原提案和规范化
-标记。跨块范围标记 precision_review，程序不会把边界可定位宣称成语义边界已经人工确认。
-待修改 UnitSet 的 issue 会使工作流进入 needs_attention，B 不能修改 A。
+标记。可解析的同块 range_occurrence 会被确定性地收窄成原文精确文本和 occurrence；跨块
+范围标记 precision_review，程序不会把边界可定位宣称成语义边界已经人工确认。待修改
+UnitSet 的 issue 会使工作流进入 needs_attention，B 不能修改 A。
 
 P2 在全部已返回的有效批次上收集标签，再查询本地目标，避免批次顺序影响结果。首版支持
 简单的数字/字母/点号标签、括号式标签，以及“定义/定理/命题/式”的单目标提及。只有显式
@@ -67,7 +69,8 @@ orchestrator 中的 DiscoveryResult。
 单次请求无隐式网络重试。A 最多一次 replace_units 修订；B 每个原始批次最多一次修订，
 支持选择 cN 或替换失败任务。候选绑定原提案指纹、字段路径和对应任务定位器；选择后再次
 验证。合法兄弟任务不会重新生成；不允许同时替换一个任务并选择它的候选，也不能用 B 的
-repair 修改 UnitSet。defer 保留未完成状态。
+repair 修改 UnitSet。普通事实诊断按 task 聚合为一次 replace_task 修订输入；带候选的歧义
+仍逐字段保存，以维持 choose_candidate 的精确绑定。defer 保留未完成状态。
 
 `WorkflowAttempt` 保存阶段、批次、修订标记、请求、输出文本、模型运行摘要和调用结果。
 事实验证诊断单独保存，因此某次请求返回合法 JSON，不等于对应事实通过了全部验证。
@@ -103,3 +106,7 @@ cargo test -p mathscape-llm --test genai_adapter
 
 Schema 快照、真实模型效果和运行可信性分别验证。上述 fixture 证明工程流程可执行，不代表
 已经验证任意教材上 LLM 的单元识别率、引用完整率或实际 token 成本。
+
+2026-09-11 使用 `discovery_debug_2` 的已记录真实响应离线重放：不重新调用模型时，系统 ID 与
+同块范围规范化使第一批通过数从 4/16 提升至 10/16，第二批首次通过数从 1/3 提升至 2/3；
+剩余诊断均为 quote 不可唯一解析或原文标题本身不成立，继续交给有界修订而非确定性猜测。

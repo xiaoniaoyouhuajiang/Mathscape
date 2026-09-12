@@ -1,6 +1,6 @@
 //! Position-independent checks. M2 will compose these with task-scoped locators.
 use crate::StageValidationReport;
-use crate::discovery_validation::{relation_types_valid, valid_temp_id};
+use crate::discovery_validation::relation_types_valid;
 use mathscape_domain::{FactDisposition, SourceFactInput, SourceFactProposal};
 use std::collections::{HashMap, HashSet};
 
@@ -43,27 +43,16 @@ pub fn preflight_source_facts(
             report.push("invalid_input", &path, "task owner is absent");
             continue;
         };
-        let mut refs = HashSet::new();
-        for id in result
-            .source_labels
-            .iter()
-            .map(|f| &f.fact_ref)
-            .chain(result.references.iter().map(|f| &f.fact_ref))
-            .chain(result.relations.iter().map(|f| &f.fact_ref))
-        {
-            if !valid_temp_id(id) || !refs.insert(id) {
-                report.push(
-                    "invalid_fact_ref",
-                    &path,
-                    "fact IDs must be valid and unique within task",
-                );
-            }
-        }
+        // Labels, references and relations are ordered task-local collections.
+        // Their stable temporary IDs are assigned by the validator; producer
+        // supplied legacy refs deliberately have no authority.
+        let has_facts = !result.source_labels.is_empty()
+            || result.source_title.is_some()
+            || !result.references.is_empty()
+            || !result.relations.is_empty()
+            || !result.issues.is_empty();
         if let FactDisposition::Unprocessed { reason } = &result.disposition
-            && (reason.trim().is_empty()
-                || !refs.is_empty()
-                || result.source_title.is_some()
-                || !result.issues.is_empty())
+            && (reason.trim().is_empty() || has_facts)
         {
             report.push(
                 "invalid_disposition",

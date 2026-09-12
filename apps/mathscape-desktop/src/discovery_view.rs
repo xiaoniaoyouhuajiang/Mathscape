@@ -126,7 +126,10 @@ pub struct DesktopPendingFactTaskView {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DesktopDiscoveryDiagnosticView {
+    /// First report containing this diagnostic, retained for v1 consumers.
     report: usize,
+    reports: Vec<usize>,
+    occurrences: usize,
     code: String,
     path: String,
     message: String,
@@ -306,34 +309,33 @@ impl DesktopDiscoveryView {
                 owner: workflow.planned_task_owner(task).map(str::to_owned),
             })
             .collect();
-        let diagnostics = workflow
-            .diagnostics()
-            .iter()
-            .enumerate()
-            .flat_map(|(report, value)| {
-                let checked = value.diagnostics.iter().map(move |diagnostic| {
-                    DesktopDiscoveryDiagnosticView {
-                        report: report + 1,
-                        code: diagnostic.code.clone(),
-                        path: diagnostic.path.clone(),
-                        message: diagnostic.message.clone(),
-                        checked: true,
-                    }
-                });
-                let not_checked =
-                    value
-                        .not_checked
-                        .iter()
-                        .map(move |path| DesktopDiscoveryDiagnosticView {
-                            report: report + 1,
-                            code: "not_checked".into(),
-                            path: path.clone(),
-                            message: "上游验证失败，因此此项未继续检查。".into(),
-                            checked: false,
-                        });
-                checked.chain(not_checked)
-            })
-            .collect();
+        let mut diagnostics = Vec::new();
+        let mut diagnostic_indexes = HashMap::new();
+        for (report_index, value) in workflow.diagnostics().iter().enumerate() {
+            let report = report_index + 1;
+            for diagnostic in &value.diagnostics {
+                push_diagnostic(
+                    &mut diagnostics,
+                    &mut diagnostic_indexes,
+                    report,
+                    diagnostic.code.clone(),
+                    diagnostic.path.clone(),
+                    diagnostic.message.clone(),
+                    true,
+                );
+            }
+            for path in &value.not_checked {
+                push_diagnostic(
+                    &mut diagnostics,
+                    &mut diagnostic_indexes,
+                    report,
+                    "not_checked".into(),
+                    path.clone(),
+                    "上游验证失败，因此此项未继续检查。".into(),
+                    false,
+                );
+            }
+        }
         let attempts = workflow
             .attempts()
             .iter()
@@ -371,6 +373,38 @@ impl DesktopDiscoveryView {
             attempts,
         }
     }
+}
+
+type DiagnosticKey = (String, String, String, bool);
+
+fn push_diagnostic(
+    diagnostics: &mut Vec<DesktopDiscoveryDiagnosticView>,
+    indexes: &mut HashMap<DiagnosticKey, usize>,
+    report: usize,
+    code: String,
+    path: String,
+    message: String,
+    checked: bool,
+) {
+    let key = (code.clone(), path.clone(), message.clone(), checked);
+    if let Some(index) = indexes.get(&key).copied() {
+        let existing = &mut diagnostics[index];
+        existing.occurrences += 1;
+        if !existing.reports.contains(&report) {
+            existing.reports.push(report);
+        }
+        return;
+    }
+    indexes.insert(key, diagnostics.len());
+    diagnostics.push(DesktopDiscoveryDiagnosticView {
+        report,
+        reports: vec![report],
+        occurrences: 1,
+        code,
+        path,
+        message,
+        checked,
+    });
 }
 
 impl From<&ResolvedDiscoverySelector> for DesktopSourceAnchorView {
@@ -413,5 +447,31 @@ fn finish_reason(reason: &LlmFinishReason) -> &'static str {
         LlmFinishReason::ContentFilter { .. } => "content_filter",
         LlmFinishReason::StopSequence { .. } => "stop_sequence",
         LlmFinishReason::Other { .. } => "other",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_diagnostics_are_collapsed_for_presentation() {
+        let mut diagnostics = Vec::new();
+        let mut indexes = HashMap::new();
+        for report in [1, 2] {
+            push_diagnostic(
+                &mut diagnostics,
+                &mut indexes,
+                report,
+                "invalid_range".into(),
+                "tasks.t1.source_title".into(),
+                "bad title".into(),
+                true,
+            );
+        }
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].report, 1);
+        assert_eq!(diagnostics[0].reports, [1, 2]);
+        assert_eq!(diagnostics[0].occurrences, 2);
     }
 }

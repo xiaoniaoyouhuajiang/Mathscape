@@ -113,6 +113,8 @@ interface DiscoveryIssueView {
 
 interface DiscoveryDiagnosticView {
   report: number;
+  reports: number[];
+  occurrences: number;
   code: string;
   path: string;
   message: string;
@@ -543,7 +545,12 @@ export class MarkdownSelection {
 
     if (view.diagnostics.length > 0) {
       const list = textElement("ul", "discovery-issues", "");
-      view.diagnostics.forEach(item => list.append(textElement("li", "", `${item.path} · ${item.code}：${item.message}`)));
+      view.diagnostics.forEach(item => {
+        const repeated = item.occurrences > 1
+          ? `（重复 ${item.occurrences} 次，报告 ${item.reports.join("、")}）`
+          : "";
+        list.append(textElement("li", "", `${item.path} · ${item.code}：${item.message}${repeated}`));
+      });
       this.discoveryResult.append(textElement("h4", "", "确定性诊断"), list);
     }
     if (pending.length > 0) {

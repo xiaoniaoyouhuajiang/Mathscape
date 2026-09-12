@@ -247,16 +247,14 @@ impl OccurrenceResolver {
             }
             TextOccurrence::RangeOccurrence { selector } => {
                 let general = DiscoverySelector::from(selector.clone());
-                if let DiscoverySelector::QuoteRange { first, last, .. } = &general {
-                    self.block(first)?;
-                    self.block(last)?;
-                    if first == last {
-                        return Err(error(
-                            OccurrenceErrorCode::InvalidRange,
-                            "use text_occurrence within one block",
-                        ));
-                    }
-                }
+                let single_block =
+                    if let DiscoverySelector::QuoteRange { first, last, .. } = &general {
+                        self.block(first)?;
+                        self.block(last)?;
+                        (first == last).then(|| first.clone())
+                    } else {
+                        None
+                    };
                 let (canonical, rewrites) = self
                     .resolver
                     .resolve_selector(general, "anchor")
@@ -274,6 +272,61 @@ impl OccurrenceResolver {
                 let normalized = rewrites
                     .iter()
                     .any(|r| r.kind() == crate::SelectorRewriteKind::SafeQuoteNormalization);
+                if let Some(handle) = single_block {
+                    // A model may express an otherwise valid same-block occurrence
+                    // with the more general escape hatch. Resolve it once, then
+                    // canonicalize to the exact source text and occurrence. This
+                    // changes representation only; it never guesses a quote or
+                    // broadens the task's authorized range.
+                    let exact = self
+                        .region
+                        .text_in(selector.range())
+                        .ok_or_else(|| {
+                            error(
+                                OccurrenceErrorCode::InvalidRange,
+                                "range has no source text",
+                            )
+                        })?
+                        .to_owned();
+                    let (id, source) = self.block(&handle)?;
+                    let (matches, _) = locator_matches(source, &exact);
+                    let selected = matches
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, span)| {
+                            self.materialize(anchor, id, source, *span, false)
+                                .ok()
+                                .filter(|candidate| {
+                                    candidate.selector().range() == selector.range()
+                                })
+                                .map(|_| index)
+                        })
+                        .ok_or_else(|| {
+                            error(
+                                OccurrenceErrorCode::InvalidRange,
+                                "same-block range cannot be canonicalized",
+                            )
+                        })?;
+                    let occurrence = (matches.len() > 1)
+                        .then(|| u32::try_from(selected + 1))
+                        .transpose()
+                        .map_err(|_| {
+                            error(
+                                OccurrenceErrorCode::InvalidOccurrence,
+                                "occurrence overflow",
+                            )
+                        })?;
+                    return Ok(LocatedOccurrence {
+                        original: TextOccurrence::TextOccurrence {
+                            block: handle,
+                            text: exact,
+                            occurrence,
+                        },
+                        selector,
+                        normalized,
+                        precision_review: false,
+                    });
+                }
                 Ok(LocatedOccurrence {
                     original: anchor.clone(),
                     selector,

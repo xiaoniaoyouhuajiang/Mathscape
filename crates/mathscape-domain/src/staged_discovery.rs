@@ -148,7 +148,10 @@ pub struct SourceFactInput {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FactLabel {
-    #[serde(rename = "ref")]
+    /// Legacy producer field accepted for replay only. Validated fact IDs are
+    /// assigned deterministically by the orchestrator.
+    #[serde(default, rename = "ref", skip_serializing_if = "String::is_empty")]
+    #[schemars(skip)]
     pub fact_ref: String,
     pub anchor: TextOccurrence,
 }
@@ -156,7 +159,10 @@ pub struct FactLabel {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FactReference {
-    #[serde(rename = "ref")]
+    /// Legacy producer field accepted for replay only. Validated fact IDs are
+    /// assigned deterministically by the orchestrator.
+    #[serde(default, rename = "ref", skip_serializing_if = "String::is_empty")]
+    #[schemars(skip)]
     pub fact_ref: String,
     pub anchor: TextOccurrence,
     pub target_hint: Option<String>,
@@ -165,7 +171,10 @@ pub struct FactReference {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FactRelation {
-    #[serde(rename = "ref")]
+    /// Legacy producer field accepted for replay only. Validated fact IDs are
+    /// assigned deterministically by the orchestrator.
+    #[serde(default, rename = "ref", skip_serializing_if = "String::is_empty")]
+    #[schemars(skip)]
     pub fact_ref: String,
     pub relation: DiscoveryRelationKind,
     pub target: String,

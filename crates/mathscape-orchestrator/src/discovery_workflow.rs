@@ -547,31 +547,15 @@ impl<'a> DiscoveryWorkflow<'a> {
                 .map(|t| t.task_ref.clone())
                 .collect();
             let repair_ref = new_request_ref("repair");
-            let mut input = DiscoveryRepairInput {
+            let input = DiscoveryRepairInput {
                 version: DiscoveryRepairVersion::V1,
                 repair_ref: repair_ref.clone(),
                 scope: RepairScope::Facts {
                     task_refs: failed.clone(),
                 },
                 blocks: batch.model.blocks.clone(),
-                issues: repair_issues(&validation.report),
+                issues: repair_fact_issues(&validation.report, &validation.choices),
             };
-            for issue in &mut input.issues {
-                if let Some(choice) = validation.choices.iter().find(|c| c.path == issue.path) {
-                    issue.candidates = choice
-                        .set
-                        .candidates()
-                        .iter()
-                        .map(|c| RepairCandidate {
-                            candidate_ref: c.candidate_ref.clone(),
-                            text: c.text.clone(),
-                            prefix: c.prefix.clone(),
-                            suffix: c.suffix.clone(),
-                        })
-                        .collect();
-                    issue.has_more = choice.set.has_more();
-                }
-            }
             let (request, prompt) =
                 repair_request(&input, &raw, &batch.model, &batch.batch_fingerprint);
             let response = match self
@@ -647,6 +631,79 @@ fn repair_issues(report: &StageValidationReport) -> Vec<RepairIssue> {
             has_more: false,
         })
         .collect()
+}
+
+fn fact_task_path(path: &str) -> Option<String> {
+    let tail = path.strip_prefix("tasks.")?;
+    let end = tail.find(['.', '[']).unwrap_or(tail.len());
+    (end > 0).then(|| format!("tasks.{}", &tail[..end]))
+}
+
+/// Facts are repaired as whole task proposals. Collapse ordinary field errors
+/// to one actionable task issue, while keeping ambiguous occurrence choices
+/// separate because each carries its own opaque candidate set.
+fn repair_fact_issues(
+    report: &StageValidationReport,
+    choices: &[FactCandidateChoice],
+) -> Vec<RepairIssue> {
+    let mut issues: Vec<RepairIssue> = Vec::new();
+    let mut grouped = HashMap::<String, usize>::new();
+    for diagnostic in &report.diagnostics {
+        if let Some(choice) = choices.iter().find(|choice| choice.path == diagnostic.path) {
+            issues.push(RepairIssue {
+                issue_ref: String::new(),
+                path: diagnostic.path.clone(),
+                code: diagnostic.code.clone(),
+                message: diagnostic.message.clone(),
+                candidates: choice
+                    .set
+                    .candidates()
+                    .iter()
+                    .map(|candidate| RepairCandidate {
+                        candidate_ref: candidate.candidate_ref.clone(),
+                        text: candidate.text.clone(),
+                        prefix: candidate.prefix.clone(),
+                        suffix: candidate.suffix.clone(),
+                    })
+                    .collect(),
+                has_more: choice.set.has_more(),
+            });
+            continue;
+        }
+        let Some(task_path) = fact_task_path(&diagnostic.path) else {
+            issues.push(RepairIssue {
+                issue_ref: String::new(),
+                path: diagnostic.path.clone(),
+                code: diagnostic.code.clone(),
+                message: diagnostic.message.clone(),
+                candidates: vec![],
+                has_more: false,
+            });
+            continue;
+        };
+        let detail = format!(
+            "{} · {}: {}",
+            diagnostic.path, diagnostic.code, diagnostic.message
+        );
+        if let Some(index) = grouped.get(&task_path).copied() {
+            issues[index].message.push('\n');
+            issues[index].message.push_str(&detail);
+        } else {
+            grouped.insert(task_path.clone(), issues.len());
+            issues.push(RepairIssue {
+                issue_ref: String::new(),
+                path: task_path,
+                code: "task_validation_failed".into(),
+                message: detail,
+                candidates: vec![],
+                has_more: false,
+            });
+        }
+    }
+    for (index, issue) in issues.iter_mut().enumerate() {
+        issue.issue_ref = format!("i{}", index + 1);
+    }
+    issues
 }
 
 fn repair_request(
@@ -833,4 +890,28 @@ fn apply_fact_repair(
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_fact_diagnostics_are_grouped_by_task() {
+        let mut report = StageValidationReport::default();
+        report.push("invalid_range", "tasks.t1.source_title", "bad title");
+        report.push(
+            "quote_not_found",
+            "tasks.t1.source_labels[0].anchor",
+            "bad label",
+        );
+        report.push("invalid_reference", "tasks.t2.references[0]", "bad target");
+        let issues = repair_fact_issues(&report, &[]);
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[0].path, "tasks.t1");
+        assert_eq!(issues[0].code, "task_validation_failed");
+        assert!(issues[0].message.contains("source_title"));
+        assert!(issues[0].message.contains("source_labels[0]"));
+        assert_eq!(issues[1].path, "tasks.t2");
+    }
 }

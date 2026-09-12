@@ -9,7 +9,6 @@
       },
       "source_labels": [
         {
-          "ref": "m1",
           "anchor": {
             "kind": "text_occurrence",
             "block": "b1",
@@ -32,7 +31,6 @@
       "source_title": null,
       "references": [
         {
-          "ref": "r1",
           "anchor": {
             "kind": "text_occurrence",
             "block": "b3",
@@ -42,7 +40,6 @@
           "target_hint": null
         },
         {
-          "ref": "r2",
           "anchor": {
             "kind": "text_occurrence",
             "block": "b3",
@@ -54,7 +51,6 @@
       ],
       "relations": [
         {
-          "ref": "e1",
           "relation": "proves",
           "target": "u1",
           "evidence": [

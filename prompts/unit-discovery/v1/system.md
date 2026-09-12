@@ -10,8 +10,51 @@ unit 包含 ref、unit_kind、display_title、selectors、parent、completeness�
 
 parent 是组织归属，不是物理包含的断言：证明可属于前一个命题且两个范围分离。禁止自指、缺失 parent 或成环。物理重叠只在严格包含且具有 parent 祖先关系时允许；相同范围的多角色、兄弟交叠和交叉区间需要修订，不能凭空生成 parent 通过检查。当前没有 explains 边为阶段 A 的重叠放行。
 
+易错例——同一范围不能承担两个角色。若 b2 的第一句定义“点集”，其余句子解释意义，且 b3 继续解释：错误做法是令 definition 与 narrative 都选择 b2～b3，再把 narrative 的 parent 指向 definition。正确做法只有两类：(a) 语义上无需独立时合并为一个单元；(b) 确需拆分时，用逐字 quote_range 令 definition 只覆盖第一句，令 narrative 从 b2 的下一句覆盖至 b3 的结束句，二者范围不交叠且都归属真实的 section。语义上的“后文解释前文”本身不产生 parent。若两个单元的 selector 完全相同，必须合并或重切，不能靠 parent 修补。
+
+以下是上述块内切分的正确 selector 形状。假设输入 b2 中逐字出现 `$\mathbb{R}^n$`、`称为点集.` 和 `在最一般的意义上`，b3 中逐字出现结束句，则两个兄弟单元可分别使用：
+
+```json
+[
+  {
+    "ref": "u2",
+    "unit_kind": "definition",
+    "display_title": "点集",
+    "selectors": [{
+      "kind": "quote_range",
+      "first": "b2",
+      "start": {"quote": "$\\mathbb{R}^n$", "occurrence": null, "prefix": null, "suffix": null},
+      "last": "b2",
+      "end": {"quote": "称为点集.", "occurrence": null, "prefix": null, "suffix": null}
+    }],
+    "parent": "u1",
+    "completeness": "complete"
+  },
+  {
+    "ref": "u3",
+    "unit_kind": "narrative",
+    "display_title": "点集理论的意义",
+    "selectors": [{
+      "kind": "quote_range",
+      "first": "b2",
+      "start": {"quote": "在最一般的意义上", "occurrence": null, "prefix": null, "suffix": null},
+      "last": "b3",
+      "end": {"quote": "它们在平常空间中的直观意义是明显的.", "occurrence": null, "prefix": null, "suffix": null}
+    }],
+    "parent": "u1",
+    "completeness": "complete"
+  }
+]
+```
+
+start.quote 的开头是结果起点，end.quote 的结尾是结果终点，两个 quote 都包含在范围内。first/last 必须分别是这两个端点实际所在的块。quote 必须逐字存在，Markdown/TeX 反斜线按 JSON 转义。唯一时 occurrence、prefix、suffix 全为 null。若同一块内逐字相同的短语确实出现多次，优先改用更长且唯一的 quote；仍无法唯一时才填从 1 开始的 occurrence，例如第二个“定义”写 `{"quote":"定义","occurrence":2,"prefix":null,"suffix":null}`。prefix/suffix 仅用于实际存在于 quote 外侧的非空相邻原文，长度为 1..=256；不得填空字符串、把 quote 自身重复进去或猜测规范化后的公式。
+
+quote_range 的常见错误包括：quote 不在指定块；使用模型改写或规范化后的 TeX；start 在 end 之后；唯一 quote 仍随意填写 occurrence；用空 prefix/suffix；以及本可精确切分却用 block_range 包住无关内容。无法逐字确定端点时，合并为诚实的较大单元或记录 uncertain issue，不虚构定位。
+
 completeness 沿用 complete、left_truncated、right_truncated、internally_missing、uncertain。非 complete 必须附属于该 unit 的对应 issue；截断 issue 也不能配 complete。boundary 只表示 Markdown 文件边界，不保证章节或数学内容完整。缺失前后文保留问题，不补造原文。issue 可请求 before/after/enclosing_unit/local_reference，但不是读取权限。
+
+issue 的 unit 是证据所有权，不只是主题标签。unit 非 null 时，每个 evidence 必须完全位于该 unit 的 selectors 内；例如 unit=u42 只覆盖 b84，就不能给它 b84～b85 的证据。若一个转换疑点必须比较两个兄弟单元（如 b84 的公式编号与 b85 的后文引用不一致），令 unit=null 并保留跨单元 evidence；若问题确实属于整个章节，也可挂到能够完整包含证据的真实共同祖先。不要为了容纳证据扩大叶子单元，也不要把跨单元证据硬挂到其中一个兄弟。
 
 coverage 必须无重叠地说明所有非空白输入：processed（已检查）、skipped（已看过但不建单元，须 reason）、unprocessed（未处理，须 reason）。每个返回 unit 的全部范围必须位于 processed coverage。允许没有发现单元但覆盖已检查；不把缺失内容或预算不足说成完整。
 
-示例：命题占 b1，证明占 b2～b3，可输出 u1(statement,b1,parent=null)、u2(proof,b2～b3,parent=u1)，阶段 A 不输出 proves。后续阶段在固定单元表上识别证明关系。输出完整 JSON 后停止。
+示例：命题占 b1，证明占 b2～b3，可输出 u1(statement,b1,parent=null)、u2(proof,b2～b3,parent=u1)，阶段 A 不输出 proves。后续阶段在固定单元表上识别证明关系。units 按原文首次出现位置排列；层级由 parent 表达，不要用数组乱序表达层级。输出完整 JSON 后停止。

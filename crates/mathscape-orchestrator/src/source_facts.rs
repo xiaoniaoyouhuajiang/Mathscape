@@ -223,7 +223,7 @@ impl PreparedFactRequest {
                 .enumerate()
                 .filter_map(|(i, f)| {
                     resolve(
-                        &f.fact_ref,
+                        &format!("l{}", i + 1),
                         &f.anchor,
                         format!("{prefix}.source_labels[{i}].anchor"),
                         &mut report,
@@ -240,7 +240,7 @@ impl PreparedFactRequest {
                 .enumerate()
                 .filter_map(|(i, f)| {
                     resolve(
-                        &f.fact_ref,
+                        &format!("r{}", i + 1),
                         &f.anchor,
                         format!("{prefix}.references[{i}].anchor"),
                         &mut report,
@@ -273,7 +273,7 @@ impl PreparedFactRequest {
                     }
                 }
                 relations.push(LocatedRelation {
-                    fact_ref: f.fact_ref.clone(),
+                    fact_ref: format!("rel{}", i + 1),
                     target: f.target.clone(),
                     relation: f.relation,
                     evidence,
