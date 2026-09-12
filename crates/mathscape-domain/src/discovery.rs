@@ -2,6 +2,7 @@
 //! Deserialization does not certify a selection: the orchestrator must resolve it
 //! against a freshly loaded immutable artifact before accepting its byte ranges.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{ContentHash, StableId};
@@ -11,7 +12,7 @@ pub const DISCOVERY_SELECTION_VERSION: &str = "mathscape-discovery-selection-1";
 pub const DISCOVERY_INPUT_VERSION: &str = "mathscape-discovery-input-2";
 
 /// Zero-based UTF-8 bytes, end exclusive. Validity depends on the source text.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TextByteRange {
     pub start: u64,

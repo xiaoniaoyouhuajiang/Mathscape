@@ -12,6 +12,7 @@ mod id;
 mod patch;
 mod relation;
 mod source;
+mod source_review;
 mod staged_discovery;
 mod trust;
 
@@ -25,5 +26,6 @@ pub use id::{ActorRef, CommitId, ContentHash, RevisionId, SchemaVersion, StableI
 pub use patch::{MapOperation, MapPatch};
 pub use relation::{EndpointRole, RelationEndpoint, RelationRecord};
 pub use source::*;
+pub use source_review::*;
 pub use staged_discovery::*;
 pub use trust::*;
