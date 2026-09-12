@@ -3,6 +3,7 @@
 //! Artifact bytes remain in the managed filesystem pool. This crate owns only
 //! authoritative metadata and provenance transactions.
 
+mod discovery;
 mod read;
 
 use std::path::Path;
@@ -18,13 +19,20 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
+pub use discovery::{
+    AcceptedRegistrationPlanRecord, DiscoveryAttemptCheckpoint, DiscoveryCheckpointStatus,
+    DiscoveryDiagnosticCheckpoint, DiscoveryFactCheckpointRecord, DiscoveryRunCheckpoint,
+    DiscoveryUnitCheckpointRecord, DiscoveryValidationCheckpoint, PendingDiscoveryTask,
+    StoredAcceptanceAuthority, StoredDiscoveryRun,
+};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 
 const ARTIFACT_POOL_MIGRATION: &str = include_str!("../../../migrations/0001_artifact_pool.sql");
 const LLM_PROFILES_MIGRATION: &str = include_str!("../../../migrations/0002_llm_profiles.sql");
 const WORKSPACE_SETTINGS_MIGRATION: &str =
     include_str!("../../../migrations/0003_workspace_settings.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 3;
+const DISCOVERY_RUNS_MIGRATION: &str = include_str!("../../../migrations/0004_discovery_runs.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -48,6 +56,8 @@ pub enum SqliteStoreError {
     ExpectedConversionRun,
     #[error("LLM profile is invalid: {0}")]
     InvalidLlmProfile(String),
+    #[error("discovery checkpoint invariant failed: {0}")]
+    DiscoveryInvariant(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -157,20 +167,28 @@ impl SqliteArtifactStore {
                 connection.execute_batch(ARTIFACT_POOL_MIGRATION)?;
                 connection.execute_batch(LLM_PROFILES_MIGRATION)?;
                 connection.execute_batch(WORKSPACE_SETTINGS_MIGRATION)?;
+                connection.execute_batch(DISCOVERY_RUNS_MIGRATION)?;
                 validate_schema(&connection)?;
             }
             1 => {
                 validate_artifact_schema(&connection)?;
                 connection.execute_batch(LLM_PROFILES_MIGRATION)?;
                 connection.execute_batch(WORKSPACE_SETTINGS_MIGRATION)?;
+                connection.execute_batch(DISCOVERY_RUNS_MIGRATION)?;
                 validate_schema(&connection)?;
             }
             2 => {
                 validate_llm_profiles_schema(&connection)?;
                 connection.execute_batch(WORKSPACE_SETTINGS_MIGRATION)?;
+                connection.execute_batch(DISCOVERY_RUNS_MIGRATION)?;
                 validate_schema(&connection)?;
             }
-            3 => validate_schema(&connection)?,
+            3 => {
+                validate_workspace_settings_schema(&connection)?;
+                connection.execute_batch(DISCOVERY_RUNS_MIGRATION)?;
+                validate_schema(&connection)?;
+            }
+            4 => validate_schema(&connection)?,
             actual => {
                 return Err(SqliteStoreError::UnsupportedSchemaVersion {
                     actual,
@@ -345,6 +363,45 @@ impl SqliteArtifactStore {
     /// other read-only application views.
     pub fn read_catalog_snapshot(&self) -> Result<ArtifactCatalogSnapshot, SqliteStoreError> {
         read::catalog_snapshot(&self.connection)
+    }
+
+    /// Atomically replaces the replay/audit checkpoint for one immutable
+    /// discovery input. This does not accept or register any map entity.
+    pub fn save_discovery_checkpoint(
+        &mut self,
+        checkpoint: &DiscoveryRunCheckpoint,
+    ) -> Result<(), SqliteStoreError> {
+        discovery::save_discovery_checkpoint(&mut self.connection, checkpoint)
+    }
+
+    pub fn discovery_checkpoint(
+        &self,
+        run_id: &StableId,
+    ) -> Result<Option<StoredDiscoveryRun>, SqliteStoreError> {
+        discovery::read_discovery_checkpoint(&self.connection, run_id)
+    }
+
+    pub fn discovery_run_count(&self) -> Result<u64, SqliteStoreError> {
+        let count =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM discovery_runs", [], |row| {
+                    row.get::<_, i64>(0)
+                })?;
+        rust_u64(count, "discovery_run_count")
+    }
+
+    pub fn save_registration_plan(
+        &mut self,
+        record: &AcceptedRegistrationPlanRecord,
+    ) -> Result<(), SqliteStoreError> {
+        discovery::save_registration_plan(&mut self.connection, record)
+    }
+
+    pub fn registration_plan(
+        &self,
+        decision_id: &StableId,
+    ) -> Result<Option<AcceptedRegistrationPlanRecord>, SqliteStoreError> {
+        discovery::read_registration_plan(&self.connection, decision_id)
     }
 
     pub fn register_check(
@@ -740,7 +797,7 @@ fn validate_artifact_schema(connection: &Connection) -> Result<(), SqliteStoreEr
     Ok(())
 }
 
-fn validate_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
+fn validate_workspace_settings_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
     validate_llm_profiles_schema(connection)?;
     let name = connection
         .query_row(
@@ -752,6 +809,23 @@ fn validate_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
     if name.as_deref() != Some("workspace_settings_v1") {
         return Err(SqliteStoreError::InvalidSchema(
             "migration 3 is absent or has an unexpected name",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
+    validate_workspace_settings_schema(connection)?;
+    let name = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 4",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if name.as_deref() != Some("discovery_runs_v1") {
+        return Err(SqliteStoreError::InvalidSchema(
+            "migration 4 is absent or has an unexpected name",
         ));
     }
     Ok(())

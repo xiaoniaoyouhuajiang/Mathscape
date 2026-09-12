@@ -659,3 +659,116 @@ fn schemas_match_snapshots_and_enforce_stage_separation() {
     assert_eq!(facts.input_version, SOURCE_FACT_INPUT_VERSION);
     assert_eq!(facts.output_version, SOURCE_FACT_VERSION);
 }
+
+fn validated_fixture() -> (
+    PreparedUnitDiscoveryRequest,
+    ValidatedUnitSet,
+    Vec<PreparedFactRequest>,
+    Vec<ValidatedFactTask>,
+) {
+    let prepared = prepared(SOURCE);
+    let units = prepared
+        .validate(proposal(&prepared), Default::default())
+        .unwrap();
+    let batches = plan_source_facts(&prepared, &units, 16).unwrap();
+    let mut facts: SourceFactProposal = serde_json::from_str(FACTS).unwrap();
+    facts.request_ref = batches[0].model_input().request_ref.clone();
+    let validation = batches[0].validate(&facts);
+    assert!(validation.report.is_valid(), "{:?}", validation.report);
+    (prepared, units, batches, validation.tasks)
+}
+
+fn acceptance(
+    result: &DiscoveryResult,
+    selection: AcceptanceSelection,
+) -> DiscoveryAcceptanceDecision {
+    DiscoveryAcceptanceDecision {
+        decision_id: StableId::parse("mathscape:acceptance/staged-fixture").unwrap(),
+        discovery_run_id: StableId::parse("mathscape:discovery-run/staged-fixture").unwrap(),
+        actor: ActorRef::parse("fixture-reviewer").unwrap(),
+        decided_at: Timestamp::parse("2026-09-12T12:00:00+08:00").unwrap(),
+        authority: AcceptanceAuthority::HumanReview,
+        expected_result_fingerprint: discovery_result_fingerprint(result),
+        selection,
+    }
+}
+
+#[test]
+fn registration_plan_accepts_a_validated_partial_result_without_granting_trust() {
+    let (prepared, units, batches, mut tasks) = validated_fixture();
+    tasks.truncate(1);
+    let result = assemble_discovery(&units, &batches, tasks).unwrap();
+    assert!(!result.complete());
+    assert_eq!(result.pending_tasks(), &["t2"]);
+    let plan = plan_source_registration(
+        prepared.input(),
+        &units,
+        &result,
+        acceptance(&result, AcceptanceSelection::AllValidated),
+    )
+    .unwrap();
+    assert!(plan.partial);
+    assert_eq!(plan.units.len(), 2);
+    assert_eq!(plan.pending_tasks, ["t2"]);
+    assert!(plan.units.iter().any(|unit| unit.facts_pending));
+    assert!(plan.relations.is_empty());
+    let wire = serde_json::to_value(&plan).unwrap();
+    assert!(wire.get("trust").is_none());
+    assert!(wire["units"].as_array().unwrap().iter().all(|unit| {
+        unit["stable_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("mathscape:source-unit/")
+    }));
+}
+
+#[test]
+fn registration_plan_requires_parent_and_relation_closed_explicit_selection() {
+    let (prepared, units, batches, tasks) = validated_fixture();
+    let result = assemble_discovery(&units, &batches, tasks).unwrap();
+    assert!(result.complete());
+    let error = plan_source_registration(
+        prepared.input(),
+        &units,
+        &result,
+        acceptance(
+            &result,
+            AcceptanceSelection::ExplicitUnits {
+                unit_refs: vec!["u2".into()],
+            },
+        ),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        SourceRegistrationPlanError::MissingParent {
+            unit: "u2".into(),
+            parent: "u1".into(),
+        }
+    );
+
+    let plan = plan_source_registration(
+        prepared.input(),
+        &units,
+        &result,
+        acceptance(&result, AcceptanceSelection::AllValidated),
+    )
+    .unwrap();
+    assert!(!plan.partial);
+    assert_eq!(plan.relations.len(), 1);
+    assert_eq!(plan.relations[0].relation, DiscoveryRelationKind::Proves);
+    assert!(!plan.spans.is_empty());
+}
+
+#[test]
+fn registration_plan_rejects_a_stale_acceptance_decision() {
+    let (prepared, units, batches, tasks) = validated_fixture();
+    let result = assemble_discovery(&units, &batches, tasks).unwrap();
+    let mut decision = acceptance(&result, AcceptanceSelection::AllValidated);
+    decision.expected_result_fingerprint =
+        ContentHash::parse(format!("sha256:{}", "9".repeat(64))).unwrap();
+    assert_eq!(
+        plan_source_registration(prepared.input(), &units, &result, decision).unwrap_err(),
+        SourceRegistrationPlanError::StaleDecision
+    );
+}

@@ -44,6 +44,8 @@ Desktop 的 Markdown 选区、活动调用与提案展示见
 
 内容发现结果如何经接受、来源登记进入图，再按需补充数学语义，见
 [`生成、登记与晋升草案`](discovery-registration-promotion-draft.md)；其中 Domain 修订尚未实施。
+已实现的运行检查点和登记计划边界见
+[`Discovery 持久化与来源登记计划 v1`](discovery-persistence-registration-plan-v1.md)。
 
 下一版来源发现按“单元发现 → 固定单元表 → 标签、引用与关系发现”拆分，见
 [`分阶段发现协议草案`](discovery-staged-protocol-draft.md)及

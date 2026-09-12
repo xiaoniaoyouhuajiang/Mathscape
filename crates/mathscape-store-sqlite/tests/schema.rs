@@ -5,13 +5,23 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use mathscape_domain::{
+    ActorRef, ContentHash, DiscoveryAdmission, DiscoveryUnitKind, StableId, Timestamp,
+    UnitCompleteness,
+};
 use mathscape_llm::{
     CapabilitySupport, CredentialRef, LLM_PROFILE_VERSION, LlmCapabilities, LlmProfile,
     WireProtocol,
 };
-use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
+use mathscape_store_sqlite::{
+    AcceptedRegistrationPlanRecord, DiscoveryAttemptCheckpoint, DiscoveryCheckpointStatus,
+    DiscoveryDiagnosticCheckpoint, DiscoveryFactCheckpointRecord, DiscoveryRunCheckpoint,
+    DiscoveryUnitCheckpointRecord, DiscoveryValidationCheckpoint, PendingDiscoveryTask,
+    SqliteArtifactStore, SqliteStoreError, StoredAcceptanceAuthority,
+};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use url::Url;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -48,7 +58,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 1",
@@ -73,6 +83,14 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
         )
         .unwrap();
     assert_eq!(settings_migration, "workspace_settings_v1");
+    let discovery_migration = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 4",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(discovery_migration, "discovery_runs_v1");
     drop(connection);
     drop(SqliteArtifactStore::open(&database).unwrap());
     cleanup(&directory);
@@ -90,7 +108,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::open(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 3
+            supported: 4
         })
     ));
     cleanup(&directory);
@@ -111,7 +129,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -149,7 +167,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 3",
@@ -158,6 +176,45 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
         )
         .unwrap();
     assert_eq!(migration, "workspace_settings_v1");
+    cleanup(&directory);
+}
+
+#[test]
+fn upgrades_workspace_settings_database_to_discovery_runs() {
+    let directory = test_directory("upgrade-v3");
+    let database = directory.join("catalog.sqlite3");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(include_str!("../../../migrations/0001_artifact_pool.sql"))
+        .unwrap();
+    connection
+        .execute_batch(include_str!("../../../migrations/0002_llm_profiles.sql"))
+        .unwrap();
+    connection
+        .execute_batch(include_str!(
+            "../../../migrations/0003_workspace_settings.sql"
+        ))
+        .unwrap();
+    drop(connection);
+
+    drop(SqliteArtifactStore::open(&database).unwrap());
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 4",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "discovery_runs_v1"
+    );
     cleanup(&directory);
 }
 
@@ -226,5 +283,134 @@ fn persists_versioned_llm_profiles_without_secret_material() {
     assert_eq!(reopened.profile(), &profile);
     let bytes = fs::read(&database).unwrap();
     assert!(!String::from_utf8_lossy(&bytes).contains("fixture-secret"));
+    cleanup(&directory);
+}
+
+fn hash(digit: char) -> ContentHash {
+    ContentHash::parse(format!("sha256:{}", digit.to_string().repeat(64))).unwrap()
+}
+
+fn insert_fixture_artifact(database: &Path, artifact_id: &StableId, content_hash: &ContentHash) {
+    let connection = Connection::open(database).unwrap();
+    connection
+        .execute(
+            "INSERT INTO artifacts (artifact_id, content_hash, byte_size, current_revision)
+             VALUES (?1, ?2, 128, ?3)",
+            [
+                artifact_id.as_str(),
+                content_hash.as_str(),
+                hash('f').as_str(),
+            ],
+        )
+        .unwrap();
+}
+
+fn discovery_checkpoint(run_id: StableId, artifact_id: StableId) -> DiscoveryRunCheckpoint {
+    DiscoveryRunCheckpoint {
+        run_id,
+        artifact_id,
+        conversion_id: Some(StableId::parse("mathscape:conversion/fixture").unwrap()),
+        pipeline_version: "mathscape-discovery-pipeline-2".into(),
+        input_fingerprint: hash('1'),
+        selection_fingerprint: hash('2'),
+        unit_set_fingerprint: Some(hash('3')),
+        result_fingerprint: Some(hash('4')),
+        status: DiscoveryCheckpointStatus::Partial,
+        admission: DiscoveryAdmission::ReviewBeforePublish,
+        profile_id: "fixture-profile".into(),
+        snapshot: json!({"status":"partial"}),
+        attempts: vec![DiscoveryAttemptCheckpoint {
+            stage: "unit-discovery".into(),
+            batch_fingerprint: None,
+            repair: false,
+            status: DiscoveryCheckpointStatus::Completed,
+            request: json!({"task":"unit-discovery"}),
+            raw_text: Some("{\"units\":[]}".into()),
+            run: json!({"profile_id":"fixture-profile"}),
+            error: None,
+        }],
+        reports: vec![DiscoveryValidationCheckpoint {
+            report: json!({"diagnostics":[{"code":"ambiguous_quote"}]}),
+            diagnostics: vec![DiscoveryDiagnosticCheckpoint {
+                code: "ambiguous_quote".into(),
+                path: "tasks.t1.references[0]".into(),
+                message: "2 matches".into(),
+                checked: true,
+            }],
+        }],
+        units: vec![DiscoveryUnitCheckpointRecord {
+            unit_ref: "u1".into(),
+            parent_ref: None,
+            unit_kind: DiscoveryUnitKind::Statement,
+            completeness: UnitCompleteness::Complete,
+            payload: json!({"ref":"u1","selectors":[{"start":0,"end":20}]}),
+        }],
+        facts: vec![DiscoveryFactCheckpointRecord {
+            task_ref: "t1".into(),
+            owner_unit_ref: "u1".into(),
+            processed: true,
+            requires_unit_revision: false,
+            payload: json!({"task_ref":"t1","owner":"u1"}),
+        }],
+        pending_tasks: vec![PendingDiscoveryTask {
+            task_ref: "t2".into(),
+            owner_unit_ref: Some("u1".into()),
+        }],
+    }
+}
+
+#[test]
+fn atomically_persists_and_replaces_discovery_checkpoints() {
+    let directory = test_directory("discovery-checkpoint");
+    let database = directory.join("catalog.sqlite3");
+    drop(SqliteArtifactStore::open(&database).unwrap());
+    let artifact_id = StableId::parse("mathscape:artifact/discovery-fixture").unwrap();
+    insert_fixture_artifact(&database, &artifact_id, &hash('a'));
+
+    let run_id = StableId::parse("mathscape:discovery-run/fixture").unwrap();
+    let mut checkpoint = discovery_checkpoint(run_id.clone(), artifact_id);
+    let mut store = SqliteArtifactStore::open(&database).unwrap();
+    store.save_discovery_checkpoint(&checkpoint).unwrap();
+    assert_eq!(store.discovery_run_count().unwrap(), 1);
+    let stored = store.discovery_checkpoint(&run_id).unwrap().unwrap();
+    assert_eq!(stored.checkpoint, checkpoint);
+
+    checkpoint.status = DiscoveryCheckpointStatus::Completed;
+    checkpoint.pending_tasks.clear();
+    checkpoint.snapshot = json!({"status":"completed"});
+    store.save_discovery_checkpoint(&checkpoint).unwrap();
+    let replaced = store.discovery_checkpoint(&run_id).unwrap().unwrap();
+    assert_eq!(replaced.checkpoint, checkpoint);
+    assert_eq!(store.discovery_run_count().unwrap(), 1);
+    cleanup(&directory);
+}
+
+#[test]
+fn persists_an_immutable_acceptance_decision_and_registration_plan() {
+    let directory = test_directory("acceptance-plan");
+    let database = directory.join("catalog.sqlite3");
+    drop(SqliteArtifactStore::open(&database).unwrap());
+    let artifact_id = StableId::parse("mathscape:artifact/acceptance-fixture").unwrap();
+    insert_fixture_artifact(&database, &artifact_id, &hash('b'));
+    let run_id = StableId::parse("mathscape:discovery-run/acceptance-fixture").unwrap();
+    let mut store = SqliteArtifactStore::open(&database).unwrap();
+    store
+        .save_discovery_checkpoint(&discovery_checkpoint(run_id.clone(), artifact_id))
+        .unwrap();
+    let decision_id = StableId::parse("mathscape:acceptance/fixture").unwrap();
+    let record = AcceptedRegistrationPlanRecord {
+        decision_id: decision_id.clone(),
+        run_id,
+        actor: ActorRef::parse("fixture-reviewer").unwrap(),
+        decided_at: Timestamp::parse("2026-09-12T12:00:00+08:00").unwrap(),
+        authority: StoredAcceptanceAuthority::HumanReview,
+        expected_result_fingerprint: hash('4'),
+        selection: json!({"kind":"explicit_units","unit_refs":["u1"]}),
+        plan_fingerprint: hash('5'),
+        plan: json!({"version":"mathscape-source-registration-plan-1","units":["u1"]}),
+    };
+    store.save_registration_plan(&record).unwrap();
+    store.save_registration_plan(&record).unwrap();
+    assert_eq!(store.registration_plan(&decision_id).unwrap(), Some(record));
     cleanup(&directory);
 }

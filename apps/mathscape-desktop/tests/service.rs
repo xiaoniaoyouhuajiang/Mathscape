@@ -16,9 +16,10 @@ use mathscape_desktop::{
 };
 use mathscape_domain::{
     ActorRef, DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest,
-    MediaType, RightsRecord, RightsStatus, SourceSelector,
+    MediaType, RightsRecord, RightsStatus, SourceSelector, StableId,
 };
 use mathscape_llm::{CredentialRef, CredentialResolver, MemoryCredentialResolver};
+use mathscape_store_sqlite::{DiscoveryCheckpointStatus, SqliteArtifactStore};
 use wiremock::{
     Mock, MockServer, Request, Respond, ResponseTemplate,
     matchers::{header, method, path},
@@ -428,6 +429,16 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     assert_eq!(value["run"]["admission"], "review_before_publish");
     assert_eq!(value["run"]["request_timeout_seconds"], 900);
     assert_eq!(value["run"]["connect_timeout_seconds"], 20);
+    let run_id = StableId::parse(value["run"]["run_id"].as_str().unwrap()).unwrap();
+    let store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+    let persisted = store.discovery_checkpoint(&run_id).unwrap().unwrap();
+    assert_eq!(
+        persisted.checkpoint.status,
+        DiscoveryCheckpointStatus::Completed
+    );
+    assert_eq!(persisted.checkpoint.units.len(), 2);
+    assert_eq!(persisted.checkpoint.facts.len(), 2);
+    assert!(persisted.checkpoint.pending_tasks.is_empty());
     assert_eq!(service.snapshot().unwrap().graph().nodes().len(), 1);
 
     let cancelled = {
@@ -443,6 +454,18 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     );
     let cancelled = serde_json::to_value(cancelled.await.unwrap().unwrap()).unwrap();
     assert_eq!(cancelled["outcome"], "cancelled");
+    let cancelled_run = StableId::parse(cancelled["run"]["run_id"].as_str().unwrap()).unwrap();
+    let store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+    assert_eq!(
+        store
+            .discovery_checkpoint(&cancelled_run)
+            .unwrap()
+            .unwrap()
+            .checkpoint
+            .status,
+        DiscoveryCheckpointStatus::Cancelled
+    );
+    assert_eq!(store.discovery_run_count().unwrap(), 2);
     assert!(service.active_discovery().is_none());
     assert!(!service.cancel_discovery());
 

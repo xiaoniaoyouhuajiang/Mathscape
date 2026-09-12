@@ -1,10 +1,24 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use mathscape_domain::{ContentHash, DiscoveryAdmission, DiscoverySelectionRequest};
+use mathscape_domain::{
+    ContentHash, DISCOVERY_PIPELINE_VERSION, DiscoveryAdmission, DiscoverySelectionRequest,
+    StableId,
+};
 use mathscape_llm::{GenaiBackend, GenaiBackendOptions, LlmError, LlmProfile};
 use mathscape_orchestrator::{
     DiscoveryRunSummary, DiscoveryWorkflow, DiscoveryWorkflowEvent, DiscoveryWorkflowLimits,
-    PreparedUnitDiscoveryRequest, WorkflowAttempt, WorkflowStatus,
+    PreparedUnitDiscoveryRequest, WorkflowAttempt, WorkflowStatus, discovery_result_fingerprint,
+};
+use mathscape_store_sqlite::{
+    DiscoveryAttemptCheckpoint, DiscoveryCheckpointStatus, DiscoveryDiagnosticCheckpoint,
+    DiscoveryFactCheckpointRecord, DiscoveryRunCheckpoint, DiscoveryUnitCheckpointRecord,
+    DiscoveryValidationCheckpoint, PendingDiscoveryTask, SqliteArtifactStore, SqliteStoreError,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -116,6 +130,7 @@ pub struct DesktopDiscoveryOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DesktopDiscoveryRun {
+    run_id: String,
     profile_id: String,
     provider: String,
     requested_model: String,
@@ -143,6 +158,12 @@ pub enum DesktopDiscoveryError {
     Backend(#[from] LlmError),
     #[error("内容发现准备线程失败：{0}")]
     Worker(String),
+    #[error("内容发现检查点保存失败：{0}")]
+    Persistence(#[from] SqliteStoreError),
+    #[error("内容发现领域值无效：{0}")]
+    Domain(#[from] mathscape_domain::DomainError),
+    #[error("内容发现检查点编码失败：{0}")]
+    Json(#[from] serde_json::Error),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -295,6 +316,7 @@ impl DesktopService {
         };
         let mut workflow =
             DiscoveryWorkflow::new(&backend, limits).with_observer(workflow_observer);
+        let run_id = new_discovery_run_id()?;
         let completed = tokio::select! {
             status = workflow.run(prepared) => Some(status),
             changed = cancelled.changed() => {
@@ -305,10 +327,14 @@ impl DesktopService {
         if completed.is_none() {
             workflow.cancel();
         }
+        let checkpoint = persistence_checkpoint(&workflow, &run_id, &profile, policy.admission)?;
+        let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        store.save_discovery_checkpoint(&checkpoint)?;
         let view = DesktopDiscoveryView::project(&workflow);
         Ok(DesktopDiscoveryOutcome::from_workflow(
             view,
             workflow.attempts(),
+            run_id,
             &profile,
             policy,
         ))
@@ -435,6 +461,7 @@ impl DesktopDiscoveryOutcome {
     fn from_workflow(
         view: DesktopDiscoveryView,
         attempts: &[WorkflowAttempt],
+        run_id: StableId,
         profile: &LlmProfile,
         policy: EffectiveDiscoveryPolicy,
     ) -> Self {
@@ -442,13 +469,14 @@ impl DesktopDiscoveryOutcome {
         Self {
             outcome,
             view,
-            run: DesktopDiscoveryRun::from_attempts(attempts, profile, policy),
+            run: DesktopDiscoveryRun::from_attempts(run_id, attempts, profile, policy),
         }
     }
 }
 
 impl DesktopDiscoveryRun {
     fn from_attempts(
+        run_id: StableId,
         attempts: &[WorkflowAttempt],
         profile: &LlmProfile,
         policy: EffectiveDiscoveryPolicy,
@@ -462,6 +490,7 @@ impl DesktopDiscoveryRun {
             })
         }
         Self {
+            run_id: run_id.to_string(),
             profile_id: profile.id.clone(),
             provider: profile.provider.clone(),
             requested_model: profile.model.clone(),
@@ -479,6 +508,146 @@ impl DesktopDiscoveryRun {
                     sum.saturating_add(response.elapsed_ms)
                 }),
         }
+    }
+}
+
+fn new_discovery_run_id() -> Result<StableId, mathscape_domain::DomainError> {
+    static SERIAL: AtomicU64 = AtomicU64::new(0);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    StableId::parse(format!(
+        "mathscape:discovery-run/{timestamp:x}-{}-{:x}",
+        std::process::id(),
+        SERIAL.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+fn persistence_checkpoint(
+    workflow: &DiscoveryWorkflow<'_>,
+    run_id: &StableId,
+    profile: &LlmProfile,
+    admission: DiscoveryAdmission,
+) -> Result<DiscoveryRunCheckpoint, DesktopDiscoveryError> {
+    let source = workflow.source_input().ok_or_else(|| {
+        DesktopDiscoveryError::Worker("workflow did not retain its DiscoveryInput".into())
+    })?;
+    let result = workflow.result();
+    let units = workflow
+        .units()
+        .into_iter()
+        .flat_map(|unit_set| unit_set.units())
+        .map(|unit| {
+            let proposal = unit.proposal();
+            Ok(DiscoveryUnitCheckpointRecord {
+                unit_ref: proposal.unit_ref.clone(),
+                parent_ref: proposal.parent.clone(),
+                unit_kind: proposal.unit_kind,
+                completeness: proposal.completeness,
+                payload: serde_json::to_value(unit)?,
+            })
+        })
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+    let facts = result
+        .as_ref()
+        .into_iter()
+        .flat_map(|result| result.tasks())
+        .map(|task| {
+            Ok(DiscoveryFactCheckpointRecord {
+                task_ref: task.task_ref().to_owned(),
+                owner_unit_ref: task.owner().to_owned(),
+                processed: task.processed(),
+                requires_unit_revision: task.requires_unit_revision(),
+                payload: serde_json::to_value(task)?,
+            })
+        })
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+    let pending_tasks = result
+        .as_ref()
+        .into_iter()
+        .flat_map(|result| result.pending_tasks())
+        .map(|task_ref| PendingDiscoveryTask {
+            task_ref: task_ref.clone(),
+            owner_unit_ref: result
+                .as_ref()
+                .and_then(|result| result.pending_task_owner(task_ref))
+                .map(str::to_owned),
+        })
+        .collect();
+    let attempts = workflow
+        .attempts()
+        .iter()
+        .map(|attempt| {
+            Ok(DiscoveryAttemptCheckpoint {
+                stage: attempt.stage.clone(),
+                batch_fingerprint: attempt.batch.clone(),
+                repair: attempt.repair,
+                status: checkpoint_status(&attempt.status),
+                request: serde_json::to_value(&attempt.request)?,
+                raw_text: attempt.raw_text.clone(),
+                run: serde_json::to_value(&attempt.run)?,
+                error: attempt.error.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+    let reports = workflow
+        .diagnostics()
+        .iter()
+        .map(|report| {
+            let mut diagnostics = report
+                .diagnostics
+                .iter()
+                .map(|diagnostic| DiscoveryDiagnosticCheckpoint {
+                    code: diagnostic.code.clone(),
+                    path: diagnostic.path.clone(),
+                    message: diagnostic.message.clone(),
+                    checked: true,
+                })
+                .collect::<Vec<_>>();
+            diagnostics.extend(report.not_checked.iter().map(|path| {
+                DiscoveryDiagnosticCheckpoint {
+                    code: "not_checked".into(),
+                    path: path.clone(),
+                    message: "upstream validation failed".into(),
+                    checked: false,
+                }
+            }));
+            Ok(DiscoveryValidationCheckpoint {
+                report: serde_json::to_value(report)?,
+                diagnostics,
+            })
+        })
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+    Ok(DiscoveryRunCheckpoint {
+        run_id: run_id.clone(),
+        artifact_id: source.snapshot.artifact_id.clone(),
+        conversion_id: source.snapshot.conversion_id.clone(),
+        pipeline_version: DISCOVERY_PIPELINE_VERSION.into(),
+        input_fingerprint: source.fingerprint.clone(),
+        selection_fingerprint: source.selection_fingerprint.clone(),
+        unit_set_fingerprint: workflow.units().map(|units| units.fingerprint().clone()),
+        result_fingerprint: result.as_ref().map(discovery_result_fingerprint),
+        status: checkpoint_status(workflow.status()),
+        admission,
+        profile_id: profile.id.clone(),
+        snapshot: serde_json::to_value(workflow.snapshot())?,
+        attempts,
+        reports,
+        units,
+        facts,
+        pending_tasks,
+    })
+}
+
+fn checkpoint_status(status: &WorkflowStatus) -> DiscoveryCheckpointStatus {
+    match status {
+        WorkflowStatus::Running => DiscoveryCheckpointStatus::Running,
+        WorkflowStatus::Completed => DiscoveryCheckpointStatus::Completed,
+        WorkflowStatus::Partial => DiscoveryCheckpointStatus::Partial,
+        WorkflowStatus::NeedsAttention => DiscoveryCheckpointStatus::NeedsAttention,
+        WorkflowStatus::Failed => DiscoveryCheckpointStatus::Failed,
+        WorkflowStatus::Cancelled => DiscoveryCheckpointStatus::Cancelled,
     }
 }
 

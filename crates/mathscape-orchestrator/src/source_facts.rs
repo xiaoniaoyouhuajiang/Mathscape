@@ -8,7 +8,7 @@ use crate::{
 use mathscape_domain::*;
 use mathscape_llm::*;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LocatedFact {
@@ -462,6 +462,7 @@ pub struct DiscoveryResult {
     pub(crate) references: Vec<AssembledReference>,
     pub(crate) relations: Vec<AssembledRelation>,
     pub(crate) pending_tasks: Vec<String>,
+    pub(crate) pending_task_owners: BTreeMap<String, String>,
     pub(crate) complete: bool,
 }
 impl DiscoveryResult {
@@ -476,6 +477,9 @@ impl DiscoveryResult {
     }
     pub fn pending_tasks(&self) -> &[String] {
         &self.pending_tasks
+    }
+    pub fn pending_task_owner(&self, task_ref: &str) -> Option<&str> {
+        self.pending_task_owners.get(task_ref).map(String::as_str)
     }
     pub fn references(&self) -> &[AssembledReference] {
         &self.references
@@ -559,6 +563,12 @@ pub fn assemble_discovery(
             })
         })
         .map(|t| t.task_ref.clone())
+        .collect();
+    let pending_task_owners = batches
+        .iter()
+        .flat_map(|batch| &batch.model.tasks)
+        .filter(|task| pending_tasks.contains(&task.task_ref))
+        .map(|task| (task.task_ref.clone(), task.owner_unit_ref.clone()))
         .collect();
     let mut references: Vec<AssembledReference> = vec![];
     let mut relations: Vec<AssembledRelation> = vec![];
@@ -715,6 +725,7 @@ pub fn assemble_discovery(
         references,
         relations,
         pending_tasks,
+        pending_task_owners,
     })
 }
 fn merge_relation(

@@ -1,7 +1,7 @@
 # 内容结构生成、来源登记与语义晋升草案
 
-状态：讨论草案，未实现。内容发现的单次 Producer 已实现；本文提出其后来源层契约的修订，
-不表示当前 Domain 构造器或 SQLite 已经支持接受和登记。既有输入、提案和验证接口以
+状态：部分实现。Discovery 运行检查点、接受决定存储和内存 `SourceRegistrationPlan` 已实现；
+正式 SourceSpan/SourceSemanticUnit 图提交与审核 UI 尚未实现。既有输入、提案和验证接口以
 [`discovery-proposal-v3.md`](discovery-proposal-v3.md) 为准；数学上下文、语义和对齐的上位模型见
 工作区 [`EMIR 规范`](../../docs/rdtx/emir-source-semantics-alignment.md)。
 
@@ -91,9 +91,11 @@ TrustRecord 的人工审核状态。需记录决策者是用户还是策略、�
 来源关系例如 `proves`，此时表达“原文将这段内容呈现为该命题的证明”；这不等于证明已经
 被 Lean 检查。图投影应保留这一关系所属的来源层和独立可信状态。
 
-可以使用一个暂名 `SourceRegistrationPlan` 的内存值携带实体、关系、复用映射、诊断和提交
-前置条件。它是受控写入的准备结果，不需要单独的持久化对象体系。底层可以复用 MapPatch
-契约；通用提交器与相关 repository 尚需实现，不能把已有 MapPatch 类型视为已存在的写入服务。
+`SourceRegistrationPlan` 已作为内存值实现，携带来源范围、单元、关系、引用、临时句柄映射、
+pending 状态和提交前置条件；接受决定及计划快照会持久化用于审计。它仍只是受控写入的准备
+结果，不是地图实体。底层可以复用 MapPatch 契约；通用提交器与相关 repository 尚需实现，
+不能把已有 MapPatch 类型视为已存在的写入服务。详见
+[`Discovery 持久化与来源登记计划 v1`](discovery-persistence-registration-plan-v1.md)。
 
 ### 3.3 数学语义构建与对齐
 

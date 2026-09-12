@@ -136,6 +136,7 @@ interface DesktopDiscoveryView {
 }
 
 interface DiscoveryRun {
+  run_id: string;
   profile_id: string;
   provider: string;
   requested_model: string;
