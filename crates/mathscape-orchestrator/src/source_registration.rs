@@ -4,9 +4,14 @@
 use std::collections::{BTreeSet, HashMap};
 
 use mathscape_domain::{
-    ActorRef, ContentHash, DiscoveryRelationKind, DiscoveryUnitKind, FactTaskProposal,
-    SourceFactProposal, SourceFactVersion, StableId, TextByteRange, Timestamp, UnitCompleteness,
-    UnitDiscoveryCheckpoint,
+    ActorRef, AlignmentStatus, ByteRange, Confidence, ContentHash, CurationStatus,
+    DialectScopeBinding, DiscoveryRelationKind, DiscoveryUnitKind, EntityEnvelope, EntityHeader,
+    EntityKind, FactTaskProposal, LayoutKind, LifecycleStatus, LocalReference,
+    LocalReferenceStatus, LocatedSourceText, MapOperation, MapPatch, MarkdownLocator, ParseStatus,
+    ProofStatus, ProvenanceStatus, RevisionId, SchemaVersion, SegmentationStatus,
+    SourceEditionBinding, SourceFactProposal, SourceFactVersion, SourcePayload, SourceSemanticUnit,
+    SourceSpan, SourceUnitRelation, SpanGranularity, StableId, TextByteRange, Timestamp,
+    TrustRecord, TypingStatus, UnitCompleteness, UnitDiscoveryCheckpoint,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -19,7 +24,7 @@ use crate::{
 
 pub const SOURCE_REGISTRATION_PLAN_VERSION: &str = "mathscape-source-registration-plan-1";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AcceptanceAuthority {
     HumanReview,
@@ -142,7 +147,7 @@ fn diagnostics(report: &StageValidationReport) -> String {
         .join("; ")
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DiscoveryAcceptanceDecision {
     pub decision_id: StableId,
     pub discovery_run_id: StableId,
@@ -153,7 +158,7 @@ pub struct DiscoveryAcceptanceDecision {
     pub selection: AcceptanceSelection,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PlannedSourceSpan {
     pub stable_id: StableId,
     pub markdown_artifact_id: StableId,
@@ -162,7 +167,7 @@ pub struct PlannedSourceSpan {
     pub exact_text_hash: ContentHash,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PlannedLocatedText {
     pub text: String,
     pub span_id: StableId,
@@ -170,7 +175,7 @@ pub struct PlannedLocatedText {
     pub precision_review: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PlannedSourceUnit {
     pub source_ref: String,
     pub stable_id: StableId,
@@ -184,7 +189,7 @@ pub struct PlannedSourceUnit {
     pub facts_pending: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PlannedSourceReference {
     pub owner: StableId,
     pub mention: PlannedLocatedText,
@@ -195,7 +200,7 @@ pub struct PlannedSourceReference {
     pub origins: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PlannedSourceRelation {
     pub stable_id: StableId,
     pub source: StableId,
@@ -206,9 +211,9 @@ pub struct PlannedSourceRelation {
     pub origins: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceRegistrationPlan {
-    pub version: &'static str,
+    pub version: String,
     pub plan_fingerprint: ContentHash,
     pub result_fingerprint: ContentHash,
     pub decision: DiscoveryAcceptanceDecision,
@@ -222,6 +227,311 @@ pub struct SourceRegistrationPlan {
     pub references: Vec<PlannedSourceReference>,
     pub relations: Vec<PlannedSourceRelation>,
     pub pending_tasks: Vec<String>,
+}
+
+#[derive(Debug, Error)]
+pub enum SourceMaterializationError {
+    #[error("unsupported source registration plan version {0}")]
+    UnsupportedVersion(String),
+    #[error("planned source object refers to unknown span {0}")]
+    UnknownSpan(StableId),
+    #[error("planned source reference has no registered owner {0}")]
+    UnknownOwner(StableId),
+    #[error(transparent)]
+    Domain(#[from] mathscape_domain::DomainError),
+}
+
+/// Converts an accepted deterministic plan into canonical Source Domain
+/// entities. It does not query or mutate storage; create/reuse/conflict is
+/// decided atomically by the repository.
+pub fn materialize_source_registration(
+    plan: &SourceRegistrationPlan,
+) -> Result<MapPatch<SourcePayload>, SourceMaterializationError> {
+    if plan.version != SOURCE_REGISTRATION_PLAN_VERSION {
+        return Err(SourceMaterializationError::UnsupportedVersion(
+            plan.version.clone(),
+        ));
+    }
+    let trust = registration_trust(&plan.decision, &[])?;
+    let schema = SchemaVersion::parse("mathscape-source-1")?;
+    let lifecycle = match plan.decision.authority {
+        AcceptanceAuthority::HumanReview => LifecycleStatus::Active,
+        AcceptanceAuthority::AutomaticPolicy => LifecycleStatus::Candidate,
+    };
+    let span_ids = plan
+        .spans
+        .iter()
+        .map(|span| span.stable_id.clone())
+        .collect::<BTreeSet<_>>();
+    let unit_ids = plan
+        .units
+        .iter()
+        .map(|unit| unit.stable_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut operations = Vec::new();
+
+    for planned in &plan.spans {
+        let span = SourceSpan::new(
+            SpanGranularity::Inline,
+            LayoutKind::Other,
+            None,
+            vec![],
+            planned.block_ids.clone(),
+            Some(MarkdownLocator::new(
+                planned.markdown_artifact_id.clone(),
+                ByteRange::new(planned.range.start, planned.range.end)?,
+                None,
+            )),
+            None,
+            Some(planned.exact_text_hash.clone()),
+        )?;
+        let payload = SourcePayload::Span(span);
+        let header = source_header(
+            planned.stable_id.clone(),
+            EntityKind::SourceSpan,
+            &payload,
+            schema.clone(),
+            lifecycle,
+            &plan.decision,
+        )?;
+        operations.push(MapOperation::CreateEntity {
+            entity: EntityEnvelope::new(header, payload)?,
+        });
+    }
+
+    for planned in &plan.units {
+        for span in &planned.source_spans {
+            if !span_ids.contains(span) {
+                return Err(SourceMaterializationError::UnknownSpan(span.clone()));
+            }
+        }
+        if planned
+            .parent
+            .as_ref()
+            .is_some_and(|parent| !unit_ids.contains(parent))
+        {
+            return Err(SourceMaterializationError::UnknownOwner(
+                planned.parent.clone().expect("checked Some"),
+            ));
+        }
+        let source_title = planned
+            .source_title
+            .as_ref()
+            .map(|value| located_source_text(value, &span_ids))
+            .transpose()?;
+        let source_labels = planned
+            .source_labels
+            .iter()
+            .map(|value| located_source_text(value, &span_ids))
+            .collect::<Result<Vec<_>, _>>()?;
+        let references = plan
+            .references
+            .iter()
+            .filter(|reference| reference.owner == planned.stable_id)
+            .map(|reference| local_reference(reference, &span_ids))
+            .collect::<Result<Vec<_>, _>>()?;
+        let unit = SourceSemanticUnit::new(
+            SourceEditionBinding::Unresolved,
+            planned.unit_kind.into(),
+            planned.display_title.clone(),
+            source_title,
+            source_labels,
+            planned.parent.clone(),
+            planned.source_spans.clone(),
+            DialectScopeBinding::Uncontextualized,
+            None,
+            Some(plan.markdown_artifact_id.clone()),
+            references,
+            planned.completeness,
+            planned.facts_pending,
+            trust.clone(),
+        )?;
+        let payload = SourcePayload::SemanticUnit(unit);
+        let header = source_header(
+            planned.stable_id.clone(),
+            EntityKind::SourceSemanticUnit,
+            &payload,
+            schema.clone(),
+            lifecycle,
+            &plan.decision,
+        )?;
+        operations.push(MapOperation::CreateEntity {
+            entity: EntityEnvelope::new(header, payload)?,
+        });
+    }
+
+    for reference in &plan.references {
+        if !unit_ids.contains(&reference.owner) {
+            return Err(SourceMaterializationError::UnknownOwner(
+                reference.owner.clone(),
+            ));
+        }
+    }
+    for planned in &plan.relations {
+        if !unit_ids.contains(&planned.source) {
+            return Err(SourceMaterializationError::UnknownOwner(
+                planned.source.clone(),
+            ));
+        }
+        if !unit_ids.contains(&planned.target) {
+            return Err(SourceMaterializationError::UnknownOwner(
+                planned.target.clone(),
+            ));
+        }
+        if let Some(span) = planned
+            .evidence_spans
+            .iter()
+            .find(|span| !span_ids.contains(*span))
+        {
+            return Err(SourceMaterializationError::UnknownSpan(span.clone()));
+        }
+        let relation_trust = registration_trust(&plan.decision, &planned.evidence_spans)?;
+        let relation_payload = SourceUnitRelation::new(planned.relation.into(), relation_trust);
+        let revision = revision_for(&(
+            &planned.stable_id,
+            &planned.source,
+            &planned.target,
+            &planned.evidence_spans,
+            &relation_payload,
+        ))?;
+        let header = EntityHeader::new(
+            planned.stable_id.clone(),
+            revision,
+            EntityKind::SourceUnitRelation,
+            schema.clone(),
+            lifecycle,
+            plan.decision.decided_at.clone(),
+            plan.decision.actor.clone(),
+            Some(plan.decision.discovery_run_id.clone()),
+        );
+        operations.push(MapOperation::CreateRelation {
+            relation: relation_payload.into_record(
+                header,
+                planned.source.clone(),
+                planned.target.clone(),
+                planned.evidence_spans.clone(),
+            )?,
+        });
+    }
+
+    MapPatch::new(
+        None,
+        plan.decision.actor.clone(),
+        Some(plan.decision.discovery_run_id.clone()),
+        Some("Register accepted source discovery".into()),
+        operations,
+    )
+    .map_err(Into::into)
+}
+
+fn located_source_text(
+    planned: &PlannedLocatedText,
+    spans: &BTreeSet<StableId>,
+) -> Result<LocatedSourceText, SourceMaterializationError> {
+    if !spans.contains(&planned.span_id) {
+        return Err(SourceMaterializationError::UnknownSpan(
+            planned.span_id.clone(),
+        ));
+    }
+    LocatedSourceText::new(
+        planned.text.clone(),
+        planned.span_id.clone(),
+        planned.normalized,
+        planned.precision_review,
+    )
+    .map_err(Into::into)
+}
+
+fn local_reference(
+    planned: &PlannedSourceReference,
+    spans: &BTreeSet<StableId>,
+) -> Result<LocalReference, SourceMaterializationError> {
+    if !spans.contains(&planned.mention.span_id) {
+        return Err(SourceMaterializationError::UnknownSpan(
+            planned.mention.span_id.clone(),
+        ));
+    }
+    let status = match planned.status {
+        ReferenceResolutionStatus::Unresolved => LocalReferenceStatus::Unresolved,
+        ReferenceResolutionStatus::Candidate => LocalReferenceStatus::Candidate,
+        ReferenceResolutionStatus::ResolvedLocal => LocalReferenceStatus::Resolved,
+        ReferenceResolutionStatus::Ambiguous => LocalReferenceStatus::Ambiguous,
+    };
+    let reason = if planned.unregistered_candidate_refs.is_empty() {
+        planned.reason.clone()
+    } else {
+        format!(
+            "{}; unregistered local candidates: {}",
+            planned.reason,
+            planned.unregistered_candidate_refs.join(", ")
+        )
+    };
+    LocalReference::new(
+        planned.mention.text.clone(),
+        planned.mention.span_id.clone(),
+        Some(planned.mention.text.clone()),
+        planned.candidate_targets.clone(),
+        status,
+        reason,
+        planned.origins.clone(),
+    )
+    .map_err(Into::into)
+}
+
+fn registration_trust(
+    decision: &DiscoveryAcceptanceDecision,
+    evidence: &[StableId],
+) -> Result<TrustRecord, mathscape_domain::DomainError> {
+    let (parse, segmentation, curation, confidence) = match decision.authority {
+        AcceptanceAuthority::HumanReview => (
+            ParseStatus::Reviewed,
+            SegmentationStatus::Checked,
+            CurationStatus::Accepted,
+            0.95,
+        ),
+        AcceptanceAuthority::AutomaticPolicy => (
+            ParseStatus::Parsed,
+            SegmentationStatus::Proposed,
+            CurationStatus::Raw,
+            0.75,
+        ),
+    };
+    Ok(TrustRecord::new(
+        ProvenanceStatus::Exact,
+        parse,
+        segmentation,
+        TypingStatus::Unchecked,
+        ProofStatus::None,
+        AlignmentStatus::Unmatched,
+        curation,
+        Confidence::new(confidence)?,
+        evidence.to_vec(),
+        vec![decision.actor.clone()],
+    ))
+}
+
+fn source_header(
+    stable_id: StableId,
+    kind: EntityKind,
+    payload: &SourcePayload,
+    schema: SchemaVersion,
+    lifecycle: LifecycleStatus,
+    decision: &DiscoveryAcceptanceDecision,
+) -> Result<EntityHeader, mathscape_domain::DomainError> {
+    Ok(EntityHeader::new(
+        stable_id.clone(),
+        revision_for(&(stable_id, payload))?,
+        kind,
+        schema,
+        lifecycle,
+        decision.decided_at.clone(),
+        decision.actor.clone(),
+        Some(decision.discovery_run_id.clone()),
+    ))
+}
+
+fn revision_for<T: Serialize>(value: &T) -> Result<RevisionId, mathscape_domain::DomainError> {
+    RevisionId::parse(fingerprint(value).as_str())
 }
 
 pub fn discovery_result_fingerprint(result: &DiscoveryResult) -> ContentHash {
@@ -295,7 +605,7 @@ pub enum SourceRegistrationPlanError {
 
 #[derive(Serialize)]
 struct RegistrationPlanBody<'a> {
-    version: &'static str,
+    version: &'a str,
     result_fingerprint: &'a ContentHash,
     decision: &'a DiscoveryAcceptanceDecision,
     markdown_artifact_id: &'a StableId,
@@ -443,7 +753,7 @@ pub fn plan_source_registration(
     {
         let proposal = unit.proposal();
         let task = task_by_owner.get(proposal.unit_ref.as_str()).copied();
-        let source_spans = unit
+        let mut source_spans = unit
             .selectors()
             .iter()
             .map(&mut intern_span)
@@ -465,7 +775,16 @@ pub fn plan_source_registration(
             .into_iter()
             .flat_map(|task| task.labels())
             .map(|fact| located(fact, &mut intern_span))
-            .collect();
+            .collect::<Vec<_>>();
+        for span_id in source_title
+            .iter()
+            .map(|title| &title.span_id)
+            .chain(source_labels.iter().map(|label| &label.span_id))
+        {
+            if !source_spans.contains(span_id) {
+                source_spans.push(span_id.clone());
+            }
+        }
         planned_units.push(PlannedSourceUnit {
             source_ref: proposal.unit_ref.clone(),
             stable_id: stable_units[&proposal.unit_ref].clone(),
@@ -511,6 +830,15 @@ pub fn plan_source_registration(
             reason: reference.resolution.reason.clone(),
             origins: reference.origins.clone(),
         });
+    }
+    for reference in &planned_references {
+        if let Some(unit) = planned_units
+            .iter_mut()
+            .find(|unit| unit.stable_id == reference.owner)
+            && !unit.source_spans.contains(&reference.mention.span_id)
+        {
+            unit.source_spans.push(reference.mention.span_id.clone());
+        }
     }
 
     let mut planned_relations = Vec::new();
@@ -572,7 +900,7 @@ pub fn plan_source_registration(
     };
     let plan_fingerprint = fingerprint(&body);
     Ok(SourceRegistrationPlan {
-        version: SOURCE_REGISTRATION_PLAN_VERSION,
+        version: SOURCE_REGISTRATION_PLAN_VERSION.into(),
         plan_fingerprint,
         result_fingerprint,
         decision,

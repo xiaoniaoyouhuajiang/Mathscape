@@ -58,7 +58,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 1",
@@ -91,6 +91,14 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
         )
         .unwrap();
     assert_eq!(discovery_migration, "discovery_runs_v1");
+    let source_map_migration = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 5",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(source_map_migration, "source_map_v1");
     drop(connection);
     drop(SqliteArtifactStore::open(&database).unwrap());
     cleanup(&directory);
@@ -108,7 +116,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::open(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 4
+            supported: 5
         })
     ));
     cleanup(&directory);
@@ -129,7 +137,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -167,7 +175,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 3",
@@ -203,7 +211,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
     );
     assert_eq!(
         connection

@@ -176,7 +176,7 @@ interface SourceReviewProjection {
 }
 
 interface DiscoveryAcceptanceOutcome {
-  state: "accepted";
+  state: "registered";
   decision_id: string;
   run_id: string;
   result_fingerprint: string;
@@ -189,6 +189,10 @@ interface DiscoveryAcceptanceOutcome {
   relation_count: number;
   pending_task_count: number;
   already_accepted: boolean;
+  commit_id: string;
+  created_object_count: number;
+  reused_object_count: number;
+  already_registered: boolean;
 }
 
 interface SourceReviewUnit {
@@ -702,7 +706,7 @@ export class MarkdownSelection {
     section.append(actions, feedback);
 
     let accepting = false;
-    let accepted = review.acceptance.state === "accepted";
+    let accepted = review.acceptance.state === "accepted" || review.acceptance.state === "registered";
     const missingDependencies = (): string[] => {
       const missing = new Set<string>();
       for (const ref of selected) {
@@ -741,14 +745,14 @@ export class MarkdownSelection {
           },
         });
         accepted = true;
-        review.acceptance.state = "accepted";
+        review.acceptance.state = "registered";
         review.acceptance.selected_units = outcome.selected_units;
         outcome.selected_units.forEach(ref => {
-          const unit = unitByRef.get(ref); if (unit) unit.acceptance = "accepted";
+          const unit = unitByRef.get(ref); if (unit) unit.acceptance = "registered";
         });
-        heading.querySelector(".source-review-state")!.textContent = "审核状态：accepted";
-        feedback.textContent = `${outcome.already_accepted ? "已存在相同接受决定" : "审核接受完成"}：${outcome.unit_count} 个单元、${outcome.span_count} 个来源范围、${outcome.relation_count} 条关系已进入待登记计划${outcome.partial ? "；这是部分发现结果" : ""}。`;
-        this.discoveryFeedback = `内容发现结果已接受：${outcome.unit_count} 个单元已形成来源登记计划，尚未写入正式来源图。`;
+        heading.querySelector(".source-review-state")!.textContent = "审核状态：registered";
+        feedback.textContent = `${outcome.already_registered ? "已存在相同来源提交" : "审核并注册完成"}：${outcome.unit_count} 个单元、${outcome.span_count} 个来源范围、${outcome.relation_count} 条关系已原子写入来源图；新建 ${outcome.created_object_count}、复用 ${outcome.reused_object_count}${outcome.partial ? "；这是部分发现结果" : ""}。`;
+        this.discoveryFeedback = `内容发现结果已注册：${outcome.unit_count} 个来源单元已写入正式来源图。`;
         section.classList.add("is-accepted");
       } catch (error) {
         feedback.textContent = "接受失败：" + String(error);

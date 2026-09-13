@@ -88,11 +88,13 @@ mockIPC((command, payload) => {
     const request = (payload as any).request;
     acceptanceRequests.push(request);
     return {
-      state: "accepted", decision_id: "acceptance-1", run_id: request.run_id,
+      state: "registered", decision_id: "acceptance-1", run_id: request.run_id,
       result_fingerprint: request.expected_result_fingerprint, plan_fingerprint: "plan-1",
       selected_units: request.selection.unit_refs, partial: behavior.discoveryStatus !== "completed",
       span_count: request.selection.unit_refs.length, unit_count: request.selection.unit_refs.length,
       reference_count: 1, relation_count: 0, pending_task_count: 0, already_accepted: false,
+      commit_id: "sha256:" + "2".repeat(64), created_object_count: request.selection.unit_refs.length * 2,
+      reused_object_count: 0, already_registered: false,
     };
   }
   if (command === "run_discovery") {

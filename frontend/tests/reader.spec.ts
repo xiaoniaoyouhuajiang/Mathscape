@@ -113,8 +113,8 @@ test("Markdown selection runs Discovery and shows an unregistered proposal", asy
   await page.getByRole("button", { name: "选择全部可接受单元" }).click();
   await expect(page.getByLabel("选择来源单元 测试命题")).toBeChecked();
   await page.getByRole("button", { name: "接受选中内容" }).click();
-  await expect(page.locator(".source-review-action-feedback")).toContainText("审核接受完成：1 个单元");
-  await expect(page.locator(".discovery-status")).toContainText("已形成来源登记计划，尚未写入正式来源图");
+  await expect(page.locator(".source-review-action-feedback")).toContainText("审核并注册完成：1 个单元");
+  await expect(page.locator(".discovery-status")).toContainText("已写入正式来源图");
   await expect(page.getByRole("button", { name: "接受选中内容" })).toBeDisabled();
   const acceptance = await page.evaluate(() => (window as any).harness.acceptanceRequests.at(-1));
   expect(acceptance).toEqual({

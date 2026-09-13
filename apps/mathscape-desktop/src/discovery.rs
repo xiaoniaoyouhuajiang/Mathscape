@@ -14,16 +14,16 @@ use mathscape_llm::{GenaiBackend, GenaiBackendOptions, LlmError, LlmProfile};
 use mathscape_orchestrator::{
     AcceptanceAuthority, AcceptanceSelection, DiscoveryAcceptanceDecision, DiscoveryRunSummary,
     DiscoveryWorkflow, DiscoveryWorkflowEvent, DiscoveryWorkflowLimits,
-    PreparedUnitDiscoveryRequest, WorkflowAttempt, WorkflowStatus, acceptance_decision_id,
-    discovery_result_fingerprint, plan_source_registration,
-    prepare_unit_discovery_request_from_input, project_source_review, rebind_discovery_input,
-    revalidate_discovery_checkpoint,
+    PreparedUnitDiscoveryRequest, SourceRegistrationPlan, WorkflowAttempt, WorkflowStatus,
+    acceptance_decision_id, discovery_result_fingerprint, materialize_source_registration,
+    plan_source_registration, prepare_unit_discovery_request_from_input, project_source_review,
+    rebind_discovery_input, revalidate_discovery_checkpoint,
 };
 use mathscape_store_sqlite::{
     AcceptedRegistrationPlanRecord, DiscoveryAttemptCheckpoint, DiscoveryCheckpointStatus,
     DiscoveryDiagnosticCheckpoint, DiscoveryFactCheckpointRecord, DiscoveryRunCheckpoint,
     DiscoveryUnitCheckpointRecord, DiscoveryValidationCheckpoint, PendingDiscoveryTask,
-    SqliteArtifactStore, SqliteStoreError, StoredAcceptanceAuthority,
+    SourceRegistrationReceipt, SqliteArtifactStore, SqliteStoreError, StoredAcceptanceAuthority,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -67,6 +67,10 @@ pub struct DesktopDiscoveryAcceptance {
     relation_count: usize,
     pending_task_count: usize,
     already_accepted: bool,
+    commit_id: String,
+    created_object_count: usize,
+    reused_object_count: usize,
+    already_registered: bool,
 }
 
 impl RunDiscoveryRequest {
@@ -315,38 +319,58 @@ impl DesktopService {
 
         let decision_id = acceptance_decision_id(&run_id, &reproduced, &actor, &request.selection)
             .map_err(|error| DesktopDiscoveryError::Acceptance(error.to_string()))?;
-        if let Some(existing) = store.registration_plan(&decision_id)? {
-            return DesktopDiscoveryAcceptance::from_record(existing, true);
-        }
-        let decision = DiscoveryAcceptanceDecision {
-            decision_id: decision_id.clone(),
-            discovery_run_id: run_id.clone(),
-            actor: actor.clone(),
-            decided_at: timestamp_now()?,
-            authority: AcceptanceAuthority::HumanReview,
-            expected_result_fingerprint: reproduced.clone(),
-            selection: request.selection,
+        let (record, already_accepted) = match store.registration_plan(&decision_id)? {
+            Some(existing) => (existing, true),
+            None => {
+                let decision = DiscoveryAcceptanceDecision {
+                    decision_id: decision_id.clone(),
+                    discovery_run_id: run_id.clone(),
+                    actor: actor.clone(),
+                    decided_at: timestamp_now()?,
+                    authority: AcceptanceAuthority::HumanReview,
+                    expected_result_fingerprint: reproduced.clone(),
+                    selection: request.selection,
+                };
+                let plan = plan_source_registration(
+                    prepared.input(),
+                    revalidated.units(),
+                    revalidated.result(),
+                    decision,
+                )
+                .map_err(|error| DesktopDiscoveryError::Acceptance(error.to_string()))?;
+                let record = AcceptedRegistrationPlanRecord {
+                    decision_id,
+                    run_id,
+                    actor,
+                    decided_at: plan.decision.decided_at.clone(),
+                    authority: StoredAcceptanceAuthority::HumanReview,
+                    expected_result_fingerprint: reproduced,
+                    selection: serde_json::to_value(&plan.decision.selection)?,
+                    plan_fingerprint: plan.plan_fingerprint.clone(),
+                    plan: serde_json::to_value(&plan)?,
+                };
+                store.save_registration_plan(&record)?;
+                (record, false)
+            }
         };
-        let plan = plan_source_registration(
-            prepared.input(),
-            revalidated.units(),
-            revalidated.result(),
-            decision,
+        let plan: SourceRegistrationPlan = serde_json::from_value(record.plan.clone())?;
+        let patch = materialize_source_registration(&plan)
+            .map_err(|error| DesktopDiscoveryError::Acceptance(error.to_string()))?;
+        let already_registered = store
+            .source_registration_receipt(&record.decision_id)?
+            .is_some();
+        let receipt = store.commit_source_registration(
+            &record.decision_id,
+            &record.plan_fingerprint,
+            &patch,
+            timestamp_now()?,
+        )?;
+        DesktopDiscoveryAcceptance::from_registration(
+            record,
+            receipt,
+            already_accepted,
+            already_registered,
         )
-        .map_err(|error| DesktopDiscoveryError::Acceptance(error.to_string()))?;
-        let record = AcceptedRegistrationPlanRecord {
-            decision_id,
-            run_id,
-            actor,
-            decided_at: plan.decision.decided_at.clone(),
-            authority: StoredAcceptanceAuthority::HumanReview,
-            expected_result_fingerprint: reproduced,
-            selection: serde_json::to_value(&plan.decision.selection)?,
-            plan_fingerprint: plan.plan_fingerprint.clone(),
-            plan: serde_json::to_value(&plan)?,
-        };
-        store.save_registration_plan(&record)?;
-        DesktopDiscoveryAcceptance::from_record(record, false)
     }
 
     async fn run_discovery_observed(
@@ -658,9 +682,11 @@ impl DesktopDiscoveryRun {
 }
 
 impl DesktopDiscoveryAcceptance {
-    fn from_record(
+    fn from_registration(
         record: AcceptedRegistrationPlanRecord,
+        receipt: SourceRegistrationReceipt,
         already_accepted: bool,
+        already_registered: bool,
     ) -> Result<Self, DesktopDiscoveryError> {
         let plan = record
             .plan
@@ -686,7 +712,7 @@ impl DesktopDiscoveryAcceptance {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
-            state: "accepted".into(),
+            state: "registered".into(),
             decision_id: record.decision_id.to_string(),
             run_id: record.run_id.to_string(),
             result_fingerprint: record.expected_result_fingerprint,
@@ -702,6 +728,10 @@ impl DesktopDiscoveryAcceptance {
             relation_count: array("relations")?.len(),
             pending_task_count: array("pending_tasks")?.len(),
             already_accepted,
+            commit_id: receipt.commit_id.to_string(),
+            created_object_count: receipt.created_objects.len(),
+            reused_object_count: receipt.reused_objects.len(),
+            already_registered,
         })
     }
 }

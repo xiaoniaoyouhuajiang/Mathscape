@@ -461,17 +461,39 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     .unwrap();
     let accepted =
         serde_json::to_value(service.accept_discovery_result(acceptance.clone()).unwrap()).unwrap();
-    assert_eq!(accepted["state"], "accepted");
+    assert_eq!(accepted["state"], "registered");
     assert_eq!(accepted["unit_count"], 2);
     assert_eq!(accepted["relation_count"], 1);
     assert_eq!(accepted["already_accepted"], false);
+    assert_eq!(accepted["already_registered"], false);
+    assert!(accepted["created_object_count"].as_u64().unwrap() >= 5);
     let repeated =
         serde_json::to_value(service.accept_discovery_result(acceptance).unwrap()).unwrap();
     assert_eq!(repeated["decision_id"], accepted["decision_id"]);
     assert_eq!(repeated["already_accepted"], true);
+    assert_eq!(repeated["already_registered"], true);
+    assert_eq!(repeated["commit_id"], accepted["commit_id"]);
     let decision_id = StableId::parse(accepted["decision_id"].as_str().unwrap()).unwrap();
     let store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
     assert!(store.registration_plan(&decision_id).unwrap().is_some());
+    assert!(
+        store
+            .source_registration_receipt(&decision_id)
+            .unwrap()
+            .is_some()
+    );
+    let objects = store.map_objects().unwrap();
+    assert_eq!(
+        objects.len() as u64,
+        accepted["created_object_count"].as_u64().unwrap()
+    );
+    assert_eq!(
+        objects
+            .iter()
+            .filter(|object| object.kind == mathscape_domain::EntityKind::SourceSemanticUnit)
+            .count(),
+        2
+    );
     drop(store);
 
     let cancelled = {

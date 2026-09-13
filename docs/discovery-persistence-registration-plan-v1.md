@@ -1,7 +1,7 @@
 # Discovery 持久化与来源登记计划 v1
 
-状态：已实现运行检查点、可操作审核、后端重验证、接受决策和 `SourceRegistrationPlan`
-持久化。正式来源图提交尚未实现。
+状态：已实现运行检查点、可操作审核、后端重验证、接受决策、`SourceRegistrationPlan`
+持久化和来源图原子提交。
 
 ## 1. 两类数据边界
 
@@ -49,7 +49,8 @@ ID，重复提交返回已有计划。
 
 - 从磁盘检查点恢复并继续 LLM 工作流；
 - 拒绝决定、审核意见和提案编辑；
-- `SourceSpan`/`SourceSemanticUnit`/`SourceUnitRelation` 的 SQLite 提交与读取；
-- 来源图 projector 和数学语义解析。
+- 从来源图到 Desktop 来源图 projector 的专用读取视图；
+- 拒绝决定、审核意见和提案编辑；
+- 来源上下文化、数学语义解析和对齐。
 
 这些能力必须建立在本契约之上，不能从 attempt 原始 JSON 绕过接受和登记计划。

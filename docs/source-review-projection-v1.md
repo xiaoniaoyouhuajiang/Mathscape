@@ -21,7 +21,8 @@ relation click   -> 同时高亮 source、target 和 evidence
 ## 状态边界
 
 - `fact_status` 表示来源事实是否已经处理，不表示数学正确；
-- `acceptance` 表示当前审核选择状态，不表示已写入数据库；
+- `acceptance` 表示当前审核选择状态；接受命令成功后，Desktop 会把正式来源注册结果以
+  `registered` 状态回显；
 - `ReferenceStatus` 区分 unresolved、candidate、resolved_local 和 ambiguous；
 - `diagnostics` 和 `pending_tasks` 必须在审核页可见；
 - `complete` 只表示内容发现工作流完成，不表示来源节点已登记。

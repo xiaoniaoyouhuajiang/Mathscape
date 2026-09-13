@@ -1,7 +1,8 @@
 # 内容结构生成、来源登记与语义晋升草案
 
-状态：部分实现。Discovery 运行检查点、接受决定存储和内存 `SourceRegistrationPlan` 已实现；
-正式 SourceSpan/SourceSemanticUnit 图提交与审核 UI 尚未实现。既有输入、提案和验证接口以
+状态：来源登记首版已实现。Discovery 运行检查点、接受决定、可操作审核、`SourceRegistrationPlan`
+和 SourceSpan/SourceSemanticUnit/SourceUnitRelation 原子提交已实现；来源图专用读取投影及
+后续数学语义解析尚未实现。既有输入、提案和验证接口以
 [`discovery-proposal-v3.md`](discovery-proposal-v3.md) 为准；数学上下文、语义和对齐的上位模型见
 工作区 [`EMIR 规范`](../../docs/rdtx/emir-source-semantics-alignment.md)。
 
@@ -91,10 +92,10 @@ TrustRecord 的人工审核状态。需记录决策者是用户还是策略、�
 来源关系例如 `proves`，此时表达“原文将这段内容呈现为该命题的证明”；这不等于证明已经
 被 Lean 检查。图投影应保留这一关系所属的来源层和独立可信状态。
 
-`SourceRegistrationPlan` 已作为内存值实现，携带来源范围、单元、关系、引用、临时句柄映射、
-pending 状态和提交前置条件；接受决定及计划快照会持久化用于审计。它仍只是受控写入的准备
-结果，不是地图实体。底层可以复用 MapPatch 契约；通用提交器与相关 repository 尚需实现，
-不能把已有 MapPatch 类型视为已存在的写入服务。详见
+`SourceRegistrationPlan` 携带来源范围、单元、关系、引用、临时句柄映射、pending 状态和提交
+前置条件；接受决定及计划快照持久化用于审计。注册器将计划物化为 Domain 对象，并以
+`MapPatch<SourcePayload>` 在 SQLite 单事务中提交；相同 decision/plan 重试返回同一回执。
+详见
 [`Discovery 持久化与来源登记计划 v1`](discovery-persistence-registration-plan-v1.md)。
 
 ### 3.3 数学语义构建与对齐
@@ -167,7 +168,8 @@ Conversion 保留解析来源和 PDF 回链依据；相同 Markdown 字节由不
 3. 完整 DialectScope 不再是登记前置条件。未构建的上下文须明确标记为尚未解析，而非“空环境”。
    可选引用或独立的上下文化关系如何表达，在实施时选择一种统一方案。
 4. 缺失完整性、未解决引用和继承环境不会自动获得 checked、resolved 或人工 accepted 标记。
-5. 登记单元与关系需增加对应 SQLite 写入/读取和 projector；现有发现验证器不能替代这些设施。
+5. 登记单元与关系已增加 SQLite 写入和幂等回执；来源图专用读取 projector 仍待实现，现有发现
+验证器不能替代这些设施。
 
 上述修订应与现有 fixture、来源层规范一起评审。本次文档仅给出方向，不预先冻结新的字段、
 表结构或自动合并算法，也不修改当前构造器。

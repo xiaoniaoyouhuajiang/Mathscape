@@ -5,14 +5,15 @@
 
 mod discovery;
 mod read;
+mod source_map;
 
 use std::path::Path;
 
 use mathscape_domain::{
     ArtifactCheck, ArtifactCheckResult, ArtifactLocation, ArtifactUri, CommandRecordStatus,
     ContentHash, ConversionExitStatus, EntityEnvelope, LifecycleStatus, LocationRole,
-    LocationStatus, PageIndexBase, SourceArtifact, SourcePayload, SourceRelation, StableId,
-    StorageKind,
+    LocationStatus, MapPatch, PageIndexBase, SourceArtifact, SourcePayload, SourceRelation,
+    StableId, StorageKind, Timestamp,
 };
 use mathscape_llm::LlmProfile;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -26,13 +27,18 @@ pub use discovery::{
     StoredAcceptanceAuthority, StoredDiscoveryRun,
 };
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
+pub use source_map::{
+    MapObjectOutcome, SOURCE_REGISTRATION_RECEIPT_VERSION, SourceRegistrationReceipt,
+    StoredMapObject,
+};
 
 const ARTIFACT_POOL_MIGRATION: &str = include_str!("../../../migrations/0001_artifact_pool.sql");
 const LLM_PROFILES_MIGRATION: &str = include_str!("../../../migrations/0002_llm_profiles.sql");
 const WORKSPACE_SETTINGS_MIGRATION: &str =
     include_str!("../../../migrations/0003_workspace_settings.sql");
 const DISCOVERY_RUNS_MIGRATION: &str = include_str!("../../../migrations/0004_discovery_runs.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 4;
+const SOURCE_MAP_MIGRATION: &str = include_str!("../../../migrations/0005_source_map.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 5;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -58,6 +64,8 @@ pub enum SqliteStoreError {
     InvalidLlmProfile(String),
     #[error("discovery checkpoint invariant failed: {0}")]
     DiscoveryInvariant(String),
+    #[error("source registration invariant failed: {0}")]
+    SourceRegistrationInvariant(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -168,6 +176,7 @@ impl SqliteArtifactStore {
                 connection.execute_batch(LLM_PROFILES_MIGRATION)?;
                 connection.execute_batch(WORKSPACE_SETTINGS_MIGRATION)?;
                 connection.execute_batch(DISCOVERY_RUNS_MIGRATION)?;
+                connection.execute_batch(SOURCE_MAP_MIGRATION)?;
                 validate_schema(&connection)?;
             }
             1 => {
@@ -175,20 +184,28 @@ impl SqliteArtifactStore {
                 connection.execute_batch(LLM_PROFILES_MIGRATION)?;
                 connection.execute_batch(WORKSPACE_SETTINGS_MIGRATION)?;
                 connection.execute_batch(DISCOVERY_RUNS_MIGRATION)?;
+                connection.execute_batch(SOURCE_MAP_MIGRATION)?;
                 validate_schema(&connection)?;
             }
             2 => {
                 validate_llm_profiles_schema(&connection)?;
                 connection.execute_batch(WORKSPACE_SETTINGS_MIGRATION)?;
                 connection.execute_batch(DISCOVERY_RUNS_MIGRATION)?;
+                connection.execute_batch(SOURCE_MAP_MIGRATION)?;
                 validate_schema(&connection)?;
             }
             3 => {
                 validate_workspace_settings_schema(&connection)?;
                 connection.execute_batch(DISCOVERY_RUNS_MIGRATION)?;
+                connection.execute_batch(SOURCE_MAP_MIGRATION)?;
                 validate_schema(&connection)?;
             }
-            4 => validate_schema(&connection)?,
+            4 => {
+                validate_discovery_schema(&connection)?;
+                connection.execute_batch(SOURCE_MAP_MIGRATION)?;
+                validate_schema(&connection)?;
+            }
+            5 => validate_schema(&connection)?,
             actual => {
                 return Err(SqliteStoreError::UnsupportedSchemaVersion {
                     actual,
@@ -402,6 +419,38 @@ impl SqliteArtifactStore {
         decision_id: &StableId,
     ) -> Result<Option<AcceptedRegistrationPlanRecord>, SqliteStoreError> {
         discovery::read_registration_plan(&self.connection, decision_id)
+    }
+
+    /// Atomically creates or reuses every Source object in one accepted patch.
+    /// A receipt is committed in the same transaction; retries return it.
+    pub fn commit_source_registration(
+        &mut self,
+        decision_id: &StableId,
+        plan_fingerprint: &ContentHash,
+        patch: &MapPatch<SourcePayload>,
+        committed_at: Timestamp,
+    ) -> Result<SourceRegistrationReceipt, SqliteStoreError> {
+        let transaction = self.connection.transaction()?;
+        let receipt = source_map::commit_source_registration(
+            &transaction,
+            decision_id,
+            plan_fingerprint,
+            patch,
+            committed_at,
+        )?;
+        transaction.commit()?;
+        Ok(receipt)
+    }
+
+    pub fn source_registration_receipt(
+        &self,
+        decision_id: &StableId,
+    ) -> Result<Option<SourceRegistrationReceipt>, SqliteStoreError> {
+        source_map::source_registration_receipt(&self.connection, decision_id)
+    }
+
+    pub fn map_objects(&self) -> Result<Vec<StoredMapObject>, SqliteStoreError> {
+        source_map::map_objects(&self.connection)
     }
 
     pub fn register_check(
@@ -815,6 +864,23 @@ fn validate_workspace_settings_schema(connection: &Connection) -> Result<(), Sql
 }
 
 fn validate_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
+    validate_discovery_schema(connection)?;
+    let name = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 5",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if name.as_deref() != Some("source_map_v1") {
+        return Err(SqliteStoreError::InvalidSchema(
+            "migration 5 is absent or has an unexpected name",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_discovery_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
     validate_workspace_settings_schema(connection)?;
     let name = connection
         .query_row(
