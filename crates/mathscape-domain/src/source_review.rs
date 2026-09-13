@@ -60,10 +60,22 @@ pub enum SourceReviewAcceptanceState {
     Registered,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceReviewAnchorPurpose {
+    Unit,
+    SourceTitle,
+    SourceLabel,
+    Reference,
+    RelationEvidence,
+    DiagnosticEvidence,
+}
+
 /// A lossless source location used by every interactive review surface.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SourceReviewAnchor {
+    pub purpose: SourceReviewAnchorPurpose,
     pub range: TextByteRange,
     pub block_ids: Vec<String>,
     pub excerpt: String,
@@ -121,6 +133,14 @@ pub struct SourceReviewRelation {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct SourceReviewStructureRelation {
+    pub relation_ref: String,
+    pub parent: String,
+    pub child: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SourceReviewDiagnostic {
     pub diagnostic_ref: String,
     pub severity: SourceReviewDiagnosticSeverity,
@@ -173,11 +193,13 @@ pub struct SourceReviewAcceptance {
 pub struct SourceReviewProjection {
     pub version: String,
     pub run_id: StableId,
+    pub result_fingerprint: ContentHash,
     pub status: SourceReviewRunStatus,
     pub complete: bool,
     pub source: SourceReviewSource,
     pub units: Vec<SourceReviewUnit>,
     pub references: Vec<SourceReviewReference>,
+    pub structure_relations: Vec<SourceReviewStructureRelation>,
     pub relations: Vec<SourceReviewRelation>,
     pub diagnostics: Vec<SourceReviewDiagnostic>,
     pub pending_tasks: Vec<SourceReviewPendingTask>,
@@ -197,6 +219,7 @@ mod tests {
         let projection = SourceReviewProjection {
             version: SOURCE_REVIEW_PROJECTION_VERSION.into(),
             run_id: StableId::parse("mathscape:discovery-run/review-fixture").unwrap(),
+            result_fingerprint: hash('3'),
             status: SourceReviewRunStatus::Partial,
             complete: false,
             source: SourceReviewSource {
@@ -216,6 +239,7 @@ mod tests {
                 fact_status: SourceReviewFactStatus::Pending,
                 acceptance: SourceReviewAcceptanceState::Selectable,
                 anchors: vec![SourceReviewAnchor {
+                    purpose: SourceReviewAnchorPurpose::Unit,
                     range: TextByteRange { start: 0, end: 9 },
                     block_ids: vec!["b1".into()],
                     excerpt: "命题".into(),
@@ -223,6 +247,7 @@ mod tests {
                 source_excerpt: "命题".into(),
             }],
             references: vec![],
+            structure_relations: vec![],
             relations: vec![],
             diagnostics: vec![],
             pending_tasks: vec![SourceReviewPendingTask {

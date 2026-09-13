@@ -58,6 +58,7 @@ interface DiscoveryAnchorView {
   end: number;
   block_ids: string[];
   excerpt: string;
+  purpose?: string;
 }
 
 interface LocatedTextView {
@@ -154,8 +155,55 @@ type WorkflowStatus = "running" | "completed" | "partial" | "needs_attention" | 
 type DiscoveryOutcome = {
   outcome: WorkflowStatus;
   view: DesktopDiscoveryView;
+  review: SourceReviewProjection | null;
   run: DiscoveryRun;
 };
+
+interface SourceReviewProjection {
+  version: "mathscape-source-review-projection-1";
+  run_id: string;
+  result_fingerprint: string;
+  status: WorkflowStatus;
+  complete: boolean;
+  source: { artifact_id: string; conversion_id: string | null; content_hash: string; input_fingerprint: string };
+  units: SourceReviewUnit[];
+  references: { reference_ref: string; owner: string; text: string; anchor: DiscoveryAnchorView; status: string; candidates: string[]; reason: string; origins: string[] }[];
+  structure_relations: { relation_ref: string; parent: string; child: string }[];
+  relations: { relation_ref: string; source: string; target: string; relation: string; evidence: DiscoveryAnchorView[]; bases: string[]; origins: string[] }[];
+  diagnostics: { diagnostic_ref: string; severity: string; stage: string; code: string; path: string; message: string; checked: boolean; related_units: string[] }[];
+  pending_tasks: { task_ref: string; owner: string | null; reason: string | null }[];
+  acceptance: { state: string; selected_units: string[]; required_units: string[]; missing_targets: string[]; blockers: string[]; allowed_scopes: unknown[] };
+}
+
+interface DiscoveryAcceptanceOutcome {
+  state: "accepted";
+  decision_id: string;
+  run_id: string;
+  result_fingerprint: string;
+  plan_fingerprint: string;
+  selected_units: string[];
+  partial: boolean;
+  span_count: number;
+  unit_count: number;
+  reference_count: number;
+  relation_count: number;
+  pending_task_count: number;
+  already_accepted: boolean;
+}
+
+interface SourceReviewUnit {
+  unit_ref: string;
+  unit_kind: string;
+  display_title: string | null;
+  source_title: { text: string; anchor: DiscoveryAnchorView } | null;
+  source_labels: { text: string; anchor: DiscoveryAnchorView }[];
+  parent: string | null;
+  completeness: string;
+  fact_status: string;
+  acceptance: string;
+  anchors: DiscoveryAnchorView[];
+  source_excerpt: string;
+}
 
 function textElement<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -557,8 +605,197 @@ export class MarkdownSelection {
     if (pending.length > 0) {
       this.discoveryResult.append(textElement("p", "discovery-pending", `尚有 ${pending.length} 个事实任务未完成：${pending.map(task => task.owner ?? task.task_ref).join("、")}`));
     }
+    if (outcome.review) this.discoveryResult.append(this.renderSourceReview(outcome.review, unitTitles));
     this.discoveryResult.append(this.jsonDetails("查看完整展示数据", view));
     this.discoveryResult.append(this.runSummary(outcome.run));
+  }
+
+  private renderSourceReview(review: SourceReviewProjection, unitTitles: Map<string, string>): HTMLElement {
+    const section = textElement("section", "source-review-panel", "");
+    const heading = textElement("div", "source-review-heading", "");
+    heading.append(
+      textElement("h4", "", "来源审核视图"),
+      textElement("span", `source-review-state state-${review.acceptance.state}`, `审核状态：${review.acceptance.state}`),
+    );
+    section.append(heading);
+    const selected = new Set(review.acceptance.selected_units);
+    const eligible = new Set(review.units
+      .filter(unit => unit.acceptance !== "blocked")
+      .map(unit => unit.unit_ref));
+    if (selected.size === 0) eligible.forEach(unit => selected.add(unit));
+    const unitByRef = new Map(review.units.map(unit => [unit.unit_ref, unit]));
+    const checkboxes = new Map<string, HTMLInputElement>();
+    const state = textElement("p", "source-review-selection-state", "");
+    const feedback = textElement("p", "source-review-action-feedback", "");
+    const accept = textElement("button", "source-review-accept", "接受选中内容");
+    accept.type = "button";
+    const tree = textElement("div", "source-review-tree", "");
+    const depth = (unit: SourceReviewUnit): number => {
+      let value = 0;
+      let parent = unit.parent;
+      const seen = new Set<string>();
+      while (parent && !seen.has(parent)) {
+        seen.add(parent); value += 1; parent = unitByRef.get(parent)?.parent ?? null;
+      }
+      return value;
+    };
+    for (const unit of review.units) {
+      const item = textElement("article", `source-review-unit state-${unit.acceptance}`, "");
+      item.tabIndex = 0;
+      item.title = "悬停或聚焦以高亮对应原文";
+      item.onmouseenter = () => unit.anchors[0] && this.focusAnchor(unit.anchors[0]);
+      item.onfocus = () => unit.anchors[0] && this.focusAnchor(unit.anchors[0]);
+      item.style.setProperty("--source-review-depth", String(depth(unit)));
+      const selector = textElement("label", "source-review-selector", "");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = selected.has(unit.unit_ref);
+      checkbox.disabled = unit.acceptance === "blocked";
+      checkbox.setAttribute("aria-label", `选择来源单元 ${unit.display_title ?? unit.unit_ref}`);
+      checkboxes.set(unit.unit_ref, checkbox);
+      selector.append(checkbox, document.createTextNode(" 纳入来源登记计划"));
+      const parent = unit.parent ? ` · 隶属 ${unitTitles.get(unit.parent) ?? unit.parent}` : "";
+      item.append(
+        selector,
+        textElement("strong", "", unit.display_title ?? unit.unit_ref),
+        textElement("span", "source-review-meta", `${this.unitKindLabel(unit.unit_kind)} · ${unit.fact_status} · ${unit.acceptance}${parent}`),
+        textElement("p", "", unit.source_excerpt),
+      );
+      checkbox.onchange = () => {
+        if (checkbox.checked) {
+          selected.add(unit.unit_ref);
+          this.closeSourceReviewSelection(selected, review, eligible);
+        } else {
+          selected.delete(unit.unit_ref);
+          this.removeSourceReviewDependents(selected, review, unit.unit_ref);
+        }
+        updateSelection();
+      };
+      tree.append(item);
+    }
+    section.append(state, tree);
+    if (review.relations.length > 0) {
+      const relations = textElement("ul", "source-review-relations", "");
+      for (const relation of review.relations) {
+        const item = document.createElement("li");
+        item.onmouseenter = () => relation.evidence[0] && this.focusAnchor(relation.evidence[0]);
+        item.append(document.createTextNode(`${unitTitles.get(relation.source) ?? relation.source} —${this.relationLabel(relation.relation)}→ ${unitTitles.get(relation.target) ?? relation.target}`));
+        relations.append(item);
+      }
+      section.append(textElement("h5", "", "可审核来源关系"), relations);
+    }
+    if (review.acceptance.blockers.length > 0) {
+      section.append(textElement("p", "source-review-blocked", `以下单元需修订，未被默认选中：${review.acceptance.blockers.join("、")}`));
+    }
+    const actions = textElement("div", "source-review-actions", "");
+    const selectAll = textElement("button", "", "选择全部可接受单元");
+    selectAll.type = "button";
+    selectAll.onclick = () => {
+      selected.clear(); eligible.forEach(unit => selected.add(unit));
+      this.closeSourceReviewSelection(selected, review, eligible);
+      updateSelection();
+    };
+    const clear = textElement("button", "", "清空选择");
+    clear.type = "button";
+    clear.onclick = () => { selected.clear(); updateSelection(); };
+    actions.append(selectAll, clear, accept);
+    section.append(actions, feedback);
+
+    let accepting = false;
+    let accepted = review.acceptance.state === "accepted";
+    const missingDependencies = (): string[] => {
+      const missing = new Set<string>();
+      for (const ref of selected) {
+        const parent = unitByRef.get(ref)?.parent;
+        if (parent && !selected.has(parent)) missing.add(parent);
+      }
+      for (const relation of review.relations) {
+        if (selected.has(relation.source) && !selected.has(relation.target)) {
+          missing.add(relation.target);
+        }
+      }
+      return [...missing];
+    };
+    const updateSelection = (): void => {
+      checkboxes.forEach((checkbox, ref) => {
+        checkbox.checked = selected.has(ref);
+        checkbox.disabled = accepting || accepted || !eligible.has(ref);
+      });
+      const missing = missingDependencies();
+      state.textContent = missing.length > 0
+        ? `已选择 ${selected.size} 个单元；仍缺少依赖：${missing.join("、")}`
+        : `已选择 ${selected.size} 个单元；父级与来源关系端点闭合。`;
+      accept.disabled = accepting || accepted || selected.size === 0 || missing.length > 0;
+      selectAll.disabled = accepting || accepted || eligible.size === 0;
+      clear.disabled = accepting || accepted || selected.size === 0;
+    };
+    accept.onclick = async () => {
+      if (accept.disabled) return;
+      accepting = true; feedback.textContent = "后端正在重新绑定原文并验证接受范围…"; updateSelection();
+      try {
+        const outcome = await invoke<DiscoveryAcceptanceOutcome>("accept_discovery_result", {
+          request: {
+            run_id: review.run_id,
+            expected_result_fingerprint: review.result_fingerprint,
+            selection: { kind: "explicit_units", unit_refs: [...selected].sort() },
+          },
+        });
+        accepted = true;
+        review.acceptance.state = "accepted";
+        review.acceptance.selected_units = outcome.selected_units;
+        outcome.selected_units.forEach(ref => {
+          const unit = unitByRef.get(ref); if (unit) unit.acceptance = "accepted";
+        });
+        heading.querySelector(".source-review-state")!.textContent = "审核状态：accepted";
+        feedback.textContent = `${outcome.already_accepted ? "已存在相同接受决定" : "审核接受完成"}：${outcome.unit_count} 个单元、${outcome.span_count} 个来源范围、${outcome.relation_count} 条关系已进入待登记计划${outcome.partial ? "；这是部分发现结果" : ""}。`;
+        this.discoveryFeedback = `内容发现结果已接受：${outcome.unit_count} 个单元已形成来源登记计划，尚未写入正式来源图。`;
+        section.classList.add("is-accepted");
+      } catch (error) {
+        feedback.textContent = "接受失败：" + String(error);
+      } finally {
+        accepting = false; updateSelection(); this.refresh();
+      }
+    };
+    this.closeSourceReviewSelection(selected, review, eligible);
+    updateSelection();
+    return section;
+  }
+
+  private closeSourceReviewSelection(selected: Set<string>, review: SourceReviewProjection, eligible: Set<string>): void {
+    const units = new Map(review.units.map(unit => [unit.unit_ref, unit]));
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const ref of [...selected]) {
+        const parent = units.get(ref)?.parent;
+        if (parent && eligible.has(parent) && !selected.has(parent)) {
+          selected.add(parent); changed = true;
+        }
+      }
+      for (const relation of review.relations) {
+        if (selected.has(relation.source) && eligible.has(relation.target) && !selected.has(relation.target)) {
+          selected.add(relation.target); changed = true;
+        }
+      }
+    }
+  }
+
+  private removeSourceReviewDependents(selected: Set<string>, review: SourceReviewProjection, removed: string): void {
+    const removedSet = new Set([removed]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const unit of review.units) {
+        if (selected.has(unit.unit_ref) && unit.parent && removedSet.has(unit.parent)) {
+          selected.delete(unit.unit_ref); removedSet.add(unit.unit_ref); changed = true;
+        }
+      }
+      for (const relation of review.relations) {
+        if (selected.has(relation.source) && removedSet.has(relation.target)) {
+          selected.delete(relation.source); removedSet.add(relation.source); changed = true;
+        }
+      }
+    }
   }
 
   private factChip(kind: string, fact: LocatedTextView): HTMLElement {

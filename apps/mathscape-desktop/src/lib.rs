@@ -5,8 +5,9 @@ mod llm_settings;
 mod workspace_settings;
 pub use content::{ArtifactContentInfo, ContentContext};
 pub use discovery::{
-    ActiveDiscoveryPhase, ActiveDiscoveryTask, DesktopDiscoveryError, DesktopDiscoveryOutcome,
-    DesktopDiscoveryProgress, DesktopDiscoveryRun, RunDiscoveryRequest,
+    AcceptDiscoveryRequest, ActiveDiscoveryPhase, ActiveDiscoveryTask, DesktopDiscoveryAcceptance,
+    DesktopDiscoveryError, DesktopDiscoveryOutcome, DesktopDiscoveryProgress, DesktopDiscoveryRun,
+    RunDiscoveryRequest,
 };
 pub use discovery_view::{DESKTOP_DISCOVERY_VIEW_VERSION, DesktopDiscoveryView};
 pub use llm_settings::{
@@ -753,6 +754,7 @@ pub fn run() {
             workspace_settings::save_workspace_settings,
             discovery::get_active_discovery,
             discovery::cancel_discovery,
+            discovery::accept_discovery_result,
             discovery::run_discovery,
             get_desktop_snapshot,
             choose_and_import_pdf,

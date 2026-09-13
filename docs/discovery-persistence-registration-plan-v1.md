@@ -1,7 +1,7 @@
 # Discovery 持久化与来源登记计划 v1
 
-状态：已实现核心契约。Desktop 已在每次内容发现结束时写入运行检查点；接受决策和
-`SourceRegistrationPlan` 已实现为后端能力，审核 UI 与正式来源图提交尚未实现。
+状态：已实现运行检查点、可操作审核、后端重验证、接受决策和 `SourceRegistrationPlan`
+持久化。正式来源图提交尚未实现。
 
 ## 1. 两类数据边界
 
@@ -36,14 +36,19 @@ cancelled 均可保存；当前实现是在工作流退出时保存，不承诺�
 partial 结果可以接受。计划保存接受范围内的 pending 任务，并把相应单元标为
 `facts_pending`，不会把“尚未发现事实”解释为“没有事实”。
 
+Desktop 审核器只提交 run ID、预期结果指纹和显式单元集合。后端重新读取受管 Markdown、
+逐字节绑定持久化 DiscoveryInput，重新验证 UnitSet 与每个已保存的 FactTask，再计算当前结果
+指纹。只有重现成功后才生成不可变接受决定。相同运行、结果、审核者和选择具有相同 decision
+ID，重复提交返回已有计划。
+
 计划为 Markdown 范围、来源单元和来源关系生成确定性候选 ID，保存 temp ref 到候选 ID 的
 映射、标签、原文标题、引用解析状态和关系证据。候选 ID 只供后续登记查询与幂等计划使用；
 正式提交仍须查询当前来源图、处理复用/冲突并构造 Domain 实体及 TrustRecord。
 
 ## 4. 尚未包含
 
-- 审核 UI、接受/拒绝操作与提案编辑；
 - 从磁盘检查点恢复并继续 LLM 工作流；
+- 拒绝决定、审核意见和提案编辑；
 - `SourceSpan`/`SourceSemanticUnit`/`SourceUnitRelation` 的 SQLite 提交与读取；
 - 来源图 projector 和数学语义解析。
 

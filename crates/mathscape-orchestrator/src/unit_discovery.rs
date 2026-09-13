@@ -174,6 +174,15 @@ pub fn build_unit_discovery_request(
     limits: DiscoveryInputLimits,
 ) -> Result<PreparedUnitDiscoveryRequest, DiscoveryInputError> {
     let input = build_discovery_input(document, selection, limits)?;
+    Ok(prepare_unit_discovery_request_from_input(input))
+}
+
+/// Rebuilds the transient prompt and selector machinery around a persisted,
+/// freshly rebound DiscoveryInput. Calling this function does not validate a
+/// UnitSet; callers must use `revalidate_checkpoint` afterwards.
+pub fn prepare_unit_discovery_request_from_input(
+    input: DiscoveryInput,
+) -> PreparedUnitDiscoveryRequest {
     let resolver = SelectorResolver::from_input(&input);
     let mut blocks: Vec<StageBlock> = Vec::new();
     let mut leading_gap = String::new();
@@ -243,7 +252,7 @@ pub fn build_unit_discovery_request(
             ..Default::default()
         },
     };
-    Ok(PreparedUnitDiscoveryRequest {
+    PreparedUnitDiscoveryRequest {
         input,
         model_input,
         resolver,
@@ -251,7 +260,7 @@ pub fn build_unit_discovery_request(
         manifest,
         prompt_fingerprint,
         request_fingerprint,
-    })
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

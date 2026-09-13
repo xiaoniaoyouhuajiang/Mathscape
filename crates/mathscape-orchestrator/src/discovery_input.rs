@@ -62,6 +62,8 @@ pub enum DiscoveryInputError {
     BlockLimit { actual: usize, limit: usize },
     #[error("discovery input limits must be positive")]
     InvalidLimits,
+    #[error("stored discovery input no longer matches the managed Markdown: {0}")]
+    StaleCheckpoint(&'static str),
 }
 
 fn hash<T: Serialize>(value: &T) -> ContentHash {
@@ -101,6 +103,116 @@ fn validate_document(document: &AnchoredMarkdown) -> Result<(), DiscoveryInputEr
             return Err(DiscoveryInputError::InvalidDocument);
         }
         prior_end = range.end;
+    }
+    Ok(())
+}
+
+/// Rebinds an untrusted persisted DiscoveryInput to the current immutable
+/// Markdown Artifact. This restores no validator authority; it only proves
+/// that every persisted byte range and byte payload still names the same
+/// managed source.
+pub fn rebind_discovery_input(
+    document: &AnchoredMarkdown,
+    input: &DiscoveryInput,
+    limits: DiscoveryInputLimits,
+) -> Result<(), DiscoveryInputError> {
+    validate_document(document)?;
+    if input.version != mathscape_domain::DISCOVERY_INPUT_VERSION {
+        return Err(DiscoveryInputError::StaleCheckpoint(
+            "unsupported input version",
+        ));
+    }
+    if input.snapshot != document.snapshot {
+        return Err(DiscoveryInputError::StaleCheckpoint(
+            "artifact snapshot changed",
+        ));
+    }
+    if !input.context.is_empty() {
+        return Err(DiscoveryInputError::StaleCheckpoint(
+            "context is unsupported by this pipeline version",
+        ));
+    }
+    if input.fingerprint != discovery_input_fingerprint(input) {
+        return Err(DiscoveryInputError::StaleCheckpoint(
+            "input fingerprint changed",
+        ));
+    }
+
+    let requested = checked_range(&input.requested.source_range, &document.source).ok_or(
+        DiscoveryInputError::StaleCheckpoint("requested range is invalid"),
+    )?;
+    if input.boundary.at_document_start != (requested.start == 0)
+        || input.boundary.at_document_end != (requested.end == document.source.len())
+    {
+        return Err(DiscoveryInputError::StaleCheckpoint(
+            "boundary flags changed",
+        ));
+    }
+    if requested.len() > limits.max_utf8_bytes {
+        return Err(DiscoveryInputError::ByteLimit {
+            actual: requested.len(),
+            limit: limits.max_utf8_bytes,
+        });
+    }
+
+    let mut cursor = input.requested.source_range.start;
+    let mut block_count = 0usize;
+    for segment in &input.requested.segments {
+        let (range, text) = match segment {
+            DiscoveryInputSegment::Block {
+                block_id,
+                structural_kind,
+                physical_range,
+                source_range,
+                text,
+            } => {
+                block_count += 1;
+                let Some(block) = document.blocks.iter().find(|block| block.id == *block_id) else {
+                    return Err(DiscoveryInputError::StaleCheckpoint(
+                        "Markdown block disappeared",
+                    ));
+                };
+                if block.range != *physical_range || block.kind != *structural_kind {
+                    return Err(DiscoveryInputError::StaleCheckpoint(
+                        "Markdown block changed",
+                    ));
+                }
+                if source_range.start < physical_range.start
+                    || source_range.end > physical_range.end
+                {
+                    return Err(DiscoveryInputError::StaleCheckpoint(
+                        "block clipping changed",
+                    ));
+                }
+                (source_range, text)
+            }
+            DiscoveryInputSegment::Gap { source_range, text } => (source_range, text),
+        };
+        if range.start != cursor || range.end <= range.start {
+            return Err(DiscoveryInputError::StaleCheckpoint(
+                "segments are not a lossless ordered partition",
+            ));
+        }
+        let actual = checked_range(range, &document.source)
+            .and_then(|range| document.source.get(range))
+            .ok_or(DiscoveryInputError::StaleCheckpoint(
+                "segment range is invalid",
+            ))?;
+        if actual != text {
+            return Err(DiscoveryInputError::StaleCheckpoint("segment text changed"));
+        }
+        cursor = range.end;
+    }
+    if cursor != input.requested.source_range.end {
+        return Err(DiscoveryInputError::StaleCheckpoint(
+            "segments do not cover the requested range",
+        ));
+    }
+    if block_count > limits.max_blocks {
+        return Err(DiscoveryInputError::BlockLimit {
+            actual: block_count,
+            limit: limits.max_blocks,
+        });
     }
     Ok(())
 }

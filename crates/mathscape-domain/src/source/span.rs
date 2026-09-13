@@ -227,10 +227,9 @@ impl MarkdownLocator {
 /// Smallest persistent, physically locatable evidence region.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SourceSpan {
-    source_artifact: StableId,
     granularity: SpanGranularity,
     layout: LayoutKind,
-    page: PageCoordinate,
+    page: Option<PageCoordinate>,
     bounding_boxes: Vec<BoundingBox>,
     marker_block_ids: Vec<String>,
     markdown: Option<MarkdownLocator>,
@@ -241,19 +240,28 @@ pub struct SourceSpan {
 impl SourceSpan {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        source_artifact: StableId,
         granularity: SpanGranularity,
         layout: LayoutKind,
-        page: PageCoordinate,
+        page: Option<PageCoordinate>,
         bounding_boxes: Vec<BoundingBox>,
         marker_block_ids: Vec<String>,
         markdown: Option<MarkdownLocator>,
         exact_text_artifact: Option<StableId>,
         normalized_text_hash: Option<ContentHash>,
     ) -> Result<Self, DomainError> {
-        if &source_artifact != page.artifact() {
-            return Err(DomainError::ArtifactMismatch {
-                field: "source_span.page",
+        if page.is_none() && markdown.is_none() {
+            return Err(DomainError::EmptyCollection {
+                field: "source_span.locators",
+            });
+        }
+        if !bounding_boxes.is_empty() && page.is_none() {
+            return Err(DomainError::InconsistentState {
+                field: "source_span.bounding_boxes_without_page",
+            });
+        }
+        if granularity == SpanGranularity::Page && page.is_none() {
+            return Err(DomainError::InconsistentState {
+                field: "source_span.page_granularity",
             });
         }
 
@@ -288,7 +296,6 @@ impl SourceSpan {
         }
 
         Ok(Self {
-            source_artifact,
             granularity,
             layout,
             page,
@@ -300,8 +307,14 @@ impl SourceSpan {
         })
     }
 
-    pub fn source_artifact(&self) -> &StableId {
-        &self.source_artifact
+    /// Preferred artifact for source navigation. Markdown is primary when
+    /// present because it carries the exact UTF-8 range used by Discovery.
+    pub fn primary_artifact(&self) -> &StableId {
+        self.markdown
+            .as_ref()
+            .map(MarkdownLocator::artifact)
+            .or_else(|| self.page.as_ref().map(PageCoordinate::artifact))
+            .expect("SourceSpan requires at least one locator")
     }
 
     pub fn granularity(&self) -> SpanGranularity {
@@ -312,8 +325,8 @@ impl SourceSpan {
         self.layout
     }
 
-    pub fn page(&self) -> &PageCoordinate {
-        &self.page
+    pub fn page(&self) -> Option<&PageCoordinate> {
+        self.page.as_ref()
     }
 
     pub fn bounding_boxes(&self) -> &[BoundingBox] {
@@ -352,10 +365,9 @@ mod tests {
         let pdf = StableId::parse("emir-fixture:artifact/source-a-pdf").unwrap();
         let markdown = StableId::parse("emir-fixture:artifact/source-a-markdown").unwrap();
         let span = SourceSpan::new(
-            pdf.clone(),
             SpanGranularity::Page,
             LayoutKind::Paragraph,
-            PageCoordinate::new(pdf, 42, Some(42), Some("31".to_owned())).unwrap(),
+            Some(PageCoordinate::new(pdf, 42, Some(42), Some("31".to_owned())).unwrap()),
             vec![],
             vec![],
             Some(MarkdownLocator::new(
@@ -373,35 +385,49 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(span.page().pdf_page_index(), 42);
+        assert_eq!(span.page().unwrap().pdf_page_index(), 42);
         assert_eq!(span.markdown().unwrap().byte_range().start(), 305);
+        assert_eq!(span.primary_artifact(), span.markdown().unwrap().artifact());
     }
 
     #[test]
-    fn page_coordinate_must_reference_the_span_artifact() {
-        let error = SourceSpan::new(
-            StableId::parse("mathscape:artifact/a").unwrap(),
-            SpanGranularity::Page,
+    fn markdown_locator_can_independently_ground_a_span() {
+        let markdown = StableId::parse("mathscape:artifact/markdown").unwrap();
+        let span = SourceSpan::new(
+            SpanGranularity::Inline,
             LayoutKind::Paragraph,
-            PageCoordinate::new(
-                StableId::parse("mathscape:artifact/b").unwrap(),
-                0,
-                None,
-                None,
-            )
-            .unwrap(),
-            vec![],
-            vec![],
             None,
+            vec![],
+            vec!["block-1".into()],
+            Some(MarkdownLocator::new(
+                markdown.clone(),
+                ByteRange::new(5, 12).unwrap(),
+                None,
+            )),
             None,
             None,
         )
-        .unwrap_err();
-        assert_eq!(
-            error,
-            DomainError::ArtifactMismatch {
-                field: "source_span.page"
-            }
-        );
+        .unwrap();
+        assert!(span.page().is_none());
+        assert_eq!(span.primary_artifact(), &markdown);
+    }
+
+    #[test]
+    fn source_span_requires_a_real_locator() {
+        assert!(matches!(
+            SourceSpan::new(
+                SpanGranularity::Inline,
+                LayoutKind::Paragraph,
+                None,
+                vec![],
+                vec![],
+                None,
+                None,
+                None,
+            ),
+            Err(DomainError::EmptyCollection {
+                field: "source_span.locators"
+            })
+        ));
     }
 }

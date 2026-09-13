@@ -9,10 +9,12 @@ mod fact_planner;
 mod fact_preflight;
 mod source_facts;
 mod source_registration;
+mod source_review;
 pub use discovery_workflow::*;
 pub use fact_planner::*;
 pub use source_facts::*;
 pub use source_registration::*;
+pub use source_review::project_source_review;
 mod markdown_anchors;
 mod marker_promotion;
 mod occurrence_resolver;
@@ -26,7 +28,7 @@ pub use unit_discovery::*;
 
 pub use discovery_input::{
     DEFAULT_DISCOVERY_INPUT_BLOCKS, DEFAULT_DISCOVERY_INPUT_BYTES, DiscoveryInputError,
-    DiscoveryInputLimits, build_discovery_input,
+    DiscoveryInputLimits, build_discovery_input, rebind_discovery_input,
 };
 pub use discovery_producer::{
     DEFAULT_DISCOVERY_RESPONSE_BYTES, DiscoveryProducer, DiscoveryProducerLimits,

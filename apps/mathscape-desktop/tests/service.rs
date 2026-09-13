@@ -11,8 +11,9 @@ use std::{
 use lopdf::{Document, Object, Stream, content::Content, content::Operation, dictionary};
 use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_desktop::{
-    DesktopDiscoveryError, DesktopService, DesktopServiceError, MarkerProfileChoice,
-    ParsePdfRequest, PdfImportOutcome, RunDiscoveryRequest, SaveWorkspaceSettingsRequest,
+    AcceptDiscoveryRequest, DesktopDiscoveryError, DesktopService, DesktopServiceError,
+    MarkerProfileChoice, ParsePdfRequest, PdfImportOutcome, RunDiscoveryRequest,
+    SaveWorkspaceSettingsRequest,
 };
 use mathscape_domain::{
     ActorRef, DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest,
@@ -440,6 +441,38 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     assert_eq!(persisted.checkpoint.facts.len(), 2);
     assert!(persisted.checkpoint.pending_tasks.is_empty());
     assert_eq!(service.snapshot().unwrap().graph().nodes().len(), 1);
+    drop(store);
+
+    let invalid_acceptance: AcceptDiscoveryRequest = serde_json::from_value(serde_json::json!({
+        "run_id": run_id.as_str(),
+        "expected_result_fingerprint": value["review"]["result_fingerprint"],
+        "selection": {"kind": "explicit_units", "unit_refs": ["u2"]}
+    }))
+    .unwrap();
+    assert!(matches!(
+        service.accept_discovery_result(invalid_acceptance),
+        Err(DesktopDiscoveryError::Acceptance(message)) if message.contains("requires its parent")
+    ));
+    let acceptance: AcceptDiscoveryRequest = serde_json::from_value(serde_json::json!({
+        "run_id": run_id.as_str(),
+        "expected_result_fingerprint": value["review"]["result_fingerprint"],
+        "selection": {"kind": "explicit_units", "unit_refs": ["u1", "u2"]}
+    }))
+    .unwrap();
+    let accepted =
+        serde_json::to_value(service.accept_discovery_result(acceptance.clone()).unwrap()).unwrap();
+    assert_eq!(accepted["state"], "accepted");
+    assert_eq!(accepted["unit_count"], 2);
+    assert_eq!(accepted["relation_count"], 1);
+    assert_eq!(accepted["already_accepted"], false);
+    let repeated =
+        serde_json::to_value(service.accept_discovery_result(acceptance).unwrap()).unwrap();
+    assert_eq!(repeated["decision_id"], accepted["decision_id"]);
+    assert_eq!(repeated["already_accepted"], true);
+    let decision_id = StableId::parse(accepted["decision_id"].as_str().unwrap()).unwrap();
+    let store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+    assert!(store.registration_plan(&decision_id).unwrap().is_some());
+    drop(store);
 
     let cancelled = {
         let service = service.clone();

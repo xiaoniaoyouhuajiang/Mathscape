@@ -50,6 +50,29 @@
 .discovery-anchor-preview { margin: 8px 0; border: 1px solid #66837d; border-radius: 6px; padding: 8px; background: #0e191f; }
 .discovery-anchor-preview pre { max-height: 160px; overflow: auto; white-space: pre-wrap; user-select: text; }
 .discovery-anchor-preview mark { background: #ffe37a; color: #1c252b; padding: 1px 0; }
+.source-review-panel { margin-top: 12px; border-top: 1px solid #48616b; padding-top: 10px; }
+.source-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.source-review-heading h4 { margin: 0; }
+.source-review-state { font-size: 11px; color: #bdd6cf; }
+.source-review-tree { display: grid; gap: 5px; max-height: 320px; overflow: auto; }
+.source-review-unit { border: 1px solid #36515d; border-radius: 5px; padding: 7px; margin-left: calc(var(--source-review-depth, 0) * 12px); cursor: pointer; }
+.source-review-unit:hover, .source-review-unit:focus { border-color: #d6b65b; background: #24383d; outline: none; }
+.source-review-unit strong, .source-review-meta { display: block; }
+.source-review-selector { display: flex; align-items: center; gap: 5px; color: #bdd6cf; font-size: 11px; margin-bottom: 4px; cursor: pointer; }
+.source-review-selector input { margin: 0; }
+.source-review-meta { color: #9ab4b5; font-size: 11px; margin-top: 3px; }
+.source-review-unit p { margin: 5px 0 0; white-space: pre-wrap; }
+.source-review-relations { margin: 4px 0 0; padding-left: 18px; }
+.source-review-relations li { padding: 3px; cursor: pointer; }
+.source-review-relations li:hover { background: #24383d; color: #ffe37a; }
+.source-review-blocked { color: #f0b27c; }
+.source-review-selection-state { color: #bdd6cf; margin: 5px 0; }
+.source-review-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.source-review-actions button { border: 1px solid #58747d; border-radius: 5px; background: #1a2b31; color: #e6efec; padding: 5px 8px; }
+.source-review-actions button:disabled { opacity: .45; }
+.source-review-accept { border-color: #83a98e !important; background: #244638 !important; }
+.source-review-action-feedback { min-height: 1.3em; color: #cfe5da; }
+.source-review-panel.is-accepted { border-top-color: #75a885; }
 .discovery-json summary { cursor: pointer; color: #9fc8c1; padding: 5px 0; }
 .discovery-json pre { max-height: 240px; overflow: auto; padding: 8px; background: #10181e; user-select: text; }
 .discovery-run { border-top: 1px dotted #45606c; padding-top: 8px; overflow-wrap: anywhere; }

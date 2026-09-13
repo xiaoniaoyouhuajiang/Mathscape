@@ -61,6 +61,7 @@ const files: Record<string, { media: string; bytes: Uint8Array }> = {
 const reads: { id: string; offset: number; length: number }[] = [];
 const selectionRequests: SelectionRequest[] = [];
 const discoveryRequests: SelectionRequest[] = [];
+const acceptanceRequests: unknown[] = [];
 const behavior = { selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed" };
 // Predetermined IPC double, not a second implementation of backend segmentation.
 function anchored(conversion: string): AnchoredMarkdown {
@@ -83,6 +84,17 @@ mockIPC((command, payload) => {
   };
   if (command === "get_active_discovery") return null;
   if (command === "cancel_discovery") return true;
+  if (command === "accept_discovery_result") {
+    const request = (payload as any).request;
+    acceptanceRequests.push(request);
+    return {
+      state: "accepted", decision_id: "acceptance-1", run_id: request.run_id,
+      result_fingerprint: request.expected_result_fingerprint, plan_fingerprint: "plan-1",
+      selected_units: request.selection.unit_refs, partial: behavior.discoveryStatus !== "completed",
+      span_count: request.selection.unit_refs.length, unit_count: request.selection.unit_refs.length,
+      reference_count: 1, relation_count: 0, pending_task_count: 0, already_accepted: false,
+    };
+  }
   if (command === "run_discovery") {
     const channel = (payload as any).onProgress;
     channel?.onmessage({ kind: "started", profile: "测试配置", model: "test-model" });
@@ -113,7 +125,24 @@ mockIPC((command, payload) => {
         pending_tasks: behavior.discoveryStatus === "completed" ? [] : [{ task_ref: "t1", owner: "u1" }], diagnostics: [],
         attempts: [{ attempt: 1, stage: "unit-discovery", repair: false, status: "completed", error: null, total_tokens: 150, elapsed_ms: 20 }],
       },
+      review: {
+        version: "mathscape-source-review-projection-1", run_id: "mathscape:discovery-run/browser-fixture",
+        result_fingerprint: "sha256:" + "1".repeat(64), status: behavior.discoveryStatus,
+        complete: behavior.discoveryStatus === "completed",
+        source: { artifact_id: "md", conversion_id: request.snapshot.conversion_id, content_hash: "test-hash", input_fingerprint: "test-input" },
+        units: [{
+          unit_ref: "u1", unit_kind: "statement", display_title: "测试命题", source_title: null,
+          source_labels: [], parent: null, completeness: "complete",
+          fact_status: behavior.discoveryStatus === "completed" ? "processed" : "pending",
+          acceptance: "selectable", anchors: [{ purpose: "unit", range: { start: anchor.start, end: anchor.end }, block_ids: anchor.block_ids, excerpt: anchor.excerpt }],
+          source_excerpt: anchor.excerpt,
+        }],
+        references: [], structure_relations: [], relations: [], diagnostics: [],
+        pending_tasks: behavior.discoveryStatus === "completed" ? [] : [{ task_ref: "t1", owner: "u1", reason: "待处理" }],
+        acceptance: { state: "selectable", selected_units: [], required_units: [], missing_targets: [], blockers: [], allowed_scopes: [{ kind: "all_validated" }] },
+      },
       run: {
+        run_id: "mathscape:discovery-run/browser-fixture",
         profile_id: "desktop-default", provider: "test", requested_model: "test-model",
         admission: request.admission,
         request_timeout_seconds: 600,
@@ -164,5 +193,5 @@ mockIPC((command, payload) => {
 
 const reader = new ArtifactReader(document.querySelector<HTMLElement>("#reader")!);
 Object.assign(window, {
-  harness: { reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, behavior, render: (source: string) => markdownRenderer().render(source) },
+  harness: { reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, behavior, render: (source: string) => markdownRenderer().render(source) },
 });

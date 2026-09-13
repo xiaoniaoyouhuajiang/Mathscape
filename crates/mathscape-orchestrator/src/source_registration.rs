@@ -4,15 +4,17 @@
 use std::collections::{BTreeSet, HashMap};
 
 use mathscape_domain::{
-    ActorRef, ContentHash, DiscoveryRelationKind, DiscoveryUnitKind, StableId, TextByteRange,
-    Timestamp, UnitCompleteness,
+    ActorRef, ContentHash, DiscoveryRelationKind, DiscoveryUnitKind, FactTaskProposal,
+    SourceFactProposal, SourceFactVersion, StableId, TextByteRange, Timestamp, UnitCompleteness,
+    UnitDiscoveryCheckpoint,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    DiscoveryResult, ReferenceResolutionStatus, ResolvedDiscoverySelector, ValidatedUnitSet,
-    fingerprint,
+    DiscoveryResult, PreparedUnitDiscoveryRequest, ReferenceResolutionStatus,
+    ResolvedDiscoverySelector, StageValidationReport, ValidatedUnitSet, assemble_discovery,
+    fingerprint, plan_source_facts,
 };
 
 pub const SOURCE_REGISTRATION_PLAN_VERSION: &str = "mathscape-source-registration-plan-1";
@@ -24,11 +26,120 @@ pub enum AcceptanceAuthority {
     AutomaticPolicy,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AcceptanceSelection {
     AllValidated,
     ExplicitUnits { unit_refs: Vec<String> },
+}
+
+/// Revalidated authority recovered from persisted wire checkpoints. The
+/// private fields prevent callers from fabricating validator-owned values.
+pub struct RevalidatedDiscovery {
+    units: ValidatedUnitSet,
+    result: DiscoveryResult,
+}
+
+impl RevalidatedDiscovery {
+    pub fn units(&self) -> &ValidatedUnitSet {
+        &self.units
+    }
+
+    pub fn result(&self) -> &DiscoveryResult {
+        &self.result
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum DiscoveryCheckpointRevalidationError {
+    #[error("stored UnitSet no longer validates: {0}")]
+    Units(String),
+    #[error("stored fact task {0} is duplicate or was not planned")]
+    UnknownFactTask(String),
+    #[error("stored fact task {task} no longer validates: {diagnostics}")]
+    Fact { task: String, diagnostics: String },
+    #[error("stored discovery result can no longer be assembled: {0}")]
+    Assembly(String),
+}
+
+/// Replays the deterministic validators over persisted untrusted proposals.
+/// It makes no LLM request and restores authority only when every persisted
+/// fact reproduces under the current pipeline and source input.
+pub fn revalidate_discovery_checkpoint(
+    prepared: &PreparedUnitDiscoveryRequest,
+    unit_checkpoint: &UnitDiscoveryCheckpoint,
+    fact_proposals: Vec<FactTaskProposal>,
+    max_tasks_per_batch: usize,
+) -> Result<RevalidatedDiscovery, DiscoveryCheckpointRevalidationError> {
+    let units = prepared
+        .revalidate_checkpoint(unit_checkpoint, Default::default())
+        .map_err(|report| DiscoveryCheckpointRevalidationError::Units(diagnostics(&report)))?;
+    let batches = plan_source_facts(prepared, &units, max_tasks_per_batch)
+        .map_err(|report| DiscoveryCheckpointRevalidationError::Units(diagnostics(&report)))?;
+
+    let planned = batches
+        .iter()
+        .flat_map(|batch| batch.model_input().tasks.iter())
+        .map(|task| task.task_ref.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for fact in &fact_proposals {
+        if !seen.insert(fact.task_ref.as_str()) || !planned.contains(fact.task_ref.as_str()) {
+            return Err(DiscoveryCheckpointRevalidationError::UnknownFactTask(
+                fact.task_ref.clone(),
+            ));
+        }
+    }
+
+    let mut validated = Vec::new();
+    for batch in &batches {
+        for proposal in fact_proposals.iter().filter(|proposal| {
+            batch
+                .model_input()
+                .tasks
+                .iter()
+                .any(|task| task.task_ref == proposal.task_ref)
+        }) {
+            let envelope = SourceFactProposal {
+                version: SourceFactVersion::V1,
+                request_ref: batch.model_input().request_ref.clone(),
+                tasks: vec![proposal.clone()],
+            };
+            let validation = batch.validate(&envelope);
+            let Some(task) = validation
+                .tasks
+                .into_iter()
+                .find(|task| task.task_ref() == proposal.task_ref)
+            else {
+                return Err(DiscoveryCheckpointRevalidationError::Fact {
+                    task: proposal.task_ref.clone(),
+                    diagnostics: diagnostics(&validation.report),
+                });
+            };
+            validated.push(task);
+        }
+    }
+    let result = assemble_discovery(&units, &batches, validated)
+        .map_err(DiscoveryCheckpointRevalidationError::Assembly)?;
+    Ok(RevalidatedDiscovery { units, result })
+}
+
+fn diagnostics(report: &StageValidationReport) -> String {
+    if report.diagnostics.is_empty() {
+        return "validation produced no authorized result".into();
+    }
+    report
+        .diagnostics
+        .iter()
+        .take(4)
+        .map(|diagnostic| {
+            format!(
+                "{} · {}: {}",
+                diagnostic.path, diagnostic.code, diagnostic.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -114,7 +225,50 @@ pub struct SourceRegistrationPlan {
 }
 
 pub fn discovery_result_fingerprint(result: &DiscoveryResult) -> ContentHash {
-    fingerprint(result)
+    // Unit/fact request refs are transport nonces and are regenerated during
+    // checkpoint revalidation. Batch fingerprints also depend on the planner's
+    // batching policy. Bind acceptance to canonical validated facts instead of
+    // either transient implementation detail.
+    let tasks = result
+        .tasks
+        .iter()
+        .map(|task| {
+            (
+                &task.task_ref,
+                &task.owner,
+                &task.original,
+                &task.labels,
+                &task.title,
+                &task.references,
+                &task.relations,
+                &task.issues,
+            )
+        })
+        .collect::<Vec<_>>();
+    fingerprint(&(
+        &result.version,
+        &result.units.input_fingerprint,
+        &result.units.unit_set_fingerprint,
+        tasks,
+        &result.references,
+        &result.relations,
+        &result.pending_tasks,
+        &result.pending_task_owners,
+        result.complete,
+    ))
+}
+
+/// Idempotent identity for one actor accepting one exact result and scope.
+pub fn acceptance_decision_id(
+    run_id: &StableId,
+    result_fingerprint: &ContentHash,
+    actor: &ActorRef,
+    selection: &AcceptanceSelection,
+) -> Result<StableId, SourceRegistrationPlanError> {
+    stable_hash_id(
+        "acceptance",
+        &fingerprint(&(run_id, result_fingerprint, actor, selection)),
+    )
 }
 
 #[derive(Debug, Error, Eq, PartialEq)]
@@ -133,6 +287,8 @@ pub enum SourceRegistrationPlanError {
     MissingParent { unit: String, parent: String },
     #[error("accepted relation from {owner} requires target {target}")]
     RelationOutsideSelection { owner: String, target: String },
+    #[error("accepted unit {0} requires its discovery boundary to be revised")]
+    UnitRequiresRevision(String),
     #[error("could not construct a stable registration identity: {0}")]
     InvalidIdentity(String),
 }
@@ -196,6 +352,13 @@ pub fn plan_source_registration(
     };
     if selected.is_empty() {
         return Err(SourceRegistrationPlanError::EmptySelection);
+    }
+    for task in result.tasks() {
+        if selected.contains(task.owner()) && task.requires_unit_revision() {
+            return Err(SourceRegistrationPlanError::UnitRequiresRevision(
+                task.owner().into(),
+            ));
+        }
     }
     for unit in units.units() {
         let proposal = unit.proposal();

@@ -678,6 +678,35 @@ fn validated_fixture() -> (
     (prepared, units, batches, validation.tasks)
 }
 
+#[test]
+fn persisted_wire_checkpoints_restore_authority_only_by_revalidation() {
+    let prepared = prepared(SOURCE);
+    let units = prepared
+        .validate(proposal(&prepared), Default::default())
+        .unwrap();
+    let facts: SourceFactProposal = serde_json::from_str(FACTS).unwrap();
+    let restored =
+        revalidate_discovery_checkpoint(&prepared, &units.checkpoint(), facts.tasks.clone(), 16)
+            .unwrap();
+    assert_eq!(restored.units().fingerprint(), units.fingerprint());
+    assert!(restored.result().complete());
+    let differently_batched =
+        revalidate_discovery_checkpoint(&prepared, &units.checkpoint(), facts.tasks.clone(), 1)
+            .unwrap();
+    assert_eq!(
+        discovery_result_fingerprint(restored.result()),
+        discovery_result_fingerprint(differently_batched.result())
+    );
+
+    let mut invalid = facts.tasks;
+    invalid[0].task_ref = "unknown-task".into();
+    assert!(matches!(
+        revalidate_discovery_checkpoint(&prepared, &units.checkpoint(), invalid, 16),
+        Err(DiscoveryCheckpointRevalidationError::UnknownFactTask(task))
+            if task == "unknown-task"
+    ));
+}
+
 fn acceptance(
     result: &DiscoveryResult,
     selection: AcceptanceSelection,

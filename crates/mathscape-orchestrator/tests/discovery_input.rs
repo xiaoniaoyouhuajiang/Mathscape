@@ -4,7 +4,7 @@ use mathscape_domain::{
 };
 use mathscape_orchestrator::{
     DiscoveryInputError, DiscoveryInputLimits, anchor_markdown, build_discovery_input,
-    resolve_selection, validate_discovery_proposal,
+    rebind_discovery_input, resolve_selection, validate_discovery_proposal,
 };
 
 fn document(source: &str) -> AnchoredMarkdown {
@@ -182,6 +182,24 @@ fn rejects_tampered_resolution_and_malformed_documents() {
     assert!(matches!(
         build_discovery_input(&malformed, &selected, DiscoveryInputLimits::default()),
         Err(DiscoveryInputError::InvalidDocument)
+    ));
+}
+
+#[test]
+fn persisted_input_must_rebind_to_the_same_managed_markdown() {
+    let doc = document("One 中文\n\nTwo\n");
+    let selected = resolve(&doc, SourceSelector::WholeDocument);
+    let input = build_discovery_input(&doc, &selected, Default::default()).unwrap();
+    rebind_discovery_input(&doc, &input, Default::default()).unwrap();
+
+    let mut tampered = input.clone();
+    match &mut tampered.requested.segments[0] {
+        DiscoveryInputSegment::Block { text, .. } => text.push('!'),
+        DiscoveryInputSegment::Gap { .. } => unreachable!(),
+    }
+    assert!(matches!(
+        rebind_discovery_input(&doc, &tampered, Default::default()),
+        Err(DiscoveryInputError::StaleCheckpoint(_))
     ));
 }
 

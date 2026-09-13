@@ -7,18 +7,23 @@ use std::{
 };
 
 use mathscape_domain::{
-    ContentHash, DISCOVERY_PIPELINE_VERSION, DiscoveryAdmission, DiscoverySelectionRequest,
-    StableId,
+    ActorRef, ContentHash, DISCOVERY_PIPELINE_VERSION, DiscoveryAdmission, DiscoveryInput,
+    DiscoverySelectionRequest, FactTaskProposal, StableId, Timestamp, UnitDiscoveryCheckpoint,
 };
 use mathscape_llm::{GenaiBackend, GenaiBackendOptions, LlmError, LlmProfile};
 use mathscape_orchestrator::{
-    DiscoveryRunSummary, DiscoveryWorkflow, DiscoveryWorkflowEvent, DiscoveryWorkflowLimits,
-    PreparedUnitDiscoveryRequest, WorkflowAttempt, WorkflowStatus, discovery_result_fingerprint,
+    AcceptanceAuthority, AcceptanceSelection, DiscoveryAcceptanceDecision, DiscoveryRunSummary,
+    DiscoveryWorkflow, DiscoveryWorkflowEvent, DiscoveryWorkflowLimits,
+    PreparedUnitDiscoveryRequest, WorkflowAttempt, WorkflowStatus, acceptance_decision_id,
+    discovery_result_fingerprint, plan_source_registration,
+    prepare_unit_discovery_request_from_input, project_source_review, rebind_discovery_input,
+    revalidate_discovery_checkpoint,
 };
 use mathscape_store_sqlite::{
-    DiscoveryAttemptCheckpoint, DiscoveryCheckpointStatus, DiscoveryDiagnosticCheckpoint,
-    DiscoveryFactCheckpointRecord, DiscoveryRunCheckpoint, DiscoveryUnitCheckpointRecord,
-    DiscoveryValidationCheckpoint, PendingDiscoveryTask, SqliteArtifactStore, SqliteStoreError,
+    AcceptedRegistrationPlanRecord, DiscoveryAttemptCheckpoint, DiscoveryCheckpointStatus,
+    DiscoveryDiagnosticCheckpoint, DiscoveryFactCheckpointRecord, DiscoveryRunCheckpoint,
+    DiscoveryUnitCheckpointRecord, DiscoveryValidationCheckpoint, PendingDiscoveryTask,
+    SqliteArtifactStore, SqliteStoreError, StoredAcceptanceAuthority,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -37,6 +42,31 @@ use crate::{
 pub struct RunDiscoveryRequest {
     selection: DiscoverySelectionRequest,
     profile_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptDiscoveryRequest {
+    run_id: String,
+    expected_result_fingerprint: ContentHash,
+    selection: AcceptanceSelection,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DesktopDiscoveryAcceptance {
+    state: String,
+    decision_id: String,
+    run_id: String,
+    result_fingerprint: ContentHash,
+    plan_fingerprint: ContentHash,
+    selected_units: Vec<String>,
+    partial: bool,
+    span_count: usize,
+    unit_count: usize,
+    reference_count: usize,
+    relation_count: usize,
+    pending_task_count: usize,
+    already_accepted: bool,
 }
 
 impl RunDiscoveryRequest {
@@ -125,6 +155,7 @@ pub type DesktopDiscoveryObserver = Arc<dyn Fn(DesktopDiscoveryProgress) + Send 
 pub struct DesktopDiscoveryOutcome {
     outcome: WorkflowStatus,
     view: DesktopDiscoveryView,
+    review: Option<mathscape_domain::SourceReviewProjection>,
     run: DesktopDiscoveryRun,
 }
 
@@ -164,6 +195,8 @@ pub enum DesktopDiscoveryError {
     Domain(#[from] mathscape_domain::DomainError),
     #[error("内容发现检查点编码失败：{0}")]
     Json(#[from] serde_json::Error),
+    #[error("来源审核接受失败：{0}")]
+    Acceptance(String),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -205,6 +238,115 @@ impl DesktopService {
         request: RunDiscoveryRequest,
     ) -> Result<DesktopDiscoveryOutcome, DesktopDiscoveryError> {
         self.run_discovery_observed(request, None).await
+    }
+
+    pub fn accept_discovery_result(
+        &self,
+        request: AcceptDiscoveryRequest,
+    ) -> Result<DesktopDiscoveryAcceptance, DesktopDiscoveryError> {
+        let run_id = StableId::parse(&request.run_id)?;
+        let actor = ActorRef::parse("mathscape-desktop-user")?;
+        let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        let stored = store
+            .discovery_checkpoint(&run_id)?
+            .ok_or_else(|| DesktopDiscoveryError::Acceptance("内容发现运行不存在".into()))?;
+        let checkpoint = stored.checkpoint;
+        if checkpoint.pipeline_version != DISCOVERY_PIPELINE_VERSION {
+            return Err(DesktopDiscoveryError::Acceptance(format!(
+                "内容发现运行使用了不兼容的流水线版本 {}",
+                checkpoint.pipeline_version
+            )));
+        }
+        if checkpoint.result_fingerprint.as_ref() != Some(&request.expected_result_fingerprint) {
+            return Err(DesktopDiscoveryError::Acceptance(
+                "审核页面已经过期，请重新打开最新结果".into(),
+            ));
+        }
+
+        let source: DiscoveryInput = checkpoint_value(&checkpoint.snapshot, "source")?;
+        let unit_checkpoint: UnitDiscoveryCheckpoint =
+            checkpoint_value(&checkpoint.snapshot, "units")?;
+        if source.snapshot.artifact_id != checkpoint.artifact_id
+            || source.snapshot.conversion_id != checkpoint.conversion_id
+            || source.fingerprint != checkpoint.input_fingerprint
+            || unit_checkpoint.input_fingerprint != checkpoint.input_fingerprint
+            || checkpoint.unit_set_fingerprint.as_ref()
+                != Some(&unit_checkpoint.unit_set_fingerprint)
+        {
+            return Err(DesktopDiscoveryError::Acceptance(
+                "持久化检查点的来源身份不一致".into(),
+            ));
+        }
+        let document = self
+            .markdown_document(
+                source.snapshot.artifact_id.as_str(),
+                source.snapshot.conversion_id.as_ref().map(StableId::as_str),
+            )
+            .map_err(DesktopDiscoveryError::Acceptance)?;
+        rebind_discovery_input(&document, &source, Default::default())
+            .map_err(|error| DesktopDiscoveryError::Acceptance(error.to_string()))?;
+        let prepared = prepare_unit_discovery_request_from_input(source);
+        let fact_proposals = checkpoint
+            .facts
+            .iter()
+            .map(|fact| {
+                let value = fact.payload.get("original").cloned().ok_or_else(|| {
+                    DesktopDiscoveryError::Acceptance(format!(
+                        "事实任务 {} 缺少原始提案",
+                        fact.task_ref
+                    ))
+                })?;
+                serde_json::from_value::<FactTaskProposal>(value).map_err(Into::into)
+            })
+            .collect::<Result<Vec<_>, DesktopDiscoveryError>>()?;
+        let revalidated = revalidate_discovery_checkpoint(
+            &prepared,
+            &unit_checkpoint,
+            fact_proposals,
+            DiscoveryWorkflowLimits::default().max_tasks_per_batch,
+        )
+        .map_err(|error| DesktopDiscoveryError::Acceptance(error.to_string()))?;
+        let reproduced = discovery_result_fingerprint(revalidated.result());
+        if reproduced != request.expected_result_fingerprint {
+            return Err(DesktopDiscoveryError::Acceptance(
+                "当前验证器无法重现待审核结果，请重新运行内容发现".into(),
+            ));
+        }
+
+        let decision_id = acceptance_decision_id(&run_id, &reproduced, &actor, &request.selection)
+            .map_err(|error| DesktopDiscoveryError::Acceptance(error.to_string()))?;
+        if let Some(existing) = store.registration_plan(&decision_id)? {
+            return DesktopDiscoveryAcceptance::from_record(existing, true);
+        }
+        let decision = DiscoveryAcceptanceDecision {
+            decision_id: decision_id.clone(),
+            discovery_run_id: run_id.clone(),
+            actor: actor.clone(),
+            decided_at: timestamp_now()?,
+            authority: AcceptanceAuthority::HumanReview,
+            expected_result_fingerprint: reproduced.clone(),
+            selection: request.selection,
+        };
+        let plan = plan_source_registration(
+            prepared.input(),
+            revalidated.units(),
+            revalidated.result(),
+            decision,
+        )
+        .map_err(|error| DesktopDiscoveryError::Acceptance(error.to_string()))?;
+        let record = AcceptedRegistrationPlanRecord {
+            decision_id,
+            run_id,
+            actor,
+            decided_at: plan.decision.decided_at.clone(),
+            authority: StoredAcceptanceAuthority::HumanReview,
+            expected_result_fingerprint: reproduced,
+            selection: serde_json::to_value(&plan.decision.selection)?,
+            plan_fingerprint: plan.plan_fingerprint.clone(),
+            plan: serde_json::to_value(&plan)?,
+        };
+        store.save_registration_plan(&record)?;
+        DesktopDiscoveryAcceptance::from_record(record, false)
     }
 
     async fn run_discovery_observed(
@@ -331,8 +473,10 @@ impl DesktopService {
         let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
         store.save_discovery_checkpoint(&checkpoint)?;
         let view = DesktopDiscoveryView::project(&workflow);
+        let review = project_source_review(&workflow, run_id.clone());
         Ok(DesktopDiscoveryOutcome::from_workflow(
             view,
+            review,
             workflow.attempts(),
             run_id,
             &profile,
@@ -460,6 +604,7 @@ impl Drop for DiscoveryPermit {
 impl DesktopDiscoveryOutcome {
     fn from_workflow(
         view: DesktopDiscoveryView,
+        review: Option<mathscape_domain::SourceReviewProjection>,
         attempts: &[WorkflowAttempt],
         run_id: StableId,
         profile: &LlmProfile,
@@ -469,6 +614,7 @@ impl DesktopDiscoveryOutcome {
         Self {
             outcome,
             view,
+            review,
             run: DesktopDiscoveryRun::from_attempts(run_id, attempts, profile, policy),
         }
     }
@@ -509,6 +655,82 @@ impl DesktopDiscoveryRun {
                 }),
         }
     }
+}
+
+impl DesktopDiscoveryAcceptance {
+    fn from_record(
+        record: AcceptedRegistrationPlanRecord,
+        already_accepted: bool,
+    ) -> Result<Self, DesktopDiscoveryError> {
+        let plan = record
+            .plan
+            .as_object()
+            .ok_or_else(|| DesktopDiscoveryError::Acceptance("登记计划不是 JSON 对象".into()))?;
+        let array =
+            |field: &'static str| -> Result<&Vec<serde_json::Value>, DesktopDiscoveryError> {
+                plan.get(field)
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or_else(|| {
+                        DesktopDiscoveryError::Acceptance(format!("登记计划缺少 {field}"))
+                    })
+            };
+        let selected_units = array("units")?
+            .iter()
+            .map(|unit| {
+                unit.get("source_ref")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        DesktopDiscoveryError::Acceptance("登记计划包含无效的来源单元".into())
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            state: "accepted".into(),
+            decision_id: record.decision_id.to_string(),
+            run_id: record.run_id.to_string(),
+            result_fingerprint: record.expected_result_fingerprint,
+            plan_fingerprint: record.plan_fingerprint,
+            selected_units,
+            partial: plan
+                .get("partial")
+                .and_then(serde_json::Value::as_bool)
+                .ok_or_else(|| DesktopDiscoveryError::Acceptance("登记计划缺少 partial".into()))?,
+            span_count: array("spans")?.len(),
+            unit_count: array("units")?.len(),
+            reference_count: array("references")?.len(),
+            relation_count: array("relations")?.len(),
+            pending_task_count: array("pending_tasks")?.len(),
+            already_accepted,
+        })
+    }
+}
+
+fn checkpoint_value<T: serde::de::DeserializeOwned>(
+    snapshot: &serde_json::Value,
+    field: &'static str,
+) -> Result<T, DesktopDiscoveryError> {
+    let value = snapshot
+        .get(field)
+        .cloned()
+        .ok_or_else(|| DesktopDiscoveryError::Acceptance(format!("检查点缺少 {field}")))?;
+    if value.is_null() {
+        return Err(DesktopDiscoveryError::Acceptance(format!(
+            "检查点中的 {field} 为空"
+        )));
+    }
+    serde_json::from_value(value).map_err(Into::into)
+}
+
+fn timestamp_now() -> Result<Timestamp, mathscape_domain::DomainError> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    Timestamp::parse(format!(
+        "unix:{}.{}",
+        duration.as_secs(),
+        duration.subsec_nanos()
+    ))
 }
 
 fn new_discovery_run_id() -> Result<StableId, mathscape_domain::DomainError> {
@@ -659,6 +881,18 @@ pub(crate) fn get_active_discovery(state: State<'_, DesktopState>) -> Option<Act
 #[tauri::command]
 pub(crate) fn cancel_discovery(state: State<'_, DesktopState>) -> bool {
     state.service.cancel_discovery()
+}
+
+#[tauri::command]
+pub(crate) async fn accept_discovery_result(
+    state: State<'_, DesktopState>,
+    request: AcceptDiscoveryRequest,
+) -> Result<DesktopDiscoveryAcceptance, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.accept_discovery_result(request))
+        .await
+        .map_err(|error| format!("来源审核线程失败：{error}"))?
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
