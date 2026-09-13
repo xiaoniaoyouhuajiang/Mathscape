@@ -35,7 +35,10 @@ use mathscape_pdf::{
     ClassificationMode, PdfContentKind, PdfEngine, PdfError, PdfOpenOptions, PdfPageIndex,
     PdfSelection,
 };
-use mathscape_query::{ArtifactGraphProjectionError, ArtifactGraphProjector};
+use mathscape_query::{
+    ArtifactGraphProjectionError, ArtifactGraphProjector, SourceGraphProjectionError,
+    SourceGraphProjector,
+};
 use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
 use mathscape_tool_marker::{
     MarkerCancellation, MarkerExecutionError, MarkerInstallation, MarkerProductRole,
@@ -148,6 +151,9 @@ impl DesktopService {
             .collect();
         let projection = ArtifactGraphProjector.project(&catalog, ProjectionLens::Source)?;
         let graph = IncidenceGraph::project(&projection);
+        let source_projection =
+            SourceGraphProjector.project(&store.source_map_snapshot()?, ProjectionLens::Source)?;
+        let source_graph = IncidenceGraph::project(&source_projection);
 
         Ok(DesktopSnapshot {
             workspace_id,
@@ -157,6 +163,7 @@ impl DesktopService {
             marker: self.marker_status(),
             pdf_artifacts,
             graph,
+            source_graph,
         })
     }
 
@@ -442,6 +449,7 @@ pub struct DesktopSnapshot {
     marker: MarkerRuntimeStatus,
     pdf_artifacts: Vec<PdfArtifactSummary>,
     graph: IncidenceGraph,
+    source_graph: IncidenceGraph,
 }
 
 impl DesktopSnapshot {
@@ -467,6 +475,10 @@ impl DesktopSnapshot {
 
     pub fn graph(&self) -> &IncidenceGraph {
         &self.graph
+    }
+
+    pub fn source_graph(&self) -> &IncidenceGraph {
+        &self.source_graph
     }
 }
 
@@ -657,6 +669,8 @@ pub enum DesktopServiceError {
     Store(#[from] SqliteStoreError),
     #[error("Artifact graph projection failed: {0}")]
     Projection(#[from] ArtifactGraphProjectionError),
+    #[error("Source graph projection failed: {0}")]
+    SourceGraph(#[from] SourceGraphProjectionError),
     #[error("graph projection failed: {0}")]
     Graph(#[from] GraphProjectionError),
     #[error("domain validation failed: {0}")]

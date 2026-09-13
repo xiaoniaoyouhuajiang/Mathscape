@@ -28,8 +28,8 @@ pub use discovery::{
 };
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use source_map::{
-    MapObjectOutcome, SOURCE_REGISTRATION_RECEIPT_VERSION, SourceRegistrationReceipt,
-    StoredMapObject,
+    MapObjectOutcome, SOURCE_REGISTRATION_RECEIPT_VERSION, SourceMapSnapshot,
+    SourceRegistrationReceipt, StoredMapEndpoint, StoredMapObject,
 };
 
 const ARTIFACT_POOL_MIGRATION: &str = include_str!("../../../migrations/0001_artifact_pool.sql");
@@ -451,6 +451,10 @@ impl SqliteArtifactStore {
 
     pub fn map_objects(&self) -> Result<Vec<StoredMapObject>, SqliteStoreError> {
         source_map::map_objects(&self.connection)
+    }
+
+    pub fn source_map_snapshot(&self) -> Result<SourceMapSnapshot, SqliteStoreError> {
+        source_map::source_map_snapshot(&self.connection)
     }
 
     pub fn register_check(

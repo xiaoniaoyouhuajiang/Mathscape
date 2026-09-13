@@ -38,6 +38,20 @@ pub struct StoredMapObject {
     pub kind: EntityKind,
     pub relation: bool,
     pub payload: Value,
+    pub lifecycle: mathscape_domain::LifecycleStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StoredMapEndpoint {
+    pub role: String,
+    pub ordinal: Option<u32>,
+    pub entity_id: StableId,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceMapSnapshot {
+    pub objects: Vec<StoredMapObject>,
+    pub relation_endpoints: std::collections::BTreeMap<StableId, Vec<StoredMapEndpoint>>,
 }
 
 pub(super) fn commit_source_registration(
@@ -479,7 +493,7 @@ pub(super) fn map_objects(
     connection: &rusqlite::Connection,
 ) -> Result<Vec<StoredMapObject>, SqliteStoreError> {
     let mut statement = connection.prepare(
-        "SELECT o.object_id, o.current_revision, o.entity_kind, o.object_shape, r.payload_json
+        "SELECT o.object_id, o.current_revision, o.entity_kind, o.object_shape, r.lifecycle, r.payload_json
          FROM map_objects o JOIN map_object_revisions r
            ON r.object_id = o.object_id AND r.revision_id = o.current_revision
          ORDER BY o.entity_kind, o.object_id",
@@ -492,17 +506,56 @@ pub(super) fn map_objects(
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
             ))
         })?
         .map(|row| {
-            let (stable_id, revision_id, kind, shape, payload) = row?;
+            let (stable_id, revision_id, kind, shape, lifecycle, payload) = row?;
             Ok(StoredMapObject {
                 stable_id: StableId::parse(stable_id)?,
                 revision_id: RevisionId::parse(revision_id)?,
                 kind: serde_json::from_value(Value::String(kind))?,
                 relation: shape == "relation",
                 payload: serde_json::from_str(&payload)?,
+                lifecycle: crate::parse_lifecycle(&lifecycle)?,
             })
         })
         .collect()
+}
+
+pub(super) fn source_map_snapshot(
+    connection: &rusqlite::Connection,
+) -> Result<SourceMapSnapshot, SqliteStoreError> {
+    let objects = map_objects(connection)?;
+    let mut endpoints = std::collections::BTreeMap::new();
+    let mut statement = connection.prepare(
+        "SELECT relation_id, role, ordinal, entity_id
+         FROM map_relation_endpoints e
+         JOIN map_objects o ON o.object_id = e.relation_id
+         WHERE e.revision_id = o.current_revision
+         ORDER BY relation_id, role, ordinal_key",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<u32>>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    for row in rows {
+        let (relation, role, ordinal, entity_id) = row?;
+        endpoints
+            .entry(StableId::parse(relation)?)
+            .or_insert_with(Vec::new)
+            .push(StoredMapEndpoint {
+                role,
+                ordinal,
+                entity_id: StableId::parse(entity_id)?,
+            });
+    }
+    Ok(SourceMapSnapshot {
+        objects,
+        relation_endpoints: endpoints,
+    })
 }

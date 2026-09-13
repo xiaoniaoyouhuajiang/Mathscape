@@ -16,6 +16,7 @@ interface DesktopSnapshot {
   marker: MarkerRuntimeStatus;
   pdf_artifacts: PdfArtifactSummary[];
   graph: IncidenceGraph;
+  source_graph: IncidenceGraph;
 }
 
 interface MarkerRuntimeStatus {
@@ -345,11 +346,12 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
   renderMarkerStatus(snapshot.marker);
 
   graphCore?.destroy();
-  graphCore = mountCytoscapeGraph(graphContainer, snapshot.graph);
-  emptyState.classList.toggle("is-hidden", snapshot.graph.nodes.length > 0);
+  const visibleGraph = snapshot.source_graph.nodes.length > 0 ? snapshot.source_graph : snapshot.graph;
+  graphCore = mountCytoscapeGraph(graphContainer, visibleGraph);
+  emptyState.classList.toggle("is-hidden", visibleGraph.nodes.length > 0);
   graphCore.on("tap", "node", (event) => {
     const selected = event.target as NodeSingular;
-    const model = snapshot.graph.nodes.find(
+    const model = visibleGraph.nodes.find(
       (node) => node.id === selected.id(),
     );
     if (model !== undefined) {
