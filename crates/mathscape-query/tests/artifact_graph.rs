@@ -10,11 +10,14 @@ use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_domain::{
     ActorRef, CommandRecordStatus, ConversionExitStatus, ConversionParameters, ConversionRun,
     EntityHeader, EntityKind, LifecycleStatus, MediaType, PageIndexBase, PageRange, RevisionId,
-    RightsRecord, RightsStatus, SchemaVersion, SourcePayload, Timestamp,
+    RightsRecord, RightsStatus, SchemaVersion, SourcePayload, StableId, Timestamp,
 };
 use mathscape_graph::{IncidenceDirection, IncidenceGraph, ProjectionLens};
-use mathscape_query::{ArtifactGraphProjector, project_artifact_catalog};
+use mathscape_query::{
+    ArtifactGraphProjector, LandscapeProjectionInput, LandscapeProjector, project_artifact_catalog,
+};
 use mathscape_store_sqlite::SqliteArtifactStore;
+use rusqlite::params;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -145,6 +148,45 @@ fn reads_the_catalog_and_projects_conversion_hyperedges() {
     pool.record_conversion(&conversion).unwrap();
     drop(pool);
 
+    // Persist one current SourceSpan with the same payload shape produced by
+    // source registration. This anchors the cross-view provenance edge.
+    drop(SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap());
+    let span_id = StableId::parse("mathscape:source-span/landscape-fixture").unwrap();
+    let span_revision = RevisionId::parse(format!("sha256:{}", "8".repeat(64))).unwrap();
+    let connection = rusqlite::Connection::open(workspace.join("mathscape.sqlite3")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO map_objects (object_id, object_shape, entity_kind, current_revision)
+             VALUES (?1, 'entity', 'SourceSpan', ?2)",
+            params![span_id.as_str(), span_revision.as_str()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO map_object_revisions
+             (object_id, revision_id, schema_version, lifecycle, created_at,
+              created_by, generation_run, payload_json)
+             VALUES (?1, ?2, 'mathscape-source-1', 'active',
+                     '2026-09-14T00:00:00+08:00', 'landscape-test', NULL, ?3)",
+            params![
+                span_id.as_str(),
+                span_revision.as_str(),
+                serde_json::json!({
+                    "payload_kind": "span",
+                    "payload": {
+                        "markdown": {
+                            "artifact": markdown.stable_id(),
+                            "byte_range": {"start": 0, "end": 10},
+                            "displayed_lines": null
+                        }
+                    }
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+    drop(connection);
+
     let store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
     let snapshot = store.read_catalog_snapshot().unwrap();
     assert_eq!(snapshot.artifacts().len(), 3);
@@ -226,6 +268,33 @@ fn reads_the_catalog_and_projects_conversion_hyperedges() {
         project_artifact_catalog(&snapshot, ProjectionLens::Rdtx).is_err(),
         "an Artifact catalog must not pretend to provide an RDTX lens"
     );
+
+    let landscape_snapshot = store.landscape_snapshot().unwrap();
+    let landscape = LandscapeProjector
+        .project(LandscapeProjectionInput::from_snapshot(&landscape_snapshot))
+        .unwrap();
+    assert_eq!(landscape.lens(), ProjectionLens::Landscape);
+    assert!(
+        landscape
+            .nodes()
+            .iter()
+            .any(|node| node.entity_id() == &span_id)
+    );
+    assert!(landscape.relations().iter().any(|relation| {
+        relation.kind() == EntityKind::Evidence
+            && relation.label() == "来源于 Markdown"
+            && relation
+                .endpoints()
+                .iter()
+                .any(|endpoint| endpoint.node() == markdown.stable_id())
+    }));
+    assert!(landscape.relations().iter().any(|relation| {
+        relation.kind() == EntityKind::ConversionRun
+            && relation
+                .endpoints()
+                .iter()
+                .any(|endpoint| endpoint.node() == source.stable_id())
+    }));
 
     drop(store);
     directory.cleanup();

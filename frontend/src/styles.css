@@ -52,6 +52,12 @@ code {
   align-items: center;
 }
 
+.graph-view-button.is-active {
+  border-color: #8fc8b7;
+  background: #31534e;
+  color: #f3fffb;
+}
+
 .brand-block {
   gap: 12px;
 }

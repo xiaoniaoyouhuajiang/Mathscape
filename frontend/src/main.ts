@@ -17,6 +17,7 @@ interface DesktopSnapshot {
   pdf_artifacts: PdfArtifactSummary[];
   graph: IncidenceGraph;
   source_graph: IncidenceGraph;
+  landscape_graph: IncidenceGraph;
 }
 
 interface MarkerRuntimeStatus {
@@ -155,19 +156,21 @@ app.innerHTML = `
         <div class="canvas-toolbar">
           <div>
             <span class="eyebrow">GRAPH PROJECTION</span>
-            <h2>Artifact / Conversion</h2>
+            <h2 id="graph-view-title">材料图</h2>
           </div>
           <div class="legend" aria-label="图例">
-            <button id="show-map" class="reader-tab" type="button">地图</button>
-            <span><i class="legend-dot entity"></i>Artifact</span>
-            <span><i class="legend-dot relation"></i>Conversion</span>
+            <button id="show-material-map" class="reader-tab graph-view-button" type="button" aria-pressed="true">材料图</button>
+            <button id="show-source-map" class="reader-tab graph-view-button" type="button" aria-pressed="false">来源图</button>
+            <button id="show-landscape-map" class="reader-tab graph-view-button" type="button" aria-pressed="false">景观图</button>
+            <span><i class="legend-dot entity"></i><span id="graph-entity-legend">Artifact</span></span>
+            <span><i class="legend-dot relation"></i><span id="graph-relation-legend">Conversion</span></span>
           </div>
         </div>
         <div id="graph" class="graph-canvas"></div>
         <section id="reader" class="reader-panel" aria-label="文件阅读器" hidden></section>
         <div id="empty-state" class="empty-state">
-          <strong>景观尚未生成</strong>
-          <span>导入第一份 PDF 后，来源节点会出现在这里。</span>
+          <strong id="empty-state-title">尚未导入材料</strong>
+          <span id="empty-state-message">导入第一份 PDF 后，材料节点会出现在这里。</span>
         </div>
       </section>
 
@@ -212,7 +215,12 @@ const workspaceId = requiredElement<HTMLElement>("#workspace-id");
 const workspaceName = requiredElement<HTMLElement>("#workspace-name");
 const workspaceRoot = requiredElement<HTMLElement>("#workspace-root");
 const graphContainer = requiredElement<HTMLElement>("#graph");
+const graphViewTitle = requiredElement<HTMLElement>("#graph-view-title");
+const graphEntityLegend = requiredElement<HTMLElement>("#graph-entity-legend");
+const graphRelationLegend = requiredElement<HTMLElement>("#graph-relation-legend");
 const emptyState = requiredElement<HTMLElement>("#empty-state");
+const emptyStateTitle = requiredElement<HTMLElement>("#empty-state-title");
+const emptyStateMessage = requiredElement<HTMLElement>("#empty-state-message");
 const nodeDetail = requiredElement<HTMLElement>("#node-detail");
 const lastImport = requiredElement<HTMLElement>("#last-import");
 const lastParse = requiredElement<HTMLElement>("#last-parse");
@@ -228,7 +236,16 @@ const llmSettings = new LlmSettingsController(
   requiredElement<HTMLElement>("#llm-settings-label"),
   showToast,
 );
-requiredElement<HTMLButtonElement>("#show-map").onclick = () => {
+requiredElement<HTMLButtonElement>("#show-material-map").onclick = () => {
+  selectGraphLens("material");
+};
+requiredElement<HTMLButtonElement>("#show-source-map").onclick = () => {
+  selectGraphLens("source");
+};
+requiredElement<HTMLButtonElement>("#show-landscape-map").onclick = () => {
+  selectGraphLens("landscape");
+};
+const showMap = () => {
   reader.close();
   readerHost.hidden = true;
   graphCore?.resize();
@@ -241,6 +258,18 @@ let submittingParse = false;
 let pollingParse = false;
 let selectedNode: IncidenceNode | undefined;
 let currentSnapshot: DesktopSnapshot | undefined;
+let selectedLens: "material" | "source" | "landscape" = "material";
+
+function selectGraphLens(lens: typeof selectedLens): void {
+  selectedLens = lens;
+  try { localStorage.setItem("mathscape:graph-lens", lens); } catch { /* Optional presentation preference. */ }
+  renderCurrentGraph();
+}
+
+try {
+  const saved = localStorage.getItem("mathscape:graph-lens");
+  if (saved === "material" || saved === "source" || saved === "landscape") selectedLens = saved;
+} catch { /* Optional presentation preference. */ }
 
 importButton.addEventListener("click", () => void importPdf());
 requiredElement<HTMLButtonElement>("#copy-workspace-id").addEventListener("click", () => {
@@ -248,6 +277,7 @@ requiredElement<HTMLButtonElement>("#copy-workspace-id").addEventListener("click
 });
 void loadSnapshot();
 void llmSettings.loadSummary();
+window.addEventListener("mathscape:source-map-changed", () => void loadSnapshot());
 window.setInterval(() => void syncParseState(), 1000);
 
 async function syncParseState(): Promise<void> {
@@ -345,8 +375,37 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
   workspaceRoot.textContent = snapshot.workspace_root;
   renderMarkerStatus(snapshot.marker);
 
+  renderCurrentGraph(snapshot);
+}
+
+function renderCurrentGraph(snapshot = currentSnapshot): void {
+  if (snapshot === undefined) return;
+  showMap();
   graphCore?.destroy();
-  const visibleGraph = snapshot.source_graph.nodes.length > 0 ? snapshot.source_graph : snapshot.graph;
+  const visibleGraph = selectedLens === "landscape"
+    ? snapshot.landscape_graph
+    : selectedLens === "source"
+      ? snapshot.source_graph
+      : snapshot.graph;
+  const labels = { material: "材料图", source: "来源图", landscape: "景观图" } as const;
+  const legends = {
+    material: ["Artifact", "Conversion"],
+    source: ["来源单元 / 范围", "来源关系"],
+    landscape: ["跨层对象", "关系 / 追溯"],
+  } as const;
+  const emptyMessages = {
+    material: ["尚未导入材料", "导入第一份 PDF 后，材料节点会出现在这里。"],
+    source: ["尚未登记来源内容", "完成内容发现、审核和注册后，来源单元会出现在这里。"],
+    landscape: ["数学景观尚未形成", "材料和来源节点存在后，跨视图追溯链会出现在这里。"],
+  } as const;
+  graphViewTitle.textContent = labels[selectedLens];
+  [graphEntityLegend.textContent, graphRelationLegend.textContent] = legends[selectedLens];
+  [emptyStateTitle.textContent, emptyStateMessage.textContent] = emptyMessages[selectedLens];
+  document.querySelectorAll<HTMLButtonElement>(".graph-view-button").forEach(button => {
+    const active = button.id === `show-${selectedLens}-map`;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
   graphCore = mountCytoscapeGraph(graphContainer, visibleGraph);
   emptyState.classList.toggle("is-hidden", visibleGraph.nodes.length > 0);
   graphCore.on("tap", "node", (event) => {

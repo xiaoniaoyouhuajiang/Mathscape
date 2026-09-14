@@ -58,7 +58,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 1",
@@ -99,6 +99,22 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
         )
         .unwrap();
     assert_eq!(source_map_migration, "source_map_v1");
+    let discovery_v2_migration = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 6",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(discovery_v2_migration, "discovery_runs_v2");
+    let result_fingerprint_column = connection
+        .prepare("PRAGMA table_info(discovery_runs)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(Result::unwrap)
+        .any(|name| name == "result_fingerprint");
+    assert!(result_fingerprint_column);
     drop(connection);
     drop(SqliteArtifactStore::open(&database).unwrap());
     cleanup(&directory);
@@ -116,7 +132,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::open(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 5
+            supported: 6
         })
     ));
     cleanup(&directory);
@@ -137,7 +153,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -175,7 +191,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 3",
@@ -211,7 +227,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
     assert_eq!(
         connection
@@ -222,6 +238,79 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
             )
             .unwrap(),
         "discovery_runs_v1"
+    );
+    cleanup(&directory);
+}
+
+#[test]
+fn repairs_a_v5_discovery_schema_missing_result_fingerprint() {
+    let directory = test_directory("repair-v5-discovery-schema");
+    let database = directory.join("catalog.sqlite3");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(include_str!("../../../migrations/0001_artifact_pool.sql"))
+        .unwrap();
+    connection
+        .execute_batch(include_str!("../../../migrations/0002_llm_profiles.sql"))
+        .unwrap();
+    connection
+        .execute_batch(include_str!(
+            "../../../migrations/0003_workspace_settings.sql"
+        ))
+        .unwrap();
+    let legacy_discovery_migration = include_str!("../../../migrations/0004_discovery_runs.sql")
+        .replace("    result_fingerprint     TEXT,\n", "");
+    connection
+        .execute_batch(&legacy_discovery_migration)
+        .unwrap();
+    connection
+        .execute_batch(
+            "DROP INDEX discovery_acceptance_by_run;
+             DROP TABLE discovery_acceptance_decisions;",
+        )
+        .unwrap();
+    connection
+        .execute_batch(include_str!("../../../migrations/0005_source_map.sql"))
+        .unwrap();
+    drop(connection);
+
+    drop(SqliteArtifactStore::open(&database).unwrap());
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        6
+    );
+    let has_result_fingerprint = connection
+        .prepare("PRAGMA table_info(discovery_runs)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(Result::unwrap)
+        .any(|name| name == "result_fingerprint");
+    assert!(has_result_fingerprint);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'table' AND name = 'discovery_acceptance_decisions'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "discovery_acceptance_decisions"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'index' AND name = 'discovery_acceptance_by_run'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "discovery_acceptance_by_run"
     );
     cleanup(&directory);
 }

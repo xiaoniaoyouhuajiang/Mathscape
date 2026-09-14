@@ -36,8 +36,8 @@ use mathscape_pdf::{
     PdfSelection,
 };
 use mathscape_query::{
-    ArtifactGraphProjectionError, ArtifactGraphProjector, SourceGraphProjectionError,
-    SourceGraphProjector,
+    ArtifactGraphProjectionError, ArtifactGraphProjector, LandscapeProjectionInput,
+    LandscapeProjector, SourceGraphProjectionError, SourceGraphProjector,
 };
 use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
 use mathscape_tool_marker::{
@@ -130,7 +130,8 @@ impl DesktopService {
         drop(pool);
 
         let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
-        let catalog = store.read_catalog_snapshot()?;
+        let landscape = store.landscape_snapshot()?;
+        let catalog = landscape.artifacts();
         let artifact_count = catalog.artifacts().len();
         let conversion_count = catalog.conversions().len();
         let pdf_artifacts = catalog
@@ -149,11 +150,14 @@ impl DesktopService {
                 })
             })
             .collect();
-        let projection = ArtifactGraphProjector.project(&catalog, ProjectionLens::Source)?;
+        let projection = ArtifactGraphProjector.project(catalog, ProjectionLens::Source)?;
         let graph = IncidenceGraph::project(&projection);
         let source_projection =
-            SourceGraphProjector.project(&store.source_map_snapshot()?, ProjectionLens::Source)?;
+            SourceGraphProjector.project(landscape.sources(), ProjectionLens::Source)?;
         let source_graph = IncidenceGraph::project(&source_projection);
+        let landscape_projection =
+            LandscapeProjector.project(LandscapeProjectionInput::from_snapshot(&landscape))?;
+        let landscape_graph = IncidenceGraph::project(&landscape_projection);
 
         Ok(DesktopSnapshot {
             workspace_id,
@@ -164,6 +168,7 @@ impl DesktopService {
             pdf_artifacts,
             graph,
             source_graph,
+            landscape_graph,
         })
     }
 
@@ -450,6 +455,7 @@ pub struct DesktopSnapshot {
     pdf_artifacts: Vec<PdfArtifactSummary>,
     graph: IncidenceGraph,
     source_graph: IncidenceGraph,
+    landscape_graph: IncidenceGraph,
 }
 
 impl DesktopSnapshot {
@@ -479,6 +485,10 @@ impl DesktopSnapshot {
 
     pub fn source_graph(&self) -> &IncidenceGraph {
         &self.source_graph
+    }
+
+    pub fn landscape_graph(&self) -> &IncidenceGraph {
+        &self.landscape_graph
     }
 }
 

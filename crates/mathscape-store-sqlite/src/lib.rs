@@ -38,7 +38,9 @@ const WORKSPACE_SETTINGS_MIGRATION: &str =
     include_str!("../../../migrations/0003_workspace_settings.sql");
 const DISCOVERY_RUNS_MIGRATION: &str = include_str!("../../../migrations/0004_discovery_runs.sql");
 const SOURCE_MAP_MIGRATION: &str = include_str!("../../../migrations/0005_source_map.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 5;
+const DISCOVERY_RUNS_V2_MIGRATION: &str =
+    include_str!("../../../migrations/0006_discovery_runs_v2.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 6;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -56,6 +58,11 @@ pub enum SqliteStoreError {
     UnsupportedSchemaVersion { actual: i64, supported: i64 },
     #[error("SQLite schema metadata is inconsistent: {0}")]
     InvalidSchema(&'static str),
+    #[error("SQLite schema is missing required {object_kind} {name}")]
+    MissingSchemaObject {
+        object_kind: &'static str,
+        name: &'static str,
+    },
     #[error("artifact invariant failed: {0}")]
     ArtifactInvariant(&'static str),
     #[error("expected a ConversionRun relation")]
@@ -142,6 +149,23 @@ pub struct StoredLlmProfile {
     is_default: bool,
 }
 
+/// Transactionally consistent input for cross-view landscape projection.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LandscapeSnapshot {
+    artifacts: ArtifactCatalogSnapshot,
+    sources: SourceMapSnapshot,
+}
+
+impl LandscapeSnapshot {
+    pub fn artifacts(&self) -> &ArtifactCatalogSnapshot {
+        &self.artifacts
+    }
+
+    pub fn sources(&self) -> &SourceMapSnapshot {
+        &self.sources
+    }
+}
+
 impl StoredLlmProfile {
     pub fn profile(&self) -> &LlmProfile {
         &self.profile
@@ -205,7 +229,12 @@ impl SqliteArtifactStore {
                 connection.execute_batch(SOURCE_MAP_MIGRATION)?;
                 validate_schema(&connection)?;
             }
-            5 => validate_schema(&connection)?,
+            5 => {
+                validate_schema(&connection)?;
+            }
+            6 => {
+                validate_schema(&connection)?;
+            }
             actual => {
                 return Err(SqliteStoreError::UnsupportedSchemaVersion {
                     actual,
@@ -213,6 +242,7 @@ impl SqliteArtifactStore {
                 });
             }
         }
+        reconcile_schema_v6(&connection)?;
         Ok(Self { connection })
     }
 
@@ -455,6 +485,16 @@ impl SqliteArtifactStore {
 
     pub fn source_map_snapshot(&self) -> Result<SourceMapSnapshot, SqliteStoreError> {
         source_map::source_map_snapshot(&self.connection)
+    }
+
+    pub fn landscape_snapshot(&self) -> Result<LandscapeSnapshot, SqliteStoreError> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let snapshot = LandscapeSnapshot {
+            artifacts: read::catalog_snapshot_from(&transaction)?,
+            sources: source_map::source_map_snapshot(&transaction)?,
+        };
+        transaction.commit()?;
+        Ok(snapshot)
     }
 
     pub fn register_check(
@@ -882,6 +922,384 @@ fn validate_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
         ));
     }
     Ok(())
+}
+
+fn validate_discovery_schema_v2(connection: &Connection) -> Result<(), SqliteStoreError> {
+    let name = connection
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 6",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if name.as_deref() != Some("discovery_runs_v2") {
+        return Err(SqliteStoreError::InvalidSchema(
+            "migration 6 is absent or has an unexpected name",
+        ));
+    }
+    if !table_has_column(connection, "discovery_runs", "result_fingerprint")? {
+        return Err(SqliteStoreError::MissingSchemaObject {
+            object_kind: "column",
+            name: "discovery_runs.result_fingerprint",
+        });
+    }
+    validate_required_schema_objects(connection)?;
+    Ok(())
+}
+
+fn reconcile_schema_v6(connection: &Connection) -> Result<(), SqliteStoreError> {
+    let transaction = connection.unchecked_transaction()?;
+    if !table_has_column(&transaction, "discovery_runs", "result_fingerprint")? {
+        transaction
+            .execute_batch("ALTER TABLE discovery_runs ADD COLUMN result_fingerprint TEXT;")?;
+    }
+    transaction.execute_batch(DISCOVERY_RUNS_V2_MIGRATION)?;
+    let migration_name = transaction
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 6",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    match migration_name.as_deref() {
+        None => {
+            transaction.execute(
+                "INSERT INTO schema_migrations (version, name) VALUES (6, 'discovery_runs_v2')",
+                [],
+            )?;
+        }
+        Some("discovery_runs_v2") => {}
+        Some(_) => {
+            return Err(SqliteStoreError::InvalidSchema(
+                "migration 6 has an unexpected name",
+            ));
+        }
+    }
+    transaction.pragma_update(None, "user_version", SUPPORTED_SCHEMA_VERSION)?;
+    validate_discovery_schema_v2(&transaction)?;
+    transaction.commit()?;
+    validate_discovery_schema_v2(connection)
+}
+
+const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
+    ("schema_migrations", &["version", "name"]),
+    (
+        "artifacts",
+        &[
+            "artifact_id",
+            "content_hash",
+            "byte_size",
+            "current_revision",
+        ],
+    ),
+    (
+        "artifact_revisions",
+        &[
+            "artifact_id",
+            "revision_id",
+            "edition_id",
+            "media_type",
+            "original_filename",
+            "page_count",
+            "rights_status",
+            "permitted_uses",
+            "rights_note",
+            "schema_version",
+            "lifecycle",
+            "created_at",
+            "created_by",
+            "generation_run",
+        ],
+    ),
+    (
+        "artifact_locations",
+        &[
+            "location_id",
+            "artifact_id",
+            "storage_kind",
+            "uri",
+            "priority",
+            "role",
+            "last_verified_at",
+            "current_status",
+        ],
+    ),
+    (
+        "artifact_checks",
+        &[
+            "check_id",
+            "location_id",
+            "checked_at",
+            "observed_hash",
+            "observed_size",
+            "result",
+            "checker_version",
+        ],
+    ),
+    (
+        "conversion_runs",
+        &[
+            "run_id",
+            "revision_id",
+            "schema_version",
+            "lifecycle",
+            "created_at",
+            "created_by",
+            "generation_run",
+            "tool_name",
+            "tool_version",
+            "command_template",
+            "command_record_status",
+            "page_start",
+            "page_end",
+            "page_index_base",
+            "output_format",
+            "redo_inline_math",
+            "additional_options",
+            "environment",
+            "started_at",
+            "finished_at",
+            "exit_status",
+            "warnings",
+            "cost",
+        ],
+    ),
+    (
+        "conversion_endpoints",
+        &["run_id", "revision_id", "role", "ordinal", "artifact_id"],
+    ),
+    (
+        "llm_profiles",
+        &["profile_id", "profile_json", "is_default", "updated_at"],
+    ),
+    (
+        "workspace_settings",
+        &["singleton_id", "settings_json", "updated_at"],
+    ),
+    (
+        "discovery_runs",
+        &[
+            "run_id",
+            "artifact_id",
+            "conversion_id",
+            "pipeline_version",
+            "input_fingerprint",
+            "selection_fingerprint",
+            "unit_set_fingerprint",
+            "result_fingerprint",
+            "status",
+            "admission",
+            "profile_id",
+            "snapshot_json",
+            "created_at",
+            "updated_at",
+        ],
+    ),
+    (
+        "discovery_attempts",
+        &[
+            "run_id",
+            "ordinal",
+            "stage",
+            "batch_fingerprint",
+            "repair",
+            "status",
+            "request_json",
+            "raw_text",
+            "run_json",
+            "error",
+        ],
+    ),
+    (
+        "discovery_validation_reports",
+        &["run_id", "report_ordinal", "report_json"],
+    ),
+    (
+        "discovery_diagnostics",
+        &[
+            "run_id",
+            "report_ordinal",
+            "diagnostic_ordinal",
+            "code",
+            "path",
+            "message",
+            "checked",
+        ],
+    ),
+    (
+        "discovery_units",
+        &[
+            "run_id",
+            "unit_ref",
+            "parent_ref",
+            "unit_kind",
+            "completeness",
+            "unit_set_fingerprint",
+            "payload_json",
+        ],
+    ),
+    (
+        "discovery_fact_tasks",
+        &[
+            "run_id",
+            "task_ref",
+            "owner_unit_ref",
+            "processed",
+            "requires_unit_revision",
+            "payload_json",
+        ],
+    ),
+    (
+        "discovery_pending_tasks",
+        &["run_id", "task_ref", "owner_unit_ref"],
+    ),
+    (
+        "discovery_acceptance_decisions",
+        &[
+            "decision_id",
+            "run_id",
+            "actor",
+            "decided_at",
+            "authority",
+            "expected_result_fingerprint",
+            "selection_json",
+            "plan_fingerprint",
+            "plan_json",
+            "created_at",
+        ],
+    ),
+    (
+        "map_objects",
+        &[
+            "object_id",
+            "object_shape",
+            "entity_kind",
+            "current_revision",
+        ],
+    ),
+    (
+        "map_object_revisions",
+        &[
+            "object_id",
+            "revision_id",
+            "schema_version",
+            "lifecycle",
+            "created_at",
+            "created_by",
+            "generation_run",
+            "payload_json",
+        ],
+    ),
+    (
+        "map_relation_endpoints",
+        &[
+            "relation_id",
+            "revision_id",
+            "role",
+            "ordinal_key",
+            "ordinal",
+            "entity_id",
+        ],
+    ),
+    (
+        "map_commits",
+        &[
+            "commit_id",
+            "author",
+            "generation_run",
+            "message",
+            "committed_at",
+        ],
+    ),
+    (
+        "map_commit_objects",
+        &[
+            "commit_id",
+            "ordinal",
+            "object_id",
+            "revision_id",
+            "outcome",
+        ],
+    ),
+    (
+        "source_registration_commits",
+        &[
+            "decision_id",
+            "plan_fingerprint",
+            "commit_id",
+            "receipt_json",
+            "committed_at",
+        ],
+    ),
+];
+
+const REQUIRED_INDEXES: &[&str] = &[
+    "artifact_locations_by_artifact",
+    "artifact_checks_by_location",
+    "llm_profiles_one_default",
+    "discovery_runs_by_source",
+    "discovery_acceptance_by_run",
+    "map_objects_by_kind",
+    "map_relation_endpoints_by_entity",
+];
+
+fn validate_required_schema_objects(connection: &Connection) -> Result<(), SqliteStoreError> {
+    for &(table, columns) in REQUIRED_TABLE_COLUMNS {
+        if !schema_object_exists(connection, "table", table)? {
+            return Err(SqliteStoreError::MissingSchemaObject {
+                object_kind: "table",
+                name: table,
+            });
+        }
+        for &column in columns {
+            if !table_has_column(connection, table, column)? {
+                return Err(SqliteStoreError::MissingSchemaObject {
+                    object_kind: "column",
+                    name: column,
+                });
+            }
+        }
+    }
+    for &index in REQUIRED_INDEXES {
+        if !schema_object_exists(connection, "index", index)? {
+            return Err(SqliteStoreError::MissingSchemaObject {
+                object_kind: "index",
+                name: index,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn schema_object_exists(
+    connection: &Connection,
+    object_kind: &str,
+    name: &str,
+) -> Result<bool, SqliteStoreError> {
+    connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2",
+            params![object_kind, name],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|row| row.is_some())
+        .map_err(SqliteStoreError::from)
+}
+
+fn table_has_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, SqliteStoreError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn validate_discovery_schema(connection: &Connection) -> Result<(), SqliteStoreError> {

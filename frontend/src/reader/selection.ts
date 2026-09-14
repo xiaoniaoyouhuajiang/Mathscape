@@ -754,6 +754,7 @@ export class MarkdownSelection {
         feedback.textContent = `${outcome.already_registered ? "已存在相同来源提交" : "审核并注册完成"}：${outcome.unit_count} 个单元、${outcome.span_count} 个来源范围、${outcome.relation_count} 条关系已原子写入来源图；新建 ${outcome.created_object_count}、复用 ${outcome.reused_object_count}${outcome.partial ? "；这是部分发现结果" : ""}。`;
         this.discoveryFeedback = `内容发现结果已注册：${outcome.unit_count} 个来源单元已写入正式来源图。`;
         section.classList.add("is-accepted");
+        window.dispatchEvent(new Event("mathscape:source-map-changed"));
       } catch (error) {
         feedback.textContent = "接受失败：" + String(error);
       } finally {

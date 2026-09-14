@@ -5,9 +5,11 @@ use mathscape_graph::{
     GraphProjection, GraphProjectionError, IncidenceDirection, ProjectionEndpoint, ProjectionGroup,
     ProjectionGroupId, ProjectionLens, ProjectionNode, ProjectionRelation, ViewLayer,
 };
-use mathscape_store_sqlite::{SourceMapSnapshot, StoredMapObject};
-use thiserror::Error;
+use mathscape_store_sqlite::{
+    ArtifactCatalogSnapshot, LandscapeSnapshot, SourceMapSnapshot, StoredMapObject,
+};
 use sha2::Digest;
+use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SourceGraphProjector;
@@ -19,6 +21,37 @@ impl SourceGraphProjector {
         lens: ProjectionLens,
     ) -> Result<GraphProjection, SourceGraphProjectionError> {
         project_source_map(snapshot, lens)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct LandscapeProjectionInput<'a> {
+    catalog: &'a ArtifactCatalogSnapshot,
+    source_map: &'a SourceMapSnapshot,
+}
+
+impl<'a> LandscapeProjectionInput<'a> {
+    pub fn new(catalog: &'a ArtifactCatalogSnapshot, source_map: &'a SourceMapSnapshot) -> Self {
+        Self {
+            catalog,
+            source_map,
+        }
+    }
+
+    pub fn from_snapshot(snapshot: &'a LandscapeSnapshot) -> Self {
+        Self::new(snapshot.artifacts(), snapshot.sources())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LandscapeProjector;
+
+impl LandscapeProjector {
+    pub fn project(
+        &self,
+        input: LandscapeProjectionInput<'_>,
+    ) -> Result<GraphProjection, SourceGraphProjectionError> {
+        project_landscape(input)
     }
 }
 
@@ -53,7 +86,7 @@ pub fn project_source_map(
     let group_id = ProjectionGroupId::parse("source-map")?;
     let group = ProjectionGroup::new(group_id.clone(), "来源图", ViewLayer::Source, None)?;
     let mut nodes = Vec::new();
-    for object in source_units.into_iter().chain(source_spans) {
+    for object in source_units.into_iter().chain(source_spans.iter().copied()) {
         let (label, summary, boundary) = object_label(object);
         let mut node = ProjectionNode::new(
             object.stable_id.clone(),
@@ -85,7 +118,9 @@ pub fn project_source_map(
         .filter(|object| object.kind == EntityKind::SourceSemanticUnit)
     {
         let payload = object_payload(unit);
-        let Some(spans) = payload.get("source_spans").and_then(serde_json::Value::as_array)
+        let Some(spans) = payload
+            .get("source_spans")
+            .and_then(serde_json::Value::as_array)
         else {
             continue;
         };
@@ -121,7 +156,8 @@ pub fn project_source_map(
                         ),
                     ],
                 )?
-                .summary("来源单元的 source_spans 字段")?,
+                .summary("来源单元的 source_spans 字段")?
+                .group(group_id.clone()),
             );
         }
     }
@@ -163,10 +199,138 @@ pub fn project_source_map(
                 projected,
             )?
             .summary(summary)?
+            .group(group_id.clone())
             .lifecycle(object.lifecycle),
         );
     }
-    GraphProjection::new(lens, vec![group], nodes, relations).map_err(Into::into)
+    let groups = if nodes.is_empty() {
+        vec![]
+    } else {
+        vec![group]
+    };
+    GraphProjection::new(lens, groups, nodes, relations).map_err(Into::into)
+}
+
+/// Builds the current cross-view landscape. The two canonical projections
+/// remain separately queryable; this view only combines their renderer-neutral
+/// nodes and relations so provenance can be followed in one neighborhood.
+pub fn project_landscape(
+    input: LandscapeProjectionInput<'_>,
+) -> Result<GraphProjection, SourceGraphProjectionError> {
+    let material =
+        super::artifact_graph::project_artifact_catalog(input.catalog, ProjectionLens::Source)
+            .map_err(|error| SourceGraphProjectionError::Material(error.to_string()))?;
+    let source = project_source_map(input.source_map, ProjectionLens::Source)?;
+    let mut groups = material.groups().to_vec();
+    groups.extend(source.groups().iter().map(|group| {
+        // Avoid a group identity collision while preserving the layer boundary.
+        ProjectionGroup::new(
+            ProjectionGroupId::parse("source-map-landscape").expect("valid group ID"),
+            group.label(),
+            group.layer(),
+            None,
+        )
+        .expect("valid projection group")
+    }));
+    let source_group = ProjectionGroupId::parse("source-map-landscape")?;
+    let mut nodes = material.nodes().to_vec();
+    nodes.extend(source.nodes().iter().map(|node| {
+        // ProjectionNode's group is private, so rebuild only the stable public
+        // display fields through the existing constructor.
+        let mut rebuilt = ProjectionNode::new(
+            node.entity_id().clone(),
+            node.kind(),
+            node.layer(),
+            node.label(),
+        )
+        .expect("source node is already validated")
+        .group(source_group.clone())
+        .boundary(node.is_boundary());
+        if let Some(summary) = node.summary_ref() {
+            rebuilt = rebuilt.summary(summary).expect("summary is already valid");
+        }
+        if let Some(lifecycle) = node.lifecycle_status() {
+            rebuilt = rebuilt.lifecycle(lifecycle);
+        }
+        rebuilt
+    }));
+    let mut relations = material.relations().to_vec();
+    relations.extend(source.relations().iter().map(|relation| {
+        let endpoints = relation.endpoints().to_vec();
+        let mut rebuilt = ProjectionRelation::new(
+            relation.relation_id().clone(),
+            relation.kind(),
+            relation.layer(),
+            relation.label(),
+            endpoints,
+        )
+        .expect("source relation is already validated")
+        .group(source_group.clone());
+        if let Some(summary) = relation.summary_ref() {
+            rebuilt = rebuilt.summary(summary).expect("summary is already valid");
+        }
+        if let Some(lifecycle) = relation.lifecycle_status() {
+            rebuilt = rebuilt.lifecycle(lifecycle);
+        }
+        rebuilt
+    }));
+    let material_ids = material
+        .nodes()
+        .iter()
+        .map(|node| node.entity_id().clone())
+        .collect::<BTreeSet<_>>();
+    let source_ids = source
+        .nodes()
+        .iter()
+        .map(|node| node.entity_id().clone())
+        .collect::<BTreeSet<_>>();
+    for object in input
+        .source_map
+        .objects
+        .iter()
+        .filter(|object| object.kind == EntityKind::SourceSpan && !object.relation)
+    {
+        let payload = object_payload(object);
+        let Some(markdown) = payload
+            .get("markdown")
+            .and_then(|value| value.get("artifact"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| StableId::parse(value).ok())
+        else {
+            continue;
+        };
+        if !material_ids.contains(&markdown) || !source_ids.contains(&object.stable_id) {
+            return Err(SourceGraphProjectionError::UnknownEndpoint {
+                relation: object.stable_id.clone(),
+                entity: markdown,
+            });
+        }
+        let relation_id = synthetic_relation_id("located-in", &object.stable_id, &markdown);
+        relations.push(
+            ProjectionRelation::new(
+                relation_id,
+                EntityKind::Evidence,
+                ViewLayer::Source,
+                "来源于 Markdown",
+                vec![
+                    ProjectionEndpoint::new(
+                        object.stable_id.clone(),
+                        mathscape_domain::EndpointRole::parse("span")?,
+                        None,
+                        IncidenceDirection::IntoRelation,
+                    ),
+                    ProjectionEndpoint::new(
+                        markdown,
+                        mathscape_domain::EndpointRole::parse("artifact")?,
+                        None,
+                        IncidenceDirection::OutOfRelation,
+                    ),
+                ],
+            )?
+            .summary("SourceSpan Markdown 定位")?,
+        );
+    }
+    GraphProjection::new(ProjectionLens::Landscape, groups, nodes, relations).map_err(Into::into)
 }
 
 fn direction(role: &str) -> IncidenceDirection {
@@ -217,10 +381,8 @@ fn object_payload(object: &StoredMapObject) -> &serde_json::Value {
 
 fn synthetic_relation_id(prefix: &str, source: &StableId, target: &StableId) -> StableId {
     let digest = sha2::Sha256::digest(format!("{prefix}:{source}:{target}").as_bytes());
-    StableId::parse(format!(
-        "mathscape:projection-relation/{prefix}/{digest:x}"
-    ))
-    .expect("synthetic projection relation IDs are valid")
+    StableId::parse(format!("mathscape:projection-relation/{prefix}/{digest:x}"))
+        .expect("synthetic projection relation IDs are valid")
 }
 
 #[cfg(test)]
@@ -254,7 +416,7 @@ mod tests {
                     revision_id: RevisionId::parse(format!("sha256:{}", "2".repeat(64))).unwrap(),
                     kind: EntityKind::SourceSemanticUnit,
                     relation: false,
-                    payload: json!({"payload":{"display_title":"命题"}}),
+                    payload: json!({"payload":{"display_title":"命题", "source_spans":[span.to_string()]}}),
                     lifecycle: mathscape_domain::LifecycleStatus::Active,
                 },
                 StoredMapObject {
@@ -284,8 +446,19 @@ mod tests {
         };
         let projection = project_source_map(&snapshot, ProjectionLens::Source).unwrap();
         assert_eq!(projection.nodes().len(), 2);
-        assert_eq!(projection.relations().len(), 1);
-        assert_eq!(projection.relations()[0].endpoints().len(), 2);
+        assert_eq!(projection.relations().len(), 2);
+        assert!(
+            projection
+                .relations()
+                .iter()
+                .any(|relation| relation.label() == "包含原文范围")
+        );
+        assert!(
+            projection
+                .relations()
+                .iter()
+                .any(|relation| relation.label() == "证明")
+        );
     }
 }
 
@@ -311,6 +484,8 @@ fn relation_label(payload: &serde_json::Value) -> String {
 pub enum SourceGraphProjectionError {
     #[error("source map cannot be projected through the {0:?} lens")]
     UnsupportedLens(ProjectionLens),
+    #[error("material graph projection failed: {0}")]
+    Material(String),
     #[error("source relation {0} has no current endpoints")]
     MissingEndpoints(StableId),
     #[error("source relation {relation} points to unknown object {entity}")]

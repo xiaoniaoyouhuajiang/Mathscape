@@ -49,12 +49,17 @@ pub(super) fn catalog_snapshot(
     connection: &Connection,
 ) -> Result<ArtifactCatalogSnapshot, SqliteStoreError> {
     let transaction = connection.unchecked_transaction()?;
-    let artifacts = read_artifacts(&transaction)?;
-    let conversions = read_conversions(&transaction)?;
+    let snapshot = catalog_snapshot_from(&transaction)?;
     transaction.commit()?;
+    Ok(snapshot)
+}
+
+pub(super) fn catalog_snapshot_from(
+    connection: &Connection,
+) -> Result<ArtifactCatalogSnapshot, SqliteStoreError> {
     Ok(ArtifactCatalogSnapshot {
-        artifacts,
-        conversions,
+        artifacts: read_artifacts(connection)?,
+        conversions: read_conversions(connection)?,
     })
 }
 

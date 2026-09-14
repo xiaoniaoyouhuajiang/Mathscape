@@ -495,6 +495,19 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
         2
     );
     drop(store);
+    let projected = service.snapshot().unwrap();
+    assert_eq!(projected.graph().nodes().len(), 1);
+    assert!(projected.source_graph().nodes().len() > 2);
+    assert!(projected.landscape_graph().nodes().len() > projected.source_graph().nodes().len());
+    assert!(projected.landscape_graph().nodes().iter().any(|node| {
+        node.domain_kind() == Some(mathscape_domain::EntityKind::Evidence)
+            && node.label() == "来源于 Markdown"
+    }));
+    let reopened = DesktopService::open(&workspace).unwrap();
+    assert_eq!(
+        reopened.snapshot().unwrap().landscape_graph().nodes().len(),
+        projected.landscape_graph().nodes().len()
+    );
 
     let cancelled = {
         let service = service.clone();
