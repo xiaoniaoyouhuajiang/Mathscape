@@ -417,6 +417,13 @@ code {
   font-weight: 400;
 }
 
+.source-preview { max-height: 220px; overflow: auto; padding: 10px; border: 1px solid #294047; border-radius: 6px; color: #d3e2e1; background: #0d171d; white-space: pre-wrap; font: 11px/1.55 ui-monospace, monospace; }
+.detail-error { color: #df958d; font-size: 12px; }
+.graph-evidence-toggle { display: inline-flex; align-items: center; gap: 5px; color: #bdd6cf; font-size: 11px; }
+.graph-evidence-toggle input { accent-color: #d7aa58; }
+.source-preview { max-height: 260px; overflow: auto; padding: 10px; border: 1px solid #294047; border-radius: 6px; color: #25303c; background: #f7f8fa; }
+.source-preview p:first-child { margin-top: 0; }
+
 .technical-details {
   margin-top: 14px;
   color: #8593a1;

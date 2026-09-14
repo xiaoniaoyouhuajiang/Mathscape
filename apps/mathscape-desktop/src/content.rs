@@ -10,6 +10,7 @@ use mathscape_orchestrator::{
 };
 use mathscape_store_sqlite::SqliteArtifactStore;
 use serde::Serialize;
+use serde_json::Value;
 use tauri::State;
 
 use crate::{DesktopService, DesktopState};
@@ -29,7 +30,120 @@ pub struct ArtifactContentInfo {
     contexts: Vec<ContentContext>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct SourceNodeDetail {
+    pub node_id: String,
+    pub kind: String,
+    pub display_title: Option<String>,
+    pub unit_kind: Option<String>,
+    pub parent: Option<String>,
+    pub artifact_id: Option<String>,
+    pub byte_range: Option<ByteRangeView>,
+    pub excerpt: Option<String>,
+    pub markdown_block_ids: Vec<String>,
+    pub payload: Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ByteRangeView {
+    pub start: u64,
+    pub end: u64,
+}
+
 impl DesktopService {
+    pub fn source_node_detail(&self, node_id: &str) -> Result<SourceNodeDetail, String> {
+        let id = StableId::parse(node_id).map_err(|e| e.to_string())?;
+        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
+            .map_err(|e| e.to_string())?;
+        let snapshot = store.source_map_snapshot().map_err(|e| e.to_string())?;
+        let object = snapshot
+            .objects
+            .iter()
+            .find(|object| object.stable_id == id)
+            .ok_or("来源节点不存在")?;
+        if !matches!(
+            object.kind,
+            mathscape_domain::EntityKind::SourceSpan
+                | mathscape_domain::EntityKind::SourceSemanticUnit
+        ) {
+            return Err("该节点不是来源节点".into());
+        }
+        let payload = object.payload.clone();
+        let body = payload.get("payload").unwrap_or(&payload);
+        // Semantic units point to spans; use the first span as the readable
+        // preview and keep the complete span list in the payload for detail UI.
+        let span_body = if object.kind == mathscape_domain::EntityKind::SourceSemanticUnit {
+            body.get("source_spans")
+                .and_then(Value::as_array)
+                .and_then(|spans| spans.first())
+                .and_then(Value::as_str)
+                .and_then(|span_id| StableId::parse(span_id).ok())
+                .and_then(|span_id| {
+                    snapshot
+                        .objects
+                        .iter()
+                        .find(|candidate| candidate.stable_id == span_id)
+                })
+                .map(|span| span.payload.get("payload").unwrap_or(&span.payload))
+        } else {
+            None
+        };
+        let locator = span_body.unwrap_or(body);
+        let artifact_id = locator
+            .pointer("/markdown/artifact")
+            .and_then(Value::as_str)
+            .or_else(|| body.get("surface_content_artifact").and_then(Value::as_str));
+        let range = locator.pointer("/markdown/byte_range").and_then(|value| {
+            Some(ByteRangeView {
+                start: value.get("start")?.as_u64()?,
+                end: value.get("end")?.as_u64()?,
+            })
+        });
+        let excerpt = match (artifact_id, &range) {
+            (Some(artifact), Some(range)) if range.end >= range.start => {
+                let artifact_id = StableId::parse(artifact).map_err(|e| e.to_string())?;
+                let bytes = ArtifactPool::open(&self.workspace_root)
+                    .map_err(|e| e.to_string())?
+                    .read_bytes(
+                        &artifact_id,
+                        range.start,
+                        (range.end - range.start).min(64 * 1024) as u32,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Some(String::from_utf8(bytes).map_err(|_| "来源文本不是有效 UTF-8")?)
+            }
+            _ => None,
+        };
+        let block_ids = locator
+            .get("marker_block_ids")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(SourceNodeDetail {
+            node_id: id.to_string(),
+            kind: format!("{:?}", object.kind),
+            display_title: body
+                .get("display_title")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            unit_kind: body.get("kind").and_then(Value::as_str).map(str::to_owned),
+            parent: body
+                .get("parent_unit")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            artifact_id: artifact_id.map(str::to_owned),
+            byte_range: range,
+            excerpt,
+            markdown_block_ids: block_ids,
+            payload,
+        })
+    }
     pub fn content_info(&self, artifact_id: &str) -> Result<ArtifactContentInfo, String> {
         let id = StableId::parse(artifact_id).map_err(|e| e.to_string())?;
         let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
@@ -242,6 +356,17 @@ pub async fn get_artifact_content_info(
 ) -> Result<ArtifactContentInfo, String> {
     let service = state.service.clone();
     tauri::async_runtime::spawn_blocking(move || service.content_info(&artifact_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_source_node_detail(
+    state: State<'_, DesktopState>,
+    node_id: String,
+) -> Result<SourceNodeDetail, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.source_node_detail(&node_id))
         .await
         .map_err(|e| e.to_string())?
 }

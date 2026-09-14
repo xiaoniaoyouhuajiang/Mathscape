@@ -59,6 +59,14 @@ pub fn project_source_map(
     snapshot: &SourceMapSnapshot,
     lens: ProjectionLens,
 ) -> Result<GraphProjection, SourceGraphProjectionError> {
+    project_source_map_internal(snapshot, lens, false)
+}
+
+fn project_source_map_internal(
+    snapshot: &SourceMapSnapshot,
+    lens: ProjectionLens,
+    include_evidence: bool,
+) -> Result<GraphProjection, SourceGraphProjectionError> {
     if lens != ProjectionLens::Source {
         return Err(SourceGraphProjectionError::UnsupportedLens(lens));
     }
@@ -78,15 +86,23 @@ pub fn project_source_map(
         .values()
         .filter(|object| object.kind == EntityKind::SourceSemanticUnit)
         .collect::<Vec<_>>();
-    let source_spans = objects
-        .values()
-        .filter(|object| object.kind == EntityKind::SourceSpan)
-        .collect::<Vec<_>>();
 
     let group_id = ProjectionGroupId::parse("source-map")?;
     let group = ProjectionGroup::new(group_id.clone(), "来源图", ViewLayer::Source, None)?;
     let mut nodes = Vec::new();
-    for object in source_units.into_iter().chain(source_spans.iter().copied()) {
+    let source_spans = objects
+        .values()
+        .filter(|object| object.kind == EntityKind::SourceSpan)
+        .collect::<Vec<_>>();
+    let render_objects = if include_evidence {
+        source_units
+            .into_iter()
+            .chain(source_spans.iter().copied())
+            .collect::<Vec<_>>()
+    } else {
+        source_units.into_iter().collect::<Vec<_>>()
+    };
+    for object in render_objects {
         let (label, summary, boundary) = object_label(object);
         let mut node = ProjectionNode::new(
             object.stable_id.clone(),
@@ -106,59 +122,55 @@ pub fn project_source_map(
         .map(|node| node.entity_id().clone())
         .collect::<BTreeSet<_>>();
     let mut relations = Vec::new();
-    // `source_spans` is a canonical containment field on SourceSemanticUnit.
-    // Project it as an explicit structural edge so a span is never rendered
-    // as an unrelated neighbour of the unit that owns it.
-    let span_ids = source_spans
-        .iter()
-        .map(|object| object.stable_id.clone())
-        .collect::<BTreeSet<_>>();
-    for unit in objects
-        .values()
-        .filter(|object| object.kind == EntityKind::SourceSemanticUnit)
-    {
-        let payload = object_payload(unit);
-        let Some(spans) = payload
-            .get("source_spans")
-            .and_then(serde_json::Value::as_array)
-        else {
-            continue;
-        };
-        for (ordinal, span) in spans.iter().enumerate() {
-            let Some(span) = span.as_str().and_then(|value| StableId::parse(value).ok()) else {
+    if include_evidence {
+        let span_ids = source_spans
+            .iter()
+            .map(|object| object.stable_id.clone())
+            .collect::<BTreeSet<_>>();
+        for unit in objects
+            .values()
+            .filter(|object| object.kind == EntityKind::SourceSemanticUnit)
+        {
+            let payload = object_payload(unit);
+            let Some(spans) = payload
+                .get("source_spans")
+                .and_then(serde_json::Value::as_array)
+            else {
                 continue;
             };
-            if !span_ids.contains(&span) {
-                return Err(SourceGraphProjectionError::UnknownEndpoint {
-                    relation: unit.stable_id.clone(),
-                    entity: span,
-                });
+            for (ordinal, span) in spans.iter().enumerate() {
+                let Some(span) = span.as_str().and_then(|value| StableId::parse(value).ok()) else {
+                    continue;
+                };
+                if !span_ids.contains(&span) {
+                    continue;
+                }
+                let relation_id = synthetic_relation_id("contains-span", &unit.stable_id, &span);
+                relations.push(
+                    ProjectionRelation::new(
+                        relation_id,
+                        EntityKind::SourceUnitRelation,
+                        ViewLayer::Source,
+                        "对应原文",
+                        vec![
+                            ProjectionEndpoint::new(
+                                unit.stable_id.clone(),
+                                mathscape_domain::EndpointRole::parse("unit")?,
+                                None,
+                                IncidenceDirection::IntoRelation,
+                            ),
+                            ProjectionEndpoint::new(
+                                span,
+                                mathscape_domain::EndpointRole::parse("span")?,
+                                Some(u32::try_from(ordinal).unwrap_or(u32::MAX)),
+                                IncidenceDirection::OutOfRelation,
+                            ),
+                        ],
+                    )?
+                    .summary("来源单元对应的原文范围")?
+                    .group(group_id.clone()),
+                );
             }
-            let relation_id = synthetic_relation_id("contains-span", &unit.stable_id, &span);
-            relations.push(
-                ProjectionRelation::new(
-                    relation_id,
-                    EntityKind::SourceUnitRelation,
-                    ViewLayer::Source,
-                    "包含原文范围",
-                    vec![
-                        ProjectionEndpoint::new(
-                            unit.stable_id.clone(),
-                            mathscape_domain::EndpointRole::parse("unit")?,
-                            None,
-                            IncidenceDirection::IntoRelation,
-                        ),
-                        ProjectionEndpoint::new(
-                            span,
-                            mathscape_domain::EndpointRole::parse("span")?,
-                            Some(u32::try_from(ordinal).unwrap_or(u32::MAX)),
-                            IncidenceDirection::OutOfRelation,
-                        ),
-                    ],
-                )?
-                .summary("来源单元的 source_spans 字段")?
-                .group(group_id.clone()),
-            );
         }
     }
     for object in objects
@@ -171,6 +183,14 @@ pub fn project_source_map(
             .ok_or_else(|| {
                 SourceGraphProjectionError::MissingEndpoints(object.stable_id.clone())
             })?;
+        // Relations whose endpoints are only evidence spans belong to the
+        // explicit evidence projection, not the semantic-unit source map.
+        if endpoints
+            .iter()
+            .any(|endpoint| !node_ids.contains(&endpoint.entity_id))
+        {
+            continue;
+        }
         let projected = endpoints
             .iter()
             .map(|endpoint| {
@@ -220,7 +240,7 @@ pub fn project_landscape(
     let material =
         super::artifact_graph::project_artifact_catalog(input.catalog, ProjectionLens::Source)
             .map_err(|error| SourceGraphProjectionError::Material(error.to_string()))?;
-    let source = project_source_map(input.source_map, ProjectionLens::Source)?;
+    let source = project_source_map_internal(input.source_map, ProjectionLens::Source, true)?;
     let mut groups = material.groups().to_vec();
     groups.extend(source.groups().iter().map(|group| {
         // Avoid a group identity collision while preserving the layer boundary.
@@ -397,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn projects_source_units_spans_and_relations_as_an_incidence_graph() {
+    fn projects_source_units_and_semantic_relations_as_an_incidence_graph() {
         let span = id("mathscape:source-span/a");
         let unit = id("mathscape:source-unit/a");
         let relation = id("mathscape:source-relation/a");
@@ -439,20 +459,14 @@ mod tests {
                     StoredMapEndpoint {
                         role: "target".into(),
                         ordinal: None,
-                        entity_id: span.clone(),
+                        entity_id: unit.clone(),
                     },
                 ],
             )]),
         };
         let projection = project_source_map(&snapshot, ProjectionLens::Source).unwrap();
-        assert_eq!(projection.nodes().len(), 2);
-        assert_eq!(projection.relations().len(), 2);
-        assert!(
-            projection
-                .relations()
-                .iter()
-                .any(|relation| relation.label() == "包含原文范围")
-        );
+        assert_eq!(projection.nodes().len(), 1);
+        assert_eq!(projection.relations().len(), 1);
         assert!(
             projection
                 .relations()

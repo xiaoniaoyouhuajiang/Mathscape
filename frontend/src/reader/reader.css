@@ -81,3 +81,4 @@
 .source-block.is-selected-block { background: #e1f0e9; border-left-color: #268065; }
 .source-block.is-discovery-anchor-block { background: #fff2bd; border-left-color: #d69b23; box-shadow: inset 0 0 0 1px #e4bf61; }
 .source-block.is-current-block, .source-block:focus-visible { outline: 2px solid #567ebb; outline-offset: -2px; }
+.source-block-focus { outline: 2px solid #d7aa58; outline-offset: 4px; background: rgba(215, 170, 88, 0.12); }

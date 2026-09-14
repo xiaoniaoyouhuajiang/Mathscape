@@ -5,6 +5,8 @@ import { mountCytoscapeGraph } from "./graph/cytoscape";
 import type { IncidenceGraph, IncidenceNode } from "./graph/projection";
 import "./styles.css";
 import { ArtifactReader } from "./reader/reader";
+import { sourceNodeDetail } from "./reader/content";
+import { markdownRenderer } from "./reader/markdown";
 import { LlmSettingsController } from "./llm/settings";
 import { mountDiscoveryTask } from "./discovery-task";
 
@@ -162,8 +164,9 @@ app.innerHTML = `
             <button id="show-material-map" class="reader-tab graph-view-button" type="button" aria-pressed="true">材料图</button>
             <button id="show-source-map" class="reader-tab graph-view-button" type="button" aria-pressed="false">来源图</button>
             <button id="show-landscape-map" class="reader-tab graph-view-button" type="button" aria-pressed="false">景观图</button>
-            <span><i class="legend-dot entity"></i><span id="graph-entity-legend">Artifact</span></span>
-            <span><i class="legend-dot relation"></i><span id="graph-relation-legend">Conversion</span></span>
+            <label id="evidence-toggle-wrap" class="graph-evidence-toggle" hidden><input id="show-landscape-evidence" type="checkbox"> 显示证据</label>
+            <span><i class="legend-dot entity"></i><span id="graph-entity-legend">来源材料</span></span>
+            <span><i class="legend-dot relation"></i><span id="graph-relation-legend">转换任务</span></span>
           </div>
         </div>
         <div id="graph" class="graph-canvas"></div>
@@ -245,6 +248,8 @@ requiredElement<HTMLButtonElement>("#show-source-map").onclick = () => {
 requiredElement<HTMLButtonElement>("#show-landscape-map").onclick = () => {
   selectGraphLens("landscape");
 };
+const evidenceToggle = requiredElement<HTMLInputElement>("#show-landscape-evidence");
+evidenceToggle.onchange = () => renderCurrentGraph();
 const showMap = () => {
   reader.close();
   readerHost.hidden = true;
@@ -383,13 +388,13 @@ function renderCurrentGraph(snapshot = currentSnapshot): void {
   showMap();
   graphCore?.destroy();
   const visibleGraph = selectedLens === "landscape"
-    ? snapshot.landscape_graph
+    ? landscapeGraphForDisplay(snapshot.landscape_graph, evidenceToggle.checked)
     : selectedLens === "source"
       ? snapshot.source_graph
       : snapshot.graph;
   const labels = { material: "材料图", source: "来源图", landscape: "景观图" } as const;
   const legends = {
-    material: ["Artifact", "Conversion"],
+    material: ["来源材料", "转换任务"],
     source: ["来源单元 / 范围", "来源关系"],
     landscape: ["跨层对象", "关系 / 追溯"],
   } as const;
@@ -406,6 +411,7 @@ function renderCurrentGraph(snapshot = currentSnapshot): void {
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   });
+  requiredElement<HTMLElement>("#evidence-toggle-wrap").hidden = selectedLens !== "landscape";
   graphCore = mountCytoscapeGraph(graphContainer, visibleGraph);
   emptyState.classList.toggle("is-hidden", visibleGraph.nodes.length > 0);
   graphCore.on("tap", "node", (event) => {
@@ -445,15 +451,16 @@ function renderNodeDetail(
 ): void {
   nodeDetail.classList.remove("empty-detail");
   nodeDetail.replaceChildren(
-    textElement("span", "kind-pill", node.element_kind),
+    textElement("span", "kind-pill", displayElementKind(node.domain_kind, node.element_kind)),
     textElement("h3", "detail-title", node.label),
     definitionList([
-      ["类型", node.domain_kind ?? "—"],
-      ["层级", node.layer],
+      ["类型", displayDomainKind(node.domain_kind)],
+      ["层级", displayLayer(node.layer)],
       ["生命周期", node.lifecycle ?? "—"],
       ["摘要", node.summary ?? "—"],
     ]),
   );
+  if (node.domain_id !== null && (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceSpan")) void renderSourceDetail(node, nodeDetail);
   const technical = document.createElement("details");
   technical.className = "technical-details";
   technical.append(textElement("summary", "", "技术详情"));
@@ -477,6 +484,23 @@ function renderNodeDetail(
   if (pdf !== undefined) {
     nodeDetail.append(createParseForm(pdf, marker));
   }
+}
+
+const domainLabels: Record<string, string> = { SourceArtifact: "来源材料", ConversionRun: "转换任务", SourceSpan: "原文范围", SourceSemanticUnit: "内容单元", SourceUnitRelation: "来源关系" };
+function displayDomainKind(kind: string | null): string { return kind === null ? "—" : domainLabels[kind] ?? kind; }
+function displayElementKind(kind: string | null, element: string): string { return element === "relation" ? "关系" : element === "group" ? "视图分组" : displayDomainKind(kind); }
+function displayLayer(layer: string): string { return ({ source: "来源层", local_semantic: "局部语义层", global_semantic: "全局语义层", alignment: "对齐层", rdtx: "RDTX 层", formalization: "形式化层" } as Record<string, string>)[layer] ?? layer; }
+async function renderSourceDetail(node: IncidenceNode, host: HTMLElement): Promise<void> {
+  try { const detail = await sourceNodeDetail(node.domain_id!); if (detail.excerpt) { const preview = document.createElement("div"); preview.className = "source-preview markdown-body"; preview.innerHTML = markdownRenderer().render(detail.excerpt); host.append(preview); } if (detail.artifact_id) { const button = textElement("button", "parse-button", "打开并定位原文"); button.type = "button"; button.onclick = () => { readerHost.hidden = false; void reader.open(detail.artifact_id!, detail.display_title ?? node.label, detail.byte_range ? { ...detail.byte_range, blockIds: detail.markdown_block_ids } : undefined); }; host.append(button); } }
+  catch (error) { host.append(textElement("p", "detail-error", `来源详情读取失败：${error instanceof Error ? error.message : String(error)}`)); }
+}
+
+function landscapeGraphForDisplay(graph: IncidenceGraph, showEvidence: boolean): IncidenceGraph {
+  if (showEvidence) return graph;
+  const hidden = new Set(graph.nodes.filter(node => node.domain_kind === "SourceSpan").map(node => node.id));
+  const nodes = graph.nodes.filter(node => !hidden.has(node.id));
+  const nodeIds = new Set(nodes.map(node => node.id));
+  return { ...graph, nodes, edges: graph.edges.filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target)) };
 }
 
 function createParseForm(

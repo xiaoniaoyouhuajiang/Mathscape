@@ -3,7 +3,7 @@ mod discovery;
 mod discovery_view;
 mod llm_settings;
 mod workspace_settings;
-pub use content::{ArtifactContentInfo, ContentContext};
+pub use content::{ArtifactContentInfo, ContentContext, SourceNodeDetail};
 pub use discovery::{
     AcceptDiscoveryRequest, ActiveDiscoveryPhase, ActiveDiscoveryTask, DesktopDiscoveryAcceptance,
     DesktopDiscoveryError, DesktopDiscoveryOutcome, DesktopDiscoveryProgress, DesktopDiscoveryRun,
@@ -769,6 +769,7 @@ pub fn run() {
             content::resolve_markdown_selection,
             content::prepare_discovery_input,
             content::get_artifact_content_info,
+            content::get_source_node_detail,
             content::read_artifact_bytes,
             llm_settings::get_llm_settings,
             llm_settings::set_default_llm_profile,

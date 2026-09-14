@@ -32,7 +32,7 @@ export class ArtifactReader {
     this.host.replaceChildren();
   }
 
-  async open(id: string, title: string): Promise<void> {
+  async open(id: string, title: string, focus?: { start: number; end: number; blockIds?: string[] }): Promise<void> {
     this.close();
     const generation = this.generation;
     const heading = element("h2", title);
@@ -44,7 +44,7 @@ export class ArtifactReader {
       if (info.media_type === "application/pdf") {
         await this.pdf(info, generation);
       } else if (info.media_type === "text/markdown") {
-        await this.markdown(info, generation);
+        await this.markdown(info, generation, focus);
       } else if (info.media_type === "application/json" || info.media_type.startsWith("text/")) {
         const bytes = await readSmallFile(info);
         if (generation !== this.generation) return;
@@ -167,7 +167,7 @@ export class ArtifactReader {
     if (items) add(items, outline);
   }
 
-  private async markdown(info: ContentInfo, generation: number): Promise<void> {
+  private async markdown(info: ContentInfo, generation: number, focus?: { start: number; end: number; blockIds?: string[] }): Promise<void> {
     let document = await markdownDocument(info.artifact_id, info.contexts[0]?.conversion_id ?? null);
     if (generation !== this.generation) return;
     const controls = element("div"); controls.className = "reader-controls";
@@ -198,6 +198,7 @@ export class ArtifactReader {
         const wrapper = element("div");
         wrapper.className = "source-block";
         wrapper.dataset.sourceBlock = block.id;
+        if (focus?.blockIds?.includes(block.id)) wrapper.classList.add("source-block-focus");
         wrapper.tabIndex = 0;
         wrapper.setAttribute("aria-label", `原文块 ${i + 1}`);
         wrapper.title = `第 ${i + 1} 块 · ${block.kind} · UTF-8 [${block.range.start}, ${block.range.end})`;
@@ -206,6 +207,7 @@ export class ArtifactReader {
         if (!wrapper.innerHTML.trim()) wrapper.append(element("pre", text));
         article.append(wrapper);
       });
+      if (focus) (article.querySelector<HTMLElement>(".source-block-focus") as HTMLElement | null)?.scrollIntoView({ behavior: "smooth", block: "center" });
       selection.refresh();
       article.querySelectorAll("a").forEach(link => {
         link.removeAttribute("href");
