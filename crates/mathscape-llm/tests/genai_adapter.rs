@@ -74,6 +74,20 @@ fn profile(server: &MockServer) -> LlmProfile {
     }
 }
 
+fn deepseek_profile(server: &MockServer) -> LlmProfile {
+    LlmProfile {
+        display_name: None,
+        version: LLM_PROFILE_VERSION.to_string(),
+        id: "deepseek-test".to_string(),
+        provider: "deepseek".to_string(),
+        wire_protocol: WireProtocol::OpenAiChatCompletions,
+        model: "deepseek-v4-pro".to_string(),
+        endpoint: Some(Url::parse(&format!("{}/", server.uri())).unwrap()),
+        credential: Some(CredentialRef::new("relay-test-key").unwrap()),
+        capabilities: LlmCapabilities::default(),
+    }
+}
+
 fn credentials() -> Arc<MemoryCredentialResolver> {
     let resolver = Arc::new(MemoryCredentialResolver::default());
     resolver
@@ -147,6 +161,49 @@ async fn custom_openai_compatible_endpoint_receives_structured_request() {
         wire_schema["$defs"]["BooleanAnswer"]["description"],
         "Reusable boolean answer"
     );
+}
+
+#[tokio::test]
+async fn deepseek_chat_completions_downgrades_json_schema_to_json_mode() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(header("authorization", "Bearer fixture-secret"))
+        .and(body_partial_json(json!({
+            "model": "deepseek-v4-pro",
+            "response_format": {"type": "json_object"}
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "deepseek-fixture",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "{\"ok\":true}"},
+                "finish_reason": "stop"
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let backend = GenaiBackend::new(
+        deepseek_profile(&server),
+        credentials(),
+        GenaiBackendOptions {
+            timeout: Duration::from_secs(5),
+            connect_timeout: Duration::from_secs(2),
+        },
+    )
+    .unwrap();
+    let response = backend.execute(request()).await.unwrap();
+
+    assert_eq!(response.text().as_deref(), Some(r#"{"ok":true}"#));
+    let received = server.received_requests().await.unwrap();
+    let body: serde_json::Value = received[0].body_json().unwrap();
+    assert_eq!(body["response_format"], json!({"type": "json_object"}));
+    assert!(body["response_format"].get("json_schema").is_none());
 }
 
 #[tokio::test]

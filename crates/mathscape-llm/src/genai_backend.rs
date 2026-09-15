@@ -108,7 +108,7 @@ impl GenaiBackend {
         check_declared_capabilities(&self.profile, &request)?;
 
         let chat_request = to_genai_request(&request)?;
-        let options = to_genai_options(&request, self.profile.wire_protocol);
+        let options = to_genai_options(&request, &self.profile);
         let started = Instant::now();
         let response = self
             .client
@@ -129,7 +129,7 @@ impl GenaiBackend {
         }
 
         let chat_request = to_genai_request(&request)?;
-        let options = to_genai_options(&request, self.profile.wire_protocol)
+        let options = to_genai_options(&request, &self.profile)
             .with_capture_content(true)
             .with_capture_reasoning_content(true)
             .with_capture_tool_calls(true)
@@ -350,7 +350,7 @@ fn to_genai_message(message: &LlmMessage) -> Result<ChatMessage, LlmError> {
     })
 }
 
-fn to_genai_options(request: &LlmRequest, wire_protocol: WireProtocol) -> ChatOptions {
+fn to_genai_options(request: &LlmRequest, profile: &LlmProfile) -> ChatOptions {
     let LlmGenerationOptions {
         temperature,
         top_p,
@@ -395,14 +395,28 @@ fn to_genai_options(request: &LlmRequest, wire_protocol: WireProtocol) -> ChatOp
             description,
             schema,
         } => {
-            let schema = lower_strict_schema_for_wire_protocol(schema, wire_protocol);
-            let mut spec = JsonSpec::new(name.clone(), schema);
-            if let Some(description) = description {
-                spec = spec.with_description(description.clone());
+            // DeepSeek's Chat Completions endpoint currently supports JSON
+            // mode (`json_object`), but rejects OpenAI's structured-output
+            // (`json_schema`) request shape.  The canonical schema remains
+            // in the prompt and is still enforced by the local deserializer
+            // and deterministic validators, so this is a transport-level
+            // compatibility downgrade only.
+            if json_schema_requires_json_mode_fallback(profile) {
+                options.with_response_format(ChatResponseFormat::JsonMode)
+            } else {
+                let schema = lower_strict_schema_for_wire_protocol(schema, profile.wire_protocol);
+                let mut spec = JsonSpec::new(name.clone(), schema);
+                if let Some(description) = description {
+                    spec = spec.with_description(description.clone());
+                }
+                options.with_response_format(spec)
             }
-            options.with_response_format(spec)
         }
     }
+}
+
+fn json_schema_requires_json_mode_fallback(profile: &LlmProfile) -> bool {
+    profile.provider == "deepseek" && profile.wire_protocol == WireProtocol::OpenAiChatCompletions
 }
 
 /// Lowers the canonical schema to the portable subset accepted by strict
