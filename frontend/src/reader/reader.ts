@@ -1,4 +1,5 @@
-import { getDocument, GlobalWorkerOptions, PDFDataRangeTransport, type PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { ArtifactPdfTransport } from "./pdf-transport";
 import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import { contentInfo, readRange, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
 import { markdownRenderer } from "./markdown";
@@ -78,28 +79,45 @@ export class ArtifactReader {
     const initial = await readRange(info.artifact_id, 0, Math.min(65536, info.byte_size));
     if (generation !== this.generation) return;
     const failure = element("p");
-    const transport = new PDFDataRangeTransport(info.byte_size, initial, true);
+    let firstFailure: Error | undefined;
+    let rejectRead!: (error: Error) => void;
+    const readFailure = new Promise<never>((_, reject) => { rejectRead = reject; });
+    // Failures can also occur after loading.promise has resolved.
+    void readFailure.catch(() => {});
+    const transport = new ArtifactPdfTransport(info.byte_size, initial,
+      (begin, length) => readRange(info.artifact_id, begin, length),
+      error => {
+        if (generation !== this.generation || firstFailure) return;
+        firstFailure = error;
+        failure.textContent = error.message;
+        console.error("PDF range read failed", { artifactId: info.artifact_id, error });
+        rejectRead(error);
+        dispose();
+      });
     const loading = getDocument({
       range: transport, disableAutoFetch: true, disableStream: true,
       cMapUrl: "/pdf-assets/cmaps/", cMapPacked: true,
       standardFontDataUrl: "/pdf-assets/standard_fonts/",
       wasmUrl: "/pdf-assets/wasm/",
     });
-    let aborted = false;
-    this.disposeDocument = () => { aborted = true; void loading.destroy(); };
-    transport.requestDataRange = (begin, end) => {
-      void readRange(info.artifact_id, begin, end - begin).then(bytes => {
-        if (!aborted) transport.onDataRange(begin, bytes);
-      }).catch(error => {
-        if (!aborted) {
-          failure.textContent = "PDF 读取失败：" + String(error);
-          void loading.destroy();
-        }
-      });
+    let destroyed = false;
+    const dispose = () => {
+      transport.abort();
+      if (destroyed) return;
+      destroyed = true;
+      void loading.destroy().catch(error => console.warn("PDF cleanup failed", error));
     };
+    this.disposeDocument = dispose;
     this.host.append(failure);
-    const pdf = await loading.promise;
-    if (generation !== this.generation) return;
+    let pdf: PDFDocumentProxy;
+    try {
+      pdf = await Promise.race([loading.promise, readFailure]);
+    } catch (error) {
+      dispose();
+      if (!firstFailure) throw error;
+      return; // The detailed first read failure is already displayed.
+    }
+    if (generation !== this.generation || transport.stopped) return;
     const controls = element("div");
     controls.className = "reader-controls";
     const previous = element("button", "上一页");
@@ -122,6 +140,7 @@ export class ArtifactReader {
     const oldDispose = this.disposeDocument;
     this.disposeDocument = () => { renderVersion++; renderTask?.cancel(); oldDispose?.(); };
     const show = async (number: number): Promise<void> => {
+      if (transport.stopped) return;
       if (!Number.isInteger(number) || number < 1 || number > pdf.numPages) { pageInput.value = String(pageNumber); return; }
       pageNumber = number; pageInput.value = String(number);
       previous.disabled = number === 1; next.disabled = number === pdf.numPages;
@@ -129,7 +148,7 @@ export class ArtifactReader {
       renderTask?.cancel();
       try {
         const page = await pdf.getPage(number);
-        if (generation !== this.generation || version !== renderVersion) return;
+        if (transport.stopped || generation !== this.generation || version !== renderVersion) return;
         const view = page.getViewport({ scale: Number(zoom.value) });
         const canvas = element("canvas");
         const ratio = window.devicePixelRatio || 1;
@@ -139,7 +158,7 @@ export class ArtifactReader {
         renderTask = page.render({ canvas, viewport: view, transform: [ratio, 0, 0, ratio, 0, 0] });
         await renderTask.promise;
       } catch (error) {
-        if (version === renderVersion && generation === this.generation) failure.textContent = String(error);
+        if (!firstFailure && !transport.stopped && version === renderVersion && generation === this.generation) failure.textContent = String(error);
       }
     };
     previous.onclick = () => void show(pageNumber - 1);
@@ -147,7 +166,11 @@ export class ArtifactReader {
     pageInput.onchange = () => void show(pageInput.valueAsNumber);
     zoom.onchange = () => void show(pageNumber);
     await show(1);
-    const items = await pdf.getOutline();
+    if (transport.stopped) return;
+    const items = await pdf.getOutline().catch(error => {
+      if (firstFailure || transport.stopped) return null;
+      throw error;
+    });
     if (generation !== this.generation) return;
     if (!items?.length) outline.append(element("p", "此 PDF 没有内置书签目录，可输入页码跳转。"));
     const add = (entries: NonNullable<typeof items>, parent: HTMLElement): void => {
@@ -159,7 +182,7 @@ export class ArtifactReader {
           if (!destination) return;
           const index = typeof destination[0] === "number" ? destination[0] : await pdf.getPageIndex(destination[0]);
           if (generation === this.generation) await show(index + 1);
-        })().catch(error => { if (generation === this.generation) failure.textContent = String(error); });
+        })().catch(error => { if (!firstFailure && !transport.stopped && generation === this.generation) failure.textContent = String(error); });
         parent.append(button);
         if (item.items.length) { const child = element("div"); parent.append(child); add(item.items, child); }
       }

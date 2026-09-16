@@ -1,5 +1,6 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { ArtifactReader } from "../src/reader/reader";
+import { ArtifactPdfTransport } from "../src/reader/pdf-transport";
 import { markdownRenderer } from "../src/reader/markdown";
 import { resolveProductPath, readRange, type ContentInfo } from "../src/reader/content";
 import type { AnchoredMarkdown, SelectionRequest } from "../src/reader/selection";
@@ -62,7 +63,7 @@ const reads: { id: string; offset: number; length: number }[] = [];
 const selectionRequests: SelectionRequest[] = [];
 const discoveryRequests: SelectionRequest[] = [];
 const acceptanceRequests: unknown[] = [];
-const behavior = { selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed" };
+const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed" };
 // Predetermined IPC double, not a second implementation of backend segmentation.
 function anchored(conversion: string): AnchoredMarkdown {
   const starts = ["# Math reader", "Inline $", "$$\n", "\\[\n", "![Diagram]", "<script>", "~~~tex"].map(marker => markdown.indexOf(marker));
@@ -188,6 +189,7 @@ mockIPC((command, payload) => {
   } satisfies ContentInfo;
   if (command === "read_artifact_bytes") {
     reads.push({ id: args.artifactId, offset: args.offset, length: args.length });
+    if (behavior.pdfRangeFailure && args.artifactId === "pdf" && args.offset > 0) throw new Error("test original IPC failure");
     return file.bytes.slice(args.offset, args.offset + args.length).buffer;
   }
   throw new Error("Unexpected IPC: " + command);
@@ -195,5 +197,5 @@ mockIPC((command, payload) => {
 
 const reader = new ArtifactReader(document.querySelector<HTMLElement>("#reader")!);
 Object.assign(window, {
-  harness: { reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, behavior, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, behavior, render: (source: string) => markdownRenderer().render(source) },
 });

@@ -100,17 +100,14 @@ impl DesktopService {
     ) -> Result<Self, DesktopServiceError> {
         let requested = workspace_root.as_ref();
         let pool = if requested.join("workspace.toml").exists() {
-            ArtifactPool::open(requested)?
+            ArtifactPool::prepare(requested)?
         } else {
             ArtifactPool::create(requested)?
         };
         let workspace_root = pool.workspace().path().to_owned();
         drop(pool);
-        // Apply migrations before independent frontend commands can race to
-        // initialize the same new Workspace database.
-        drop(SqliteArtifactStore::open(
-            &workspace_root.join("mathscape.sqlite3"),
-        )?);
+        // Pool creation/preparation has completed all schema maintenance before
+        // independent frontend commands can connect to this workspace.
         Ok(Self {
             workspace_root,
             marker,

@@ -7,6 +7,61 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => "harness" in window);
 });
 
+test("PDF transport ignores late reads after abort or first failure", async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const Transport = (window as any).harness.ArtifactPdfTransport;
+    const failures: string[] = [], delivered: number[] = [];
+    const pending: { resolve: (bytes: Uint8Array) => void; reject: (error: Error) => void }[] = [];
+    const read = () => new Promise<Uint8Array>((resolve, reject) => pending.push({ resolve, reject }));
+    const t = new Transport(100, new Uint8Array(), read, (e: Error) => failures.push(e.message));
+    t.onDataRange = (begin: number) => delivered.push(begin);
+    t.requestDataRange(0, 10);
+    t.requestDataRange(10, 20);
+    pending[0].reject(new Error("original IPC error"));
+    await Promise.resolve();
+    pending[1].resolve(new Uint8Array(10));
+    await Promise.resolve();
+    t.requestDataRange(20, 30);
+    const aborted = new Transport(100, new Uint8Array(), read, (e: Error) => failures.push(e.message));
+    aborted.onDataRange = (begin: number) => delivered.push(begin);
+    aborted.requestDataRange(30, 40);
+    aborted.abort();
+    pending[2].resolve(new Uint8Array(10));
+    await Promise.resolve();
+    const broken = new Transport(100, new Uint8Array(), read, (e: Error) => failures.push(e.message));
+    broken.onDataRange = () => { throw new Error("missing range reader"); };
+    broken.requestDataRange(40, 50);
+    pending[3].resolve(new Uint8Array(10));
+    await Promise.resolve();
+    return { failures, delivered, reads: pending.length };
+  });
+  expect(result.delivered).toEqual([]);
+  expect(result.reads).toBe(4);
+  expect(result.failures).toHaveLength(2);
+  expect(result.failures[0]).toContain("读取字节，字节 [0, 10)");
+  expect(result.failures[0]).toContain("original IPC error");
+  expect(result.failures[1]).toContain("投递 PDF.js，字节 [40, 50)");
+});
+
+test("PDF IPC failure settles opening, preserves first error, and allows reopening", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.evaluate(async () => {
+    const h = (window as any).harness;
+    h.behavior.pdfRangeFailure = true;
+    await h.reader.open("pdf", "Failure test");
+  });
+  await expect(page.locator("#reader")).toContainText("test original IPC failure");
+  await expect(page.locator("#reader")).not.toContainText("正在读取");
+  await page.evaluate(async () => {
+    const h = (window as any).harness;
+    h.behavior.pdfRangeFailure = false;
+    await h.reader.open("pdf", "Retry");
+  });
+  await expect(page.locator("canvas")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("PDF range transport, outline destination, page input and cleanup", async ({ page }) => {
   await page.evaluate(async () => (window as any).harness.reader.open("pdf", "Two pages"));
   await expect(page.locator("canvas")).toBeVisible();

@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "test:reader": "playwright test",
     "tauri:dev": "cd ../apps/mathscape-desktop && ../../frontend/node_modules/.bin/tauri dev",
-    "tauri:dev:local": "cd ../apps/mathscape-desktop && MATHSCAPE_WORKSPACE_ROOT=\"$PWD/../../.mathscape-dev/workspace\" ../../frontend/node_modules/.bin/tauri dev",
+    "tauri:dev:local_1": "cd ../apps/mathscape-desktop && MATHSCAPE_WORKSPACE_ROOT=\"$PWD/../../.mathscape-dev/workspace\" ../../frontend/node_modules/.bin/tauri dev",
+    "tauri:dev:local_2": "cd ../apps/mathscape-desktop && MATHSCAPE_WORKSPACE_ROOT=\"$PWD/../../.mathscape-dev/workspace2\" ../../frontend/node_modules/.bin/tauri dev",
     "tauri:build": "cd ../apps/mathscape-desktop && ../../frontend/node_modules/.bin/tauri build"
   },
   "dependencies": {

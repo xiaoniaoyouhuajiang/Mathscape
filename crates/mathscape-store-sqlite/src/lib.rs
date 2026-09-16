@@ -181,7 +181,26 @@ pub struct SqliteArtifactStore {
 }
 
 impl SqliteArtifactStore {
+    /// Connect to an existing, prepared catalog. Never creates, migrates or repairs it.
     pub fn open(path: &Path) -> Result<Self, SqliteStoreError> {
+        let connection = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        Self::configure_connection(&connection)?;
+        let actual: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if actual != SUPPORTED_SCHEMA_VERSION {
+            return Err(SqliteStoreError::UnsupportedSchemaVersion {
+                actual,
+                supported: SUPPORTED_SCHEMA_VERSION,
+            });
+        }
+        Ok(Self { connection })
+    }
+
+    /// Prepare a workspace catalog before accepting business requests.
+    /// May create, migrate and reconcile historical schemas; fully validates the result.
+    pub fn prepare(path: &Path) -> Result<Self, SqliteStoreError> {
         Self::initialize(Connection::open(path)?)
     }
 
@@ -189,10 +208,20 @@ impl SqliteArtifactStore {
         Self::initialize(Connection::open_in_memory()?)
     }
 
-    fn initialize(connection: Connection) -> Result<Self, SqliteStoreError> {
+    fn configure_connection(connection: &Connection) -> Result<(), SqliteStoreError> {
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", true)?;
-        connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
+        Ok(())
+    }
+
+    fn initialize(connection: Connection) -> Result<Self, SqliteStoreError> {
+        Self::configure_connection(&connection)?;
+        let journal_mode: String =
+            connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+        if !journal_mode.eq_ignore_ascii_case("wal") {
+            connection.pragma_update(None, "journal_mode", "WAL")?;
+        }
         let version = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match version {
             0 => {
@@ -948,7 +977,16 @@ fn validate_discovery_schema_v2(connection: &Connection) -> Result<(), SqliteSto
 }
 
 fn reconcile_schema_v6(connection: &Connection) -> Result<(), SqliteStoreError> {
-    let transaction = connection.unchecked_transaction()?;
+    // Opening a healthy catalog is a read operation (including concurrent PDF
+    // range reads). Do not replay DDL/user_version writes on every connection.
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == SUPPORTED_SCHEMA_VERSION && validate_discovery_schema_v2(connection).is_ok() {
+        return Ok(());
+    }
+    // Reconciliation reads before writing. Acquire the writer slot up front;
+    // upgrading a deferred WAL snapshot can fail immediately with BUSY_SNAPSHOT.
+    let transaction =
+        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)?;
     if !table_has_column(&transaction, "discovery_runs", "result_fingerprint")? {
         transaction
             .execute_batch("ALTER TABLE discovery_runs ADD COLUMN result_fingerprint TEXT;")?;

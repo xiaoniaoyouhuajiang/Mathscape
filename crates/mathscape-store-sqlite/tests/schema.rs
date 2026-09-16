@@ -49,10 +49,98 @@ fn cleanup(path: &Path) {
 }
 
 #[test]
+fn ordinary_open_never_creates_or_upgrades_a_catalog() {
+    let directory = test_directory("connect-only");
+    let database = directory.join("catalog.sqlite3");
+    assert!(SqliteArtifactStore::open(&database).is_err());
+    assert!(!database.exists());
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(include_str!("../../../migrations/0001_artifact_pool.sql"))
+        .unwrap();
+    assert!(matches!(
+        SqliteArtifactStore::open(&database),
+        Err(SqliteStoreError::UnsupportedSchemaVersion { actual: 1, .. })
+    ));
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 1);
+    drop(connection);
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
+    assert_eq!(
+        SqliteArtifactStore::open(&database)
+            .unwrap()
+            .artifact_count()
+            .unwrap(),
+        0
+    );
+    cleanup(&directory);
+}
+
+#[test]
+fn ordinary_open_does_not_repair_a_historical_v6_draft() {
+    let directory = test_directory("prepare-only-reconciliation");
+    let database = directory.join("catalog.sqlite3");
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch("DROP INDEX discovery_acceptance_by_run;")
+        .unwrap();
+    drop(SqliteArtifactStore::open(&database).unwrap());
+    let count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'discovery_acceptance_by_run'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
+    let count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'discovery_acceptance_by_run'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+    drop(connection);
+    cleanup(&directory);
+}
+
+#[test]
+fn healthy_catalog_opens_concurrently_while_another_connection_holds_the_writer_lock() {
+    let directory = test_directory("concurrent-read-open");
+    let database = directory.join("catalog.sqlite3");
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
+    let writer = Connection::open(&database).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE;").unwrap();
+    // Model independent PDF range requests. They must not need the writer slot.
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let database = &database;
+                scope.spawn(move || {
+                    let store = SqliteArtifactStore::open(database).unwrap();
+                    assert_eq!(store.artifact_count().unwrap(), 0);
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
+    writer.execute_batch("ROLLBACK;").unwrap();
+    drop(writer);
+    cleanup(&directory);
+}
+
+#[test]
 fn creates_and_reopens_the_versioned_artifact_schema() {
     let directory = test_directory("migration");
     let database = directory.join("catalog.sqlite3");
-    drop(SqliteArtifactStore::open(&database).unwrap());
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
 
     let connection = Connection::open(&database).unwrap();
     let version = connection
@@ -116,7 +204,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
         .any(|name| name == "result_fingerprint");
     assert!(result_fingerprint_column);
     drop(connection);
-    drop(SqliteArtifactStore::open(&database).unwrap());
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
     cleanup(&directory);
 }
 
@@ -129,7 +217,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
     drop(connection);
 
     assert!(matches!(
-        SqliteArtifactStore::open(&database),
+        SqliteArtifactStore::prepare(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
             supported: 6
@@ -148,7 +236,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
         .unwrap();
     drop(connection);
 
-    drop(SqliteArtifactStore::open(&database).unwrap());
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
     let connection = Connection::open(&database).unwrap();
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
@@ -186,7 +274,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
         .unwrap();
     drop(connection);
 
-    drop(SqliteArtifactStore::open(&database).unwrap());
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
     let connection = Connection::open(&database).unwrap();
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
@@ -221,7 +309,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
         .unwrap();
     drop(connection);
 
-    drop(SqliteArtifactStore::open(&database).unwrap());
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
     let connection = Connection::open(&database).unwrap();
     assert_eq!(
         connection
@@ -274,7 +362,7 @@ fn repairs_a_v5_discovery_schema_missing_result_fingerprint() {
         .unwrap();
     drop(connection);
 
-    drop(SqliteArtifactStore::open(&database).unwrap());
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
     let connection = Connection::open(&database).unwrap();
     assert_eq!(
         connection
@@ -325,7 +413,7 @@ struct FixtureSettings {
 fn persists_and_replaces_a_versioned_workspace_settings_document() {
     let directory = test_directory("workspace-settings");
     let database = directory.join("catalog.sqlite3");
-    let mut store = SqliteArtifactStore::open(&database).unwrap();
+    let mut store = SqliteArtifactStore::prepare(&database).unwrap();
     assert_eq!(store.workspace_settings::<FixtureSettings>().unwrap(), None);
 
     let mut settings = FixtureSettings {
@@ -337,7 +425,7 @@ fn persists_and_replaces_a_versioned_workspace_settings_document() {
     store.save_workspace_settings(&settings).unwrap();
     drop(store);
 
-    let store = SqliteArtifactStore::open(&database).unwrap();
+    let store = SqliteArtifactStore::prepare(&database).unwrap();
     assert_eq!(
         store.workspace_settings::<FixtureSettings>().unwrap(),
         Some(settings)
@@ -356,7 +444,7 @@ fn persists_and_replaces_a_versioned_workspace_settings_document() {
 fn persists_versioned_llm_profiles_without_secret_material() {
     let directory = test_directory("llm-profile");
     let database = directory.join("catalog.sqlite3");
-    let mut store = SqliteArtifactStore::open(&database).unwrap();
+    let mut store = SqliteArtifactStore::prepare(&database).unwrap();
     let profile = LlmProfile {
         display_name: None,
         version: LLM_PROFILE_VERSION.to_string(),
@@ -375,7 +463,7 @@ fn persists_versioned_llm_profiles_without_secret_material() {
     assert!(stored.is_default());
     drop(store);
 
-    let store = SqliteArtifactStore::open(&database).unwrap();
+    let store = SqliteArtifactStore::prepare(&database).unwrap();
     let reopened = store.default_llm_profile().unwrap().unwrap();
     assert_eq!(reopened.profile(), &profile);
     let bytes = fs::read(&database).unwrap();
@@ -460,13 +548,13 @@ fn discovery_checkpoint(run_id: StableId, artifact_id: StableId) -> DiscoveryRun
 fn atomically_persists_and_replaces_discovery_checkpoints() {
     let directory = test_directory("discovery-checkpoint");
     let database = directory.join("catalog.sqlite3");
-    drop(SqliteArtifactStore::open(&database).unwrap());
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
     let artifact_id = StableId::parse("mathscape:artifact/discovery-fixture").unwrap();
     insert_fixture_artifact(&database, &artifact_id, &hash('a'));
 
     let run_id = StableId::parse("mathscape:discovery-run/fixture").unwrap();
     let mut checkpoint = discovery_checkpoint(run_id.clone(), artifact_id);
-    let mut store = SqliteArtifactStore::open(&database).unwrap();
+    let mut store = SqliteArtifactStore::prepare(&database).unwrap();
     store.save_discovery_checkpoint(&checkpoint).unwrap();
     assert_eq!(store.discovery_run_count().unwrap(), 1);
     let stored = store.discovery_checkpoint(&run_id).unwrap().unwrap();
@@ -486,11 +574,11 @@ fn atomically_persists_and_replaces_discovery_checkpoints() {
 fn persists_an_immutable_acceptance_decision_and_registration_plan() {
     let directory = test_directory("acceptance-plan");
     let database = directory.join("catalog.sqlite3");
-    drop(SqliteArtifactStore::open(&database).unwrap());
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
     let artifact_id = StableId::parse("mathscape:artifact/acceptance-fixture").unwrap();
     insert_fixture_artifact(&database, &artifact_id, &hash('b'));
     let run_id = StableId::parse("mathscape:discovery-run/acceptance-fixture").unwrap();
-    let mut store = SqliteArtifactStore::open(&database).unwrap();
+    let mut store = SqliteArtifactStore::prepare(&database).unwrap();
     store
         .save_discovery_checkpoint(&discovery_checkpoint(run_id.clone(), artifact_id))
         .unwrap();

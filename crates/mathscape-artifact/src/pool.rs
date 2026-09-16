@@ -177,10 +177,18 @@ pub struct ArtifactPool {
 impl ArtifactPool {
     pub fn create(path: impl AsRef<Path>) -> Result<Self, ArtifactPoolError> {
         let workspace = WorkspaceRoot::create(path)?;
-        let catalog = SqliteArtifactStore::open(&workspace.database_path())?;
+        let catalog = SqliteArtifactStore::prepare(&workspace.database_path())?;
         Ok(Self { workspace, catalog })
     }
 
+    /// Prepare an existing workspace before serving concurrent application requests.
+    pub fn prepare(path: impl AsRef<Path>) -> Result<Self, ArtifactPoolError> {
+        let workspace = WorkspaceRoot::open(path)?;
+        let catalog = SqliteArtifactStore::prepare(&workspace.database_path())?;
+        Ok(Self { workspace, catalog })
+    }
+
+    /// Connect to an already prepared workspace without schema maintenance.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ArtifactPoolError> {
         let workspace = WorkspaceRoot::open(path)?;
         let catalog = SqliteArtifactStore::open(&workspace.database_path())?;

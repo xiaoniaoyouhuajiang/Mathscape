@@ -4,6 +4,8 @@
 
 Workspace 包含 `workspace.toml`、`mathscape.sqlite3`、`objects/`、`staging/`、`quarantine/` 和可重建的 `cache/`。SQLite 保存权威元数据和来源对象；对象池保存不可变字节，大型文件不进入 SQLite BLOB。Fixture/导出 JSON 不成为第二套运行时权威来源。
 
+Desktop 启动时通过 `ArtifactPool::create/prepare` 完成数据库迁移、历史兼容修复及完整结构校验，成功后才开放业务请求。运行期 `ArtifactPool::open` / `SqliteArtifactStore::open` 只连接已有数据库、设置连接参数并检查版本，不创建数据库、不执行迁移或完整结构扫描。独立调用方也必须先完成准备；这一区分不表示已支持多个进程同时初始化工作区。
+
 Managed 对象按 SHA-256 寻址，`pool:` URI 相对于显式 Workspace 根解析，不能依赖进程目录、原文件名或历史绝对路径。路径穿越和越界符号链接必须拒绝。普通导入完成后，移动或删除用户原文件不影响材料；原路径仅是导入溯源。
 
 导入先复制到自有 staging、计算摘要、验证并去重，再无覆盖提升到对象池，最后登记 SQLite。文件与数据库不是一个跨系统原子事务：数据库失败可以留下未登记 orphan object，不能留下指向缺失字节的成功记录。重试按内容去重；自动垃圾回收尚未实现。
