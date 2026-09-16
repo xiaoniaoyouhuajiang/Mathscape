@@ -27,7 +27,7 @@ metadata may receive audited revisions. `ArtifactLocation` is deliberately
 stored outside artifact payloads; availability and integrity are derived
 operational state backed by append-only `ArtifactCheck` records.
 `SourceUnitRelation` normalizes its source, target, and evidence spans as
-role-labelled relation endpoints. See `docs/source-layer-v1.md` for the
+role-labelled relation endpoints. See [data rules](../../docs/data-model.md) for the
 canonical-versus-derived boundary.
 
 `SourcePayload` is the first heterogeneous payload family. A later slice will

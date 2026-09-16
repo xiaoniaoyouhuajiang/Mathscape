@@ -15,4 +15,4 @@ The crate currently provides:
 
 The default import path always creates a Managed copy. Reference-only External
 locations, hydration, garbage collection and live Workspace export remain
-deferred. See [`../../docs/artifact-pool-boundary.md`](../../docs/artifact-pool-boundary.md).
+deferred. See [`../../docs/storage-and-integrations.md`](../../docs/storage-and-integrations.md).

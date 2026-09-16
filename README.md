@@ -1,8 +1,8 @@
 # Mathscape
 
-Mathscape（“数学景观”）是一个将数学材料摄取、语义建模、关系发现、图算法与 Lean 形式化验证统一起来的本地优先工具。
+Mathscape（“数学景观”）是面向数学学习者和研究者的本地优先工具，目标是将重要数学材料转成可追溯的超图，在多个视图中组织笔记、理解证明并探索跨领域关联。LLM 提出候选，程序验证与用户审核控制登记。
 
-当前仓库处于 Domain Kernel 的初始搭建阶段。设计依据暂时位于父目录的 `docs/rdtx/`，首个实验数据位于父目录的 `data/fixtures/epsilon-n-cesaro-v1/`；后续会通过显式导入流程将它们转化为 Mathscape workspace，而不是直接产生跨仓库运行时依赖。
+当前已打通 PDF 导入、Marker 转换、阅读选区、LLM 来源发现、审核登记和来源图浏览。数学语义、对齐与 Lean 编排仍未形成端到端实现；Agent 调度是待实验方向。
 
 ## 结构
 
@@ -18,15 +18,20 @@ testdata/   进入版本管理、供默认测试直接使用的轻量固定产�
 
 大型 PDF 与实验语料位于仓库外部，通过 `MATHSCAPE_CORPUS_ROOT` 定位；默认测试不得依赖该变量。`testdata/` 只保存足以复现解析和扫描行为的小型派生产物及其来源摘要。
 
-Artifact Pool 的长期存储、可搬迁 Workspace 和 Managed/External 边界见
-[`docs/artifact-pool-boundary.md`](docs/artifact-pool-boundary.md)。
+新开发者按顺序阅读四份主文档，再沿文中代码入口深入：
+
+1. [架构与当前能力](docs/architecture.md)
+2. [数据模型与不变量](docs/data-model.md)
+3. [存储与集成](docs/storage-and-integrations.md)
+4. [开发与验证](docs/development.md)
+
+历史工程草案已合并，原文可从 Git 历史查阅。版本化 Prompt、Schema 和回归材料继续保留。
 
 ## 当前命令
 
 ```sh
 cargo check --workspace
 cargo test --workspace
-cargo run -p mathscape-cli
 ```
 
 ## Desktop 开发
@@ -51,4 +56,4 @@ MATHSCAPE_MARKER_EXECUTABLE=/absolute/path/to/marker/bin/marker_single \
 ```
 
 应用会使用该环境自己的 Python 探测 `marker-pdf` 版本；当前固定 profiles 支持
-Marker 2.x。选择来源图中的 PDF Artifact 后，可在右栏触发连续页码范围解析。
+Marker 2.x。选择材料图中的 PDF Artifact 后，可在右栏触发连续页码范围解析。

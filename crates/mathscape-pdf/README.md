@@ -39,5 +39,5 @@ let text = engine.extract_positioned_text("book.pdf", &pages, &options)?;
 # Ok::<(), mathscape_pdf::PdfError>(())
 ```
 
-See [`../../docs/pdf-module-boundary.md`](../../docs/pdf-module-boundary.md) for
+See [`../../docs/storage-and-integrations.md`](../../docs/storage-and-integrations.md) for
 the initial boundary and contract design.

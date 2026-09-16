@@ -1,5 +1,7 @@
 # Source Discovery prompt bundle v3
 
+保留的单阶段离线回放与比较路径，非 Desktop 默认流程；当前入口见 [架构](../../../docs/architecture.md)。
+
 本包在 v2 的短句柄与 SelectorIntent v2 之上收紧来源证据精度：来源单元使用带精确
 quote 锚点的复数 `source_labels`，`reference.selector` 在 Schema 层只能是
 `quote_range`，并禁止 reference 自指。旧 v2 包保留为历史契约。

@@ -1,58 +1,62 @@
-# Initial architecture
+# 架构
 
-Mathscape 采用 Rust 单内核、本地优先的桌面架构：
+Mathscape 是面向数学学习者和研究者的本地优先桌面应用。当前实现聚焦材料摄取、来源发现、人工审核与来源图；数学语义解释和跨领域关联是目标，不能把当前来源抽取能力等同于该目标已经实现。
+
+## 模块与依赖
+
+| 模块 | 职责与边界 |
+| --- | --- |
+| `mathscape-domain` | 身份、修订、来源实体、角色化超边、MapPatch 和传输契约；不依赖 UI、数据库或供应商 |
+| `mathscape-store-sqlite` | 目录、发现运行、接受决定、来源对象的持久化、事务与类型化读取 |
+| `mathscape-artifact` | Workspace、不可变受管字节、导入、完整性检查；调用存储层登记目录 |
+| `mathscape-pdf` / `mathscape-tool-marker` | PDF 检查与选区 / 外部转换进程；无地图写入权限 |
+| `mathscape-llm` | 供应商中立调用契约、凭据解析和传输适配；不决定任务或可信性 |
+| `mathscape-orchestrator` | 输入准备、模型任务、确定性验证、修订、来源登记计划和转换产物提升 |
+| `mathscape-query` / `mathscape-graph` | 从权威快照构建只读视图 / 超边展开与运行时索引 |
+| `apps/mathscape-desktop` / `frontend` | Tauri 用例与事件 / 阅读、审核、设置和 Cytoscape 渲染 |
+
+依赖从应用指向上述能力模块，领域层不反向依赖应用。前端通过 Tauri 命令操作，不能直接访问 SQLite 或任意主机文件。实际依赖以各 crate 的 Cargo.toml 为准。
+
+`mathscape-tool-lean`、`mathscape-validation`、`mathscape-fixture` 目前只有模块占位；校验实际位于 domain、orchestrator 和 store 中。CLI 也是 scaffold，尚非完整操作入口。
+
+## 当前主流程
 
 ```text
-embedded frontend
-       |
-application commands and events
-       |
-Rust Domain Kernel ---- Rust orchestration
-       |                       |
-       +-- SQLite store        +-- LLM provider
-       +-- Managed Pool        +-- Marker process
-       +-- graph projections   +-- Lean/Lake process
+本地 PDF → Managed Artifact → PDF 选区 → Marker → Managed Markdown 与派生产物
+                                                     ↓
+Markdown 选区 → 后端重建输入 → A 单元发现 → 确定性验证 → 冻结 UnitSet
+                                                     ↓
+                         任务规划 → B 来源事实发现 → 验证与有界修订
+                                                     ↓
+                            检查点落库 → 审核 → 重验证 → 接受计划 → 来源登记
+                                                     ↓
+                                    材料图 / 来源图 / 景观图
 ```
 
-## 边界原则
+A 识别单元、范围、parent、完整性、issues 和 coverage；不产生标签、引用或内容关系。B 在冻结目录上提取原文标签、标题、引用和明示关系，以任务 disposition 表达处理状态。生成标题与原文标题必须区分。
 
-1. `mathscape-domain` 定义稳定身份、revision、实体、关系和 MapPatch 契约，不依赖 UI、数据库或外部工具。
-2. 所有规范数据写入都必须经过 Kernel 校验和事务提交。
-3. SQLite 是权威持久化存储；图结构是可重建、可缓存的类型化投影。
-4. Marker、Lean 和模型供应商通过适配器接入，不能持有领域写入权限。
-5. Prompt 和响应 schema 是有版本的资源，不作为散落在业务代码中的字符串存在。
-6. 桌面应用和 CLI 复用相同的 Rust crates。
-7. SQLite 保存 Artifact 权威元数据，Managed Artifact Pool 保存不可变字节；普通导入完成后不依赖用户选择的原始路径。
-8. Workspace 内的 Managed URI 相对于显式 Workspace 根目录解析，不能依赖进程当前目录或保存绝对路径，因此 Workspace 关闭后可整体搬迁。
-9. LLM 调用只依赖 `mathscape-llm` 的供应商中立契约；供应商 SDK、鉴权和 wire protocol
-   转换留在适配器内，领域类型和数据库不能依赖它们。
+Planner 分配事实 owner 和可提取范围；每批 B 仍可阅读完整授权选区。严格嵌套的后代拥有自己的内容，父任务不能重复占有。B 不能修改 A；边界问题保留为需修订状态。A 到 B 自动交接，不以人工接受为前置条件。
 
-Artifact Pool 的聚合、目录布局、Managed/External 策略和自包含性契约见
-[`artifact-pool-boundary.md`](artifact-pool-boundary.md)。External 只作为未来显式启用的扩展模式，首版业务入口只接受 Managed 导入。
+工作流限制调用数、批次和总期限；A 最多一次完整单元修订，B 每个原始批次最多一次有界修订。失败任务不能抹去成功兄弟任务。未知 token usage 不能当作零消耗；token 预算是后续调用门槛，不是远端逐 token 硬限额。流式文本仅供观察，完整响应才进入验证。
 
-应用图视图、超边的 incidence graph 展开以及 renderer 边界见
-[`graph-projection-v1.md`](graph-projection-v1.md)。
+当前 Desktop 在工作流返回或取消后保存检查点，未实现每阶段实时落盘、崩溃恢复、历史运行浏览或从磁盘续跑入口。同一内存 workflow 可显式续跑。活动任务锁覆盖 A/B/修订，切换阅读页不释放锁；取消会丢弃在途 future，再保留已有结果。
 
-LLM profile、运行期凭据、单次调用与编排层的边界见
-[`llm-infrastructure-v1.md`](llm-infrastructure-v1.md)。
-Desktop 配置页、SQLite profile 与系统钥匙串的边界见
-[`desktop-llm-settings-v1.md`](desktop-llm-settings-v1.md)。
-来源发现的单次调用、响应拒绝与确定性验证边界见
-[`discovery-producer-v1.md`](discovery-producer-v1.md)。
-Desktop 的 Markdown 选区、活动调用与提案展示见
-[`desktop-discovery-v1.md`](desktop-discovery-v1.md)。
+当前接受入口是人工选择；设置中的 automatic candidate 不等于已经自动登记。已实现部分结果接受与正式来源登记，未实现提案编辑、拒绝意见、自动补上下文和跨文献语义对齐。
 
-内容发现结果如何经接受、来源登记进入图，再按需补充数学语义，见
-[`生成、登记与晋升草案`](discovery-registration-promotion-draft.md)；其中 Domain 修订尚未实施。
-已实现的运行检查点和登记计划边界见
-[`Discovery 持久化与来源登记计划 v1`](discovery-persistence-registration-plan-v1.md)。
+## 视图边界
 
-下一版来源发现按“单元发现 → 固定单元表 → 标签、引用与关系发现”拆分，见
-[`分阶段发现协议草案`](discovery-staged-protocol-draft.md)及
-[`开发任务`](discovery-staged-development-plan.md)。Desktop 默认运行、展示投影与 Markdown
-回链已经接入，见 [`M3 Desktop 实现`](desktop-staged-discovery-m3.md)；DiscoveryProposal v3 保留为离线
-回放与比较路径。
+SQLite 的 Artifact Catalog 与 Source Map 通过同一读事务组成景观快照。来源链可表达 `SourceSemanticUnit → SourceSpan → Markdown ← ConversionRun ← PDF`，转换溯源并不提供精确 PDF 位置。
 
-## 初始里程碑
+`GraphProjection` 保留第一类超边及带角色端点；`IncidenceGraph` 把超边展开为关系节点与连接边。端点方向由 Rust 显式给出，前端不能从角色名称猜测或自行折叠关系。渲染 ID 确定性派生，petgraph 内存索引不能用作持久身份。
 
-导入 `epsilon-n-cesaro-v1` fixture，保存稳定 ID、来源定位和关系语义，通过统一校验，并能查询来源链与 R/D/T/X 邻域。
+分组、边界节点、布局和选择状态属于视图，不改变领域身份。审核投影也是只读 DTO：不包含完整模型请求和原始输出，不授予登记权限。图不是第二套权威数据库。
+
+材料图展示 Artifact 与转换；来源图默认聚焦内容单元与内容关系；景观图联结两者，通过“显示证据”展开 SourceSpan。内容单元详情可预览渲染后的原文并跳到 Markdown 锚点；隐藏证据节点不删除来源记录。
+
+## 代码入口与探索范围
+
+- 调用链：[Desktop discovery](../apps/mathscape-desktop/src/discovery.rs)、[workflow](../crates/mathscape-orchestrator/src/discovery_workflow.rs)、[Planner](../crates/mathscape-orchestrator/src/fact_planner.rs)。
+- 数据到视图：[query](../crates/mathscape-query/src/lib.rs)、[graph](../crates/mathscape-graph/src/lib.rs)、[审核投影](../crates/mathscape-orchestrator/src/source_review.rs)。
+- 版本化任务：[prompts](../prompts/README.md)。单阶段 v3 留作离线回放与比较，非 Desktop 默认路径。
+
+共享数学实体、DialectScope、证明状态、R/D/T/X 构建及 Lean 验证尚未形成端到端应用能力。新的 Agent 架构仍待验证；当前 A/B 流程是实现现状，不是未来数学理解必须遵循的顺序。
