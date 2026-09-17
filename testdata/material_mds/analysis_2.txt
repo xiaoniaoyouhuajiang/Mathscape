@@ -1,0 +1,171 @@
+### 3.3.3 点集
+
+ $\mathbb{R}^n$  的任何子集称为点集. 在最一般的意义上, 任何点集都可看作某种“图形”; 但除了球、超平面等少数很特殊的图形之外, 我们能说些什么呢? 初看起来, 一般的点集似乎没有什么规则性可言, 但 Cantor 等人的开创性工作却给点集理论赋予了丰富的内容. 点集论的核心概念实质上联系着点之间的相互接近; 而这正是描述连续性所必需的. 这就毫不奇怪, 点集概念与近代分析学是密不可分的.
+
+设  $A \subset \mathbb{R}^n$  是给定的点集. 下面给出关于  $A$  的一连串概念, 它们在平常空间中的直观意义是明显的.
+
+**3.3.1 定义** 设  $A \subset \mathbb{R}^n, x \in \mathbb{R}^n$ .
+
+(i) 若存在  $r > 0$ , 使得  $B, (x) \subset A$ , 则称  $x$  为  $A$  的内点, 而称  $A$  为  $x$  的邻域.  $A$  的内点之全体构成一集  $A^\circ$ , 称其为  $A$  的内部. 若  $A = A^\circ (\Leftrightarrow A \subset A^\circ)$ , 即  $A$  中每点为内点), 则称  $A$  为开集.
+
+(ii) 若  $\forall r > 0$ , 有  $A \cap B, (x) \neq \emptyset$ , 则称  $x$  为  $A$  的触点.  $A$  的全体触点构成一集  $\bar{A}$ , 称其为  $A$  的闭包. 若  $A = \bar{A} (\Leftrightarrow \bar{A} \subset A)$ , 即  $A$  含有其所有触点), 则称  $A$  为闭集. 有界闭集称为紧集.
+
+(iii) 若  $\forall r > 0$ , 有  $A \cap B, (x) \neq \emptyset \neq A^\circ \cap B, (x) (\Leftrightarrow x \in \bar{A} \setminus A^\circ)$ , 则称  $x$  为  $A$  的边界点.  $A$  的全体边界点构成一集  $\partial A$ , 称为  $A$  的边界.
+
+(iv) 若  $\forall r > 0, B, (x)$  含  $A$  中异于  $x$  的点 ( $\Leftrightarrow x \in \bar{A} \setminus \{x\}$ ), 则称  $x$  为  $A$  的聚点;  $A$  的全体聚点构成一集  $A'$ , 称其为  $A$  的导集.
+
+考虑到给出以上定义时并未对集  $A$  预设任何条件(甚至未设  $A \neq \emptyset!$ ), 对于内部、闭包、开集等概念是否能得出一些有价值的结论, 似乎是很可疑的. 然而事实上, 在定义 3.3.1 的基础上可展开一个惊人地丰富的理论, 这件事正是 Cantor 当年创立点集论时所作的, 而 Cantor 的继承者则进一步发展成更一般的点集拓扑学, 后者对于现代分析学的基础作用; 乃为世所公认. 当然, 此处并非深入讨论点集论的适当地方: 即使对 3.3.1 所定义的诸概念作一初步讨论, 也很费篇幅, 且在目
+
+前未必能激起你的兴趣. 因此, 此处只提到一些最基本的结论. 首先注意,
+
+$$x \in \bar{A} \Leftrightarrow \forall r > 0; B_r(x) \subset A^c \Leftrightarrow x \notin A^c,$$
+
+这就得到惊人地对称的美妙公式
+
+$$\bar{A} = A^{\infty} \quad \text{或} \quad A^c = (\bar{A}^c)^c. \quad (16)$$
+
+公式(16)体现了闭包与内部的对偶性, 用此可将二者互相转化. 特别, 由(16)直接推出:  $\bar{A} = A \Leftrightarrow A^c = A^{\infty}$ , 即  $A$  是闭集  $\Leftrightarrow A^c$  是开集, 因而闭集与开集亦呈现出某种对偶性. 这些结论是很有用的.
+
+关于开集与闭集的最重要的结论是:
+
+**3.3.2 定理** (i) 任意个开集之并与有限个开集之交是开集,  $\mathbf{R}^n$ ,  $\emptyset$  是开集.
+
+(ii) 任意个闭集之交与有限个闭集之并是闭集;  $\mathbf{R}^n$  与  $\emptyset$  均为闭集.
+
+证 利用开集与闭集的对偶性, 易从(i)推出(ii), 故只要证(i). 设  $A_i (i \in I)$  是开集,  $A = \bigcup A_i$ . 任给  $x \in A$ , 取  $i \in I$ , 使  $x \in A_i$ . 因  $A_i$  是开集, 故有  $r > 0$ , 使得  $B_r(x) \subset A_i \subset A$ , 从而  $x \in A^c$ . 这表明  $A$  是开集. 其次设  $A_i (1 \leq i \leq n)$  是开集,  $A = \bigcap A_i$ . 任给  $x \in A$ , 取  $r_i > 0$ , 使得  $B_{r_i}(x) \subset A_i (1 \leq i \leq n)$ . 令  $r = \min r_i$ , 则  $B_r(x) \subset A$ . 这表明  $A$  是开集.  $\mathbf{R}^n$  与  $\emptyset$  为开集是显然的.  $\square$
+
+究竟如何构成开集? 以下定理给出了某种回答.
+
+**3.3.3 定理** 设  $A \subset \mathbf{R}^n$  是一非空开集.
+
+(i) 若  $n = 1$ , 则  $A$  是可数个互不相交的开区间之并.
+
+(ii) 若  $n > 1$ , 则  $A$  是可数个开球(不必互不相交)之并.
+
+证 (i) 任给  $x \in A$ , 因  $x \in A^c$ , 至少有一开区间  $(x - r, x + r) \subset A (r > 0)$ . 以  $\delta_r$  记包含  $x$  且含于  $A$  的所有开区间之并, 则易看出  $\delta_r$  本身也是一个开区间, 且它是含有  $x$  且含于  $A$  的最大开区间. 若  $x, y \in A$ ,  $\delta_r \cap \delta_y \neq \emptyset$ , 则  $\delta_r \cup \delta_y$  是同时含有  $x$  与  $y$  的开区间, 因此必  $\delta_r = \delta_r \cup \delta_y = \delta_y$ . 这表明  $\delta_r$  与  $\delta_y$  要么重合要么互不相交, 因此  $A$  是一族互不相交的开区间之并. 从这族开区间的每一个中任取一有理点, 则得到一组互不相同的有理点, 因而只有可数个(参考 1.3.2(i), 1.3.3). 于是  $A$  是可数个互不相交的开区间之并.
+
+(ii) 任给  $x \in A$ , 取  $r > 0$ , 使得  $B_r(x) \subset A$ , 不妨设  $r \in \mathbf{Q}$ . 取有理点  $a \in B_r(x)$  (参考 1.3.3).  $\forall y \in B_r(a)$ , 有  $|y - x| \leq |y - a| + |a - x| < 2r$ , 因而  $y \in B_{2r}(x) \subset A$ , 于是  $x \in B_r(a) \subset A$ . 这表明  $A$  可表为形如  $B_r(a)$  的球之并, 其中  $a \in \mathbf{Q}^n$ ,  $r \in \mathbf{Q}$ ; 这样的球仅有可数多个(参考 1.3.3).  $\square$
+
+从定理 3.3.3 直接推出: 若  $A$  是 1 维闭集, 则  $A$  是从  $\mathbf{R}$  中挖去可数多个互不相交的开区间的结果; 若  $A$  是  $n$  维闭集, 则  $A$  是从  $\mathbf{R}^n$  中挖去可数多个开球的结果. 这就原则上阐明了开集与闭集的结构. 但在具体问题中遇到的开集与闭集, 仍然可能是高度复杂而难以描述的. 而且应注意, 更多的点集既非开集也非闭集.
+
+**3.3.4 定义** 设  $D \subset \mathbb{R}^n$  是一非空开集. 若任给  $a, b \in D$ , 存在有限点组  $a = a_0, a_1, \dots, a_m = b$ , 使  $\bigcup_i^n [a_{i-1}, a_i] \subset D$ , 则称  $D$  为一个  $n$  维区域, 简称为区域.
+
+定义 3.3.4 中的点集  $\bigcup [a_{i-1}, a_i]$  称为连接点  $a$  与  $b$  的折线. 因此开集  $D$  为区域  $\Leftrightarrow D$  中任两点可用全在  $D$  中的折线连接; 或简单地说, 区域就是连通开集. 显然, 凸开集必为区域. 若  $D \subset \mathbb{R}$  为非空开集, 则易知  $D$  是区域  $\Leftrightarrow D$  就是一个开区间. 可见对于 1 维区域已没什么好说的. 多维区域则可呈现出很大的复杂性, 这可从 2 维区域的一些直观例子看出来. 区域的较简单的例子是: 开球  $B, (a)$ ; 开方体  $\prod_1^n (a_i, b_i)$  等, 它们都是凸开集. 当然, 区域未必是凸的.
+
+本书中考虑的函数, 多半定义在某个区域上. 为今后应用方便, 对区域的边界作些说明. 给定区域  $D \subset \mathbb{R}^n$ , 只要  $D \neq \mathbb{R}^n$ , 边界  $\partial D$  就非空. 可以证明,  $\partial D$  中的点必为  $D$  的聚点, 这意味着可从  $D$  内部逼近  $D$  的任何边界点. 这一事实在分析中是重要的. 通常称  $\bar{D} = D \cup \partial D$  为闭区域. 在分析中经常遇到的情况是, 所考虑的函数定义于某区域  $D$  及其一部分边界上. 为方便起见, 今后说到区域  $D$  时, 除非已指明  $D$  为开区域或闭区域, 容许  $D$  包含其部分边界. 这一规定虽有悖于定义 3.3.4, 但在微积分学中有其方便且是通行的. 一个区域通常由一组不等式表示. 仅用不等号  $<$  与  $>$  的不等式表示开区域, 仅用不等号  $\leq$  与  $\geq$  的不等式表示闭区域. 典型的例子是矩形:  $a < x < b, c < y < d$ ; 圆:  $(x - a)^2 + (y - b)^2 < R^2$ .
+
+如已提到的, 点集论的基本思想是刻画点的接近或邻近, 因而邻域概念有其特殊重要性, 它在分析中尤为常用, 值得作稍多的说明. 在定义 3.3.1(i) 中, 我们将点  $x$  的邻域定义为以  $x$  为内点的任何点集, 这样的邻域是高度一般的. 就实际需要而言, 通常只用到某些很特殊的邻域, 因而需要以下概念.
+
+**3.3.5 定义** 设  $x \in \mathbb{R}^n$ ,  $\{U_r\}$  是  $x$  的一族邻域. 若对  $x$  的任给邻域  $V$ , 总有某个  $U_r \subset V$ , 则称  $\{U_r\}$  为  $x$  的一个邻域基.
+
+给定  $x \in \mathbb{R}^n$ ,  $x$  的邻域基的常见例子是:
+
+- (i) 球邻域基  $\{B, (x) : r > 0\}$ ;
+- (ii) 可数球邻域基  $\{B_{1/k}(x) : k \in \mathbb{N}\}$ ;
+- (iii) 方体邻域基  $\{C, (x) : r > 0\}$ , 其中  $C, (x)$  是  $n$  维方体,
+
+$$C_r(x) = \prod_{i=1}^n (x_i - r, x_i + r).$$
+
+邻域基的本质特征是, 它含有“任意小”的邻域, 因而可用来刻画点的无限接近, 而这对于分析学恰是关键的. 分析的各基本概念, 如极限、连续性等, 均可用邻域基来描述; 而且, 各种邻域基的作用是等价的, 因此选用什么邻域基全凭方便, 并非本质问题. 在大多数情况下, 都采用球邻域基或方体邻域基.
+
+鉴于邻域在分析中频繁地出现, 为行文简便起见, 约定如下简写法: 只要写出  $U = N(x)$ , 就意味着“ $U$  是点  $x$  的一个邻域”. 注意不应将记号  $U = N(x)$  当成通
+
+常意义上的等式,它只是表出“ $U$ 是 $x$ 的邻域”这一关系;  $N(x) = U$  这样的式子是没有意义的.
+
+在由  $\mathbf{R}$  构建 Euclid 空间  $\mathbf{R}^n$  时,我们排除了广义实数  $\pm\infty$ . 就定义  $\mathbf{R}^n$  中的线性结构与度量结构而言,这是必要的;但就点集论的内容来说,让  $\pm\infty$  参与进来,不仅可行,而且在分析学中有不可忽略的实际需要.例如,倘若不用  $\pm\infty$ ,如何描述一个动点无限远离原点?从空间  $\mathbf{R}^n$  过渡到含无穷远点的空间  $\bar{\mathbf{R}}^n$ ,并无原则困难,但记号上不免带来较大的复杂性,这是你不愿看到的.因此,我们不在此处展开全面讨论,只是提到若干特殊情况.
+
+首先,对于  $\bar{\mathbf{R}} = [-\infty, \infty]$  中的点集论,只要补充定义  $\pm\infty$  的邻域就够了.集族  $\{(a, \infty] : a \in \mathbf{R}\}$  与  $\{(n, \infty] : n \in \mathbf{N}\}$  均可作为点  $\infty$  的邻域基.点  $-\infty$  亦有类似邻域基.  $\bar{\mathbf{R}}^n$  ( $n > 1$ ) 的情况要复杂些,今用  $\bar{\mathbf{R}}^2$  作简略说明.首先注意,  $(a, \infty)$ ,  $(a, -\infty)$ ,  $(\infty, \infty)$  等均为  $\bar{\mathbf{R}}^2$  中的点(“无穷远点”).对于点  $(a, \infty)$  ( $a \in \mathbf{R}$ ), 可取如下邻域基:
+
+$$\{(a - 1/k, a + 1/k) \times (k, \infty] : k \in \mathbf{N}\};$$
+
+对于点  $(\infty, \infty)$ , 可取如下邻域基:
+
+$$\{(k, \infty] \times (k, \infty] : k \in \mathbf{N}\}.$$
+
+以上邻域基中的邻域都是“无穷矩形”.
+
+由定义 3.3.1(iv)可推出:  $x$  是  $A$  的聚点  $\Leftrightarrow \forall U = N(x), U$  含有  $A$  中异于  $x$  的点.这一刻画亦适用于  $\bar{\mathbf{R}}^n$ . 例如,设  $A \subset \bar{\mathbf{R}}^n$ , 则点  $(\infty, \infty)$  是  $A$  的聚点  $\Leftrightarrow \forall k \in \mathbf{N}$ , 无穷矩形  $(k, \infty) \times (k, \infty)$  都含有  $A$  中的点.
+
+### § 3.4 复平面
+
+在一般地考虑过  $n$  维 Euclid 空间之后,今要单独挑出  $\mathbf{R}^2$  加以考察.关注点不在于  $\mathbf{R}^2$  的几何与拓扑方面,而在于它不同于  $\mathbf{R}^n$  ( $n > 2$ ) 的代数特性.我们要指出,在  $\mathbf{R}^2$  中可引进乘法,使  $\mathbf{R}^2$  成为一个“域”,而且是实数域的一个自然扩张.
+
+下面以白体字母  $z, \zeta$  等记  $\mathbf{R}^2$  中的元.任给  $z = (x, y), z_1 = (x_1, y_1) \in \mathbf{R}^2$ , 定义乘积
+
+$$zz_1 = (xx_1 - yy_1, xy_1 + x_1y) \in \mathbf{R}^2. \quad (17)$$
+
+直接看出如此定义的乘法是交换的;稍细的验证还可得出乘法的结合性、乘法对加法的分配性.令  $e = (1, 0)$ , 则对任给  $z = (x, y) \in \mathbf{R}^2$  有
+
+$$ez = (1 \cdot x - 0 \cdot y, 0 \cdot x + 1 \cdot y) = (x, y) = z,$$
+
+可见  $e$  是乘法单位元.若  $z = (x, y) \neq (0, 0), z_1 = (x_1, y_1)$  满足  $zz_1 = e$ , 则由式(17)有  $xx_1 - yy_1 = 1, xy_1 + x_1y = 0$ .不难由此唯一地解出  $x_1 = x/|z|^2, y_1 = -y/|z|^2$ , 于是  $z$  有唯一“倒数”.
+
+$$z_1 = \frac{1}{z} = \left( \frac{x}{|z|^2}, -\frac{y}{|z|^2} \right).$$
+
+至此,已验证了  $\mathbf{R}^2$  依式(17)定义的乘法具有与命题 2.2.4(i)~(v)相当的性质.这一事实与由命题 3.1.1 所表述的加法性质相结合,表明  $\mathbf{R}^2$  是代数学中所说的域,称为复数域.当  $\mathbf{R}^2$  被看作复数域时记作  $\mathbf{C}$ ,其中的元称为复数;复数  $z$  的模长  $|z|$  (依式(6))也称为  $z$  的绝对值.
+
+任给  $(a,0) \in \mathbf{C}$  与  $z = (x,y) \in \mathbf{C}$ ,有
+
+$$(a,0) + z = (a + x, y), \quad (a,0)z = az.$$
+
+这表明  $(a,0)$  起实数  $a$  的作用,不妨就等同  $(a,0)$  与  $a$  (下面就写  $(a,0) = a$ ),因而实数域  $\mathbf{R}$  就被嵌入到复数域  $\mathbf{C}$  中了,或者说  $\mathbf{C}$  是  $\mathbf{R}$  的一个扩张.其次约定  $i = (0,1)$ ,则对任给  $z = (x,y) \in \mathbf{C}$  有
+
+$$x + iy = (x,0) + (0,1)(y,0) = (x,y) = z,$$
+
+这就得到复数的标准表示  $z = x + iy$ ,其中  $i$  就是通常所说的虚数单位,只是它现在作为  $\mathbf{C}$  中的一点  $(0,1)$ ,并无任何“虚拟性”.  $i^2 = -1$  是可验证的:
+
+$$i^2 = (0,1)(0,1) = (-1,0) = -1 \quad (\text{用(17)}).$$
+
+任给  $z = x + iy \in \mathbf{C}$ . 一方面,  $z$  完全由  $x$  与  $y$  决定,二者分别称为  $z$  的实部与虚部,写作
+
+$$x = \operatorname{Re} z, \quad y = \operatorname{Im} z. \quad (18)$$
+
+另一方面,  $z$  也完全决定于其绝对值  $|z|$  与辐角  $\operatorname{Arg} z$ ,其中  $\operatorname{Arg} z$  定义为从  $x$  轴正向到向量  $z$  的角度,它在相差  $2n\pi$  ( $n \in \mathbf{Z}$ ) 的范围内确定,仅当  $z = 0$  时  $\operatorname{Arg} z$  无定义.此外,称  $\bar{z} = x - iy$  为  $z$  的共轭复数.涉及  $z, \bar{z}, |z|, \operatorname{Arg} z, \operatorname{Re} z, \operatorname{Im} z$  的如下关系式是常用的:
+
+$$\left\{ \begin{array}{l} \overline{z + w} = \bar{z} + \bar{w}, \overline{zw} = \bar{z}\bar{w}, \overline{1/z} = 1/\bar{z} \quad (z \neq 0); \\ |zw| = |z| |w|, |z^{-1}| = |z|^{-1}, \\ z^{-1} = \bar{z}/|z|^2, |z|^2 = z\bar{z} = |\bar{z}|^2; \\ z + \bar{z} = 2\operatorname{Re} z, \quad z - \bar{z} = 2\operatorname{Im} z; \\ \operatorname{Re} z = |z| \cos(\operatorname{Arg} z), \operatorname{Im} z = |z| \sin(\operatorname{Arg} z) \quad (z \neq 0); \\ |\operatorname{Re} z| \leq |z|, |\operatorname{Im} z| \leq |z|; \\ \operatorname{Arg}(zw) = \operatorname{Arg} z + \operatorname{Arg} w, \operatorname{Arg} z^n = n\operatorname{Arg} z. \end{array} \right. \quad (19a) \quad (19b) \quad (19c) \quad (19d) \quad (19e) \quad (19f) \quad (19g)$$
+
+复数域  $\mathbf{C}$  是实数域  $\mathbf{R}$  的扩张意味着,  $\mathbf{R}$  上的有理运算已扩张为  $\mathbf{C}$  上的有理运算,因而基于有理运算的有理函数自然在  $\mathbf{C}$  上有意义,只要避免以 0 为分母.一个或许更有意义的事实是,其他初等函数也能扩张到复数域上,尽管这种可能性初看起来并不明显.关键的一步是定义复指数函数  $e^x$ ,有多种不同(但本质上等价)的方法做到这一点,目前所能用的方法是借助于如下 Euler 公式:
+
+$$e^{iy} = \cos y + i \sin y \quad (y \in \mathbf{R}). \quad (20)$$
+
+任给  $z = x + iy \in \mathbf{C}$ , 形式地利用  $e^z = e^x e^{iy}$ , 从式(20)得出
+
+$$e^z = e^x (\cos y + i \sin y), \quad (21)$$
+
+这就是复指数函数  $e^z$  的定义. 由式(21)看出,  $e^z$  是以  $2\pi i$  为周期的周期函数, 因而其反函数  $\ln z$  是多值的, 实际上
+
+$$\ln z = \ln |z| + i \operatorname{Arg} z, \quad z = |z| e^{i \operatorname{Arg} z} \quad (0 \neq z \in \mathbf{C}). \quad (22)$$
+
+一旦扩张了指数函数, 双曲函数也就自动地扩张到了  $\mathbf{C}$  上, 只需在 § 2(30) 中以  $z \in \mathbf{C}$  取代实变量  $x$  就行了. 其次, 式(20)可等价地写成:
+
+$$\cos y = \frac{e^{iy} + e^{-iy}}{2}, \quad \sin y = \frac{e^{iy} - e^{-iy}}{2i}.$$
+
+以  $z \in \mathbf{C}$  取代其中的  $y$  就得复三角函数的定义:
+
+$$\begin{cases} \cos z = (e^{iz} + e^{-iz})/2 = \operatorname{ch}(iz), \\ \sin z = (e^{iz} - e^{-iz})/2i = -i \operatorname{ish}(iz). \end{cases} \quad (23)$$
+
+这样, 三角函数与双曲函数的联系就变成直接的了. 基于这一联系, 反三角函数与反双曲函数也就沟通起来; 而且这两类反函数都能用对数函数(22)来表示, 这些事实在实数域内是无法看清的. 在 § 2. 3 中, 我们通过对数函数来定义幂函数(参看 § 2. 3(27)), 这一方法同样可用来定义复数域内的幂函数:
+
+$$z^a = e^{a \ln z} \quad (0 \neq z \in \mathbf{C}), \quad (24)$$
+
+其中  $a \in \mathbf{C}$  是任给常数. 由  $\ln z$  的多值性,  $z^a$  一般是多值的. 若  $a = 1/n, n \in \mathbf{N}$ , 则结合式(21), (22)与(24)得出
+
+$$\sqrt[n]{z} = z^{1/n} = \sqrt[n]{|z|} \exp\left(\frac{2ik\pi + i \operatorname{arg} z}{n}\right), \quad (25)$$
+
+其中  $\operatorname{arg} z \in [0, 2\pi)$  是  $\operatorname{Arg} z$  的一支(称为主值),  $k = 0, 1, \dots, n-1$ .
+
+应用 Euler 公式的一个附带收获是, 得到了一个推导某些三角函数恒等式的简捷方法. 鉴于这些恒等式今后将多次用到, 今将其主要者汇集如下:
+
+$$\begin{cases} \sum_{k=1}^n \cos kx = \frac{\sin(n+1/2)x}{2 \sin(x/2)} - \frac{1}{2}, \end{cases} \quad (26a)$$
+
+$$\begin{cases} \sum_{k=1}^n \sin kx = \frac{\sin(nx/2) \sin((n+1)x/2)}{\sin(x/2)}; \end{cases} \quad (26b)$$
+
+$$\sum_{k=1}^n \sin(kx + b) = \frac{\sin(nx/2) \sin((n+1)x/2 + b)}{\sin(x/2)}; \quad (27)$$
+
+$$\begin{cases} \cos nx = \sum_{k=0}^{\lfloor n/2 \rfloor} (-1)^k \binom{n}{2k} (\sin x)^{2k} (\cos x)^{n-2k}, \end{cases} \quad (28a)$$
+
+$$\begin{cases} \sin nx = \sum_{k=0}^{\lfloor (n-1)/2 \rfloor} (-1)^k \binom{n}{2k+1} (\sin x)^{2k+1} (\cos x)^{n-2k-1}; \end{cases} \quad (28b)$$
+
+$$\left\{ \begin{aligned} \sin^{2n}x &= \frac{1}{4^n} \left[ \binom{2n}{n} + 2 \sum_{k=1}^n (-1)^k \binom{2n}{n-k} \cos 2kx \right], \\ \sin^{2n+1}x &= \frac{1}{4^n} \sum_{k=0}^n (-1)^k \binom{2n+1}{n-k} \sin(2k+1)x, \\ \cos^{2n}x &= \frac{1}{4^n} \left[ \binom{2n}{n} + 2 \sum_{k=1}^n \binom{2n}{n-k} \cos 2kx \right], \\ \cos^{2n+1}x &= \frac{1}{4^n} \sum_{k=0}^n \binom{2n+1}{n-k} \cos(2k+1)x. \end{aligned} \right. \quad (29a)$$
+
+利用 Euler 公式并计算和  $\sum_1^n e^{ikx}$ , 可得式(26); 从式(26)易推出式(27). 应用 Newton 二项公式分别展开  $(\cos x + i \sin x)^n$  与  $\left( \frac{e^{ix} - e^{-ix}}{2i} \right)^{2n}$ , 即得式(28)与(29a);(29b)~(29d)的推导是类似的. 所有这些计算都是初等而平凡的. 不过. 你如能做一遍, 对于熟悉 Euler 公式的应用, 倒是很有益处.

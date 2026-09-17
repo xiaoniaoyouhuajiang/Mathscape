@@ -1,0 +1,87 @@
+## 二、用 Cauchy 准则证明极限
+
+**要点** 数列  $\{x_n\}$  收敛(只有有限极限)  $\xrightarrow{\text{Cauchy准则}} \forall \epsilon > 0, \exists N > 0$ , 当  $m, n > N$  时, 有  $|x_m - x_n| < \epsilon \xrightarrow{\text{亦即}} \forall \epsilon > 0, \exists N > 0$ , 当  $n > N$  时,  $|x_{n+p} - x_n| < \epsilon$  ( $\forall p > 0$ ).
+
+Cauchy 准则的优点在于不要事先知道极限的猜测值  $A$ , 如
+
+**例 1.2.7** 设  $x_n = \frac{\sin 1}{2} + \frac{\sin 2}{2^2} + \dots + \frac{\sin n}{2^n}$ , 试证  $\{x_n\}$  收敛.
+
+(北京航空航天大学, 华中师范大学)
+
+$$\begin{aligned} \text{证 因} \quad |x_{n+p} - x_n| &\leq \frac{1}{2^{n+1}} + \frac{1}{2^{n+2}} + \dots + \frac{1}{2^{n+p}} \\ &= \frac{1}{2^{n+1}} \left(1 + \frac{1}{2} + \dots + \frac{1}{2^{p-1}}\right) \leq \frac{1}{2^{n+1}} \left(\frac{1}{1 - \frac{1}{2}}\right) \\ &= \frac{1}{2^n} < \frac{1}{n}, \end{aligned}$$
+
+ $\forall \epsilon > 0$ , (只要  $\frac{1}{n} < \epsilon$  (即  $n > \frac{1}{\epsilon}$ )), 故令  $N = \frac{1}{\epsilon}$ , 则  $n > N$  时, 有  $|x_{n+p} - x_n| < \epsilon$  ( $\forall p > 0$ ),  $\{x_n\}$  收敛获证.
+
+**例 1.2.8** 判断如下命题的真伪:
+
+数列  $\{a_n\}$  存在极限  $\lim_{n \rightarrow \infty} a_n = a$  的充分必要条件是: 对任一自然数  $p$ , 都有  $\lim_{n \rightarrow \infty} |a_{n+p} - a_n| = 0$ . (北京大学)
+
+答 该命题不对, 例如  $a_n = \sqrt{n}$  ( $n = 1, 2, \dots$ ), 虽然  $\forall p > 0$ ,  $|a_{n+p} - a_n| = \frac{p}{\sqrt{n+p} + \sqrt{n}} \rightarrow 0$  (当  $n \rightarrow \infty$  时), 但  $a_n = \sqrt{n} \rightarrow +\infty$  (当  $n \rightarrow \infty$  时), 无有限极限 (又如  $b_n = \ln n$  亦可说明).
+
+注 正确的说法是: 数列  $\{a_n\}$  有有限极限的充分必要条件是  $|a_{n+p} - a_n| \rightarrow 0$ , 当  $n \rightarrow +\infty$  时, 关于  $p \in \mathbb{N}$  一致.
+
+### 三、否定形式
+
+**要点**  $x_n \rightharpoonup A$  (当  $n \rightarrow \infty$  时), 按定义指:  $\exists \epsilon_0 > 0, \forall N > 0, \exists n_1 > N$ , 使得  $|x_{n_1} - A| \geq \epsilon_0$
+
+按 Cauchy 准则  $\Rightarrow \exists \epsilon_0 > 0, \forall N > 0, \exists m_1, n_1 > N$ , 使得  $|x_{m_1} - x_{n_1}| \geq \epsilon_0$
+
+( $\Leftarrow$  亦即  $\Rightarrow \exists \epsilon_0 > 0, \forall N > 0, \exists n_1 > N$ , 及  $p_1 > 0$ , 使得  $|x_{n_1+p_1} - x_{n_1}| \geq \epsilon_0$ .)
+
+☆ **例 1.2.9** 证明  $\lim_{n \rightarrow \infty} \sin n$  不存在. (武汉大学)
+
+**证 I** (用极限定义) 因为  $-1 \leq \sin n \leq 1$ , 所以我们只要证明: 任意  $A \in [-1, 1]$ ,  $\lim_{n \rightarrow \infty} \sin n \neq A$  即可. 不妨设  $A \in [0, 1]$  (对于  $[-1, 0]$  的情况, 类似可证). 根据极限定义, 我们只要证明:  $\exists \epsilon_0 > 0, \forall N > 0, \exists n > N$ , 使得  $|\sin n - A| \geq \epsilon_0$ .
+
+事实上, 可取  $\epsilon_0 = \frac{\sqrt{2}}{2}, \forall N > 0$ , 令
+
+ $n = \left[ \left( 2N\pi - \frac{\pi}{2} \right) + \frac{\pi}{4} \right]$  (这里  $[\dots]$  表示取整数部分). 则  $n > N$ , 且由
+
+$$\left(2N\pi - \frac{\pi}{2}\right) - \frac{\pi}{4} < n < \left(2N\pi - \frac{\pi}{2}\right) + \frac{\pi}{4},$$
+
+$$\sin n < -\frac{\sqrt{2}}{2},$$
+
+知  $|\sin n - A| \geq \frac{\sqrt{2}}{2}$ .
+
+证 II 据 Cauchy 准则, 要证  $\lim_{n \rightarrow \infty} \sin n$  不存在, 即要证明:
+
+ $\exists \epsilon_0 > 0, \forall N > 0, \exists n, m > N$ , 使得  $|\sin n - \sin m| \geq \epsilon_0$ .
+
+$$取 \epsilon_0 = \frac{\sqrt{2}}{2}, \forall N > 0, \text{ 令 } n = \left[2N\pi + \frac{3}{4}\pi\right],$$
+
+ $m = [2N\pi + 2\pi]([\dots]$  表示取整数部分), 则  $m > n > N$ , 且
+
+$$2N\pi + \frac{\pi}{4} < n < 2N\pi + \frac{3}{4}\pi, 2N\pi + \pi < m < 2N\pi + 2\pi$$
+
+$$|\sin n - \sin m| \geq \epsilon_0 = \frac{\sqrt{2}}{2}.$$
+
+这表明  $|\sin n|$  发散.
+
+证 III (反证法)
+
+若  $\lim_{n \rightarrow \infty} \sin n = A$ , 因  $\sin(n+2) - \sin n = 2\sin 1\cos(n+1)$ , 知
+
+$$\lim_{n \rightarrow \infty} 2\sin 1\cos(n+1) = \lim_{n \rightarrow \infty} (\sin(n+2) - \sin n) = A - A = 0,$$
+
+从而  $\lim_{n \rightarrow \infty} \cos n = 0, A = \lim_{n \rightarrow \infty} \sin n = \lim_{n \rightarrow \infty} \sqrt{1 - \cos^2 n} = 1$ .
+
+但  $\sin 2n = 2\sin n \cdot \cos n$ ,
+
+取极限得  $A = 0$ , 矛盾.
+
+注 1°  $\epsilon - N(\epsilon - \delta)$  方法的引进, 是数学分析划时代的进步, 是质的飞跃, 从此跨入了一个新时代. 数学院系各专业的学生务必熟练掌握. 非数学院系学生不作高要求;
+
+2° 方法的精髓是: 用任意小量(常量)  $\epsilon > 0$ , 来刻画和鉴别无穷小量(变量). 其中  $N(\delta)$  是进程“时刻”的标志(进入某一时刻之后,  $|x_n - A|$  就能比事先任意给定的  $\epsilon > 0$ (还要小.);
+
+ $3^\circ \epsilon > 0$ , 可用  $\frac{1}{k}$  ( $k \in \mathbb{N}_+$  是正整数) 来替代. 如  $x_n \rightarrow A$  (当  $n \rightarrow +\infty$  时), 可等价地定义为:  $\forall k \in \mathbb{N}_+, \exists N > 0$ , 当  $n > N$  时  $|x_n - A| < \frac{1}{k}$ .
+
+ $x_n \rightharpoonup A$  (当  $n \rightarrow +\infty$  时) 可描述为:  $\exists k_0 \in \mathbb{N}_+, \forall N > 0, \exists n > N$ , 使得  $|x_n - A| \geq \frac{1}{k_0}$ .
+
+函数极限的 Cauchy 准则, 也有类似的结论;
+
+ $4^\circ$  如上所见, 从肯定变到否定, 有如下规律. 即“ $\forall$ ”与“ $\exists$ ”对换. 肯定形式为“ $\forall \dots \exists \dots$ ”使得  $\dots$ ”, 否定形式则为“ $\exists \dots$ ”使得  $\forall \dots$ ”;
+
+ $5^\circ$  当存在符号“ $\exists$ ”出现在任意符号“ $\forall$ ”之后时, 例如“ $x_n \rightarrow A$  (当  $n \rightarrow +\infty$  时),  $\forall \epsilon > 0, \exists N > 0 \dots$ ”, 这里的  $N > 0$ , 是依赖于  $\epsilon$  的. 严格来说应写成  $\exists N(\epsilon) > 0$ . 虽然  $N(\epsilon)$  常写成  $N$ , 但心里随时要记住它与  $\epsilon$  息息相关;
+
+ $6^\circ$  当“ $\forall$ ”出现在论断的最后时, 如 Cauchy 收敛准则“ $\forall \epsilon > 0, \exists N > 0$ , 当  $n > N$  时,  $|x_{n+p} - x_n| < \epsilon$  ( $\forall p > 0$ ).”这里“ $\forall p$ ”最好读作“对所有的  $p$  都成立”. 当“ $\forall$ ”出现在论断之首时, 一般读作“对每一个给定的  $\dots$ ”;
+
+ $7^\circ$  特别地, 若能证明:  $\forall n \in \mathbb{N}$ , 有  $|x_{n+p} - x_n| \geq \varphi(n, p) \rightarrow a \neq 0$  (当  $p \rightarrow +\infty$  时), 按 Cauchy 准则, 可断定  $|x_n|$  发散.

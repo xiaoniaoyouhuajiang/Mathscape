@@ -1,0 +1,84 @@
+下面主要考虑特征值与特征向量的计算, 同时也涉及与特征值或特征向量有关的某些其他问题, 包括特征值的某些初步应用. 但特征值的系统应用(如矩阵与二次型的对角化问题)只能在后面详细展开.
+
+### A. 特征值与特征向量的计算
+
+在线性代数中,特征值与特征向量的计算是一个具有普遍需要的基本问题.在高等代数课程的范围内,涉及计算特征值与特征向量的内容可以举出:
+
+- ● 矩阵相似性之判定;
+- ● Jordan 标准形问题;
+- ● 对角标准形问题;
+- ● 二次型的对角化问题;
+- ● 二次型的正定性问题,
+
+等等.上述问题的重要性是不容置疑的,而这就使得计算特征值与特征向量的技巧成为不可缺少.
+
+计算特征值与特征向量的方法是多种多样的,但总体上可分为两类:
+
+(i) **直接法**:即直接解方程  $\Delta_A(\lambda) = 0$  与  $(A - \lambda I)x = 0$  ( $\lambda \in \sigma(A)$ ),这仅适用于  $A$  已具体给出的情况,且未必总能成功(你知道并无解方程  $\Delta_A(\lambda) = 0$  的一般方法).
+
+(ii) **间接法**:即利用已知条件与现有结论进行推断的各种方法,其中也包括观察法.从方法训练的角度看,颇富技巧性的间接法或许更值得关注.
+
+任给  $\lambda \in \sigma(A)$ ,  $A$  属于  $\lambda$  的特征向量必定有无穷多个.下面说到求出  $A$  的特征向量时,总是指对每个  $\lambda \in \sigma(A)$ , 求出  $A$  属于  $\lambda$  的一组线性无关特征向量  $\alpha_1, \alpha_2, \dots, \alpha_k, k = n - r(A - \lambda I)$ ;这恰好相当于求方程组  $(A - \lambda I)x = 0$  的一个基础解系.
+
+首先让你完成几个基本的练习,以获得初步经验.
+
+$$521. \text{ 求 } A = \begin{bmatrix} 2 & -1 & 2 \\ 5 & -3 & 3 \\ -1 & 0 & -2 \end{bmatrix} \text{ 的特征值与特征向量. } (\sigma(A) = \{-1, -1, -1\}, (1, 1, -1)^T)$$
+
+$$522. \text{ 求 } A = \begin{bmatrix} 3 & 1 & 0 \\ -4 & -1 & 0 \\ 4 & -8 & -2 \end{bmatrix} \text{ 的特征值与特征向量. } (\lambda_1 = -2, (0, 0, 1)^T; \lambda_2 = \lambda_3 = 1, (3, -6, 20)^T)$$
+
+$$523. \text{ 求 } A = \begin{bmatrix} 0 & 0 & 1 \\ 0 & 1 & 0 \\ 1 & 0 & 0 \end{bmatrix} \text{ 的特征值与特征向量. } (\lambda_1 = \lambda_2 = 1, (1, 0, 1)^T \text{ 与 } (0, 1, 0)^T; \lambda_3 = -1, (1, 0, -1)^T)$$
+
+尝试过这些简单情况之后,就该转向更复杂的例子了.
+
+524. 设  $\alpha = (a_1, a_2, \dots, a_n)^T$  与  $\beta = (b_1, b_2, \dots, b_n)^T$  是非零向量,  $A = \alpha \beta^T$ , 求
+
+ $A$  的特征值与特征向量.
+
+解 (i) 求特征值. 可用题 116 的结果算出  $|\lambda - A|$ , 但我们宁可用更具启发性的如下方法: 因  $r(A) = 1$  (依题 368), 故  $A$  中 2 阶以上的子式均为零, 而  $\text{tr } A = \alpha^T \beta \triangleq \mu$ , 于是由定理 3.1.2(i) 有  $\Delta_A(\lambda) = \lambda^n - \mu\lambda^{n-1}$ , 从而  $\sigma(A) = \{\mu, 0, \dots, 0\}$ .
+
+(ii) 求特征向量. 鉴于  $A$  的特殊性, 用观察法更简单. 首先, 由  $A\alpha = \alpha\beta^T \alpha = \mu\alpha$  得出  $\alpha$  是  $A$  属于  $\mu$  的一个特征向量. 其次, 要使  $Ax = \alpha\beta^T x = 0$ , 只需  $\beta^T x = 0$  即可. 不妨设  $b_1 \neq 0$ , 令  $\alpha_j = (b_j, 0, \dots, -b_1, \dots, 0)^T$  ( $2 \leq j \leq n$ ,  $-b_1$  是第  $j$  个分量), 则显然  $\beta^T \alpha_j = 0$ , 因而  $\alpha_2, \dots, \alpha_n$  是  $A$  属于 0 的  $n-1$  个线性无关特征向量.
+
+□ $A \in C^{n \times n}$  的线性无关特征向量之个数当然不会超过  $n$  个. 至于是否恰为  $n$  个, 如我们很快将看到的(参看定理 3.3.2), 是一个有重大意义的问题.
+
+525. 设  $\alpha \in R^n$  是一单位向量,  $A = \alpha\alpha^T$ , 求  $A$  的特征值与特征向量.
+
+提示 用上题或利用以下事实:  $A^2 = A \Rightarrow \sigma(A) \subset \{0, 1\}$ , 这结合  $\text{tr } A = 1$  (参考题 197) 得  $\sigma(A) = \{1, 0, \dots, 0\}$ . (参考题 561).
+
+526. 设  $A = ee^T, e^T = (1, 1, \dots, 1)$ , 求  $A$  的特征值与特征向量.
+
+提示 用题 524 或直接计算;  $\sigma(A) = \{n, 0, \dots, 0\}$ , 特征向量:  $e, (1, -1, \dots, 0)^T, \dots, (1, 0, \dots, 0, -1)^T$ .
+
+$$527. \text{ 设 } A = \begin{bmatrix} 0 & a & \dots & a \\ b & 0 & \dots & a \\ \vdots & \vdots & & \vdots \\ b & b & \dots & 0 \end{bmatrix}_{n \times n}, a \neq b, \text{ 求 } \sigma(A).$$
+
+解 依题 106 有
+
+$$|\lambda - A| = \frac{b(\lambda + a)^n - a(\lambda + b)^n}{b - a}, \quad |\lambda - A| = 0 \Leftrightarrow \left(\frac{\lambda + a}{\lambda + b}\right)^n = \frac{a}{b}.$$
+
+以  $\epsilon_j$  ( $1 \leq j \leq n$ ) 记  $\frac{a}{b}$  的  $n$  次根, 则
+
+$$\sigma(A) = \{\lambda_1, \lambda_2, \dots, \lambda_n\}, \quad \lambda_j = \frac{a - b\epsilon_j}{\epsilon_j - 1} \quad (1 \leq j \leq n).$$
+
+□
+$$528. \text{ 设 } A = \begin{bmatrix} 0 & -1 & & \\ 1 & 0 & \ddots & \\ & \ddots & \ddots & -1 \\ & & 1 & 0 \end{bmatrix}_{n \times n}, \text{ 求 } \sigma(A).$$
+
+提示 用题 131;  $|\lambda - A| = (a^{n+1} - b^{n+1})/(a - b), a + b = \lambda, ab = -1, \sigma(A) = \{2i\cos(k\pi/(n+1)) : 1 \leq k \leq n\}$ .
+
+529. 设  $A = \begin{bmatrix} a_1 & a_2 & \cdots & a_n \\ 1 & 0 & & \\ & \ddots & \ddots & \\ & & 1 & 0 \end{bmatrix}$ , 考察  $A$  的特征值与特征向量.
+
+提示 用题123;  $\Delta_A(\lambda) = \lambda^n - a_1\lambda^{n-1} - \cdots - a_n$ . 设  $\sigma(A) = \{\lambda_1, \lambda_2, \dots, \lambda_n\}$ , 则由观察看出  $\alpha_i = (\lambda_i^{n-1}, \dots, \lambda_i, 1)^T$  是  $A$  属于  $\lambda_i$  的特征向量.
+
+530. 设  $A \in C^{n \times m}, B \in C^{m \times n}, n \geq m$ , 则  $\sigma(AB) = \sigma(BA) \cup \{0, \dots, 0\}(n-m)$  个零), 因而  $AB$  与  $BA$  有相同的非零特征值; 特别, 当  $m = n$  时  $\sigma(AB) = \sigma(BA)$ .
+
+提示 用题272.
+
+题530 的结论对于特征值的计算意义颇大, 其作用可类比于公式  $\text{tr}(AB) = \text{tr}(BA)$  (题196). 在  $m$  很小 (例如  $m = 1$ ) 时, 通过计算  $\sigma(BA)$  来得出  $\sigma(AB)$  非常有利. 即使对于  $m = n$  的情况, 公式  $\sigma(AB) = \sigma(BA)$  亦可能作有价值的应用. 你知道, 在矩阵计算中,  $AB \neq BA$  常常是一个令人烦恼的障碍. 一旦某个“矩阵函数” $\varphi(A)$  (常见的有  $|A|, \text{tr } A, |\lambda I - A|$  等) 满足  $\varphi(AB) = \varphi(BA)$ , 那么在有关  $\varphi(A)$  的问题上就突破了不可换性的障碍, 因而在线性代数中格外有意义. 下面你可从一些实例中获得更实在的体会.
+
+531. 设  $A = [a_i a_j + 1]_{n \times n}$ ,  $\sum_i a_i = 0$ , 求  $\sigma(A)$ .
+
+解 令  $\alpha = (a_1, a_2, \dots, a_n)^T, e = (1, 1, \dots, 1)^T, B = (\alpha, e)$ , 则  $A = \alpha\alpha^T + ee^T = BB^T$  (这是关键!), 于是由题530 有
+
+$$\begin{aligned} \sigma(A) &= \sigma(B^T B) \cup \{0, \dots, 0\} \quad (n-2 \text{ 个零}) \\ &= \left\{n, \sum_i a_i^2, 0, \dots, 0\right\}, \end{aligned}$$
+
+2 阶矩阵  $B^T B$  的特征值为  $n$ ,  $\sum_i a_i^2$  是明显的. □
+
+以上解法表明, 利用题530 计算  $\sigma(A)$  的关键步骤是寻求适当分解  $A = BC$ , 使得  $\sigma(CB)$  便于求出. 你从如下几个练习中将获得初步的经验.
