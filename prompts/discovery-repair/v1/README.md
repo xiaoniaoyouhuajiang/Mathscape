@@ -7,5 +7,5 @@ A 允许替换单元提案，B 允许选择当前候选或替换失败任务。�
 跨阶段替换、跨任务扩大修改范围或无限循环。实现见
 [当前架构](../../../docs/architecture.md)。
 
-Prompt revision 4 增加按 task 聚合的事实修订与 replace_task 完整示例，并保留相同范围单元、
+Prompt revision 6 增加按 task 聚合的事实修订、来源事实与数学正确性的边界说明和 replace_task 完整示例，并保留相同范围单元、
 quote_range 重切和跨单元 issue 所有权的有界修订方法。
