@@ -707,6 +707,36 @@ fn persisted_wire_checkpoints_restore_authority_only_by_revalidation() {
     ));
 }
 
+#[test]
+fn discovery_assembly_is_stable_under_fact_arrival_order() {
+    let (_prepared, units, batches, tasks) = validated_fixture();
+    let forward = assemble_discovery(&units, &batches, tasks.clone()).unwrap();
+    let mut reversed_tasks = tasks;
+    reversed_tasks.reverse();
+    let reversed = assemble_discovery(&units, &batches, reversed_tasks).unwrap();
+
+    assert_eq!(
+        forward
+            .tasks()
+            .iter()
+            .map(|task| task.task_ref())
+            .collect::<Vec<_>>(),
+        reversed
+            .tasks()
+            .iter()
+            .map(|task| task.task_ref())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        serde_json::to_value(&forward).unwrap(),
+        serde_json::to_value(&reversed).unwrap()
+    );
+    assert_eq!(
+        discovery_result_fingerprint(&forward),
+        discovery_result_fingerprint(&reversed)
+    );
+}
+
 fn acceptance(
     result: &DiscoveryResult,
     selection: AcceptanceSelection,

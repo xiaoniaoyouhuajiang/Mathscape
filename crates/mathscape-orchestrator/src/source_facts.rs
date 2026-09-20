@@ -8,7 +8,7 @@ use crate::{
 use mathscape_domain::*;
 use mathscape_llm::*;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LocatedFact {
@@ -532,10 +532,21 @@ fn section(units: &ValidatedUnitSet, id: &str) -> Option<String> {
     None
 }
 
+fn relation_kind_order(kind: DiscoveryRelationKind) -> u8 {
+    match kind {
+        DiscoveryRelationKind::Proves => 0,
+        DiscoveryRelationKind::Solves => 1,
+        DiscoveryRelationKind::Hints => 2,
+        DiscoveryRelationKind::Explains => 3,
+        DiscoveryRelationKind::Cites => 4,
+        DiscoveryRelationKind::AppliesMethod => 5,
+    }
+}
+
 pub fn assemble_discovery(
     units: &ValidatedUnitSet,
     batches: &[PreparedFactRequest],
-    tasks: Vec<ValidatedFactTask>,
+    mut tasks: Vec<ValidatedFactTask>,
 ) -> Result<DiscoveryResult, String> {
     if batches.iter().any(|b| {
         b.unit_set_fingerprint != *units.fingerprint()
@@ -554,6 +565,26 @@ pub fn assemble_discovery(
             return Err("stale or duplicate fact task".into());
         }
     }
+
+    // Fact responses can arrive from independent batches, and a replay may
+    // reconstruct them in a different arrival order.  The task collection has
+    // no semantic order of its own, so bind it to the planner's stable order
+    // (which follows the frozen unit order) before deriving any aggregates.
+    // Do not sort the arrays inside a task: source labels, references, issues,
+    // relation evidence, and other occurrence lists retain their source/model
+    // order because that order can carry mathematical meaning.
+    let task_order: HashMap<String, usize> = batches
+        .iter()
+        .flat_map(|batch| batch.model.tasks.iter())
+        .enumerate()
+        .map(|(index, task)| (task.task_ref.clone(), index))
+        .collect();
+    tasks.sort_by_key(|task| {
+        task_order
+            .get(&task.task_ref)
+            .copied()
+            .expect("validated fact task has a planned order")
+    });
     let pending_tasks: Vec<_> = batches
         .iter()
         .flat_map(|b| &b.model.tasks)
@@ -653,6 +684,10 @@ pub fn assemble_discovery(
             {
                 candidates.push(h.clone());
             }
+            // Candidate references form a set.  Keep their value independent
+            // of the order in which local declarations and hints were seen.
+            candidates.sort();
+            candidates.dedup();
             let status =
                 if status == ReferenceResolutionStatus::ResolvedLocal && candidates.len() > 1 {
                     ReferenceResolutionStatus::Ambiguous
@@ -717,6 +752,54 @@ pub fn assemble_discovery(
             );
         }
     }
+
+    // These are projections over the ordered task stream, not proof traces:
+    // their outer order is presentation/serialization order.  Canonicalize
+    // it using source-unit order and source offsets, while leaving each
+    // occurrence/evidence vector untouched.
+    let unit_order: HashMap<String, usize> = units
+        .units()
+        .iter()
+        .enumerate()
+        .map(|(index, unit)| (unit.proposal().unit_ref.clone(), index))
+        .collect();
+    for reference in &mut references {
+        reference.origins.sort();
+        reference.origins.dedup();
+        reference.resolution.candidates.sort();
+        reference.resolution.candidates.dedup();
+    }
+    references.sort_by(|left, right| {
+        unit_order
+            .get(&left.owner)
+            .copied()
+            .unwrap_or(usize::MAX)
+            .cmp(&unit_order.get(&right.owner).copied().unwrap_or(usize::MAX))
+            .then_with(|| {
+                left.location
+                    .range()
+                    .start
+                    .cmp(&right.location.range().start)
+            })
+            .then_with(|| left.location.range().end.cmp(&right.location.range().end))
+    });
+    for relation in &mut relations {
+        relation.origins.sort();
+        relation.origins.dedup();
+        relation.bases.sort();
+        relation.bases.dedup();
+    }
+    relations.sort_by(|left, right| {
+        unit_order
+            .get(&left.source)
+            .copied()
+            .unwrap_or(usize::MAX)
+            .cmp(&unit_order.get(&right.source).copied().unwrap_or(usize::MAX))
+            .then_with(|| left.target.cmp(&right.target))
+            .then_with(|| {
+                relation_kind_order(left.relation).cmp(&relation_kind_order(right.relation))
+            })
+    });
     Ok(DiscoveryResult {
         version: DiscoveryResultVersion::V1,
         complete: !units.is_partial() && pending_tasks.is_empty(),

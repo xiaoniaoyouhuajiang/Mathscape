@@ -212,8 +212,11 @@ impl<'a> DiscoveryWorkflow<'a> {
         if self.batches.is_empty() && !units.units().is_empty() {
             return None;
         }
-        let mut facts: Vec<_> = self.facts.values().cloned().collect();
-        facts.sort_by(|a, b| a.task_ref.cmp(&b.task_ref));
+        // HashMap iteration is intentionally left unspecified.  Assembly
+        // canonicalizes the unordered task collection against the frozen
+        // planner order, so lexical sorting here would both be redundant and
+        // would incorrectly suggest that task identifiers carry order.
+        let facts: Vec<_> = self.facts.values().cloned().collect();
         assemble_discovery(units, &self.batches, facts).ok()
     }
     pub fn cancel(&mut self) {
