@@ -109,10 +109,14 @@ pub enum DesktopIssueStage {
 #[derive(Clone, Debug, Serialize)]
 pub struct DesktopDiscoveryIssueView {
     issue_ref: String,
+    issue_refs: Vec<String>,
     stage: DesktopIssueStage,
+    stages: Vec<DesktopIssueStage>,
     owner: Option<String>,
     kind: DiscoveryIssueKind,
     observation: String,
+    observations: Vec<String>,
+    occurrences: usize,
     context_request: Option<DiscoveryContextRequest>,
     requires_unit_revision: bool,
     evidence: Vec<DesktopSourceAnchorView>,
@@ -268,10 +272,14 @@ impl DesktopDiscoveryView {
                 let proposal = issue.proposal();
                 DesktopDiscoveryIssueView {
                     issue_ref: format!("a{}", index + 1),
+                    issue_refs: vec![format!("a{}", index + 1)],
                     stage: DesktopIssueStage::UnitDiscovery,
+                    stages: vec![DesktopIssueStage::UnitDiscovery],
                     owner: proposal.unit.clone(),
                     kind: proposal.kind,
                     observation: bounded(&proposal.observation, 1_000),
+                    observations: vec![bounded(&proposal.observation, 1_000)],
+                    occurrences: 1,
                     context_request: proposal.context_request.clone(),
                     requires_unit_revision: false,
                     evidence: issue
@@ -287,10 +295,14 @@ impl DesktopDiscoveryView {
                 issues.extend(task.issues().iter().enumerate().map(
                     |(index, (issue, evidence))| DesktopDiscoveryIssueView {
                         issue_ref: format!("{}:i{}", task.task_ref(), index + 1),
+                        issue_refs: vec![format!("{}:i{}", task.task_ref(), index + 1)],
                         stage: DesktopIssueStage::SourceFacts,
+                        stages: vec![DesktopIssueStage::SourceFacts],
                         owner: Some(task.owner().to_owned()),
                         kind: issue.kind,
                         observation: bounded(&issue.observation, 1_000),
+                        observations: vec![bounded(&issue.observation, 1_000)],
+                        occurrences: 1,
                         context_request: issue.context_request.clone(),
                         requires_unit_revision: issue.requires_unit_revision,
                         evidence: evidence.iter().map(DesktopSourceAnchorView::from).collect(),
@@ -298,6 +310,7 @@ impl DesktopDiscoveryView {
                 ));
             }
         }
+        issues = aggregate_issues(issues);
         let mut seen_pending = HashSet::new();
         let pending_tasks = result
             .as_ref()
@@ -373,6 +386,67 @@ impl DesktopDiscoveryView {
             attempts,
         }
     }
+}
+
+fn aggregate_issues(mut issues: Vec<DesktopDiscoveryIssueView>) -> Vec<DesktopDiscoveryIssueView> {
+    let mut aggregated = Vec::with_capacity(issues.len());
+    for issue in issues.drain(..) {
+        let Some(existing) = aggregated
+            .iter_mut()
+            .find(|existing| same_issue(existing, &issue))
+        else {
+            aggregated.push(issue);
+            continue;
+        };
+        existing.occurrences += issue.occurrences;
+        for issue_ref in issue.issue_refs {
+            if !existing.issue_refs.contains(&issue_ref) {
+                existing.issue_refs.push(issue_ref);
+            }
+        }
+        for stage in issue.stages {
+            if !existing.stages.contains(&stage) {
+                existing.stages.push(stage);
+            }
+        }
+        for observation in issue.observations {
+            if !existing.observations.contains(&observation) {
+                existing.observations.push(observation);
+            }
+        }
+        for evidence in issue.evidence {
+            if !existing
+                .evidence
+                .iter()
+                .any(|current| current.start == evidence.start && current.end == evidence.end)
+            {
+                existing.evidence.push(evidence);
+            }
+        }
+        existing.requires_unit_revision |= issue.requires_unit_revision;
+        if existing.context_request.is_none() {
+            existing.context_request = issue.context_request;
+        }
+        existing.observation = existing.observations.join("；");
+    }
+    aggregated
+}
+
+fn same_issue(left: &DesktopDiscoveryIssueView, right: &DesktopDiscoveryIssueView) -> bool {
+    if left.kind != right.kind || left.owner != right.owner {
+        return false;
+    }
+    if left.evidence.is_empty() || right.evidence.is_empty() {
+        return left.evidence.is_empty()
+            && right.evidence.is_empty()
+            && left.observation == right.observation;
+    }
+    left.evidence.iter().any(|left| {
+        right
+            .evidence
+            .iter()
+            .any(|right| left.start < right.end && right.start < left.end)
+    })
 }
 
 type DiagnosticKey = (String, String, String, bool);
@@ -473,5 +547,38 @@ mod tests {
         assert_eq!(diagnostics[0].report, 1);
         assert_eq!(diagnostics[0].reports, [1, 2]);
         assert_eq!(diagnostics[0].occurrences, 2);
+    }
+
+    #[test]
+    fn cross_stage_issues_are_aggregated_by_owner_kind_and_overlapping_evidence() {
+        let issue =
+            |issue_ref: &str, stage: DesktopIssueStage, start: u64| DesktopDiscoveryIssueView {
+                issue_ref: issue_ref.into(),
+                issue_refs: vec![issue_ref.into()],
+                stage,
+                stages: vec![stage],
+                owner: Some("u4".into()),
+                kind: DiscoveryIssueKind::SuspectedConversionError,
+                observation: format!("observation {issue_ref}"),
+                observations: vec![format!("observation {issue_ref}")],
+                occurrences: 1,
+                context_request: None,
+                requires_unit_revision: false,
+                evidence: vec![DesktopSourceAnchorView {
+                    start,
+                    end: start + 10,
+                    block_ids: vec![],
+                    excerpt: "fixture".into(),
+                }],
+            };
+        let aggregated = aggregate_issues(vec![
+            issue("a1", DesktopIssueStage::UnitDiscovery, 10),
+            issue("t4:i1", DesktopIssueStage::SourceFacts, 15),
+        ]);
+        assert_eq!(aggregated.len(), 1);
+        assert_eq!(aggregated[0].occurrences, 2);
+        assert_eq!(aggregated[0].issue_refs, ["a1", "t4:i1"]);
+        assert_eq!(aggregated[0].stages.len(), 2);
+        assert_eq!(aggregated[0].observations.len(), 2);
     }
 }

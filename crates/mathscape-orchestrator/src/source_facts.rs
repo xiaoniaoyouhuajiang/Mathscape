@@ -239,16 +239,57 @@ impl PreparedFactRequest {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, f)| {
-                    resolve(
-                        &format!("r{}", i + 1),
-                        &f.anchor,
-                        format!("{prefix}.references[{i}].anchor"),
-                        &mut report,
-                    )
-                    .map(|fact| LocatedReference {
-                        fact,
-                        target_hint: f.target_hint.clone(),
-                    })
+                    if f.target_hint.is_some() {
+                        return resolve(
+                            &format!("r{}", i + 1),
+                            &f.anchor,
+                            format!("{prefix}.references[{i}].anchor"),
+                            &mut report,
+                        )
+                        .map(|fact| LocatedReference {
+                            fact,
+                            target_hint: f.target_hint.clone(),
+                        });
+                    }
+                    let path = format!("{prefix}.references[{i}].anchor");
+                    let Some(locator) = &scope.locator else {
+                        report.push(
+                            "unauthorized_range",
+                            &path,
+                            "owner has no direct extraction region",
+                        );
+                        return None;
+                    };
+                    match locator.resolve(&f.anchor) {
+                        Ok(value) => Some(LocatedReference {
+                            fact: located(&format!("r{}", i + 1), value),
+                            target_hint: f.target_hint.clone(),
+                        }),
+                        Err(error) if error.code == OccurrenceErrorCode::AmbiguousQuote => {
+                            // A repeated external citation is useful as an
+                            // audit warning, but choosing one occurrence is
+                            // not worth blocking the complete task. Do not
+                            // create a potentially false source edge.
+                            report.warn(
+                                "ambiguous_reference",
+                                path,
+                                format!(
+                                    "{}; reference retained as unresolved mention",
+                                    error.message
+                                ),
+                            );
+                            None
+                        }
+                        Err(error) => {
+                            let code = serde_json::to_value(error.code)
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .to_owned();
+                            report.push(&code, path, error.message);
+                            None
+                        }
+                    }
                 })
                 .collect();
             let mut relations = vec![];
@@ -318,6 +359,13 @@ impl PreparedFactRequest {
                 }
             }
             if report.is_valid() {
+                result.report.diagnostics.extend(
+                    report
+                        .diagnostics
+                        .iter()
+                        .filter(|diagnostic| diagnostic.code.starts_with("warning_"))
+                        .cloned(),
+                );
                 result.tasks.push(ValidatedFactTask {
                     task_ref: task.task_ref.clone(),
                     owner: scope.owner.clone(),

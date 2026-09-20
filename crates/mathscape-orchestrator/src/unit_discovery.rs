@@ -95,8 +95,22 @@ impl StageValidationReport {
             message: message.into(),
         });
     }
+
+    /// Records a deterministic, non-blocking quality warning. Warnings stay
+    /// in the same audit stream as validation diagnostics, but never force a
+    /// repair or make the task invalid.
+    pub(crate) fn warn(&mut self, code: &str, path: impl Into<String>, message: impl Into<String>) {
+        self.diagnostics.push(StageDiagnostic {
+            code: format!("warning_{code}"),
+            path: path.into(),
+            message: message.into(),
+        });
+    }
+
     pub fn is_valid(&self) -> bool {
-        self.diagnostics.is_empty()
+        self.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code.starts_with("warning_"))
     }
 }
 

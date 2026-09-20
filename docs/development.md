@@ -48,6 +48,8 @@ cargo run -p mathscape-orchestrator --example discovery_workflow_demo --quiet
 
 前三条只输出 Schema，最后一条离线回放工作流。旧单阶段生成器 `discovery_schema` 对应当前 v3，不用于重写 v1/v2 历史快照。输入或输出语义不兼容时升级契约；Prompt 指令变化记录 revision。旧包和兼容反序列化的去留由回放与测试依赖决定。
 
+来源发现的修复约束：修复响应优先使用带 `base_fingerprint` 的局部 patch（单元 issue evidence、事实锚点或事实 issue evidence）；只有结构变化才使用完整 `replace_units`/`replace_task`。重复且未绑定的引用作为 `warning_*` 非阻塞诊断保留，不自动猜测目标。Desktop 审核投影会按 owner、issue kind 和重叠证据聚合 Stage A/B 的同源问题，并保留各阶段与原始 issue 引用。
+
 ## 数据库升级
 
 [migrations](../migrations/) 顺序追加；已发布 migration 不原地改写。升级在打开 Workspace 时执行，必须覆盖已有数据库，而不是要求用户删库重建。检查旧版本升级、重开和拒绝未知未来版本；历史异常 schema 的修复应有专门回归。

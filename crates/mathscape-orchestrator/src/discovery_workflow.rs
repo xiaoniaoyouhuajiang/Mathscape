@@ -406,6 +406,7 @@ impl<'a> DiscoveryWorkflow<'a> {
                     let input = DiscoveryRepairInput {
                         version: DiscoveryRepairVersion::V1,
                         repair_ref: repair_ref.clone(),
+                        base_fingerprint: crate::unit_discovery::fingerprint(&raw),
                         scope: RepairScope::Units {},
                         blocks: prepared.model_input().blocks.clone(),
                         issues: repair_issues(&report),
@@ -431,12 +432,14 @@ impl<'a> DiscoveryWorkflow<'a> {
                     if response.repair_ref != repair_ref || response.actions.len() != 1 {
                         return self.finish(WorkflowStatus::NeedsAttention);
                     }
-                    let Some(DiscoveryRepairAction::ReplaceUnits { proposal }) =
-                        response.actions.into_iter().next()
-                    else {
-                        return self.finish(WorkflowStatus::NeedsAttention);
+                    let repaired = match apply_unit_repair(&raw, &input, &response) {
+                        Ok(proposal) => proposal,
+                        Err(error) => {
+                            self.events.push(error);
+                            return self.finish(WorkflowStatus::NeedsAttention);
+                        }
                     };
-                    match prepared.validate(*proposal, Default::default()) {
+                    match prepared.validate(repaired, Default::default()) {
                         Ok(u) => self.units = Some(u),
                         Err(r) => {
                             self.diagnostics.push(r);
@@ -534,10 +537,12 @@ impl<'a> DiscoveryWorkflow<'a> {
                 completed_tasks,
                 total_tasks,
             });
+            if !validation.report.diagnostics.is_empty() {
+                self.diagnostics.push(validation.report.clone());
+            }
             if validation.report.is_valid() {
                 continue;
             }
-            self.diagnostics.push(validation.report.clone());
             let repair_key = batch.batch_fingerprint.to_string();
             if !self.repairs.insert(repair_key) {
                 continue;
@@ -553,6 +558,7 @@ impl<'a> DiscoveryWorkflow<'a> {
             let input = DiscoveryRepairInput {
                 version: DiscoveryRepairVersion::V1,
                 repair_ref: repair_ref.clone(),
+                base_fingerprint: crate::unit_discovery::fingerprint(&raw),
                 scope: RepairScope::Facts {
                     task_refs: failed.clone(),
                 },
@@ -620,10 +626,64 @@ impl<'a> DiscoveryWorkflow<'a> {
     }
 }
 
+fn apply_unit_repair(
+    raw: &UnitDiscoveryProposal,
+    input: &DiscoveryRepairInput,
+    response: &DiscoveryRepairResponse,
+) -> Result<UnitDiscoveryProposal, String> {
+    if response.repair_ref != input.repair_ref {
+        return Err("stale repair response".into());
+    }
+    if input.base_fingerprint != crate::unit_discovery::fingerprint(raw) {
+        return Err("stale repair base proposal".into());
+    }
+    let [action] = response.actions.as_slice() else {
+        return Err("unit repair must contain exactly one action".into());
+    };
+    let mut result = raw.clone();
+    match action {
+        DiscoveryRepairAction::ReplaceUnits { proposal } => {
+            if proposal.request_ref != raw.request_ref {
+                return Err("unit replacement belongs to another request".into());
+            }
+            Ok((**proposal).clone())
+        }
+        DiscoveryRepairAction::PatchUnitIssueEvidence {
+            issue_ref,
+            evidence,
+        } => {
+            let issue_index = issue_ref
+                .strip_prefix('i')
+                .ok_or("invalid unit issue reference")?
+                .parse::<usize>()
+                .map_err(|_| "invalid unit issue reference")?
+                .checked_sub(1)
+                .ok_or("invalid unit issue reference")?;
+            let issue = input
+                .issues
+                .get(issue_index)
+                .ok_or("unknown unit repair issue")?;
+            if issue.issue_ref != *issue_ref
+                || issue.path != format!("issues[{issue_index}].evidence")
+            {
+                return Err("unit evidence patch does not match the reported issue".into());
+            }
+            let target = result
+                .issues
+                .get_mut(issue_index)
+                .ok_or("unit issue is missing from the base proposal")?;
+            target.evidence = evidence.clone();
+            Ok(result)
+        }
+        _ => Err("wrong-stage repair action".into()),
+    }
+}
+
 fn repair_issues(report: &StageValidationReport) -> Vec<RepairIssue> {
     report
         .diagnostics
         .iter()
+        .filter(|diagnostic| !diagnostic.code.starts_with("warning_"))
         .enumerate()
         .map(|(i, d)| RepairIssue {
             issue_ref: format!("i{}", i + 1),
@@ -652,6 +712,9 @@ fn repair_fact_issues(
     let mut issues: Vec<RepairIssue> = Vec::new();
     let mut grouped = HashMap::<String, usize>::new();
     for diagnostic in &report.diagnostics {
+        if diagnostic.code.starts_with("warning_") {
+            continue;
+        }
         if let Some(choice) = choices.iter().find(|choice| choice.path == diagnostic.path) {
             issues.push(RepairIssue {
                 issue_ref: String::new(),
@@ -765,6 +828,9 @@ fn apply_fact_repair(
     let mut selected = HashSet::new();
     let mut deferred = HashSet::new();
     let base = fingerprint(raw);
+    if input.base_fingerprint != base {
+        return Err("stale repair base proposal".into());
+    }
     for action in &response.actions {
         match action {
             DiscoveryRepairAction::ReplaceTask { task_ref, proposal } => {
@@ -781,6 +847,90 @@ fn apply_fact_repair(
                 } else {
                     result.tasks.push((**proposal).clone());
                 }
+            }
+            DiscoveryRepairAction::PatchFactAnchor {
+                task_ref,
+                path,
+                anchor,
+            } => {
+                if !failed.contains(task_ref)
+                    || replaced.contains(task_ref)
+                    || deferred.contains(task_ref)
+                {
+                    return Err("conflicting or unauthorized fact anchor patch".into());
+                }
+                let issue = input
+                    .issues
+                    .iter()
+                    .find(|issue| issue.path == *path)
+                    .ok_or("anchor patch does not match a reported issue")?;
+                if !issue.path.starts_with(&format!("tasks.{task_ref}.")) {
+                    return Err("anchor patch targets another task".into());
+                }
+                let task = result
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.task_ref == *task_ref)
+                    .ok_or("missing task")?;
+                let suffix = path
+                    .strip_prefix(&format!("tasks.{task_ref}."))
+                    .ok_or("invalid fact anchor path")?;
+                if suffix == "source_title" {
+                    task.source_title = Some(anchor.clone());
+                } else {
+                    let (field, tail) = suffix
+                        .split_once('[')
+                        .ok_or("unsupported fact anchor path")?;
+                    let index: usize = tail
+                        .split(']')
+                        .next()
+                        .ok_or("invalid fact anchor index")?
+                        .parse()
+                        .map_err(|_| "invalid fact anchor index")?;
+                    let field = field.strip_suffix(".anchor").unwrap_or(field);
+                    match field {
+                        "source_labels" => {
+                            task.source_labels
+                                .get_mut(index)
+                                .ok_or("missing source label")?
+                                .anchor = anchor.clone();
+                        }
+                        "references" => {
+                            task.references
+                                .get_mut(index)
+                                .ok_or("missing reference")?
+                                .anchor = anchor.clone();
+                        }
+                        _ => return Err("unsupported fact anchor field".into()),
+                    }
+                }
+                touched.insert(task_ref.clone());
+            }
+            DiscoveryRepairAction::PatchFactIssueEvidence {
+                task_ref,
+                issue_index,
+                evidence,
+            } => {
+                if !failed.contains(task_ref)
+                    || replaced.contains(task_ref)
+                    || deferred.contains(task_ref)
+                {
+                    return Err("conflicting or unauthorized fact issue patch".into());
+                }
+                let expected_path = format!("tasks.{task_ref}.issues[{issue_index}].evidence");
+                if !input.issues.iter().any(|issue| issue.path == expected_path) {
+                    return Err("fact issue patch does not match a reported issue".into());
+                }
+                let task = result
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.task_ref == *task_ref)
+                    .ok_or("missing task")?;
+                task.issues
+                    .get_mut(*issue_index)
+                    .ok_or("missing fact issue")?
+                    .evidence = evidence.clone();
+                touched.insert(task_ref.clone());
             }
             DiscoveryRepairAction::ChooseCandidate {
                 issue_ref,

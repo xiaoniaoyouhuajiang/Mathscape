@@ -293,6 +293,88 @@
         },
         {
           "additionalProperties": false,
+          "description": "Replace only the evidence selectors of one unit-stage issue. This is\nintentionally narrower than ReplaceUnits so a locator repair does not\nrequire the model to restate the whole unit proposal.",
+          "properties": {
+            "evidence": {
+              "items": {
+                "$ref": "#/$defs/DiscoverySelector"
+              },
+              "type": "array"
+            },
+            "issue_ref": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "patch_unit_issue_evidence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "issue_ref",
+            "evidence"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Replace one source-title/label/reference anchor in a failed fact task.\n`path` must match the validator-reported field path exactly.",
+          "properties": {
+            "anchor": {
+              "$ref": "#/$defs/TextOccurrence"
+            },
+            "kind": {
+              "const": "patch_fact_anchor",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "task_ref": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "task_ref",
+            "path",
+            "anchor"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Replace one fact-issue's evidence without replacing the complete task.",
+          "properties": {
+            "evidence": {
+              "items": {
+                "$ref": "#/$defs/DiscoverySelector"
+              },
+              "type": "array"
+            },
+            "issue_index": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "patch_fact_issue_evidence",
+              "type": "string"
+            },
+            "task_ref": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "task_ref",
+            "issue_index",
+            "evidence"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "properties": {
             "kind": {
               "const": "replace_units",

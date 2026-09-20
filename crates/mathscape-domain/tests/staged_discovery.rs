@@ -58,6 +58,7 @@ fn occurrence_and_repair_are_closed_wire_contracts() {
 
     let repair_input = json!({
         "version":"mathscape-discovery-repair-1", "repair_ref":"p1",
+        "base_fingerprint":"sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "scope":{"stage":"facts","task_refs":["t2"]}, "blocks":[],
         "issues":[{"issue_ref":"i1","path":"tasks[1].references[0]",
             "code":"ambiguous_quote","message":"出现两次",

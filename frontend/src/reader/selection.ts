@@ -104,10 +104,14 @@ interface DiscoveryRelationView {
 
 interface DiscoveryIssueView {
   issue_ref: string;
+  issue_refs?: string[];
   stage: "unit_discovery" | "source_facts";
+  stages?: ("unit_discovery" | "source_facts")[];
   owner: string | null;
   kind: string;
   observation: string;
+  observations?: string[];
+  occurrences?: number;
   requires_unit_revision: boolean;
   evidence: DiscoveryAnchorView[];
 }
@@ -589,7 +593,10 @@ export class MarkdownSelection {
       const list = textElement("ul", "discovery-issues", "");
       for (const issue of view.issues) {
         const item = document.createElement("li");
-        item.append(document.createTextNode(`${issue.stage === "unit_discovery" ? "单元识别" : "来源事实"} · ${this.issueKindLabel(issue.kind)}${issue.owner ? ` · ${unitTitles.get(issue.owner) ?? issue.owner}` : ""}：${issue.observation}`));
+        const stages = issue.stages ?? [issue.stage];
+        const stageLabels = stages.map(stage => stage === "unit_discovery" ? "单元识别" : "来源事实").join("、");
+        const repeated = (issue.occurrences ?? 1) > 1 ? `（聚合 ${issue.occurrences} 条）` : "";
+        item.append(document.createTextNode(`${stageLabels} · ${this.issueKindLabel(issue.kind)}${issue.owner ? ` · ${unitTitles.get(issue.owner) ?? issue.owner}` : ""}${repeated}：${issue.observation}`));
         if (issue.evidence.length > 0) item.append(" ", this.anchorButtons("证据", issue.evidence));
         list.append(item);
       }
@@ -602,7 +609,8 @@ export class MarkdownSelection {
         const repeated = item.occurrences > 1
           ? `（重复 ${item.occurrences} 次，报告 ${item.reports.join("、")}）`
           : "";
-        list.append(textElement("li", "", `${item.path} · ${item.code}：${item.message}${repeated}`));
+        const severity = item.code.startsWith("warning_") ? "非阻塞警告" : "验证错误";
+        list.append(textElement("li", "", `${severity} · ${item.path} · ${item.code}：${item.message}${repeated}`));
       });
       this.discoveryResult.append(textElement("h4", "", "确定性诊断"), list);
     }

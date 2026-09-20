@@ -97,6 +97,7 @@ fn facts(input: &SourceFactInput) -> SourceFactProposal {
 enum Mode {
     Clean,
     RepairA,
+    RepairPatchA,
     RepairB,
     RepairTask,
     Unrepairable,
@@ -140,6 +141,15 @@ impl LlmBackend for Backend {
                     if self.mode == Mode::RepairA {
                         u["units"][0]["parent"] = json!("u2");
                     }
+                    if self.mode == Mode::RepairPatchA {
+                        u["issues"] = json!([{
+                            "kind": "suspected_conversion_error",
+                            "unit": "u2",
+                            "evidence": [{"kind":"block_range","first":"b1","last":"b1"}],
+                            "observation": "fixture conversion warning",
+                            "context_request": null
+                        }]);
+                    }
                     u
                 }
                 "source-facts" => {
@@ -163,11 +173,16 @@ impl LlmBackend for Backend {
                                 task["references"] = json!([]);
                                 task["relations"] = json!([]);
                             }
-                            if matches!(
-                                self.mode,
-                                Mode::RepairB | Mode::Unrepairable | Mode::WrongStageRepair
-                            ) {
+                            if matches!(self.mode, Mode::RepairB | Mode::WrongStageRepair) {
                                 task["references"][0]["anchor"]["occurrence"] = Value::Null;
+                            }
+                            if matches!(self.mode, Mode::Unrepairable | Mode::WrongStageRepair) {
+                                task["source_title"] = json!({
+                                    "kind": "text_occurrence",
+                                    "block": "b3",
+                                    "text": "missing title",
+                                    "occurrence": null
+                                });
                             }
                             if self.mode == Mode::RepairTask {
                                 task["references"][0]["target_hint"] = json!("u2");
@@ -185,6 +200,12 @@ impl LlmBackend for Backend {
                         let mut p = input["original"].clone();
                         p["units"][0]["parent"] = Value::Null;
                         json!({"kind":"replace_units","proposal":p})
+                    } else if self.mode == Mode::RepairPatchA {
+                        json!({
+                            "kind": "patch_unit_issue_evidence",
+                            "issue_ref": "i1",
+                            "evidence": [{"kind":"block_range","first":"b2","last":"b2"}]
+                        })
                     } else if self.mode == Mode::RepairTask {
                         let mut task = input["original"]["tasks"]
                             .as_array()
@@ -287,18 +308,32 @@ async fn complete_pipeline_uses_fresh_full_context_and_unresolved_is_valid() {
 
 #[tokio::test]
 async fn one_repair_per_stage_and_valid_sibling_is_retained() {
-    for mode in [Mode::RepairA, Mode::RepairB, Mode::RepairTask] {
+    for mode in [Mode::RepairA, Mode::RepairPatchA, Mode::RepairTask] {
         let backend = Backend::new(mode);
         let mut flow = DiscoveryWorkflow::new(&backend, Default::default());
         assert_eq!(flow.run(prepared(SOURCE)).await, WorkflowStatus::Completed);
         assert_eq!(flow.attempts().len(), 3);
         assert_eq!(flow.attempts().iter().filter(|a| a.repair).count(), 1);
         assert_eq!(flow.result().unwrap().tasks().len(), 2);
-        if mode != Mode::RepairA {
+        if mode == Mode::RepairTask {
             let repair = user(&flow.attempts()[2].request);
             assert_eq!(repair["repair"]["scope"]["task_refs"], json!(["t2"]));
         }
     }
+}
+
+#[tokio::test]
+async fn ambiguous_repeated_reference_is_non_blocking() {
+    let backend = Backend::new(Mode::RepairB);
+    let mut flow = DiscoveryWorkflow::new(&backend, Default::default());
+    assert_eq!(flow.run(prepared(SOURCE)).await, WorkflowStatus::Completed);
+    assert_eq!(flow.attempts().len(), 2);
+    assert!(
+        flow.diagnostics()
+            .iter()
+            .flat_map(|report| &report.diagnostics)
+            .any(|diagnostic| diagnostic.code == "warning_ambiguous_reference")
+    );
 }
 
 #[tokio::test]

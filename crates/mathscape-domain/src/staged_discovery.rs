@@ -226,6 +226,26 @@ pub enum DiscoveryRepairAction {
         issue_ref: String,
         candidate_ref: String,
     },
+    /// Replace only the evidence selectors of one unit-stage issue. This is
+    /// intentionally narrower than ReplaceUnits so a locator repair does not
+    /// require the model to restate the whole unit proposal.
+    PatchUnitIssueEvidence {
+        issue_ref: String,
+        evidence: Vec<DiscoverySelector>,
+    },
+    /// Replace one source-title/label/reference anchor in a failed fact task.
+    /// `path` must match the validator-reported field path exactly.
+    PatchFactAnchor {
+        task_ref: String,
+        path: String,
+        anchor: TextOccurrence,
+    },
+    /// Replace one fact-issue's evidence without replacing the complete task.
+    PatchFactIssueEvidence {
+        task_ref: String,
+        issue_index: usize,
+        evidence: Vec<DiscoverySelector>,
+    },
     ReplaceUnits {
         proposal: Box<UnitDiscoveryProposal>,
     },
@@ -280,6 +300,9 @@ pub enum RepairScope {
 pub struct DiscoveryRepairInput {
     pub version: DiscoveryRepairVersion,
     pub repair_ref: String,
+    /// Fingerprint of `original`; patch actions are valid only against this
+    /// exact proposal revision.
+    pub base_fingerprint: ContentHash,
     pub scope: RepairScope,
     pub blocks: Vec<StageBlock>,
     pub issues: Vec<RepairIssue>,
