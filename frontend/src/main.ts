@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Core, NodeSingular } from "cytoscape";
 
-import { mountCytoscapeGraph } from "./graph/cytoscape";
+import { mountCytoscapeGraph, type RenderMode } from "./graph/cytoscape";
 import type { IncidenceGraph, IncidenceNode } from "./graph/projection";
 import "./styles.css";
 import { ArtifactReader } from "./reader/reader";
@@ -165,6 +165,7 @@ app.innerHTML = `
             <button id="show-source-map" class="reader-tab graph-view-button" type="button" aria-pressed="false">来源图</button>
             <button id="show-landscape-map" class="reader-tab graph-view-button" type="button" aria-pressed="false">景观图</button>
             <label id="evidence-toggle-wrap" class="graph-evidence-toggle" hidden><input id="show-landscape-evidence" type="checkbox"> 显示证据</label>
+            <label id="render-mode-wrap" class="graph-evidence-toggle"><input id="render-mode-toggle" type="checkbox" checked> 语义边</label>
             <span><i class="legend-dot entity"></i><span id="graph-entity-legend">来源材料</span></span>
             <span><i class="legend-dot relation"></i><span id="graph-relation-legend">转换任务</span></span>
           </div>
@@ -250,6 +251,12 @@ requiredElement<HTMLButtonElement>("#show-landscape-map").onclick = () => {
 };
 const evidenceToggle = requiredElement<HTMLInputElement>("#show-landscape-evidence");
 evidenceToggle.onchange = () => renderCurrentGraph();
+const renderModeToggle = requiredElement<HTMLInputElement>("#render-mode-toggle");
+renderModeToggle.onchange = () => {
+  renderMode = renderModeToggle.checked ? "semantic" : "hyperedge";
+  try { localStorage.setItem("mathscape:render-mode", renderMode); } catch { /* Optional presentation preference. */ }
+  renderCurrentGraph();
+};
 const showMap = () => {
   reader.close();
   readerHost.hidden = true;
@@ -264,6 +271,7 @@ let pollingParse = false;
 let selectedNode: IncidenceNode | undefined;
 let currentSnapshot: DesktopSnapshot | undefined;
 let selectedLens: "material" | "source" | "landscape" = "material";
+let renderMode: RenderMode = "semantic";
 
 function selectGraphLens(lens: typeof selectedLens): void {
   selectedLens = lens;
@@ -274,6 +282,11 @@ function selectGraphLens(lens: typeof selectedLens): void {
 try {
   const saved = localStorage.getItem("mathscape:graph-lens");
   if (saved === "material" || saved === "source" || saved === "landscape") selectedLens = saved;
+} catch { /* Optional presentation preference. */ }
+try {
+  const savedMode = localStorage.getItem("mathscape:render-mode");
+  if (savedMode === "semantic" || savedMode === "hyperedge") renderMode = savedMode;
+  renderModeToggle.checked = renderMode === "semantic";
 } catch { /* Optional presentation preference. */ }
 
 importButton.addEventListener("click", () => void importPdf());
@@ -412,7 +425,7 @@ function renderCurrentGraph(snapshot = currentSnapshot): void {
     button.setAttribute("aria-pressed", String(active));
   });
   requiredElement<HTMLElement>("#evidence-toggle-wrap").hidden = selectedLens !== "landscape";
-  graphCore = mountCytoscapeGraph(graphContainer, visibleGraph);
+  graphCore = mountCytoscapeGraph(graphContainer, visibleGraph, renderMode);
   emptyState.classList.toggle("is-hidden", visibleGraph.nodes.length > 0);
   graphCore.on("tap", "node", (event) => {
     const selected = event.target as NodeSingular;
