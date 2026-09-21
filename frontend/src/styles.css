@@ -421,6 +421,12 @@ code {
 .detail-error { color: #df958d; font-size: 12px; }
 .graph-evidence-toggle { display: inline-flex; align-items: center; gap: 5px; color: #bdd6cf; font-size: 11px; }
 .graph-evidence-toggle input { accent-color: #d7aa58; }
+.graph-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.preset-group { display: flex; gap: 4px; }
+.preset-button { background: #20353e; color: #e9edf2; border: 1px solid #45606c; border-radius: 5px; padding: 5px 10px; font-size: 11px; cursor: pointer; }
+.preset-button.is-active { border-color: #8fc8b7; background: #31534e; color: #f3fffb; }
+.filter-group { display: flex; align-items: center; gap: 8px; }
+.filter-divider { color: #3a4f5c; font-size: 14px; user-select: none; }
 .source-preview { max-height: 260px; overflow: auto; padding: 10px; border: 1px solid #294047; border-radius: 6px; color: #25303c; background: #f7f8fa; }
 .source-preview p:first-child { margin-top: 0; }
 

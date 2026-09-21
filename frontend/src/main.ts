@@ -154,27 +154,33 @@ app.innerHTML = `
         </section>
       </aside>
 
-      <section class="canvas-panel" aria-label="来源关系图">
+      <section class="canvas-panel" aria-label="数学地图">
         <div class="canvas-toolbar">
           <div>
-            <span class="eyebrow">GRAPH PROJECTION</span>
-            <h2 id="graph-view-title">材料图</h2>
+            <span class="eyebrow">MAP</span>
+            <h2 id="graph-view-title">数学地图</h2>
           </div>
-          <div class="legend" aria-label="图例">
-            <button id="show-material-map" class="reader-tab graph-view-button" type="button" aria-pressed="true">材料图</button>
-            <button id="show-source-map" class="reader-tab graph-view-button" type="button" aria-pressed="false">来源图</button>
-            <button id="show-landscape-map" class="reader-tab graph-view-button" type="button" aria-pressed="false">景观图</button>
-            <label id="evidence-toggle-wrap" class="graph-evidence-toggle" hidden><input id="show-landscape-evidence" type="checkbox"> 显示证据</label>
-            <label id="render-mode-wrap" class="graph-evidence-toggle"><input id="render-mode-toggle" type="checkbox" checked> 语义边</label>
-            <span><i class="legend-dot entity"></i><span id="graph-entity-legend">来源材料</span></span>
-            <span><i class="legend-dot relation"></i><span id="graph-relation-legend">转换任务</span></span>
+          <div class="graph-controls" aria-label="过滤">
+            <div class="preset-group">
+              <button class="preset-button" data-preset="source" type="button">来源内容</button>
+              <button class="preset-button" data-preset="material" type="button">材料</button>
+              <button class="preset-button" data-preset="overview" type="button">总览</button>
+            </div>
+            <span class="filter-divider">│</span>
+            <div class="filter-group" id="node-filter-group">
+              <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceArtifact"> 材料</label>
+              <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceSemanticUnit"> 内容单元</label>
+              <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceSpan"> 原文证据</label>
+            </div>
+            <span class="filter-divider">│</span>
+            <label class="graph-evidence-toggle"><input id="render-mode-toggle" type="checkbox" checked> 语义边</label>
           </div>
         </div>
         <div id="graph" class="graph-canvas"></div>
         <section id="reader" class="reader-panel" aria-label="文件阅读器" hidden></section>
         <div id="empty-state" class="empty-state">
           <strong id="empty-state-title">尚未导入材料</strong>
-          <span id="empty-state-message">导入第一份 PDF 后，材料节点会出现在这里。</span>
+          <span id="empty-state-message">导入第一份 PDF 后，节点会出现在这里。</span>
         </div>
       </section>
 
@@ -220,8 +226,7 @@ const workspaceName = requiredElement<HTMLElement>("#workspace-name");
 const workspaceRoot = requiredElement<HTMLElement>("#workspace-root");
 const graphContainer = requiredElement<HTMLElement>("#graph");
 const graphViewTitle = requiredElement<HTMLElement>("#graph-view-title");
-const graphEntityLegend = requiredElement<HTMLElement>("#graph-entity-legend");
-const graphRelationLegend = requiredElement<HTMLElement>("#graph-relation-legend");
+const nodeFilterGroup = requiredElement<HTMLElement>("#node-filter-group");
 const emptyState = requiredElement<HTMLElement>("#empty-state");
 const emptyStateTitle = requiredElement<HTMLElement>("#empty-state-title");
 const emptyStateMessage = requiredElement<HTMLElement>("#empty-state-message");
@@ -240,17 +245,22 @@ const llmSettings = new LlmSettingsController(
   requiredElement<HTMLElement>("#llm-settings-label"),
   showToast,
 );
-requiredElement<HTMLButtonElement>("#show-material-map").onclick = () => {
-  selectGraphLens("material");
-};
-requiredElement<HTMLButtonElement>("#show-source-map").onclick = () => {
-  selectGraphLens("source");
-};
-requiredElement<HTMLButtonElement>("#show-landscape-map").onclick = () => {
-  selectGraphLens("landscape");
-};
-const evidenceToggle = requiredElement<HTMLInputElement>("#show-landscape-evidence");
-evidenceToggle.onchange = () => renderCurrentGraph();
+document.querySelectorAll<HTMLButtonElement>(".preset-button").forEach((button) => {
+  button.onclick = () => {
+    const preset = button.dataset.preset as PresetName;
+    if (preset in PRESET_NODE_KINDS) {
+      visibleNodeKinds = new Set(PRESET_NODE_KINDS[preset]);
+      syncCheckboxesToFilter();
+      persistFilter();
+      renderCurrentGraph();
+    }
+  };
+});
+nodeFilterGroup.addEventListener("change", () => {
+  syncFilterFromCheckboxes();
+  persistFilter();
+  renderCurrentGraph();
+});
 const renderModeToggle = requiredElement<HTMLInputElement>("#render-mode-toggle");
 renderModeToggle.onchange = () => {
   renderMode = renderModeToggle.checked ? "semantic" : "hyperedge";
@@ -270,19 +280,56 @@ let submittingParse = false;
 let pollingParse = false;
 let selectedNode: IncidenceNode | undefined;
 let currentSnapshot: DesktopSnapshot | undefined;
-let selectedLens: "material" | "source" | "landscape" = "material";
 let renderMode: RenderMode = "semantic";
 
-function selectGraphLens(lens: typeof selectedLens): void {
-  selectedLens = lens;
-  try { localStorage.setItem("mathscape:graph-lens", lens); } catch { /* Optional presentation preference. */ }
-  renderCurrentGraph();
-}
+type PresetName = "overview" | "material" | "source";
+const PRESET_NODE_KINDS: Record<PresetName, ReadonlySet<string>> = {
+  overview: new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan"]),
+  material: new Set(["SourceArtifact"]),
+  source: new Set(["SourceArtifact", "SourceSemanticUnit"]),
+};
+let visibleNodeKinds = new Set<string>(PRESET_NODE_KINDS.source);
 
+function syncCheckboxesToFilter(): void {
+  nodeFilterGroup.querySelectorAll<HTMLInputElement>("input[data-node-kind]").forEach((cb) => {
+    cb.checked = visibleNodeKinds.has(cb.dataset.nodeKind!);
+  });
+  syncPresetHighlight();
+}
+function syncFilterFromCheckboxes(): void {
+  visibleNodeKinds = new Set<string>();
+  nodeFilterGroup.querySelectorAll<HTMLInputElement>("input[data-node-kind]").forEach((cb) => {
+    if (cb.checked) visibleNodeKinds.add(cb.dataset.nodeKind!);
+  });
+  syncPresetHighlight();
+}
+function syncPresetHighlight(): void {
+  document.querySelectorAll<HTMLButtonElement>(".preset-button").forEach((button) => {
+    const preset = button.dataset.preset as PresetName;
+    const presetKinds = PRESET_NODE_KINDS[preset];
+    const active = presetKinds !== undefined && setsEqual(presetKinds, visibleNodeKinds);
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+function setsEqual<T>(a: ReadonlySet<T>, b: ReadonlySet<T>): boolean {
+  if (a.size !== b.size) return false;
+  for (const item of a) if (!b.has(item)) return false;
+  return true;
+}
+function persistFilter(): void {
+  try { localStorage.setItem("mathscape:graph-filter", JSON.stringify([...visibleNodeKinds])); } catch { /* Optional presentation preference. */ }
+}
 try {
-  const saved = localStorage.getItem("mathscape:graph-lens");
-  if (saved === "material" || saved === "source" || saved === "landscape") selectedLens = saved;
+  const savedFilter = localStorage.getItem("mathscape:graph-filter");
+  if (savedFilter !== null) {
+    const parsed = JSON.parse(savedFilter) as string[];
+    if (Array.isArray(parsed) && parsed.every((k: unknown) => typeof k === "string")) {
+      visibleNodeKinds = new Set(parsed);
+    }
+  }
 } catch { /* Optional presentation preference. */ }
+syncCheckboxesToFilter();
 try {
   const savedMode = localStorage.getItem("mathscape:render-mode");
   if (savedMode === "semantic" || savedMode === "hyperedge") renderMode = savedMode;
@@ -400,33 +447,16 @@ function renderCurrentGraph(snapshot = currentSnapshot): void {
   if (snapshot === undefined) return;
   showMap();
   graphCore?.destroy();
-  const visibleGraph = selectedLens === "landscape"
-    ? landscapeGraphForDisplay(snapshot.landscape_graph, evidenceToggle.checked)
-    : selectedLens === "source"
-      ? snapshot.source_graph
-      : snapshot.graph;
-  const labels = { material: "材料图", source: "来源图", landscape: "景观图" } as const;
-  const legends = {
-    material: ["来源材料", "转换任务"],
-    source: ["来源单元 / 范围", "来源关系"],
-    landscape: ["跨层对象", "关系 / 追溯"],
-  } as const;
-  const emptyMessages = {
-    material: ["尚未导入材料", "导入第一份 PDF 后，材料节点会出现在这里。"],
-    source: ["尚未登记来源内容", "完成内容发现、审核和注册后，来源单元会出现在这里。"],
-    landscape: ["数学景观尚未形成", "材料和来源节点存在后，跨视图追溯链会出现在这里。"],
-  } as const;
-  graphViewTitle.textContent = labels[selectedLens];
-  [graphEntityLegend.textContent, graphRelationLegend.textContent] = legends[selectedLens];
-  [emptyStateTitle.textContent, emptyStateMessage.textContent] = emptyMessages[selectedLens];
-  document.querySelectorAll<HTMLButtonElement>(".graph-view-button").forEach(button => {
-    const active = button.id === `show-${selectedLens}-map`;
-    button.classList.toggle("is-active", active);
-    button.setAttribute("aria-pressed", String(active));
-  });
-  requiredElement<HTMLElement>("#evidence-toggle-wrap").hidden = selectedLens !== "landscape";
+  const visibleGraph = filterGraph(snapshot.landscape_graph);
+  syncPresetHighlight();
+  const entityCount = visibleGraph.nodes.filter((n) => n.element_kind === "entity").length;
+  const hasAnyData = snapshot.landscape_graph.nodes.some((n) => n.element_kind !== "group");
+  emptyStateTitle.textContent = hasAnyData ? "当前过滤条件下无可见节点" : "尚未导入材料";
+  emptyStateMessage.textContent = hasAnyData
+    ? "尝试切换显示预设或勾选更多节点类型。"
+    : "导入第一份 PDF 后，节点会出现在这里。";
   graphCore = mountCytoscapeGraph(graphContainer, visibleGraph, renderMode);
-  emptyState.classList.toggle("is-hidden", visibleGraph.nodes.length > 0);
+  emptyState.classList.toggle("is-hidden", entityCount > 0);
   graphCore.on("tap", "node", (event) => {
     const selected = event.target as NodeSingular;
     const model = visibleGraph.nodes.find(
@@ -508,12 +538,20 @@ async function renderSourceDetail(node: IncidenceNode, host: HTMLElement): Promi
   catch (error) { host.append(textElement("p", "detail-error", `来源详情读取失败：${error instanceof Error ? error.message : String(error)}`)); }
 }
 
-function landscapeGraphForDisplay(graph: IncidenceGraph, showEvidence: boolean): IncidenceGraph {
-  if (showEvidence) return graph;
-  const hidden = new Set(graph.nodes.filter(node => node.domain_kind === "SourceSpan").map(node => node.id));
-  const nodes = graph.nodes.filter(node => !hidden.has(node.id));
-  const nodeIds = new Set(nodes.map(node => node.id));
-  return { ...graph, nodes, edges: graph.edges.filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target)) };
+function filterGraph(graph: IncidenceGraph): IncidenceGraph {
+  const relationKinds = new Set<string>();
+  if (visibleNodeKinds.has("SourceArtifact")) relationKinds.add("ConversionRun");
+  if (visibleNodeKinds.has("SourceSemanticUnit")) relationKinds.add("SourceUnitRelation");
+  const nodes = graph.nodes.filter((node) => {
+    if (node.element_kind === "group") return true;
+    if (node.element_kind === "relation") {
+      return node.domain_kind !== null && relationKinds.has(node.domain_kind);
+    }
+    return node.domain_kind !== null && visibleNodeKinds.has(node.domain_kind);
+  });
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const edges = graph.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+  return { ...graph, nodes, edges };
 }
 
 function createParseForm(
