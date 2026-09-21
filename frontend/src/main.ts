@@ -249,6 +249,7 @@ document.querySelectorAll<HTMLButtonElement>(".preset-button").forEach((button) 
   button.onclick = () => {
     const preset = button.dataset.preset as PresetName;
     if (preset in PRESET_NODE_KINDS) {
+      activePreset = preset;
       visibleNodeKinds = new Set(PRESET_NODE_KINDS[preset]);
       syncCheckboxesToFilter();
       persistFilter();
@@ -289,6 +290,7 @@ const PRESET_NODE_KINDS: Record<PresetName, ReadonlySet<string>> = {
   source: new Set(["SourceArtifact", "SourceSemanticUnit"]),
 };
 let visibleNodeKinds = new Set<string>(PRESET_NODE_KINDS.source);
+let activePreset: PresetName | "custom" = "source";
 
 function syncCheckboxesToFilter(): void {
   nodeFilterGroup.querySelectorAll<HTMLInputElement>("input[data-node-kind]").forEach((cb) => {
@@ -297,6 +299,7 @@ function syncCheckboxesToFilter(): void {
   syncPresetHighlight();
 }
 function syncFilterFromCheckboxes(): void {
+  activePreset = "custom";
   visibleNodeKinds = new Set<string>();
   nodeFilterGroup.querySelectorAll<HTMLInputElement>("input[data-node-kind]").forEach((cb) => {
     if (cb.checked) visibleNodeKinds.add(cb.dataset.nodeKind!);
@@ -326,6 +329,9 @@ try {
     const parsed = JSON.parse(savedFilter) as string[];
     if (Array.isArray(parsed) && parsed.every((k: unknown) => typeof k === "string")) {
       visibleNodeKinds = new Set(parsed);
+      const matchingPreset = (Object.keys(PRESET_NODE_KINDS) as PresetName[])
+        .find((preset) => setsEqual(PRESET_NODE_KINDS[preset], visibleNodeKinds));
+      activePreset = matchingPreset ?? "custom";
     }
   }
 } catch { /* Optional presentation preference. */ }
@@ -539,15 +545,25 @@ async function renderSourceDetail(node: IncidenceNode, host: HTMLElement): Promi
 }
 
 function filterGraph(graph: IncidenceGraph): IncidenceGraph {
+  // Unknown types are intentionally visible only in the all-layer overview.
+  // Source/material presets remain stable until their layer-specific controls
+  // are added, so a future semantic node cannot silently leak into them.
+  const knownNodeKinds = new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan"]);
+  const knownRelationKinds = new Set(["ConversionRun", "SourceUnitRelation"]);
+  const allowUnknownKinds = activePreset === "overview";
   const relationKinds = new Set<string>();
   if (visibleNodeKinds.has("SourceArtifact")) relationKinds.add("ConversionRun");
   if (visibleNodeKinds.has("SourceSemanticUnit")) relationKinds.add("SourceUnitRelation");
   const nodes = graph.nodes.filter((node) => {
     if (node.element_kind === "group") return true;
     if (node.element_kind === "relation") {
-      return node.domain_kind !== null && relationKinds.has(node.domain_kind);
+      if (node.domain_kind === null) return false;
+      return (allowUnknownKinds && !knownRelationKinds.has(node.domain_kind))
+        || relationKinds.has(node.domain_kind);
     }
-    return node.domain_kind !== null && visibleNodeKinds.has(node.domain_kind);
+    if (node.domain_kind === null) return false;
+    return (allowUnknownKinds && !knownNodeKinds.has(node.domain_kind))
+      || visibleNodeKinds.has(node.domain_kind);
   });
   const nodeIds = new Set(nodes.map((n) => n.id));
   const edges = graph.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));

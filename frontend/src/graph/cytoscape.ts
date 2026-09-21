@@ -134,7 +134,7 @@ function buildSemanticEdges(
       }
     }
 
-    if (endpoints.length === 0) continue;
+    if (endpoints.length < 2) continue;
 
     if (endpoints.length === 2) {
       // Binary relation: single direct edge between the two entities.
@@ -155,10 +155,10 @@ function buildSemanticEdges(
         edgeTarget = endpoints[1].entity;
         directed = false;
       } else {
-        // Mixed directions: best effort.
+        // Mixed or ambiguous directions: default to undirected to avoid fabricating arrows.
         edgeSource = endpoints[0].entity;
         edgeTarget = endpoints[1].entity;
-        directed = endpoints.some((e) => e.direction !== "undirected");
+        directed = false;
       }
 
       result.push({
