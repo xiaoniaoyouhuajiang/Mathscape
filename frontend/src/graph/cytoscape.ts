@@ -60,6 +60,7 @@ export function toCytoscapeElements(
   } else {
     edges = graph.edges.map((edge) => ({
       group: "edges",
+      classes: edgeClasses(edge.directed),
       data: {
         id: edge.id,
         source: edge.source,
@@ -163,6 +164,7 @@ function buildSemanticEdges(
 
       result.push({
         group: "edges",
+        classes: edgeClasses(directed, true),
         data: {
           id: `sem~${relationDomainId}`,
           source: edgeSource,
@@ -195,6 +197,7 @@ function buildSemanticEdges(
         const isInto = ep.direction === "into_relation";
         result.push({
           group: "edges",
+          classes: edgeClasses(ep.direction !== "undirected", true),
           data: {
             id: `sem~${relationDomainId}~${i}`,
             source: isInto ? ep.entity : junctionId,
@@ -210,6 +213,11 @@ function buildSemanticEdges(
   }
 
   return result;
+}
+
+function edgeClasses(directed: boolean, semantic = false): string {
+  const directionClass = directed ? "is-directed" : "is-undirected";
+  return semantic ? `${directionClass} semantic-edge` : directionClass;
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +249,42 @@ const styles: StylesheetJson = [
       height: "34px",
       "background-color": "#b47b49",
       "border-color": "#d0a274",
+    },
+  },
+  {
+    selector: 'node[domainKind = "SourceArtifact"]',
+    style: {
+      shape: "round-rectangle",
+      width: "46px",
+      height: "30px",
+      "background-color": "#3e6b82",
+      "border-color": "#8db7c9",
+      "border-width": 1.5,
+    },
+  },
+  {
+    selector: 'node[domainKind = "SourceSemanticUnit"]',
+    style: {
+      shape: "ellipse",
+      width: "34px",
+      height: "34px",
+      "background-color": "#4a948a",
+      "border-color": "#9bd1c5",
+      "border-width": 1.5,
+    },
+  },
+  {
+    selector: 'node[domainKind = "SourceSpan"]',
+    style: {
+      shape: "round-rectangle",
+      width: "30px",
+      height: "22px",
+      "background-color": "#667b78",
+      "background-opacity": 0.72,
+      "border-color": "#a5bbb5",
+      "border-style": "dashed",
+      "border-width": 1.5,
+      "font-size": "9px",
     },
   },
   {
@@ -278,7 +322,7 @@ const styles: StylesheetJson = [
     },
   },
   {
-    selector: "edge[semantic]",
+    selector: "edge.semantic-edge",
     style: {
       label: "data(label)",
       "line-color": "#9a7b5a",
@@ -287,7 +331,16 @@ const styles: StylesheetJson = [
     },
   },
   {
-    selector: "edge[directed = false]",
+    selector: "edge.is-directed",
+    style: {
+      width: 2.2,
+      "target-arrow-shape": "triangle",
+      "target-arrow-color": "#f0c27d",
+      "arrow-scale": 1.55,
+    },
+  },
+  {
+    selector: "edge.is-undirected",
     style: {
       "target-arrow-shape": "none",
       "line-style": "dashed",
