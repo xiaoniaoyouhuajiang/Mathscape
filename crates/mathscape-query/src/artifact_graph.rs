@@ -4,7 +4,7 @@ use mathscape_domain::{
 };
 use mathscape_graph::{
     GraphProjection, GraphProjectionError, IncidenceDirection, ProjectionEndpoint, ProjectionLens,
-    ProjectionNode, ProjectionRelation, ViewLayer,
+    ProjectionNode, ProjectionRelation, ProjectionRelationKind, ViewLayer,
 };
 use mathscape_store_sqlite::ArtifactCatalogSnapshot;
 use std::collections::{BTreeMap, BTreeSet};
@@ -158,6 +158,7 @@ pub fn project_artifact_catalog(
                 label,
                 endpoints,
             )?
+            .relation_kind(ProjectionRelationKind::Conversion)
             .summary(summary)?
             .lifecycle(relation.header().lifecycle()),
         );

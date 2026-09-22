@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::{
     GRAPH_PROJECTION_SCHEMA_VERSION, GraphProjection, IncidenceDirection, ProjectionGroupId,
-    ProjectionLens, ViewLayer,
+    ProjectionLens, ProjectionRelationKind, ViewLayer,
 };
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -54,6 +54,8 @@ pub struct IncidenceNode {
     element_kind: IncidenceNodeKind,
     domain_id: Option<StableId>,
     domain_kind: Option<EntityKind>,
+    /// Only relation nodes carry a subtype; entities and groups serialize null.
+    relation_kind: Option<ProjectionRelationKind>,
     layer: ViewLayer,
     label: String,
     summary: Option<String>,
@@ -77,6 +79,10 @@ impl IncidenceNode {
 
     pub const fn domain_kind(&self) -> Option<EntityKind> {
         self.domain_kind
+    }
+
+    pub const fn relation_kind(&self) -> Option<ProjectionRelationKind> {
+        self.relation_kind
     }
 
     pub const fn layer(&self) -> ViewLayer {
@@ -169,6 +175,7 @@ impl IncidenceGraph {
                 element_kind: IncidenceNodeKind::Group,
                 domain_id: None,
                 domain_kind: None,
+                relation_kind: None,
                 layer: group.layer(),
                 label: group.label().to_owned(),
                 summary: None,
@@ -183,6 +190,7 @@ impl IncidenceGraph {
                 element_kind: IncidenceNodeKind::Entity,
                 domain_id: Some(node.entity_id().clone()),
                 domain_kind: Some(node.kind()),
+                relation_kind: None,
                 layer: node.layer(),
                 label: node.label().to_owned(),
                 summary: node.summary_ref().map(str::to_owned),
@@ -200,6 +208,7 @@ impl IncidenceGraph {
                 element_kind: IncidenceNodeKind::Relation,
                 domain_id: Some(relation.relation_id().clone()),
                 domain_kind: Some(relation.kind()),
+                relation_kind: Some(relation.relation_kind_value()),
                 layer: relation.layer(),
                 label: relation.label().to_owned(),
                 summary: relation.summary_ref().map(str::to_owned),

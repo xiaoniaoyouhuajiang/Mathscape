@@ -14,5 +14,5 @@ pub use incidence::{
 pub use projection::{
     GRAPH_PROJECTION_SCHEMA_VERSION, GraphProjection, GraphProjectionError, IncidenceDirection,
     ProjectionEndpoint, ProjectionGroup, ProjectionGroupId, ProjectionLens, ProjectionNode,
-    ProjectionRelation, ViewLayer,
+    ProjectionRelation, ProjectionRelationKind, ViewLayer,
 };

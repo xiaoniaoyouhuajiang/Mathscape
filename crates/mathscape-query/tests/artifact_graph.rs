@@ -12,7 +12,9 @@ use mathscape_domain::{
     EntityHeader, EntityKind, LifecycleStatus, MediaType, PageIndexBase, PageRange, RevisionId,
     RightsRecord, RightsStatus, SchemaVersion, SourcePayload, StableId, Timestamp,
 };
-use mathscape_graph::{IncidenceDirection, IncidenceGraph, ProjectionLens};
+use mathscape_graph::{
+    IncidenceDirection, IncidenceGraph, IncidenceNodeKind, ProjectionLens, ProjectionRelationKind,
+};
 use mathscape_query::{
     ArtifactGraphProjector, LandscapeProjectionInput, LandscapeProjector, project_artifact_catalog,
 };
@@ -225,6 +227,10 @@ fn reads_the_catalog_and_projects_conversion_hyperedges() {
     let projected_conversion = &projection.relations()[0];
     assert_eq!(projected_conversion.relation_id(), &conversion_id);
     assert_eq!(projected_conversion.label(), "source · PDF 1–2 页 · 解析");
+    assert_eq!(
+        projected_conversion.relation_kind_value(),
+        ProjectionRelationKind::Conversion
+    );
     assert!(
         projected_conversion
             .summary_ref()
@@ -283,17 +289,25 @@ fn reads_the_catalog_and_projects_conversion_hyperedges() {
     assert!(landscape.relations().iter().any(|relation| {
         relation.kind() == EntityKind::Evidence
             && relation.label() == "来源于 Markdown"
+            && relation.relation_kind_value() == ProjectionRelationKind::LocatedIn
             && relation
                 .endpoints()
                 .iter()
                 .any(|endpoint| endpoint.node() == markdown.stable_id())
     }));
+    // The landscape rebuilds relations field by field, so a dropped subtype
+    // would silently degrade every material relation to `unknown`.
     assert!(landscape.relations().iter().any(|relation| {
         relation.kind() == EntityKind::ConversionRun
+            && relation.relation_kind_value() == ProjectionRelationKind::Conversion
             && relation
                 .endpoints()
                 .iter()
                 .any(|endpoint| endpoint.node() == source.stable_id())
+    }));
+    let landscape_incidence = IncidenceGraph::project(&landscape);
+    assert!(landscape_incidence.nodes().iter().all(|node| {
+        (node.element_kind() == IncidenceNodeKind::Relation) == node.relation_kind().is_some()
     }));
 
     drop(store);

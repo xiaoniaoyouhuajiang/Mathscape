@@ -33,6 +33,52 @@ pub enum ViewLayer {
     Formalization,
 }
 
+/// Renderer-facing discriminant that survives localization and label edits.
+///
+/// The value space is the union of three origins: conversion relations from the
+/// artifact catalog, relations synthesized by the projectors themselves, and
+/// the subtype persisted in a source relation payload. Consumers deciding what
+/// to traverse must treat [`ProjectionRelationKind::Unknown`] as forbidden so a
+/// future domain relation cannot silently widen an existing traversal.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ProjectionRelationKind {
+    Conversion,
+    LocatedIn,
+    ContainsSpan,
+    States,
+    Proves,
+    HasPart,
+    Poses,
+    Hints,
+    Solves,
+    Explains,
+    AppliesMethod,
+    Cites,
+    #[default]
+    Unknown,
+}
+
+impl ProjectionRelationKind {
+    /// Maps the `relation` value of a `SourceUnitRelation` payload, which is
+    /// the snake_case serialization of `SourceUnitRelationKind`.
+    pub fn from_domain_relation(value: &str) -> Self {
+        match value {
+            "states" => Self::States,
+            "proves" => Self::Proves,
+            "has_part" => Self::HasPart,
+            "poses" => Self::Poses,
+            "hints" => Self::Hints,
+            "solves" => Self::Solves,
+            "explains" => Self::Explains,
+            "applies_method" => Self::AppliesMethod,
+            "cites" => Self::Cites,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IncidenceDirection {
@@ -241,6 +287,7 @@ impl ProjectionEndpoint {
 pub struct ProjectionRelation {
     relation_id: StableId,
     kind: EntityKind,
+    relation_kind: ProjectionRelationKind,
     layer: ViewLayer,
     label: String,
     summary: Option<String>,
@@ -271,6 +318,7 @@ impl ProjectionRelation {
         Ok(Self {
             relation_id,
             kind,
+            relation_kind: ProjectionRelationKind::Unknown,
             layer,
             label: non_empty(label, "relation.label")?,
             summary: None,
@@ -284,6 +332,11 @@ impl ProjectionRelation {
     pub fn summary(mut self, summary: impl Into<String>) -> Result<Self, GraphProjectionError> {
         self.summary = Some(non_empty(summary, "relation.summary")?);
         Ok(self)
+    }
+
+    pub const fn relation_kind(mut self, relation_kind: ProjectionRelationKind) -> Self {
+        self.relation_kind = relation_kind;
+        self
     }
 
     pub const fn lifecycle(mut self, lifecycle: LifecycleStatus) -> Self {
@@ -307,6 +360,10 @@ impl ProjectionRelation {
 
     pub const fn kind(&self) -> EntityKind {
         self.kind
+    }
+
+    pub const fn relation_kind_value(&self) -> ProjectionRelationKind {
+        self.relation_kind
     }
 
     pub const fn layer(&self) -> ViewLayer {

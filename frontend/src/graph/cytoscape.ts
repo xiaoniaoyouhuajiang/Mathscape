@@ -1,4 +1,5 @@
 import cytoscape, {
+  type CollectionReturnValue,
   type Core,
   type ElementDefinition,
   type StylesheetJson,
@@ -11,6 +12,7 @@ import {
   type IncidenceGraph,
   type IncidenceNode,
 } from "./projection";
+import { FOCUS_CONTRACTION_KIND } from "./focus";
 import { EDGE_TYPES, NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
 
 export type RenderMode = "semantic" | "hyperedge";
@@ -174,7 +176,7 @@ function buildSemanticEdges(
       // relation has one or more evidence spans.
       result.push({
         group: "edges",
-        classes: edgeClasses(true, true),
+        classes: `${edgeClasses(true, true)}${contractionClass(relationDomainKind)}`,
         data: {
           id: `sem~${relationDomainId}`,
           source: sources[0].entity,
@@ -323,6 +325,10 @@ function addEvidenceEdge(
   });
 }
 
+function contractionClass(domainKind: string | null): string {
+  return domainKind === FOCUS_CONTRACTION_KIND ? " contracted-edge" : "";
+}
+
 function edgeClasses(directed: boolean, semantic = false): string {
   const directionClass = directed ? "is-directed" : "is-undirected";
   return semantic ? `${directionClass} semantic-edge` : directionClass;
@@ -439,7 +445,35 @@ const styles: StylesheetJson = [
       "line-style": "dashed",
     },
   },
+  // Declared last so a contracted path keeps its own weight and arrow colour
+  // instead of inheriting the directed-relation emphasis.
+  {
+    selector: "edge.contracted-edge",
+    style: {
+      label: "data(label)",
+      width: 1.6,
+      "line-style": "dotted",
+      "line-color": EDGE_TYPES.contracted.color,
+      "target-arrow-shape": "triangle",
+      "target-arrow-color": EDGE_TYPES.contracted.color,
+      "arrow-scale": 1.2,
+      color: "#9fb2c2",
+      "font-size": "9px",
+    },
+  },
+  // Out-of-focus context: still drawn so the focused region keeps its place in
+  // the whole map, but faint and inert so it cannot be clicked by accident.
+  {
+    selector: ".is-out-of-focus",
+    style: {
+      opacity: 0.12,
+      events: "no",
+      label: "",
+    },
+  },
 ];
+
+export const OUT_OF_FOCUS_CLASS = "is-out-of-focus";
 
 // ---------------------------------------------------------------------------
 // Graph mounting
@@ -450,17 +484,137 @@ export function mountCytoscapeGraph(
   graph: IncidenceGraph,
   renderMode: RenderMode = "semantic",
 ): Core {
-  return cytoscape({
+  const core = cytoscape({
     container,
     elements: toCytoscapeElements(graph, renderMode),
     style: styles,
-    layout: {
-      name: "cose",
-      animate: false,
-      fit: true,
-      padding: 24,
-    },
     minZoom: 0.08,
     maxZoom: 4,
   });
+  runLayout(core, core.elements(), true);
+  return core;
+}
+
+/**
+ * Brings an already-mounted instance in line with `graph` without tearing it
+ * down, so nodes the user has already located on screen keep their position.
+ *
+ * Only newly added nodes are laid out: everything that survives the diff is
+ * locked for the duration of the layout run, and the viewport is left alone
+ * unless the element set was replaced wholesale (a render-mode switch, or the
+ * first graph after an empty canvas).
+ */
+export function syncCytoscapeGraph(
+  core: Core,
+  graph: IncidenceGraph,
+  renderMode: RenderMode = "semantic",
+): void {
+  const desired = new Map(
+    toCytoscapeElements(graph, renderMode).map(
+      (element) => [String(element.data.id), element] as const,
+    ),
+  );
+
+  const staleIds: string[] = [];
+  const additions: ElementDefinition[] = [];
+  core.elements().forEach((element) => {
+    if (!desired.has(element.id())) staleIds.push(element.id());
+  });
+  for (const [id, element] of desired) {
+    const existing = core.getElementById(id);
+    if (existing.empty()) {
+      additions.push(element);
+      continue;
+    }
+    // Cytoscape cannot repoint an existing edge, so an edge that kept its ID
+    // while changing endpoints has to be replaced rather than updated.
+    if (
+      existing.isEdge() &&
+      (existing.data("source") !== element.data.source ||
+        existing.data("target") !== element.data.target)
+    ) {
+      staleIds.push(id);
+      additions.push(element);
+      continue;
+    }
+    existing.data(element.data);
+    existing.classes(element.classes ?? "");
+  }
+
+  const replacedWholesale =
+    core.nodes().empty() ||
+    staleIds.filter((id) => core.getElementById(id).isNode()).length ===
+      core.nodes().length;
+
+  let added = core.collection();
+  core.batch(() => {
+    core.remove(
+      staleIds.reduce(
+        (collection, id) => collection.union(core.getElementById(id)),
+        core.collection(),
+      ),
+    );
+    added = core.add(additions);
+  });
+
+  const addedNodes = added.nodes();
+  if (addedNodes.empty()) return;
+  if (replacedWholesale) {
+    runLayout(core, core.elements(), true);
+    return;
+  }
+  const settled = core.nodes().difference(addedNodes);
+  settled.lock();
+  runLayout(core, core.elements(), false);
+  settled.unlock();
+}
+
+/**
+ * Restricts emphasis to the projection nodes in `inScopeIds`, or clears the
+ * restriction when it is `null`. Elements outside the scope stay mounted and
+ * keep their coordinates, so the focused region keeps its place in the map.
+ *
+ * Only projection node IDs are passed in: the synthetic junctions and edges
+ * that semantic-edge mode invents have IDs the caller cannot know, so their
+ * scope is derived from the endpoints they connect.
+ */
+export function applyFocusScope(core: Core, inScopeIds: ReadonlySet<string> | null): void {
+  core.batch(() => {
+    if (inScopeIds === null) {
+      core.elements().removeClass(OUT_OF_FOCUS_CLASS);
+      return;
+    }
+    const junctions = core.nodes('[elementKind = "junction"]');
+    core.nodes().difference(junctions).forEach((node) => {
+      node.toggleClass(OUT_OF_FOCUS_CLASS, !inScopeIds.has(node.id()));
+    });
+    // A junction stands in for one relation, so it belongs to the focused
+    // region only when every endpoint it gathers does.
+    junctions.forEach((junction) => {
+      const endpoints = junction.neighborhood().nodes();
+      const inScope =
+        endpoints.nonempty() && endpoints.filter(`.${OUT_OF_FOCUS_CLASS}`).empty();
+      junction.toggleClass(OUT_OF_FOCUS_CLASS, !inScope);
+    });
+    core.edges().forEach((edge) => {
+      const inScope =
+        !edge.source().hasClass(OUT_OF_FOCUS_CLASS) &&
+        !edge.target().hasClass(OUT_OF_FOCUS_CLASS);
+      edge.toggleClass(OUT_OF_FOCUS_CLASS, !inScope);
+    });
+  });
+}
+
+function runLayout(core: Core, elements: CollectionReturnValue, fit: boolean): void {
+  if (elements.empty()) return;
+  elements
+    .layout({
+      name: "cose",
+      animate: false,
+      fit,
+      padding: 24,
+      randomize: false,
+    })
+    .run();
+  if (fit) core.fit(undefined, 24);
 }

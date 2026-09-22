@@ -15,8 +15,10 @@
 | Task 1 隐藏投影分组方框 | ✅ 已完成 | `toCytoscapeElements` 直接过滤 `element_kind === "group"` |
 | Task 2 关系改为语义边 | ✅ 已完成 | `renderMode` + `buildSemanticEdges`（二元直连、多元 junction、证据虚线边） |
 | Task 3 统一地图 + 过滤 | ✅ 已完成 | 单一 `landscape_graph` + 预设按钮 + 节点类型 checkbox，状态持久化到 localStorage |
-| Task 5 类型名称与图例 | 🔜 下一步 | 执行顺序已调整到 Task 4 之前，理由见下 |
-| Task 4 聚焦与后代展开 | ⏳ 待办（已修订） | 原方案低估了工作量，修订版见对应章节 |
+| Task 5 类型名称与图例 | ✅ 已完成 | `taxonomy.ts` 统一类型词表；PDF / Markdown 按 media type 区分；图例由已挂载的图反向生成 |
+| Task 4.0 关系子类型字段 | ✅ 已完成 | `ProjectionRelationKind` + `IncidenceNode.relation_kind`；无存储层迁移 |
+| Task 4.0b 结构层级关系投影 | ✅ 已完成 | 从 `parent_unit` 合成 `has_part`，让 `has_part` 穿越规则不再是死规则 |
+| Task 4 聚焦与后代展开 | ✅ 已完成 | 4a-1 ~ 4a-4 全部落地；双击入口（4a-5）主动暂缓，理由见 Task 4 |
 | Task 6 布局与大图性能 | ⏳ 待办 | 吸收了原 4b 的载荷精简议题 |
 
 ---
@@ -149,6 +151,85 @@
 
 ---
 
+### Task 4.0 — 稳定的关系子类型字段（Task 4 后端前置）
+
+**范围**：`mathscape-graph` + `mathscape-query` + 前端类型定义。**不涉及存储层迁移，也不改领域模型。**
+
+**问题**：Task 4 的"可穿越关系集合"必须建立在稳定的机器可读值上。当前前端能看到的关系判别信息只有 `domain_kind`，而**允许穿越与禁止穿越的边界横切在同一个 `domain_kind` 内部**：
+
+- 合成关系"对应原文"（单元 → 原文范围，必须穿越）签发的是 `EntityKind::SourceUnitRelation`；
+- `cites` / `proves`（必须禁止穿越）签发的也是 `EntityKind::SourceUnitRelation`。
+
+两者今天唯一的区别是 `label` 的中文字面量。依赖它会受本地化、文案修改和合成关系命名的影响。
+
+**关键事实**：稳定值其实已经存在，只是在投影这一步被丢弃了。`SourceUnitRelationKind` 是 serde `snake_case` 的闭合枚举（`states` / `proves` / `has_part` / `poses` / `hints` / `solves` / `explains` / `applies_method` / `cites`，共 9 个变体），持久化在 payload 的 `relation` 字段中；`source_graph.rs` 的 `relation_label` 读到它之后立刻翻译成中文，原值不再向下传递。因此本任务的本质是**停止丢弃已有的值**。
+
+**方案**：
+
+1. 在 `mathscape-graph` 中新增投影级判别式 `ProjectionRelationKind`（serde `snake_case`），其值空间是三个来源的并集：
+
+   | 来源 | 取值 |
+   |---|---|
+   | `EntityKind::ConversionRun` | `conversion` |
+   | 投影合成关系 | `located_in`、`contains_span` |
+   | 关系 payload 的领域子类型 | `states`、`proves`、`has_part`、`poses`、`hints`、`solves`、`explains`、`applies_method`、`cites` |
+   | 兜底 | `unknown` |
+
+   采用**扁平单字段**而非"`domain_kind` + `relation_subkind`"两级结构：聚焦策略可以直接写成一张集合表，前端无需做两级判断。
+
+2. `ProjectionRelation` 增加该字段（builder 形式，默认 `unknown`），`IncidenceNode` 在关系节点上输出 `relation_kind`，实体节点与分组为 `null`。
+
+3. 两个 projector 负责填充；`project_landscape` 重建关系时必须把该字段一并带过去，否则景观图会整体退化成 `unknown`。
+
+4. 字段只挂在关系节点上，不重复挂到 `IncidenceEdge`。`focus.ts` 在 `IncidenceGraph` 层遍历时关系节点仍在，而 `buildSemanticEdges` 本来就要查关系节点取 label，顺带取子类型是零成本；边上再存一份只会制造两个可能不一致的来源。
+
+**穿越策略（三档，而非两档）**：
+
+| 档位 | 取值 | 聚焦时的行为 |
+|---|---|---|
+| 文件链路 | `conversion`、`located_in` | 允许穿越，**不计入深度**（纯粹的文件管道，用户不应为"PDF → Markdown → 原文范围"付出深度预算） |
+| 内容与结构关系 | `contains_span`、`has_part` | 允许穿越，**计入深度** |
+| 语义关系 | `states`、`proves`、`poses`、`hints`、`solves`、`explains`、`applies_method`、`cites` | 禁止穿越 |
+| 未知 | `unknown` 及任何未来新增值 | **禁止穿越（fail-closed）** |
+
+> [!NOTE]
+> **关于 `contains_span` 计不计深度**。最初的设想是把三条溯源关系一律设为免深度，理由是超边的中转节点不应消耗预算。但遍历实现本身已经把关系节点当作透明超边处理（entity → relation → entity 记作一跳），这个理由已经被满足。如果 `contains_span` 再免深度，那么"1 层 / 2 层 / 全部"在当前数据下结果完全相同——因为每个内容单元都恰好距其原文范围一步，深度控件会变成死控件。因此最终把 `contains_span` 归入计深度档：**深度 1 = 这份材料的全部内容单元**（正是核心用例），深度 2 = 再加上这些单元的结构子节点。
+
+> [!IMPORTANT]
+> 两个容易被忽略的点。其一，`has_part` 表达的是文档内部的结构包含（章 → 命题），属于"这个 PDF 贡献了什么"的一部分，不能顺手划进禁止穿越，否则聚焦一本书时看不到它自己的层级结构；但它可能形成长链，所以必须计入深度预算。其二，默认必须 fail-closed：`relation_label` 现有的 `other => other` 兜底说明 payload 里可以出现未映射的字符串，如果未知值默认可穿越，将来往领域里加一个新关系时它会悄悄泄进聚焦结果，而没有任何地方会报错。
+
+**变更文件**：
+- `crates/mathscape-graph/src/projection.rs` — 新增 `ProjectionRelationKind`；`ProjectionRelation` 增加字段与 builder
+- `crates/mathscape-graph/src/incidence.rs` — `IncidenceNode` 输出 `relation_kind`
+- `crates/mathscape-query/src/artifact_graph.rs` — 转换关系标记为 `conversion`
+- `crates/mathscape-query/src/source_graph.rs` — 合成关系标记为 `located_in` / `contains_span`；领域关系从 payload 解析；景观图重建时透传
+- [`projection.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/projection.ts) — `IncidenceNode` 增加 `relation_kind`
+
+**schema 版本**：纯增量字段，前端只做 `GRAPH_PROJECTION_SCHEMA_VERSION` 相等校验且前后端同包发布，无需 bump 到 v2。
+
+**后续可选清理**（不与本任务捆绑）：有了稳定子类型之后，"证明""引用"这些中文名可以从 `mathscape-query` 迁到前端 `taxonomy.ts`，与 Task 5 建立的"中文名只有一个来源"原则对齐。目前本地化字符串仍硬编码在 Rust 中。
+
+---
+
+### Task 4.0b — 结构层级关系投影（`has_part`）
+
+**范围**：`mathscape-query`，无存储层与领域模型变更。
+
+**问题**：Task 4 交付后发现"以内容单元为中心聚焦"必然只返回单元自己。原因不在遍历逻辑，而是**单元的父子结构从未被投影成关系**：层级信息保存在 `SourceSemanticUnit` payload 的 `parent_unit` 字段里，而 `project_source_map_internal` 只把 `relation == true && kind == SourceUnitRelation` 的对象投影为关系，从不读取 `parent_unit`。于是 Task 4.0 策略表中的 `has_part` 是一条**死规则**，"章 → 命题"的结构在图里根本不存在。
+
+`parent_unit` 在真实数据中确实被写入（`source_registration.rs` 把 `planned.parent` 传给 `SourceSemanticUnit::new`），因此只需在投影层把它显式化。
+
+**方案**：照 `contains-span` 合成关系的同构写法，为每个带 `parent_unit` 的单元合成一条关系：
+
+- `relation_kind = has_part`，`EntityKind::SourceUnitRelation`，label 取 `relation_label(HasPart)` 即"包含"
+- **父节点必须放在 `into_relation` 侧**（role `parent`），子节点放 `out_of_relation` 侧（role `child`）。方向搞反会让遍历从子单元向上走进整个章节，等价于"聚焦一个命题"变成"展开整本书"
+- 跳过自指（`parent == self`）与父节点未被渲染的情况
+
+**变更文件**：
+- `crates/mathscape-query/src/source_graph.rs` — `project_source_map_internal` 中新增 `has-part` 合成关系；单测断言端点方向
+
+---
+
 ### Task 4 — 按来源聚焦与后代展开（交互增强 · 已修订）
 
 **范围**：纯前端。原方案中的后端 `get_neighborhood`（4b）已删除，理由见下。
@@ -158,7 +239,7 @@
 > [!WARNING]
 > **对原方案的修正**：原方案把 Task 4 描述为"在内存中对 `landscape_graph` 做 BFS/DFS"，这低估了工作量。在当前代码状态下，朴素 BFS 会返回一个**只包含 PDF 自己**的子图。Task 4 的难点不在遍历算法，而在遍历之前必须解决的三个语义问题。
 
-#### 4.0 必须先解决的三个语义前提
+#### 前提：三个必须先解决的语义问题
 
 **(a) 图的方向性是不一致的，有向 BFS 走不通。**
 
@@ -178,7 +259,7 @@
 
 `SourceUnitRelation` 包含 `cites`、`proves` 这类跨文献关系。一旦无向遍历，从内容单元会顺着引用关系跑到别的 PDF 去，"展开全部"实际等于展开连通分量，正好回到我们想避免的毛线团。
 
-因此聚焦遍历必须限定**可穿越的关系类型集合**：只走 `ConversionRun`、`located-in`、`对应原文` 这类溯源关系，不走 `cites` / `proves`。这一点写入验收标准。
+因此聚焦遍历必须限定**可穿越的关系类型集合**。该集合由 Task 4.0 引入的 `relation_kind` 字段定义（三档策略见 Task 4.0），不依赖中文标签。这一点写入验收标准。
 
 #### 4.1 遍历放在 IncidenceGraph 层，不是 cytoscape 层
 
@@ -207,11 +288,15 @@
 - 空状态文案要区分"过滤后为空"与"聚焦范围为空"，当前 `main.ts` 只有前者。
 - 深度控件：1 层 / 2 层 / 全部。
 
-#### 4.4 增量渲染
+#### 4.4 增量渲染与范围淡化
 
-当前 `renderCurrentGraph` 每次都 `graphCore?.destroy()` 并重跑 `cose` 且 `fit: true`。聚焦、退出聚焦、调深度都会触发整图重排，用户的空间记忆每次清零，对"逐层展开"体验很差。
+原实现每次 `renderCurrentGraph` 都 `graphCore?.destroy()` 并重跑 `cose` 且 `fit: true`，聚焦、退出聚焦、调深度都触发整图重排，用户的空间记忆每次清零。已改为：
 
-聚焦时改为不销毁 core：用 `cy.batch` 增删元素，只对新增节点跑布局，保留已有节点坐标。
+- **core 只挂载一次**。`syncCytoscapeGraph` 按元素 ID 做差集：移除多余元素、新增缺失元素、就地更新留存元素的 `data` 与 class。交互处理器随之只绑定一次，改为从模块级的 `displayedGraph` 反查节点模型。
+- **只对新增节点跑布局**。留存节点在布局期间 `lock()`，布局不带 `fit`，视口保持不动。只有元素集被整体替换时（切换渲染模式、空画布后的第一张图）才做完整布局并 `fit`。
+- **聚焦不再替换图，而是淡化范围外**。渲染的是"过滤后全图 ∪ 聚焦子图"，范围外元素加 `is-out-of-focus`（`opacity: 0.12` + `events: no` + 去标签），用户能看出焦点在整张图中的位置。语义边模式下合成边与 junction 节点的 ID 前端无从预知，所以它们的范围由端点推导，而不是靠 ID 匹配。
+
+结果是：只切换深度或进出聚焦时通常没有新节点，因此**完全不触发布局**。
 
 #### 4.5 关于原 4b（后端 `get_neighborhood`）：删除
 
@@ -221,18 +306,30 @@
 
 #### 4.6 交付拆分
 
-| 子任务 | 内容 | 可独立验收 |
+| 子任务 | 内容 | 状态 |
 |---|---|---|
-| 4a-1 | `focus.ts`：方向映射、可穿越关系集合、超边透明遍历、路径收缩 | 纯逻辑 |
-| 4a-2 | 聚焦状态模型、深度控件、"返回全图"出口、空状态文案区分 | 是 |
-| 4a-3 | Inspector 入口按钮 | 是 |
-| 4a-4 | 增量渲染 + 双击 / 右键菜单 | 是 |
+| 4a-1 | `focus.ts`：方向映射、可穿越关系集合、超边透明遍历、路径收缩 | ✅ |
+| 4a-2 | 聚焦状态模型、深度控件、"返回全图"出口、空状态文案区分 | ✅ |
+| 4a-3 | Inspector 入口按钮 | ✅ |
+| 4a-4 | 增量渲染 + 范围淡化 + 右键菜单 + Esc | ✅ |
+| 4a-5 | 双击入口 | ⏳ 暂缓，见下 |
+
+**已落地的语义细节**：
+
+- 遍历是**单向的**，只沿派生方向向下游走。聚焦一个 PDF 会得到它的 Markdown、原文范围和内容单元，但不会反向带出别的祖先。
+- 收缩出来的虚拟关系以 `domain_kind = "FocusContraction"` 标记，在语义边模式下渲染为一条点线箭头，图例中单列为"派生自（路径已折叠）"，用户能看出这条边不是领域中的真实关系。
+- 聚焦视图**保留**落在范围内且两端都可见的原有关系（包括 `cites` 这类禁止穿越的关系）。禁止穿越的含义是"不据此扩大范围"，而不是"不显示"。
+- 聚焦状态不写入 localStorage；快照刷新后若根节点已不存在则自动退出聚焦。
+- 前端目前没有单元测试框架（仅 Playwright 用于阅读器），`focus.ts` 被写成无 DOM 依赖的纯函数，等引入 vitest 后可直接补测。
+- 右键菜单按 Q4 的决定自行实现（`cxttap` + `position: fixed` 的 `<div>`，越界自动贴边），菜单项为"以此为中心聚焦 / 仅展开一层 / 返回全图"，不可聚焦的节点只显示"返回全图"；画布空白处右键在聚焦态下也给出"返回全图"。`Esc` 先关菜单，无菜单时退出聚焦。
+- **双击入口暂缓**。它与现有 `tap` 冲突（单击已打开 Inspector 并触发 `sourceNodeDetail` 异步请求，双击会先放出一次单击，需要去抖），而右键菜单已经覆盖同样的动作且能同时暴露多个选项。若后续要加，建议把双击留给"打开阅读器并定位原文"这个更符合直觉的动作，而不是再绑一次聚焦。
 
 **变更文件**：
 - `frontend/src/graph/focus.ts` — 新建：聚焦遍历与路径收缩
-- [`main.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/main.ts) — 聚焦状态、入口、空状态、增量渲染
-- [`cytoscape.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/cytoscape.ts) — 收缩虚拟边的样式；增量挂载 API
-- [`styles.css`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/styles.css) — 聚焦状态条与深度控件样式
+- `frontend/src/graph/context-menu.ts` — 新建：通用画布右键菜单
+- [`main.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/main.ts) — 聚焦状态、入口、空状态、图合并、一次性交互绑定
+- [`cytoscape.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/cytoscape.ts) — 收缩虚拟边样式；`syncCytoscapeGraph` 增量同步；`applyFocusScope` 范围淡化
+- [`styles.css`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/styles.css) — 聚焦状态条、深度控件、右键菜单样式
 
 ---
 
@@ -262,7 +359,9 @@ graph TD
     T1["Task 1\n隐藏投影分组方框"] --> T3
     T2["Task 2\n关系改为语义边"] --> T3
     T3["Task 3\n统一地图 + 过滤"] --> T5
-    T5["Task 5\n类型名称与图例"] --> T4
+    T5["Task 5\n类型名称与图例"] --> T40
+    T40["Task 4.0\n关系子类型字段"] --> T40B
+    T40B["Task 4.0b\n结构层级关系投影"] --> T4
     T4["Task 4\n聚焦与后代展开"] --> T6
     T6["Task 6\n布局优化与大图性能"]
 ```
@@ -272,16 +371,16 @@ graph TD
 
 **建议分批交付**：
 - **Sprint 1（可用性修复）**：Task 1 + Task 2 ✅
-- **Sprint 2（信息架构）**：Task 3 ✅ + Task 5
-- **Sprint 3（交互增强）**：Task 4，按 4a-1 → 4a-4 逐步交付
+- **Sprint 2（信息架构）**：Task 3 ✅ + Task 5 ✅
+- **Sprint 3（交互增强）**：Task 4.0 → Task 4.0b → Task 4 ✅（双击入口暂缓）
 - **Sprint 4（规模化）**：Task 6 ← 待数据量增长后处理
 
 ---
 
 ## 开放问题
 
-> [!IMPORTANT]
-> **Q1（仍开放）：关系类型枚举**。Task 4 的"可穿越关系集合"需要区分 `SourceUnitRelation` 的子类型（`cites` / `proves` / `contains`）。目前前端只能看到 `domain_kind === "SourceUnitRelation"`，只能靠关系 `label` 的中文字面量近似判断，这很脆弱。建议在 `IncidenceGraph` 的关系节点上增加 `relation_subkind` 字段。**这是 Task 4 唯一可能需要后端配合的点。**
+> [!NOTE]
+> **Q1（已解决）：关系类型枚举**。已确认稳定子类型早已存在于关系 payload 中，只是被投影层丢弃，因此不需要存储层迁移。方案落为独立的 Task 4.0（扁平 `relation_kind` 字段 + 三档穿越策略 + 未知值 fail-closed）。
 
 > [!NOTE]
 > **Q2（已解决）：景观图数据完整性**。Task 1 直接过滤 group 节点后，`source-map-landscape` 分组未产生副作用。
@@ -301,9 +400,14 @@ graph TD
 - **Task 1**：打开景观图，不再出现大方框包围整个图区域 ✅
 - **Task 2**：关系以带标签的边呈现，切换到超边模式后恢复菱形节点 ✅
 - **Task 3**：勾选/取消 checkbox 后图实时更新；预设按钮切换效果符合文档描述 ✅
-- **Task 5**：PDF 与 Markdown 节点视觉可区分；图例随过滤条件动态变化；图例 / Inspector / checkbox 名称一致
+- **Task 5**：PDF 与 Markdown 节点视觉可区分；图例随过滤条件动态变化；图例 / Inspector / checkbox 名称一致 ✅
+- **Task 4.0**：单元测试断言合成关系得到 `contains_span` / `located_in`、转换关系得到 `conversion`、payload 中的 `proves` 得到 `proves`、未映射字符串得到 `unknown`；景观图中的关系不因重建而退化为 `unknown`
+- **Task 4.0b**：单元测试断言带 `parent_unit` 的单元产出 `has_part` 关系，且父节点位于 `into_relation` 侧、子节点位于 `out_of_relation` 侧
 - **Task 4**：
   - 在默认"来源内容"预设下（`SourceSpan` 隐藏）聚焦某个 PDF，仍能看到其内容单元——验证路径收缩生效
   - 聚焦后不出现经 `cites` 跨到其他 PDF 的节点——验证可穿越关系集合生效
-  - 调整深度和退出聚焦时已有节点位置不跳变——验证增量渲染生效
+  - 调整深度和退出聚焦时已有节点位置不跳变、视口不重新 `fit`——验证增量渲染生效
+  - 聚焦后范围外节点变淡但仍在原位且不可点击——验证范围淡化生效
+  - 聚焦一个带子单元的章节单元（深度 2），能看到其子单元——验证 Task 4.0b 的结构关系接入了遍历
+  - 节点右键出现菜单、画布空白处右键在聚焦态下给出"返回全图"、`Esc` 依次关菜单与退出聚焦
 - **Task 6**：导入多份 PDF 并解析后，图仍可交互；切换 layout 对比布局质量

@@ -1,7 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Core, NodeSingular } from "cytoscape";
 
-import { mountCytoscapeGraph, type RenderMode } from "./graph/cytoscape";
+import {
+  applyFocusScope,
+  mountCytoscapeGraph,
+  syncCytoscapeGraph,
+  type RenderMode,
+} from "./graph/cytoscape";
+import {
+  hideContextMenu,
+  isContextMenuOpen,
+  showContextMenu,
+  type ContextMenuItem,
+} from "./graph/context-menu";
+import { focusSubgraph, type FocusDepth, type FocusResult } from "./graph/focus";
 import type { IncidenceGraph, IncidenceNode } from "./graph/projection";
 import {
   EDGE_TYPES,
@@ -188,6 +200,17 @@ app.innerHTML = `
           </div>
         </div>
         <div id="graph" class="graph-canvas"></div>
+        <div id="focus-bar" class="focus-bar" aria-label="聚焦范围" hidden>
+          <span class="focus-label">聚焦：<strong id="focus-root">—</strong></span>
+          <span class="focus-depth">
+            深度
+            <button class="depth-button" data-depth="1" type="button">1</button>
+            <button class="depth-button" data-depth="2" type="button">2</button>
+            <button class="depth-button" data-depth="all" type="button">全部</button>
+          </span>
+          <span id="focus-summary" class="focus-summary"></span>
+          <button id="exit-focus" class="focus-exit" type="button">返回全图</button>
+        </div>
         <div id="graph-legend" class="map-legend" aria-label="图例"></div>
         <section id="reader" class="reader-panel" aria-label="文件阅读器" hidden></section>
         <div id="empty-state" class="empty-state">
@@ -238,6 +261,9 @@ const workspaceName = requiredElement<HTMLElement>("#workspace-name");
 const workspaceRoot = requiredElement<HTMLElement>("#workspace-root");
 const graphContainer = requiredElement<HTMLElement>("#graph");
 const graphLegend = requiredElement<HTMLElement>("#graph-legend");
+const focusBar = requiredElement<HTMLElement>("#focus-bar");
+const focusRootLabel = requiredElement<HTMLElement>("#focus-root");
+const focusSummary = requiredElement<HTMLElement>("#focus-summary");
 const graphViewTitle = requiredElement<HTMLElement>("#graph-view-title");
 const nodeFilterGroup = requiredElement<HTMLElement>("#node-filter-group");
 const emptyState = requiredElement<HTMLElement>("#empty-state");
@@ -281,6 +307,18 @@ renderModeToggle.onchange = () => {
   try { localStorage.setItem("mathscape:render-mode", renderMode); } catch { /* Optional presentation preference. */ }
   renderCurrentGraph();
 };
+document.querySelectorAll<HTMLButtonElement>(".depth-button").forEach((button) => {
+  button.onclick = () => {
+    focusDepth = button.dataset.depth === "all" ? "all" : (Number(button.dataset.depth) as 1 | 2);
+    renderCurrentGraph();
+  };
+});
+requiredElement<HTMLButtonElement>("#exit-focus").onclick = () => exitFocus();
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (isContextMenuOpen()) hideContextMenu();
+  else if (focusRootId !== null) exitFocus();
+});
 const showMap = () => {
   reader.close();
   readerHost.hidden = true;
@@ -294,7 +332,14 @@ let submittingParse = false;
 let pollingParse = false;
 let selectedNode: IncidenceNode | undefined;
 let currentSnapshot: DesktopSnapshot | undefined;
+// The elements currently mounted, so interaction handlers bound once against a
+// persistent Cytoscape instance can still resolve a node back to its model.
+let displayedGraph: IncidenceGraph | undefined;
 let renderMode: RenderMode = "semantic";
+// Focus is a transient exploration state: unlike the filter and render mode it
+// is deliberately not persisted, so a reload always returns to the whole map.
+let focusRootId: string | null = null;
+let focusDepth: FocusDepth = "all";
 
 type PresetName = "overview" | "material" | "source";
 const PRESET_NODE_KINDS: Record<PresetName, ReadonlySet<string>> = {
@@ -465,32 +510,139 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
 function renderCurrentGraph(snapshot = currentSnapshot): void {
   if (snapshot === undefined) return;
   showMap();
-  graphCore?.destroy();
-  const visibleGraph = filterGraph(snapshot.landscape_graph);
+  hideContextMenu();
+  if (focusRootId !== null && !snapshot.landscape_graph.nodes.some((n) => n.id === focusRootId)) {
+    focusRootId = null;
+  }
+  // Focus traverses the unfiltered projection and contracts paths that cross
+  // hidden nodes, so the visibility filter is passed in rather than applied first.
+  const focus =
+    focusRootId === null
+      ? null
+      : focusSubgraph(snapshot.landscape_graph, focusRootId, {
+          depth: focusDepth,
+          isEntityVisible,
+        });
+  const filtered = filterGraph(snapshot.landscape_graph);
+  // The focused region is emphasized inside the whole filtered map rather than
+  // replacing it, so the user keeps the surrounding context and the layout.
+  displayedGraph = focus === null ? filtered : mergeGraphs(filtered, focus.graph);
+  const focusScope =
+    focus === null ? null : new Set(focus.graph.nodes.map((node) => node.id));
   syncPresetHighlight();
-  const entityCount = visibleGraph.nodes.filter((n) => n.element_kind === "entity").length;
+  renderFocusBar(focus, snapshot.landscape_graph);
+  const entityCount = (focus === null ? filtered : focus.graph).nodes.filter(
+    (n) => n.element_kind === "entity",
+  ).length;
   const hasAnyData = snapshot.landscape_graph.nodes.some((n) => n.element_kind !== "group");
-  emptyStateTitle.textContent = hasAnyData ? "当前过滤条件下无可见节点" : "尚未导入材料";
-  emptyStateMessage.textContent = hasAnyData
-    ? "尝试切换显示预设或勾选更多节点类型。"
-    : "导入第一份 PDF 后，节点会出现在这里。";
-  graphCore = mountCytoscapeGraph(graphContainer, visibleGraph, renderMode);
+  if (focus !== null) {
+    emptyStateTitle.textContent = "聚焦范围内没有可显示的节点";
+    emptyStateMessage.textContent = "该来源尚未派生出内容，或当前过滤条件隐藏了全部后代。";
+  } else {
+    emptyStateTitle.textContent = hasAnyData ? "当前过滤条件下无可见节点" : "尚未导入材料";
+    emptyStateMessage.textContent = hasAnyData
+      ? "尝试切换显示预设或勾选更多节点类型。"
+      : "导入第一份 PDF 后，节点会出现在这里。";
+  }
+  if (graphCore === null) {
+    graphCore = mountCytoscapeGraph(graphContainer, displayedGraph, renderMode);
+    bindGraphInteractions(graphCore);
+  } else {
+    syncCytoscapeGraph(graphCore, displayedGraph, renderMode);
+  }
+  applyFocusScope(graphCore, focusScope);
   renderLegend(graphCore);
-  emptyState.classList.toggle("is-hidden", entityCount > 0);
-  graphCore.on("tap", "node", (event) => {
-    const selected = event.target as NodeSingular;
-    const model = visibleGraph.nodes.find(
-      (node) => node.id === selected.id(),
-    );
-    if (model !== undefined) {
-      selectedNode = model;
-      const pdf = snapshot.pdf_artifacts.find(
-        (artifact) => artifact.artifact_id === model.domain_id,
-      );
-      renderNodeDetail(model, pdf, snapshot.marker);
-    }
-  });
+  // In focus mode the root is always rendered, so "nothing to show" means the
+  // root came back without any visible descendant.
+  emptyState.classList.toggle("is-hidden", entityCount > (focus === null ? 0 : 1));
   refreshParseState();
+}
+
+/** Union by element ID; `overlay` wins so contracted paths keep their labels. */
+function mergeGraphs(base: IncidenceGraph, overlay: IncidenceGraph): IncidenceGraph {
+  const nodes = new Map(base.nodes.map((node) => [node.id, node]));
+  for (const node of overlay.nodes) nodes.set(node.id, node);
+  const edges = new Map(base.edges.map((edge) => [edge.id, edge]));
+  for (const edge of overlay.edges) edges.set(edge.id, edge);
+  return { ...base, nodes: [...nodes.values()], edges: [...edges.values()] };
+}
+
+function bindGraphInteractions(core: Core): void {
+  core.on("tap", "node", (event) => {
+    selectNode((event.target as NodeSingular).id());
+  });
+  core.on("cxttap", "node", (event) => {
+    const node = event.target as NodeSingular;
+    selectNode(node.id());
+    const position = event.renderedPosition ?? { x: 0, y: 0 };
+    const bounds = graphContainer.getBoundingClientRect();
+    showContextMenu(
+      bounds.left + position.x,
+      bounds.top + position.y,
+      nodeMenuItems(node.id()),
+    );
+  });
+  core.on("cxttap", (event) => {
+    if (event.target !== core) return;
+    if (focusRootId === null) return;
+    showContextMenu(event.originalEvent.clientX, event.originalEvent.clientY, [
+      { label: "返回全图", onSelect: exitFocus },
+    ]);
+  });
+}
+
+function selectNode(id: string): void {
+  const model = displayedGraph?.nodes.find((node) => node.id === id);
+  if (model === undefined || currentSnapshot === undefined) return;
+  selectedNode = model;
+  const pdf = currentSnapshot.pdf_artifacts.find(
+    (artifact) => artifact.artifact_id === model.domain_id,
+  );
+  renderNodeDetail(model, pdf, currentSnapshot.marker);
+}
+
+function nodeMenuItems(id: string): ContextMenuItem[] {
+  const node = displayedGraph?.nodes.find((candidate) => candidate.id === id);
+  const items: ContextMenuItem[] = [];
+  if (node !== undefined && canFocus(node)) {
+    items.push(
+      {
+        label: "以此为中心聚焦",
+        disabled: focusRootId === id && focusDepth === "all",
+        onSelect: () => setFocus(id, "all"),
+      },
+      {
+        label: "仅展开一层",
+        disabled: focusRootId === id && focusDepth === 1,
+        onSelect: () => setFocus(id, 1),
+      },
+    );
+  }
+  items.push({
+    label: "返回全图",
+    disabled: focusRootId === null,
+    onSelect: exitFocus,
+  });
+  return items;
+}
+
+/** Only entities that sit upstream of a derivation chain can anchor a focus. */
+function canFocus(node: IncidenceNode): boolean {
+  return (
+    node.element_kind === "entity" &&
+    (node.domain_kind === "SourceArtifact" || node.domain_kind === "SourceSemanticUnit")
+  );
+}
+
+function setFocus(id: string, depth: FocusDepth): void {
+  focusRootId = id;
+  focusDepth = depth;
+  renderCurrentGraph();
+}
+
+function exitFocus(): void {
+  focusRootId = null;
+  renderCurrentGraph();
 }
 
 function renderImportResult(result: PdfImportResult): void {
@@ -535,6 +687,18 @@ function renderNodeDetail(
     technical.append(copy);
   }
   nodeDetail.append(technical);
+  if (canFocus(node)) {
+    const focused = focusRootId === node.id;
+    const focusButton = textElement(
+      "button",
+      "parse-button",
+      focused ? "已以此为中心" : "以此为中心聚焦",
+    );
+    focusButton.type = "button";
+    focusButton.disabled = focused;
+    focusButton.onclick = () => setFocus(node.id, "all");
+    nodeDetail.append(focusButton);
+  }
   if (node.domain_kind === "SourceArtifact" && node.domain_id !== null) {
     const read = textElement("button", "parse-button", "阅读文件");
     read.type = "button";
@@ -555,11 +719,34 @@ async function renderSourceDetail(node: IncidenceNode, host: HTMLElement): Promi
   catch (error) { host.append(textElement("p", "detail-error", `来源详情读取失败：${error instanceof Error ? error.message : String(error)}`)); }
 }
 
+function renderFocusBar(focus: FocusResult | null, graph: IncidenceGraph): void {
+  focusBar.hidden = focus === null;
+  if (focus === null) return;
+  focusRootLabel.textContent =
+    graph.nodes.find((node) => node.id === focusRootId)?.label ?? "—";
+  const contracted =
+    focus.contractedCount > 0 ? ` · 折叠了 ${focus.contractedCount} 个被过滤的中间节点` : "";
+  focusSummary.textContent = `展开 ${focus.reachedCount} 个节点${contracted}`;
+  document.querySelectorAll<HTMLButtonElement>(".depth-button").forEach((button) => {
+    const active = button.dataset.depth === String(focusDepth);
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
+function isEntityVisible(node: IncidenceNode): boolean {
+  if (node.domain_kind === null) return false;
+  const knownNodeKinds = new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan"]);
+  return (
+    (activePreset === "overview" && !knownNodeKinds.has(node.domain_kind)) ||
+    visibleNodeKinds.has(node.domain_kind)
+  );
+}
+
 function filterGraph(graph: IncidenceGraph): IncidenceGraph {
   // Unknown types are intentionally visible only in the all-layer overview.
   // Source/material presets remain stable until their layer-specific controls
   // are added, so a future semantic node cannot silently leak into them.
-  const knownNodeKinds = new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan"]);
   const knownRelationKinds = new Set(["ConversionRun", "SourceUnitRelation"]);
   const allowUnknownKinds = activePreset === "overview";
   const relationKinds = new Set<string>();
@@ -572,9 +759,7 @@ function filterGraph(graph: IncidenceGraph): IncidenceGraph {
       return (allowUnknownKinds && !knownRelationKinds.has(node.domain_kind))
         || relationKinds.has(node.domain_kind);
     }
-    if (node.domain_kind === null) return false;
-    return (allowUnknownKinds && !knownNodeKinds.has(node.domain_kind))
-      || visibleNodeKinds.has(node.domain_kind);
+    return isEntityVisible(node);
   });
   const nodeIds = new Set(nodes.map((n) => n.id));
   const edges = graph.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
@@ -591,7 +776,8 @@ function renderLegend(core: Core): void {
   });
   const edgeKeys = new Set<EdgeTypeKey>();
   core.edges().forEach((edge) => {
-    if (edge.hasClass("evidence-edge")) edgeKeys.add("evidence");
+    if (edge.hasClass("contracted-edge")) edgeKeys.add("contracted");
+    else if (edge.hasClass("evidence-edge")) edgeKeys.add("evidence");
     else if (edge.hasClass("semantic-edge")) edgeKeys.add("relation");
     else edgeKeys.add("incidence");
   });
@@ -600,7 +786,7 @@ function renderLegend(core: Core): void {
   for (const key of NODE_TYPE_ORDER) {
     if (nodeKeys.has(key)) items.push(legendItem(nodeSwatch(NODE_TYPES[key]), NODE_TYPES[key].label));
   }
-  for (const key of ["relation", "evidence", "incidence"] as EdgeTypeKey[]) {
+  for (const key of ["relation", "evidence", "contracted", "incidence"] as EdgeTypeKey[]) {
     if (edgeKeys.has(key)) items.push(legendItem(edgeSwatch(EDGE_TYPES[key]), EDGE_TYPES[key].label));
   }
   graphLegend.replaceChildren(...items);

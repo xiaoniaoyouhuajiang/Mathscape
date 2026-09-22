@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use mathscape_domain::{EntityKind, StableId};
 use mathscape_graph::{
     GraphProjection, GraphProjectionError, IncidenceDirection, ProjectionEndpoint, ProjectionGroup,
-    ProjectionGroupId, ProjectionLens, ProjectionNode, ProjectionRelation, ViewLayer,
+    ProjectionGroupId, ProjectionLens, ProjectionNode, ProjectionRelation, ProjectionRelationKind,
+    ViewLayer,
 };
 use mathscape_store_sqlite::{
     ArtifactCatalogSnapshot, LandscapeSnapshot, SourceMapSnapshot, StoredMapObject,
@@ -167,11 +168,57 @@ fn project_source_map_internal(
                             ),
                         ],
                     )?
+                    .relation_kind(ProjectionRelationKind::ContainsSpan)
                     .summary("来源单元对应的原文范围")?
                     .group(group_id.clone()),
                 );
             }
         }
+    }
+    // A unit's place in the document hierarchy lives in its own payload rather
+    // than in a stored relation, so the structural edge only exists if the
+    // projection synthesizes it. Without this, focusing a section cannot reach
+    // the units it contains.
+    for unit in objects
+        .values()
+        .filter(|object| object.kind == EntityKind::SourceSemanticUnit)
+    {
+        let Some(parent) = object_payload(unit)
+            .get("parent_unit")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| StableId::parse(value).ok())
+        else {
+            continue;
+        };
+        if parent == unit.stable_id || !node_ids.contains(&parent) {
+            continue;
+        }
+        let relation_id = synthetic_relation_id("has-part", &parent, &unit.stable_id);
+        relations.push(
+            ProjectionRelation::new(
+                relation_id,
+                EntityKind::SourceUnitRelation,
+                ViewLayer::Source,
+                relation_label(ProjectionRelationKind::HasPart),
+                vec![
+                    ProjectionEndpoint::new(
+                        parent,
+                        mathscape_domain::EndpointRole::parse("parent")?,
+                        None,
+                        IncidenceDirection::IntoRelation,
+                    ),
+                    ProjectionEndpoint::new(
+                        unit.stable_id.clone(),
+                        mathscape_domain::EndpointRole::parse("child")?,
+                        None,
+                        IncidenceDirection::OutOfRelation,
+                    ),
+                ],
+            )?
+            .relation_kind(ProjectionRelationKind::HasPart)
+            .summary("来源单元的结构层级")?
+            .group(group_id.clone()),
+        );
     }
     for object in objects
         .values()
@@ -208,7 +255,8 @@ fn project_source_map_internal(
                 ))
             })
             .collect::<Result<Vec<_>, SourceGraphProjectionError>>()?;
-        let label = relation_label(&object.payload);
+        let relation_kind = relation_kind_of(&object.payload);
+        let label = relation_label(relation_kind);
         let summary = format!("来源关系 · {}", label);
         relations.push(
             ProjectionRelation::new(
@@ -218,6 +266,7 @@ fn project_source_map_internal(
                 label,
                 projected,
             )?
+            .relation_kind(relation_kind)
             .summary(summary)?
             .group(group_id.clone())
             .lifecycle(object.lifecycle),
@@ -285,6 +334,7 @@ pub fn project_landscape(
             endpoints,
         )
         .expect("source relation is already validated")
+        .relation_kind(relation.relation_kind_value())
         .group(source_group.clone());
         if let Some(summary) = relation.summary_ref() {
             rebuilt = rebuilt.summary(summary).expect("summary is already valid");
@@ -347,6 +397,7 @@ pub fn project_landscape(
                     ),
                 ],
             )?
+            .relation_kind(ProjectionRelationKind::LocatedIn)
             .summary("SourceSpan Markdown 定位")?,
         );
     }
@@ -467,31 +518,112 @@ mod tests {
         let projection = project_source_map(&snapshot, ProjectionLens::Source).unwrap();
         assert_eq!(projection.nodes().len(), 1);
         assert_eq!(projection.relations().len(), 1);
-        assert!(
-            projection
-                .relations()
-                .iter()
-                .any(|relation| relation.label() == "证明")
+        assert!(projection.relations().iter().any(|relation| {
+            relation.label() == "证明"
+                && relation.relation_kind_value() == ProjectionRelationKind::Proves
+        }));
+    }
+
+    #[test]
+    fn synthesizes_a_structural_relation_from_the_units_parent() {
+        let span = id("mathscape:source-span/a");
+        let section = id("mathscape:source-unit/section");
+        let child = id("mathscape:source-unit/child");
+        let unit = |stable_id: &StableId, revision: char, payload: serde_json::Value| {
+            StoredMapObject {
+                stable_id: stable_id.clone(),
+                revision_id: RevisionId::parse(format!("sha256:{}", revision.to_string().repeat(64)))
+                    .unwrap(),
+                kind: EntityKind::SourceSemanticUnit,
+                relation: false,
+                payload,
+                lifecycle: mathscape_domain::LifecycleStatus::Active,
+            }
+        };
+        let snapshot = SourceMapSnapshot {
+            objects: vec![
+                unit(
+                    &section,
+                    '1',
+                    json!({"payload":{"display_title":"第一节","source_spans":[span.to_string()]}}),
+                ),
+                unit(
+                    &child,
+                    '2',
+                    json!({"payload":{
+                        "display_title":"命题 1.1",
+                        "source_spans":[span.to_string()],
+                        "parent_unit": section.to_string()
+                    }}),
+                ),
+            ],
+            relation_endpoints: BTreeMap::new(),
+        };
+
+        let projection = project_source_map(&snapshot, ProjectionLens::Source).unwrap();
+        let structural = projection
+            .relations()
+            .iter()
+            .find(|relation| {
+                relation.relation_kind_value() == ProjectionRelationKind::HasPart
+            })
+            .expect("the unit hierarchy must reach the projection");
+        assert_eq!(structural.label(), "包含");
+        // The parent has to sit on the into-relation side or focus traversal
+        // would walk from a child up into its whole section.
+        assert!(structural.endpoints().iter().any(|endpoint| {
+            endpoint.node() == &section
+                && endpoint.direction() == IncidenceDirection::IntoRelation
+        }));
+        assert!(structural.endpoints().iter().any(|endpoint| {
+            endpoint.node() == &child
+                && endpoint.direction() == IncidenceDirection::OutOfRelation
+        }));
+    }
+
+    #[test]
+    fn unmapped_relation_payloads_fall_back_to_unknown() {
+        assert_eq!(
+            relation_kind_of(&json!({"payload":{"relation":"has_part"}})),
+            ProjectionRelationKind::HasPart
+        );
+        // Traversal policies must fail closed, so anything the projector does
+        // not recognize stays `unknown` instead of borrowing a neighbour's kind.
+        assert_eq!(
+            relation_kind_of(&json!({"payload":{"relation":"invented_later"}})),
+            ProjectionRelationKind::Unknown
+        );
+        assert_eq!(
+            relation_kind_of(&json!({"payload":{}})),
+            ProjectionRelationKind::Unknown
         );
     }
 }
 
-fn relation_label(payload: &serde_json::Value) -> String {
+fn relation_kind_of(payload: &serde_json::Value) -> ProjectionRelationKind {
     let payload = payload.get("payload").unwrap_or(payload);
     payload
         .get("relation")
         .and_then(serde_json::Value::as_str)
-        .map(|value| match value {
-            "proves" => "证明",
-            "solves" => "解答",
-            "hints" => "提示",
-            "explains" => "解释",
-            "cites" => "引用",
-            "applies_method" => "应用方法",
-            other => other,
+        .map_or(ProjectionRelationKind::Unknown, |value| {
+            ProjectionRelationKind::from_domain_relation(value)
         })
-        .unwrap_or("来源关系")
-        .to_owned()
+}
+
+fn relation_label(kind: ProjectionRelationKind) -> String {
+    match kind {
+        ProjectionRelationKind::States => "陈述",
+        ProjectionRelationKind::Proves => "证明",
+        ProjectionRelationKind::HasPart => "包含",
+        ProjectionRelationKind::Poses => "提出",
+        ProjectionRelationKind::Hints => "提示",
+        ProjectionRelationKind::Solves => "解答",
+        ProjectionRelationKind::Explains => "解释",
+        ProjectionRelationKind::AppliesMethod => "应用方法",
+        ProjectionRelationKind::Cites => "引用",
+        _ => "来源关系",
+    }
+    .to_owned()
 }
 
 #[derive(Debug, Error)]

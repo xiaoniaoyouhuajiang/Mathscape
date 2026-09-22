@@ -311,6 +311,103 @@ code {
   background: rgb(12 19 26 / 84%);
 }
 
+.focus-bar {
+  position: absolute;
+  top: 78px;
+  left: 16px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  max-width: calc(100% - 32px);
+  padding: 7px 12px;
+  border: 1px solid #45606c;
+  border-radius: 8px;
+  color: #bdd6cf;
+  background: rgb(16 28 34 / 92%);
+  font-size: 11px;
+}
+
+.focus-bar[hidden] {
+  display: none;
+}
+
+.focus-label strong {
+  color: #f3fffb;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.focus-depth {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  color: #8695a2;
+}
+
+.depth-button {
+  padding: 3px 8px;
+  border: 1px solid #45606c;
+  border-radius: 5px;
+  color: #e9edf2;
+  background: #20353e;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.depth-button.is-active {
+  border-color: #8fc8b7;
+  background: #31534e;
+  color: #f3fffb;
+}
+
+.focus-summary {
+  color: #8695a2;
+}
+
+.focus-exit {
+  padding: 3px 10px;
+  border: 1px solid #6b5a45;
+  border-radius: 5px;
+  color: #f0c27d;
+  background: #2b2319;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.graph-context-menu {
+  position: fixed;
+  z-index: 20;
+  display: grid;
+  min-width: 152px;
+  padding: 4px;
+  border: 1px solid #45606c;
+  border-radius: 8px;
+  background: rgb(15 24 31 / 97%);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 45%);
+}
+
+.context-menu-item {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 5px;
+  color: #dce8e5;
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu-item:hover:not(:disabled) {
+  background: #24414a;
+}
+
+.context-menu-item:disabled {
+  color: #6b7a85;
+  cursor: default;
+}
+
 .map-legend {
   position: absolute;
   bottom: 14px;

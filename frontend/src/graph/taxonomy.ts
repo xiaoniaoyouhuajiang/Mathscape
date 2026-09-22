@@ -1,3 +1,4 @@
+import { FOCUS_CONTRACTION_KIND } from "./focus";
 import type { IncidenceNode } from "./projection";
 
 /**
@@ -18,6 +19,7 @@ export type NodeTypeKey =
   | "conversion_run"
   | "source_relation"
   | "evidence_relation"
+  | "focus_contraction"
   | "unknown_entity"
   | "unknown_relation";
 
@@ -160,6 +162,17 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
     backgroundOpacity: 0.8,
     fontSize: 9,
   },
+  focus_contraction: {
+    label: "已折叠的派生路径",
+    shape: "diamond",
+    width: 26,
+    height: 26,
+    background: "#5d6f82",
+    border: "#93a6b3",
+    borderStyle: "dashed",
+    backgroundOpacity: 0.7,
+    fontSize: 9,
+  },
   unknown_entity: {
     label: "未分类对象",
     shape: "ellipse",
@@ -186,7 +199,7 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
 
 export const NODE_TYPE_ORDER = Object.keys(NODE_TYPES) as NodeTypeKey[];
 
-export type EdgeTypeKey = "relation" | "evidence" | "incidence";
+export type EdgeTypeKey = "relation" | "evidence" | "contracted" | "incidence";
 
 export interface EdgeTypeVisual {
   label: string;
@@ -197,6 +210,7 @@ export interface EdgeTypeVisual {
 export const EDGE_TYPES: Record<EdgeTypeKey, EdgeTypeVisual> = {
   relation: { label: "关系（箭头表示方向）", color: "#9a7b5a", dashed: false },
   evidence: { label: "原文证据链接", color: "#82958e", dashed: true },
+  contracted: { label: "派生自（路径已折叠）", color: "#7f93a6", dashed: true },
   incidence: { label: "超边端点连接", color: "#647987", dashed: false },
 };
 
@@ -208,6 +222,7 @@ const DOMAIN_KIND_LABELS: Record<string, string> = {
   SourceSemanticUnit: "内容单元",
   SourceUnitRelation: "来源关系",
   Evidence: "证据关系",
+  FocusContraction: "已折叠的派生路径",
 };
 
 export function domainKindLabel(kind: string | null): string {
@@ -224,6 +239,8 @@ export function nodeTypeKey(node: IncidenceNode): NodeTypeKey {
         return "source_relation";
       case "Evidence":
         return "evidence_relation";
+      case FOCUS_CONTRACTION_KIND:
+        return "focus_contraction";
       default:
         return "unknown_relation";
     }

@@ -21,6 +21,26 @@ export type ProjectionLens =
 
 export type IncidenceNodeKind = "entity" | "relation" | "group";
 
+/**
+ * Stable relation discriminant emitted by the projection layer. The Rust enum
+ * is `#[non_exhaustive]`, so consumers must treat any value outside this union
+ * the same way they treat `unknown`.
+ */
+export type RelationKind =
+  | "conversion"
+  | "located_in"
+  | "contains_span"
+  | "states"
+  | "proves"
+  | "has_part"
+  | "poses"
+  | "hints"
+  | "solves"
+  | "explains"
+  | "applies_method"
+  | "cites"
+  | "unknown";
+
 export type IncidenceDirection =
   | "into_relation"
   | "out_of_relation"
@@ -31,6 +51,8 @@ export interface IncidenceNode {
   element_kind: IncidenceNodeKind;
   domain_id: string | null;
   domain_kind: string | null;
+  /** Non-null only on relation nodes. */
+  relation_kind: RelationKind | null;
   layer: ViewLayer;
   label: string;
   summary: string | null;
