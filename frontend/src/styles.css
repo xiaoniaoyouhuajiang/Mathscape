@@ -46,16 +46,9 @@ code {
 }
 
 .brand-block,
-.topbar-actions,
-.legend {
+.topbar-actions {
   display: flex;
   align-items: center;
-}
-
-.graph-view-button.is-active {
-  border-color: #8fc8b7;
-  background: #31534e;
-  color: #f3fffb;
 }
 
 .brand-block {
@@ -318,28 +311,70 @@ code {
   background: rgb(12 19 26 / 84%);
 }
 
-.legend {
-  gap: 13px;
+.map-legend {
+  position: absolute;
+  bottom: 14px;
+  left: 16px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 14px;
+  max-width: 62%;
+  padding: 8px 11px;
+  border: 1px solid #26303a;
+  border-radius: 8px;
   color: #8695a2;
+  background: rgb(12 19 26 / 78%);
   font-size: 10px;
+  pointer-events: none;
+}
+
+.map-legend:empty {
+  display: none;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .legend-dot {
   display: inline-block;
-  width: 8px;
+  width: 10px;
   height: 8px;
-  margin-right: 5px;
+  border: 1px solid;
+}
+
+.legend-dot.is-rect {
+  border-radius: 2px;
+}
+
+.legend-dot.is-round {
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
 }
 
-.legend-dot.entity {
-  background: #59918b;
+.legend-dot.is-diamond {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  transform: rotate(45deg);
 }
 
-.legend-dot.relation {
-  border-radius: 2px;
-  background: #b47b49;
-  transform: rotate(45deg);
+.legend-dot.is-dashed {
+  border-style: dashed;
+}
+
+.legend-line {
+  display: inline-block;
+  width: 15px;
+  border-top: 2px solid currentcolor;
+}
+
+.legend-line.is-dashed {
+  border-top-style: dashed;
 }
 
 .graph-canvas {

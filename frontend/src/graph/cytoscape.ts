@@ -11,6 +11,7 @@ import {
   type IncidenceGraph,
   type IncidenceNode,
 } from "./projection";
+import { EDGE_TYPES, NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
 
 export type RenderMode = "semantic" | "hyperedge";
 
@@ -48,6 +49,7 @@ export function toCytoscapeElements(
         id: node.id,
         label: node.label,
         elementKind: node.element_kind,
+        nodeType: nodeTypeKey(node),
         domainId: node.domain_id,
         domainKind: node.domain_kind,
         layer: node.layer,
@@ -330,6 +332,24 @@ function edgeClasses(directed: boolean, semantic = false): string {
 // Cytoscape stylesheet
 // ---------------------------------------------------------------------------
 
+const nodeTypeStyles: StylesheetJson = NODE_TYPE_ORDER.map((key) => {
+  const visual = NODE_TYPES[key];
+  return {
+    selector: `node[nodeType = "${key}"]`,
+    style: {
+      shape: visual.shape,
+      width: `${visual.width}px`,
+      height: `${visual.height}px`,
+      "background-color": visual.background,
+      "background-opacity": visual.backgroundOpacity,
+      "border-color": visual.border,
+      "border-style": visual.borderStyle,
+      "border-width": 1.5,
+      "font-size": `${visual.fontSize}px`,
+    },
+  };
+});
+
 const styles: StylesheetJson = [
   {
     selector: "node",
@@ -347,52 +367,7 @@ const styles: StylesheetJson = [
       "text-background-padding": "3px",
     },
   },
-  {
-    selector: 'node[elementKind = "relation"]',
-    style: {
-      shape: "diamond",
-      width: "34px",
-      height: "34px",
-      "background-color": "#b47b49",
-      "border-color": "#d0a274",
-    },
-  },
-  {
-    selector: 'node[domainKind = "SourceArtifact"]',
-    style: {
-      shape: "round-rectangle",
-      width: "46px",
-      height: "30px",
-      "background-color": "#3e6b82",
-      "border-color": "#8db7c9",
-      "border-width": 1.5,
-    },
-  },
-  {
-    selector: 'node[domainKind = "SourceSemanticUnit"]',
-    style: {
-      shape: "ellipse",
-      width: "34px",
-      height: "34px",
-      "background-color": "#4a948a",
-      "border-color": "#9bd1c5",
-      "border-width": 1.5,
-    },
-  },
-  {
-    selector: 'node[domainKind = "SourceSpan"]',
-    style: {
-      shape: "round-rectangle",
-      width: "30px",
-      height: "22px",
-      "background-color": "#667b78",
-      "background-opacity": 0.72,
-      "border-color": "#a5bbb5",
-      "border-style": "dashed",
-      "border-width": 1.5,
-      "font-size": "9px",
-    },
-  },
+  ...nodeTypeStyles,
   {
     selector: 'node[elementKind = "junction"]',
     style: {
@@ -419,8 +394,8 @@ const styles: StylesheetJson = [
       label: "data(role)",
       width: 1.5,
       "curve-style": "bezier",
-      "line-color": "#647987",
-      "target-arrow-color": "#647987",
+      "line-color": EDGE_TYPES.incidence.color,
+      "target-arrow-color": EDGE_TYPES.incidence.color,
       "target-arrow-shape": "triangle",
       "font-size": "9px",
       color: "#9aa9b4",
@@ -431,8 +406,8 @@ const styles: StylesheetJson = [
     selector: "edge.semantic-edge",
     style: {
       label: "data(label)",
-      "line-color": "#9a7b5a",
-      "target-arrow-color": "#9a7b5a",
+      "line-color": EDGE_TYPES.relation.color,
+      "target-arrow-color": EDGE_TYPES.relation.color,
       color: "#c9a87a",
     },
   },
@@ -442,7 +417,7 @@ const styles: StylesheetJson = [
       label: "data(label)",
       width: 1.2,
       "line-style": "dashed",
-      "line-color": "#82958e",
+      "line-color": EDGE_TYPES.evidence.color,
       "target-arrow-shape": "none",
       color: "#9db2aa",
       "font-size": "8px",

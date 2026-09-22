@@ -3,6 +3,17 @@ import type { Core, NodeSingular } from "cytoscape";
 
 import { mountCytoscapeGraph, type RenderMode } from "./graph/cytoscape";
 import type { IncidenceGraph, IncidenceNode } from "./graph/projection";
+import {
+  EDGE_TYPES,
+  NODE_TYPES,
+  NODE_TYPE_ORDER,
+  domainKindLabel,
+  nodeTypeLabel,
+  type EdgeTypeKey,
+  type EdgeTypeVisual,
+  type NodeTypeKey,
+  type NodeTypeVisual,
+} from "./graph/taxonomy";
 import "./styles.css";
 import { ArtifactReader } from "./reader/reader";
 import { sourceNodeDetail } from "./reader/content";
@@ -168,7 +179,7 @@ app.innerHTML = `
             </div>
             <span class="filter-divider">│</span>
             <div class="filter-group" id="node-filter-group">
-              <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceArtifact"> 材料</label>
+              <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceArtifact"> 材料文件</label>
               <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceSemanticUnit"> 内容单元</label>
               <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceSpan"> 原文证据</label>
             </div>
@@ -177,6 +188,7 @@ app.innerHTML = `
           </div>
         </div>
         <div id="graph" class="graph-canvas"></div>
+        <div id="graph-legend" class="map-legend" aria-label="图例"></div>
         <section id="reader" class="reader-panel" aria-label="文件阅读器" hidden></section>
         <div id="empty-state" class="empty-state">
           <strong id="empty-state-title">尚未导入材料</strong>
@@ -225,6 +237,7 @@ const workspaceId = requiredElement<HTMLElement>("#workspace-id");
 const workspaceName = requiredElement<HTMLElement>("#workspace-name");
 const workspaceRoot = requiredElement<HTMLElement>("#workspace-root");
 const graphContainer = requiredElement<HTMLElement>("#graph");
+const graphLegend = requiredElement<HTMLElement>("#graph-legend");
 const graphViewTitle = requiredElement<HTMLElement>("#graph-view-title");
 const nodeFilterGroup = requiredElement<HTMLElement>("#node-filter-group");
 const emptyState = requiredElement<HTMLElement>("#empty-state");
@@ -462,6 +475,7 @@ function renderCurrentGraph(snapshot = currentSnapshot): void {
     ? "尝试切换显示预设或勾选更多节点类型。"
     : "导入第一份 PDF 后，节点会出现在这里。";
   graphCore = mountCytoscapeGraph(graphContainer, visibleGraph, renderMode);
+  renderLegend(graphCore);
   emptyState.classList.toggle("is-hidden", entityCount > 0);
   graphCore.on("tap", "node", (event) => {
     const selected = event.target as NodeSingular;
@@ -500,10 +514,10 @@ function renderNodeDetail(
 ): void {
   nodeDetail.classList.remove("empty-detail");
   nodeDetail.replaceChildren(
-    textElement("span", "kind-pill", displayElementKind(node.domain_kind, node.element_kind)),
+    textElement("span", "kind-pill", nodeTypeLabel(node)),
     textElement("h3", "detail-title", node.label),
     definitionList([
-      ["类型", displayDomainKind(node.domain_kind)],
+      ["类型", domainKindLabel(node.domain_kind)],
       ["层级", displayLayer(node.layer)],
       ["生命周期", node.lifecycle ?? "—"],
       ["摘要", node.summary ?? "—"],
@@ -535,9 +549,6 @@ function renderNodeDetail(
   }
 }
 
-const domainLabels: Record<string, string> = { SourceArtifact: "来源材料", ConversionRun: "转换任务", SourceSpan: "原文范围", SourceSemanticUnit: "内容单元", SourceUnitRelation: "来源关系" };
-function displayDomainKind(kind: string | null): string { return kind === null ? "—" : domainLabels[kind] ?? kind; }
-function displayElementKind(kind: string | null, element: string): string { return element === "relation" ? "关系" : element === "group" ? "视图分组" : displayDomainKind(kind); }
 function displayLayer(layer: string): string { return ({ source: "来源层", local_semantic: "局部语义层", global_semantic: "全局语义层", alignment: "对齐层", rdtx: "RDTX 层", formalization: "形式化层" } as Record<string, string>)[layer] ?? layer; }
 async function renderSourceDetail(node: IncidenceNode, host: HTMLElement): Promise<void> {
   try { const detail = await sourceNodeDetail(node.domain_id!); if (detail.excerpt) { const preview = document.createElement("div"); preview.className = "source-preview markdown-body"; preview.innerHTML = markdownRenderer().render(detail.excerpt); host.append(preview); } if (detail.artifact_id) { const button = textElement("button", "parse-button", "打开并定位原文"); button.type = "button"; button.onclick = () => { readerHost.hidden = false; void reader.open(detail.artifact_id!, detail.display_title ?? node.label, detail.byte_range ? { ...detail.byte_range, blockIds: detail.markdown_block_ids } : undefined); }; host.append(button); } }
@@ -568,6 +579,54 @@ function filterGraph(graph: IncidenceGraph): IncidenceGraph {
   const nodeIds = new Set(nodes.map((n) => n.id));
   const edges = graph.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
   return { ...graph, nodes, edges };
+}
+
+// The legend is read back from the mounted graph so it can never describe a
+// type that the current filter and render mode did not actually produce.
+function renderLegend(core: Core): void {
+  const nodeKeys = new Set<NodeTypeKey>();
+  core.nodes().forEach((node) => {
+    const key = node.data("nodeType") as NodeTypeKey | undefined;
+    if (key !== undefined && key in NODE_TYPES) nodeKeys.add(key);
+  });
+  const edgeKeys = new Set<EdgeTypeKey>();
+  core.edges().forEach((edge) => {
+    if (edge.hasClass("evidence-edge")) edgeKeys.add("evidence");
+    else if (edge.hasClass("semantic-edge")) edgeKeys.add("relation");
+    else edgeKeys.add("incidence");
+  });
+
+  const items: HTMLElement[] = [];
+  for (const key of NODE_TYPE_ORDER) {
+    if (nodeKeys.has(key)) items.push(legendItem(nodeSwatch(NODE_TYPES[key]), NODE_TYPES[key].label));
+  }
+  for (const key of ["relation", "evidence", "incidence"] as EdgeTypeKey[]) {
+    if (edgeKeys.has(key)) items.push(legendItem(edgeSwatch(EDGE_TYPES[key]), EDGE_TYPES[key].label));
+  }
+  graphLegend.replaceChildren(...items);
+}
+
+function legendItem(swatch: HTMLElement, label: string): HTMLElement {
+  const item = document.createElement("span");
+  item.className = "legend-item";
+  item.append(swatch, document.createTextNode(label));
+  return item;
+}
+
+function nodeSwatch(visual: NodeTypeVisual): HTMLElement {
+  const shape = visual.shape === "ellipse" ? "is-round" : visual.shape === "diamond" ? "is-diamond" : "is-rect";
+  const swatch = document.createElement("span");
+  swatch.className = `legend-dot ${shape}${visual.borderStyle === "dashed" ? " is-dashed" : ""}`;
+  swatch.style.backgroundColor = visual.background;
+  swatch.style.borderColor = visual.border;
+  return swatch;
+}
+
+function edgeSwatch(visual: EdgeTypeVisual): HTMLElement {
+  const swatch = document.createElement("span");
+  swatch.className = `legend-line${visual.dashed ? " is-dashed" : ""}`;
+  swatch.style.color = visual.color;
+  return swatch;
 }
 
 function createParseForm(

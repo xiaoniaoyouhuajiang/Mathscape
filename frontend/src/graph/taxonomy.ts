@@ -1,0 +1,261 @@
+import type { IncidenceNode } from "./projection";
+
+/**
+ * Single source of truth for user-visible type names and visual encoding.
+ *
+ * Cytoscape styles, the canvas legend and the Inspector all read from here so
+ * that one concept never appears under two different Chinese names.
+ */
+export type NodeTypeKey =
+  | "pdf"
+  | "markdown"
+  | "parse_metadata"
+  | "parse_image"
+  | "attachment"
+  | "artifact"
+  | "semantic_unit"
+  | "source_span"
+  | "conversion_run"
+  | "source_relation"
+  | "evidence_relation"
+  | "unknown_entity"
+  | "unknown_relation";
+
+export type NodeShape = "round-rectangle" | "cut-rectangle" | "hexagon" | "barrel" | "rectangle" | "ellipse" | "diamond";
+
+export type BorderStyle = "solid" | "dashed";
+
+export interface NodeTypeVisual {
+  label: string;
+  shape: NodeShape;
+  width: number;
+  height: number;
+  background: string;
+  border: string;
+  borderStyle: BorderStyle;
+  backgroundOpacity: number;
+  fontSize: number;
+}
+
+/** Declaration order doubles as legend order. */
+export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
+  pdf: {
+    label: "PDF",
+    shape: "round-rectangle",
+    width: 48,
+    height: 30,
+    background: "#3e6b82",
+    border: "#8db7c9",
+    borderStyle: "solid",
+    backgroundOpacity: 1,
+    fontSize: 11,
+  },
+  markdown: {
+    label: "Markdown 正文",
+    shape: "cut-rectangle",
+    width: 46,
+    height: 28,
+    background: "#2f6f73",
+    border: "#7fc5c6",
+    borderStyle: "solid",
+    backgroundOpacity: 1,
+    fontSize: 11,
+  },
+  parse_metadata: {
+    label: "解析元数据",
+    shape: "hexagon",
+    width: 32,
+    height: 24,
+    background: "#4a5a66",
+    border: "#8a9aa6",
+    borderStyle: "solid",
+    backgroundOpacity: 0.9,
+    fontSize: 9,
+  },
+  parse_image: {
+    label: "解析图片",
+    shape: "barrel",
+    width: 34,
+    height: 26,
+    background: "#5a6b7a",
+    border: "#93a6b3",
+    borderStyle: "solid",
+    backgroundOpacity: 0.9,
+    fontSize: 9,
+  },
+  attachment: {
+    label: "附件",
+    shape: "rectangle",
+    width: 32,
+    height: 24,
+    background: "#465059",
+    border: "#7f8b95",
+    borderStyle: "solid",
+    backgroundOpacity: 0.9,
+    fontSize: 9,
+  },
+  artifact: {
+    label: "材料文件",
+    shape: "round-rectangle",
+    width: 44,
+    height: 28,
+    background: "#3e6b82",
+    border: "#8db7c9",
+    borderStyle: "solid",
+    backgroundOpacity: 0.9,
+    fontSize: 11,
+  },
+  semantic_unit: {
+    label: "内容单元",
+    shape: "ellipse",
+    width: 34,
+    height: 34,
+    background: "#4a948a",
+    border: "#9bd1c5",
+    borderStyle: "solid",
+    backgroundOpacity: 1,
+    fontSize: 11,
+  },
+  source_span: {
+    label: "原文证据",
+    shape: "round-rectangle",
+    width: 30,
+    height: 22,
+    background: "#667b78",
+    border: "#a5bbb5",
+    borderStyle: "dashed",
+    backgroundOpacity: 0.72,
+    fontSize: 9,
+  },
+  conversion_run: {
+    label: "转换任务",
+    shape: "diamond",
+    width: 34,
+    height: 34,
+    background: "#b47b49",
+    border: "#d0a274",
+    borderStyle: "solid",
+    backgroundOpacity: 1,
+    fontSize: 10,
+  },
+  source_relation: {
+    label: "来源关系",
+    shape: "diamond",
+    width: 32,
+    height: 32,
+    background: "#8f6a9c",
+    border: "#c0a3cb",
+    borderStyle: "solid",
+    backgroundOpacity: 1,
+    fontSize: 10,
+  },
+  evidence_relation: {
+    label: "证据关系",
+    shape: "diamond",
+    width: 28,
+    height: 28,
+    background: "#6c7f79",
+    border: "#a5bbb5",
+    borderStyle: "dashed",
+    backgroundOpacity: 0.8,
+    fontSize: 9,
+  },
+  unknown_entity: {
+    label: "未分类对象",
+    shape: "ellipse",
+    width: 32,
+    height: 32,
+    background: "#59918b",
+    border: "#8bbab4",
+    borderStyle: "solid",
+    backgroundOpacity: 1,
+    fontSize: 11,
+  },
+  unknown_relation: {
+    label: "未分类关系",
+    shape: "diamond",
+    width: 30,
+    height: 30,
+    background: "#7a6a5a",
+    border: "#b39f8a",
+    borderStyle: "solid",
+    backgroundOpacity: 1,
+    fontSize: 10,
+  },
+};
+
+export const NODE_TYPE_ORDER = Object.keys(NODE_TYPES) as NodeTypeKey[];
+
+export type EdgeTypeKey = "relation" | "evidence" | "incidence";
+
+export interface EdgeTypeVisual {
+  label: string;
+  color: string;
+  dashed: boolean;
+}
+
+export const EDGE_TYPES: Record<EdgeTypeKey, EdgeTypeVisual> = {
+  relation: { label: "关系（箭头表示方向）", color: "#9a7b5a", dashed: false },
+  evidence: { label: "原文证据链接", color: "#82958e", dashed: true },
+  incidence: { label: "超边端点连接", color: "#647987", dashed: false },
+};
+
+/** Chinese names for raw `domain_kind` values, used when no finer type applies. */
+const DOMAIN_KIND_LABELS: Record<string, string> = {
+  SourceArtifact: "材料文件",
+  ConversionRun: "转换任务",
+  SourceSpan: "原文证据",
+  SourceSemanticUnit: "内容单元",
+  SourceUnitRelation: "来源关系",
+  Evidence: "证据关系",
+};
+
+export function domainKindLabel(kind: string | null): string {
+  if (kind === null) return "—";
+  return DOMAIN_KIND_LABELS[kind] ?? kind;
+}
+
+export function nodeTypeKey(node: IncidenceNode): NodeTypeKey {
+  if (node.element_kind === "relation") {
+    switch (node.domain_kind) {
+      case "ConversionRun":
+        return "conversion_run";
+      case "SourceUnitRelation":
+        return "source_relation";
+      case "Evidence":
+        return "evidence_relation";
+      default:
+        return "unknown_relation";
+    }
+  }
+  switch (node.domain_kind) {
+    case "SourceSemanticUnit":
+      return "semantic_unit";
+    case "SourceSpan":
+      return "source_span";
+    case "SourceArtifact":
+      return artifactTypeKey(node.summary);
+    default:
+      return "unknown_entity";
+  }
+}
+
+export function nodeTypeLabel(node: IncidenceNode): string {
+  return NODE_TYPES[nodeTypeKey(node)].label;
+}
+
+/**
+ * PDF and its parsed Markdown share `domain_kind = "SourceArtifact"`, so the
+ * media type has to come from the summary that `project_artifact_catalog`
+ * writes as `"{media_type} · {bytes} bytes · {status}"`. If the projection ever
+ * exposes the media type as its own field, read that field instead.
+ */
+function artifactTypeKey(summary: string | null): NodeTypeKey {
+  const mediaType = summary === null ? "" : summary.split(" · ", 1)[0];
+  if (!mediaType.includes("/")) return "artifact";
+  if (mediaType === "application/pdf") return "pdf";
+  if (mediaType === "text/markdown") return "markdown";
+  if (mediaType === "application/json") return "parse_metadata";
+  if (mediaType.startsWith("image/")) return "parse_image";
+  return "attachment";
+}
