@@ -40,8 +40,6 @@ interface DesktopSnapshot {
   conversion_count: number;
   marker: MarkerRuntimeStatus;
   pdf_artifacts: PdfArtifactSummary[];
-  graph: IncidenceGraph;
-  source_graph: IncidenceGraph;
   landscape_graph: IncidenceGraph;
 }
 

@@ -28,7 +28,7 @@ use mathscape_artifact::{
     ArtifactImportOutcome, ArtifactMetadata, ArtifactPool, ArtifactPoolError,
 };
 use mathscape_domain::{ActorRef, MediaType, RightsRecord, RightsStatus, StableId};
-use mathscape_graph::{GraphProjectionError, IncidenceGraph, ProjectionLens};
+use mathscape_graph::IncidenceGraph;
 use mathscape_llm::{CredentialStore, KeyringCredentialStore};
 use mathscape_orchestrator::{MarkerPromotionError, promote_marker_inventory};
 use mathscape_pdf::{
@@ -36,8 +36,7 @@ use mathscape_pdf::{
     PdfSelection,
 };
 use mathscape_query::{
-    ArtifactGraphProjectionError, ArtifactGraphProjector, LandscapeProjectionInput,
-    LandscapeProjector, SourceGraphProjectionError, SourceGraphProjector,
+    LandscapeProjectionInput, LandscapeProjector, SourceGraphProjectionError,
 };
 use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
 use mathscape_tool_marker::{
@@ -147,11 +146,6 @@ impl DesktopService {
                 })
             })
             .collect();
-        let projection = ArtifactGraphProjector.project(catalog, ProjectionLens::Source)?;
-        let graph = IncidenceGraph::project(&projection);
-        let source_projection =
-            SourceGraphProjector.project(landscape.sources(), ProjectionLens::Source)?;
-        let source_graph = IncidenceGraph::project(&source_projection);
         let landscape_projection =
             LandscapeProjector.project(LandscapeProjectionInput::from_snapshot(&landscape))?;
         let landscape_graph = IncidenceGraph::project(&landscape_projection);
@@ -163,8 +157,6 @@ impl DesktopService {
             conversion_count,
             marker: self.marker_status(),
             pdf_artifacts,
-            graph,
-            source_graph,
             landscape_graph,
         })
     }
@@ -450,8 +442,6 @@ pub struct DesktopSnapshot {
     conversion_count: usize,
     marker: MarkerRuntimeStatus,
     pdf_artifacts: Vec<PdfArtifactSummary>,
-    graph: IncidenceGraph,
-    source_graph: IncidenceGraph,
     landscape_graph: IncidenceGraph,
 }
 
@@ -474,14 +464,6 @@ impl DesktopSnapshot {
 
     pub fn pdf_artifacts(&self) -> &[PdfArtifactSummary] {
         &self.pdf_artifacts
-    }
-
-    pub fn graph(&self) -> &IncidenceGraph {
-        &self.graph
-    }
-
-    pub fn source_graph(&self) -> &IncidenceGraph {
-        &self.source_graph
     }
 
     pub fn landscape_graph(&self) -> &IncidenceGraph {
@@ -674,12 +656,8 @@ pub enum DesktopServiceError {
     Pdf(#[from] PdfError),
     #[error("SQLite catalog read failed: {0}")]
     Store(#[from] SqliteStoreError),
-    #[error("Artifact graph projection failed: {0}")]
-    Projection(#[from] ArtifactGraphProjectionError),
     #[error("Source graph projection failed: {0}")]
     SourceGraph(#[from] SourceGraphProjectionError),
-    #[error("graph projection failed: {0}")]
-    Graph(#[from] GraphProjectionError),
     #[error("domain validation failed: {0}")]
     Domain(#[from] mathscape_domain::DomainError),
     #[error("Marker request is invalid: {0}")]

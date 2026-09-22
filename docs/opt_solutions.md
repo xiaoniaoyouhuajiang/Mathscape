@@ -19,7 +19,8 @@
 | Task 4.0 关系子类型字段 | ✅ 已完成 | `ProjectionRelationKind` + `IncidenceNode.relation_kind`；无存储层迁移 |
 | Task 4.0b 结构层级关系投影 | ✅ 已完成 | 从 `parent_unit` 合成 `has_part`，让 `has_part` 穿越规则不再是死规则 |
 | Task 4 聚焦与后代展开 | ✅ 已完成 | 4a-1 ~ 4a-4 全部落地；双击入口（4a-5）主动暂缓，理由见 Task 4 |
-| Task 6 布局与大图性能 | ⏳ 待办 | 吸收了原 4b 的载荷精简议题 |
+| Task 6a 精简 DesktopSnapshot 载荷 | ✅ 已完成 | 快照只返回 `landscape_graph`；不再独立投影/序列化 `graph` 与 `source_graph` |
+| Task 6 布局与大图性能 | ⏳ 待办 | 层次布局、阈值聚合等规模化议题；与 6a 拆开 |
 
 ---
 
@@ -27,7 +28,7 @@
 
 | 层 | 当前状态 |
 |---|---|
-| **Rust 后端** | `DesktopSnapshot` 同时返回 `graph`（材料图）、`source_graph`、`landscape_graph` 三张 `IncidenceGraph`；Task 3 之后前端只消费 `landscape_graph`，另外两张是冗余载荷 |
+| **Rust 后端** | `DesktopSnapshot` 只返回 `landscape_graph`；材料图与来源图仍由 `LandscapeProjector` 内部合成，不再单独投影或走 IPC |
 | **`IncidenceGraph::project`** | 仍把 `ProjectionGroup` 序列化为节点（`element_kind = "group"`），但前端已不再渲染 |
 | **关系渲染** | 后端仍产出关系节点；前端默认在语义边模式下折叠为边（`cytoscape.ts`） |
 | **前端** | `main.ts` 统一渲染 `landscape_graph`，通过预设 + checkbox 过滤 |
@@ -302,7 +303,7 @@
 
 理由不是"数据量还小"，而是投入产出不对。真正的性能问题在于 `get_desktop_snapshot` 每次序列化三张全量 `IncidenceGraph`，而前端只用其中一张。而且按 `architecture.md` 的边界，query 层职责是"从权威快照构建只读视图"，新增邻域 API 意味着存储层要支持图遍历，成本远高于收益。
 
-该议题改写为"精简 `DesktopSnapshot` 载荷"并入 Task 6。
+该议题已作为独立小清理落地（Task 6a），不再与布局优化捆在一起。
 
 #### 4.6 交付拆分
 
@@ -333,22 +334,32 @@
 
 ---
 
+### Task 6a — 精简 `DesktopSnapshot` 载荷 ✅
+
+**范围**：`mathscape-desktop` + 前端类型。query 层仍可独立投影材料图与来源图。
+
+**问题**：Task 3 之后前端只读 `landscape_graph`，但 `get_desktop_snapshot` 仍会再投影并序列化 `graph` 与 `source_graph`。景观投影内部已经会跑材料图和来源图，等于投影三遍、IPC 也带三张图。
+
+**方案**：`DesktopSnapshot` 只保留 `landscape_graph`；去掉独立的 `ArtifactGraphProjector` / `SourceGraphProjector` 调用。
+
+**落地结果**：前端 `DesktopSnapshot` 类型同步删字段；桌面测试改为只断言景观图（材料节点、内容单元、合成溯源边）。
+
+---
+
 ### Task 6 — 全景布局优化与大图性能（收尾）
 
 **范围**：前端 + 可选 Rust
 
-**问题**：数据量增长后全量景观图会成为不可读的"毛线团"；`cose` 布局在节点多时性能较差；`DesktopSnapshot` 载荷冗余。
+**问题**：数据量增长后全量景观图会成为不可读的"毛线团"；`cose` 布局在节点多时性能较差。快照冗余已由 Task 6a 处理。
 
 **方案**：
 - Task 3 的默认预设与 Task 4 的聚焦已缓解最坏情况
-- 可引入 `cytoscape-fcose`（比 cose 快数倍）或 `dagre`（层次布局）
-- 节点数超过阈值时自动降级到聚合视图（仅显示 PDF 级别）
-- **精简 `DesktopSnapshot` 载荷**（原 4b 转入）：Task 3 之后前端只消费 `landscape_graph`，`graph` 与 `source_graph` 是纯冗余序列化开销，应从快照中移除或改为按需请求
+- 可引入层次布局（`dagre` / `breadthfirst`）；`fcose` 只加快力导向，不改善派生链可读性
+- 节点数超过阈值时自动降级到聚合视图（仅显示 PDF 级别）——等真有多来源、默认预设已拖不动再做
 
 **变更文件**：
 - [`cytoscape.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/cytoscape.ts) — 替换 layout；添加节点数阈值检查
-- [`package.json`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/package.json) — 新增 `cytoscape-fcose` 依赖（需评估体积）
-- `apps/mathscape-desktop/src/lib.rs` — 精简 `DesktopSnapshot` 字段
+- [`package.json`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/package.json) — 若引入布局库需评估体积
 
 ---
 
@@ -362,7 +373,8 @@ graph TD
     T5["Task 5\n类型名称与图例"] --> T40
     T40["Task 4.0\n关系子类型字段"] --> T40B
     T40B["Task 4.0b\n结构层级关系投影"] --> T4
-    T4["Task 4\n聚焦与后代展开"] --> T6
+    T4["Task 4\n聚焦与后代展开"] --> T6A
+    T6A["Task 6a\n精简快照载荷"] --> T6
     T6["Task 6\n布局优化与大图性能"]
 ```
 
@@ -373,6 +385,7 @@ graph TD
 - **Sprint 1（可用性修复）**：Task 1 + Task 2 ✅
 - **Sprint 2（信息架构）**：Task 3 ✅ + Task 5 ✅
 - **Sprint 3（交互增强）**：Task 4.0 → Task 4.0b → Task 4 ✅（双击入口暂缓）
+- **Sprint 3.5（载荷清理）**：Task 6a ✅
 - **Sprint 4（规模化）**：Task 6 ← 待数据量增长后处理
 
 ---
@@ -410,4 +423,5 @@ graph TD
   - 聚焦后范围外节点变淡但仍在原位且不可点击——验证范围淡化生效
   - 聚焦一个带子单元的章节单元（深度 2），能看到其子单元——验证 Task 4.0b 的结构关系接入了遍历
   - 节点右键出现菜单、画布空白处右键在聚焦态下给出"返回全图"、`Esc` 依次关菜单与退出聚焦
+- **Task 6a**：`DesktopSnapshot` JSON 不再含 `graph` / `source_graph`；解析后快照仍能渲染景观图；桌面服务测试只断言 `landscape_graph`
 - **Task 6**：导入多份 PDF 并解析后，图仍可交互；切换 layout 对比布局质量

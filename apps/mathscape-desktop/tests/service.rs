@@ -440,7 +440,7 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     assert_eq!(persisted.checkpoint.units.len(), 2);
     assert_eq!(persisted.checkpoint.facts.len(), 2);
     assert!(persisted.checkpoint.pending_tasks.is_empty());
-    assert_eq!(service.snapshot().unwrap().graph().nodes().len(), 1);
+    assert_eq!(service.snapshot().unwrap().landscape_graph().nodes().len(), 1);
     drop(store);
 
     let invalid_acceptance: AcceptDiscoveryRequest = serde_json::from_value(serde_json::json!({
@@ -496,9 +496,20 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     );
     drop(store);
     let projected = service.snapshot().unwrap();
-    assert_eq!(projected.graph().nodes().len(), 1);
-    assert!(projected.source_graph().nodes().len() > 2);
-    assert!(projected.landscape_graph().nodes().len() > projected.source_graph().nodes().len());
+    assert_eq!(
+        projected
+            .landscape_graph()
+            .nodes()
+            .iter()
+            .filter(|node| node.domain_kind()
+                == Some(mathscape_domain::EntityKind::SourceSemanticUnit))
+            .count(),
+        2
+    );
+    assert!(projected.landscape_graph().nodes().iter().any(|node| {
+        node.domain_kind() == Some(mathscape_domain::EntityKind::SourceArtifact)
+    }));
+    assert!(projected.landscape_graph().nodes().len() > 2);
     assert!(projected.landscape_graph().nodes().iter().any(|node| {
         node.domain_kind() == Some(mathscape_domain::EntityKind::Evidence)
             && node.label() == "来源于 Markdown"
@@ -568,14 +579,14 @@ fn imports_a_pdf_into_a_reopenable_workspace_and_refreshes_the_graph() {
 
     let initial = service.snapshot().unwrap();
     assert_eq!(initial.artifact_count(), 0);
-    assert!(initial.graph().nodes().is_empty());
+    assert!(initial.landscape_graph().nodes().is_empty());
 
     let imported = service.import_pdf(&source).unwrap();
     assert_eq!(imported.outcome(), PdfImportOutcome::Inserted);
     assert_eq!(imported.page_count(), 1);
     assert_eq!(imported.snapshot().artifact_count(), 1);
     assert_eq!(imported.snapshot().conversion_count(), 0);
-    assert_eq!(imported.snapshot().graph().nodes().len(), 1);
+    assert_eq!(imported.snapshot().landscape_graph().nodes().len(), 1);
     assert!(
         imported
             .artifact_id()
@@ -790,8 +801,8 @@ printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_
     );
     assert_eq!(parsed.snapshot().artifact_count(), 4);
     assert_eq!(parsed.snapshot().conversion_count(), 1);
-    assert_eq!(parsed.snapshot().graph().nodes().len(), 5);
-    assert_eq!(parsed.snapshot().graph().edges().len(), 4);
+    assert_eq!(parsed.snapshot().landscape_graph().nodes().len(), 5);
+    assert_eq!(parsed.snapshot().landscape_graph().edges().len(), 4);
     assert_eq!(parsed.snapshot().pdf_artifacts().len(), 1);
     assert_eq!(parsed.snapshot().pdf_artifacts()[0].page_count(), Some(1));
     assert!(
