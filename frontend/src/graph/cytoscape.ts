@@ -28,9 +28,12 @@ export function toCytoscapeElements(
 
   // Build relation-node lookup for semantic edge conversion.
   const relationNodesById = new Map<string, IncidenceNode>();
+  const entityNodesById = new Map<string, IncidenceNode>();
   for (const node of graph.nodes) {
     if (node.element_kind === "relation") {
       relationNodesById.set(node.id, node);
+    } else if (node.element_kind === "entity") {
+      entityNodesById.set(node.id, node);
     }
   }
 
@@ -40,6 +43,7 @@ export function toCytoscapeElements(
     .filter((node) => (useSemanticEdges ? node.element_kind !== "relation" : true))
     .map((node) => ({
       group: "nodes",
+      classes: node.boundary ? "is-boundary" : undefined,
       data: {
         id: node.id,
         label: node.label,
@@ -56,7 +60,12 @@ export function toCytoscapeElements(
   let edges: ElementDefinition[];
 
   if (useSemanticEdges) {
-    edges = buildSemanticEdges(graph.edges, relationNodesById, nodes);
+    edges = buildSemanticEdges(
+      graph.edges,
+      relationNodesById,
+      entityNodesById,
+      nodes,
+    );
   } else {
     edges = graph.edges.map((edge) => ({
       group: "edges",
@@ -94,6 +103,7 @@ export function toCytoscapeElements(
 function buildSemanticEdges(
   incidenceEdges: IncidenceEdge[],
   relationNodes: Map<string, IncidenceNode>,
+  entityNodes: Map<string, IncidenceNode>,
   outNodes: ElementDefinition[],
 ): ElementDefinition[] {
   // Group incidence edges by their owning relation.
@@ -112,6 +122,7 @@ function buildSemanticEdges(
       entity: string;
       role: string;
       direction: IncidenceDirection;
+      evidence: boolean;
     }> = [];
     let relationLabel = "";
     let relationSummary: string | null = null;
@@ -121,14 +132,24 @@ function buildSemanticEdges(
       if (relationNodes.has(edge.source)) {
         // source is a relation node → target is the entity
         const rn = relationNodes.get(edge.source)!;
-        endpoints.push({ entity: edge.target, role: edge.role, direction: edge.direction });
+        endpoints.push({
+          entity: edge.target,
+          role: edge.role,
+          direction: edge.direction,
+          evidence: isEvidenceEndpoint(edge.role, entityNodes.get(edge.target)),
+        });
         relationLabel = rn.label;
         relationSummary = rn.summary;
         relationDomainKind = rn.domain_kind;
       } else if (relationNodes.has(edge.target)) {
         // target is a relation node → source is the entity
         const rn = relationNodes.get(edge.target)!;
-        endpoints.push({ entity: edge.source, role: edge.role, direction: edge.direction });
+        endpoints.push({
+          entity: edge.source,
+          role: edge.role,
+          direction: edge.direction,
+          evidence: isEvidenceEndpoint(edge.role, entityNodes.get(edge.source)),
+        });
         relationLabel = rn.label;
         relationSummary = rn.summary;
         relationDomainKind = rn.domain_kind;
@@ -137,20 +158,74 @@ function buildSemanticEdges(
 
     if (endpoints.length < 2) continue;
 
+    const sources = endpoints.filter(
+      (e) => e.direction === "into_relation" && !e.evidence,
+    );
+    const targets = endpoints.filter(
+      (e) => e.direction === "out_of_relation" && !e.evidence,
+    );
+    const evidenceEndpoints = endpoints.filter((e) => e.evidence);
+    const regularEndpoints = endpoints.filter((e) => !e.evidence);
+
+    if (sources.length === 1 && targets.length === 1 && regularEndpoints.length === 2) {
+      // Keep the mathematical source → target backbone direct even when the
+      // relation has one or more evidence spans.
+      result.push({
+        group: "edges",
+        classes: edgeClasses(true, true),
+        data: {
+          id: `sem~${relationDomainId}`,
+          source: sources[0].entity,
+          target: targets[0].entity,
+          label: relationLabel,
+          relationId: relationDomainId,
+          domainKind: relationDomainKind,
+          summary: relationSummary,
+          directed: true,
+          semantic: true,
+        },
+      });
+      evidenceEndpoints.forEach((evidence, index) => {
+        addEvidenceEdge(
+          result,
+          evidence.entity,
+          targets[0].entity,
+          relationDomainId,
+          index,
+        );
+      });
+      continue;
+    }
+
+    if (regularEndpoints.length === 1 && evidenceEndpoints.length === 1) {
+      // A unit/span provenance pair has no mathematical source/target
+      // direction. Show it as an explicit evidence edge.
+      addEvidenceEdge(
+        result,
+        evidenceEndpoints[0].entity,
+        regularEndpoints[0].entity,
+        relationDomainId,
+        0,
+        relationLabel,
+      );
+      continue;
+    }
+
     if (endpoints.length === 2) {
-      // Binary relation: single direct edge between the two entities.
-      const sources = endpoints.filter((e) => e.direction === "into_relation");
-      const targets = endpoints.filter((e) => e.direction === "out_of_relation");
+      // Binary relation without evidence: keep explicit direction, or fall
+      // back to an undirected edge when the endpoint roles are ambiguous.
+      const binarySources = endpoints.filter((e) => e.direction === "into_relation");
+      const binaryTargets = endpoints.filter((e) => e.direction === "out_of_relation");
 
       let edgeSource: string;
       let edgeTarget: string;
       let directed: boolean;
 
-      if (sources.length === 1 && targets.length === 1) {
-        edgeSource = sources[0].entity;
-        edgeTarget = targets[0].entity;
+      if (binarySources.length === 1 && binaryTargets.length === 1) {
+        edgeSource = binarySources[0].entity;
+        edgeTarget = binaryTargets[0].entity;
         directed = true;
-      } else if (sources.length === 0 && targets.length === 0) {
+      } else if (binarySources.length === 0 && binaryTargets.length === 0) {
         // Both undirected.
         edgeSource = endpoints[0].entity;
         edgeTarget = endpoints[1].entity;
@@ -213,6 +288,37 @@ function buildSemanticEdges(
   }
 
   return result;
+}
+
+function isEvidenceEndpoint(
+  role: string,
+  node: IncidenceNode | undefined,
+): boolean {
+  return role === "evidence" || role === "span" || node?.domain_kind === "SourceSpan";
+}
+
+function addEvidenceEdge(
+  result: ElementDefinition[],
+  evidence: string,
+  anchor: string,
+  relationDomainId: string,
+  ordinal: number,
+  label = "证据",
+): void {
+  result.push({
+    group: "edges",
+    classes: `${edgeClasses(false, true)} evidence-edge`,
+    data: {
+      id: `evidence~${relationDomainId}~${ordinal}`,
+      source: evidence,
+      target: anchor,
+      label,
+      relationId: relationDomainId,
+      evidence: true,
+      directed: false,
+      semantic: true,
+    },
+  });
 }
 
 function edgeClasses(directed: boolean, semantic = false): string {
@@ -300,7 +406,7 @@ const styles: StylesheetJson = [
     },
   },
   {
-    selector: "node[boundary = true]",
+    selector: "node.is-boundary",
     style: {
       "background-opacity": 0.45,
       "border-style": "dashed",
@@ -328,6 +434,18 @@ const styles: StylesheetJson = [
       "line-color": "#9a7b5a",
       "target-arrow-color": "#9a7b5a",
       color: "#c9a87a",
+    },
+  },
+  {
+    selector: "edge.evidence-edge",
+    style: {
+      label: "data(label)",
+      width: 1.2,
+      "line-style": "dashed",
+      "line-color": "#82958e",
+      "target-arrow-shape": "none",
+      color: "#9db2aa",
+      "font-size": "8px",
     },
   },
   {
