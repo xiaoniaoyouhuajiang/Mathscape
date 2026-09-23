@@ -34,13 +34,20 @@ export interface SourceUnitDraft {
   display_title: string | null;
   parent: string | null;
   source_spans: string[];
-  completeness: string;
+  completeness: UnitCompleteness;
 }
+
+export type UnitCompleteness =
+  | "complete"
+  | "left_truncated"
+  | "right_truncated"
+  | "internally_missing"
+  | "uncertain";
 
 export interface SourceUnitChanges {
   display_title?: FieldChange<string>;
   parent?: FieldChange<string>;
-  completeness?: string | null;
+  completeness?: UnitCompleteness | null;
 }
 
 export interface SourceRelationDraft {

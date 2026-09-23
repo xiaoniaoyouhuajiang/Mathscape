@@ -38,6 +38,8 @@ import {
   commitMapChange,
   renderEditActions,
   renderEditForm,
+  renderCreateUnitForm,
+  renderCreateRelationForm,
   renderRetireForm,
   renderImpactPreview,
   renderCommitting,
@@ -353,6 +355,7 @@ let renderMode: RenderMode = "semantic";
 // is deliberately not persisted, so a reload always returns to the whole map.
 let focusRootId: string | null = null;
 let focusDepth: FocusDepth = "all";
+let pendingRelationSourceId: string | null = null;
 
 type PresetName = "overview" | "material" | "source";
 const PRESET_NODE_KINDS: Record<PresetName, ReadonlySet<string>> = {
@@ -585,7 +588,19 @@ function mergeGraphs(base: IncidenceGraph, overlay: IncidenceGraph): IncidenceGr
 
 function bindGraphInteractions(core: Core): void {
   core.on("tap", "node", (event) => {
-    selectNode((event.target as NodeSingular).id());
+    const id = (event.target as NodeSingular).id();
+    if (pendingRelationSourceId !== null) {
+      const target = displayedGraph?.nodes.find((node) => node.id === id);
+      if (target?.domain_kind === "SourceSemanticUnit" && target.id !== pendingRelationSourceId) {
+        const sourceId = pendingRelationSourceId;
+        pendingRelationSourceId = null;
+        void enterCreateRelationMode(sourceId, target.domain_id!);
+      } else {
+        showToast("请选择另一个内容单元作为目标节点", "error");
+      }
+      return;
+    }
+    selectNode(id);
   });
   core.on("tap", "edge", (event) => {
     const relationId = (event.target as EdgeSingular).data("relationId");
@@ -629,6 +644,19 @@ function selectNode(id: string): void {
 function nodeMenuItems(id: string): ContextMenuItem[] {
   const node = displayedGraph?.nodes.find((candidate) => candidate.id === id);
   const items: ContextMenuItem[] = [];
+  if (node?.domain_kind === "SourceSemanticUnit" && node.domain_id !== null) {
+    items.push({
+      label: "以此为父节点新建内容单元",
+      onSelect: () => void enterCreateUnitMode(node.domain_id!),
+    });
+    items.push({
+      label: "从此节点创建来源关系",
+      onSelect: () => {
+        pendingRelationSourceId = node.id;
+        showToast("请点击地图中的另一个内容单元作为目标", "success");
+      },
+    });
+  }
   if (node !== undefined && canFocus(node)) {
     items.push(
       {
@@ -767,11 +795,15 @@ function enterEditMode(editCtx: import("./map-edit").EditContext): void {
   inspectorLocked = true;
   nodeDetail.classList.remove("empty-detail");
   nodeDetail.replaceChildren();
+  let draftForm: HTMLFormElement | null = null;
   const { form } = renderEditForm(
     editCtx,
-    (request) => void enterPreviewMode(editCtx, request, () => enterEditMode(editCtx)),
+    (request) => void enterPreviewMode(request, () => {
+      if (draftForm !== null) { nodeDetail.replaceChildren(draftForm); inspectorLocked = true; }
+    }),
     () => restoreNodeDetail(),
   );
+  draftForm = form;
   nodeDetail.append(form);
 }
 
@@ -779,17 +811,58 @@ function enterRetireMode(editCtx: import("./map-edit").EditContext): void {
   inspectorLocked = true;
   nodeDetail.classList.remove("empty-detail");
   nodeDetail.replaceChildren();
+  let draftForm: HTMLFormElement | null = null;
   nodeDetail.append(
-    renderRetireForm(
+    draftForm = renderRetireForm(
       editCtx,
-      (request) => void enterPreviewMode(editCtx, request, () => enterRetireMode(editCtx)),
+      (request) => void enterPreviewMode(request, () => {
+        if (draftForm !== null) { nodeDetail.replaceChildren(draftForm); inspectorLocked = true; }
+      }),
       () => restoreNodeDetail(),
     ),
   );
 }
 
+async function enterCreateUnitMode(parentId: string): Promise<void> {
+  try {
+    const context = await getEditContext(parentId);
+    // The context intentionally excludes the object itself from its edit
+    // parent list to prevent cycles. For creation, the selected node is the
+    // explicit parent and must be offered as the initial choice.
+    if (!context.available_parents.some((option) => option.object_id === parentId)) {
+      context.available_parents.unshift({
+        object_id: parentId,
+        label: selectedNode?.label ?? parentId,
+      });
+    }
+    inspectorLocked = true;
+    nodeDetail.replaceChildren();
+    let draftForm: HTMLFormElement | null = null;
+    draftForm = renderCreateUnitForm(context, parentId, (request) => void enterPreviewMode(request, () => {
+      if (draftForm !== null) { nodeDetail.replaceChildren(draftForm); inspectorLocked = true; }
+    }), () => restoreNodeDetail());
+    nodeDetail.append(draftForm);
+  } catch (error) {
+    showToast(`读取创建上下文失败：${errorMessage(error)}`, "error");
+  }
+}
+
+async function enterCreateRelationMode(sourceId: string, targetId: string): Promise<void> {
+  try {
+    const context = await getEditContext(sourceId);
+    inspectorLocked = true;
+    nodeDetail.replaceChildren();
+    let draftForm: HTMLFormElement | null = null;
+    draftForm = renderCreateRelationForm(context, sourceId, targetId, (request) => void enterPreviewMode(request, () => {
+      if (draftForm !== null) { nodeDetail.replaceChildren(draftForm); inspectorLocked = true; }
+    }), () => restoreNodeDetail());
+    nodeDetail.append(draftForm);
+  } catch (error) {
+    showToast(`读取关系创建上下文失败：${errorMessage(error)}`, "error");
+  }
+}
+
 async function enterPreviewMode(
-  editCtx: import("./map-edit").EditContext,
   request: UserChangeRequest,
   onBack: () => void,
 ): Promise<void> {
@@ -802,21 +875,20 @@ async function enterPreviewMode(
     renderImpactPreview(
       nodeDetail,
       plan,
-      () => void executeCommit(editCtx, request, plan.plan_fingerprint, onBack),
+      () => void executeCommit(request, plan.plan_fingerprint, onBack),
       onBack,
     );
   } catch (error) {
     renderCommitError(
       nodeDetail,
       errorMessage(error),
-      () => void enterPreviewMode(editCtx, request, onBack),
+      () => void enterPreviewMode(request, onBack),
       () => restoreNodeDetail(),
     );
   }
 }
 
 async function executeCommit(
-  editCtx: import("./map-edit").EditContext,
   request: UserChangeRequest,
   fingerprint: string,
   onBack: () => void,
@@ -836,7 +908,7 @@ async function executeCommit(
     renderCommitError(
       nodeDetail,
       errorMessage(error),
-      () => void enterPreviewMode(editCtx, request, onBack),
+      () => void enterPreviewMode(request, onBack),
       () => restoreNodeDetail(),
     );
   }

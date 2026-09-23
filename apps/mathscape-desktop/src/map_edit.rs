@@ -10,9 +10,15 @@ use crate::{DesktopService, DesktopState};
 const ACTOR: &str = "mathscape-desktop";
 
 fn now() -> Result<Timestamp, String> {
-    let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    Timestamp::parse(format!("unix:{}.{}", duration.as_secs(), duration.subsec_nanos()))
-        .map_err(|error| error.to_string())
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    Timestamp::parse(format!(
+        "unix:{}.{}",
+        duration.as_secs(),
+        duration.subsec_nanos()
+    ))
+    .map_err(|error| error.to_string())
 }
 
 fn actor() -> Result<ActorRef, String> {
@@ -26,7 +32,9 @@ fn store(service: &DesktopService) -> Result<SqliteArtifactStore, String> {
 
 pub fn plan(service: &DesktopService, request: UserChangeRequest) -> Result<ImpactPlan, String> {
     let store = store(service)?;
-    let snapshot = store.map_edit_snapshot().map_err(|error| error.to_string())?;
+    let snapshot = store
+        .map_edit_snapshot()
+        .map_err(|error| error.to_string())?;
     let actor = actor()?;
     Ok(plan_discovery(&snapshot, &request, &actor).impact)
 }
@@ -57,7 +65,9 @@ pub async fn get_map_object_edit_context(
     let service = state.service.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store = store(&service)?;
-        let snapshot = store.map_edit_snapshot().map_err(|error| error.to_string())?;
+        let snapshot = store
+            .map_edit_snapshot()
+            .map_err(|error| error.to_string())?;
         get_edit_context(&snapshot, &object_id)
     })
     .await

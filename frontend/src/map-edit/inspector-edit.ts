@@ -8,6 +8,9 @@ import type {
   EditOption,
   FieldChange,
   SourceRelationChanges,
+  SourceRelationDraft,
+  SourceUnitDraft,
+  UnitCompleteness,
   SourceUnitChanges,
   UserChangeOperation,
   UserChangeRequest,
@@ -133,6 +136,119 @@ export function renderEditForm(
   });
 
   return { form, buildRequest };
+}
+
+/** Create a source unit with the selected map node as its parent. */
+export function renderCreateUnitForm(
+  context: EditContext,
+  parentId: string | null,
+  onPreview: (request: UserChangeRequest) => void,
+  onCancel: () => void,
+): HTMLFormElement {
+  const form = document.createElement("form");
+  form.className = "edit-form";
+  form.append(makeText("span", "eyebrow", parentId ? "新建子内容单元" : "新建根内容单元"));
+
+  const title = document.createElement("input");
+  title.type = "text";
+  title.placeholder = "例如：定理的一个推论";
+  appendLabeled(form, "显示标题", title);
+
+  const kind = document.createElement("select");
+  for (const [value, label] of [
+    ["section", "章节"], ["definition", "定义"], ["statement", "命题/定理"],
+    ["proof", "证明"], ["proof_step", "证明步骤"], ["problem", "问题"],
+    ["hint", "提示"], ["solution", "解答"], ["example", "例子"],
+    ["remark", "注记"], ["method", "方法"], ["notation", "记号"], ["narrative", "叙述"],
+  ] as const) kind.append(new Option(label, value));
+  appendLabeled(form, "单元类型", kind);
+
+  const parent = document.createElement("select");
+  parent.append(new Option("（根节点）", ""));
+  for (const option of context.available_parents) parent.append(new Option(option.label, option.object_id));
+  parent.value = parentId ?? "";
+  appendLabeled(form, "父单元", parent);
+
+  const spans = createCreateSpanSelector(context.evidence_spans);
+  form.append(spans.element);
+
+  const completeness = document.createElement("select");
+  for (const [value, label] of [["complete", "完整"], ["left_truncated", "左侧截断"], ["right_truncated", "右侧截断"], ["internally_missing", "内部缺失"], ["uncertain", "边界待确认"]] as const) completeness.append(new Option(label, value));
+  completeness.value = "complete";
+  appendLabeled(form, "完整性", completeness);
+
+  const reason = document.createElement("input");
+  reason.type = "text"; reason.required = true; reason.placeholder = "例如：补充遗漏的推论单元";
+  appendLabeled(form, "变更原因", reason);
+  appendFormButtons(form, "预览新建", onCancel, () => {
+    const draft: SourceUnitDraft = {
+      kind: kind.value,
+      display_title: title.value.trim() || null,
+      parent: parent.value || null,
+      source_spans: spans.getValue(),
+      completeness: completeness.value as UnitCompleteness,
+    };
+    if (draft.source_spans.length === 0 || !reason.value.trim()) return;
+    onPreview({ request_id: generateRequestId(), base_commit: context.base_commit, reason: reason.value.trim(), operations: [{ operation: "create_source_unit", object_id: `mathscape:source-unit/${crypto.randomUUID()}`, draft }] });
+  });
+  return form;
+}
+
+/** Create a relation after both endpoints were selected in the map. */
+export function renderCreateRelationForm(
+  context: EditContext,
+  sourceId: string,
+  targetId: string,
+  onPreview: (request: UserChangeRequest) => void,
+  onCancel: () => void,
+): HTMLFormElement {
+  const form = document.createElement("form");
+  form.className = "edit-form";
+  form.append(makeText("span", "eyebrow", "新建来源关系"));
+  const endpoints = document.createElement("p");
+  endpoints.className = "form-note";
+  endpoints.textContent = `源：${sourceId}  →  目标：${targetId}`;
+  form.append(endpoints);
+  const relation = document.createElement("select");
+  for (const [value, label] of [["proves", "证明"], ["solves", "解决"], ["hints", "提示"], ["explains", "解释"], ["cites", "引用"], ["applies_method", "应用方法"]] as const) relation.append(new Option(label, value));
+  appendLabeled(form, "关系类型", relation);
+  const spans = createCreateSpanSelector(context.evidence_spans);
+  form.append(spans.element);
+  const reason = document.createElement("input");
+  reason.type = "text"; reason.required = true; reason.placeholder = "例如：补充材料中的明确引用";
+  appendLabeled(form, "变更原因", reason);
+  appendFormButtons(form, "预览新建", onCancel, () => {
+    const draft: SourceRelationDraft = { relation: relation.value, source: sourceId, target: targetId, evidence_spans: spans.getValue() };
+    if (draft.evidence_spans.length === 0 || !reason.value.trim()) return;
+    onPreview({ request_id: generateRequestId(), base_commit: context.base_commit, reason: reason.value.trim(), operations: [{ operation: "create_source_relation", object_id: `mathscape:source-relation/${crypto.randomUUID()}`, draft }] });
+  });
+  return form;
+}
+
+function appendLabeled(host: HTMLElement, labelText: string, control: HTMLElement): void {
+  const label = document.createElement("label"); label.className = "form-field";
+  label.append(makeText("span", "", labelText), control); host.append(label);
+}
+function appendFormButtons(form: HTMLFormElement, submitText: string, onCancel: () => void, submit: () => void): void {
+  const buttons = document.createElement("div"); buttons.className = "edit-actions";
+  const ok = document.createElement("button"); ok.type = "submit"; ok.className = "parse-button"; ok.textContent = submitText;
+  const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "retire-button cancel-button"; cancel.textContent = "取消"; cancel.onclick = onCancel;
+  buttons.append(ok, cancel); form.append(buttons);
+  form.addEventListener("submit", (event) => { event.preventDefault(); submit(); });
+}
+function createCreateSpanSelector(options: EditOption[]): { element: HTMLElement; getValue: () => string[] } {
+  const wrapper = document.createElement("div"); wrapper.className = "form-field span-list-field";
+  wrapper.append(makeText("span", "", "原文证据（至少选择一段）"));
+  const checks: Array<{ id: string; input: HTMLInputElement }> = [];
+  for (const option of options) {
+    const row = document.createElement("label"); row.className = "span-checkbox-item";
+    const input = document.createElement("input"); input.type = "checkbox";
+    row.append(input, document.createTextNode(option.label)); wrapper.append(row); checks.push({ id: option.object_id, input });
+  }
+  return { element: wrapper, getValue: () => checks.filter((item) => item.input.checked).map((item) => item.id) };
+}
+function makeText(tag: string, className: string, value: string): HTMLElement {
+  const element = document.createElement(tag); element.className = className; element.textContent = value; return element;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,8 +422,7 @@ function createRelationKindControl(field: EditableField): FieldControl {
 
   const select = document.createElement("select");
   for (const kind of [
-    "states", "proves", "has_part", "poses", "hints",
-    "solves", "explains", "applies_method", "cites",
+    "proves", "solves", "hints", "explains", "applies_method", "cites",
   ]) {
     select.append(new Option(kind, kind));
   }
@@ -408,7 +523,7 @@ function buildOperation(
     }
     const completeness = fieldValues.get("completeness")?.() as string | null;
     if (completeness !== null) {
-      changes.completeness = completeness;
+      changes.completeness = completeness as UnitCompleteness;
     }
     return {
       operation: "edit_source_unit",
