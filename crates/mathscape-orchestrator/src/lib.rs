@@ -10,6 +10,7 @@ mod fact_preflight;
 mod source_facts;
 mod source_registration;
 mod source_review;
+pub mod map_edit;
 pub use discovery_workflow::*;
 pub use fact_planner::*;
 pub use source_facts::*;

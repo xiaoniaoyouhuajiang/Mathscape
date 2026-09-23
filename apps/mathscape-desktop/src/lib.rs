@@ -2,6 +2,7 @@ mod content;
 mod discovery;
 mod discovery_view;
 mod llm_settings;
+mod map_edit;
 mod workspace_settings;
 pub use content::{ArtifactContentInfo, ContentContext, SourceNodeDetail};
 pub use discovery::{
@@ -13,6 +14,7 @@ pub use discovery_view::{DESKTOP_DISCOVERY_VIEW_VERSION, DesktopDiscoveryView};
 pub use llm_settings::{
     LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,
 };
+pub use map_edit::{commit_map_change, get_map_object_edit_context, plan_map_change};
 pub use workspace_settings::{
     DiscoveryAdmissionPreference, SaveWorkspaceSettingsRequest, WORKSPACE_SETTINGS_VERSION,
     WorkspaceSettings, WorkspaceSettingsError,
@@ -756,6 +758,9 @@ pub fn run() {
             discovery::cancel_discovery,
             discovery::accept_discovery_result,
             discovery::run_discovery,
+            map_edit::get_map_object_edit_context,
+            map_edit::plan_map_change,
+            map_edit::commit_map_change,
             get_desktop_snapshot,
             choose_and_import_pdf,
             get_active_parse,

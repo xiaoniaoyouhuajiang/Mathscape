@@ -46,7 +46,7 @@ export function toCytoscapeElements(
     .filter((node) => (useSemanticEdges ? node.element_kind !== "relation" : true))
     .map((node) => ({
       group: "nodes",
-      classes: node.boundary ? "is-boundary" : undefined,
+      classes: nodeClasses(node.boundary, node.lifecycle),
       data: {
         id: node.id,
         label: node.label,
@@ -131,6 +131,7 @@ function buildSemanticEdges(
     let relationLabel = "";
     let relationSummary: string | null = null;
     let relationDomainKind: string | null = null;
+    let relationLifecycle: string | null = null;
 
     for (const edge of relEdges) {
       if (relationNodes.has(edge.source)) {
@@ -145,6 +146,7 @@ function buildSemanticEdges(
         relationLabel = rn.label;
         relationSummary = rn.summary;
         relationDomainKind = rn.domain_kind;
+        relationLifecycle = rn.lifecycle;
       } else if (relationNodes.has(edge.target)) {
         // target is a relation node → source is the entity
         const rn = relationNodes.get(edge.target)!;
@@ -157,6 +159,7 @@ function buildSemanticEdges(
         relationLabel = rn.label;
         relationSummary = rn.summary;
         relationDomainKind = rn.domain_kind;
+        relationLifecycle = rn.lifecycle;
       }
     }
 
@@ -176,7 +179,7 @@ function buildSemanticEdges(
       // relation has one or more evidence spans.
       result.push({
         group: "edges",
-        classes: `${edgeClasses(true, true)}${contractionClass(relationDomainKind)}`,
+        classes: `${edgeClasses(true, true)}${contractionClass(relationDomainKind)}${retiredClass(relationLifecycle)}`,
         data: {
           id: `sem~${relationDomainId}`,
           source: sources[0].entity,
@@ -243,7 +246,7 @@ function buildSemanticEdges(
 
       result.push({
         group: "edges",
-        classes: edgeClasses(directed, true),
+        classes: `${edgeClasses(directed, true)}${retiredClass(relationLifecycle)}`,
         data: {
           id: `sem~${relationDomainId}`,
           source: edgeSource,
@@ -327,6 +330,21 @@ function addEvidenceEdge(
 
 function contractionClass(domainKind: string | null): string {
   return domainKind === FOCUS_CONTRACTION_KIND ? " contracted-edge" : "";
+}
+
+function retiredLifecycle(lifecycle: string | null | undefined): boolean {
+  return lifecycle === "deprecated" || lifecycle === "superseded" || lifecycle === "rejected";
+}
+
+function nodeClasses(boundary: boolean, lifecycle: string | null): string | undefined {
+  const classes: string[] = [];
+  if (boundary) classes.push("is-boundary");
+  if (retiredLifecycle(lifecycle)) classes.push("is-retired");
+  return classes.length > 0 ? classes.join(" ") : undefined;
+}
+
+function retiredClass(lifecycle: string | null): string {
+  return retiredLifecycle(lifecycle) ? " is-retired" : "";
 }
 
 function edgeClasses(directed: boolean, semantic = false): string {
@@ -459,6 +477,14 @@ const styles: StylesheetJson = [
       "arrow-scale": 1.2,
       color: "#9fb2c2",
       "font-size": "9px",
+    },
+  },
+  {
+    selector: ".is-retired",
+    style: {
+      opacity: 0.4,
+      "border-style": "dashed",
+      "line-style": "dashed",
     },
   },
   // Out-of-focus context: still drawn so the focused region keeps its place in

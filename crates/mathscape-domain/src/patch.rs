@@ -32,7 +32,9 @@ impl<P> MapOperation<P> {
     pub fn target(&self) -> &StableId {
         match self {
             Self::CreateEntity { entity } => entity.header().stable_id(),
-            Self::ReviseEntity { stable_id, .. } | Self::ReviseRelation { stable_id, .. } => {
+            Self::ReviseEntity { stable_id, .. }
+            | Self::ReviseRelation { stable_id, .. }
+            => {
                 stable_id
             }
             Self::CreateRelation { relation } => relation.header().stable_id(),

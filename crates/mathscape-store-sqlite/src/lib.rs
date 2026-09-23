@@ -6,6 +6,7 @@
 mod discovery;
 mod read;
 mod source_map;
+mod map_edit;
 
 use std::path::Path;
 
@@ -40,7 +41,7 @@ const DISCOVERY_RUNS_MIGRATION: &str = include_str!("../../../migrations/0004_di
 const SOURCE_MAP_MIGRATION: &str = include_str!("../../../migrations/0005_source_map.sql");
 const DISCOVERY_RUNS_V2_MIGRATION: &str =
     include_str!("../../../migrations/0006_discovery_runs_v2.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 6;
+const SUPPORTED_SCHEMA_VERSION: i64 = 7;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -261,7 +262,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6 => {
+            6 | 7 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -271,7 +272,17 @@ impl SqliteArtifactStore {
                 });
             }
         }
-        reconcile_schema_v6(&connection)?;
+        if version < 7 {
+            reconcile_schema_v6(&connection)?;
+            connection.execute_batch(include_str!("../../../migrations/0007_map_edits.sql"))?;
+        } else {
+            // Re-run the historical repair checks for already upgraded
+            // catalogs, then restore the current schema marker.
+            reconcile_schema_v6(&connection)?;
+            connection.pragma_update(None, "user_version", SUPPORTED_SCHEMA_VERSION)?;
+        }
+        connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
+        connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
         Ok(Self { connection })
     }
 
@@ -980,7 +991,7 @@ fn reconcile_schema_v6(connection: &Connection) -> Result<(), SqliteStoreError> 
     // Opening a healthy catalog is a read operation (including concurrent PDF
     // range reads). Do not replay DDL/user_version writes on every connection.
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version == SUPPORTED_SCHEMA_VERSION && validate_discovery_schema_v2(connection).is_ok() {
+    if version == 6 && validate_discovery_schema_v2(connection).is_ok() {
         return Ok(());
     }
     // Reconciliation reads before writing. Acquire the writer slot up front;
@@ -1013,7 +1024,7 @@ fn reconcile_schema_v6(connection: &Connection) -> Result<(), SqliteStoreError> 
             ));
         }
     }
-    transaction.pragma_update(None, "user_version", SUPPORTED_SCHEMA_VERSION)?;
+    transaction.pragma_update(None, "user_version", 6)?;
     validate_discovery_schema_v2(&transaction)?;
     transaction.commit()?;
     validate_discovery_schema_v2(connection)

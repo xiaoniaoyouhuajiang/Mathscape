@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Core, NodeSingular } from "cytoscape";
+import type { Core, EdgeSingular, NodeSingular } from "cytoscape";
 
 import {
   applyFocusScope,
@@ -32,6 +32,19 @@ import { sourceNodeDetail } from "./reader/content";
 import { markdownRenderer } from "./reader/markdown";
 import { LlmSettingsController } from "./llm/settings";
 import { mountDiscoveryTask } from "./discovery-task";
+import {
+  getEditContext,
+  planMapChange,
+  commitMapChange,
+  renderEditActions,
+  renderEditForm,
+  renderRetireForm,
+  renderImpactPreview,
+  renderCommitting,
+  renderCommitSuccess,
+  renderCommitError,
+  type UserChangeRequest,
+} from "./map-edit";
 
 interface DesktopSnapshot {
   workspace_id: string;
@@ -330,6 +343,8 @@ let submittingParse = false;
 let pollingParse = false;
 let selectedNode: IncidenceNode | undefined;
 let currentSnapshot: DesktopSnapshot | undefined;
+// Snapshot refresh must not wipe an in-progress edit / retire / preview.
+let inspectorLocked = false;
 // The elements currently mounted, so interaction handlers bound once against a
 // persistent Cytoscape instance can still resolve a node back to its model.
 let displayedGraph: IncidenceGraph | undefined;
@@ -445,7 +460,7 @@ function refreshParseState(): void {
   } else {
     setBusy(false);
   }
-  if (selectedNode !== undefined && currentSnapshot !== undefined) {
+  if (!inspectorLocked && selectedNode !== undefined && currentSnapshot !== undefined) {
     renderNodeDetail(selectedNode,
       currentSnapshot.pdf_artifacts.find(pdf => pdf.artifact_id === selectedNode?.domain_id),
       currentSnapshot.marker);
@@ -493,6 +508,9 @@ async function importPdf(): Promise<void> {
 
 function renderSnapshot(snapshot: DesktopSnapshot): void {
   currentSnapshot = snapshot;
+  if (selectedNode !== undefined) {
+    selectedNode = snapshot.landscape_graph.nodes.find((node) => node.id === selectedNode?.id);
+  }
   artifactCount.textContent = snapshot.artifact_count.toString();
   conversionCount.textContent = snapshot.conversion_count.toString();
   workspaceId.textContent = snapshot.workspace_id;
@@ -569,6 +587,14 @@ function bindGraphInteractions(core: Core): void {
   core.on("tap", "node", (event) => {
     selectNode((event.target as NodeSingular).id());
   });
+  core.on("tap", "edge", (event) => {
+    const relationId = (event.target as EdgeSingular).data("relationId");
+    if (typeof relationId !== "string") return;
+    const relation = displayedGraph?.nodes.find(
+      (node) => node.element_kind === "relation" && node.domain_id === relationId,
+    );
+    if (relation !== undefined) selectNode(relation.id);
+  });
   core.on("cxttap", "node", (event) => {
     const node = event.target as NodeSingular;
     selectNode(node.id());
@@ -592,6 +618,7 @@ function bindGraphInteractions(core: Core): void {
 function selectNode(id: string): void {
   const model = displayedGraph?.nodes.find((node) => node.id === id);
   if (model === undefined || currentSnapshot === undefined) return;
+  inspectorLocked = false;
   selectedNode = model;
   const pdf = currentSnapshot.pdf_artifacts.find(
     (artifact) => artifact.artifact_id === model.domain_id,
@@ -669,7 +696,7 @@ function renderNodeDetail(
     definitionList([
       ["类型", domainKindLabel(node.domain_kind)],
       ["层级", displayLayer(node.layer)],
-      ["生命周期", node.lifecycle ?? "—"],
+      ["生命周期", displayLifecycle(node.lifecycle)],
       ["摘要", node.summary ?? "—"],
     ]),
   );
@@ -709,9 +736,140 @@ function renderNodeDetail(
   if (pdf !== undefined) {
     nodeDetail.append(createParseForm(pdf, marker));
   }
+  // Map-edit: add edit/retire buttons for editable domain objects
+  if (
+    node.domain_id !== null &&
+    (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceUnitRelation")
+  ) {
+    void mountEditActions(node.domain_id);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Map-edit flow orchestrator
+// ---------------------------------------------------------------------------
+
+async function mountEditActions(objectId: string): Promise<void> {
+  try {
+    const editCtx = await getEditContext(objectId);
+    if (inspectorLocked || selectedNode?.domain_id !== objectId) return;
+    renderEditActions(nodeDetail, editCtx, () => enterEditMode(editCtx), () => enterRetireMode(editCtx));
+  } catch (error) {
+    const message = errorMessage(error);
+    // Projection-synthesized relations (has_part / contains_span / located_in)
+    // are not stored objects and have no edit context.
+    if (message.includes("对象不存在")) return;
+    nodeDetail.append(textElement("p", "detail-error", `编辑上下文读取失败：${message}`));
+  }
+}
+
+function enterEditMode(editCtx: import("./map-edit").EditContext): void {
+  inspectorLocked = true;
+  nodeDetail.classList.remove("empty-detail");
+  nodeDetail.replaceChildren();
+  const { form } = renderEditForm(
+    editCtx,
+    (request) => void enterPreviewMode(editCtx, request, () => enterEditMode(editCtx)),
+    () => restoreNodeDetail(),
+  );
+  nodeDetail.append(form);
+}
+
+function enterRetireMode(editCtx: import("./map-edit").EditContext): void {
+  inspectorLocked = true;
+  nodeDetail.classList.remove("empty-detail");
+  nodeDetail.replaceChildren();
+  nodeDetail.append(
+    renderRetireForm(
+      editCtx,
+      (request) => void enterPreviewMode(editCtx, request, () => enterRetireMode(editCtx)),
+      () => restoreNodeDetail(),
+    ),
+  );
+}
+
+async function enterPreviewMode(
+  editCtx: import("./map-edit").EditContext,
+  request: UserChangeRequest,
+  onBack: () => void,
+): Promise<void> {
+  inspectorLocked = true;
+  nodeDetail.replaceChildren();
+  nodeDetail.append(textElement("p", "", "正在分析变更影响…"));
+  try {
+    const plan = await planMapChange(request);
+    nodeDetail.replaceChildren();
+    renderImpactPreview(
+      nodeDetail,
+      plan,
+      () => void executeCommit(editCtx, request, plan.plan_fingerprint, onBack),
+      onBack,
+    );
+  } catch (error) {
+    renderCommitError(
+      nodeDetail,
+      errorMessage(error),
+      () => void enterPreviewMode(editCtx, request, onBack),
+      () => restoreNodeDetail(),
+    );
+  }
+}
+
+async function executeCommit(
+  editCtx: import("./map-edit").EditContext,
+  request: UserChangeRequest,
+  fingerprint: string,
+  onBack: () => void,
+): Promise<void> {
+  inspectorLocked = true;
+  renderCommitting(nodeDetail);
+  try {
+    const receipt = await commitMapChange(request, fingerprint);
+    try {
+      await loadSnapshot();
+    } catch {
+      // The commit already succeeded; a snapshot refresh failure must not hide the receipt.
+    }
+    renderCommitSuccess(nodeDetail, receipt, () => restoreNodeDetail());
+    showToast("变更已提交", "success");
+  } catch (error) {
+    renderCommitError(
+      nodeDetail,
+      errorMessage(error),
+      () => void enterPreviewMode(editCtx, request, onBack),
+      () => restoreNodeDetail(),
+    );
+  }
+}
+
+function restoreNodeDetail(): void {
+  inspectorLocked = false;
+  if (selectedNode !== undefined && currentSnapshot !== undefined) {
+    renderNodeDetail(
+      selectedNode,
+      currentSnapshot.pdf_artifacts.find((pdf) => pdf.artifact_id === selectedNode?.domain_id),
+      currentSnapshot.marker,
+    );
+  } else {
+    nodeDetail.classList.add("empty-detail");
+    nodeDetail.replaceChildren(
+      textElement("div", "detail-symbol", "⌁"),
+      textElement("p", "", "点击图中的节点以查看它在来源层中的身份和状态。"),
+    );
+  }
 }
 
 function displayLayer(layer: string): string { return ({ source: "来源层", local_semantic: "局部语义层", global_semantic: "全局语义层", alignment: "对齐层", rdtx: "RDTX 层", formalization: "形式化层" } as Record<string, string>)[layer] ?? layer; }
+function displayLifecycle(lifecycle: string | null): string {
+  if (lifecycle === null) return "—";
+  return ({
+    active: "活动",
+    deprecated: "已退役",
+    superseded: "已被替代",
+    rejected: "已拒绝",
+    deleted: "已删除",
+  } as Record<string, string>)[lifecycle] ?? lifecycle;
+}
 async function renderSourceDetail(node: IncidenceNode, host: HTMLElement): Promise<void> {
   try { const detail = await sourceNodeDetail(node.domain_id!); if (detail.excerpt) { const preview = document.createElement("div"); preview.className = "source-preview markdown-body"; preview.innerHTML = markdownRenderer().render(detail.excerpt); host.append(preview); } if (detail.artifact_id) { const button = textElement("button", "parse-button", "打开并定位原文"); button.type = "button"; button.onclick = () => { readerHost.hidden = false; void reader.open(detail.artifact_id!, detail.display_title ?? node.label, detail.byte_range ? { ...detail.byte_range, blockIds: detail.markdown_block_ids } : undefined); }; host.append(button); } }
   catch (error) { host.append(textElement("p", "detail-error", `来源详情读取失败：${error instanceof Error ? error.message : String(error)}`)); }
@@ -1035,7 +1193,9 @@ function showToast(message: string, kind: "success" | "error"): void {
 }
 
 function errorMessage(error: unknown): string {
-  return typeof error === "string" ? error : "发生了未知错误";
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  return "发生了未知错误";
 }
 
 async function copyIdentifier(value: string): Promise<void> {

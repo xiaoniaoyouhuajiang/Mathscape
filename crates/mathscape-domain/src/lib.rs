@@ -10,6 +10,7 @@ mod entity;
 mod error;
 mod id;
 mod patch;
+mod map_edit;
 mod relation;
 mod source;
 mod source_review;
@@ -24,6 +25,7 @@ pub use entity::{
 pub use error::DomainError;
 pub use id::{ActorRef, CommitId, ContentHash, RevisionId, SchemaVersion, StableId, Timestamp};
 pub use patch::{MapOperation, MapPatch};
+pub use map_edit::*;
 pub use relation::{EndpointRole, RelationEndpoint, RelationRecord};
 pub use source::*;
 pub use source_review::*;
