@@ -67,6 +67,39 @@ fn actor() -> ActorRef {
 }
 
 #[test]
+fn generated_bytes_use_the_same_content_addressed_pool() {
+    let directory = TestDirectory::create("generated-bytes");
+    let workspace = directory.path().join("workspace");
+    let mut pool = ArtifactPool::create(&workspace).unwrap();
+    let metadata = ArtifactMetadata::new(
+        None,
+        MediaType::parse("text/markdown").unwrap(),
+        Some("patched.md".into()),
+        None,
+        RightsRecord::new(RightsStatus::DerivativeOfUnassessedSource, vec![], None).unwrap(),
+    );
+    let bytes = b"# corrected\n$B_r(x)$\n";
+    let artifact = pool.import_bytes(bytes, metadata, actor()).unwrap();
+    assert_eq!(artifact.byte_size(), bytes.len() as u64);
+    assert_eq!(
+        pool.read_bytes(artifact.stable_id(), 0, 1024).unwrap(),
+        bytes
+    );
+    assert!(
+        pool.workspace()
+            .object_path(artifact.content_hash())
+            .is_file()
+    );
+    assert!(
+        fs::read_dir(pool.workspace().staging_path())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    directory.cleanup();
+}
+
+#[test]
 fn managed_import_is_deduplicated_and_survives_workspace_move() {
     let directory = TestDirectory::create("portable");
     let source = directory.path().join("source.pdf");

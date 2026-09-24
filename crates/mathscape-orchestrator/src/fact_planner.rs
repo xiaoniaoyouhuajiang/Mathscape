@@ -131,6 +131,20 @@ pub fn plan_source_facts(
     units: &ValidatedUnitSet,
     max_tasks_per_batch: usize,
 ) -> Result<Vec<PreparedFactRequest>, StageValidationReport> {
+    plan_source_facts_with_warnings(prepared, units, max_tasks_per_batch, &[])
+}
+
+/// Plans Stage B while carrying deterministic, read-only warnings from Stage
+/// A/P. The ordinary planner remains source-compatible and passes no
+/// warnings; the patched workflow uses this entry point so unresolved
+/// conversion issues stay visible to the fact producer without becoming
+/// model-editable instructions.
+pub fn plan_source_facts_with_warnings(
+    prepared: &PreparedUnitDiscoveryRequest,
+    units: &ValidatedUnitSet,
+    max_tasks_per_batch: usize,
+    source_warnings: &[CanonicalDiscoveryIssue],
+) -> Result<Vec<PreparedFactRequest>, StageValidationReport> {
     let mut report = StageValidationReport::default();
     if max_tasks_per_batch == 0 {
         report.push("invalid_limits", "planner", "batch size must be positive");
@@ -314,6 +328,7 @@ pub fn plan_source_facts(
             blocks: blocks.clone(),
             units: directory.clone(),
             tasks: chunk.to_vec(),
+            source_warnings: source_warnings.to_vec(),
         };
         let batch_fingerprint = fingerprint(&(
             units.fingerprint(),

@@ -171,6 +171,33 @@ fn published_schema_matches_dto_and_has_closed_required_output_objects() {
 }
 
 #[test]
+fn markdown_patch_schema_matches_the_published_stage_contract() {
+    let schema = mathscape_orchestrator::markdown_patch_output_schema();
+    let published: Value = serde_json::from_str(include_str!(
+        "../../../prompts/markdown-patch/v1/output.schema.json"
+    ))
+    .unwrap();
+    assert_eq!(schema, published);
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    assert!(validator.is_valid(&json!({
+        "version": "mathscape-markdown-patch-1",
+        "request_ref": "p1",
+        "patches": []
+    })));
+    assert!(!validator.is_valid(&json!({
+        "version": "mathscape-markdown-patch-1",
+        "request_ref": "p1",
+        "patches": [{
+            "patch_ref": "p1",
+            "issue_ref": "a-i1",
+            "target": {"kind": "range_occurrence", "selector": {"kind": "quote_range", "first": "b1", "start": {"quote": "x", "occurrence": null, "prefix": null, "suffix": null}, "last": "b1", "end": {"quote": "x", "occurrence": null, "prefix": null, "suffix": null}}},
+            "replacement": "y",
+            "rationale": "test"
+        }]
+    })));
+}
+
+#[test]
 fn schema_accepts_context_and_coverage_variants_but_rejects_extra_fields() {
     let validator = jsonschema::validator_for(&discovery_output_schema()).unwrap();
     for context in [

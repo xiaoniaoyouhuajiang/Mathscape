@@ -3,6 +3,7 @@ mod discovery;
 mod discovery_view;
 mod llm_settings;
 mod map_edit;
+mod markdown_patch;
 mod workspace_settings;
 pub use content::{ArtifactContentInfo, ContentContext, SourceNodeDetail};
 pub use discovery::{
@@ -15,6 +16,10 @@ pub use llm_settings::{
     LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,
 };
 pub use map_edit::{commit_map_change, get_map_object_edit_context, plan_map_change};
+pub use markdown_patch::{
+    DesktopMarkdownPatchPreview, DesktopMarkdownPatchReview, PreviewMarkdownPatchRequest,
+    RunMarkdownPatchRequest, SubmitMarkdownPatchDecisionRequest,
+};
 pub use workspace_settings::{
     DiscoveryAdmissionPreference, SaveWorkspaceSettingsRequest, WORKSPACE_SETTINGS_VERSION,
     WorkspaceSettings, WorkspaceSettingsError,
@@ -37,9 +42,7 @@ use mathscape_pdf::{
     ClassificationMode, PdfContentKind, PdfEngine, PdfError, PdfOpenOptions, PdfPageIndex,
     PdfSelection,
 };
-use mathscape_query::{
-    LandscapeProjectionInput, LandscapeProjector, SourceGraphProjectionError,
-};
+use mathscape_query::{LandscapeProjectionInput, LandscapeProjector, SourceGraphProjectionError};
 use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
 use mathscape_tool_marker::{
     MarkerCancellation, MarkerExecutionError, MarkerInstallation, MarkerProductRole,
@@ -758,6 +761,10 @@ pub fn run() {
             discovery::cancel_discovery,
             discovery::accept_discovery_result,
             discovery::run_discovery,
+            markdown_patch::run_markdown_patch,
+            markdown_patch::get_markdown_patch_review,
+            markdown_patch::preview_markdown_patch,
+            markdown_patch::submit_markdown_patch_decision,
             map_edit::get_map_object_edit_context,
             map_edit::plan_map_change,
             map_edit::commit_map_change,

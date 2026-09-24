@@ -19,7 +19,7 @@ pub struct TextByteRange {
     pub end: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MarkdownSnapshot {
     pub artifact_id: StableId,

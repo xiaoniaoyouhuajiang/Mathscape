@@ -143,6 +143,11 @@ pub struct SourceFactInput {
     pub blocks: Vec<StageBlock>,
     pub units: Vec<FrozenUnitEntry>,
     pub tasks: Vec<FactTask>,
+    /// Read-only warnings carried from Stage A/P. They explain unresolved
+    /// conversion issues without granting Stage B permission to edit units or
+    /// source bytes. Omitted by legacy v2 inputs.
+    #[serde(default)]
+    pub source_warnings: Vec<crate::CanonicalDiscoveryIssue>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -315,6 +320,10 @@ pub struct UnitDiscoveryCheckpoint {
     pub input_fingerprint: ContentHash,
     pub unit_set_fingerprint: ContentHash,
     pub proposal: UnitDiscoveryProposal,
+    /// System-owned issue identities used by the independent Markdown patch
+    /// stage.  Older checkpoints omit this field and are upgraded lazily.
+    #[serde(default)]
+    pub issue_registry: Vec<crate::CanonicalDiscoveryIssue>,
 }
 
 /// Future composition wire envelope. Validation/assembly belongs to M2.

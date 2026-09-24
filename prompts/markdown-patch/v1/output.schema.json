@@ -1,0 +1,165 @@
+{
+  "$defs": {
+    "DiscoveryIssueRef": {
+      "description": "A system-assigned reference to an A-stage issue. Model-provided temporary\nreferences are deliberately not part of the persisted identity.",
+      "type": "string"
+    },
+    "DiscoveryQuoteAnchor": {
+      "additionalProperties": false,
+      "description": "One boundary intent inside a request-local block. `occurrence` is one-based\namong matches at the resolver's selected matching tier. Prefix and suffix\nconstrain a match but are not included in the resolved source range.",
+      "properties": {
+        "occurrence": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prefix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quote": {
+          "type": "string"
+        },
+        "suffix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "quote",
+        "occurrence",
+        "prefix",
+        "suffix"
+      ],
+      "type": "object"
+    },
+    "DiscoveryQuoteSelector": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "$ref": "#/$defs/DiscoveryQuoteAnchor"
+            },
+            "first": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "quote_range",
+              "type": "string"
+            },
+            "last": {
+              "type": "string"
+            },
+            "start": {
+              "$ref": "#/$defs/DiscoveryQuoteAnchor"
+            }
+          },
+          "required": [
+            "kind",
+            "first",
+            "start",
+            "last",
+            "end"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A source locator whose wire shape can only express `quote_range`. It is used\nwhere a whole Markdown block is too coarse to identify the claimed source\noccurrence, notably source labels and references."
+    },
+    "MarkdownPatchProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "issue_ref": {
+          "$ref": "#/$defs/DiscoveryIssueRef"
+        },
+        "patch_ref": {
+          "description": "A request-local model handle. The orchestrator assigns the persisted\npatch reference after validation.",
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "replacement": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/TextOccurrence"
+        }
+      },
+      "required": [
+        "patch_ref",
+        "issue_ref",
+        "target",
+        "replacement",
+        "rationale"
+      ],
+      "type": "object"
+    },
+    "TextOccurrence": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "block": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "text_occurrence",
+              "type": "string"
+            },
+            "occurrence": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "block",
+            "text",
+            "occurrence"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Text is specified exactly once. Occurrence is one-based within the supplied\nfragment at the chosen exact-or-safe-normalized matching tier."
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "patches": {
+      "items": {
+        "$ref": "#/$defs/MarkdownPatchProposal"
+      },
+      "type": "array"
+    },
+    "request_ref": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "request_ref",
+    "patches"
+  ],
+  "title": "MarkdownPatchResponse",
+  "type": "object"
+}

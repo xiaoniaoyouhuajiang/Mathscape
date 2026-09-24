@@ -752,7 +752,7 @@ fn checkpoint_value<T: serde::de::DeserializeOwned>(
     serde_json::from_value(value).map_err(Into::into)
 }
 
-fn timestamp_now() -> Result<Timestamp, mathscape_domain::DomainError> {
+pub(crate) fn timestamp_now() -> Result<Timestamp, mathscape_domain::DomainError> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();

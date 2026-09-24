@@ -1,0 +1,9 @@
+{
+  "id": "markdown-patch",
+  "version": "mathscape-markdown-patch-1",
+  "input_version": "mathscape-markdown-patch-input-1",
+  "output_version": "mathscape-markdown-patch-1",
+  "schema_name": "mathscape_markdown_patch_response",
+  "max_output_tokens": 16384,
+  "max_response_bytes": 524288
+}

@@ -76,6 +76,25 @@
 .discovery-json summary { cursor: pointer; color: #9fc8c1; padding: 5px 0; }
 .discovery-json pre { max-height: 240px; overflow: auto; padding: 8px; background: #10181e; user-select: text; }
 .discovery-run { border-top: 1px dotted #45606c; padding-top: 8px; overflow-wrap: anywhere; }
+.markdown-patch-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.markdown-patch-actions button { background: #223a42; color: #cbe3dd; border: 1px solid #4d6b70; border-radius: 5px; padding: 5px 9px; cursor: pointer; }
+.markdown-patch-actions button:disabled { opacity: .45; cursor: default; }
+.markdown-patch-status, .markdown-patch-review-status { color: #b8d8d2; overflow-wrap: anywhere; }
+.markdown-patch-review { margin-top: 12px; border: 1px solid #516b70; border-radius: 8px; padding: 10px; background: #111d23; }
+.markdown-patch-heading, .markdown-patch-item-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.markdown-patch-heading h4 { margin: 0; }
+.markdown-patch-meta, .markdown-patch-range, .markdown-patch-rationale { color: #9eb5b3; font-size: 12px; overflow-wrap: anywhere; }
+.markdown-patch-help { color: #b9c9c6; font-size: 12px; }
+.markdown-patch-list { display: grid; gap: 8px; }
+.markdown-patch-item { border: 1px solid #334b50; border-radius: 6px; padding: 8px; background: #17252b; }
+.markdown-patch-item pre, .markdown-patch-item textarea, .markdown-patch-diff pre { width: 100%; box-sizing: border-box; margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; line-height: 1.5; }
+.markdown-patch-old { color: #e8c2ba; background: #291d21; padding: 6px; }
+.markdown-patch-replacement { display: block; min-height: 42px; resize: vertical; color: #d7eee7; background: #0d171c; border: 1px solid #46676a; border-radius: 4px; padding: 6px; }
+.markdown-patch-diff { margin-top: 8px; }
+.markdown-patch-original, .markdown-patch-revised { max-height: 220px; overflow: auto; padding: 8px; background: #0d171c; border: 1px solid #294047; }
+.markdown-patch-original { border-left: 3px solid #a16b61; }
+.markdown-patch-revised { border-left: 3px solid #579b81; }
+.markdown-patch-review.is-finished { opacity: .8; }
 .source-block { border-left: 3px solid transparent; padding: 3px 10px; margin: 3px 0; cursor: pointer; }
 .source-block:hover { background: #edf0f4; }
 .source-block.is-selected-block { background: #e1f0e9; border-left-color: #268065; }

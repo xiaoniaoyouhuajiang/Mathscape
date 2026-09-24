@@ -529,17 +529,19 @@ mod tests {
         let span = id("mathscape:source-span/a");
         let section = id("mathscape:source-unit/section");
         let child = id("mathscape:source-unit/child");
-        let unit = |stable_id: &StableId, revision: char, payload: serde_json::Value| {
-            StoredMapObject {
+        let unit =
+            |stable_id: &StableId, revision: char, payload: serde_json::Value| StoredMapObject {
                 stable_id: stable_id.clone(),
-                revision_id: RevisionId::parse(format!("sha256:{}", revision.to_string().repeat(64)))
-                    .unwrap(),
+                revision_id: RevisionId::parse(format!(
+                    "sha256:{}",
+                    revision.to_string().repeat(64)
+                ))
+                .unwrap(),
                 kind: EntityKind::SourceSemanticUnit,
                 relation: false,
                 payload,
                 lifecycle: mathscape_domain::LifecycleStatus::Active,
-            }
-        };
+            };
         let snapshot = SourceMapSnapshot {
             objects: vec![
                 unit(
@@ -564,20 +566,16 @@ mod tests {
         let structural = projection
             .relations()
             .iter()
-            .find(|relation| {
-                relation.relation_kind_value() == ProjectionRelationKind::HasPart
-            })
+            .find(|relation| relation.relation_kind_value() == ProjectionRelationKind::HasPart)
             .expect("the unit hierarchy must reach the projection");
         assert_eq!(structural.label(), "包含");
         // The parent has to sit on the into-relation side or focus traversal
         // would walk from a child up into its whole section.
         assert!(structural.endpoints().iter().any(|endpoint| {
-            endpoint.node() == &section
-                && endpoint.direction() == IncidenceDirection::IntoRelation
+            endpoint.node() == &section && endpoint.direction() == IncidenceDirection::IntoRelation
         }));
         assert!(structural.endpoints().iter().any(|endpoint| {
-            endpoint.node() == &child
-                && endpoint.direction() == IncidenceDirection::OutOfRelation
+            endpoint.node() == &child && endpoint.direction() == IncidenceDirection::OutOfRelation
         }));
     }
 

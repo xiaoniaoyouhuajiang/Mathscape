@@ -4,9 +4,10 @@
 //! authoritative metadata and provenance transactions.
 
 mod discovery;
+mod map_edit;
+mod markdown_patch;
 mod read;
 mod source_map;
-mod map_edit;
 
 use std::path::Path;
 
@@ -27,6 +28,7 @@ pub use discovery::{
     DiscoveryUnitCheckpointRecord, DiscoveryValidationCheckpoint, PendingDiscoveryTask,
     StoredAcceptanceAuthority, StoredDiscoveryRun,
 };
+pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use source_map::{
     MapObjectOutcome, SOURCE_REGISTRATION_RECEIPT_VERSION, SourceMapSnapshot,
@@ -41,7 +43,9 @@ const DISCOVERY_RUNS_MIGRATION: &str = include_str!("../../../migrations/0004_di
 const SOURCE_MAP_MIGRATION: &str = include_str!("../../../migrations/0005_source_map.sql");
 const DISCOVERY_RUNS_V2_MIGRATION: &str =
     include_str!("../../../migrations/0006_discovery_runs_v2.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 7;
+const MARKDOWN_PATCHES_MIGRATION: &str =
+    include_str!("../../../migrations/0008_markdown_patches.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 8;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -196,6 +200,7 @@ impl SqliteArtifactStore {
                 supported: SUPPORTED_SCHEMA_VERSION,
             });
         }
+        validate_markdown_patch_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -262,7 +267,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6 | 7 => {
+            6 | 7 | 8 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -279,10 +284,20 @@ impl SqliteArtifactStore {
             // Re-run the historical repair checks for already upgraded
             // catalogs, then restore the current schema marker.
             reconcile_schema_v6(&connection)?;
+            if version < 8 {
+                connection.execute_batch(MARKDOWN_PATCHES_MIGRATION)?;
+            }
             connection.pragma_update(None, "user_version", SUPPORTED_SCHEMA_VERSION)?;
+        }
+        if version < 7 {
+            connection.execute_batch(MARKDOWN_PATCHES_MIGRATION)?;
         }
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
+        connection.prepare(
+            "SELECT patch_set_id, patch_fingerprint, status FROM markdown_patch_sets LIMIT 0",
+        )?;
+        validate_markdown_patch_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -728,6 +743,124 @@ impl SqliteArtifactStore {
         }
         transaction.commit()?;
         Ok(())
+    }
+
+    pub fn save_markdown_patch_set(
+        &mut self,
+        patch_set_id: &StableId,
+        patch_set: &mathscape_domain::MarkdownPatchSet,
+        status: mathscape_domain::MarkdownPatchStatus,
+        patched_artifact_id: Option<&StableId>,
+        conversion_id: Option<&StableId>,
+        now: &Timestamp,
+    ) -> Result<(), SqliteStoreError> {
+        markdown_patch::save_patch_set(
+            &mut self.connection,
+            patch_set_id,
+            patch_set,
+            status,
+            patched_artifact_id,
+            conversion_id,
+            now,
+        )
+    }
+
+    pub fn save_markdown_patch_draft(
+        &mut self,
+        patch_set_id: &StableId,
+        patch_ref: &str,
+        replacement: &str,
+        revision: u64,
+        actor: &StableId,
+        updated_at: &Timestamp,
+    ) -> Result<(), SqliteStoreError> {
+        markdown_patch::save_patch_draft(
+            &mut self.connection,
+            patch_set_id,
+            patch_ref,
+            replacement,
+            revision,
+            actor,
+            updated_at,
+        )
+    }
+
+    pub fn update_markdown_patch_status(
+        &mut self,
+        patch_set_id: &StableId,
+        status: mathscape_domain::MarkdownPatchStatus,
+        patched_artifact_id: Option<&StableId>,
+        conversion_id: Option<&StableId>,
+        updated_at: &Timestamp,
+    ) -> Result<(), SqliteStoreError> {
+        markdown_patch::update_patch_set_status(
+            &self.connection,
+            patch_set_id,
+            status,
+            patched_artifact_id,
+            conversion_id,
+            updated_at,
+        )
+    }
+
+    pub fn record_markdown_patch_decision(
+        &mut self,
+        decision: &mathscape_domain::MarkdownPatchDecision,
+        created_at: &Timestamp,
+        patch_set_id: &StableId,
+    ) -> Result<(), SqliteStoreError> {
+        markdown_patch::record_patch_decision(
+            &mut self.connection,
+            decision,
+            created_at,
+            patch_set_id,
+        )
+    }
+
+    pub fn record_markdown_patch_application(
+        &mut self,
+        application_id: &StableId,
+        patch_set_id: &StableId,
+        receipt: &mathscape_domain::MarkdownPatchApplyReceipt,
+        error: Option<&str>,
+        created_at: &Timestamp,
+    ) -> Result<(), SqliteStoreError> {
+        markdown_patch::record_patch_application(
+            &mut self.connection,
+            application_id,
+            patch_set_id,
+            receipt,
+            error,
+            created_at,
+        )
+    }
+
+    pub fn markdown_patch_set_json(
+        &self,
+        patch_set_id: &StableId,
+    ) -> Result<Option<serde_json::Value>, SqliteStoreError> {
+        markdown_patch::patch_set_json(&self.connection, patch_set_id)
+    }
+
+    pub fn markdown_patch_drafts(
+        &self,
+        patch_set_id: &StableId,
+    ) -> Result<std::collections::BTreeMap<String, String>, SqliteStoreError> {
+        markdown_patch::patch_drafts(&self.connection, patch_set_id)
+    }
+
+    pub fn latest_markdown_patch_application(
+        &self,
+        patch_set_id: &StableId,
+    ) -> Result<Option<StoredPatchApplication>, SqliteStoreError> {
+        markdown_patch::latest_patch_application(&self.connection, patch_set_id)
+    }
+
+    pub fn latest_markdown_patch_set_json_for_run(
+        &self,
+        run_id: &StableId,
+    ) -> Result<Option<(StableId, serde_json::Value, String)>, SqliteStoreError> {
+        markdown_patch::latest_patch_set_json_for_run(&self.connection, run_id)
     }
 
     pub fn artifact_count(&self) -> Result<u64, SqliteStoreError> {
@@ -1314,6 +1447,23 @@ fn validate_required_schema_objects(connection: &Connection) -> Result<(), Sqlit
             return Err(SqliteStoreError::MissingSchemaObject {
                 object_kind: "index",
                 name: index,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_markdown_patch_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
+    for table in [
+        "markdown_patch_sets",
+        "markdown_patch_operations",
+        "markdown_patch_decisions",
+        "markdown_patch_applications",
+    ] {
+        if !schema_object_exists(connection, "table", table)? {
+            return Err(SqliteStoreError::MissingSchemaObject {
+                object_kind: "table",
+                name: table,
             });
         }
     }

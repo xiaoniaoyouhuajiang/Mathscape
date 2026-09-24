@@ -440,7 +440,10 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     assert_eq!(persisted.checkpoint.units.len(), 2);
     assert_eq!(persisted.checkpoint.facts.len(), 2);
     assert!(persisted.checkpoint.pending_tasks.is_empty());
-    assert_eq!(service.snapshot().unwrap().landscape_graph().nodes().len(), 1);
+    assert_eq!(
+        service.snapshot().unwrap().landscape_graph().nodes().len(),
+        1
+    );
     drop(store);
 
     let invalid_acceptance: AcceptDiscoveryRequest = serde_json::from_value(serde_json::json!({
@@ -501,14 +504,17 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
             .landscape_graph()
             .nodes()
             .iter()
-            .filter(|node| node.domain_kind()
-                == Some(mathscape_domain::EntityKind::SourceSemanticUnit))
+            .filter(
+                |node| node.domain_kind() == Some(mathscape_domain::EntityKind::SourceSemanticUnit)
+            )
             .count(),
         2
     );
-    assert!(projected.landscape_graph().nodes().iter().any(|node| {
-        node.domain_kind() == Some(mathscape_domain::EntityKind::SourceArtifact)
-    }));
+    assert!(
+        projected.landscape_graph().nodes().iter().any(|node| {
+            node.domain_kind() == Some(mathscape_domain::EntityKind::SourceArtifact)
+        })
+    );
     assert!(projected.landscape_graph().nodes().len() > 2);
     assert!(projected.landscape_graph().nodes().iter().any(|node| {
         node.domain_kind() == Some(mathscape_domain::EntityKind::Evidence)

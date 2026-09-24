@@ -520,6 +520,7 @@ fn fact_preflight_catches_self_reference_without_resolving_the_bad_quote() {
                 context_block_refs: vec![],
             },
         ],
+        source_warnings: vec![],
     };
     let mut facts: SourceFactProposal = serde_json::from_str(FACTS).unwrap();
     assert!(preflight_source_facts(&input, &facts).is_valid());

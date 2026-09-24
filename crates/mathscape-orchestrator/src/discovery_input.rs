@@ -239,8 +239,39 @@ pub fn build_discovery_input(
     if &fresh != selection {
         return Err(DiscoveryInputError::ResolvedSelectionMismatch);
     }
-    let selected = checked_range(&selection.range, &document.source)
-        .ok_or(DiscoveryInputError::InvalidDocument)?;
+    build_discovery_input_for_range(
+        document,
+        selection.range.clone(),
+        selection.input_fingerprint.clone(),
+        limits,
+    )
+}
+
+/// Rebuilds a DiscoveryInput after a deterministic Markdown patch. The caller
+/// supplies a range map produced by the patch engine; no selector is guessed.
+pub fn rebind_discovery_input_after_patch(
+    document: &AnchoredMarkdown,
+    original: &DiscoveryInput,
+    offset_map: &crate::markdown_patch::OffsetMap,
+    limits: DiscoveryInputLimits,
+) -> Result<DiscoveryInput, DiscoveryInputError> {
+    let range = offset_map
+        .map_range(&original.requested.source_range)
+        .ok_or(DiscoveryInputError::StaleCheckpoint(
+            "patched selection boundary is ambiguous",
+        ))?;
+    let selection_fingerprint = hash(&(&document.snapshot.fingerprint, &range));
+    build_discovery_input_for_range(document, range, selection_fingerprint, limits)
+}
+
+fn build_discovery_input_for_range(
+    document: &AnchoredMarkdown,
+    range: TextByteRange,
+    selection_fingerprint: ContentHash,
+    limits: DiscoveryInputLimits,
+) -> Result<DiscoveryInput, DiscoveryInputError> {
+    let selected =
+        checked_range(&range, &document.source).ok_or(DiscoveryInputError::InvalidDocument)?;
     let selected_len = selected.len();
     if selected_len > limits.max_utf8_bytes {
         return Err(DiscoveryInputError::ByteLimit {
@@ -252,9 +283,7 @@ pub fn build_discovery_input(
     let included: Vec<_> = document
         .blocks
         .iter()
-        .filter(|block| {
-            block.range.end > selection.range.start && block.range.start < selection.range.end
-        })
+        .filter(|block| block.range.end > range.start && block.range.start < range.end)
         .collect();
     if included.len() > limits.max_blocks {
         return Err(DiscoveryInputError::BlockLimit {
@@ -301,17 +330,21 @@ pub fn build_discovery_input(
     }
 
     let reconstructed: String = segments.iter().map(DiscoveryInputSegment::text).collect();
-    if reconstructed != selection.raw_text {
+    let expected = document
+        .source
+        .get(selected.clone())
+        .ok_or(DiscoveryInputError::InvalidDocument)?;
+    if reconstructed != expected {
         return Err(DiscoveryInputError::ResolvedSelectionMismatch);
     }
     let mut input = DiscoveryInput {
         version: DISCOVERY_INPUT_VERSION.into(),
         snapshot: document.snapshot.clone(),
-        selection_fingerprint: selection.input_fingerprint.clone(),
+        selection_fingerprint,
         // Filled from every producer-visible field below.
-        fingerprint: selection.input_fingerprint.clone(),
+        fingerprint: hash(&(&document.snapshot.fingerprint, &range)),
         requested: DiscoveryInputRegion {
-            source_range: selection.range.clone(),
+            source_range: range.clone(),
             segments,
         },
         context: vec![],

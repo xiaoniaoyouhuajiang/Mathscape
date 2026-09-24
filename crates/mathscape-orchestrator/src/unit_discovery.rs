@@ -343,8 +343,298 @@ impl ValidatedUnitSet {
             input_fingerprint: self.input_fingerprint.clone(),
             unit_set_fingerprint: self.fingerprint.clone(),
             proposal: self.proposal.clone(),
+            issue_registry: canonical_discovery_issues(self),
         }
     }
+}
+
+#[derive(Clone, Debug)]
+struct RebindBlock {
+    handle: String,
+    range: TextByteRange,
+    text: String,
+}
+
+fn rebind_blocks(input: &DiscoveryInput) -> Vec<RebindBlock> {
+    input
+        .requested
+        .segments
+        .iter()
+        .filter_map(|segment| match segment {
+            DiscoveryInputSegment::Block {
+                source_range, text, ..
+            } => Some((source_range.clone(), text.clone())),
+            DiscoveryInputSegment::Gap { .. } => None,
+        })
+        .enumerate()
+        .map(|(index, (range, text))| RebindBlock {
+            handle: format!("b{}", index + 1),
+            range,
+            text,
+        })
+        .collect()
+}
+
+fn quote_anchor_for(
+    block: &RebindBlock,
+    start: usize,
+    end: usize,
+) -> Result<DiscoveryQuoteAnchor, String> {
+    if start >= end || end > block.text.len() {
+        return Err("rebind endpoint is outside its block".into());
+    }
+    let quote = block
+        .text
+        .get(start..end)
+        .ok_or_else(|| "rebind endpoint is not on a UTF-8 boundary".to_owned())?;
+    let occurrence = crate::markdown_patch::exact_occurrences(&block.text, quote)
+        .iter()
+        .position(|(a, _)| *a == start)
+        .and_then(|index| u32::try_from(index + 1).ok());
+    Ok(DiscoveryQuoteAnchor {
+        quote: quote.to_owned(),
+        occurrence: (occurrence != Some(1)).then_some(occurrence.unwrap_or(1)),
+        prefix: None,
+        suffix: None,
+    })
+}
+
+fn endpoint_block<'a>(
+    blocks: &'a [RebindBlock],
+    range: &TextByteRange,
+) -> Result<(&'a RebindBlock, usize, &'a RebindBlock, usize), String> {
+    let start = blocks
+        .iter()
+        .find(|block| block.range.start <= range.start && range.start < block.range.end)
+        .ok_or_else(|| "rebind range start is not inside a block".to_owned())?;
+    let end = blocks
+        .iter()
+        .find(|block| block.range.start < range.end && range.end <= block.range.end)
+        .ok_or_else(|| "rebind range end is not inside a block".to_owned())?;
+    let start_offset = usize::try_from(range.start - start.range.start)
+        .map_err(|_| "rebind start offset overflows".to_owned())?;
+    let end_offset = usize::try_from(range.end - end.range.start)
+        .map_err(|_| "rebind end offset overflows".to_owned())?;
+    Ok((start, start_offset, end, end_offset))
+}
+
+fn selector_for_rebound_range(
+    input: &DiscoveryInput,
+    range: &TextByteRange,
+) -> Result<DiscoverySelector, String> {
+    let blocks = rebind_blocks(input);
+    let (start_block, start_offset, end_block, end_offset) = endpoint_block(&blocks, range)?;
+    let start_end = (start_offset + 64).min(start_block.text.len());
+    let start_quote = quote_anchor_for(start_block, start_offset, start_end)?;
+    let end_start = end_offset.saturating_sub(64);
+    let end_quote = quote_anchor_for(end_block, end_start, end_offset)?;
+    Ok(DiscoverySelector::QuoteRange {
+        first: start_block.handle.clone(),
+        start: start_quote,
+        last: end_block.handle.clone(),
+        end: end_quote,
+    })
+}
+
+fn resolve_existing_selector_range(
+    prepared: &PreparedUnitDiscoveryRequest,
+    selector: &DiscoverySelector,
+) -> Result<TextByteRange, String> {
+    let (canonical, _) = prepared
+        .resolver
+        .resolve_selector(selector.clone(), "rebind")
+        .map_err(|error| error.to_string())?;
+    let mut diagnostics = Vec::new();
+    let region = authorize_discovery_input(&prepared.input, &mut diagnostics)
+        .ok_or_else(|| "existing selector input is invalid".to_owned())?;
+    region
+        .resolve(&canonical)
+        .map(|resolved| resolved.range().clone())
+        .map_err(|error| error.to_owned())
+}
+
+fn map_rebound_ranges(
+    ranges: &[TextByteRange],
+    offset_map: &crate::markdown_patch::OffsetMap,
+) -> Result<Vec<TextByteRange>, usize> {
+    ranges
+        .iter()
+        .enumerate()
+        .map(|(index, range)| offset_map.map_range(range).ok_or(index))
+        .collect()
+}
+
+/// Rebinds a validated A UnitSet onto a patched DiscoveryInput. All selectors
+/// are regenerated from mapped byte ranges and passed through the normal A
+/// validator again; this function never trusts a shifted quote by itself.
+pub fn rebind_unit_set_after_patch(
+    prepared: &PreparedUnitDiscoveryRequest,
+    units: &ValidatedUnitSet,
+    new_input: DiscoveryInput,
+    offset_map: &crate::markdown_patch::OffsetMap,
+) -> Result<(PreparedUnitDiscoveryRequest, ValidatedUnitSet), StageValidationReport> {
+    let new_prepared = prepare_unit_discovery_request_from_input(new_input);
+    let mut report = StageValidationReport::default();
+    let mut mapped_unit_ranges: HashMap<String, Vec<TextByteRange>> = HashMap::new();
+    let mut proposal = units.proposal.clone();
+    proposal.request_ref = new_prepared.model_input.request_ref.clone();
+    for (index, unit) in proposal.units.iter_mut().enumerate() {
+        let Some(frozen) = units.units.get(index) else {
+            report.push(
+                "rebind_unit_mismatch",
+                "units",
+                "unit checkpoint is inconsistent",
+            );
+            continue;
+        };
+        let old_ranges: Vec<_> = frozen
+            .selectors
+            .iter()
+            .map(|selector| selector.range().clone())
+            .collect();
+        let ranges = match map_rebound_ranges(&old_ranges, offset_map) {
+            Ok(ranges) => ranges,
+            Err(failed) => {
+                report.push(
+                    "rebind_ambiguous_range",
+                    format!("units[{index}].selectors[{failed}]"),
+                    "range endpoint falls inside a replaced span",
+                );
+                continue;
+            }
+        };
+        mapped_unit_ranges.insert(unit.unit_ref.clone(), ranges.clone());
+        unit.selectors = ranges
+            .iter()
+            .filter_map(|range| selector_for_rebound_range(&new_prepared.input, range).ok())
+            .collect();
+        if unit.selectors.len() != ranges.len() {
+            report.push(
+                "rebind_selector_failed",
+                format!("units[{index}].selectors"),
+                "could not construct a unique canonical selector",
+            );
+        }
+    }
+    for (index, issue) in proposal.issues.iter_mut().enumerate() {
+        let Some(frozen) = units.issues.get(index) else {
+            report.push(
+                "rebind_issue_mismatch",
+                "issues",
+                "issue checkpoint is inconsistent",
+            );
+            continue;
+        };
+        let old_ranges: Vec<_> = frozen
+            .evidence
+            .iter()
+            .map(|selector| selector.range().clone())
+            .collect();
+        let ranges = match map_rebound_ranges(&old_ranges, offset_map) {
+            Ok(ranges) => ranges,
+            Err(failed) => {
+                report.push(
+                    "rebind_ambiguous_range",
+                    format!("issues[{index}].evidence[{failed}]"),
+                    "range endpoint falls inside a replaced span",
+                );
+                continue;
+            }
+        };
+        issue.evidence = ranges
+            .iter()
+            .filter_map(|range| selector_for_rebound_range(&new_prepared.input, range).ok())
+            .collect();
+        if issue.evidence.len() != ranges.len() {
+            report.push(
+                "rebind_selector_failed",
+                format!("issues[{index}].evidence"),
+                "could not construct a unique issue evidence selector",
+            );
+        }
+    }
+    for (index, coverage) in proposal.coverage.iter_mut().enumerate() {
+        let range = match resolve_existing_selector_range(prepared, &coverage.selector)
+            .ok()
+            .and_then(|range| offset_map.map_range(&range))
+        {
+            Some(range) => range,
+            None => {
+                report.push(
+                    "rebind_coverage_failed",
+                    format!("coverage[{index}].selector"),
+                    "coverage range cannot be mapped to the patched input",
+                );
+                continue;
+            }
+        };
+        match selector_for_rebound_range(&new_prepared.input, &range) {
+            Ok(selector) => coverage.selector = selector,
+            Err(error) => report.push(
+                "rebind_selector_failed",
+                format!("coverage[{index}].selector"),
+                error,
+            ),
+        }
+    }
+    if !report.is_valid() {
+        return Err(report);
+    }
+    match new_prepared.validate(proposal, Default::default()) {
+        Ok(rebound) => Ok((new_prepared, rebound)),
+        Err(validation) => Err(validation),
+    }
+}
+
+/// Assigns canonical, system-owned issue references after A validation. The
+/// initial implementation preserves validated proposal order; the persisted
+/// checkpoint is the authority across repair/replay.
+pub fn canonical_discovery_issues(units: &ValidatedUnitSet) -> Vec<CanonicalDiscoveryIssue> {
+    units
+        .issues
+        .iter()
+        .enumerate()
+        .map(|(index, issue)| CanonicalDiscoveryIssue {
+            issue_ref: DiscoveryIssueRef::parse(format!("a-i{}", index + 1))
+                .expect("canonical issue ref is valid"),
+            kind: issue.proposal.kind,
+            unit_ref: issue.proposal.unit.clone(),
+            evidence: issue
+                .evidence
+                .iter()
+                .map(|selector| selector.range().clone())
+                .collect(),
+            observation: issue.proposal.observation.clone(),
+        })
+        .collect()
+}
+
+/// Returns the persisted issue registry when available. This keeps issue
+/// references stable across a repair/replay; legacy v1 checkpoints are
+/// upgraded lazily from their proposal order.
+pub fn canonical_discovery_issues_for_checkpoint(
+    checkpoint: &UnitDiscoveryCheckpoint,
+) -> Vec<CanonicalDiscoveryIssue> {
+    if !checkpoint.issue_registry.is_empty() {
+        return checkpoint.issue_registry.clone();
+    }
+    // Legacy checkpoints did not persist resolved evidence. Returning an
+    // empty evidence set deliberately makes the patch resolver fail closed;
+    // callers can only patch such a run after rebuilding a validated UnitSet.
+    checkpoint
+        .proposal
+        .issues
+        .iter()
+        .enumerate()
+        .map(|(index, issue)| CanonicalDiscoveryIssue {
+            issue_ref: DiscoveryIssueRef::parse(format!("a-i{}", index + 1))
+                .expect("canonical issue ref is valid"),
+            kind: issue.kind,
+            unit_ref: issue.unit.clone(),
+            evidence: Vec::new(),
+            observation: issue.observation.clone(),
+        })
+        .collect()
 }
 
 fn inside(outer: &[ResolvedDiscoverySelector], item: &ResolvedDiscoverySelector) -> bool {

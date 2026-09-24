@@ -7,16 +7,19 @@ mod discovery_validation;
 mod discovery_workflow;
 mod fact_planner;
 mod fact_preflight;
+pub mod map_edit;
 mod source_facts;
 mod source_registration;
 mod source_review;
-pub mod map_edit;
 pub use discovery_workflow::*;
 pub use fact_planner::*;
 pub use source_facts::*;
 pub use source_registration::*;
 pub use source_review::project_source_review;
 mod markdown_anchors;
+pub mod markdown_patch;
+mod markdown_patch_producer;
+mod markdown_patch_prompt;
 mod marker_promotion;
 mod occurrence_resolver;
 mod selection_plan;
@@ -30,6 +33,7 @@ pub use unit_discovery::*;
 pub use discovery_input::{
     DEFAULT_DISCOVERY_INPUT_BLOCKS, DEFAULT_DISCOVERY_INPUT_BYTES, DiscoveryInputError,
     DiscoveryInputLimits, build_discovery_input, rebind_discovery_input,
+    rebind_discovery_input_after_patch,
 };
 pub use discovery_producer::{
     DEFAULT_DISCOVERY_RESPONSE_BYTES, DiscoveryProducer, DiscoveryProducerLimits,
@@ -50,6 +54,15 @@ pub use discovery_validation::{
     ValidatedDiscoveryUnit, ValidatedProposalStatus, validate_discovery_proposal,
 };
 pub use markdown_anchors::{AnchorError, MAX_MARKDOWN_BYTES, anchor_markdown, resolve_selection};
+pub use markdown_patch_producer::{
+    MarkdownPatchProducer, MarkdownPatchProductionOutcome, MarkdownPatchProductionSummary,
+    MarkdownPatchRejection, MarkdownPatchResponseSummary,
+};
+pub use markdown_patch_prompt::{
+    MarkdownPatchPromptManifest, PreparedMarkdownPatchRequest, build_markdown_patch_request,
+    build_markdown_patch_request_with_issues, markdown_patch_output_schema,
+    markdown_patch_prompt_manifest,
+};
 pub use marker_promotion::{
     MarkerArtifactPromotion, MarkerPromotionError, MarkerPromotionResult, PRODUCT_PATHS_KEY,
     ProductPath, promote_marker_inventory,

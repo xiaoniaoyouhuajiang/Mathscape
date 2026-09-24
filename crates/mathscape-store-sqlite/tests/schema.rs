@@ -146,7 +146,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 1",
@@ -203,6 +203,34 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
         .map(Result::unwrap)
         .any(|name| name == "result_fingerprint");
     assert!(result_fingerprint_column);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 8",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "markdown_patches"
+    );
+    for table in [
+        "markdown_patch_sets",
+        "markdown_patch_operations",
+        "markdown_patch_decisions",
+        "markdown_patch_applications",
+    ] {
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1,
+            "missing Markdown patch table {table}"
+        );
+    }
     drop(connection);
     drop(SqliteArtifactStore::prepare(&database).unwrap());
     cleanup(&directory);
@@ -220,7 +248,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::prepare(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 7
+            supported: 8
         })
     ));
     cleanup(&directory);
@@ -241,7 +269,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -279,7 +307,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 3",
@@ -315,7 +343,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        7
+        8
     );
     assert_eq!(
         connection
@@ -368,7 +396,7 @@ fn repairs_a_v5_discovery_schema_missing_result_fingerprint() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        7
+        8
     );
     let has_result_fingerprint = connection
         .prepare("PRAGMA table_info(discovery_runs)")

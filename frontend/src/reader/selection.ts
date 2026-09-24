@@ -163,6 +163,58 @@ type DiscoveryOutcome = {
   run: DiscoveryRun;
 };
 
+interface MarkdownPatchProposalView {
+  patch_ref: string;
+  issue_ref: string;
+  range: TextRange;
+  old_text: string;
+  old_text_hash: string;
+  replacement: string;
+  replacement_hash: string;
+  rationale: string;
+  status: string;
+}
+
+interface MarkdownPatchSetView {
+  version: string;
+  run_id: string;
+  base_snapshot: MarkdownSnapshot;
+  base_input_fingerprint: string;
+  patches: MarkdownPatchProposalView[];
+  fingerprint: string;
+}
+
+interface MarkdownPatchReviewView {
+  run_id: string;
+  patch_set_id: string | null;
+  input_fingerprint: string;
+  status: string;
+  patch_set: MarkdownPatchSetView | null;
+  provider_model: string | null;
+  message: string | null;
+}
+
+interface MarkdownPatchSafetyView {
+  status: string;
+  diagnostics: { code: string; path: string; message: string }[];
+}
+
+interface MarkdownPatchPreviewView {
+  run_id: string;
+  patch_set_id: string;
+  patch_set_fingerprint: string;
+  original: string;
+  revised: string;
+  safety: MarkdownPatchSafetyView;
+}
+
+interface MarkdownPatchReceiptView {
+  status: string;
+  patched_artifact_id: string | null;
+  conversion_id: string | null;
+  safety: MarkdownPatchSafetyView;
+}
+
 interface SourceReviewProjection {
   version: "mathscape-source-review-projection-1";
   run_id: string;
@@ -222,6 +274,16 @@ function textElement<K extends keyof HTMLElementTagNameMap>(
   node.className = className;
   node.textContent = text;
   return node;
+}
+
+function markdownPatchStatusLabel(status: string): string {
+  return ({
+    awaiting_patch_review: "等待审核修订建议",
+    no_patchable_issue: "没有可修订的转换异常",
+    no_patch_proposed: "模型没有提出可验证修订",
+    applied: "修订已应用",
+    rejected: "修订已拒绝",
+  } as Record<string, string>)[status] ?? status;
 }
 
 export function markdownDocument(id: string, conversion: string | null): Promise<AnchoredMarkdown> {
@@ -538,6 +600,36 @@ export class MarkdownSelection {
         `${units.length} 个单元 · ${relations.length} 条关系 · ${references.length} 个引用 · ${pending.length} 个待完成任务`,
       ),
     );
+    // Markdown correction is an independent, reviewable P stage.  Keep it
+    // explicitly separate from source registration: the returned patch set
+    // is persisted, but no bytes or map objects are changed until the user
+    // accepts individual replacements below.
+    const patchable = view.issues.some(issue => issue.kind === "suspected_conversion_error");
+    if (patchable && outcome.run.run_id) {
+      const patchActions = textElement("div", "markdown-patch-actions", "");
+      const patchButton = textElement("button", "", "生成 Markdown 修订建议");
+      patchButton.type = "button";
+      const patchStatus = textElement("span", "markdown-patch-status", "仅处理转换异常，不会自动改写原文");
+      patchButton.onclick = async () => {
+        patchButton.disabled = true;
+        patchStatus.textContent = "正在生成修订建议…";
+        try {
+          const review = await invoke<MarkdownPatchReviewView>("run_markdown_patch", {
+            request: { run_id: outcome.run.run_id, profile_id: null },
+          });
+          patchStatus.textContent = review.message ?? markdownPatchStatusLabel(review.status);
+          if (review.patch_set && review.patch_set_id) {
+            this.renderMarkdownPatchReview(review);
+          }
+        } catch (error) {
+          patchStatus.textContent = `修订建议失败：${String(error)}`;
+        } finally {
+          patchButton.disabled = false;
+        }
+      };
+      patchActions.append(patchButton, patchStatus);
+      this.discoveryResult.append(textElement("h4", "", "Markdown 转换校准"), patchActions);
+    }
     if (units.length > 0) {
       const cards = textElement("div", "discovery-units", "");
       for (const unit of units) {
@@ -620,6 +712,119 @@ export class MarkdownSelection {
     if (outcome.review) this.discoveryResult.append(this.renderSourceReview(outcome.review, unitTitles));
     this.discoveryResult.append(this.jsonDetails("查看完整展示数据", view));
     this.discoveryResult.append(this.runSummary(outcome.run));
+  }
+
+  private renderMarkdownPatchReview(review: MarkdownPatchReviewView): void {
+    const patchSet = review.patch_set;
+    if (!patchSet || !review.patch_set_id) return;
+    const section = textElement("section", "markdown-patch-review", "");
+    const heading = textElement("div", "markdown-patch-heading", "");
+    heading.append(
+      textElement("h4", "", "Markdown 修订审核"),
+      textElement("span", "markdown-patch-meta", `${patchSet.patches.length} 条建议 · 指纹 ${patchSet.fingerprint}`),
+    );
+    section.append(
+      heading,
+      textElement("p", "markdown-patch-help", "逐项确认模型建议。这里不会证明数学正确性；只校验原文定位、字节范围和 Markdown 结构是否保持。"),
+    );
+    const rows = textElement("div", "markdown-patch-list", "");
+    const replacements = new Map<string, HTMLTextAreaElement>();
+    const selected = new Map<string, HTMLInputElement>();
+    for (const patch of patchSet.patches) {
+      const row = textElement("article", "markdown-patch-item", "");
+      const top = textElement("div", "markdown-patch-item-heading", "");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = true;
+      checkbox.setAttribute("aria-label", `接受 ${patch.patch_ref}`);
+      selected.set(patch.patch_ref, checkbox);
+      top.append(
+        checkbox,
+        textElement("strong", "", `${patch.patch_ref} · ${patch.issue_ref}`),
+        textElement("span", "markdown-patch-range", `[${patch.range.start}, ${patch.range.end})`),
+      );
+      const old = textElement("pre", "markdown-patch-old", patch.old_text);
+      const textarea = document.createElement("textarea");
+      textarea.className = "markdown-patch-replacement";
+      textarea.value = patch.replacement;
+      textarea.rows = Math.max(2, Math.min(8, patch.replacement.split("\n").length + 1));
+      textarea.setAttribute("aria-label", `${patch.patch_ref} replacement`);
+      replacements.set(patch.patch_ref, textarea);
+      row.append(top, textElement("span", "markdown-patch-rationale", patch.rationale), old, textarea);
+      rows.append(row);
+    }
+    const actions = textElement("div", "markdown-patch-actions", "");
+    const previewButton = textElement("button", "", "预览校验");
+    const acceptButton = textElement("button", "", "应用选中修订");
+    const rejectButton = textElement("button", "", "全部拒绝");
+    const status = textElement("p", "markdown-patch-review-status", "");
+    const diff = textElement("details", "markdown-patch-diff", "");
+    const diffSummary = document.createElement("summary"); diffSummary.textContent = "查看原文/修订文本";
+    const original = textElement("pre", "markdown-patch-original", "");
+    const revised = textElement("pre", "markdown-patch-revised", "");
+    diff.append(diffSummary, original, revised);
+    const values = (): Record<string, string> => Object.fromEntries(
+      [...replacements.entries()].map(([ref, input]) => [ref, input.value]),
+    );
+    const chosen = (): string[] => [...selected.entries()]
+      .filter(([, checkbox]) => checkbox.checked)
+      .map(([ref]) => ref);
+    const showSafety = (safety: MarkdownPatchSafetyView): void => {
+      const diagnostics = safety.diagnostics.length > 0
+        ? `；${safety.diagnostics.map(item => `${item.code}: ${item.message}`).join("；")}`
+        : "";
+      status.textContent = `${safety.status === "safe_for_b" ? "可直接衔接 Stage B" : "需要重新识别单元"}${diagnostics}`;
+    };
+    previewButton.onclick = async () => {
+      previewButton.disabled = acceptButton.disabled = rejectButton.disabled = true;
+      status.textContent = "正在进行确定性校验…";
+      try {
+        const preview = await invoke<MarkdownPatchPreviewView>("preview_markdown_patch", {
+          request: { run_id: review.run_id, patch_set_id: review.patch_set_id, replacements: values() },
+        });
+        patchSet.fingerprint = preview.patch_set_fingerprint;
+        const meta = heading.querySelector<HTMLElement>(".markdown-patch-meta");
+        if (meta) meta.textContent = `${patchSet.patches.length} 条建议 · 指纹 ${patchSet.fingerprint}`;
+        original.textContent = preview.original;
+        revised.textContent = preview.revised;
+        diff.open = true;
+        showSafety(preview.safety);
+      } catch (error) {
+        status.textContent = `预览失败：${String(error)}`;
+      } finally {
+        previewButton.disabled = acceptButton.disabled = rejectButton.disabled = false;
+      }
+    };
+    const submit = async (acceptedPatchRefs: string[]): Promise<void> => {
+      previewButton.disabled = acceptButton.disabled = rejectButton.disabled = true;
+      status.textContent = acceptedPatchRefs.length > 0 ? "正在应用修订…" : "正在记录拒绝决定…";
+      try {
+        const receipt = await invoke<MarkdownPatchReceiptView>("submit_markdown_patch_decision", {
+          request: {
+            run_id: review.run_id,
+            patch_set_id: review.patch_set_id,
+            expected_patch_fingerprint: patchSet.fingerprint,
+            accepted_patch_refs: acceptedPatchRefs,
+            replacements: values(),
+          },
+        });
+        status.textContent = receipt.status === "applied"
+          ? `修订已应用：${receipt.patched_artifact_id ?? "新 Markdown"}；请基于新材料重新运行来源发现。`
+          : "修订已拒绝，原 Markdown 保持不变。";
+        section.classList.add("is-finished");
+        acceptButton.disabled = rejectButton.disabled = true;
+        if (receipt.status === "applied") window.dispatchEvent(new Event("mathscape:source-map-changed"));
+      } catch (error) {
+        status.textContent = `提交失败：${String(error)}`;
+        previewButton.disabled = acceptButton.disabled = rejectButton.disabled = false;
+      }
+    };
+    acceptButton.onclick = () => void submit(chosen());
+    rejectButton.onclick = () => void submit([]);
+    actions.append(previewButton, acceptButton, rejectButton);
+    section.append(rows, actions, status, diff);
+    this.discoveryResult.append(section);
+    void previewButton.click();
   }
 
   private renderSourceReview(review: SourceReviewProjection, unitTitles: Map<string, string>): HTMLElement {
