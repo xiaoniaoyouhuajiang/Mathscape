@@ -11,7 +11,7 @@ CREATE TABLE markdown_patch_sets (
  base_snapshot_json TEXT NOT NULL CHECK(json_valid(base_snapshot_json)),
  patch_json TEXT NOT NULL CHECK(json_valid(patch_json)),
  patched_artifact_id TEXT REFERENCES artifacts(artifact_id),
- conversion_id TEXT REFERENCES conversion_runs(run_id),
+ conversion_id TEXT,
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL
 ) STRICT;
@@ -51,7 +51,7 @@ CREATE TABLE markdown_patch_applications (
  patch_set_id TEXT NOT NULL REFERENCES markdown_patch_sets(patch_set_id),
  base_artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
  patched_artifact_id TEXT REFERENCES artifacts(artifact_id),
- conversion_id TEXT REFERENCES conversion_runs(run_id),
+ conversion_id TEXT,
  old_input_fingerprint TEXT NOT NULL,
  new_input_fingerprint TEXT,
  safety_json TEXT NOT NULL CHECK(json_valid(safety_json)),

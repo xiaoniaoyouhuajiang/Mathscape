@@ -236,6 +236,93 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     cleanup(&directory);
 }
 
+/// SQLite only reports a malformed foreign key ("foreign key mismatch") when a
+/// row is written, so check every declared parent key against the schema.
+#[test]
+fn every_foreign_key_targets_a_primary_or_unique_key() {
+    let directory = test_directory("foreign-keys");
+    let database = directory.join("catalog.sqlite3");
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
+    let connection = Connection::open(&database).unwrap();
+
+    let tables: Vec<String> = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let key_sets = |table: &str| -> Vec<Vec<String>> {
+        let mut primary: Vec<(i64, String)> = connection
+            .prepare(&format!("PRAGMA table_info(\"{table}\")"))
+            .unwrap()
+            .query_map([], |row| Ok((row.get::<_, i64>(5)?, row.get::<_, String>(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|(position, _)| *position > 0)
+            .collect();
+        primary.sort();
+        let mut sets = vec![primary.into_iter().map(|(_, name)| name).collect()];
+        let unique: Vec<String> = connection
+            .prepare(&format!("PRAGMA index_list(\"{table}\")"))
+            .unwrap()
+            .query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|(_, unique)| *unique == 1)
+            .map(|(name, _)| name)
+            .collect();
+        for index in unique {
+            sets.push(
+                connection
+                    .prepare(&format!("PRAGMA index_info(\"{index}\")"))
+                    .unwrap()
+                    .query_map([], |row| row.get::<_, String>(2))
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .collect(),
+            );
+        }
+        sets
+    };
+
+    for table in &tables {
+        let mut keys: Vec<(i64, String, Option<String>)> = connection
+            .prepare(&format!("PRAGMA foreign_key_list(\"{table}\")"))
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(2)?, row.get(4)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        keys.sort_by_key(|(id, _, _)| *id);
+        let mut grouped: Vec<(String, Vec<Option<String>>)> = Vec::new();
+        let mut last = None;
+        for (id, parent, column) in keys {
+            if last != Some(id) {
+                grouped.push((parent, Vec::new()));
+                last = Some(id);
+            }
+            grouped.last_mut().unwrap().1.push(column);
+        }
+        for (parent, columns) in grouped {
+            let parent_keys = key_sets(&parent);
+            let matches = if columns.iter().all(Option::is_none) {
+                !parent_keys[0].is_empty()
+            } else {
+                let mut wanted: Vec<String> = columns.into_iter().flatten().collect();
+                wanted.sort();
+                parent_keys.into_iter().any(|mut key| {
+                    key.sort();
+                    key == wanted
+                })
+            };
+            assert!(matches, "{table} has a foreign key that is not a key of {parent}");
+        }
+    }
+    drop(connection);
+    cleanup(&directory);
+}
+
 #[test]
 fn refuses_to_downgrade_an_unknown_future_schema() {
     let directory = test_directory("future-schema");
