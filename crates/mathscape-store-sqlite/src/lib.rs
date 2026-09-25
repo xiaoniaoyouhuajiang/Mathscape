@@ -481,6 +481,32 @@ impl SqliteArtifactStore {
         discovery::save_discovery_checkpoint(&mut self.connection, checkpoint)
     }
 
+    /// Atomically persists a paused discovery checkpoint and its pending
+    /// Markdown patch set. A run must never become `awaiting_patch_review`
+    /// without a recoverable patch set.
+    pub fn save_discovery_checkpoint_with_patch_set(
+        &mut self,
+        checkpoint: &DiscoveryRunCheckpoint,
+        patch_set_id: &StableId,
+        patch_set: &mathscape_domain::MarkdownPatchSet,
+        status: mathscape_domain::MarkdownPatchStatus,
+        now: &Timestamp,
+    ) -> Result<(), SqliteStoreError> {
+        let transaction = self.connection.transaction()?;
+        discovery::save_discovery_checkpoint_in(&transaction, checkpoint)?;
+        markdown_patch::save_patch_set_in(
+            &transaction,
+            patch_set_id,
+            patch_set,
+            status,
+            None,
+            None,
+            now,
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn discovery_checkpoint(
         &self,
         run_id: &StableId,
@@ -864,6 +890,13 @@ impl SqliteArtifactStore {
         patch_set_id: &StableId,
     ) -> Result<Option<serde_json::Value>, SqliteStoreError> {
         markdown_patch::patch_set_json(&self.connection, patch_set_id)
+    }
+
+    pub fn markdown_patch_set_status(
+        &self,
+        patch_set_id: &StableId,
+    ) -> Result<Option<mathscape_domain::MarkdownPatchStatus>, SqliteStoreError> {
+        markdown_patch::patch_set_status(&self.connection, patch_set_id)
     }
 
     pub fn markdown_patch_drafts(

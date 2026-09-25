@@ -422,8 +422,38 @@ impl DesktopService {
             .map_err(DesktopMarkdownPatchError::Validation)?;
         let actor = StableId::parse(DESKTOP_PATCH_ACTOR)?;
         let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
-        let accepted: HashSet<_> = request.accepted_patch_refs.iter().cloned().collect();
         let now = crate::discovery::timestamp_now()?;
+        match store.markdown_patch_set_status(&original_patch_set_id)? {
+            Some(MarkdownPatchStatus::Proposed) => {}
+            Some(_) => {
+                if let Some(application) =
+                    store.latest_markdown_patch_application(&original_patch_set_id)?
+                {
+                    return replay_patch_receipt(&original, application);
+                }
+                return Err(DesktopMarkdownPatchError::Validation(
+                    "该 Markdown patch set 已经完成审核决定，不能在同一次 run 中再次提交".into(),
+                ));
+            }
+            None => {
+                return Err(DesktopMarkdownPatchError::Checkpoint(
+                    "patch set not found".into(),
+                ));
+            }
+        }
+        // Persist user edits before attempting the decision so a failed
+        // submit or a full rejection can be resumed without losing the draft.
+        for (patch_ref, replacement) in &request.replacements {
+            store.save_markdown_patch_draft(
+                &original_patch_set_id,
+                patch_ref,
+                replacement,
+                1,
+                &actor,
+                &now,
+            )?;
+        }
+        let accepted: HashSet<_> = request.accepted_patch_refs.iter().cloned().collect();
         if accepted.is_empty() {
             if let Some(application) =
                 store.latest_markdown_patch_application(&original_patch_set_id)?
@@ -595,6 +625,18 @@ impl DesktopService {
             promotion.receipt.conversion_id.as_ref(),
             &now,
         )?;
+        if selected_patch_set_id != original_patch_set_id {
+            // A partial decision creates a separate applied patch set. Mark
+            // the original proposal consumed so rejected operations cannot be
+            // submitted later in the same discovery run.
+            store.update_markdown_patch_status(
+                &original_patch_set_id,
+                MarkdownPatchStatus::Accepted,
+                None,
+                None,
+                &now,
+            )?;
+        }
         let decision_id = fingerprint_id("markdown-patch-decision", &selected.fingerprint)?;
         let decision = MarkdownPatchDecision {
             decision_id,

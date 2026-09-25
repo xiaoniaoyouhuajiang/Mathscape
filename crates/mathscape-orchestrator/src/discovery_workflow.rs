@@ -495,6 +495,11 @@ impl<'a> DiscoveryWorkflow<'a> {
             batch_total: batch_position.map(|position| position.1),
             repair,
         });
+        let response_limit = if request.task.kind == "markdown-patch" {
+            MAX_PATCH_OUTPUT_BYTES
+        } else {
+            2 * 1024 * 1024
+        };
         let response = match timeout_at(deadline, self.backend.execute_stream(request)).await {
             Ok(Ok(r)) => r,
             failure => {
@@ -515,8 +520,8 @@ impl<'a> DiscoveryWorkflow<'a> {
         self.attempts[i].run.observe(&response);
         self.attempts[i].raw_text = response
             .text()
-            .map(|s| s.chars().take(2 * 1024 * 1024).collect());
-        match decode_response::<T>(&response, 2 * 1024 * 1024) {
+            .map(|s| s.chars().take(response_limit).collect());
+        match decode_response::<T>(&response, response_limit) {
             Ok(value) => {
                 self.attempts[i].status = WorkflowStatus::Completed;
                 self.emit(DiscoveryWorkflowEvent::AttemptFinished {

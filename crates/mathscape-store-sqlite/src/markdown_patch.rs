@@ -2,7 +2,7 @@ use mathscape_domain::{
     ContentHash, MarkdownPatchApplyReceipt, MarkdownPatchDecision, MarkdownPatchDecisionKind,
     MarkdownPatchSet, MarkdownPatchStatus, StableId, Timestamp,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 
 use crate::SqliteStoreError;
@@ -17,6 +17,29 @@ pub struct StoredMarkdownPatchSet {
 
 pub(super) fn save_patch_set(
     connection: &mut Connection,
+    patch_set_id: &StableId,
+    patch_set: &MarkdownPatchSet,
+    status: MarkdownPatchStatus,
+    patched_artifact_id: Option<&StableId>,
+    conversion_id: Option<&StableId>,
+    now: &Timestamp,
+) -> Result<(), SqliteStoreError> {
+    let transaction = connection.transaction()?;
+    save_patch_set_in(
+        &transaction,
+        patch_set_id,
+        patch_set,
+        status,
+        patched_artifact_id,
+        conversion_id,
+        now,
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub(super) fn save_patch_set_in(
+    connection: &Transaction<'_>,
     patch_set_id: &StableId,
     patch_set: &MarkdownPatchSet,
     status: MarkdownPatchStatus,
@@ -71,10 +94,9 @@ pub(super) fn save_patch_set(
             "patch fingerprint is already bound to another patch set id".into(),
         ));
     }
-    let transaction = connection.transaction()?;
     let snapshot = serde_json::to_string(&patch_set.base_snapshot)?;
     let patch_json = serde_json::to_string(patch_set)?;
-    transaction.execute(
+    connection.execute(
         "INSERT INTO markdown_patch_sets (
             patch_set_id, run_id, base_artifact_id, base_input_fingerprint,
             patch_fingerprint, status, base_snapshot_json, patch_json,
@@ -100,12 +122,12 @@ pub(super) fn save_patch_set(
             now.as_str(),
         ],
     )?;
-    transaction.execute(
+    connection.execute(
         "DELETE FROM markdown_patch_operations WHERE patch_set_id = ?1",
         [patch_set_id.as_str()],
     )?;
     for (ordinal, operation) in patch_set.patches.iter().enumerate() {
-        transaction.execute(
+        connection.execute(
             "INSERT INTO markdown_patch_operations (
                 patch_set_id, patch_ref, issue_ref, ordinal, old_start, old_end,
                 old_text_hash, model_replacement, draft_replacement, draft_revision,
@@ -133,7 +155,6 @@ pub(super) fn save_patch_set(
             ],
         )?;
     }
-    transaction.commit()?;
     Ok(())
 }
 
@@ -290,6 +311,21 @@ pub(super) fn patch_set_json(
         .transpose()
 }
 
+pub(super) fn patch_set_status(
+    connection: &Connection,
+    patch_set_id: &StableId,
+) -> Result<Option<MarkdownPatchStatus>, SqliteStoreError> {
+    connection
+        .query_row(
+            "SELECT status FROM markdown_patch_sets WHERE patch_set_id = ?1",
+            [patch_set_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|value| parse_status(&value))
+        .transpose()
+}
+
 pub(super) fn patch_drafts(
     connection: &Connection,
     patch_set_id: &StableId,
@@ -388,6 +424,21 @@ fn status_string(status: MarkdownPatchStatus) -> &'static str {
         MarkdownPatchStatus::Stale => "stale",
         MarkdownPatchStatus::Applied => "applied",
         MarkdownPatchStatus::Failed => "failed",
+    }
+}
+
+fn parse_status(value: &str) -> Result<MarkdownPatchStatus, SqliteStoreError> {
+    match value {
+        "proposed" => Ok(MarkdownPatchStatus::Proposed),
+        "accepted" => Ok(MarkdownPatchStatus::Accepted),
+        "rejected" => Ok(MarkdownPatchStatus::Rejected),
+        "stale" => Ok(MarkdownPatchStatus::Stale),
+        "applied" => Ok(MarkdownPatchStatus::Applied),
+        "failed" => Ok(MarkdownPatchStatus::Failed),
+        _ => Err(SqliteStoreError::InvalidStoredValue {
+            field: "markdown_patch_sets.status",
+            value: value.to_owned(),
+        }),
     }
 }
 

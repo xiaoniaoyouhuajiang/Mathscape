@@ -642,19 +642,19 @@ impl DesktopService {
         }
         let checkpoint = persistence_checkpoint(&workflow, &run_id, &profile, policy.admission)?;
         let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
-        store.save_discovery_checkpoint(&checkpoint)?;
         if *workflow.status() == WorkflowStatus::AwaitingPatchReview
             && let Some(pending) = workflow.pending_patch()
         {
             let patch_set_id = crate::markdown_patch::patch_set_id(pending)?;
-            store.save_markdown_patch_set(
+            store.save_discovery_checkpoint_with_patch_set(
+                &checkpoint,
                 &patch_set_id,
                 pending,
                 MarkdownPatchStatus::Proposed,
-                None,
-                None,
                 &timestamp_now()?,
             )?;
+        } else {
+            store.save_discovery_checkpoint(&checkpoint)?;
         }
         let view = DesktopDiscoveryView::project(&workflow);
         let review = project_source_review(&workflow, run_id.clone());

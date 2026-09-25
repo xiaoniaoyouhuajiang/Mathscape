@@ -4,7 +4,7 @@ use mathscape_domain::{
     ActorRef, ContentHash, DiscoveryAdmission, DiscoveryUnitKind, StableId, Timestamp,
     UnitCompleteness,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -238,6 +238,16 @@ pub(super) fn save_discovery_checkpoint(
 ) -> Result<(), SqliteStoreError> {
     checkpoint.validate()?;
     let transaction = connection.transaction()?;
+    save_discovery_checkpoint_in(&transaction, checkpoint)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub(super) fn save_discovery_checkpoint_in(
+    transaction: &Transaction<'_>,
+    checkpoint: &DiscoveryRunCheckpoint,
+) -> Result<(), SqliteStoreError> {
+    checkpoint.validate()?;
     let existing = transaction
         .query_row(
             "SELECT artifact_id, pipeline_version, input_fingerprint, selection_fingerprint,
@@ -426,7 +436,6 @@ pub(super) fn save_discovery_checkpoint(
             ],
         )?;
     }
-    transaction.commit()?;
     Ok(())
 }
 
