@@ -18,6 +18,7 @@ pub const SOURCE_REVIEW_PROJECTION_VERSION: &str = "mathscape-source-review-proj
 #[serde(rename_all = "snake_case")]
 pub enum SourceReviewRunStatus {
     Running,
+    AwaitingPatchReview,
     Completed,
     Partial,
     NeedsAttention,

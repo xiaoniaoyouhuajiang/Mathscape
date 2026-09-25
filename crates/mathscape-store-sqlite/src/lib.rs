@@ -45,7 +45,9 @@ const DISCOVERY_RUNS_V2_MIGRATION: &str =
     include_str!("../../../migrations/0006_discovery_runs_v2.sql");
 const MARKDOWN_PATCHES_MIGRATION: &str =
     include_str!("../../../migrations/0008_markdown_patches.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 8;
+const DISCOVERY_PATCH_REVIEW_MIGRATION: &str =
+    include_str!("../../../migrations/0009_discovery_patch_review.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 9;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -267,7 +269,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6 | 7 | 8 => {
+            6..=9 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -287,10 +289,13 @@ impl SqliteArtifactStore {
             if version < 8 {
                 connection.execute_batch(MARKDOWN_PATCHES_MIGRATION)?;
             }
-            connection.pragma_update(None, "user_version", SUPPORTED_SCHEMA_VERSION)?;
+            connection.pragma_update(None, "user_version", version.max(8))?;
         }
         if version < 7 {
             connection.execute_batch(MARKDOWN_PATCHES_MIGRATION)?;
+        }
+        if version < 9 {
+            migrate_discovery_patch_review(&connection)?;
         }
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -481,6 +486,25 @@ impl SqliteArtifactStore {
         run_id: &StableId,
     ) -> Result<Option<StoredDiscoveryRun>, SqliteStoreError> {
         discovery::read_discovery_checkpoint(&self.connection, run_id)
+    }
+
+    /// Most recently updated run over `artifact_id` that is paused for
+    /// Markdown patch review, if any.
+    pub fn latest_discovery_run_awaiting_patch_review(
+        &self,
+        artifact_id: &StableId,
+    ) -> Result<Option<StableId>, SqliteStoreError> {
+        let run_id = self
+            .connection
+            .query_row(
+                "SELECT run_id FROM discovery_runs
+                 WHERE artifact_id = ?1 AND status = 'awaiting_patch_review'
+                 ORDER BY updated_at DESC, run_id DESC LIMIT 1",
+                params![artifact_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        run_id.map(StableId::parse).transpose().map_err(Into::into)
     }
 
     pub fn discovery_run_count(&self) -> Result<u64, SqliteStoreError> {
@@ -1161,6 +1185,34 @@ fn reconcile_schema_v6(connection: &Connection) -> Result<(), SqliteStoreError> 
     validate_discovery_schema_v2(&transaction)?;
     transaction.commit()?;
     validate_discovery_schema_v2(connection)
+}
+
+/// Rebuilds `discovery_runs` to admit `awaiting_patch_review`. Child tables
+/// keep referencing the table by name, so foreign keys must be off while the
+/// old table is dropped; integrity is re-proved before commit.
+fn migrate_discovery_patch_review(connection: &Connection) -> Result<(), SqliteStoreError> {
+    connection.pragma_update(None, "foreign_keys", false)?;
+    let migrated = (|| {
+        let transaction = rusqlite::Transaction::new_unchecked(
+            connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        transaction.execute_batch(DISCOVERY_PATCH_REVIEW_MIGRATION)?;
+        let violation = transaction
+            .query_row("PRAGMA foreign_key_check", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?;
+        if violation.is_some() {
+            return Err(SqliteStoreError::InvalidSchema(
+                "discovery_runs rebuild left dangling foreign keys",
+            ));
+        }
+        transaction.commit()?;
+        Ok(())
+    })();
+    connection.pragma_update(None, "foreign_keys", true)?;
+    migrated
 }
 
 const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[

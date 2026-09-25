@@ -24,8 +24,8 @@
 .selection-panel p { margin: 4px 0 10px; }
 .selection-source { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .discovery-status { color: #b8d8d2; }
-.discovery-result { margin-top: 10px; border-top: 1px solid #45606c; padding-top: 10px; max-height: 46vh; overflow: auto; }
-.discovery-result h3, .discovery-result h4 { margin: 5px 0 8px; }
+.discovery-result, .markdown-patch-host { margin-top: 10px; border-top: 1px solid #45606c; padding-top: 10px; max-height: 46vh; overflow: auto; }
+.discovery-result h3, .discovery-result h4, .markdown-patch-host h3, .markdown-patch-host h4 { margin: 5px 0 8px; }
 .discovery-summary, .discovery-run { color: #aebdc7; }
 .discovery-units { display: grid; gap: 7px; }
 .discovery-unit { background: #1b2a33; border: 1px solid #35505d; border-radius: 6px; padding: 8px; }
@@ -95,6 +95,17 @@
 .markdown-patch-original { border-left: 3px solid #a16b61; }
 .markdown-patch-revised { border-left: 3px solid #579b81; }
 .markdown-patch-review.is-finished { opacity: .8; }
+.markdown-patch-host .markdown-patch-review { margin-top: 6px; }
+.markdown-patch-host .discovery-summary { color: #b9c9c6; }
+.markdown-patch-comparison { margin-top: 6px; }
+.markdown-patch-item pre.markdown-patch-inline { padding: 6px; background: #0d171c; border: 1px solid #294047; }
+.markdown-patch-inline del { color: #f0b3a8; background: #3a2226; text-decoration: line-through; }
+.markdown-patch-inline ins { color: #bfe8d3; background: #1d3a2e; text-decoration: none; }
+.markdown-patch-compare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-top: 6px; }
+.markdown-patch-pane { min-width: 0; padding: 6px 8px; background: #0d171c; border: 1px solid #294047; border-left: 3px solid #a16b61; border-radius: 4px; overflow-x: auto; }
+.markdown-patch-pane + .markdown-patch-pane { border-left-color: #579b81; }
+.markdown-patch-pane-label { display: block; color: #9eb5b3; font-size: 11px; margin-bottom: 4px; }
+.markdown-patch-pane .markdown-body { font-size: 13px; }
 .source-block { border-left: 3px solid transparent; padding: 3px 10px; margin: 3px 0; cursor: pointer; }
 .source-block:hover { background: #edf0f4; }
 .source-block.is-selected-block { background: #e1f0e9; border-left-color: #268065; }

@@ -26,6 +26,10 @@ use thiserror::Error;
 
 use crate::{DesktopService, DesktopState};
 
+/// Patch decisions and drafts record their actor as a `StableId`, which needs
+/// a URI-like scheme unlike the free-form `ActorRef`.
+const DESKTOP_PATCH_ACTOR: &str = "mathscape:actor/desktop-user";
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunMarkdownPatchRequest {
@@ -118,13 +122,21 @@ fn checkpoint_value<T: serde::de::DeserializeOwned>(
     serde_json::from_value(value).map_err(Into::into)
 }
 
-fn patch_set_id(patch_set: &MarkdownPatchSet) -> Result<StableId, mathscape_domain::DomainError> {
-    let digest = patch_set
-        .fingerprint
+fn fingerprint_id(
+    kind: &str,
+    fingerprint: &ContentHash,
+) -> Result<StableId, mathscape_domain::DomainError> {
+    let digest = fingerprint
         .as_str()
         .strip_prefix("sha256:")
-        .unwrap_or(patch_set.fingerprint.as_str());
-    StableId::parse(format!("mathscape:markdown-patch-set/{digest}"))
+        .unwrap_or(fingerprint.as_str());
+    StableId::parse(format!("mathscape:{kind}/{digest}"))
+}
+
+pub(crate) fn patch_set_id(
+    patch_set: &MarkdownPatchSet,
+) -> Result<StableId, mathscape_domain::DomainError> {
+    fingerprint_id("markdown-patch-set", &patch_set.fingerprint)
 }
 
 fn patch_set_from_store(
@@ -247,6 +259,22 @@ impl DesktopService {
         })
     }
 
+    /// Review for the newest discovery run over `artifact_id` that is still
+    /// paused for Markdown patch review. A recorded decision whose resume has
+    /// not happened yet is returned too, so the reader can offer to continue.
+    pub fn get_pending_markdown_patch_review(
+        &self,
+        artifact_id: String,
+    ) -> Result<Option<DesktopMarkdownPatchReview>, DesktopMarkdownPatchError> {
+        let artifact_id = StableId::parse(artifact_id)?;
+        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        let Some(run_id) = store.latest_discovery_run_awaiting_patch_review(&artifact_id)? else {
+            return Ok(None);
+        };
+        drop(store);
+        self.get_markdown_patch_review(run_id.to_string()).map(Some)
+    }
+
     fn load_patch_context(
         &self,
         run_id: &StableId,
@@ -354,7 +382,7 @@ impl DesktopService {
         let patch_set_id = StableId::parse(request.patch_set_id.clone())?;
         let preview = self.patch_preview_internal(&request)?;
         if !request.replacements.is_empty() {
-            let actor = StableId::parse("mathscape-desktop-user")?;
+            let actor = StableId::parse(DESKTOP_PATCH_ACTOR)?;
             let now = crate::discovery::timestamp_now()?;
             for (patch_ref, replacement) in &request.replacements {
                 store.save_markdown_patch_draft(
@@ -392,7 +420,7 @@ impl DesktopService {
         }
         let rewritten = rewrite_patch_set_replacements(&original, &request.replacements)
             .map_err(DesktopMarkdownPatchError::Validation)?;
-        let actor = StableId::parse("mathscape-desktop-user")?;
+        let actor = StableId::parse(DESKTOP_PATCH_ACTOR)?;
         let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
         let accepted: HashSet<_> = request.accepted_patch_refs.iter().cloned().collect();
         let now = crate::discovery::timestamp_now()?;
@@ -406,14 +434,7 @@ impl DesktopService {
             no_patch.patches.clear();
             let safety =
                 evaluate_patch_safety(&context.document, &context.document, &no_patch, &[]);
-            let decision_id = StableId::parse(format!(
-                "mathscape:markdown-patch-decision/{}",
-                rewritten
-                    .fingerprint
-                    .as_str()
-                    .strip_prefix("sha256:")
-                    .unwrap_or(rewritten.fingerprint.as_str())
-            ))?;
+            let decision_id = fingerprint_id("markdown-patch-decision", &rewritten.fingerprint)?;
             let decision = MarkdownPatchDecision {
                 decision_id: decision_id.clone(),
                 run_id: run_id.clone(),
@@ -442,14 +463,8 @@ impl DesktopService {
                 safety,
                 status: MarkdownPatchStatus::Rejected,
             };
-            let application_id = StableId::parse(format!(
-                "mathscape:markdown-patch-application/{}",
-                rewritten
-                    .fingerprint
-                    .as_str()
-                    .strip_prefix("sha256:")
-                    .unwrap_or(rewritten.fingerprint.as_str())
-            ))?;
+            let application_id =
+                fingerprint_id("markdown-patch-application", &rewritten.fingerprint)?;
             store.record_markdown_patch_application(
                 &application_id,
                 &original_patch_set_id,
@@ -503,6 +518,16 @@ impl DesktopService {
             &selected,
             &unit_ranges,
         );
+        if safety
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "block_structure_changed")
+        {
+            return Err(DesktopMarkdownPatchError::Validation(
+                "所选修订会改变 Markdown 块结构（新增标题、列表或代码块），v1 不接受此类修订"
+                    .into(),
+            ));
+        }
         let new_input = rebind_discovery_input_after_patch(
             &patched_document,
             &context.source,
@@ -570,14 +595,7 @@ impl DesktopService {
             promotion.receipt.conversion_id.as_ref(),
             &now,
         )?;
-        let decision_id = StableId::parse(format!(
-            "mathscape:markdown-patch-decision/{}",
-            selected
-                .fingerprint
-                .as_str()
-                .strip_prefix("sha256:")
-                .unwrap_or(selected.fingerprint.as_str())
-        ))?;
+        let decision_id = fingerprint_id("markdown-patch-decision", &selected.fingerprint)?;
         let decision = MarkdownPatchDecision {
             decision_id,
             run_id: run_id.clone(),
@@ -591,14 +609,7 @@ impl DesktopService {
             actor,
         };
         store.record_markdown_patch_decision(&decision, &now, &selected_patch_set_id)?;
-        let application_id = StableId::parse(format!(
-            "mathscape:markdown-patch-application/{}",
-            selected
-                .fingerprint
-                .as_str()
-                .strip_prefix("sha256:")
-                .unwrap_or(selected.fingerprint.as_str())
-        ))?;
+        let application_id = fingerprint_id("markdown-patch-application", &selected.fingerprint)?;
         store.record_markdown_patch_application(
             &application_id,
             &selected_patch_set_id,
@@ -797,6 +808,20 @@ pub async fn get_markdown_patch_review(
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_pending_markdown_patch_review(
+    state: State<'_, DesktopState>,
+    artifact_id: String,
+) -> Result<Option<DesktopMarkdownPatchReview>, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        service.get_pending_markdown_patch_review(artifact_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

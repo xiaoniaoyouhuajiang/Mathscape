@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { askAdmission, runDiscoveryTask } from "../discovery-task";
+import { askAdmission, resumeDiscoveryTask, runDiscoveryTask } from "../discovery-task";
+import { markdownRenderer } from "./markdown";
 import {
   getWorkspaceSettings,
   WORKSPACE_SETTINGS_CHANGED,
@@ -155,7 +156,7 @@ interface DiscoveryRun {
   elapsed_ms: number;
 }
 
-type WorkflowStatus = "running" | "completed" | "partial" | "needs_attention" | "failed" | "cancelled";
+type WorkflowStatus = "running" | "awaiting_patch_review" | "completed" | "partial" | "needs_attention" | "failed" | "cancelled";
 type DiscoveryOutcome = {
   outcome: WorkflowStatus;
   view: DesktopDiscoveryView;
@@ -281,10 +282,36 @@ function markdownPatchStatusLabel(status: string): string {
     awaiting_patch_review: "等待审核修订建议",
     no_patchable_issue: "没有可修订的转换异常",
     no_patch_proposed: "模型没有提出可验证修订",
+    proposed: "等待审核修订建议",
+    accepted: "修订已接受",
     applied: "修订已应用",
     rejected: "修订已拒绝",
+    stale: "修订建议已过期",
+    failed: "修订应用失败",
   } as Record<string, string>)[status] ?? status;
 }
+
+/**
+ * A resumed run can finish on a patched Markdown artifact that the current
+ * reader does not show. The outcome is parked here while the reader reopens
+ * on that artifact, and the next selection over the same snapshot adopts it.
+ */
+let handedOffOutcome: DiscoveryOutcome | null = null;
+
+type DiscoverySource = NonNullable<DesktopDiscoveryView["source"]>;
+
+function openSourceArtifact(source: DiscoverySource, focus?: DiscoveryAnchorView, refreshMap = false): void {
+  window.dispatchEvent(new CustomEvent("mathscape:open-source", {
+    detail: {
+      artifactId: source.artifact_id,
+      title: "修订后 Markdown",
+      focus: focus ? { start: focus.start, end: focus.end, blockIds: focus.block_ids } : undefined,
+      refreshMap,
+    },
+  }));
+}
+
+const DECIDED_PATCH_STATUSES = new Set(["accepted", "applied", "rejected"]);
 
 export function markdownDocument(id: string, conversion: string | null): Promise<AnchoredMarkdown> {
   return invoke("get_markdown_document", { artifactId: id, conversionId: conversion });
@@ -310,8 +337,11 @@ export class MarkdownSelection {
   private result = document.createElement("pre");
   private discoveryStatus = document.createElement("p");
   private discoveryResult = document.createElement("section");
+  // Survives selection changes: a paused run is not tied to the current range.
+  private patchReviewHost = document.createElement("section");
   private anchorPreview = document.createElement("section");
   private discoverySource: DesktopDiscoveryView["source"] = null;
+  private lastOutcome: DiscoveryOutcome | null = null;
   private policy = document.createElement("select");
   private policyTouched = false;
   private askEachRun = false;
@@ -357,6 +387,8 @@ export class MarkdownSelection {
     this.discoveryResult.hidden = true;
     this.anchorPreview.className = "discovery-anchor-preview";
     this.anchorPreview.hidden = true;
+    this.patchReviewHost.className = "markdown-patch-host";
+    this.patchReviewHost.hidden = true;
     this.panel.append(
       instructions,
       controls,
@@ -364,6 +396,7 @@ export class MarkdownSelection {
       this.discoveryStatus,
       this.result,
       this.anchorPreview,
+      this.patchReviewHost,
       this.discoveryResult,
     );
     article.addEventListener("click", this.onClick);
@@ -373,6 +406,109 @@ export class MarkdownSelection {
     void this.syncActiveDiscovery();
     void this.loadWorkspacePolicy();
     this.refresh();
+    const handedOff = handedOffOutcome;
+    if (handedOff?.view.source && this.matchesSnapshot(handedOff.view.source)) {
+      handedOffOutcome = null;
+      this.renderDiscovery(handedOff);
+      this.refresh();
+    } else {
+      void this.loadPendingPatchReview();
+    }
+  }
+
+  private matchesSnapshot(source: DiscoverySource): boolean {
+    const snapshot = this.data.snapshot;
+    return source.artifact_id === snapshot.artifact_id
+      && source.conversion_id === snapshot.conversion_id
+      && source.content_hash === snapshot.content_hash;
+  }
+
+  private async loadPendingPatchReview(): Promise<void> {
+    try {
+      const review = await invoke<MarkdownPatchReviewView | null>("get_pending_markdown_patch_review", {
+        artifactId: this.data.snapshot.artifact_id,
+      });
+      if (this.disposed || review === null || !this.patchReviewHost.hidden) return;
+      this.showWorkflowPatchReview(review, "有一次内容发现已固定单元，正在等待审核 Markdown 修订。");
+    } catch {
+      // Recovery is best effort; the run stays paused in SQLite.
+    }
+  }
+
+  private async openWorkflowPatchReview(runId: string): Promise<void> {
+    try {
+      const review = await invoke<MarkdownPatchReviewView>("get_markdown_patch_review", { runId });
+      if (!this.disposed) this.showWorkflowPatchReview(review, "单元识别完成；在进入来源事实发现之前，请审核 Markdown 修订。");
+    } catch (error) {
+      if (!this.disposed) {
+        this.patchReviewHost.hidden = false;
+        this.patchReviewHost.replaceChildren(textElement("p", "markdown-patch-review-status", `无法读取待审核修订：${String(error)}`));
+      }
+    }
+  }
+
+  private showWorkflowPatchReview(review: MarkdownPatchReviewView, intro: string): void {
+    this.patchReviewHost.hidden = false;
+    this.patchReviewHost.replaceChildren(
+      textElement("h3", "", "内容发现已暂停 · 等待审核 Markdown 修订"),
+      textElement("p", "discovery-summary", intro),
+    );
+    if (review.patch_set && review.patch_set_id && review.status === "proposed") {
+      this.renderMarkdownPatchReview(review, "workflow");
+      return;
+    }
+    const status = textElement("p", "markdown-patch-review-status", review.message ?? markdownPatchStatusLabel(review.status));
+    this.patchReviewHost.append(status);
+    if (DECIDED_PATCH_STATUSES.has(review.status)) {
+      const actions = textElement("div", "markdown-patch-actions", "");
+      const resume = textElement("button", "", "按已记录的决定继续内容发现");
+      resume.type = "button";
+      resume.onclick = () => { resume.disabled = true; void this.resumeAfterPatch(review.run_id, status); };
+      actions.append(resume);
+      this.patchReviewHost.append(actions);
+    }
+  }
+
+  private async resumeAfterPatch(runId: string, status: HTMLElement): Promise<void> {
+    if (this.pending || this.activeDiscovery !== null) {
+      status.textContent = "已有内容发现任务正在运行，请稍后继续。";
+      return;
+    }
+    this.pending = true;
+    this.discoveryFeedback = "正在按审核决定继续内容发现；等待审核的时间不计入总期限。";
+    status.textContent = "正在继续内容发现…";
+    this.refresh();
+    try {
+      const outcome = await resumeDiscoveryTask<DiscoveryOutcome>(runId);
+      const source = outcome.view.source;
+      if (this.disposed || (source && !this.matchesSnapshot(source))) {
+        // Finished on the patched artifact (or this reader is gone): continue
+        // in a reader showing the run's final snapshot.
+        handedOffOutcome = outcome;
+        // The patched artifact and its conversion are new map objects.
+        if (!this.disposed && source) openSourceArtifact(source, undefined, true);
+        return;
+      }
+      this.patchReviewHost.hidden = true;
+      this.patchReviewHost.replaceChildren();
+      this.renderDiscovery(outcome);
+    } catch (error) {
+      if (!this.disposed) {
+        status.textContent = `继续内容发现失败：${String(error)}`;
+        this.discoveryFeedback = "继续内容发现失败：" + String(error);
+        const retry = textElement("button", "discovery-anchor-button", "重试继续发现");
+        retry.type = "button";
+        retry.onclick = () => { retry.remove(); void this.resumeAfterPatch(runId, status); };
+        status.after(retry);
+      }
+    } finally {
+      if (!this.disposed) {
+        this.pending = false;
+        this.activeDiscovery = null;
+        this.refresh();
+        void this.syncActiveDiscovery();
+      }
+    }
   }
 
   dispose(): void {
@@ -466,6 +602,10 @@ export class MarkdownSelection {
       starting: "正在启动",
       discovering_units: "正在识别数学单元",
       validating_units: "正在验证单元",
+      reviewing_patches: "正在生成 Markdown 修订建议",
+      awaiting_patch_review: "等待审核 Markdown 修订",
+      applying_patches: "正在应用 Markdown 修订",
+      rebuilding_units: "正在按修订后原文重新识别单元",
       planning_facts: "正在规划来源事实任务",
       discovering_facts: "正在发现标签、引用与关系",
       validating_facts: "正在验证来源事实",
@@ -582,16 +722,21 @@ export class MarkdownSelection {
     this.discoveryResult.hidden = false;
     const view = outcome.view;
     this.discoverySource = view.source;
+    this.lastOutcome = outcome;
     const units = view.units;
     const unitTitles = new Map(units.map(unit => [unit.unit_ref, unit.title]));
     const relations = view.relations;
     const references = view.references;
     const pending = view.pending_tasks;
     const statusLabels: Record<WorkflowStatus, string> = {
-      running: "运行中", completed: "完成", partial: "部分完成",
+      running: "运行中", awaiting_patch_review: "等待审核修订", completed: "完成", partial: "部分完成",
       needs_attention: "需要处理", failed: "失败", cancelled: "已取消",
     };
-    this.discoveryFeedback = `两阶段内容发现${statusLabels[outcome.outcome]}：${units.length} 个单元、${relations.length} 条关系、${references.length} 个引用。结果尚未接受或入图。`;
+    const paused = outcome.outcome === "awaiting_patch_review";
+    this.discoveryFeedback = paused
+      ? `单元识别完成：${units.length} 个单元已固定；内容发现已暂停，审核 Markdown 修订后继续来源事实发现。`
+      : `两阶段内容发现${statusLabels[outcome.outcome]}：${units.length} 个单元、${relations.length} 条关系、${references.length} 个引用。结果尚未接受或入图。`;
+    if (paused && outcome.run.run_id) void this.openWorkflowPatchReview(outcome.run.run_id);
     this.discoveryResult.append(
       textElement("h3", "", `分阶段发现 · ${statusLabels[outcome.outcome]}`),
       textElement(
@@ -605,7 +750,7 @@ export class MarkdownSelection {
     // is persisted, but no bytes or map objects are changed until the user
     // accepts individual replacements below.
     const patchable = view.issues.some(issue => issue.kind === "suspected_conversion_error");
-    if (patchable && outcome.run.run_id) {
+    if (patchable && !paused && outcome.run.run_id) {
       const patchActions = textElement("div", "markdown-patch-actions", "");
       const patchButton = textElement("button", "", "生成 Markdown 修订建议");
       patchButton.type = "button";
@@ -629,6 +774,15 @@ export class MarkdownSelection {
       };
       patchActions.append(patchButton, patchStatus);
       this.discoveryResult.append(textElement("h4", "", "Markdown 转换校准"), patchActions);
+    }
+    if (view.source && !this.matchesSnapshot(view.source)) {
+      const note = textElement("p", "discovery-pending", "本次结果基于修订后的 Markdown；定位原文会切换到修订后的材料。");
+      const open = textElement("button", "discovery-anchor-button", "打开修订后 Markdown");
+      open.type = "button";
+      const source = view.source;
+      open.onclick = () => { handedOffOutcome = outcome; openSourceArtifact(source); };
+      note.append(" ", open);
+      this.discoveryResult.append(note);
     }
     if (units.length > 0) {
       const cards = textElement("div", "discovery-units", "");
@@ -709,14 +863,69 @@ export class MarkdownSelection {
     if (pending.length > 0) {
       this.discoveryResult.append(textElement("p", "discovery-pending", `尚有 ${pending.length} 个事实任务未完成：${pending.map(task => task.owner ?? task.task_ref).join("、")}`));
     }
-    if (outcome.review) this.discoveryResult.append(this.renderSourceReview(outcome.review, unitTitles));
+    if (outcome.review && !paused) this.discoveryResult.append(this.renderSourceReview(outcome.review, unitTitles));
     this.discoveryResult.append(this.jsonDetails("查看完整展示数据", view));
     this.discoveryResult.append(this.runSummary(outcome.run));
   }
 
-  private renderMarkdownPatchReview(review: MarkdownPatchReviewView): void {
+  /**
+   * The patch's enclosing physical block in the base Markdown, split around
+   * the patched bytes. Null when the reader shows a different snapshot.
+   */
+  private patchBlockContext(patchSet: MarkdownPatchSetView, patch: MarkdownPatchProposalView): { before: string; after: string } | null {
+    const base = patchSet.base_snapshot;
+    const snapshot = this.data.snapshot;
+    if (base.artifact_id !== snapshot.artifact_id || base.content_hash !== snapshot.content_hash) return null;
+    const block = this.data.blocks.find(candidate => candidate.range.start <= patch.range.start && patch.range.end <= candidate.range.end);
+    if (!block) return null;
+    const bytes = new TextEncoder().encode(this.data.source);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    try {
+      if (decoder.decode(bytes.subarray(patch.range.start, patch.range.end)) !== patch.old_text) return null;
+      return {
+        before: decoder.decode(bytes.subarray(block.range.start, patch.range.start)),
+        after: decoder.decode(bytes.subarray(patch.range.end, block.range.end)),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private patchComparison(patchSet: MarkdownPatchSetView, patch: MarkdownPatchProposalView, replacement: HTMLTextAreaElement): HTMLElement {
+    const context = this.patchBlockContext(patchSet, patch) ?? { before: "", after: "" };
+    const md = markdownRenderer();
+    const compare = textElement("div", "markdown-patch-compare", "");
+    const pane = (label: string): HTMLElement => {
+      const column = textElement("div", "markdown-patch-pane", "");
+      const body = textElement("div", "markdown-body", "");
+      column.append(textElement("span", "markdown-patch-pane-label", label), body);
+      compare.append(column);
+      return body;
+    };
+    const original = pane("原文渲染");
+    const revised = pane("修订后渲染");
+    const inline = textElement("pre", "markdown-patch-inline", "");
+    const render = (): void => {
+      original.innerHTML = md.render(context.before + patch.old_text + context.after);
+      revised.innerHTML = md.render(context.before + replacement.value + context.after);
+      inline.replaceChildren(
+        document.createTextNode(this.tail(context.before, 80)),
+        textElement("del", "", patch.old_text),
+        textElement("ins", "", replacement.value),
+        document.createTextNode(this.head(context.after, 80)),
+      );
+    };
+    replacement.addEventListener("input", render);
+    render();
+    const wrapper = textElement("div", "markdown-patch-comparison", "");
+    wrapper.append(inline, compare);
+    return wrapper;
+  }
+
+  private renderMarkdownPatchReview(review: MarkdownPatchReviewView, mode: "manual" | "workflow" = "manual"): void {
     const patchSet = review.patch_set;
     if (!patchSet || !review.patch_set_id) return;
+    const workflow = mode === "workflow";
     const section = textElement("section", "markdown-patch-review", "");
     const heading = textElement("div", "markdown-patch-heading", "");
     heading.append(
@@ -750,13 +959,19 @@ export class MarkdownSelection {
       textarea.rows = Math.max(2, Math.min(8, patch.replacement.split("\n").length + 1));
       textarea.setAttribute("aria-label", `${patch.patch_ref} replacement`);
       replacements.set(patch.patch_ref, textarea);
-      row.append(top, textElement("span", "markdown-patch-rationale", patch.rationale), old, textarea);
+      row.append(
+        top,
+        textElement("span", "markdown-patch-rationale", patch.rationale),
+        old,
+        textarea,
+        this.patchComparison(patchSet, patch, textarea),
+      );
       rows.append(row);
     }
     const actions = textElement("div", "markdown-patch-actions", "");
     const previewButton = textElement("button", "", "预览校验");
-    const acceptButton = textElement("button", "", "应用选中修订");
-    const rejectButton = textElement("button", "", "全部拒绝");
+    const acceptButton = textElement("button", "", workflow ? "应用选中修订并继续发现" : "应用选中修订");
+    const rejectButton = textElement("button", "", workflow ? "全部拒绝并继续发现" : "全部拒绝");
     const status = textElement("p", "markdown-patch-review-status", "");
     const diff = textElement("details", "markdown-patch-diff", "");
     const diffSummary = document.createElement("summary"); diffSummary.textContent = "查看原文/修订文本";
@@ -787,7 +1002,6 @@ export class MarkdownSelection {
         if (meta) meta.textContent = `${patchSet.patches.length} 条建议 · 指纹 ${patchSet.fingerprint}`;
         original.textContent = preview.original;
         revised.textContent = preview.revised;
-        diff.open = true;
         showSafety(preview.safety);
       } catch (error) {
         status.textContent = `预览失败：${String(error)}`;
@@ -808,12 +1022,21 @@ export class MarkdownSelection {
             replacements: values(),
           },
         });
+        section.classList.add("is-finished");
+        acceptButton.disabled = rejectButton.disabled = true;
+        // A map refresh closes this reader; the workflow path refreshes the
+        // map when it reopens the reader on the patched artifact.
+        if (receipt.status === "applied" && !workflow) window.dispatchEvent(new Event("mathscape:source-map-changed"));
+        if (workflow) {
+          status.textContent = receipt.status === "applied"
+            ? `修订已写入新 Markdown：${receipt.patched_artifact_id ?? ""}；正在继续内容发现…`
+            : "修订已拒绝，原 Markdown 保持不变；正在继续内容发现…";
+          void this.resumeAfterPatch(review.run_id, status);
+          return;
+        }
         status.textContent = receipt.status === "applied"
           ? `修订已应用：${receipt.patched_artifact_id ?? "新 Markdown"}；请基于新材料重新运行来源发现。`
           : "修订已拒绝，原 Markdown 保持不变。";
-        section.classList.add("is-finished");
-        acceptButton.disabled = rejectButton.disabled = true;
-        if (receipt.status === "applied") window.dispatchEvent(new Event("mathscape:source-map-changed"));
       } catch (error) {
         status.textContent = `提交失败：${String(error)}`;
         previewButton.disabled = acceptButton.disabled = rejectButton.disabled = false;
@@ -823,7 +1046,7 @@ export class MarkdownSelection {
     rejectButton.onclick = () => void submit([]);
     actions.append(previewButton, acceptButton, rejectButton);
     section.append(rows, actions, status, diff);
-    this.discoveryResult.append(section);
+    (workflow ? this.patchReviewHost : this.discoveryResult).append(section);
     void previewButton.click();
   }
 
@@ -860,8 +1083,8 @@ export class MarkdownSelection {
       const item = textElement("article", `source-review-unit state-${unit.acceptance}`, "");
       item.tabIndex = 0;
       item.title = "悬停或聚焦以高亮对应原文";
-      item.onmouseenter = () => unit.anchors[0] && this.focusAnchor(unit.anchors[0]);
-      item.onfocus = () => unit.anchors[0] && this.focusAnchor(unit.anchors[0]);
+      item.onmouseenter = () => unit.anchors[0] && this.focusAnchor(unit.anchors[0], false);
+      item.onfocus = () => unit.anchors[0] && this.focusAnchor(unit.anchors[0], false);
       item.style.setProperty("--source-review-depth", String(depth(unit)));
       const selector = textElement("label", "source-review-selector", "");
       const checkbox = document.createElement("input");
@@ -895,7 +1118,7 @@ export class MarkdownSelection {
       const relations = textElement("ul", "source-review-relations", "");
       for (const relation of review.relations) {
         const item = document.createElement("li");
-        item.onmouseenter = () => relation.evidence[0] && this.focusAnchor(relation.evidence[0]);
+        item.onmouseenter = () => relation.evidence[0] && this.focusAnchor(relation.evidence[0], false);
         item.append(document.createTextNode(`${unitTitles.get(relation.source) ?? relation.source} —${this.relationLabel(relation.relation)}→ ${unitTitles.get(relation.target) ?? relation.target}`));
         relations.append(item);
       }
@@ -1064,12 +1287,18 @@ export class MarkdownSelection {
     return actions;
   }
 
-  private focusAnchor(anchor: DiscoveryAnchorView): void {
-    const expectedConversion = this.data.snapshot.conversion_id;
-    if (this.discoverySource === null
-      || this.discoverySource.artifact_id !== this.data.snapshot.artifact_id
-      || this.discoverySource.conversion_id !== expectedConversion
-      || this.discoverySource.content_hash !== this.data.snapshot.content_hash) {
+  private focusAnchor(anchor: DiscoveryAnchorView, navigate = true): void {
+    if (this.discoverySource === null || !this.matchesSnapshot(this.discoverySource)) {
+      if (!navigate) return;
+      const outcome = this.lastOutcome;
+      if (outcome?.view.source && this.discoverySource
+        && outcome.view.source.content_hash === this.discoverySource.content_hash) {
+        // Anchors of a run finished on the patched artifact are offsets into
+        // that artifact; reopen the reader there and carry the result along.
+        handedOffOutcome = outcome;
+        openSourceArtifact(outcome.view.source, anchor);
+        return;
+      }
       this.discoveryFeedback = "发现结果不属于当前 Markdown 快照，拒绝应用来源锚点。";
       this.refresh();
       return;

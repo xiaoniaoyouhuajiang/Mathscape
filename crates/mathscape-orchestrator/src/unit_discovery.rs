@@ -75,13 +75,13 @@ pub fn repair_output_schema() -> Value {
     output_schema_for::<DiscoveryRepairResponse>()
 }
 
-#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct StageDiagnostic {
     pub code: String,
     pub path: String,
     pub message: String,
 }
-#[derive(Clone, Debug, Default, Error, Serialize)]
+#[derive(Clone, Debug, Default, Error, Serialize, Deserialize)]
 #[error("staged discovery validation failed")]
 pub struct StageValidationReport {
     pub diagnostics: Vec<StageDiagnostic>,
@@ -424,9 +424,16 @@ fn selector_for_rebound_range(
 ) -> Result<DiscoverySelector, String> {
     let blocks = rebind_blocks(input);
     let (start_block, start_offset, end_block, end_offset) = endpoint_block(&blocks, range)?;
-    let start_end = (start_offset + 64).min(start_block.text.len());
+    // Quotes are at most 64 bytes, widened to the nearest UTF-8 boundary.
+    let mut start_end = (start_offset + 64).min(start_block.text.len());
+    while !start_block.text.is_char_boundary(start_end) {
+        start_end += 1;
+    }
     let start_quote = quote_anchor_for(start_block, start_offset, start_end)?;
-    let end_start = end_offset.saturating_sub(64);
+    let mut end_start = end_offset.saturating_sub(64);
+    while !end_block.text.is_char_boundary(end_start) {
+        end_start -= 1;
+    }
     let end_quote = quote_anchor_for(end_block, end_start, end_offset)?;
     Ok(DiscoverySelector::QuoteRange {
         first: start_block.handle.clone(),

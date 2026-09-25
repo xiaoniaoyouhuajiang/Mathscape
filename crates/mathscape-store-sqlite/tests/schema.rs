@@ -146,7 +146,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 1",
@@ -213,6 +213,16 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
             .unwrap(),
         "markdown_patches"
     );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 9",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "discovery_patch_review"
+    );
     for table in [
         "markdown_patch_sets",
         "markdown_patch_operations",
@@ -256,7 +266,9 @@ fn every_foreign_key_targets_a_primary_or_unique_key() {
         let mut primary: Vec<(i64, String)> = connection
             .prepare(&format!("PRAGMA table_info(\"{table}\")"))
             .unwrap()
-            .query_map([], |row| Ok((row.get::<_, i64>(5)?, row.get::<_, String>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(5)?, row.get::<_, String>(1)?))
+            })
             .unwrap()
             .map(Result::unwrap)
             .filter(|(position, _)| *position > 0)
@@ -266,7 +278,9 @@ fn every_foreign_key_targets_a_primary_or_unique_key() {
         let unique: Vec<String> = connection
             .prepare(&format!("PRAGMA index_list(\"{table}\")"))
             .unwrap()
-            .query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+            })
             .unwrap()
             .map(Result::unwrap)
             .filter(|(_, unique)| *unique == 1)
@@ -316,7 +330,10 @@ fn every_foreign_key_targets_a_primary_or_unique_key() {
                     key == wanted
                 })
             };
-            assert!(matches, "{table} has a foreign key that is not a key of {parent}");
+            assert!(
+                matches,
+                "{table} has a foreign key that is not a key of {parent}"
+            );
         }
     }
     drop(connection);
@@ -335,7 +352,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::prepare(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 8
+            supported: 9
         })
     ));
     cleanup(&directory);
@@ -356,7 +373,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -394,7 +411,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 3",
@@ -430,7 +447,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        8
+        9
     );
     assert_eq!(
         connection
@@ -483,7 +500,7 @@ fn repairs_a_v5_discovery_schema_missing_result_fingerprint() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        8
+        9
     );
     let has_result_fingerprint = connection
         .prepare("PRAGMA table_info(discovery_runs)")
@@ -682,6 +699,135 @@ fn atomically_persists_and_replaces_discovery_checkpoints() {
     let replaced = store.discovery_checkpoint(&run_id).unwrap().unwrap();
     assert_eq!(replaced.checkpoint, checkpoint);
     assert_eq!(store.discovery_run_count().unwrap(), 1);
+    cleanup(&directory);
+}
+
+#[test]
+fn only_a_run_awaiting_patch_review_moves_onto_a_patched_snapshot() {
+    let directory = test_directory("patch-review-rebind");
+    let database = directory.join("catalog.sqlite3");
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
+    let base = StableId::parse("mathscape:artifact/patch-base").unwrap();
+    let patched = StableId::parse("mathscape:artifact/patch-revised").unwrap();
+    insert_fixture_artifact(&database, &base, &hash('a'));
+    insert_fixture_artifact(&database, &patched, &hash('b'));
+    let mut store = SqliteArtifactStore::prepare(&database).unwrap();
+
+    let run_id = StableId::parse("mathscape:discovery-run/patch-review").unwrap();
+    let mut awaiting = discovery_checkpoint(run_id.clone(), base.clone());
+    awaiting.status = DiscoveryCheckpointStatus::AwaitingPatchReview;
+    awaiting.result_fingerprint = None;
+    awaiting.facts.clear();
+    awaiting.pending_tasks.clear();
+    store.save_discovery_checkpoint(&awaiting).unwrap();
+    let stored = store.discovery_checkpoint(&run_id).unwrap().unwrap();
+    assert_eq!(
+        stored.checkpoint.status,
+        DiscoveryCheckpointStatus::AwaitingPatchReview
+    );
+
+    let mut continued = discovery_checkpoint(run_id.clone(), patched.clone());
+    continued.conversion_id =
+        Some(StableId::parse("mathscape:conversion/markdown-patch/x").unwrap());
+    continued.input_fingerprint = hash('6');
+    continued.selection_fingerprint = hash('7');
+    continued.status = DiscoveryCheckpointStatus::Completed;
+    store.save_discovery_checkpoint(&continued).unwrap();
+    let stored = store.discovery_checkpoint(&run_id).unwrap().unwrap();
+    assert_eq!(stored.checkpoint, continued);
+
+    // Once B has run on the patched snapshot the identity is frozen again.
+    let mut moved_back = continued.clone();
+    moved_back.artifact_id = base.clone();
+    moved_back.input_fingerprint = hash('1');
+    assert!(matches!(
+        store.save_discovery_checkpoint(&moved_back),
+        Err(SqliteStoreError::DiscoveryInvariant(_))
+    ));
+
+    let mut invalid = awaiting.clone();
+    invalid.run_id = StableId::parse("mathscape:discovery-run/patch-review-invalid").unwrap();
+    invalid.result_fingerprint = Some(hash('4'));
+    assert!(matches!(
+        store.save_discovery_checkpoint(&invalid),
+        Err(SqliteStoreError::DiscoveryInvariant(_))
+    ));
+    cleanup(&directory);
+}
+
+#[test]
+fn upgrading_to_v9_preserves_discovery_runs_and_their_children() {
+    let directory = test_directory("upgrade-v8-patch-review");
+    let database = directory.join("catalog.sqlite3");
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
+    let artifact_id = StableId::parse("mathscape:artifact/upgrade-v8").unwrap();
+    insert_fixture_artifact(&database, &artifact_id, &hash('c'));
+    let run_id = StableId::parse("mathscape:discovery-run/upgrade-v8").unwrap();
+    let checkpoint = discovery_checkpoint(run_id.clone(), artifact_id);
+    {
+        let mut store = SqliteArtifactStore::prepare(&database).unwrap();
+        store.save_discovery_checkpoint(&checkpoint).unwrap();
+    }
+    // Recreate the v8 table shape (no awaiting_patch_review) with data in place.
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             BEGIN;
+             CREATE TABLE discovery_runs_v8 AS SELECT * FROM discovery_runs;
+             DROP TABLE discovery_runs;
+             CREATE TABLE discovery_runs (
+                run_id TEXT PRIMARY KEY NOT NULL,
+                artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
+                conversion_id TEXT,
+                pipeline_version TEXT NOT NULL,
+                input_fingerprint TEXT NOT NULL,
+                selection_fingerprint TEXT NOT NULL,
+                unit_set_fingerprint TEXT,
+                result_fingerprint TEXT,
+                status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'partial',
+                    'needs_attention', 'failed', 'cancelled')),
+                admission TEXT NOT NULL,
+                profile_id TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             ) STRICT;
+             INSERT INTO discovery_runs SELECT * FROM discovery_runs_v8;
+             DROP TABLE discovery_runs_v8;
+             CREATE INDEX discovery_runs_by_source
+                ON discovery_runs(artifact_id, input_fingerprint, updated_at);
+             DELETE FROM schema_migrations WHERE version = 9;
+             PRAGMA user_version = 8;
+             COMMIT;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut store = SqliteArtifactStore::prepare(&database).unwrap();
+    let stored = store.discovery_checkpoint(&run_id).unwrap().unwrap();
+    assert_eq!(stored.checkpoint, checkpoint);
+    let mut awaiting = checkpoint.clone();
+    awaiting.status = DiscoveryCheckpointStatus::AwaitingPatchReview;
+    awaiting.result_fingerprint = None;
+    awaiting.facts.clear();
+    awaiting.pending_tasks.clear();
+    store.save_discovery_checkpoint(&awaiting).unwrap();
+    drop(store);
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        9
+    );
+    let violations = connection
+        .prepare("PRAGMA foreign_key_check")
+        .unwrap()
+        .query_map([], |_| Ok(()))
+        .unwrap()
+        .count();
+    assert_eq!(violations, 0);
     cleanup(&directory);
 }
 

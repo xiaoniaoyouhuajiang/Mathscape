@@ -423,6 +423,15 @@ requiredElement<HTMLButtonElement>("#copy-workspace-id").addEventListener("click
 void loadSnapshot();
 void llmSettings.loadSummary();
 window.addEventListener("mathscape:source-map-changed", () => void loadSnapshot());
+window.addEventListener("mathscape:open-source", (event) => {
+  const detail = (event as CustomEvent<{ artifactId: string; title: string; focus?: { start: number; end: number; blockIds?: string[] }; refreshMap?: boolean }>).detail;
+  void (async () => {
+    // Rendering the map closes the reader, so refresh before opening it.
+    if (detail.refreshMap) await loadSnapshot();
+    readerHost.hidden = false;
+    await reader.open(detail.artifactId, detail.title, detail.focus);
+  })();
+});
 window.setInterval(() => void syncParseState(), 1000);
 
 async function syncParseState(): Promise<void> {

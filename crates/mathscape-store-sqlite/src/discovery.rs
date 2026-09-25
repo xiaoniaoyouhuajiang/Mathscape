@@ -14,6 +14,7 @@ use crate::{SqliteStoreError, sqlite_bool};
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryCheckpointStatus {
     Running,
+    AwaitingPatchReview,
     Completed,
     Partial,
     NeedsAttention,
@@ -150,6 +151,16 @@ impl DiscoveryRunCheckpoint {
                 "discovery unit refs must be unique".into(),
             ));
         }
+        if self.status == DiscoveryCheckpointStatus::AwaitingPatchReview
+            && (self.units.is_empty()
+                || self.result_fingerprint.is_some()
+                || !self.facts.is_empty()
+                || !self.pending_tasks.is_empty())
+        {
+            return Err(SqliteStoreError::DiscoveryInvariant(
+                "a run awaiting patch review holds a frozen UnitSet and no Stage B state".into(),
+            ));
+        }
         if !self.units.is_empty() && self.unit_set_fingerprint.is_none() {
             return Err(SqliteStoreError::DiscoveryInvariant(
                 "a non-empty unit checkpoint requires its UnitSet fingerprint".into(),
@@ -229,7 +240,8 @@ pub(super) fn save_discovery_checkpoint(
     let transaction = connection.transaction()?;
     let existing = transaction
         .query_row(
-            "SELECT artifact_id, pipeline_version, input_fingerprint, selection_fingerprint
+            "SELECT artifact_id, pipeline_version, input_fingerprint, selection_fingerprint,
+                    status
              FROM discovery_runs WHERE run_id = ?1",
             [checkpoint.run_id.as_str()],
             |row| {
@@ -238,19 +250,29 @@ pub(super) fn save_discovery_checkpoint(
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             },
         )
         .optional()?;
-    if existing.is_some_and(|(artifact, pipeline, input, selection)| {
-        artifact != checkpoint.artifact_id.as_str()
-            || pipeline != checkpoint.pipeline_version
+    if let Some((artifact, pipeline, input, selection, stored_status)) = existing {
+        if pipeline != checkpoint.pipeline_version {
+            return Err(SqliteStoreError::DiscoveryInvariant(
+                "run ID is already bound to another discovery pipeline".into(),
+            ));
+        }
+        // Only a run paused before Stage B may move onto the patched Markdown
+        // snapshot; every other state keeps its source identity for life.
+        let rebinding = artifact != checkpoint.artifact_id.as_str()
             || input != checkpoint.input_fingerprint.as_str()
-            || selection != checkpoint.selection_fingerprint.as_str()
-    }) {
-        return Err(SqliteStoreError::DiscoveryInvariant(
-            "run ID is already bound to another discovery input".into(),
-        ));
+            || selection != checkpoint.selection_fingerprint.as_str();
+        if rebinding
+            && parse_status(&stored_status)? != DiscoveryCheckpointStatus::AwaitingPatchReview
+        {
+            return Err(SqliteStoreError::DiscoveryInvariant(
+                "run ID is already bound to another discovery input".into(),
+            ));
+        }
     }
 
     let snapshot = serde_json::to_string(&checkpoint.snapshot)?;
@@ -261,7 +283,10 @@ pub(super) fn save_discovery_checkpoint(
             status, admission, profile_id, snapshot_json
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(run_id) DO UPDATE SET
+            artifact_id = excluded.artifact_id,
             conversion_id = excluded.conversion_id,
+            input_fingerprint = excluded.input_fingerprint,
+            selection_fingerprint = excluded.selection_fingerprint,
             unit_set_fingerprint = excluded.unit_set_fingerprint,
             result_fingerprint = excluded.result_fingerprint,
             status = excluded.status,
@@ -787,6 +812,7 @@ fn parse_enum<T: for<'de> Deserialize<'de>>(
 fn status(value: DiscoveryCheckpointStatus) -> &'static str {
     match value {
         DiscoveryCheckpointStatus::Running => "running",
+        DiscoveryCheckpointStatus::AwaitingPatchReview => "awaiting_patch_review",
         DiscoveryCheckpointStatus::Completed => "completed",
         DiscoveryCheckpointStatus::Partial => "partial",
         DiscoveryCheckpointStatus::NeedsAttention => "needs_attention",
@@ -798,6 +824,7 @@ fn status(value: DiscoveryCheckpointStatus) -> &'static str {
 fn parse_status(value: &str) -> Result<DiscoveryCheckpointStatus, SqliteStoreError> {
     match value {
         "running" => Ok(DiscoveryCheckpointStatus::Running),
+        "awaiting_patch_review" => Ok(DiscoveryCheckpointStatus::AwaitingPatchReview),
         "completed" => Ok(DiscoveryCheckpointStatus::Completed),
         "partial" => Ok(DiscoveryCheckpointStatus::Partial),
         "needs_attention" => Ok(DiscoveryCheckpointStatus::NeedsAttention),

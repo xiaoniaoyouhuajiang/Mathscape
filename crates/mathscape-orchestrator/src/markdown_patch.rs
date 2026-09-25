@@ -241,9 +241,12 @@ pub fn select_patch_set(
     Ok(selected)
 }
 
-fn patch_set_fingerprint(patch_set: &MarkdownPatchSet) -> ContentHash {
+pub(crate) fn patch_set_fingerprint(patch_set: &MarkdownPatchSet) -> ContentHash {
+    // Bound to the run: the stored patch set, its decisions and the patch
+    // ConversionRun are all keyed by this fingerprint.
     hash_value(&(
         PATCH_VALIDATOR_REVISION,
+        &patch_set.run_id,
         &patch_set.base_input_fingerprint,
         patch_set
             .patches
@@ -471,29 +474,16 @@ pub fn resolve_patch_proposals(
     if !diagnostics.is_empty() {
         return Err(PatchValidationReport { diagnostics });
     }
-    let fingerprint = hash_value(&(
-        PATCH_VALIDATOR_REVISION,
-        &input.fingerprint,
-        resolved
-            .iter()
-            .map(|patch| {
-                (
-                    &patch.issue_ref,
-                    &patch.range,
-                    &patch.old_text_hash,
-                    &patch.replacement_hash,
-                )
-            })
-            .collect::<Vec<_>>(),
-    ));
-    Ok(MarkdownPatchSet {
+    let mut patch_set = MarkdownPatchSet {
         version: mathscape_domain::MARKDOWN_PATCH_SET_VERSION.into(),
         run_id,
         base_snapshot: input.snapshot.clone(),
         base_input_fingerprint: input.fingerprint.clone(),
         patches: resolved,
-        fingerprint,
-    })
+        fingerprint: input.fingerprint.clone(),
+    };
+    patch_set.fingerprint = patch_set_fingerprint(&patch_set);
+    Ok(patch_set)
 }
 
 pub fn apply_patch_set(

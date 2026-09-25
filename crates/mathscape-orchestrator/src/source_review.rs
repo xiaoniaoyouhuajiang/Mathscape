@@ -252,6 +252,7 @@ fn reference_status(status: &crate::ReferenceResolutionStatus) -> SourceReviewRe
 fn review_status(status: &WorkflowStatus) -> SourceReviewRunStatus {
     match status {
         WorkflowStatus::Running => SourceReviewRunStatus::Running,
+        WorkflowStatus::AwaitingPatchReview => SourceReviewRunStatus::AwaitingPatchReview,
         WorkflowStatus::Completed => SourceReviewRunStatus::Completed,
         WorkflowStatus::Partial => SourceReviewRunStatus::Partial,
         WorkflowStatus::NeedsAttention => SourceReviewRunStatus::NeedsAttention,

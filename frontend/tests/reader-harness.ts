@@ -63,7 +63,27 @@ const reads: { id: string; offset: number; length: number }[] = [];
 const selectionRequests: SelectionRequest[] = [];
 const discoveryRequests: SelectionRequest[] = [];
 const acceptanceRequests: unknown[] = [];
-const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed" };
+const patchDecisions: any[] = [];
+const resumeRequests: unknown[] = [];
+const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null };
+const byteOffset = (text: string): number => new TextEncoder().encode(markdown.slice(0, markdown.indexOf(text))).length;
+function patchReview(status: string): unknown {
+  const start = byteOffset("x^2");
+  return {
+    run_id: "mathscape:discovery-run/browser-fixture", patch_set_id: "mathscape:markdown-patch-set/fixture",
+    input_fingerprint: "test-input", status, provider_model: null, message: null,
+    patch_set: {
+      version: "mathscape-markdown-patch-set-1", run_id: "mathscape:discovery-run/browser-fixture",
+      base_snapshot: anchored("conversion").snapshot, base_input_fingerprint: "test-input",
+      fingerprint: "sha256:" + "3".repeat(64),
+      patches: [{
+        patch_ref: "p1", issue_ref: "a-i1", range: { start, end: start + 3 },
+        old_text: "x^2", old_text_hash: "h-old", replacement: "x^3", replacement_hash: "h-new",
+        rationale: "指数被识别错误", status: "proposed",
+      }],
+    },
+  };
+}
 // Predetermined IPC double, not a second implementation of backend segmentation.
 function anchored(conversion: string): AnchoredMarkdown {
   const starts = ["# Math reader", "Inline $", "$$\n", "\\[\n", "![Diagram]", "<script>", "~~~tex"].map(marker => markdown.indexOf(marker));
@@ -76,7 +96,29 @@ function anchored(conversion: string): AnchoredMarkdown {
     } })),
   };
 }
-mockIPC((command, payload) => {
+mockIPC(function handle(command, payload): any {
+  if (command === "get_pending_markdown_patch_review") {
+    return behavior.pendingPatchStatus === null ? null : patchReview(behavior.pendingPatchStatus);
+  }
+  if (command === "get_markdown_patch_review") return patchReview(behavior.pendingPatchStatus ?? "proposed");
+  if (command === "preview_markdown_patch") return {
+    run_id: "mathscape:discovery-run/browser-fixture", patch_set_id: "mathscape:markdown-patch-set/fixture",
+    patch_set_fingerprint: "sha256:" + "3".repeat(64), original: markdown, revised: markdown.replace("x^2", "x^3"),
+    safety: { status: "safe_for_b", diagnostics: [] },
+  };
+  if (command === "submit_markdown_patch_decision") {
+    const request = (payload as any).request;
+    patchDecisions.push(request);
+    behavior.pendingPatchStatus = request.accepted_patch_refs.length > 0 ? "applied" : "rejected";
+    return { status: behavior.pendingPatchStatus, patched_artifact_id: null, conversion_id: null, safety: { status: "safe_for_b", diagnostics: [] } };
+  }
+  if (command === "resume_discovery_after_patch") {
+    resumeRequests.push((payload as any).request);
+    behavior.pendingPatchStatus = null;
+    behavior.discoveryStatus = "completed";
+    const selection = discoveryRequests.at(-1) ?? { snapshot: anchored("conversion").snapshot, admission: "review_before_publish" };
+    return handle("run_discovery", { request: { selection }, onProgress: (payload as any).onProgress });
+  }
   if (command === "get_workspace_settings") return {
     version: "mathscape-workspace-settings-1",
     discovery_admission: behavior.admission,
@@ -128,7 +170,7 @@ mockIPC((command, payload) => {
         pending_tasks: behavior.discoveryStatus === "completed" ? [] : [{ task_ref: "t1", owner: "u1" }], diagnostics: [],
         attempts: [{ attempt: 1, stage: "unit-discovery", repair: false, status: "completed", error: null, total_tokens: 150, elapsed_ms: 20 }],
       },
-      review: {
+      review: behavior.discoveryStatus === "awaiting_patch_review" ? null : {
         version: "mathscape-source-review-projection-1", run_id: "mathscape:discovery-run/browser-fixture",
         result_fingerprint: "sha256:" + "1".repeat(64), status: behavior.discoveryStatus,
         complete: behavior.discoveryStatus === "completed",
@@ -197,5 +239,5 @@ mockIPC((command, payload) => {
 
 const reader = new ArtifactReader(document.querySelector<HTMLElement>("#reader")!);
 Object.assign(window, {
-  harness: { ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, behavior, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, patchDecisions, resumeRequests, behavior, render: (source: string) => markdownRenderer().render(source) },
 });

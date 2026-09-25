@@ -9,7 +9,7 @@ pub use content::{ArtifactContentInfo, ContentContext, SourceNodeDetail};
 pub use discovery::{
     AcceptDiscoveryRequest, ActiveDiscoveryPhase, ActiveDiscoveryTask, DesktopDiscoveryAcceptance,
     DesktopDiscoveryError, DesktopDiscoveryOutcome, DesktopDiscoveryProgress, DesktopDiscoveryRun,
-    RunDiscoveryRequest,
+    ResumeDiscoveryRequest, RunDiscoveryRequest,
 };
 pub use discovery_view::{DESKTOP_DISCOVERY_VIEW_VERSION, DesktopDiscoveryView};
 pub use llm_settings::{
@@ -761,8 +761,10 @@ pub fn run() {
             discovery::cancel_discovery,
             discovery::accept_discovery_result,
             discovery::run_discovery,
+            discovery::resume_discovery_after_patch,
             markdown_patch::run_markdown_patch,
             markdown_patch::get_markdown_patch_review,
+            markdown_patch::get_pending_markdown_patch_review,
             markdown_patch::preview_markdown_patch,
             markdown_patch::submit_markdown_patch_decision,
             map_edit::get_map_object_edit_context,

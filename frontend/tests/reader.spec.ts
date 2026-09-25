@@ -187,6 +187,67 @@ test("Markdown selection runs Discovery and shows an unregistered proposal", asy
   expect(request.admission).toBe("review_before_publish");
 });
 
+test("Discovery paused for Markdown patch review shows a rendered comparison and resumes", async ({ page }) => {
+  await page.evaluate(async () => {
+    (window as any).harness.behavior.discoveryStatus = "awaiting_patch_review";
+    await (window as any).harness.reader.open("md", "修订审核测试");
+  });
+  await page.getByLabel("原文块 2", { exact: true }).click();
+  await page.getByRole("button", { name: "设置起点" }).click();
+  await page.getByRole("button", { name: "设置终点" }).click();
+  await page.getByRole("button", { name: "使用 LLM 发现内容" }).click();
+  const host = page.locator(".markdown-patch-host");
+  await expect(host).toContainText("内容发现已暂停");
+  await expect(page.locator(".discovery-status")).toContainText("审核 Markdown 修订后继续");
+  await expect(page.locator(".source-review-panel")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "生成 Markdown 修订建议" })).toHaveCount(0);
+  // Both panes render the whole enclosing block through KaTeX.
+  const panes = host.locator(".markdown-patch-pane .markdown-body");
+  await expect(panes).toHaveCount(2);
+  await expect(panes.nth(0).locator(".katex")).toHaveCount(2);
+  await expect(panes.nth(1).locator(".katex")).toHaveCount(2);
+  await expect(host.locator(".markdown-patch-inline del")).toHaveText("x^2");
+  await expect(host.locator(".markdown-patch-inline ins")).toHaveText("x^3");
+  await expect(host.locator(".markdown-patch-review-status")).toContainText("可直接衔接 Stage B");
+  await host.getByLabel("p1 replacement").fill("x^4");
+  await expect(host.locator(".markdown-patch-inline ins")).toHaveText("x^4");
+  await expect(panes.nth(1)).toContainText("4");
+  await host.getByRole("button", { name: "全部拒绝并继续发现" }).click();
+  await expect(page.locator(".discovery-result")).toContainText("测试命题");
+  await expect(host).toBeHidden();
+  await expect(page.locator(".source-review-panel")).toHaveCount(1);
+  const recorded = await page.evaluate(() => ({
+    decision: (window as any).harness.patchDecisions.at(-1),
+    resume: (window as any).harness.resumeRequests.at(-1),
+  }));
+  expect(recorded.decision.accepted_patch_refs).toEqual([]);
+  expect(recorded.decision.replacements).toEqual({ p1: "x^4" });
+  expect(recorded.resume).toEqual({ run_id: "mathscape:discovery-run/browser-fixture" });
+});
+
+test("reopening a reader recovers a paused run and continues a recorded decision", async ({ page }) => {
+  await page.evaluate(async () => {
+    (window as any).harness.behavior.pendingPatchStatus = "proposed";
+    await (window as any).harness.reader.open("md", "恢复审核");
+  });
+  const host = page.locator(".markdown-patch-host");
+  await expect(host).toContainText("正在等待审核 Markdown 修订");
+  await expect(host.getByRole("button", { name: "应用选中修订并继续发现" })).toBeVisible();
+  // Changing the selection must not discard the paused review.
+  await page.getByLabel("原文块 1", { exact: true }).click();
+  await page.getByRole("button", { name: "设置起点" }).click();
+  await expect(host).toBeVisible();
+
+  await page.evaluate(async () => {
+    (window as any).harness.behavior.pendingPatchStatus = "applied";
+    await (window as any).harness.reader.open("md", "恢复审核");
+  });
+  await expect(host).toContainText("修订已应用");
+  await host.getByRole("button", { name: "按已记录的决定继续内容发现" }).click();
+  await expect(page.locator(".discovery-result")).toContainText("测试命题");
+  await expect(host).toBeHidden();
+});
+
 test("ask-each-run workspace policy requires an explicit admission choice", async ({ page }) => {
   await page.evaluate(() => { (window as any).harness.behavior.admission = "ask_each_run"; });
   await page.evaluate(async () => (window as any).harness.reader.open("md", "审核策略测试"));

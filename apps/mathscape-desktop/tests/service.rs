@@ -12,8 +12,8 @@ use lopdf::{Document, Object, Stream, content::Content, content::Operation, dict
 use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_desktop::{
     AcceptDiscoveryRequest, DesktopDiscoveryError, DesktopService, DesktopServiceError,
-    MarkerProfileChoice, ParsePdfRequest, PdfImportOutcome, RunDiscoveryRequest,
-    SaveWorkspaceSettingsRequest,
+    MarkerProfileChoice, ParsePdfRequest, PdfImportOutcome, ResumeDiscoveryRequest,
+    RunDiscoveryRequest, SaveWorkspaceSettingsRequest,
 };
 use mathscape_domain::{
     ActorRef, DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest,
@@ -571,6 +571,326 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     assert_eq!(
         schema_names,
         ["unit_discovery_v1", "source_facts_v1", "unit_discovery_v1"]
+    );
+    directory.cleanup();
+}
+
+const PATCH_SOURCE: &str =
+    include_str!("../../../crates/mathscape-domain/tests/fixtures/staged-source.md");
+const PATCH_UNITS: &str =
+    include_str!("../../../crates/mathscape-domain/tests/fixtures/staged-units.json");
+const PATCH_FACTS: &str =
+    include_str!("../../../crates/mathscape-domain/tests/fixtures/staged-facts.json");
+
+/// A reports one conversion issue inside b2, P proposes `N=1` → `N=2`, B
+/// answers from the staged fixture.
+#[derive(Clone, Debug)]
+struct PatchReviewResponder;
+
+impl Respond for PatchReviewResponder {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        let schema = body["response_format"]["json_schema"]["name"]
+            .as_str()
+            .unwrap();
+        let content = body["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_str()
+            .unwrap();
+        let input: serde_json::Value = serde_json::from_str(content).unwrap();
+        let output = match schema {
+            "unit_discovery_v1" => {
+                let mut units: serde_json::Value = serde_json::from_str(PATCH_UNITS).unwrap();
+                units["request_ref"] = input["request_ref"].clone();
+                units["issues"] = serde_json::json!([{
+                    "kind": "suspected_conversion_error",
+                    "unit": "u2",
+                    "evidence": [{"kind": "block_range", "first": "b2", "last": "b2"}],
+                    "observation": "fixture conversion damage",
+                    "context_request": null
+                }]);
+                units
+            }
+            "mathscape_markdown_patch_response" => serde_json::json!({
+                "version": mathscape_domain::MARKDOWN_PATCH_VERSION,
+                "request_ref": input["request_ref"],
+                "patches": [{
+                    "patch_ref": "model-1",
+                    "issue_ref": input["issues"][0]["issue_ref"],
+                    "target": {"kind": "text_occurrence", "block": "b2", "text": "N=1", "occurrence": null},
+                    "replacement": "N=2",
+                    "rationale": "fixture repair"
+                }]
+            }),
+            "source_facts_v1" => {
+                let mut facts: serde_json::Value = serde_json::from_str(PATCH_FACTS).unwrap();
+                facts["request_ref"] = input["request_ref"].clone();
+                let requested = input["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|task| task["task_ref"].clone())
+                    .collect::<Vec<_>>();
+                facts["tasks"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|task| requested.contains(&task["task_ref"]));
+                facts
+            }
+            other => panic!("unexpected schema {other}"),
+        };
+        let chunk = serde_json::json!({
+            "id":"chatcmpl-patch-review-fixture",
+            "object":"chat.completion.chunk","created":1,"model":"patch-review-model",
+            "choices":[{"index":0,"delta":{"role":"assistant","content":output.to_string()},"finish_reason":"stop"}]
+        });
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+    }
+}
+
+#[tokio::test]
+async fn discovery_pauses_for_markdown_patch_review_and_resumes_from_sqlite() {
+    let server = MockServer::start().await;
+    let directory = TestDirectory::create("desktop-patch-review");
+    let workspace = directory.path().join("workspace");
+    let markdown = directory.path().join("staged.md");
+    fs::write(&markdown, PATCH_SOURCE).unwrap();
+    let credentials = Arc::new(MemoryCredentialResolver::default());
+    let service = DesktopService::open_with_credential_store(&workspace, credentials).unwrap();
+    let mut pool = ArtifactPool::open(&workspace).unwrap();
+    let markdown_id = pool
+        .import_file(
+            &markdown,
+            ArtifactMetadata::new(
+                None,
+                MediaType::parse("text/markdown").unwrap(),
+                Some("staged.md".into()),
+                None,
+                RightsRecord::new(RightsStatus::NotAssessed, vec![], None).unwrap(),
+            ),
+            ActorRef::parse("desktop-patch-review-test").unwrap(),
+        )
+        .unwrap()
+        .stable_id()
+        .to_string();
+    drop(pool);
+    service
+        .save_llm_profile(
+            serde_json::from_value(serde_json::json!({
+                "profile_id": "patch-review",
+                "provider": "custom-relay",
+                "wire_protocol": "open_ai_chat_completions",
+                "model": "patch-review-model",
+                "endpoint": format!("{}/v1/", server.uri()),
+                "api_key": "patch-review-secret",
+                "clear_api_key": false,
+                "make_default": true
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(PatchReviewResponder)
+        .mount(&server)
+        .await;
+    let document = service.markdown_document(&markdown_id, None).unwrap();
+    let request = RunDiscoveryRequest::new(
+        DiscoverySelectionRequest {
+            version: DISCOVERY_SELECTION_VERSION.into(),
+            snapshot: document.snapshot.clone(),
+            selector: SourceSelector::WholeDocument,
+            admission: DiscoveryAdmission::ReviewBeforePublish,
+        },
+        None,
+    );
+    let database = workspace.join("mathscape.sqlite3");
+    let status_of = |run_id: &StableId| {
+        SqliteArtifactStore::open(&database)
+            .unwrap()
+            .discovery_checkpoint(run_id)
+            .unwrap()
+            .unwrap()
+            .checkpoint
+    };
+    let pause = |outcome: serde_json::Value| {
+        assert_eq!(outcome["outcome"], "awaiting_patch_review");
+        assert!(outcome["review"].is_null());
+        let run_id = StableId::parse(outcome["run"]["run_id"].as_str().unwrap()).unwrap();
+        let checkpoint = status_of(&run_id);
+        assert_eq!(
+            checkpoint.status,
+            DiscoveryCheckpointStatus::AwaitingPatchReview
+        );
+        let review = serde_json::to_value(
+            service
+                .get_markdown_patch_review(run_id.to_string())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(review["status"], "proposed");
+        assert_eq!(review["patch_set"]["patches"][0]["patch_ref"], "p1");
+        (run_id, review)
+    };
+    let server = &server;
+    let schemas = |from: usize| async move {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .skip(from)
+            .map(|request| {
+                let body: serde_json::Value = request.body_json().unwrap();
+                body["response_format"]["json_schema"]["name"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // Rejecting keeps the original snapshot; B still runs in the same run.
+    let first =
+        serde_json::to_value(service.run_discovery(request.clone()).await.unwrap()).unwrap();
+    let (rejected_run, review) = pause(first);
+    let pending_status = || {
+        service
+            .get_pending_markdown_patch_review(markdown_id.to_string())
+            .unwrap()
+            .map(|review| {
+                let review = serde_json::to_value(review).unwrap();
+                (
+                    review["run_id"].as_str().unwrap().to_owned(),
+                    review["status"].as_str().unwrap().to_owned(),
+                )
+            })
+    };
+    assert_eq!(
+        pending_status(),
+        Some((rejected_run.to_string(), "proposed".to_owned()))
+    );
+    assert!(matches!(
+        service
+            .resume_discovery_after_patch(ResumeDiscoveryRequest::new(rejected_run.as_str()))
+            .await,
+        Err(DesktopDiscoveryError::Resume(message)) if message.contains("接受或拒绝")
+    ));
+    service
+        .submit_markdown_patch_decision(
+            serde_json::from_value(serde_json::json!({
+                "run_id": rejected_run.as_str(),
+                "patch_set_id": review["patch_set_id"],
+                "expected_patch_fingerprint": review["patch_set"]["fingerprint"],
+                "accepted_patch_refs": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    // A recorded decision stays recoverable until the run actually resumes.
+    assert_eq!(
+        pending_status(),
+        Some((rejected_run.to_string(), "rejected".to_owned()))
+    );
+    let resumed = serde_json::to_value(
+        service
+            .resume_discovery_after_patch(ResumeDiscoveryRequest::new(rejected_run.as_str()))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(resumed["outcome"], "completed");
+    assert_eq!(resumed["run"]["run_id"], rejected_run.as_str());
+    assert_eq!(resumed["run"]["attempts"], 3);
+    let checkpoint = status_of(&rejected_run);
+    assert_eq!(checkpoint.status, DiscoveryCheckpointStatus::Completed);
+    assert_eq!(checkpoint.artifact_id.as_str(), markdown_id);
+    assert_eq!(pending_status(), None);
+    assert_eq!(
+        schemas(0).await,
+        [
+            "unit_discovery_v1",
+            "mathscape_markdown_patch_response",
+            "source_facts_v1"
+        ]
+    );
+    assert!(
+        service
+            .resume_discovery_after_patch(ResumeDiscoveryRequest::new(rejected_run.as_str()))
+            .await
+            .is_err(),
+        "a finished run cannot be resumed twice"
+    );
+
+    // Accepting promotes the patched Markdown and B runs on it.
+    let second = serde_json::to_value(service.run_discovery(request).await.unwrap()).unwrap();
+    let (applied_run, review) = pause(second);
+    let receipt = serde_json::to_value(
+        service
+            .submit_markdown_patch_decision(
+                serde_json::from_value(serde_json::json!({
+                    "run_id": applied_run.as_str(),
+                    "patch_set_id": review["patch_set_id"],
+                    "expected_patch_fingerprint": review["patch_set"]["fingerprint"],
+                    "accepted_patch_refs": ["p1"]
+                }))
+                .unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(receipt["status"], "applied");
+    let patched_artifact = receipt["patched_artifact_id"].as_str().unwrap().to_owned();
+    let resumed = serde_json::to_value(
+        service
+            .resume_discovery_after_patch(ResumeDiscoveryRequest::new(applied_run.as_str()))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(resumed["outcome"], "completed");
+    // The reader switches to this snapshot to locate the resumed result.
+    assert_eq!(
+        resumed["view"]["source"]["artifact_id"],
+        patched_artifact.as_str()
+    );
+    assert_eq!(
+        resumed["view"]["source"]["conversion_id"],
+        receipt["conversion_id"]
+    );
+    let checkpoint = status_of(&applied_run);
+    assert_eq!(checkpoint.status, DiscoveryCheckpointStatus::Completed);
+    assert_eq!(checkpoint.artifact_id.as_str(), patched_artifact);
+    assert_eq!(
+        checkpoint.conversion_id.as_ref().map(StableId::as_str),
+        receipt["conversion_id"].as_str()
+    );
+    assert_eq!(
+        checkpoint.snapshot["patch"]["applied"]["patched_artifact_id"],
+        patched_artifact.as_str()
+    );
+    assert_eq!(
+        schemas(3).await,
+        [
+            "unit_discovery_v1",
+            "mathscape_markdown_patch_response",
+            "source_facts_v1"
+        ]
+    );
+    let facts_request: serde_json::Value = server.received_requests().await.unwrap()[5]
+        .body_json()
+        .unwrap();
+    assert!(
+        facts_request["messages"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .contains("N=2"),
+        "B reads the patched Markdown"
     );
     directory.cleanup();
 }

@@ -7,13 +7,15 @@ use std::{
 };
 
 use mathscape_domain::{
-    ActorRef, ContentHash, DISCOVERY_PIPELINE_VERSION, DiscoveryAdmission, DiscoveryInput,
-    DiscoverySelectionRequest, FactTaskProposal, StableId, Timestamp, UnitDiscoveryCheckpoint,
+    ActorRef, AnchoredMarkdown, ContentHash, DISCOVERY_PIPELINE_VERSION, DiscoveryAdmission,
+    DiscoveryInput, DiscoverySelectionRequest, FactTaskProposal, MarkdownPatchSet,
+    MarkdownPatchStatus, StableId, Timestamp, UnitDiscoveryCheckpoint,
 };
 use mathscape_llm::{GenaiBackend, GenaiBackendOptions, LlmError, LlmProfile};
 use mathscape_orchestrator::{
     AcceptanceAuthority, AcceptanceSelection, DiscoveryAcceptanceDecision, DiscoveryRunSummary,
-    DiscoveryWorkflow, DiscoveryWorkflowEvent, DiscoveryWorkflowLimits,
+    DiscoveryWorkflow, DiscoveryWorkflowEvent, DiscoveryWorkflowLimits, MarkdownPatchGate,
+    MarkdownPatchWorkflowState, PatchReviewCheckpoint, PatchReviewDecision,
     PreparedUnitDiscoveryRequest, SourceRegistrationPlan, WorkflowAttempt, WorkflowStatus,
     acceptance_decision_id, discovery_result_fingerprint, materialize_source_registration,
     plan_source_registration, prepare_unit_discovery_request_from_input, project_source_review,
@@ -82,12 +84,33 @@ impl RunDiscoveryRequest {
     }
 }
 
+/// Continues a run paused for Markdown patch review. The reviewer decision
+/// must already be recorded by `submit_markdown_patch_decision`; the run keeps
+/// its profile, admission and spent call/token budget.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeDiscoveryRequest {
+    run_id: String,
+}
+
+impl ResumeDiscoveryRequest {
+    pub fn new(run_id: impl Into<String>) -> Self {
+        Self {
+            run_id: run_id.into(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActiveDiscoveryPhase {
     Starting,
     DiscoveringUnits,
     ValidatingUnits,
+    ReviewingPatches,
+    AwaitingPatchReview,
+    ApplyingPatches,
+    RebuildingUnits,
     PlanningFacts,
     DiscoveringFacts,
     ValidatingFacts,
@@ -201,6 +224,47 @@ pub enum DesktopDiscoveryError {
     Json(#[from] serde_json::Error),
     #[error("来源审核接受失败：{0}")]
     Acceptance(String),
+    #[error("内容发现检查点无效：{0}")]
+    Checkpoint(String),
+    #[error("Markdown 修订后继续内容发现失败：{0}")]
+    Resume(String),
+}
+
+enum DiscoveryStart {
+    Fresh(PreparedUnitDiscoveryRequest),
+    Resume(Box<PatchResumePlan>),
+}
+
+struct PatchResumePlan {
+    prepared: PreparedUnitDiscoveryRequest,
+    checkpoint: PatchReviewCheckpoint,
+    decision: PatchResumeDecision,
+}
+
+enum PatchResumeDecision {
+    RejectAll,
+    Apply {
+        base_document: AnchoredMarkdown,
+        selected: MarkdownPatchSet,
+        /// The promoted artifact as read back from the Artifact Pool.
+        patched_document: AnchoredMarkdown,
+    },
+}
+
+struct DiscoveryExecution {
+    run_id: StableId,
+    start: DiscoveryStart,
+    profile: LlmProfile,
+    policy: EffectiveDiscoveryPolicy,
+}
+
+impl DiscoveryExecution {
+    fn base_input(&self) -> &DiscoveryInput {
+        match &self.start {
+            DiscoveryStart::Fresh(prepared) => prepared.input(),
+            DiscoveryStart::Resume(plan) => plan.prepared.input(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -242,6 +306,14 @@ impl DesktopService {
         request: RunDiscoveryRequest,
     ) -> Result<DesktopDiscoveryOutcome, DesktopDiscoveryError> {
         self.run_discovery_observed(request, None).await
+    }
+
+    pub async fn resume_discovery_after_patch(
+        &self,
+        request: ResumeDiscoveryRequest,
+    ) -> Result<DesktopDiscoveryOutcome, DesktopDiscoveryError> {
+        self.resume_discovery_after_patch_observed(request, None)
+            .await
     }
 
     pub fn accept_discovery_result(
@@ -379,19 +451,42 @@ impl DesktopService {
         observer: Option<DesktopDiscoveryObserver>,
     ) -> Result<DesktopDiscoveryOutcome, DesktopDiscoveryError> {
         let service = self.clone();
-        let (prepared, profile, policy) = tauri::async_runtime::spawn_blocking(move || {
+        let execution = tauri::async_runtime::spawn_blocking(move || {
             service.prepare_discovery_execution(request)
         })
         .await
         .map_err(|error| DesktopDiscoveryError::Worker(error.to_string()))??;
+        self.execute_discovery(execution, observer).await
+    }
 
+    async fn resume_discovery_after_patch_observed(
+        &self,
+        request: ResumeDiscoveryRequest,
+        observer: Option<DesktopDiscoveryObserver>,
+    ) -> Result<DesktopDiscoveryOutcome, DesktopDiscoveryError> {
+        let service = self.clone();
+        let execution =
+            tauri::async_runtime::spawn_blocking(move || service.prepare_patch_resume(request))
+                .await
+                .map_err(|error| DesktopDiscoveryError::Worker(error.to_string()))??;
+        self.execute_discovery(execution, observer).await
+    }
+
+    async fn execute_discovery(
+        &self,
+        execution: DiscoveryExecution,
+        observer: Option<DesktopDiscoveryObserver>,
+    ) -> Result<DesktopDiscoveryOutcome, DesktopDiscoveryError> {
         let (cancel, mut cancelled) = watch::channel(false);
         let task = ActiveDiscoveryTask {
-            artifact_id: prepared.input().snapshot.artifact_id.to_string(),
-            input_fingerprint: prepared.input().fingerprint.clone(),
-            profile_id: profile.id.clone(),
-            request_timeout_seconds: policy.request_timeout.as_secs(),
-            phase: ActiveDiscoveryPhase::Starting,
+            artifact_id: execution.base_input().snapshot.artifact_id.to_string(),
+            input_fingerprint: execution.base_input().fingerprint.clone(),
+            profile_id: execution.profile.id.clone(),
+            request_timeout_seconds: execution.policy.request_timeout.as_secs(),
+            phase: match execution.start {
+                DiscoveryStart::Fresh(_) => ActiveDiscoveryPhase::Starting,
+                DiscoveryStart::Resume(_) => ActiveDiscoveryPhase::ApplyingPatches,
+            },
             attempt: 0,
             batch_index: None,
             batch_total: None,
@@ -401,6 +496,12 @@ impl DesktopService {
             cancellation_requested: false,
         };
         let _permit = self.begin_discovery(task, cancel)?;
+        let DiscoveryExecution {
+            run_id,
+            start,
+            profile,
+            policy,
+        } = execution;
 
         if let Some(observer) = &observer {
             observer(DesktopDiscoveryProgress::Started {
@@ -480,9 +581,55 @@ impl DesktopService {
             timeout: policy.request_timeout,
             ..Default::default()
         };
-        let mut workflow =
-            DiscoveryWorkflow::new(&backend, limits).with_observer(workflow_observer);
-        let run_id = new_discovery_run_id()?;
+        let mut workflow = DiscoveryWorkflow::new(&backend, limits)
+            .with_observer(workflow_observer)
+            .with_patch_gate(MarkdownPatchGate::ReviewBeforeApply)
+            .with_run_id(run_id.clone());
+        let prepared = match start {
+            DiscoveryStart::Fresh(prepared) => prepared,
+            DiscoveryStart::Resume(plan) => {
+                let PatchResumePlan {
+                    prepared,
+                    checkpoint,
+                    decision,
+                } = *plan;
+                let resume = |error: mathscape_orchestrator::PatchReviewError| {
+                    DesktopDiscoveryError::Resume(error.to_string())
+                };
+                workflow = workflow
+                    .continue_from(&prepared, checkpoint)
+                    .map_err(resume)?;
+                match decision {
+                    PatchResumeDecision::RejectAll => {
+                        workflow
+                            .resolve_patch_review(PatchReviewDecision::RejectAll)
+                            .map_err(resume)?;
+                        prepared
+                    }
+                    PatchResumeDecision::Apply {
+                        base_document,
+                        selected,
+                        patched_document,
+                    } => {
+                        let continuation = workflow
+                            .prepare_patch_continuation(&base_document, &selected)
+                            .map_err(resume)?;
+                        if continuation.document().snapshot != patched_document.snapshot {
+                            return Err(DesktopDiscoveryError::Resume(
+                                "已登记的修订 Markdown 与审核通过的 patch 不一致".into(),
+                            ));
+                        }
+                        let next = continuation.prepared();
+                        workflow
+                            .resolve_patch_review(PatchReviewDecision::Apply(Box::new(
+                                continuation,
+                            )))
+                            .map_err(resume)?;
+                        next
+                    }
+                }
+            }
+        };
         let completed = tokio::select! {
             status = workflow.run(prepared) => Some(status),
             changed = cancelled.changed() => {
@@ -496,6 +643,19 @@ impl DesktopService {
         let checkpoint = persistence_checkpoint(&workflow, &run_id, &profile, policy.admission)?;
         let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
         store.save_discovery_checkpoint(&checkpoint)?;
+        if *workflow.status() == WorkflowStatus::AwaitingPatchReview
+            && let Some(pending) = workflow.pending_patch()
+        {
+            let patch_set_id = crate::markdown_patch::patch_set_id(pending)?;
+            store.save_markdown_patch_set(
+                &patch_set_id,
+                pending,
+                MarkdownPatchStatus::Proposed,
+                None,
+                None,
+                &timestamp_now()?,
+            )?;
+        }
         let view = DesktopDiscoveryView::project(&workflow);
         let review = project_source_review(&workflow, run_id.clone());
         Ok(DesktopDiscoveryOutcome::from_workflow(
@@ -511,14 +671,7 @@ impl DesktopService {
     fn prepare_discovery_execution(
         &self,
         request: RunDiscoveryRequest,
-    ) -> Result<
-        (
-            PreparedUnitDiscoveryRequest,
-            LlmProfile,
-            EffectiveDiscoveryPolicy,
-        ),
-        DesktopDiscoveryError,
-    > {
+    ) -> Result<DiscoveryExecution, DesktopDiscoveryError> {
         let settings = self.workspace_settings()?;
         let admission = match settings.discovery_admission() {
             crate::DiscoveryAdmissionPreference::ReviewBeforePublish => {
@@ -534,7 +687,110 @@ impl DesktopService {
         let prepared = self
             .prepare_unit_discovery_request(request.selection)
             .map_err(DesktopDiscoveryError::Input)?;
-        Ok((prepared, profile, policy))
+        Ok(DiscoveryExecution {
+            run_id: new_discovery_run_id()?,
+            start: DiscoveryStart::Fresh(prepared),
+            profile,
+            policy,
+        })
+    }
+
+    fn prepare_patch_resume(
+        &self,
+        request: ResumeDiscoveryRequest,
+    ) -> Result<DiscoveryExecution, DesktopDiscoveryError> {
+        let resume = DesktopDiscoveryError::Resume;
+        let run_id = StableId::parse(&request.run_id)?;
+        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        let checkpoint = store
+            .discovery_checkpoint(&run_id)?
+            .ok_or_else(|| resume("内容发现运行不存在".into()))?
+            .checkpoint;
+        if checkpoint.status != DiscoveryCheckpointStatus::AwaitingPatchReview {
+            return Err(resume("该内容发现运行没有在等待 Markdown 修订审核".into()));
+        }
+        if checkpoint.pipeline_version != DISCOVERY_PIPELINE_VERSION {
+            return Err(resume(format!(
+                "内容发现运行使用了不兼容的流水线版本 {}",
+                checkpoint.pipeline_version
+            )));
+        }
+        let snapshot = &checkpoint.snapshot;
+        let source: DiscoveryInput = checkpoint_value(snapshot, "source")?;
+        if source.snapshot.artifact_id != checkpoint.artifact_id
+            || source.snapshot.conversion_id != checkpoint.conversion_id
+            || source.fingerprint != checkpoint.input_fingerprint
+        {
+            return Err(resume("持久化检查点的来源身份不一致".into()));
+        }
+        let patch: MarkdownPatchWorkflowState = checkpoint_value(snapshot, "patch")?;
+        let pending = patch
+            .pending
+            .ok_or_else(|| resume("检查点缺少待审核的 patch set".into()))?;
+        let review = PatchReviewCheckpoint {
+            units: checkpoint_value(snapshot, "units")?,
+            pending,
+            attempts: checkpoint_value(snapshot, "attempts")?,
+            diagnostics: checkpoint_value(snapshot, "diagnostics")?,
+            events: checkpoint_value(snapshot, "events")?,
+        };
+
+        let base_document = self
+            .markdown_document(
+                source.snapshot.artifact_id.as_str(),
+                source.snapshot.conversion_id.as_ref().map(StableId::as_str),
+            )
+            .map_err(resume)?;
+        rebind_discovery_input(&base_document, &source, Default::default())
+            .map_err(|error| resume(error.to_string()))?;
+
+        let (patch_set_id, value, status) = store
+            .latest_markdown_patch_set_json_for_run(&run_id)?
+            .ok_or_else(|| resume("尚未提交 Markdown 修订决定".into()))?;
+        let decision = match status.as_str() {
+            "rejected" => {
+                if patch_set_id != crate::markdown_patch::patch_set_id(&review.pending)? {
+                    return Err(resume("被拒绝的 patch set 不是本次暂停的审核对象".into()));
+                }
+                PatchResumeDecision::RejectAll
+            }
+            "applied" => {
+                let selected: MarkdownPatchSet = serde_json::from_value(value)?;
+                let application = store
+                    .latest_markdown_patch_application(&patch_set_id)?
+                    .filter(|application| application.status == "applied")
+                    .ok_or_else(|| resume("修订决定缺少应用回执".into()))?;
+                let (Some(patched_artifact_id), Some(conversion_id)) =
+                    (application.patched_artifact_id, application.conversion_id)
+                else {
+                    return Err(resume("修订应用回执缺少修订后的 Markdown".into()));
+                };
+                let patched_document = self
+                    .markdown_document(&patched_artifact_id, Some(&conversion_id))
+                    .map_err(resume)?;
+                PatchResumeDecision::Apply {
+                    base_document,
+                    selected,
+                    patched_document,
+                }
+            }
+            _ => return Err(resume("请先接受或拒绝 Markdown 修订建议".into())),
+        };
+
+        let profile = self.selected_llm_profile(Some(&checkpoint.profile_id))?;
+        let policy = self
+            .workspace_settings()?
+            .discovery_policy(checkpoint.admission);
+        Ok(DiscoveryExecution {
+            run_id,
+            start: DiscoveryStart::Resume(Box::new(PatchResumePlan {
+                prepared: prepare_unit_discovery_request_from_input(source),
+                checkpoint: review,
+                decision,
+            })),
+            profile,
+            policy,
+        })
     }
 
     fn begin_discovery(
@@ -564,7 +820,9 @@ fn update_active_task(
     };
     match event {
         DiscoveryWorkflowEvent::WorkflowStarted => {
-            task.phase = ActiveDiscoveryPhase::DiscoveringUnits;
+            if task.phase == ActiveDiscoveryPhase::Starting {
+                task.phase = ActiveDiscoveryPhase::DiscoveringUnits;
+            }
         }
         DiscoveryWorkflowEvent::AttemptStarted {
             attempt,
@@ -578,17 +836,33 @@ fn update_active_task(
             task.batch_total = *batch_total;
             task.phase = if *repair {
                 ActiveDiscoveryPhase::Repairing
+            } else if stage == "markdown-patch" {
+                ActiveDiscoveryPhase::ReviewingPatches
             } else if stage == "unit-discovery" {
-                ActiveDiscoveryPhase::DiscoveringUnits
+                if task.phase == ActiveDiscoveryPhase::RebuildingUnits {
+                    ActiveDiscoveryPhase::RebuildingUnits
+                } else {
+                    ActiveDiscoveryPhase::DiscoveringUnits
+                }
             } else {
                 ActiveDiscoveryPhase::DiscoveringFacts
             };
         }
         DiscoveryWorkflowEvent::ValidationStarted { stage, .. } => {
-            task.phase = if stage == "unit-discovery" {
-                ActiveDiscoveryPhase::ValidatingUnits
+            task.phase = match stage.as_str() {
+                "unit-discovery" => ActiveDiscoveryPhase::ValidatingUnits,
+                "markdown-patch" => ActiveDiscoveryPhase::ReviewingPatches,
+                _ => ActiveDiscoveryPhase::ValidatingFacts,
+            };
+        }
+        DiscoveryWorkflowEvent::PatchReviewRequested { .. } => {
+            task.phase = ActiveDiscoveryPhase::AwaitingPatchReview;
+        }
+        DiscoveryWorkflowEvent::PatchReviewResolved { rebuild_units, .. } => {
+            task.phase = if *rebuild_units {
+                ActiveDiscoveryPhase::RebuildingUnits
             } else {
-                ActiveDiscoveryPhase::ValidatingFacts
+                ActiveDiscoveryPhase::PlanningFacts
             };
         }
         DiscoveryWorkflowEvent::UnitCheckpointCreated { units, .. } => {
@@ -743,9 +1017,9 @@ fn checkpoint_value<T: serde::de::DeserializeOwned>(
     let value = snapshot
         .get(field)
         .cloned()
-        .ok_or_else(|| DesktopDiscoveryError::Acceptance(format!("检查点缺少 {field}")))?;
+        .ok_or_else(|| DesktopDiscoveryError::Checkpoint(format!("检查点缺少 {field}")))?;
     if value.is_null() {
-        return Err(DesktopDiscoveryError::Acceptance(format!(
+        return Err(DesktopDiscoveryError::Checkpoint(format!(
             "检查点中的 {field} 为空"
         )));
     }
@@ -895,6 +1169,7 @@ fn persistence_checkpoint(
 fn checkpoint_status(status: &WorkflowStatus) -> DiscoveryCheckpointStatus {
     match status {
         WorkflowStatus::Running => DiscoveryCheckpointStatus::Running,
+        WorkflowStatus::AwaitingPatchReview => DiscoveryCheckpointStatus::AwaitingPatchReview,
         WorkflowStatus::Completed => DiscoveryCheckpointStatus::Completed,
         WorkflowStatus::Partial => DiscoveryCheckpointStatus::Partial,
         WorkflowStatus::NeedsAttention => DiscoveryCheckpointStatus::NeedsAttention,
@@ -934,6 +1209,26 @@ pub(crate) async fn run_discovery(
     state
         .service
         .run_discovery_observed(
+            request,
+            Some(Arc::new(move |progress| {
+                if let Ok(value) = serde_json::to_value(progress) {
+                    let _ = on_progress.send(value);
+                }
+            })),
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub(crate) async fn resume_discovery_after_patch(
+    state: State<'_, DesktopState>,
+    request: ResumeDiscoveryRequest,
+    on_progress: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<DesktopDiscoveryOutcome, String> {
+    state
+        .service
+        .resume_discovery_after_patch_observed(
             request,
             Some(Arc::new(move |progress| {
                 if let Ok(value) = serde_json::to_value(progress) {

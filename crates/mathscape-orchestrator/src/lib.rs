@@ -22,6 +22,7 @@ mod markdown_patch_producer;
 mod markdown_patch_prompt;
 mod marker_promotion;
 mod occurrence_resolver;
+mod patch_review;
 mod selection_plan;
 mod selector_resolver;
 mod unit_discovery;
@@ -66,6 +67,10 @@ pub use markdown_patch_prompt::{
 pub use marker_promotion::{
     MarkerArtifactPromotion, MarkerPromotionError, MarkerPromotionResult, PRODUCT_PATHS_KEY,
     ProductPath, promote_marker_inventory,
+};
+pub use patch_review::{
+    AppliedPatchRecord, MarkdownPatchGate, MarkdownPatchWorkflowState, PatchContinuation,
+    PatchReviewDecision, PatchReviewError, ranges_covered,
 };
 pub use selection_plan::{ConversionSelectionPlan, ConversionSlice};
 pub use selector_resolver::{

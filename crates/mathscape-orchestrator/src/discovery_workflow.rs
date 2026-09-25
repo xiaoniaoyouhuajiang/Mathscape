@@ -1,10 +1,14 @@
 //! Bounded, in-memory orchestration. Each provider request is independent.
+use crate::markdown_patch::resolve_patch_proposals;
+use crate::patch_review::{
+    conversion_warnings, is_patchable_issue, prepare_continuation, ranges_covered,
+};
 use crate::source_facts::{decode_response, pending_run};
 use crate::unit_discovery::{fingerprint, new_request_ref};
 use crate::*;
 use mathscape_domain::*;
 use mathscape_llm::*;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -32,10 +36,13 @@ impl Default for DiscoveryWorkflowLimits {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowStatus {
     Running,
+    /// Paused between A and B until a reviewer decides on the pending
+    /// Markdown patch set. Waiting does not count against the run deadline.
+    AwaitingPatchReview,
     Completed,
     Partial,
     NeedsAttention,
@@ -70,6 +77,13 @@ pub enum DiscoveryWorkflowEvent {
         units: usize,
         partial: bool,
     },
+    PatchReviewRequested {
+        patches: usize,
+    },
+    PatchReviewResolved {
+        applied: bool,
+        rebuild_units: bool,
+    },
     FactPlanCreated {
         batches: usize,
         tasks: usize,
@@ -86,7 +100,7 @@ pub enum DiscoveryWorkflowEvent {
 
 pub type DiscoveryWorkflowObserver = Arc<dyn Fn(DiscoveryWorkflowEvent) + Send + Sync>;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowAttempt {
     pub stage: String,
     pub batch: Option<ContentHash>,
@@ -108,6 +122,24 @@ pub struct DiscoveryWorkflowSnapshot {
     pub attempts: Vec<WorkflowAttempt>,
     pub diagnostics: Vec<StageValidationReport>,
     pub events: Vec<String>,
+    pub patch: MarkdownPatchWorkflowState,
+}
+
+/// Persisted state needed to rebuild a run paused for patch review. The
+/// UnitSet checkpoint is revalidated; nothing here restores authority by
+/// deserialization alone.
+pub struct PatchReviewCheckpoint {
+    pub units: UnitDiscoveryCheckpoint,
+    pub pending: MarkdownPatchSet,
+    pub attempts: Vec<WorkflowAttempt>,
+    pub diagnostics: Vec<StageValidationReport>,
+    pub events: Vec<String>,
+}
+
+enum PatchStep {
+    Continue,
+    Paused,
+    Stop(WorkflowStatus),
 }
 
 pub struct DiscoveryWorkflow<'a> {
@@ -123,6 +155,8 @@ pub struct DiscoveryWorkflow<'a> {
     events: Vec<String>,
     source_input: Option<DiscoveryInput>,
     observer: Option<DiscoveryWorkflowObserver>,
+    run_id: Option<StableId>,
+    patch: MarkdownPatchWorkflowState,
 }
 impl<'a> DiscoveryWorkflow<'a> {
     pub fn new(backend: &'a dyn LlmBackend, limits: DiscoveryWorkflowLimits) -> Self {
@@ -139,11 +173,190 @@ impl<'a> DiscoveryWorkflow<'a> {
             events: vec![],
             source_input: None,
             observer: None,
+            run_id: None,
+            patch: MarkdownPatchWorkflowState::default(),
         }
     }
     pub fn with_observer(mut self, observer: DiscoveryWorkflowObserver) -> Self {
         self.observer = Some(observer);
         self
+    }
+    pub fn with_patch_gate(mut self, gate: MarkdownPatchGate) -> Self {
+        self.patch.gate = gate;
+        self
+    }
+    /// Patch sets are bound to the persisted run identity.
+    pub fn with_run_id(mut self, run_id: StableId) -> Self {
+        self.run_id = Some(run_id);
+        self
+    }
+    pub fn run_id(&self) -> Option<&StableId> {
+        self.run_id.as_ref()
+    }
+    pub fn patch_state(&self) -> &MarkdownPatchWorkflowState {
+        &self.patch
+    }
+    pub fn pending_patch(&self) -> Option<&MarkdownPatchSet> {
+        self.patch.pending.as_ref()
+    }
+    pub fn patch_round_exhausted(&self) -> bool {
+        self.patch.round_exhausted
+    }
+
+    /// Rebuilds a run paused for patch review from its persisted checkpoint.
+    /// Prior attempts keep counting against the call and token budgets; the
+    /// deadline restarts when `run` is called again.
+    pub fn continue_from(
+        mut self,
+        prepared: &PreparedUnitDiscoveryRequest,
+        checkpoint: PatchReviewCheckpoint,
+    ) -> Result<Self, PatchReviewError> {
+        let Some(run_id) = &self.run_id else {
+            return Err(PatchReviewError::Stale(
+                "resuming requires the run id".into(),
+            ));
+        };
+        if self.patch.gate != MarkdownPatchGate::ReviewBeforeApply {
+            return Err(PatchReviewError::Stale(
+                "resuming requires the review patch gate".into(),
+            ));
+        }
+        let pending = checkpoint.pending;
+        if &pending.run_id != run_id
+            || pending.base_input_fingerprint != prepared.input().fingerprint
+            || pending.base_snapshot != prepared.input().snapshot
+            || pending.patches.is_empty()
+        {
+            return Err(PatchReviewError::Stale(
+                "pending patch set does not belong to this run input".into(),
+            ));
+        }
+        let units = prepared
+            .revalidate_checkpoint(&checkpoint.units, Default::default())
+            .map_err(|report| {
+                PatchReviewError::Stale(format!(
+                    "UnitSet checkpoint no longer validates ({} diagnostics)",
+                    report.diagnostics.len()
+                ))
+            })?;
+        self.attempts = checkpoint.attempts;
+        for attempt in &mut self.attempts {
+            if attempt.status == WorkflowStatus::Running {
+                attempt.status = WorkflowStatus::Cancelled;
+            }
+        }
+        self.diagnostics = checkpoint.diagnostics;
+        self.events = checkpoint.events;
+        self.source_input = Some(prepared.input().clone());
+        self.units = Some(units);
+        self.patch.rounds = MAX_PATCH_ROUNDS_PER_RUN;
+        self.patch.pending = Some(pending);
+        self.status = WorkflowStatus::AwaitingPatchReview;
+        Ok(self)
+    }
+
+    /// Applies an accepted subset of the pending patch set to the exact base
+    /// Markdown. The result must be handed back through
+    /// `resolve_patch_review` before the run continues.
+    pub fn prepare_patch_continuation(
+        &self,
+        base_document: &AnchoredMarkdown,
+        selected: &MarkdownPatchSet,
+    ) -> Result<PatchContinuation, PatchReviewError> {
+        let (Some(pending), Some(source), Some(units)) =
+            (&self.patch.pending, &self.source_input, &self.units)
+        else {
+            return Err(PatchReviewError::NotAwaiting);
+        };
+        if self.status != WorkflowStatus::AwaitingPatchReview {
+            return Err(PatchReviewError::NotAwaiting);
+        }
+        prepare_continuation(base_document, source, units, pending, selected)
+    }
+
+    /// Records the reviewer decision. Afterwards `run` must be called with
+    /// the original request (reject) or `PatchContinuation::prepared` (apply).
+    pub fn resolve_patch_review(
+        &mut self,
+        decision: PatchReviewDecision,
+    ) -> Result<(), PatchReviewError> {
+        if self.status != WorkflowStatus::AwaitingPatchReview || self.patch.pending.is_none() {
+            return Err(PatchReviewError::NotAwaiting);
+        }
+        let source = self
+            .source_input
+            .as_ref()
+            .expect("paused run keeps its input");
+        let (applied, rebuild_units) = match decision {
+            PatchReviewDecision::RejectAll => {
+                let units = self.units.as_ref().expect("paused run keeps its UnitSet");
+                self.patch.source_warnings = conversion_warnings(units, &[]);
+                self.events.push("markdown patch rejected".into());
+                (false, false)
+            }
+            PatchReviewDecision::Apply(continuation) => {
+                let (patch_set, applied, input, safety, rebound) = continuation.into_parts();
+                let pending = self.patch.pending.as_ref().expect("checked above");
+                if patch_set.base_input_fingerprint != source.fingerprint
+                    || patch_set.run_id != pending.run_id
+                {
+                    return Err(PatchReviewError::Stale(
+                        "continuation was prepared for another paused input".into(),
+                    ));
+                }
+                let accepted: Vec<_> = patch_set
+                    .patches
+                    .iter()
+                    .map(|patch| patch.issue_ref.as_str())
+                    .collect();
+                let rebuild = rebound.is_none();
+                self.patch.source_warnings = match &rebound {
+                    Some(units) => conversion_warnings(units, &accepted),
+                    None => Vec::new(),
+                };
+                self.patch.applied = Some(AppliedPatchRecord {
+                    patch_set_fingerprint: patch_set.fingerprint.clone(),
+                    accepted_patch_refs: patch_set
+                        .patches
+                        .iter()
+                        .map(|patch| patch.patch_ref.clone())
+                        .collect(),
+                    base_artifact_id: patch_set.base_snapshot.artifact_id.clone(),
+                    patched_artifact_id: input.snapshot.artifact_id.clone(),
+                    conversion_id: input
+                        .snapshot
+                        .conversion_id
+                        .clone()
+                        .expect("patched Markdown carries its patch conversion"),
+                    base_input_fingerprint: source.fingerprint.clone(),
+                    new_input_fingerprint: input.fingerprint.clone(),
+                    safety,
+                    new_patch_ranges: applied.new_patch_ranges,
+                });
+                self.patch.rebuild_pending = rebuild;
+                self.units = rebound;
+                self.source_input = Some(input);
+                self.events.push(
+                    if rebuild {
+                        "markdown patch applied; rebuild units"
+                    } else {
+                        "markdown patch applied; units rebound"
+                    }
+                    .into(),
+                );
+                (true, rebuild)
+            }
+        };
+        self.patch.pending = None;
+        self.patch.round_exhausted = true;
+        self.batches.clear();
+        self.facts.clear();
+        self.status = WorkflowStatus::Running;
+        self.emit(DiscoveryWorkflowEvent::PatchReviewResolved {
+            applied,
+            rebuild_units,
+        });
+        Ok(())
     }
     fn emit(&self, event: DiscoveryWorkflowEvent) {
         if let Some(observer) = &self.observer {
@@ -204,6 +417,7 @@ impl<'a> DiscoveryWorkflow<'a> {
             attempts: self.attempts.clone(),
             diagnostics: self.diagnostics.clone(),
             events: self.events.clone(),
+            patch: self.patch.clone(),
         }
     }
     pub fn result(&self) -> Option<DiscoveryResult> {
@@ -325,6 +539,120 @@ impl<'a> DiscoveryWorkflow<'a> {
         }
     }
 
+    /// The single P round between A and B. Only conversion issues whose
+    /// evidence sits inside one physical block are sent to P; the resolver
+    /// still sees every canonical issue so references stay consistent.
+    async fn consider_patch(
+        &mut self,
+        prepared: &PreparedUnitDiscoveryRequest,
+        deadline: Instant,
+    ) -> PatchStep {
+        let units = self.units.as_ref().expect("validated units");
+        if let Some(applied) = &self.patch.applied
+            && !ranges_covered(units, &applied.new_patch_ranges)
+        {
+            self.events
+                .push("UnitSet does not cover the applied Markdown patch".into());
+            return PatchStep::Stop(WorkflowStatus::NeedsAttention);
+        }
+        if self.patch.gate == MarkdownPatchGate::Skip {
+            return PatchStep::Continue;
+        }
+        if self.patch.pending.is_some() {
+            return PatchStep::Paused;
+        }
+        if self.patch.round_exhausted {
+            if self.patch.rebuild_pending {
+                self.patch.source_warnings = conversion_warnings(units, &[]);
+                self.patch.rebuild_pending = false;
+                self.events
+                    .push("patch round exhausted; conversion issues passed to B".into());
+            }
+            return PatchStep::Continue;
+        }
+        let issues = canonical_discovery_issues(units);
+        let patchable: Vec<_> = issues
+            .iter()
+            .filter(|issue| is_patchable_issue(prepared.input(), issue))
+            .cloned()
+            .collect();
+        if patchable.is_empty() {
+            self.patch.source_warnings = conversion_warnings(units, &[]);
+            return PatchStep::Continue;
+        }
+        if self.patch.rounds >= MAX_PATCH_ROUNDS_PER_RUN {
+            self.patch.round_exhausted = true;
+            self.patch.source_warnings = conversion_warnings(units, &[]);
+            return PatchStep::Continue;
+        }
+        let Some(run_id) = self.run_id.clone() else {
+            self.events
+                .push("Markdown patch review requires a persisted run id".into());
+            return PatchStep::Stop(WorkflowStatus::NeedsAttention);
+        };
+        let request = build_markdown_patch_request_with_issues(prepared, units, patchable);
+        let before = self.attempts.len();
+        let outcome = self
+            .call::<MarkdownPatchResponse>(
+                request.request().clone(),
+                request.prompt_fingerprint().clone(),
+                None,
+                None,
+                false,
+                deadline,
+            )
+            .await;
+        // A transport failure, deadline or exhausted budget leaves the round
+        // unspent; an answer that cannot be used spends it.
+        if let Err(error) = &outcome
+            && self
+                .attempts
+                .get(before)
+                .is_none_or(|attempt| attempt.status == WorkflowStatus::Failed)
+        {
+            self.events.push(error.clone());
+            return PatchStep::Stop(WorkflowStatus::NeedsAttention);
+        }
+        self.patch.rounds += 1;
+        let resolved = outcome.and_then(|response| {
+            if response.version != MARKDOWN_PATCH_VERSION
+                || response.request_ref != request.input().request_ref
+            {
+                return Err("patch response belongs to another request".to_owned());
+            }
+            resolve_patch_proposals(prepared.input(), run_id, &issues, &response.patches).map_err(
+                |report| {
+                    report
+                        .diagnostics()
+                        .iter()
+                        .map(|diagnostic| format!("{}: {}", diagnostic.path, diagnostic.code))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                },
+            )
+        });
+        match resolved {
+            Ok(patch_set) if !patch_set.patches.is_empty() => {
+                self.emit(DiscoveryWorkflowEvent::PatchReviewRequested {
+                    patches: patch_set.patches.len(),
+                });
+                self.events.push("await markdown patch review".into());
+                self.patch.pending = Some(patch_set);
+                PatchStep::Paused
+            }
+            other => {
+                self.events.push(match other {
+                    Err(error) => format!("markdown patch rejected: {error}"),
+                    Ok(_) => "markdown patch proposed no change".into(),
+                });
+                let units = self.units.as_ref().expect("validated units");
+                self.patch.round_exhausted = true;
+                self.patch.source_warnings = conversion_warnings(units, &[]);
+                PatchStep::Continue
+            }
+        }
+    }
+
     /// Calling again explicitly resumes the same in-memory run; successful tasks
     /// and the frozen A result are retained. Budgets count all attempts.
     pub async fn run(&mut self, prepared: PreparedUnitDiscoveryRequest) -> WorkflowStatus {
@@ -335,6 +663,11 @@ impl<'a> DiscoveryWorkflow<'a> {
             || self.limits.timeout.is_zero()
         {
             return self.finish(WorkflowStatus::Failed);
+        }
+        if self.status == WorkflowStatus::AwaitingPatchReview {
+            self.events
+                .push("resolve the pending Markdown patch review first".into());
+            return self.finish(WorkflowStatus::AwaitingPatchReview);
         }
         for a in &mut self.attempts {
             if a.status == WorkflowStatus::Running {
@@ -399,7 +732,11 @@ impl<'a> DiscoveryWorkflow<'a> {
                 Ok(units) => self.units = Some(units),
                 Err(report) => {
                     self.diagnostics.push(report.clone());
-                    if !self.repairs.insert("units".into()) {
+                    // A rebuilt A on a patched snapshot gets its own repair.
+                    if !self
+                        .repairs
+                        .insert(format!("units:{}", prepared.input().fingerprint))
+                    {
                         return self.finish(WorkflowStatus::NeedsAttention);
                     }
                     let repair_ref = new_request_ref("repair");
@@ -455,10 +792,16 @@ impl<'a> DiscoveryWorkflow<'a> {
             partial: units.is_partial(),
         });
         if self.batches.is_empty() {
-            match plan_source_facts(
+            match self.consider_patch(&prepared, deadline).await {
+                PatchStep::Continue => {}
+                PatchStep::Paused => return self.finish(WorkflowStatus::AwaitingPatchReview),
+                PatchStep::Stop(status) => return self.finish(status),
+            }
+            match plan_source_facts_with_warnings(
                 &prepared,
                 self.units.as_ref().unwrap(),
                 self.limits.max_tasks_per_batch,
+                &self.patch.source_warnings,
             ) {
                 Ok(batches) => {
                     if batches.len() > self.limits.max_batches {

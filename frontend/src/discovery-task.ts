@@ -10,8 +10,11 @@ let cancel: HTMLButtonElement;
 let timeline: HTMLOListElement;
 const attemptOutputs = new Map<number, { reasoning: HTMLElement; output: HTMLElement }>();
 
-type WorkflowStatus = "running" | "completed" | "partial" | "needs_attention" | "failed" | "cancelled";
+type WorkflowStatus = "running" | "awaiting_patch_review" | "completed" | "partial" | "needs_attention" | "failed" | "cancelled";
 type WorkflowEvent = {
+  patches?: number;
+  applied?: boolean;
+  rebuild_units?: boolean;
   kind: string;
   attempt?: number;
   stage?: string;
@@ -64,18 +67,32 @@ export function mountDiscoveryTask(): void {
 }
 
 /** Application lifetime owns the promise and output, independent of readers. */
-export async function runDiscoveryTask<T>(request: unknown): Promise<T> {
+export function runDiscoveryTask<T>(request: unknown): Promise<T> {
+  return executeDiscoveryTask<T>("run_discovery", { request }, false);
+}
+
+/** Continues a run paused for Markdown patch review after its decision is recorded. */
+export function resumeDiscoveryTask<T>(runId: string): Promise<T> {
+  return executeDiscoveryTask<T>("resume_discovery_after_patch", { request: { run_id: runId } }, true);
+}
+
+async function executeDiscoveryTask<T>(command: string, args: Record<string, unknown>, resume: boolean): Promise<T> {
   mountDiscoveryTask();
   if (running) throw new Error("已有内容发现任务正在运行");
   running = true;
   let completed = false;
   panel!.hidden = false;
   panel!.querySelector("header strong")!.textContent = "内容发现任务";
-  status.textContent = "等待模型响应…";
+  status.textContent = resume ? "正在应用 Markdown 修订决定并恢复检查点…" : "等待模型响应…";
   launcher.textContent = "发现任务 · 运行中";
-  panel!.querySelector(".task-attempts")!.replaceChildren();
-  timeline.replaceChildren();
-  attemptOutputs.clear();
+  if (resume) {
+    // Earlier attempt numbers continue after the pause; keep their output.
+    timelineStep("恢复暂停的内容发现");
+  } else {
+    panel!.querySelector(".task-attempts")!.replaceChildren();
+    timeline.replaceChildren();
+    attemptOutputs.clear();
+  }
   result.replaceChildren();
   cancel.disabled = false;
   const channel = new Channel<DiscoveryProgress>();
@@ -103,7 +120,7 @@ export async function runDiscoveryTask<T>(request: unknown): Promise<T> {
     target.scrollTop = target.scrollHeight;
   };
   try {
-    const outcome = await invoke<T>("run_discovery", { request, onProgress: channel });
+    const outcome = await invoke<T>(command, { ...args, onProgress: channel });
     completed = true;
     const value = outcome as { outcome?: WorkflowStatus; view?: { units?: unknown[]; relations?: unknown[]; references?: unknown[]; pending_tasks?: unknown[] }; run?: { requested_model?: string } };
     const units = value.view?.units?.length ?? 0;
@@ -111,7 +128,9 @@ export async function runDiscoveryTask<T>(request: unknown): Promise<T> {
     const references = value.view?.references?.length ?? 0;
     status.textContent = value.outcome === "completed"
       ? `两阶段验证完成 · ${value.run?.requested_model ?? ""} · ${units} 个单元、${relations} 条关系；尚未接受或入图。`
-      : `工作流结束：${workflowStatusLabel(value.outcome)}；检查点仅保存在当前返回结果中。`;
+      : value.outcome === "awaiting_patch_review"
+        ? `已暂停：${units} 个单元已固定，等待审核 Markdown 修订；请在阅读器的发现面板中处理，检查点已保存。`
+        : `工作流结束：${workflowStatusLabel(value.outcome)}；检查点已保存。`;
     const summaryCard = document.createElement("p");
     summaryCard.className = "task-result-summary";
     summaryCard.textContent = `${units} 个单元 · ${relations} 条关系 · ${references} 个引用 · ${value.view?.pending_tasks?.length ?? 0} 个待完成任务`;
@@ -127,7 +146,7 @@ export async function runDiscoveryTask<T>(request: unknown): Promise<T> {
   } finally {
     running = false;
     cancel.disabled = true;
-    launcher.textContent = "发现任务 · 查看结果";
+    launcher.textContent = status.textContent?.startsWith("已暂停") ? "发现任务 · 等待审核修订" : "发现任务 · 查看结果";
   }
 }
 
@@ -135,11 +154,12 @@ function stageLabel(stage: string): string {
   if (stage === "unit-discovery") return "单元识别";
   if (stage === "source-facts") return "来源事实发现";
   if (stage === "discovery-repair") return "有界修订";
+  if (stage === "markdown-patch") return "Markdown 修订建议";
   return stage;
 }
 
 function workflowStatusLabel(value: WorkflowStatus | undefined): string {
-  return ({ completed: "已完成", partial: "部分完成", needs_attention: "需要处理", failed: "失败", cancelled: "已取消", running: "运行中" } as Record<string, string>)[value ?? ""] ?? String(value ?? "未知");
+  return ({ completed: "已完成", partial: "部分完成", needs_attention: "需要处理", failed: "失败", cancelled: "已取消", running: "运行中", awaiting_patch_review: "等待审核 Markdown 修订" } as Record<string, string>)[value ?? ""] ?? String(value ?? "未知");
 }
 
 function ensureAttempt(
@@ -190,6 +210,17 @@ function applyWorkflowEvent(event: WorkflowEvent): void {
   } else if (event.kind === "fact_checkpoint_updated") {
     status.textContent = `来源事实检查点 · ${event.completed_tasks ?? 0}/${event.total_tasks ?? 0} 个任务完成`;
     timelineStep(`事实检查点：${event.completed_tasks ?? 0}/${event.total_tasks ?? 0}`);
+  } else if (event.kind === "patch_review_requested") {
+    status.textContent = `模型提出 ${event.patches ?? 0} 条 Markdown 修订建议，等待人工审核…`;
+    timelineStep(`等待审核 Markdown 修订：${event.patches ?? 0} 条建议`);
+  } else if (event.kind === "patch_review_resolved") {
+    const text = !event.applied
+      ? "修订全部拒绝，沿用原 Markdown 继续"
+      : event.rebuild_units
+        ? "修订已应用，修订触及单元边界，重新识别一次单元"
+        : "修订已应用，单元已重新绑定到修订后原文";
+    status.textContent = `${text}…`;
+    timelineStep(text);
   } else if (event.kind === "assembly_started") {
     status.textContent = "正在组装两阶段发现结果…";
     timelineStep("组装来源发现结果");
