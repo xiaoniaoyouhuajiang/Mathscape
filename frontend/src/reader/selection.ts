@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { askAdmission, resumeDiscoveryTask, runDiscoveryTask } from "../discovery-task";
-import { markdownRenderer } from "./markdown";
+import { markdownPatchSource, markdownRenderer } from "./markdown";
 import {
   getWorkspaceSettings,
   WORKSPACE_SETTINGS_CHANGED,
@@ -906,8 +906,11 @@ export class MarkdownSelection {
     const revised = pane("修订后渲染");
     const inline = textElement("pre", "markdown-patch-inline", "");
     const render = (): void => {
-      original.innerHTML = md.render(context.before + patch.old_text + context.after);
-      revised.innerHTML = md.render(context.before + replacement.value + context.after);
+      // Keep the complete enclosing block so Markdown and KaTeX retain their
+      // original context, but inject renderer-only anchors around the changed
+      // fragment. The renderer turns those anchors into old/new highlights.
+      original.innerHTML = md.render(markdownPatchSource(context.before, patch.old_text, context.after, "old"));
+      revised.innerHTML = md.render(markdownPatchSource(context.before, replacement.value, context.after, "new"));
       inline.replaceChildren(
         document.createTextNode(this.tail(context.before, 80)),
         textElement("del", "", patch.old_text),

@@ -206,6 +206,8 @@ test("Discovery paused for Markdown patch review shows a rendered comparison and
   await expect(panes).toHaveCount(2);
   await expect(panes.nth(0).locator(".katex")).toHaveCount(2);
   await expect(panes.nth(1).locator(".katex")).toHaveCount(2);
+  await expect(panes.nth(0).locator(".markdown-patch-highlight-old.markdown-patch-highlight-formula")).toHaveCount(1);
+  await expect(panes.nth(1).locator(".markdown-patch-highlight-new.markdown-patch-highlight-formula")).toHaveCount(1);
   await expect(host.locator(".markdown-patch-inline del")).toHaveText("x^2");
   await expect(host.locator(".markdown-patch-inline ins")).toHaveText("x^3");
   await expect(host.locator(".markdown-patch-review-status")).toContainText("可直接衔接 Stage B");
