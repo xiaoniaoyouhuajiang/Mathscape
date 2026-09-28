@@ -431,6 +431,21 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     assert_eq!(value["run"]["request_timeout_seconds"], 900);
     assert_eq!(value["run"]["connect_timeout_seconds"], 20);
     let run_id = StableId::parse(value["run"]["run_id"].as_str().unwrap()).unwrap();
+    let listed =
+        serde_json::to_value(service.list_discovery_runs(Some(&markdown_id)).unwrap()).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["review_status"], "reviewable");
+    assert_eq!(listed[0]["unresolved_reference_count"], 1);
+    let recovered =
+        serde_json::to_value(service.get_discovery_review(run_id.as_str()).unwrap()).unwrap();
+    assert_eq!(
+        recovered["outcome"]["review"]["result_fingerprint"],
+        value["review"]["result_fingerprint"]
+    );
+    assert_eq!(
+        recovered["outcome"]["view"]["references"][0]["status"],
+        "unresolved"
+    );
     let store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
     let persisted = store.discovery_checkpoint(&run_id).unwrap().unwrap();
     assert_eq!(
@@ -807,6 +822,12 @@ async fn discovery_pauses_for_markdown_patch_review_and_resumes_from_sqlite() {
     assert_eq!(checkpoint.status, DiscoveryCheckpointStatus::Completed);
     assert_eq!(checkpoint.artifact_id.as_str(), markdown_id);
     assert_eq!(pending_status(), None);
+    let recovered_rejected =
+        serde_json::to_value(service.get_discovery_review(rejected_run.as_str()).unwrap()).unwrap();
+    assert_eq!(
+        recovered_rejected["outcome"]["view"]["source"]["artifact_id"],
+        markdown_id
+    );
     assert_eq!(
         schemas(0).await,
         [
@@ -869,6 +890,12 @@ async fn discovery_pauses_for_markdown_patch_review_and_resumes_from_sqlite() {
     assert_eq!(
         checkpoint.snapshot["patch"]["applied"]["patched_artifact_id"],
         patched_artifact.as_str()
+    );
+    let recovered_applied =
+        serde_json::to_value(service.get_discovery_review(applied_run.as_str()).unwrap()).unwrap();
+    assert_eq!(
+        recovered_applied["outcome"]["view"]["source"]["artifact_id"],
+        patched_artifact
     );
     assert_eq!(
         schemas(3).await,

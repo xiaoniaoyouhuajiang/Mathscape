@@ -30,6 +30,7 @@ import "./styles.css";
 import { ArtifactReader } from "./reader/reader";
 import { sourceNodeDetail } from "./reader/content";
 import { markdownRenderer } from "./reader/markdown";
+import { openDiscoveryOutcome, openDiscoveryPatchReview, type DiscoveryOutcome } from "./reader/selection";
 import { LlmSettingsController } from "./llm/settings";
 import { mountDiscoveryTask } from "./discovery-task";
 import {
@@ -56,6 +57,34 @@ interface DesktopSnapshot {
   marker: MarkerRuntimeStatus;
   pdf_artifacts: PdfArtifactSummary[];
   landscape_graph: IncidenceGraph;
+}
+
+interface DiscoveryRunSummaryView {
+  run_id: string;
+  artifact_id: string;
+  artifact_name: string | null;
+  conversion_id: string | null;
+  input_fingerprint: string;
+  result_fingerprint: string | null;
+  pipeline_version: string;
+  status: string;
+  review_status: "processing" | "reviewable" | "accepted" | "registered" | "discarded" | "terminal";
+  profile_id: string;
+  unit_count: number;
+  fact_count: number;
+  pending_task_count: number;
+  unresolved_reference_count: number;
+  relation_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface DiscoveryReviewEnvelopeView {
+  run_id: string;
+  review_status: string;
+  created_at: string;
+  updated_at: string;
+  outcome: DiscoveryOutcome;
 }
 
 interface MarkerRuntimeStatus {
@@ -188,6 +217,15 @@ app.innerHTML = `
           <span class="field-label">最近一次解析</span>
           <p>选择图中的 PDF 节点以配置连续页码范围。</p>
         </section>
+        <section id="discovery-ledger" class="discovery-ledger">
+          <div class="ledger-heading">
+            <span class="field-label">内容发现记录</span>
+            <button id="refresh-discovery-runs" class="copy-button" type="button">刷新</button>
+          </div>
+          <div id="discovery-runs-list" class="discovery-runs-list">
+            <p class="ledger-empty">正在读取运行记录…</p>
+          </div>
+        </section>
       </aside>
 
       <section class="canvas-panel" aria-label="数学地图">
@@ -285,6 +323,8 @@ const emptyStateMessage = requiredElement<HTMLElement>("#empty-state-message");
 const nodeDetail = requiredElement<HTMLElement>("#node-detail");
 const lastImport = requiredElement<HTMLElement>("#last-import");
 const lastParse = requiredElement<HTMLElement>("#last-parse");
+const discoveryRunsList = requiredElement<HTMLElement>("#discovery-runs-list");
+const refreshDiscoveryRunsButton = requiredElement<HTMLButtonElement>("#refresh-discovery-runs");
 const markerState = requiredElement<HTMLElement>("#marker-state");
 const markerVersion = requiredElement<HTMLElement>("#marker-version");
 const markerProblem = requiredElement<HTMLElement>("#marker-problem");
@@ -417,19 +457,21 @@ try {
 } catch { /* Optional presentation preference. */ }
 
 importButton.addEventListener("click", () => void importPdf());
+refreshDiscoveryRunsButton.addEventListener("click", () => void loadDiscoveryRuns());
 requiredElement<HTMLButtonElement>("#copy-workspace-id").addEventListener("click", () => {
   void copyIdentifier(workspaceId.textContent ?? "");
 });
 void loadSnapshot();
 void llmSettings.loadSummary();
 window.addEventListener("mathscape:source-map-changed", () => void loadSnapshot());
+window.addEventListener("mathscape:discovery-runs-changed", () => void loadDiscoveryRuns());
 window.addEventListener("mathscape:open-source", (event) => {
-  const detail = (event as CustomEvent<{ artifactId: string; title: string; focus?: { start: number; end: number; blockIds?: string[] }; refreshMap?: boolean }>).detail;
+  const detail = (event as CustomEvent<{ artifactId: string; conversionId?: string | null; title: string; focus?: { start: number; end: number; blockIds?: string[] }; patchRunId?: string; refreshMap?: boolean }>).detail;
   void (async () => {
     // Rendering the map closes the reader, so refresh before opening it.
     if (detail.refreshMap) await loadSnapshot();
     readerHost.hidden = false;
-    await reader.open(detail.artifactId, detail.title, detail.focus);
+    await reader.open(detail.artifactId, detail.title, detail.focus, detail.patchRunId, detail.conversionId);
   })();
 });
 window.setInterval(() => void syncParseState(), 1000);
@@ -484,6 +526,7 @@ async function loadSnapshot(): Promise<void> {
   try {
     const snapshot = await invoke<DesktopSnapshot>("get_desktop_snapshot");
     renderSnapshot(snapshot);
+    void loadDiscoveryRuns();
     serviceState.textContent = "本地内核已连接";
     serviceState.classList.add("is-ready");
   } catch (error: unknown) {
@@ -491,6 +534,131 @@ async function loadSnapshot(): Promise<void> {
     showToast(errorMessage(error), "error");
   } finally {
     setBusy(false);
+  }
+}
+
+function discoveryRunStatusLabel(status: string): string {
+  return ({
+    processing: "处理中",
+    reviewable: "待审核",
+    accepted: "已接受，尚未登记",
+    registered: "已登记",
+    discarded: "已放弃",
+    terminal: "已结束",
+  } as Record<string, string>)[status] ?? status;
+}
+
+function discoveryWorkflowStatusLabel(status: string): string {
+  return ({
+    running: "运行中",
+    awaiting_patch_review: "等待 Markdown 修订审核",
+    completed: "完成",
+    partial: "部分完成",
+    needs_attention: "需要处理",
+    failed: "失败",
+    cancelled: "已取消",
+  } as Record<string, string>)[status] ?? status;
+}
+
+function shortRunId(runId: string): string {
+  return runId.length > 34 ? `${runId.slice(0, 17)}…${runId.slice(-12)}` : runId;
+}
+
+async function loadDiscoveryRuns(): Promise<void> {
+  refreshDiscoveryRunsButton.disabled = true;
+  try {
+    const runs = await invoke<DiscoveryRunSummaryView[]>("list_discovery_runs", {
+      request: { artifact_id: null },
+    });
+    discoveryRunsList.replaceChildren();
+    if (runs.length === 0) {
+      discoveryRunsList.append(textElement("p", "ledger-empty", "尚无已保存的内容发现记录。"));
+      return;
+    }
+    runs.slice(0, 20).forEach(run => renderDiscoveryRunItem(run));
+  } catch (error) {
+    discoveryRunsList.replaceChildren(textElement("p", "ledger-error", `读取失败：${errorMessage(error)}`));
+  } finally {
+    refreshDiscoveryRunsButton.disabled = false;
+  }
+}
+
+function renderDiscoveryRunItem(run: DiscoveryRunSummaryView): void {
+  const item = textElement("article", `discovery-run-item state-${run.review_status}`, "");
+  const heading = textElement("div", "discovery-run-item-heading", "");
+  heading.append(
+    textElement("strong", "", run.artifact_name ?? run.artifact_id),
+    textElement("span", "discovery-run-state", discoveryRunStatusLabel(run.review_status)),
+  );
+  const counts = textElement(
+    "span",
+    "discovery-run-counts",
+    `${discoveryWorkflowStatusLabel(run.status)} · ${run.unit_count} 单元 · ${run.relation_count} 关系 · ${run.unresolved_reference_count} 未解析引用`,
+  );
+  const actions = textElement("div", "discovery-run-actions", "");
+  const open = textElement("button", "", "打开审核结果");
+  open.type = "button";
+  open.disabled = run.status === "running";
+  if (run.status === "running") open.title = "运行尚未完成，请稍后刷新";
+  open.onclick = () => void openPersistedDiscoveryRun(run, open);
+  actions.append(open);
+  if (run.review_status === "reviewable" && run.result_fingerprint !== null) {
+    const discard = textElement("button", "", "放弃结果");
+    discard.type = "button";
+    discard.onclick = () => void discardPersistedDiscoveryRun(run, discard);
+    actions.append(discard);
+  }
+  item.append(
+    heading,
+    counts,
+    textElement("span", "discovery-run-id", shortRunId(run.run_id)),
+    actions,
+  );
+  discoveryRunsList.append(item);
+}
+
+async function openPersistedDiscoveryRun(
+  run: DiscoveryRunSummaryView,
+  button: HTMLButtonElement,
+): Promise<void> {
+  button.disabled = true;
+  try {
+    if (run.status === "awaiting_patch_review") {
+      openDiscoveryPatchReview(run.run_id, run.artifact_id, run.conversion_id, run.artifact_name ?? "Markdown 修订审核");
+      return;
+    }
+    const envelope = await invoke<DiscoveryReviewEnvelopeView>("get_discovery_review", {
+      runId: run.run_id,
+    });
+    openDiscoveryOutcome(envelope.outcome);
+  } catch (error) {
+    showToast(`恢复内容发现结果失败：${errorMessage(error)}`, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function discardPersistedDiscoveryRun(
+  run: DiscoveryRunSummaryView,
+  button: HTMLButtonElement,
+): Promise<void> {
+  if (run.result_fingerprint === null) return;
+  const reason = "用户从内容发现记录中放弃本次未登记结果";
+  button.disabled = true;
+  try {
+    await invoke("discard_discovery_run", {
+      request: {
+        run_id: run.run_id,
+        request_id: `mathscape:discovery-disposition/${crypto.randomUUID()}`,
+        expected_result_fingerprint: run.result_fingerprint,
+        reason,
+      },
+    });
+    await loadDiscoveryRuns();
+    showToast("已放弃本次内容发现结果；原始检查点仍保留。", "success");
+  } catch (error) {
+    showToast(`放弃内容发现结果失败：${errorMessage(error)}`, "error");
+    button.disabled = false;
   }
 }
 
@@ -505,6 +673,7 @@ async function importPdf(): Promise<void> {
     }
     renderSnapshot(result.snapshot);
     renderImportResult(result);
+    void loadDiscoveryRuns();
     showToast(
       result.outcome === "inserted"
         ? `已导入 ${result.filename}`

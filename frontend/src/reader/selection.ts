@@ -147,8 +147,8 @@ interface DiscoveryRun {
   provider: string;
   requested_model: string;
   admission: SelectionRequest["admission"];
-  request_timeout_seconds: number;
-  connect_timeout_seconds: number;
+  request_timeout_seconds: number | null;
+  connect_timeout_seconds: number | null;
   attempts: number;
   input_tokens: number | null;
   output_tokens: number | null;
@@ -157,7 +157,7 @@ interface DiscoveryRun {
 }
 
 type WorkflowStatus = "running" | "awaiting_patch_review" | "completed" | "partial" | "needs_attention" | "failed" | "cancelled";
-type DiscoveryOutcome = {
+export type DiscoveryOutcome = {
   outcome: WorkflowStatus;
   view: DesktopDiscoveryView;
   review: SourceReviewProjection | null;
@@ -304,11 +304,30 @@ function openSourceArtifact(source: DiscoverySource, focus?: DiscoveryAnchorView
   window.dispatchEvent(new CustomEvent("mathscape:open-source", {
     detail: {
       artifactId: source.artifact_id,
+      conversionId: source.conversion_id,
       title: "修订后 Markdown",
       focus: focus ? { start: focus.start, end: focus.end, blockIds: focus.block_ids } : undefined,
       refreshMap,
     },
   }));
+}
+
+export function openDiscoveryPatchReview(
+  runId: string,
+  artifactId: string,
+  conversionId: string | null,
+  title: string,
+): void {
+  window.dispatchEvent(new CustomEvent("mathscape:open-source", {
+    detail: { artifactId, conversionId, title, patchRunId: runId },
+  }));
+}
+
+/** Opens a persisted discovery result in a Markdown reader without losing its
+ * review projection. The reader consumes this handoff when it mounts. */
+export function openDiscoveryOutcome(outcome: DiscoveryOutcome): void {
+  handedOffOutcome = outcome;
+  if (outcome.view.source) openSourceArtifact(outcome.view.source);
 }
 
 const DECIDED_PATCH_STATUSES = new Set(["accepted", "applied", "rejected"]);
@@ -353,7 +372,7 @@ export class MarkdownSelection {
   private endButton: HTMLButtonElement;
   private indexes: Map<string, number>;
 
-  constructor(private data: AnchoredMarkdown, private article: HTMLElement) {
+  constructor(private data: AnchoredMarkdown, private article: HTMLElement, patchRunId?: string) {
     this.indexes = new Map(data.blocks.map((b, i) => [b.id, i]));
     this.panel.className = "selection-panel";
     this.panel.setAttribute("aria-label", "来源发现选区");
@@ -411,6 +430,8 @@ export class MarkdownSelection {
       handedOffOutcome = null;
       this.renderDiscovery(handedOff);
       this.refresh();
+    } else if (patchRunId) {
+      void this.openWorkflowPatchReview(patchRunId);
     } else {
       void this.loadPendingPatchReview();
     }
@@ -480,6 +501,7 @@ export class MarkdownSelection {
     this.refresh();
     try {
       const outcome = await resumeDiscoveryTask<DiscoveryOutcome>(runId);
+      window.dispatchEvent(new Event("mathscape:discovery-runs-changed"));
       const source = outcome.view.source;
       if (this.disposed || (source && !this.matchesSnapshot(source))) {
         // Finished on the patched artifact (or this reader is gone): continue
@@ -701,6 +723,7 @@ export class MarkdownSelection {
     this.refresh();
     try {
       const outcome = await runDiscoveryTask<DiscoveryOutcome>({ selection, profile_id: null });
+      window.dispatchEvent(new Event("mathscape:discovery-runs-changed"));
       if (this.disposed || version !== this.version) return;
       this.renderDiscovery(outcome);
     } catch (error) {
@@ -1371,10 +1394,13 @@ export class MarkdownSelection {
       ? "token 数未知"
       : `${run.total_tokens} tokens`;
     const admission = run.admission === "automatic_candidate" ? "自动候选策略（尚未登记）" : "等待人工审核";
+    const timeout = run.request_timeout_seconds === null
+      ? "原运行期限未记录"
+      : `总期限 ${run.request_timeout_seconds} 秒`;
     return textElement(
       "p",
       "discovery-run",
-      `${run.profile_id} · ${run.requested_model} · ${run.attempts} 次调用 · ${usage} · ${run.elapsed_ms} ms · 总期限 ${run.request_timeout_seconds} 秒 · ${admission}`,
+      `${run.profile_id} · ${run.requested_model} · ${run.attempts} 次调用 · ${usage} · ${run.elapsed_ms} ms · ${timeout} · ${admission}`,
     );
   }
 }

@@ -146,7 +146,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 1",
@@ -222,6 +222,16 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
             )
             .unwrap(),
         "discovery_patch_review"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 10",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "discovery_run_recovery"
     );
     for table in [
         "markdown_patch_sets",
@@ -352,7 +362,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::prepare(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 9
+            supported: 10
         })
     ));
     cleanup(&directory);
@@ -373,7 +383,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -411,7 +421,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 3",
@@ -447,7 +457,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
     assert_eq!(
         connection
@@ -500,7 +510,7 @@ fn repairs_a_v5_discovery_schema_missing_result_fingerprint() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
     let has_result_fingerprint = connection
         .prepare("PRAGMA table_info(discovery_runs)")
@@ -703,6 +713,58 @@ fn atomically_persists_and_replaces_discovery_checkpoints() {
 }
 
 #[test]
+fn discarding_a_run_is_idempotent_and_blocks_acceptance() {
+    let directory = test_directory("discovery-run-disposition");
+    let database = directory.join("catalog.sqlite3");
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
+    let artifact_id = StableId::parse("mathscape:artifact/disposition-fixture").unwrap();
+    insert_fixture_artifact(&database, &artifact_id, &hash('a'));
+    let run_id = StableId::parse("mathscape:discovery-run/disposition-fixture").unwrap();
+    let mut store = SqliteArtifactStore::prepare(&database).unwrap();
+    store
+        .save_discovery_checkpoint(&discovery_checkpoint(run_id.clone(), artifact_id))
+        .unwrap();
+    let actor = ActorRef::parse("fixture-reviewer").unwrap();
+    let request_id = StableId::parse("mathscape:discovery-disposition/fixture").unwrap();
+    let receipt = store
+        .discard_discovery_run(
+            &run_id,
+            &request_id,
+            &hash('4'),
+            &actor,
+            "fixture discard",
+            &Timestamp::parse("2026-09-28T00:00:00Z").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(receipt.disposition, "discarded");
+    assert!(store.discovery_run_is_discarded(&run_id).unwrap());
+    let repeated = store
+        .discard_discovery_run(
+            &run_id,
+            &StableId::parse("mathscape:discovery-disposition/other").unwrap(),
+            &hash('4'),
+            &actor,
+            "different text",
+            &Timestamp::parse("2026-09-28T00:00:01Z").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(repeated.request_id, request_id);
+    let record = AcceptedRegistrationPlanRecord {
+        decision_id: StableId::parse("mathscape:acceptance/disposition-fixture").unwrap(),
+        run_id,
+        actor,
+        decided_at: Timestamp::parse("2026-09-28T00:00:00Z").unwrap(),
+        authority: StoredAcceptanceAuthority::HumanReview,
+        expected_result_fingerprint: hash('4'),
+        selection: json!({"kind":"all_validated"}),
+        plan_fingerprint: hash('5'),
+        plan: json!({"version":"fixture"}),
+    };
+    assert!(store.save_registration_plan(&record).is_err());
+    cleanup(&directory);
+}
+
+#[test]
 fn only_a_run_awaiting_patch_review_moves_onto_a_patched_snapshot() {
     let directory = test_directory("patch-review-rebind");
     let database = directory.join("catalog.sqlite3");
@@ -756,7 +818,7 @@ fn only_a_run_awaiting_patch_review_moves_onto_a_patched_snapshot() {
 }
 
 #[test]
-fn upgrading_to_v9_preserves_discovery_runs_and_their_children() {
+fn upgrading_to_v10_preserves_discovery_runs_and_their_children() {
     let directory = test_directory("upgrade-v8-patch-review");
     let database = directory.join("catalog.sqlite3");
     drop(SqliteArtifactStore::prepare(&database).unwrap());
@@ -797,7 +859,8 @@ fn upgrading_to_v9_preserves_discovery_runs_and_their_children() {
              DROP TABLE discovery_runs_v8;
              CREATE INDEX discovery_runs_by_source
                 ON discovery_runs(artifact_id, input_fingerprint, updated_at);
-             DELETE FROM schema_migrations WHERE version = 9;
+             DROP TABLE discovery_run_dispositions;
+             DELETE FROM schema_migrations WHERE version IN (9, 10);
              PRAGMA user_version = 8;
              COMMIT;",
         )
@@ -819,7 +882,7 @@ fn upgrading_to_v9_preserves_discovery_runs_and_their_children() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
     let violations = connection
         .prepare("PRAGMA foreign_key_check")

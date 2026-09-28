@@ -25,8 +25,8 @@ use thiserror::Error;
 pub use discovery::{
     AcceptedRegistrationPlanRecord, DiscoveryAttemptCheckpoint, DiscoveryCheckpointStatus,
     DiscoveryDiagnosticCheckpoint, DiscoveryFactCheckpointRecord, DiscoveryRunCheckpoint,
-    DiscoveryUnitCheckpointRecord, DiscoveryValidationCheckpoint, PendingDiscoveryTask,
-    StoredAcceptanceAuthority, StoredDiscoveryRun,
+    DiscoveryRunDispositionReceipt, DiscoveryUnitCheckpointRecord, DiscoveryValidationCheckpoint,
+    PendingDiscoveryTask, StoredAcceptanceAuthority, StoredDiscoveryRun, StoredDiscoveryRunSummary,
 };
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
@@ -47,7 +47,9 @@ const MARKDOWN_PATCHES_MIGRATION: &str =
     include_str!("../../../migrations/0008_markdown_patches.sql");
 const DISCOVERY_PATCH_REVIEW_MIGRATION: &str =
     include_str!("../../../migrations/0009_discovery_patch_review.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 9;
+const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
+    include_str!("../../../migrations/0010_discovery_run_recovery.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 10;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -203,6 +205,7 @@ impl SqliteArtifactStore {
             });
         }
         validate_markdown_patch_schema(&connection)?;
+        validate_discovery_run_recovery_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -269,7 +272,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=9 => {
+            6..=10 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -297,12 +300,16 @@ impl SqliteArtifactStore {
         if version < 9 {
             migrate_discovery_patch_review(&connection)?;
         }
+        if version < 10 {
+            migrate_discovery_run_recovery(&connection)?;
+        }
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
         connection.prepare(
             "SELECT patch_set_id, patch_fingerprint, status FROM markdown_patch_sets LIMIT 0",
         )?;
         validate_markdown_patch_schema(&connection)?;
+        validate_discovery_run_recovery_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -531,6 +538,43 @@ impl SqliteArtifactStore {
             )
             .optional()?;
         run_id.map(StableId::parse).transpose().map_err(Into::into)
+    }
+
+    pub fn list_discovery_run_summaries(
+        &self,
+        artifact_id: Option<&StableId>,
+    ) -> Result<Vec<StoredDiscoveryRunSummary>, SqliteStoreError> {
+        discovery::list_discovery_run_summaries(&self.connection, artifact_id)
+    }
+
+    pub fn discard_discovery_run(
+        &mut self,
+        run_id: &StableId,
+        request_id: &StableId,
+        expected_result_fingerprint: &ContentHash,
+        actor: &mathscape_domain::ActorRef,
+        reason: &str,
+        decided_at: &Timestamp,
+    ) -> Result<DiscoveryRunDispositionReceipt, SqliteStoreError> {
+        discovery::discard_discovery_run(
+            &mut self.connection,
+            run_id,
+            request_id,
+            expected_result_fingerprint,
+            actor,
+            reason,
+            decided_at,
+        )
+    }
+
+    pub fn discovery_run_is_discarded(&self, run_id: &StableId) -> Result<bool, SqliteStoreError> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM discovery_run_dispositions WHERE run_id = ?1)",
+                params![run_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
     }
 
     pub fn discovery_run_count(&self) -> Result<u64, SqliteStoreError> {
@@ -1248,6 +1292,14 @@ fn migrate_discovery_patch_review(connection: &Connection) -> Result<(), SqliteS
     migrated
 }
 
+fn migrate_discovery_run_recovery(connection: &Connection) -> Result<(), SqliteStoreError> {
+    let transaction =
+        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)?;
+    transaction.execute_batch(DISCOVERY_RUN_RECOVERY_MIGRATION)?;
+    transaction.commit()?;
+    validate_discovery_run_recovery_schema(connection)
+}
+
 const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
     ("schema_migrations", &["version", "name"]),
     (
@@ -1549,6 +1601,33 @@ fn validate_markdown_patch_schema(connection: &Connection) -> Result<(), SqliteS
             return Err(SqliteStoreError::MissingSchemaObject {
                 object_kind: "table",
                 name: table,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_discovery_run_recovery_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
+    for column in [
+        "run_id",
+        "disposition",
+        "reason",
+        "actor",
+        "request_id",
+        "decided_at",
+    ] {
+        if !table_has_column(connection, "discovery_run_dispositions", column)? {
+            return Err(SqliteStoreError::MissingSchemaObject {
+                object_kind: "column",
+                name: "discovery_run_dispositions",
+            });
+        }
+    }
+    for index in ["discovery_run_dispositions_by_decision"] {
+        if !schema_object_exists(connection, "index", index)? {
+            return Err(SqliteStoreError::MissingSchemaObject {
+                object_kind: "index",
+                name: index,
             });
         }
     }

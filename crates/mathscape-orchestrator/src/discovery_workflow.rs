@@ -255,6 +255,49 @@ impl<'a> DiscoveryWorkflow<'a> {
         Ok(self)
     }
 
+    /// Reconstructs a completed/partial workflow for read-only projection
+    /// from values that have already passed deterministic checkpoint
+    /// revalidation. No provider request is made and the returned workflow is
+    /// not intended to resume LLM work.
+    pub fn restore_from_revalidated(
+        backend: &'a dyn LlmBackend,
+        limits: DiscoveryWorkflowLimits,
+        run_id: StableId,
+        prepared: &PreparedUnitDiscoveryRequest,
+        restored: RevalidatedDiscovery,
+        attempts: Vec<WorkflowAttempt>,
+        diagnostics: Vec<StageValidationReport>,
+        events: Vec<String>,
+        patch: MarkdownPatchWorkflowState,
+        status: WorkflowStatus,
+    ) -> Result<Self, String> {
+        let (units, result) = restored.into_parts();
+        let batches =
+            plan_source_facts(prepared, &units, limits.max_tasks_per_batch).map_err(|report| {
+                format!(
+                    "stored fact plan no longer validates ({} diagnostics)",
+                    report.diagnostics.len()
+                )
+            })?;
+        let facts = result
+            .tasks()
+            .iter()
+            .cloned()
+            .map(|task| (task.task_ref().to_owned(), task))
+            .collect();
+        let mut workflow = Self::new(backend, limits).with_run_id(run_id);
+        workflow.attempts = attempts;
+        workflow.units = Some(units);
+        workflow.batches = batches;
+        workflow.facts = facts;
+        workflow.diagnostics = diagnostics;
+        workflow.events = events;
+        workflow.source_input = Some(prepared.input().clone());
+        workflow.patch = patch;
+        workflow.status = status;
+        Ok(workflow)
+    }
+
     /// Applies an accepted subset of the pending patch set to the exact base
     /// Markdown. The result must be handed back through
     /// `resolve_patch_review` before the run continues.

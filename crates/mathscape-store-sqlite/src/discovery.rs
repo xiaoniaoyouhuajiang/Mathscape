@@ -102,6 +102,39 @@ pub struct StoredDiscoveryRun {
     pub updated_at: String,
 }
 
+/// Compact, query-oriented metadata used by the Desktop run ledger. The full
+/// checkpoint is deliberately not loaded for list views.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredDiscoveryRunSummary {
+    pub run_id: StableId,
+    pub artifact_id: StableId,
+    pub artifact_name: Option<String>,
+    pub conversion_id: Option<StableId>,
+    pub input_fingerprint: ContentHash,
+    pub result_fingerprint: Option<ContentHash>,
+    pub pipeline_version: String,
+    pub status: DiscoveryCheckpointStatus,
+    pub review_status: String,
+    pub profile_id: String,
+    pub unit_count: usize,
+    pub fact_count: usize,
+    pub pending_task_count: usize,
+    pub unresolved_reference_count: usize,
+    pub relation_count: usize,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryRunDispositionReceipt {
+    pub run_id: StableId,
+    pub disposition: String,
+    pub request_id: StableId,
+    pub actor: ActorRef,
+    pub reason: String,
+    pub decided_at: Timestamp,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StoredAcceptanceAuthority {
@@ -520,6 +553,246 @@ pub(super) fn read_discovery_checkpoint(
     }))
 }
 
+pub(super) fn list_discovery_run_summaries(
+    connection: &Connection,
+    artifact_id: Option<&StableId>,
+) -> Result<Vec<StoredDiscoveryRunSummary>, SqliteStoreError> {
+    let mut statement = connection.prepare(
+        "SELECT d.run_id, d.artifact_id, ar.original_filename, d.conversion_id, d.input_fingerprint,
+                d.result_fingerprint, d.pipeline_version, d.status, d.profile_id,
+                d.created_at, d.updated_at,
+                (SELECT COUNT(*) FROM discovery_units u WHERE u.run_id = d.run_id),
+                (SELECT COUNT(*) FROM discovery_fact_tasks f WHERE f.run_id = d.run_id),
+                (SELECT COUNT(*) FROM discovery_pending_tasks p WHERE p.run_id = d.run_id),
+                (SELECT COUNT(*) FROM json_each(d.snapshot_json, '$.result.references')
+                 WHERE json_extract(value, '$.resolution.status')
+                       IN ('unresolved', 'ambiguous', 'candidate')),
+                COALESCE(json_array_length(d.snapshot_json, '$.result.relations'), 0),
+                EXISTS(SELECT 1 FROM discovery_acceptance_decisions a WHERE a.run_id = d.run_id),
+                EXISTS(SELECT 1 FROM source_registration_commits c
+                       JOIN discovery_acceptance_decisions a ON a.decision_id = c.decision_id
+                       WHERE a.run_id = d.run_id),
+                EXISTS(SELECT 1 FROM discovery_run_dispositions x WHERE x.run_id = d.run_id)
+         FROM discovery_runs d
+         JOIN artifacts a ON a.artifact_id = d.artifact_id
+         JOIN artifact_revisions ar ON ar.artifact_id = a.artifact_id
+             AND ar.revision_id = a.current_revision
+         WHERE (?1 IS NULL OR d.artifact_id = ?1)
+         ORDER BY d.updated_at DESC, d.run_id DESC",
+    )?;
+    let rows = statement.query_map([artifact_id.map(StableId::as_str)], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, String>(9)?,
+            row.get::<_, String>(10)?,
+            row.get::<_, i64>(11)?,
+            row.get::<_, i64>(12)?,
+            row.get::<_, i64>(13)?,
+            row.get::<_, i64>(14)?,
+            row.get::<_, i64>(15)?,
+            row.get::<_, i64>(16)?,
+            row.get::<_, i64>(17)?,
+            row.get::<_, i64>(18)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (
+            run_id,
+            artifact_id,
+            artifact_name,
+            conversion_id,
+            input_fingerprint,
+            result_fingerprint,
+            pipeline_version,
+            status,
+            profile_id,
+            created_at,
+            updated_at,
+            unit_count,
+            fact_count,
+            pending_task_count,
+            unresolved_reference_count,
+            relation_count,
+            accepted,
+            registered,
+            discarded,
+        ) = row?;
+        let status = parse_status(&status)?;
+        let review_status = if discarded != 0 {
+            "discarded"
+        } else if registered != 0 {
+            "registered"
+        } else if accepted != 0 {
+            "accepted"
+        } else {
+            match status {
+                DiscoveryCheckpointStatus::Running
+                | DiscoveryCheckpointStatus::AwaitingPatchReview => "processing",
+                DiscoveryCheckpointStatus::Completed
+                | DiscoveryCheckpointStatus::Partial
+                | DiscoveryCheckpointStatus::NeedsAttention => "reviewable",
+                DiscoveryCheckpointStatus::Failed | DiscoveryCheckpointStatus::Cancelled => {
+                    "terminal"
+                }
+            }
+        };
+        Ok(StoredDiscoveryRunSummary {
+            run_id: StableId::parse(run_id)?,
+            artifact_id: StableId::parse(artifact_id)?,
+            artifact_name,
+            conversion_id: conversion_id.map(StableId::parse).transpose()?,
+            input_fingerprint: ContentHash::parse(input_fingerprint)?,
+            result_fingerprint: result_fingerprint.map(ContentHash::parse).transpose()?,
+            pipeline_version,
+            status,
+            review_status: review_status.into(),
+            profile_id,
+            unit_count: usize::try_from(unit_count).map_err(|_| {
+                SqliteStoreError::InvalidStoredValue {
+                    field: "discovery_runs.unit_count",
+                    value: unit_count.to_string(),
+                }
+            })?,
+            fact_count: usize::try_from(fact_count).map_err(|_| {
+                SqliteStoreError::InvalidStoredValue {
+                    field: "discovery_runs.fact_count",
+                    value: fact_count.to_string(),
+                }
+            })?,
+            pending_task_count: usize::try_from(pending_task_count).map_err(|_| {
+                SqliteStoreError::InvalidStoredValue {
+                    field: "discovery_runs.pending_task_count",
+                    value: pending_task_count.to_string(),
+                }
+            })?,
+            unresolved_reference_count: usize::try_from(unresolved_reference_count).map_err(
+                |_| SqliteStoreError::InvalidStoredValue {
+                    field: "discovery_runs.unresolved_reference_count",
+                    value: unresolved_reference_count.to_string(),
+                },
+            )?,
+            relation_count: usize::try_from(relation_count).map_err(|_| {
+                SqliteStoreError::InvalidStoredValue {
+                    field: "discovery_runs.relation_count",
+                    value: relation_count.to_string(),
+                }
+            })?,
+            created_at,
+            updated_at,
+        })
+    })
+    .collect()
+}
+
+pub(super) fn discard_discovery_run(
+    connection: &mut Connection,
+    run_id: &StableId,
+    request_id: &StableId,
+    expected_result_fingerprint: &ContentHash,
+    actor: &ActorRef,
+    reason: &str,
+    decided_at: &Timestamp,
+) -> Result<DiscoveryRunDispositionReceipt, SqliteStoreError> {
+    if reason.trim().is_empty() {
+        return Err(SqliteStoreError::DiscoveryInvariant(
+            "discovery run disposition reason cannot be blank".into(),
+        ));
+    }
+    let transaction = connection.transaction()?;
+    let row = transaction
+        .query_row(
+            "SELECT result_fingerprint, status FROM discovery_runs WHERE run_id = ?1",
+            [run_id.as_str()],
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let Some((stored_result, status)) = row else {
+        return Err(SqliteStoreError::DiscoveryInvariant(
+            "discovery run does not exist".into(),
+        ));
+    };
+    if stored_result.as_deref() != Some(expected_result_fingerprint.as_str()) {
+        return Err(SqliteStoreError::DiscoveryInvariant(
+            "discovery result fingerprint is stale".into(),
+        ));
+    }
+    if matches!(
+        parse_status(&status)?,
+        DiscoveryCheckpointStatus::Running | DiscoveryCheckpointStatus::AwaitingPatchReview
+    ) {
+        return Err(SqliteStoreError::DiscoveryInvariant(
+            "a running or patch-paused discovery run cannot be discarded here".into(),
+        ));
+    }
+    let accepted: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM discovery_acceptance_decisions WHERE run_id = ?1)",
+        [run_id.as_str()],
+        |row| row.get(0),
+    )?;
+    if accepted {
+        return Err(SqliteStoreError::DiscoveryInvariant(
+            "an accepted discovery run must use registration reversal".into(),
+        ));
+    }
+    if let Some(existing) = transaction
+        .query_row(
+            "SELECT run_id, disposition, reason, actor, request_id, decided_at
+             FROM discovery_run_dispositions WHERE run_id = ?1",
+            [run_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()?
+    {
+        transaction.commit()?;
+        return Ok(DiscoveryRunDispositionReceipt {
+            run_id: StableId::parse(existing.0)?,
+            disposition: existing.1,
+            request_id: StableId::parse(existing.4)?,
+            actor: ActorRef::parse(existing.3)?,
+            reason: existing.2,
+            decided_at: Timestamp::parse(existing.5)?,
+        });
+    }
+    transaction.execute(
+        "INSERT INTO discovery_run_dispositions
+         (run_id, disposition, reason, actor, request_id, decided_at)
+         VALUES (?1, 'discarded', ?2, ?3, ?4, ?5)",
+        params![
+            run_id.as_str(),
+            reason,
+            actor.as_str(),
+            request_id.as_str(),
+            decided_at.as_str(),
+        ],
+    )?;
+    transaction.commit()?;
+    Ok(DiscoveryRunDispositionReceipt {
+        run_id: run_id.clone(),
+        disposition: "discarded".into(),
+        request_id: request_id.clone(),
+        actor: actor.clone(),
+        reason: reason.into(),
+        decided_at: decided_at.clone(),
+    })
+}
+
 pub(super) fn save_registration_plan(
     connection: &mut Connection,
     record: &AcceptedRegistrationPlanRecord,
@@ -542,6 +815,16 @@ pub(super) fn save_registration_plan(
     {
         return Err(SqliteStoreError::DiscoveryInvariant(
             "acceptance decision does not match the stored discovery result".into(),
+        ));
+    }
+    let discarded: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM discovery_run_dispositions WHERE run_id = ?1)",
+        [record.run_id.as_str()],
+        |row| row.get(0),
+    )?;
+    if discarded {
+        return Err(SqliteStoreError::DiscoveryInvariant(
+            "a discarded discovery result cannot be accepted".into(),
         ));
     }
     let existing = transaction

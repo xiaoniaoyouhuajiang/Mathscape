@@ -53,6 +53,13 @@ impl RevalidatedDiscovery {
     pub fn result(&self) -> &DiscoveryResult {
         &self.result
     }
+
+    /// Moves the deterministically revalidated values into a read-only
+    /// workflow reconstruction. This does not expose deserialization setters;
+    /// callers must obtain the pair from `revalidate_discovery_checkpoint`.
+    pub fn into_parts(self) -> (ValidatedUnitSet, DiscoveryResult) {
+        (self.units, self.result)
+    }
 }
 
 #[derive(Debug, Error)]

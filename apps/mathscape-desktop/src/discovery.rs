@@ -3,7 +3,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use mathscape_domain::{
@@ -11,7 +11,10 @@ use mathscape_domain::{
     DiscoveryInput, DiscoverySelectionRequest, FactTaskProposal, MarkdownPatchSet,
     MarkdownPatchStatus, StableId, Timestamp, UnitDiscoveryCheckpoint,
 };
-use mathscape_llm::{GenaiBackend, GenaiBackendOptions, LlmError, LlmProfile};
+use mathscape_llm::{
+    GenaiBackend, GenaiBackendOptions, LLM_PROFILE_VERSION, LlmError, LlmProfile, LlmResponse,
+    ScriptedLlmBackend, WireProtocol,
+};
 use mathscape_orchestrator::{
     AcceptanceAuthority, AcceptanceSelection, DiscoveryAcceptanceDecision, DiscoveryRunSummary,
     DiscoveryWorkflow, DiscoveryWorkflowEvent, DiscoveryWorkflowLimits, MarkdownPatchGate,
@@ -24,8 +27,9 @@ use mathscape_orchestrator::{
 use mathscape_store_sqlite::{
     AcceptedRegistrationPlanRecord, DiscoveryAttemptCheckpoint, DiscoveryCheckpointStatus,
     DiscoveryDiagnosticCheckpoint, DiscoveryFactCheckpointRecord, DiscoveryRunCheckpoint,
-    DiscoveryUnitCheckpointRecord, DiscoveryValidationCheckpoint, PendingDiscoveryTask,
-    SourceRegistrationReceipt, SqliteArtifactStore, SqliteStoreError, StoredAcceptanceAuthority,
+    DiscoveryRunDispositionReceipt, DiscoveryUnitCheckpointRecord, DiscoveryValidationCheckpoint,
+    PendingDiscoveryTask, SourceRegistrationReceipt, SqliteArtifactStore, SqliteStoreError,
+    StoredAcceptanceAuthority, StoredDiscoveryRunSummary,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -186,6 +190,51 @@ pub struct DesktopDiscoveryOutcome {
     run: DesktopDiscoveryRun,
 }
 
+#[derive(Debug, Serialize)]
+pub struct DesktopDiscoveryRunSummary {
+    run_id: String,
+    artifact_id: String,
+    artifact_name: Option<String>,
+    conversion_id: Option<String>,
+    input_fingerprint: ContentHash,
+    result_fingerprint: Option<ContentHash>,
+    pipeline_version: String,
+    status: DiscoveryCheckpointStatus,
+    review_status: String,
+    profile_id: String,
+    unit_count: usize,
+    fact_count: usize,
+    pending_task_count: usize,
+    unresolved_reference_count: usize,
+    relation_count: usize,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DesktopDiscoveryReviewEnvelope {
+    run_id: String,
+    review_status: String,
+    created_at: String,
+    updated_at: String,
+    outcome: DesktopDiscoveryOutcome,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListDiscoveryRunsRequest {
+    artifact_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscardDiscoveryRunRequest {
+    run_id: String,
+    request_id: String,
+    expected_result_fingerprint: ContentHash,
+    reason: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DesktopDiscoveryRun {
     run_id: String,
@@ -193,8 +242,8 @@ pub struct DesktopDiscoveryRun {
     provider: String,
     requested_model: String,
     admission: DiscoveryAdmission,
-    request_timeout_seconds: u64,
-    connect_timeout_seconds: u64,
+    request_timeout_seconds: Option<u64>,
+    connect_timeout_seconds: Option<u64>,
     attempts: usize,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
@@ -276,6 +325,207 @@ struct StreamContext {
 }
 
 impl DesktopService {
+    pub fn list_discovery_runs(
+        &self,
+        artifact_id: Option<&str>,
+    ) -> Result<Vec<DesktopDiscoveryRunSummary>, DesktopDiscoveryError> {
+        let artifact_id = artifact_id
+            .map(StableId::parse)
+            .transpose()
+            .map_err(DesktopDiscoveryError::Domain)?;
+        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        store
+            .list_discovery_run_summaries(artifact_id.as_ref())
+            .map(|summaries| summaries.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
+    }
+
+    pub fn get_discovery_review(
+        &self,
+        run_id_text: &str,
+    ) -> Result<DesktopDiscoveryReviewEnvelope, DesktopDiscoveryError> {
+        let run_id = StableId::parse(run_id_text)?;
+        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        let stored = store
+            .discovery_checkpoint(&run_id)?
+            .ok_or_else(|| DesktopDiscoveryError::Checkpoint("内容发现运行不存在".into()))?;
+        let checkpoint = stored.checkpoint;
+        if !matches!(
+            checkpoint.status,
+            DiscoveryCheckpointStatus::Completed
+                | DiscoveryCheckpointStatus::Partial
+                | DiscoveryCheckpointStatus::NeedsAttention
+        ) || checkpoint.result_fingerprint.is_none()
+        {
+            return Err(DesktopDiscoveryError::Checkpoint(
+                "该运行尚未形成可恢复的来源审核结果；等待 Markdown 修订的运行请使用修订审核入口"
+                    .into(),
+            ));
+        }
+        if checkpoint.pipeline_version != DISCOVERY_PIPELINE_VERSION {
+            return Err(DesktopDiscoveryError::Checkpoint(format!(
+                "内容发现运行使用了不兼容的流水线版本 {}",
+                checkpoint.pipeline_version
+            )));
+        }
+        let source: DiscoveryInput = checkpoint_value(&checkpoint.snapshot, "source")?;
+        let document = self
+            .markdown_document(
+                source.snapshot.artifact_id.as_str(),
+                source.snapshot.conversion_id.as_ref().map(StableId::as_str),
+            )
+            .map_err(DesktopDiscoveryError::Checkpoint)?;
+        rebind_discovery_input(&document, &source, Default::default())
+            .map_err(|error| DesktopDiscoveryError::Checkpoint(error.to_string()))?;
+        let prepared = prepare_unit_discovery_request_from_input(source);
+        let fact_proposals = checkpoint
+            .facts
+            .iter()
+            .map(|fact| {
+                fact.payload
+                    .get("original")
+                    .cloned()
+                    .ok_or_else(|| {
+                        DesktopDiscoveryError::Checkpoint(format!(
+                            "事实任务 {} 缺少原始提案",
+                            fact.task_ref
+                        ))
+                    })
+                    .and_then(|value| {
+                        serde_json::from_value::<FactTaskProposal>(value)
+                            .map_err(DesktopDiscoveryError::Json)
+                    })
+            })
+            .collect::<Result<Vec<_>, DesktopDiscoveryError>>()?;
+        let restored = revalidate_discovery_checkpoint(
+            &prepared,
+            &checkpoint_value(&checkpoint.snapshot, "units")?,
+            fact_proposals,
+            DiscoveryWorkflowLimits::default().max_tasks_per_batch,
+        )
+        .map_err(|error| DesktopDiscoveryError::Checkpoint(error.to_string()))?;
+        let reproduced = discovery_result_fingerprint(restored.result());
+        if checkpoint.result_fingerprint.as_ref() != Some(&reproduced) {
+            return Err(DesktopDiscoveryError::Checkpoint(
+                "当前验证器无法重现持久化的内容发现结果".into(),
+            ));
+        }
+
+        let attempts = checkpoint
+            .attempts
+            .iter()
+            .map(|attempt| {
+                Ok(WorkflowAttempt {
+                    stage: attempt.stage.clone(),
+                    batch: attempt.batch_fingerprint.clone(),
+                    repair: attempt.repair,
+                    request: serde_json::from_value(attempt.request.clone())?,
+                    raw_text: attempt.raw_text.clone(),
+                    run: serde_json::from_value(attempt.run.clone())?,
+                    status: workflow_status(attempt.status),
+                    error: attempt.error.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, serde_json::Error>>()?;
+        let diagnostics = checkpoint
+            .reports
+            .iter()
+            .map(|report| serde_json::from_value(report.report.clone()))
+            .collect::<Result<Vec<_>, serde_json::Error>>()?;
+        let events: Vec<String> = checkpoint_value(&checkpoint.snapshot, "events")?;
+        let patch: MarkdownPatchWorkflowState = checkpoint_value(&checkpoint.snapshot, "patch")?;
+        // Recovery is a read-only projection: the saved LLM profile may have
+        // been edited or removed since this run. Build a non-executing backend
+        // from the attempt's historical identity instead of requiring current
+        // credentials or configuration.
+        let first_run = attempts
+            .first()
+            .map(|attempt| &attempt.run)
+            .ok_or_else(|| DesktopDiscoveryError::Checkpoint("检查点缺少 LLM 调用记录".into()))?;
+        let profile = LlmProfile {
+            version: LLM_PROFILE_VERSION.into(),
+            id: checkpoint.profile_id.clone(),
+            display_name: None,
+            provider: first_run.provider.clone(),
+            wire_protocol: WireProtocol::OpenAiChatCompletions,
+            model: first_run.requested_model.clone(),
+            endpoint: None,
+            credential: None,
+            capabilities: Default::default(),
+        };
+        let backend = ScriptedLlmBackend::new(
+            profile.clone(),
+            std::iter::empty::<Result<LlmResponse, LlmError>>(),
+        );
+        // Historical timeout settings were not persisted by older runs. Use
+        // placeholders internally and serialize them as unknown below.
+        let policy = EffectiveDiscoveryPolicy {
+            admission: checkpoint.admission,
+            request_timeout: Duration::ZERO,
+            connect_timeout: Duration::ZERO,
+        };
+        let workflow = DiscoveryWorkflow::restore_from_revalidated(
+            &backend,
+            DiscoveryWorkflowLimits {
+                timeout: policy.request_timeout,
+                ..Default::default()
+            },
+            run_id.clone(),
+            &prepared,
+            restored,
+            attempts,
+            diagnostics,
+            events,
+            patch,
+            workflow_status(checkpoint.status),
+        )
+        .map_err(DesktopDiscoveryError::Checkpoint)?;
+        let view = DesktopDiscoveryView::project(&workflow);
+        let review = project_source_review(&workflow, run_id.clone());
+        let summary = store
+            .list_discovery_run_summaries(Some(&checkpoint.artifact_id))?
+            .into_iter()
+            .find(|summary| summary.run_id == run_id)
+            .ok_or_else(|| DesktopDiscoveryError::Checkpoint("运行摘要不存在".into()))?;
+        let mut outcome = DesktopDiscoveryOutcome::from_workflow(
+            view,
+            review,
+            workflow.attempts(),
+            run_id.clone(),
+            &profile,
+            policy,
+        );
+        outcome.run.request_timeout_seconds = None;
+        outcome.run.connect_timeout_seconds = None;
+        Ok(DesktopDiscoveryReviewEnvelope {
+            run_id: run_id.to_string(),
+            review_status: summary.review_status,
+            created_at: summary.created_at,
+            updated_at: summary.updated_at,
+            outcome,
+        })
+    }
+
+    pub fn discard_discovery_run(
+        &self,
+        request: DiscardDiscoveryRunRequest,
+    ) -> Result<DiscoveryRunDispositionReceipt, DesktopDiscoveryError> {
+        let run_id = StableId::parse(&request.run_id)?;
+        let request_id = StableId::parse(&request.request_id)?;
+        let actor = ActorRef::parse("mathscape-desktop-user")?;
+        let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        store
+            .discard_discovery_run(
+                &run_id,
+                &request_id,
+                &request.expected_result_fingerprint,
+                &actor,
+                &request.reason,
+                &timestamp_now()?,
+            )
+            .map_err(Into::into)
+    }
+
     pub fn active_discovery(&self) -> Option<ActiveDiscoveryTask> {
         self.active_discovery
             .lock()
@@ -327,6 +577,11 @@ impl DesktopService {
             .discovery_checkpoint(&run_id)?
             .ok_or_else(|| DesktopDiscoveryError::Acceptance("内容发现运行不存在".into()))?;
         let checkpoint = stored.checkpoint;
+        if store.discovery_run_is_discarded(&run_id)? {
+            return Err(DesktopDiscoveryError::Acceptance(
+                "该内容发现结果已被放弃，不能再次接受；请重新运行内容发现".into(),
+            ));
+        }
         if checkpoint.pipeline_version != DISCOVERY_PIPELINE_VERSION {
             return Err(DesktopDiscoveryError::Acceptance(format!(
                 "内容发现运行使用了不兼容的流水线版本 {}",
@@ -939,8 +1194,8 @@ impl DesktopDiscoveryRun {
             provider: profile.provider.clone(),
             requested_model: profile.model.clone(),
             admission: policy.admission,
-            request_timeout_seconds: policy.request_timeout.as_secs(),
-            connect_timeout_seconds: policy.connect_timeout.as_secs(),
+            request_timeout_seconds: Some(policy.request_timeout.as_secs()),
+            connect_timeout_seconds: Some(policy.connect_timeout.as_secs()),
             attempts: attempts.len(),
             input_tokens: total(attempts, |run| run.response.as_ref()?.usage.input_tokens),
             output_tokens: total(attempts, |run| run.response.as_ref()?.usage.output_tokens),
@@ -1178,9 +1433,83 @@ fn checkpoint_status(status: &WorkflowStatus) -> DiscoveryCheckpointStatus {
     }
 }
 
+fn workflow_status(status: DiscoveryCheckpointStatus) -> WorkflowStatus {
+    match status {
+        DiscoveryCheckpointStatus::Running => WorkflowStatus::Running,
+        DiscoveryCheckpointStatus::AwaitingPatchReview => WorkflowStatus::AwaitingPatchReview,
+        DiscoveryCheckpointStatus::Completed => WorkflowStatus::Completed,
+        DiscoveryCheckpointStatus::Partial => WorkflowStatus::Partial,
+        DiscoveryCheckpointStatus::NeedsAttention => WorkflowStatus::NeedsAttention,
+        DiscoveryCheckpointStatus::Failed => WorkflowStatus::Failed,
+        DiscoveryCheckpointStatus::Cancelled => WorkflowStatus::Cancelled,
+    }
+}
+
+impl From<StoredDiscoveryRunSummary> for DesktopDiscoveryRunSummary {
+    fn from(summary: StoredDiscoveryRunSummary) -> Self {
+        Self {
+            run_id: summary.run_id.to_string(),
+            artifact_id: summary.artifact_id.to_string(),
+            artifact_name: summary.artifact_name,
+            conversion_id: summary.conversion_id.map(|id| id.to_string()),
+            input_fingerprint: summary.input_fingerprint,
+            result_fingerprint: summary.result_fingerprint,
+            pipeline_version: summary.pipeline_version,
+            status: summary.status,
+            review_status: summary.review_status,
+            profile_id: summary.profile_id,
+            unit_count: summary.unit_count,
+            fact_count: summary.fact_count,
+            pending_task_count: summary.pending_task_count,
+            unresolved_reference_count: summary.unresolved_reference_count,
+            relation_count: summary.relation_count,
+            created_at: summary.created_at,
+            updated_at: summary.updated_at,
+        }
+    }
+}
+
 #[tauri::command]
 pub(crate) fn get_active_discovery(state: State<'_, DesktopState>) -> Option<ActiveDiscoveryTask> {
     state.service.active_discovery()
+}
+
+#[tauri::command]
+pub(crate) async fn list_discovery_runs(
+    state: State<'_, DesktopState>,
+    request: ListDiscoveryRunsRequest,
+) -> Result<Vec<DesktopDiscoveryRunSummary>, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        service.list_discovery_runs(request.artifact_id.as_deref())
+    })
+    .await
+    .map_err(|error| format!("读取内容发现记录线程失败：{error}"))?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub(crate) async fn get_discovery_review(
+    state: State<'_, DesktopState>,
+    run_id: String,
+) -> Result<DesktopDiscoveryReviewEnvelope, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.get_discovery_review(&run_id))
+        .await
+        .map_err(|error| format!("恢复内容发现结果线程失败：{error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub(crate) async fn discard_discovery_run(
+    state: State<'_, DesktopState>,
+    request: DiscardDiscoveryRunRequest,
+) -> Result<DiscoveryRunDispositionReceipt, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.discard_discovery_run(request))
+        .await
+        .map_err(|error| format!("放弃内容发现结果线程失败：{error}"))?
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

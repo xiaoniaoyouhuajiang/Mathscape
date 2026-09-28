@@ -218,6 +218,22 @@ code {
   padding: 15px;
 }
 
+.discovery-ledger { margin-top: 14px; border: 1px solid #2a3742; border-radius: 12px; background: #111b23; padding: 12px; }
+.ledger-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.discovery-runs-list { display: grid; gap: 8px; max-height: 34vh; overflow: auto; margin-top: 9px; }
+.ledger-empty, .ledger-error { margin: 4px 0; color: #9eb0b9; font-size: 12px; }
+.ledger-error { color: #e7aaa1; }
+.discovery-run-item { padding: 9px; border: 1px solid #344953; border-radius: 7px; background: #16242b; font-size: 11px; }
+.discovery-run-item-heading { display: flex; align-items: start; justify-content: space-between; gap: 6px; }
+.discovery-run-item-heading strong { overflow-wrap: anywhere; font-weight: 600; }
+.discovery-run-state { flex: none; color: #a9d4c6; }
+.discovery-run-item.state-discarded { opacity: .66; }
+.discovery-run-counts, .discovery-run-id { display: block; margin-top: 4px; color: #a8b8bd; overflow-wrap: anywhere; }
+.discovery-run-id { color: #728b92; font-family: ui-monospace, SFMono-Regular, monospace; }
+.discovery-run-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.discovery-run-actions button { border: 1px solid #49676b; border-radius: 5px; padding: 3px 6px; background: #20343b; color: #d6ece5; cursor: pointer; font-size: 11px; }
+.discovery-run-actions button:disabled { opacity: .5; cursor: wait; }
+
 .workspace-card code,
 .path-value {
   display: block;

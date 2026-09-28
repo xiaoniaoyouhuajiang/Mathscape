@@ -33,7 +33,7 @@ export class ArtifactReader {
     this.host.replaceChildren();
   }
 
-  async open(id: string, title: string, focus?: { start: number; end: number; blockIds?: string[] }): Promise<void> {
+  async open(id: string, title: string, focus?: { start: number; end: number; blockIds?: string[] }, patchRunId?: string, conversionId?: string | null): Promise<void> {
     this.close();
     const generation = this.generation;
     const heading = element("h2", title);
@@ -45,7 +45,7 @@ export class ArtifactReader {
       if (info.media_type === "application/pdf") {
         await this.pdf(info, generation);
       } else if (info.media_type === "text/markdown") {
-        await this.markdown(info, generation, focus);
+        await this.markdown(info, generation, focus, patchRunId, conversionId);
       } else if (info.media_type === "application/json" || info.media_type.startsWith("text/")) {
         const bytes = await readSmallFile(info);
         if (generation !== this.generation) return;
@@ -190,8 +190,8 @@ export class ArtifactReader {
     if (items) add(items, outline);
   }
 
-  private async markdown(info: ContentInfo, generation: number, focus?: { start: number; end: number; blockIds?: string[] }): Promise<void> {
-    let document = await markdownDocument(info.artifact_id, info.contexts[0]?.conversion_id ?? null);
+  private async markdown(info: ContentInfo, generation: number, focus?: { start: number; end: number; blockIds?: string[] }, patchRunId?: string, conversionId?: string | null): Promise<void> {
+    let document = await markdownDocument(info.artifact_id, conversionId ?? info.contexts[0]?.conversion_id ?? null);
     if (generation !== this.generation) return;
     const controls = element("div"); controls.className = "reader-controls";
     const raw = element("button", "查看原文");
@@ -202,7 +202,7 @@ export class ArtifactReader {
     if (info.contexts.length > 1) controls.append(contextSelect);
     const article = element("article"); article.className = "markdown-body";
     this.host.append(controls, article);
-    let selection = new MarkdownSelection(document, article);
+    let selection = new MarkdownSelection(document, article, patchRunId);
     controls.after(selection.panel);
     this.disposeDocument = () => selection.dispose();
     let rawMode = false, version = 0;
@@ -270,7 +270,7 @@ export class ArtifactReader {
       void markdownDocument(info.artifact_id, info.contexts[Number(contextSelect.value)]?.conversion_id ?? null).then(data => {
         if (generation !== this.generation || current !== version) return;
         document = data;
-        selection = new MarkdownSelection(document, article);
+        selection = new MarkdownSelection(document, article, patchRunId);
         controls.after(selection.panel);
         raw.disabled = false;
         return render();
