@@ -718,7 +718,11 @@ pub fn plan_source_registration(
             stable_id: stable_id.clone(),
             markdown_artifact_id: source.snapshot.artifact_id.clone(),
             range: selector.range().clone(),
-            block_ids: selector.block_ids().to_vec(),
+            // Stage B may have resolved this selector against an internal
+            // fragment partition. Persist only the source document's
+            // canonical block IDs so registered spans remain navigable by the
+            // Markdown reader.
+            block_ids: selector.canonical_block_ids(source),
             exact_text_hash,
         });
         stable_id

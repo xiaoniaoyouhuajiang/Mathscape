@@ -8,10 +8,11 @@ mod workspace_settings;
 pub use content::{ArtifactContentInfo, ContentContext, SourceNodeDetail};
 pub use discovery::{
     AcceptDiscoveryRequest, ActiveDiscoveryPhase, ActiveDiscoveryTask, DesktopDiscoveryAcceptance,
-    DesktopDiscoveryError, DesktopDiscoveryOutcome, DesktopDiscoveryProgress,
-    DesktopDiscoveryReviewEnvelope, DesktopDiscoveryRun, DesktopDiscoveryRunSummary,
-    DiscardDiscoveryRunRequest, ListDiscoveryRunsRequest, ResumeDiscoveryRequest,
-    RunDiscoveryRequest,
+    DesktopDiscoveryAttemptDiagnostic, DesktopDiscoveryError, DesktopDiscoveryOutcome,
+    DesktopDiscoveryProgress, DesktopDiscoveryReviewEnvelope, DesktopDiscoveryRun,
+    DesktopDiscoveryRunDiagnostics, DesktopDiscoveryRunSummary,
+    DesktopDiscoveryValidationDiagnostic, DiscardDiscoveryRunRequest, ListDiscoveryRunsRequest,
+    ResumeDiscoveryRequest, RunDiscoveryRequest,
 };
 pub use discovery_view::{DESKTOP_DISCOVERY_VIEW_VERSION, DesktopDiscoveryView};
 pub use llm_settings::{
@@ -762,6 +763,7 @@ pub fn run() {
             discovery::get_active_discovery,
             discovery::list_discovery_runs,
             discovery::get_discovery_review,
+            discovery::get_discovery_diagnostics,
             discovery::discard_discovery_run,
             discovery::cancel_discovery,
             discovery::accept_discovery_result,

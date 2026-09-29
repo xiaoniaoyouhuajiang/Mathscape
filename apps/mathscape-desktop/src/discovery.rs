@@ -9,7 +9,7 @@ use std::{
 use mathscape_domain::{
     ActorRef, AnchoredMarkdown, ContentHash, DISCOVERY_PIPELINE_VERSION, DiscoveryAdmission,
     DiscoveryInput, DiscoverySelectionRequest, FactTaskProposal, MarkdownPatchSet,
-    MarkdownPatchStatus, StableId, Timestamp, UnitDiscoveryCheckpoint,
+    MarkdownPatchStatus, SourceReviewAcceptanceState, StableId, Timestamp, UnitDiscoveryCheckpoint,
 };
 use mathscape_llm::{
     GenaiBackend, GenaiBackendOptions, LLM_PROFILE_VERSION, LlmError, LlmProfile, LlmResponse,
@@ -211,6 +211,41 @@ pub struct DesktopDiscoveryRunSummary {
     updated_at: String,
 }
 
+/// Safe, replay-independent diagnostics for a run that cannot be opened as a
+/// source-review projection. Raw prompts and provider responses are omitted;
+/// the persisted checkpoint remains the audit source of truth.
+#[derive(Debug, Serialize)]
+pub struct DesktopDiscoveryAttemptDiagnostic {
+    ordinal: usize,
+    stage: String,
+    repair: bool,
+    status: DiscoveryCheckpointStatus,
+    error: Option<String>,
+    response_received: bool,
+    elapsed_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DesktopDiscoveryValidationDiagnostic {
+    report: usize,
+    code: String,
+    path: String,
+    message: String,
+    checked: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DesktopDiscoveryRunDiagnostics {
+    run_id: String,
+    status: DiscoveryCheckpointStatus,
+    review_status: String,
+    result_fingerprint: Option<ContentHash>,
+    message: String,
+    attempts: Vec<DesktopDiscoveryAttemptDiagnostic>,
+    diagnostics: Vec<DesktopDiscoveryValidationDiagnostic>,
+    events: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct DesktopDiscoveryReviewEnvelope {
     run_id: String,
@@ -338,6 +373,102 @@ impl DesktopService {
             .list_discovery_run_summaries(artifact_id.as_ref())
             .map(|summaries| summaries.into_iter().map(Into::into).collect())
             .map_err(Into::into)
+    }
+
+    pub fn get_discovery_diagnostics(
+        &self,
+        run_id_text: &str,
+    ) -> Result<DesktopDiscoveryRunDiagnostics, DesktopDiscoveryError> {
+        let run_id = StableId::parse(run_id_text)?;
+        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        let stored = store
+            .discovery_checkpoint(&run_id)?
+            .ok_or_else(|| DesktopDiscoveryError::Checkpoint("内容发现运行不存在".into()))?;
+        let checkpoint = stored.checkpoint;
+        let summary = store
+            .list_discovery_run_summaries(Some(&checkpoint.artifact_id))?
+            .into_iter()
+            .find(|summary| summary.run_id == run_id);
+        let review_status = summary
+            .as_ref()
+            .map(|summary| summary.review_status.clone())
+            .unwrap_or_else(|| "diagnostic".into());
+        let attempts = checkpoint
+            .attempts
+            .iter()
+            .enumerate()
+            .map(|(index, attempt)| DesktopDiscoveryAttemptDiagnostic {
+                ordinal: index + 1,
+                stage: attempt.stage.clone(),
+                repair: attempt.repair,
+                status: attempt.status,
+                error: attempt.error.clone(),
+                response_received: attempt
+                    .run
+                    .get("response")
+                    .is_some_and(|response| !response.is_null()),
+                elapsed_ms: attempt
+                    .run
+                    .pointer("/response/elapsed_ms")
+                    .and_then(serde_json::Value::as_u64),
+            })
+            .collect();
+        let diagnostics = checkpoint
+            .reports
+            .iter()
+            .enumerate()
+            .flat_map(|(report_index, report)| {
+                report.diagnostics.iter().map(move |diagnostic| {
+                    DesktopDiscoveryValidationDiagnostic {
+                        report: report_index + 1,
+                        code: diagnostic.code.clone(),
+                        path: diagnostic.path.clone(),
+                        message: diagnostic.message.clone(),
+                        checked: diagnostic.checked,
+                    }
+                })
+            })
+            .collect();
+        let events = checkpoint
+            .snapshot
+            .get("events")
+            .and_then(serde_json::Value::as_array)
+            .map(|events| {
+                events
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let message = match checkpoint.status {
+            DiscoveryCheckpointStatus::Running => {
+                "该运行仍在进行中，以下是最近一次已保存的检查点。".into()
+            }
+            DiscoveryCheckpointStatus::AwaitingPatchReview => {
+                "该运行正在等待 Markdown 修订审核，请从修订审核入口继续。".into()
+            }
+            DiscoveryCheckpointStatus::NeedsAttention => {
+                "该运行需要处理，但尚未形成可恢复的来源审核结果。".into()
+            }
+            DiscoveryCheckpointStatus::Failed => "该运行失败，未形成可恢复的来源审核结果。".into(),
+            DiscoveryCheckpointStatus::Cancelled => {
+                "该运行已取消，未形成可恢复的来源审核结果。".into()
+            }
+            DiscoveryCheckpointStatus::Completed | DiscoveryCheckpointStatus::Partial => {
+                "该运行的来源审核结果当前不可恢复，请查看诊断并重新运行。".into()
+            }
+        };
+        Ok(DesktopDiscoveryRunDiagnostics {
+            run_id: run_id.to_string(),
+            status: checkpoint.status,
+            review_status,
+            result_fingerprint: checkpoint.result_fingerprint,
+            message,
+            attempts,
+            diagnostics,
+            events,
+        })
     }
 
     pub fn get_discovery_review(
@@ -481,12 +612,30 @@ impl DesktopService {
         )
         .map_err(DesktopDiscoveryError::Checkpoint)?;
         let view = DesktopDiscoveryView::project(&workflow);
-        let review = project_source_review(&workflow, run_id.clone());
         let summary = store
             .list_discovery_run_summaries(Some(&checkpoint.artifact_id))?
             .into_iter()
             .find(|summary| summary.run_id == run_id)
             .ok_or_else(|| DesktopDiscoveryError::Checkpoint("运行摘要不存在".into()))?;
+        let mut review = project_source_review(&workflow, run_id.clone());
+        if let Some(review) = &mut review {
+            match summary.review_status.as_str() {
+                "accepted" => review.acceptance.state = SourceReviewAcceptanceState::Accepted,
+                "registered" => review.acceptance.state = SourceReviewAcceptanceState::Registered,
+                "discarded" => {
+                    review.acceptance.state = SourceReviewAcceptanceState::Blocked;
+                    review.acceptance.blockers = review
+                        .units
+                        .iter()
+                        .map(|unit| unit.unit_ref.clone())
+                        .collect();
+                    review.units.iter_mut().for_each(|unit| {
+                        unit.acceptance = SourceReviewAcceptanceState::Blocked;
+                    });
+                }
+                _ => {}
+            }
+        }
         let mut outcome = DesktopDiscoveryOutcome::from_workflow(
             view,
             review,
@@ -1497,6 +1646,18 @@ pub(crate) async fn get_discovery_review(
     tauri::async_runtime::spawn_blocking(move || service.get_discovery_review(&run_id))
         .await
         .map_err(|error| format!("恢复内容发现结果线程失败：{error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub(crate) async fn get_discovery_diagnostics(
+    state: State<'_, DesktopState>,
+    run_id: String,
+) -> Result<DesktopDiscoveryRunDiagnostics, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.get_discovery_diagnostics(&run_id))
+        .await
+        .map_err(|error| format!("读取内容发现诊断线程失败：{error}"))?
         .map_err(|error| error.to_string())
 }
 

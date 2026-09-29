@@ -130,6 +130,30 @@ impl ResolvedDiscoverySelector {
     pub fn text(&self) -> &str {
         &self.text
     }
+
+    /// Returns the block identifiers from the persisted source input that
+    /// physically contain this selector. Stage B plans split source blocks
+    /// into internal `fragment:*` segments so that task scopes are disjoint;
+    /// those identifiers are intentionally not part of the public Markdown
+    /// anchor contract. Projection and registration must use this mapping to
+    /// expose the original `block:*` identifiers instead.
+    pub fn canonical_block_ids(&self, input: &DiscoveryInput) -> Vec<String> {
+        input
+            .requested
+            .segments
+            .iter()
+            .filter_map(|segment| match segment {
+                DiscoveryInputSegment::Block {
+                    block_id,
+                    source_range,
+                    ..
+                } if source_range.end > self.range.start && source_range.start < self.range.end => {
+                    Some(block_id.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

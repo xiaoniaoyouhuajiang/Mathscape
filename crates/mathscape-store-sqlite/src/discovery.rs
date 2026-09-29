@@ -636,12 +636,19 @@ pub(super) fn list_discovery_run_summaries(
             match status {
                 DiscoveryCheckpointStatus::Running
                 | DiscoveryCheckpointStatus::AwaitingPatchReview => "processing",
-                DiscoveryCheckpointStatus::Completed
-                | DiscoveryCheckpointStatus::Partial
-                | DiscoveryCheckpointStatus::NeedsAttention => "reviewable",
-                DiscoveryCheckpointStatus::Failed | DiscoveryCheckpointStatus::Cancelled => {
-                    "terminal"
+                DiscoveryCheckpointStatus::Completed | DiscoveryCheckpointStatus::Partial
+                    if result_fingerprint.is_some() =>
+                {
+                    "reviewable"
                 }
+                // NeedsAttention is only reviewable when assembly produced a
+                // result. A validation/transport stop may use the same
+                // workflow status while leaving no result fingerprint; such
+                // runs must open the diagnostic view instead.
+                DiscoveryCheckpointStatus::NeedsAttention if result_fingerprint.is_some() => {
+                    "reviewable"
+                }
+                _ => "diagnostic",
             }
         };
         Ok(StoredDiscoveryRunSummary {

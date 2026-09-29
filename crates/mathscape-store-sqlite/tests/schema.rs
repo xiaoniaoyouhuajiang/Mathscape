@@ -701,8 +701,8 @@ fn atomically_persists_and_replaces_discovery_checkpoints() {
     assert_eq!(store.discovery_run_count().unwrap(), 1);
     let stored = store.discovery_checkpoint(&run_id).unwrap().unwrap();
     assert_eq!(stored.checkpoint, checkpoint);
-
     checkpoint.status = DiscoveryCheckpointStatus::Completed;
+    checkpoint.result_fingerprint = Some(hash('4'));
     checkpoint.pending_tasks.clear();
     checkpoint.snapshot = json!({"status":"completed"});
     store.save_discovery_checkpoint(&checkpoint).unwrap();

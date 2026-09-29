@@ -57,15 +57,15 @@ pub fn project_source_review(
             let anchors = unit
                 .selectors()
                 .iter()
-                .map(|selector| anchor(selector, SourceReviewAnchorPurpose::Unit))
+                .map(|selector| anchor(input, selector, SourceReviewAnchorPurpose::Unit))
                 .collect::<Vec<_>>();
             let source_title = task
                 .and_then(|task| task.title())
-                .map(|fact| text_fact(fact, SourceReviewAnchorPurpose::SourceTitle));
+                .map(|fact| text_fact(input, fact, SourceReviewAnchorPurpose::SourceTitle));
             let source_labels = task
                 .into_iter()
                 .flat_map(|task| task.labels())
-                .map(|fact| text_fact(fact, SourceReviewAnchorPurpose::SourceLabel))
+                .map(|fact| text_fact(input, fact, SourceReviewAnchorPurpose::SourceLabel))
                 .collect();
             SourceReviewUnit {
                 unit_ref: proposal.unit_ref.clone(),
@@ -99,7 +99,11 @@ pub fn project_source_review(
             reference_ref: format!("r{}", index + 1),
             owner: reference.owner.clone(),
             text: bounded(reference.location.text(), 240),
-            anchor: anchor(&reference.location, SourceReviewAnchorPurpose::Reference),
+            anchor: anchor(
+                input,
+                &reference.location,
+                SourceReviewAnchorPurpose::Reference,
+            ),
             status: reference_status(&reference.resolution.status),
             candidates: reference.resolution.candidates.clone(),
             reason: reference.resolution.reason.clone(),
@@ -134,7 +138,9 @@ pub fn project_source_review(
             evidence: relation
                 .evidence
                 .iter()
-                .map(|selector| anchor(selector, SourceReviewAnchorPurpose::RelationEvidence))
+                .map(|selector| {
+                    anchor(input, selector, SourceReviewAnchorPurpose::RelationEvidence)
+                })
                 .collect(),
             bases: relation.bases.clone(),
             origins: relation.origins.clone(),
@@ -215,24 +221,26 @@ pub fn project_source_review(
 }
 
 fn anchor(
+    input: &mathscape_domain::DiscoveryInput,
     selector: &ResolvedDiscoverySelector,
     purpose: SourceReviewAnchorPurpose,
 ) -> SourceReviewAnchor {
     SourceReviewAnchor {
         purpose,
         range: selector.range().clone(),
-        block_ids: selector.block_ids().to_vec(),
+        block_ids: selector.canonical_block_ids(input),
         excerpt: bounded(selector.text(), 240),
     }
 }
 
 fn text_fact(
+    input: &mathscape_domain::DiscoveryInput,
     fact: &crate::LocatedFact,
     purpose: SourceReviewAnchorPurpose,
 ) -> SourceReviewTextFact {
     SourceReviewTextFact {
         text: bounded(fact.location.text(), 240),
-        anchor: anchor(&fact.location, purpose),
+        anchor: anchor(input, &fact.location, purpose),
         normalized: fact.normalized,
         precision_review: fact.precision_review,
     }

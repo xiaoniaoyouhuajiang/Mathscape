@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 
 use mathscape_domain::{
-    ContentHash, DiscoveryContextRequest, DiscoveryIssueKind, DiscoveryRelationKind,
-    DiscoveryUnitKind, TextByteRange, UnitCompleteness,
+    ContentHash, DiscoveryContextRequest, DiscoveryInput, DiscoveryIssueKind,
+    DiscoveryRelationKind, DiscoveryUnitKind, TextByteRange, UnitCompleteness,
 };
 use mathscape_llm::LlmFinishReason;
 use mathscape_orchestrator::{
@@ -163,6 +163,7 @@ impl DesktopDiscoveryView {
 
     pub fn project(workflow: &DiscoveryWorkflow<'_>) -> Self {
         let result = workflow.result();
+        let input = workflow.source_input();
         let source = workflow
             .source_input()
             .map(|input| DesktopDiscoverySourceView {
@@ -192,11 +193,11 @@ impl DesktopDiscoveryView {
                 let source_labels = task
                     .into_iter()
                     .flat_map(|task| task.labels())
-                    .map(DesktopLocatedTextView::from)
+                    .map(|fact| DesktopLocatedTextView::from_fact(input, fact))
                     .collect::<Vec<_>>();
                 let source_title = task
                     .and_then(|task| task.title())
-                    .map(DesktopLocatedTextView::from);
+                    .map(|fact| DesktopLocatedTextView::from_fact(input, fact));
                 let title = source_title
                     .as_ref()
                     .map(|title| title.text.clone())
@@ -230,7 +231,7 @@ impl DesktopDiscoveryView {
                     anchors: unit
                         .selectors()
                         .iter()
-                        .map(DesktopSourceAnchorView::from)
+                        .map(|selector| DesktopSourceAnchorView::from_selector(input, selector))
                         .collect(),
                     source_labels,
                     source_title,
@@ -244,7 +245,7 @@ impl DesktopDiscoveryView {
             .map(|reference| DesktopDiscoveryReferenceView {
                 owner: reference.owner.clone(),
                 text: bounded(reference.location.text(), 240),
-                anchor: DesktopSourceAnchorView::from(&reference.location),
+                anchor: DesktopSourceAnchorView::from_selector(input, &reference.location),
                 status: reference.resolution.status.clone(),
                 candidates: reference.resolution.candidates.clone(),
                 reason: reference.resolution.reason.clone(),
@@ -262,7 +263,7 @@ impl DesktopDiscoveryView {
                 evidence: relation
                     .evidence
                     .iter()
-                    .map(DesktopSourceAnchorView::from)
+                    .map(|selector| DesktopSourceAnchorView::from_selector(input, selector))
                     .collect(),
                 bases: relation.bases.clone(),
                 origins: relation.origins.clone(),
@@ -287,7 +288,7 @@ impl DesktopDiscoveryView {
                     evidence: issue
                         .evidence()
                         .iter()
-                        .map(DesktopSourceAnchorView::from)
+                        .map(|selector| DesktopSourceAnchorView::from_selector(input, selector))
                         .collect(),
                 }
             }));
@@ -295,19 +296,26 @@ impl DesktopDiscoveryView {
         if let Some(result) = &result {
             for task in result.tasks() {
                 issues.extend(task.issues().iter().enumerate().map(
-                    |(index, (issue, evidence))| DesktopDiscoveryIssueView {
-                        issue_ref: format!("{}:i{}", task.task_ref(), index + 1),
-                        issue_refs: vec![format!("{}:i{}", task.task_ref(), index + 1)],
-                        stage: DesktopIssueStage::SourceFacts,
-                        stages: vec![DesktopIssueStage::SourceFacts],
-                        owner: Some(task.owner().to_owned()),
-                        kind: issue.kind,
-                        observation: bounded(&issue.observation, 1_000),
-                        observations: vec![bounded(&issue.observation, 1_000)],
-                        occurrences: 1,
-                        context_request: issue.context_request.clone(),
-                        requires_unit_revision: issue.requires_unit_revision,
-                        evidence: evidence.iter().map(DesktopSourceAnchorView::from).collect(),
+                    |(index, (issue, evidence))| {
+                        DesktopDiscoveryIssueView {
+                            issue_ref: format!("{}:i{}", task.task_ref(), index + 1),
+                            issue_refs: vec![format!("{}:i{}", task.task_ref(), index + 1)],
+                            stage: DesktopIssueStage::SourceFacts,
+                            stages: vec![DesktopIssueStage::SourceFacts],
+                            owner: Some(task.owner().to_owned()),
+                            kind: issue.kind,
+                            observation: bounded(&issue.observation, 1_000),
+                            observations: vec![bounded(&issue.observation, 1_000)],
+                            occurrences: 1,
+                            context_request: issue.context_request.clone(),
+                            requires_unit_revision: issue.requires_unit_revision,
+                            evidence: evidence
+                                .iter()
+                                .map(|selector| {
+                                    DesktopSourceAnchorView::from_selector(input, selector)
+                                })
+                                .collect(),
+                        }
                     },
                 ));
             }
@@ -485,10 +493,18 @@ fn push_diagnostic(
 
 impl From<&ResolvedDiscoverySelector> for DesktopSourceAnchorView {
     fn from(selector: &ResolvedDiscoverySelector) -> Self {
+        Self::from_selector(None, selector)
+    }
+}
+
+impl DesktopSourceAnchorView {
+    fn from_selector(input: Option<&DiscoveryInput>, selector: &ResolvedDiscoverySelector) -> Self {
         Self {
             start: selector.range().start,
             end: selector.range().end,
-            block_ids: selector.block_ids().to_vec(),
+            block_ids: input
+                .map(|input| selector.canonical_block_ids(input))
+                .unwrap_or_else(|| selector.block_ids().to_vec()),
             excerpt: bounded(selector.text(), 240),
         }
     }
@@ -496,10 +512,16 @@ impl From<&ResolvedDiscoverySelector> for DesktopSourceAnchorView {
 
 impl From<&LocatedFact> for DesktopLocatedTextView {
     fn from(fact: &LocatedFact) -> Self {
+        Self::from_fact(None, fact)
+    }
+}
+
+impl DesktopLocatedTextView {
+    fn from_fact(input: Option<&DiscoveryInput>, fact: &LocatedFact) -> Self {
         Self {
             fact_ref: fact.fact_ref.clone(),
             text: bounded(fact.location.text(), 240),
-            anchor: DesktopSourceAnchorView::from(&fact.location),
+            anchor: DesktopSourceAnchorView::from_selector(input, &fact.location),
             normalized: fact.normalized,
             precision_review: fact.precision_review,
         }

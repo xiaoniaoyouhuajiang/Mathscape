@@ -411,6 +411,34 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     assert_eq!(value["view"]["units"][0]["title"], "习题 1");
     assert_eq!(value["view"]["references"][0]["text"], "定义");
     assert_eq!(value["view"]["references"][0]["status"], "unresolved");
+    assert!(
+        value["view"]["references"][0]["anchor"]["block_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|id| id.as_str().unwrap().starts_with("block:"))
+    );
+    assert!(
+        value["view"]["relations"][0]["evidence"][0]["block_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|id| id.as_str().unwrap().starts_with("block:"))
+    );
+    assert!(
+        value["review"]["references"][0]["anchor"]["block_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|id| id.as_str().unwrap().starts_with("block:"))
+    );
+    assert!(
+        value["review"]["relations"][0]["evidence"][0]["block_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|id| id.as_str().unwrap().starts_with("block:"))
+    );
     assert_eq!(value["view"]["issues"][0]["kind"], "missing_context");
     assert!(
         value["view"]["issues"][0]["evidence"][0]["excerpt"]
@@ -446,6 +474,17 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
         recovered["outcome"]["view"]["references"][0]["status"],
         "unresolved"
     );
+    assert!(
+        recovered["outcome"]["view"]["references"][0]["anchor"]["block_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|id| id.as_str().unwrap().starts_with("block:"))
+    );
+    let diagnostics =
+        serde_json::to_value(service.get_discovery_diagnostics(run_id.as_str()).unwrap()).unwrap();
+    assert_eq!(diagnostics["status"], "completed");
+    assert_eq!(diagnostics["attempts"].as_array().unwrap().len(), 2);
     let store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
     let persisted = store.discovery_checkpoint(&run_id).unwrap().unwrap();
     assert_eq!(

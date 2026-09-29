@@ -71,7 +71,7 @@ interface DiscoveryRunSummaryView {
   result_fingerprint: string | null;
   pipeline_version: string;
   status: string;
-  review_status: "processing" | "reviewable" | "accepted" | "registered" | "discarded" | "terminal";
+  review_status: "processing" | "reviewable" | "accepted" | "registered" | "discarded" | "diagnostic" | "terminal";
   profile_id: string;
   unit_count: number;
   fact_count: number;
@@ -80,6 +80,25 @@ interface DiscoveryRunSummaryView {
   relation_count: number;
   created_at: string;
   updated_at: string;
+}
+
+interface DiscoveryRunDiagnosticsView {
+  run_id: string;
+  status: string;
+  review_status: string;
+  result_fingerprint: string | null;
+  message: string;
+  attempts: {
+    ordinal: number;
+    stage: string;
+    repair: boolean;
+    status: string;
+    error: string | null;
+    response_received: boolean;
+    elapsed_ms: number | null;
+  }[];
+  diagnostics: { report: number; code: string; path: string; message: string; checked: boolean }[];
+  events: string[];
 }
 
 interface DiscoveryReviewEnvelopeView {
@@ -553,6 +572,7 @@ function discoveryRunStatusLabel(status: string): string {
     accepted: "已接受，尚未登记",
     registered: "已登记",
     discarded: "已放弃",
+    diagnostic: "需查看诊断",
     terminal: "已结束",
   } as Record<string, string>)[status] ?? status;
 }
@@ -567,6 +587,15 @@ function discoveryWorkflowStatusLabel(status: string): string {
     failed: "失败",
     cancelled: "已取消",
   } as Record<string, string>)[status] ?? status;
+}
+
+function discoveryStageLabel(stage: string): string {
+  return ({
+    "unit-discovery": "单元识别",
+    "source-facts": "来源事实发现",
+    "discovery-repair": "有界修订",
+    "markdown-patch": "Markdown 修订建议",
+  } as Record<string, string>)[stage] ?? stage;
 }
 
 function shortRunId(runId: string): string {
@@ -622,10 +651,13 @@ function renderDiscoveryRunItem(run: DiscoveryRunSummaryView): void {
     `${discoveryWorkflowStatusLabel(run.status)} · ${run.unit_count} 单元 · ${run.relation_count} 关系 · ${run.unresolved_reference_count} 未解析引用`,
   );
   const actions = textElement("div", "discovery-run-actions", "");
-  const open = textElement("button", "", "打开审核结果");
+  const recoverable = run.result_fingerprint !== null
+    && ["completed", "partial", "needs_attention"].includes(run.status);
+  const open = textElement("button", "", run.status === "awaiting_patch_review"
+    ? "打开修订审核"
+    : recoverable ? "打开审核结果" : "查看运行诊断");
   open.type = "button";
-  open.disabled = run.status === "running";
-  if (run.status === "running") open.title = "运行尚未完成，请稍后刷新";
+  if (run.status === "running") open.title = "运行仍在进行中，将显示最近一次已保存的检查点";
   open.onclick = () => void openPersistedDiscoveryRun(run, open);
   actions.append(open);
   if (run.review_status === "reviewable" && run.result_fingerprint !== null) {
@@ -653,6 +685,15 @@ async function openPersistedDiscoveryRun(
       openDiscoveryPatchReview(run.run_id, run.artifact_id, run.conversion_id, run.artifact_name ?? "Markdown 修订审核");
       return;
     }
+    const recoverable = run.result_fingerprint !== null
+      && ["completed", "partial", "needs_attention"].includes(run.status);
+    if (!recoverable) {
+      const diagnostics = await invoke<DiscoveryRunDiagnosticsView>("get_discovery_diagnostics", {
+        runId: run.run_id,
+      });
+      showDiscoveryDiagnostics(run, diagnostics);
+      return;
+    }
     const envelope = await invoke<DiscoveryReviewEnvelopeView>("get_discovery_review", {
       runId: run.run_id,
     });
@@ -667,6 +708,74 @@ async function openPersistedDiscoveryRun(
   } finally {
     button.disabled = false;
   }
+}
+
+function showDiscoveryDiagnostics(
+  run: DiscoveryRunSummaryView,
+  diagnostics: DiscoveryRunDiagnosticsView,
+): void {
+  const dialog = document.createElement("dialog");
+  dialog.className = "discovery-diagnostics-dialog";
+  dialog.setAttribute("aria-labelledby", "discovery-diagnostics-title");
+  const title = textElement("h2", "", "内容发现运行诊断");
+  title.id = "discovery-diagnostics-title";
+  const meta = textElement(
+    "p",
+    "discovery-diagnostics-meta",
+    `${run.artifact_name ?? run.artifact_id} · ${discoveryWorkflowStatusLabel(run.status)} · ${shortRunId(run.run_id)}`,
+  );
+  const message = textElement("p", "discovery-diagnostics-message", diagnostics.message);
+  const attempts = textElement("section", "discovery-diagnostics-section", "");
+  attempts.append(textElement("h3", "", "调用记录"));
+  if (diagnostics.attempts.length === 0) {
+    attempts.append(textElement("p", "ledger-empty", "没有已保存的模型调用记录。"));
+  } else {
+    const list = document.createElement("ol");
+    list.className = "discovery-diagnostics-list";
+    diagnostics.attempts.forEach(attempt => {
+      const item = document.createElement("li");
+      const response = attempt.response_received
+        ? `已收到响应${attempt.elapsed_ms === null ? "" : ` · ${attempt.elapsed_ms} ms`}`
+        : "没有完整响应";
+      item.append(
+        textElement("strong", "", `调用 ${attempt.ordinal} · ${discoveryStageLabel(attempt.stage)}${attempt.repair ? " · 修订" : ""}`),
+        textElement("span", "", `${attempt.status} · ${response}`),
+      );
+      if (attempt.error) item.append(textElement("p", "discovery-diagnostics-error", attempt.error));
+      list.append(item);
+    });
+    attempts.append(list);
+  }
+  const validation = textElement("section", "discovery-diagnostics-section", "");
+  validation.append(textElement("h3", "", "验证诊断"));
+  if (diagnostics.diagnostics.length === 0) {
+    validation.append(textElement("p", "ledger-empty", "没有已保存的验证诊断。"));
+  } else {
+    const list = document.createElement("ul");
+    list.className = "discovery-diagnostics-list";
+    diagnostics.diagnostics.forEach(item => {
+      const row = document.createElement("li");
+      row.append(
+        textElement("strong", "", `${item.code} · 报告 ${item.report}`),
+        textElement("span", "", `${item.path} · ${item.message}`),
+      );
+      list.append(row);
+    });
+    validation.append(list);
+  }
+  const events = textElement("details", "discovery-diagnostics-section", "");
+  events.append(textElement("summary", "", "工作流事件"));
+  const eventList = document.createElement("ol");
+  eventList.className = "discovery-diagnostics-list";
+  diagnostics.events.forEach(event => eventList.append(textElement("li", "", event)));
+  events.append(eventList);
+  const close = textElement("button", "", "关闭");
+  close.type = "button";
+  close.onclick = () => dialog.close();
+  dialog.append(title, meta, message, attempts, validation, events, close);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  document.body.append(dialog);
+  dialog.showModal();
 }
 
 async function discardPersistedDiscoveryRun(
