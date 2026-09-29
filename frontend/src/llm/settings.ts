@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { eventBus } from "../core/events";
 
 import "./settings.css";
 import {
@@ -238,7 +239,7 @@ export class LlmSettingsController {
     this.testButton = required<HTMLButtonElement>(host, ".test-settings");
 
     this.trigger.onclick = () => void this.open();
-    window.addEventListener("mathscape:open-settings", () => void this.open());
+    eventBus.on("open-settings", () => void this.open());
     this.profileSelect = required<HTMLSelectElement>(host, "select[name=saved-profile]");
     this.profileName = required<HTMLInputElement>(host, "input[name=profile-name]");
     this.profileSelect.onchange = () => {

@@ -4,6 +4,7 @@ import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import { contentInfo, readRange, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
 import { markdownRenderer } from "./markdown";
 import { markdownDocument, MarkdownSelection, type PatchReviewMode } from "./selection";
+import { eventBus } from "../core/events";
 import "./reader.css";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -44,7 +45,7 @@ export class ArtifactReader {
 
   async open(id: string, title: string, options: ReaderOpenOptions = {}): Promise<void> {
     this.close();
-    window.dispatchEvent(new Event("mathscape:reader-opened"));
+    eventBus.emit("reader-opened");
     const { focus, patch, conversionId } = options;
     const generation = this.generation;
     const heading = element("h2", title);

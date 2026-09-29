@@ -10,6 +10,7 @@ import {
   type DiscoveryAdmissionPreference,
   type WorkspaceSettings,
 } from "../workspace-settings";
+import { eventBus } from "../core/events";
 
 export interface TextRange { start: number; end: number }
 export interface MarkdownSnapshot {
@@ -142,9 +143,13 @@ export function openDiscoveryPatchReview(
   conversionId: string | null,
   title: string,
 ): void {
-  window.dispatchEvent(new CustomEvent("mathscape:open-source", {
-    detail: { artifactId, conversionId, title, patchRunId: runId, patchMode: "workflow" },
-  }));
+  eventBus.emit("open-source", {
+    artifactId,
+    conversionId,
+    title,
+    patchRunId: runId,
+    patchMode: "workflow",
+  });
 }
 
 const DECIDED_PATCH_STATUSES = new Set(["accepted", "applied", "rejected"]);
@@ -185,6 +190,7 @@ export class MarkdownSelection {
   private startButton: HTMLButtonElement;
   private endButton: HTMLButtonElement;
   private indexes: Map<string, number>;
+  private unsubscribeSettings?: () => void;
 
   constructor(private data: AnchoredMarkdown, private article: HTMLElement, patch?: { runId: string; mode: PatchReviewMode }) {
     this.indexes = new Map(data.blocks.map((b, i) => [b.id, i]));
@@ -208,7 +214,7 @@ export class MarkdownSelection {
     this.policy.value = "review_before_publish";
     this.policy.onchange = () => { this.policyTouched = true; this.changed(); };
     controls.append(this.policyLabel);
-    button("修改设置", () => window.dispatchEvent(new Event("mathscape:open-settings")));
+    button("修改设置", () => eventBus.emit("open-settings"));
     this.validate = button("构建发现输入", () => void this.resolve());
     this.discover = button("使用 LLM 发现内容", () => void this.runDiscovery());
     this.status.setAttribute("role", "status");
@@ -231,7 +237,9 @@ export class MarkdownSelection {
     );
     article.addEventListener("click", this.onClick);
     article.addEventListener("keydown", this.onKey);
-    window.addEventListener(WORKSPACE_SETTINGS_CHANGED, this.onWorkspaceSettings);
+    this.unsubscribeSettings = eventBus.on("workspace-settings-changed", (settings) => {
+      this.onWorkspaceSettings(new CustomEvent(WORKSPACE_SETTINGS_CHANGED, { detail: settings }));
+    });
     this.discoveryTimer = window.setInterval(() => void this.syncActiveDiscovery(), 1200);
     void this.syncActiveDiscovery();
     void this.loadWorkspacePolicy();
@@ -314,11 +322,11 @@ export class MarkdownSelection {
     this.refresh();
     try {
       const outcome = await resumeDiscoveryTask<DiscoveryOutcome>(runId);
-      window.dispatchEvent(new Event("mathscape:discovery-runs-changed"));
+      eventBus.emit("discovery-runs-changed");
       const source = outcome.view.source;
       // A run finished on the patched artifact introduces new map objects.
       if (source && source.content_hash !== this.data.snapshot.content_hash) {
-        window.dispatchEvent(new Event("mathscape:source-map-changed"));
+        eventBus.emit("source-map-changed");
       }
       if (!this.disposed) {
         this.patchReviewHost.hidden = true;
@@ -348,7 +356,7 @@ export class MarkdownSelection {
     this.disposed = true; this.version++;
     this.article.removeEventListener("click", this.onClick);
     this.article.removeEventListener("keydown", this.onKey);
-    window.removeEventListener(WORKSPACE_SETTINGS_CHANGED, this.onWorkspaceSettings);
+    this.unsubscribeSettings?.();
     window.clearInterval(this.discoveryTimer);
     this.panel.remove();
   }
@@ -530,7 +538,7 @@ export class MarkdownSelection {
     this.refresh();
     try {
       const outcome = await runDiscoveryTask<DiscoveryOutcome>({ selection, profile_id: null });
-      window.dispatchEvent(new Event("mathscape:discovery-runs-changed"));
+      eventBus.emit("discovery-runs-changed");
       if (this.disposed || version !== this.version) return;
       this.renderDiscovery(outcome);
     } catch (error) {
@@ -727,7 +735,7 @@ export class MarkdownSelection {
         acceptButton.disabled = rejectButton.disabled = true;
         // A map refresh closes this reader; the workflow path refreshes the
         // map when it reopens the reader on the patched artifact.
-        if (receipt.status === "applied" && !workflow) window.dispatchEvent(new Event("mathscape:source-map-changed"));
+        if (receipt.status === "applied" && !workflow) eventBus.emit("source-map-changed");
         if (workflow) {
           status.textContent = receipt.status === "applied"
             ? `修订已写入新 Markdown：${receipt.patched_artifact_id ?? ""}；正在继续内容发现…`

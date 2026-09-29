@@ -9,37 +9,11 @@ let launcher: HTMLButtonElement;
 let cancel: HTMLButtonElement;
 let timeline: HTMLOListElement;
 const attemptOutputs = new Map<number, { reasoning: HTMLElement; output: HTMLElement }>();
-
-type WorkflowStatus = "running" | "awaiting_patch_review" | "completed" | "partial" | "needs_attention" | "failed" | "cancelled";
-type WorkflowEvent = {
-  patches?: number;
-  applied?: boolean;
-  rebuild_units?: boolean;
-  kind: string;
-  attempt?: number;
-  stage?: string;
-  batch_index?: number | null;
-  batch_total?: number | null;
-  repair?: boolean;
-  units?: number;
-  batches?: number;
-  tasks?: number;
-  completed_tasks?: number;
-  total_tasks?: number;
-  status?: WorkflowStatus;
-};
-type DiscoveryProgress =
-  | { kind: "started"; profile: string; model: string }
-  | { kind: "workflow_event"; event: WorkflowEvent }
-  | {
-      kind: "stream_delta" | "response_completed";
-      attempt: number;
-      stage: string;
-      batch_index: number | null;
-      batch_total: number | null;
-      stream?: string;
-      text?: string;
-    };
+import type {
+  DiscoveryProgress,
+  WorkflowEvent,
+  WorkflowStatus,
+} from "./discovery/types";
 
 export function mountDiscoveryTask(): void {
   if (panel) return;

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { eventBus } from "./core/events";
 
 export type DiscoveryAdmissionPreference =
   | "review_before_publish"
@@ -29,9 +30,6 @@ export function saveWorkspaceSettings(
 ): Promise<WorkspaceSettings> {
   return invoke("save_workspace_settings", { request });
 }
-
 export function announceWorkspaceSettings(settings: WorkspaceSettings): void {
-  window.dispatchEvent(new CustomEvent<WorkspaceSettings>(WORKSPACE_SETTINGS_CHANGED, {
-    detail: settings,
-  }));
+  eventBus.emit("workspace-settings-changed", settings);
 }

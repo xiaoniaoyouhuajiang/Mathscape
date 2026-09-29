@@ -8,13 +8,14 @@ import {
 } from "./labels";
 import { ReviewGraph } from "./review-graph";
 import type { DiscoveryAcceptanceOutcome, DiscoveryOutcome, DiscoveryRun, ReviewRunMeta, SourceReviewProjection } from "./types";
+import { eventBus } from "../core/events";
 import "./review.css";
 
 export const OPEN_REVIEW_EVENT = "mathscape:open-review";
-export interface OpenReviewDetail { outcome: DiscoveryOutcome; meta?: ReviewRunMeta }
+export type { OpenReviewDetail } from "../core/events";
 
 export function openReviewWorkspace(outcome: DiscoveryOutcome, meta?: ReviewRunMeta): void {
-  window.dispatchEvent(new CustomEvent<OpenReviewDetail>(OPEN_REVIEW_EVENT, { detail: { outcome, meta } }));
+  eventBus.emit("open-review", { outcome, meta });
 }
 
 /** Larger results start as a layered list; a graph of that size is unreadable. */
@@ -180,7 +181,7 @@ export class DiscoveryReviewWorkspace {
     );
     this.returnChip.querySelector(".review-return-close")!.setAttribute("aria-label", "关闭审核工作区");
     (host.parentElement ?? document.body).append(this.returnChip);
-    window.addEventListener("mathscape:reader-opened", () => { if (this.isOpen()) this.suspend(); });
+    eventBus.on("reader-opened", () => { if (this.isOpen()) this.suspend(); });
   }
 
   isOpen(): boolean { return !this.host.hidden; }
@@ -431,14 +432,12 @@ export class DiscoveryReviewWorkspace {
     const source = this.outcome?.view.source;
     if (!source) return;
     this.suspend();
-    window.dispatchEvent(new CustomEvent("mathscape:open-source", {
-      detail: {
-        artifactId: source.artifact_id,
-        conversionId: source.conversion_id,
-        title: this.meta.title ?? "来源 Markdown",
-        focus: anchor && this.stale === null ? { start: anchor.start, end: anchor.end, blockIds: anchor.block_ids } : undefined,
-      },
-    }));
+    eventBus.emit("open-source", {
+      artifactId: source.artifact_id,
+      conversionId: source.conversion_id,
+      title: this.meta.title ?? "来源 Markdown",
+      focus: anchor && this.stale === null ? { start: anchor.start, end: anchor.end, blockIds: anchor.block_ids } : undefined,
+    });
   }
 
   private openSelection(): void {
@@ -537,12 +536,13 @@ export class DiscoveryReviewWorkspace {
         const source = outcome.view.source;
         if (review.patch_set && review.patch_set_id && source) {
           this.suspend();
-          window.dispatchEvent(new CustomEvent("mathscape:open-source", {
-            detail: {
-              artifactId: source.artifact_id, conversionId: source.conversion_id,
-              title: this.meta.title ?? "Markdown 修订审核", patchRunId: outcome.run.run_id, patchMode: "manual",
-            },
-          }));
+          eventBus.emit("open-source", {
+            artifactId: source.artifact_id,
+            conversionId: source.conversion_id,
+            title: this.meta.title ?? "Markdown 修订审核",
+            patchRunId: outcome.run.run_id,
+            patchMode: "manual",
+          });
         }
       } catch (error) {
         status.textContent = `修订建议失败：${String(error)}`;
@@ -911,8 +911,8 @@ export class DiscoveryReviewWorkspace {
       this.meta.review_status = "registered";
       try { localStorage.removeItem(this.draftKey()!); } catch { /* Storage may be unavailable. */ }
       message = `${outcome.already_registered ? "已存在相同来源提交" : "审核并注册完成"}：${outcome.unit_count} 个单元、${outcome.span_count} 个来源范围、${outcome.relation_count} 条关系已原子写入来源图；新建 ${outcome.created_object_count}、复用 ${outcome.reused_object_count}${outcome.partial ? "；这是部分发现结果" : ""}。`;
-      window.dispatchEvent(new Event("mathscape:source-map-changed"));
-      window.dispatchEvent(new Event("mathscape:discovery-runs-changed"));
+      eventBus.emit("source-map-changed");
+      eventBus.emit("discovery-runs-changed");
     } catch (error) {
       if (generation !== this.generation) return;
       message = "接受失败：" + String(error);
@@ -963,8 +963,7 @@ function removeDependents(selected: Set<string>, review: SourceReviewProjection,
 /** Mounts the single workspace instance and routes open requests to it. */
 export function mountReviewWorkspace(host: HTMLElement): DiscoveryReviewWorkspace {
   const workspace = new DiscoveryReviewWorkspace(host);
-  window.addEventListener(OPEN_REVIEW_EVENT, event => {
-    const detail = (event as CustomEvent<OpenReviewDetail>).detail;
+  eventBus.on("open-review", (detail) => {
     void workspace.open(detail.outcome, detail.meta);
   });
   return workspace;

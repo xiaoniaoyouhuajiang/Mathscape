@@ -51,6 +51,19 @@ import {
   renderCommitError,
   type UserChangeRequest,
 } from "./map-edit";
+import { eventBus } from "./core/events";
+import { errorMessage } from "./core/ipc";
+import type {
+  DiscoveryRunSummaryView,
+  DiscoveryRunDiagnosticsView,
+  DiscoveryReviewEnvelopeView,
+} from "./discovery/types";
+import {
+  discoveryRunStatusLabel,
+  discoveryWorkflowStatusLabel,
+  discoveryStageLabel,
+  shortRunId,
+} from "./discovery/labels";
 
 interface DesktopSnapshot {
   workspace_id: string;
@@ -60,53 +73,6 @@ interface DesktopSnapshot {
   marker: MarkerRuntimeStatus;
   pdf_artifacts: PdfArtifactSummary[];
   landscape_graph: IncidenceGraph;
-}
-
-interface DiscoveryRunSummaryView {
-  run_id: string;
-  artifact_id: string;
-  artifact_name: string | null;
-  conversion_id: string | null;
-  input_fingerprint: string;
-  result_fingerprint: string | null;
-  pipeline_version: string;
-  status: string;
-  review_status: "processing" | "reviewable" | "accepted" | "registered" | "discarded" | "diagnostic" | "terminal";
-  profile_id: string;
-  unit_count: number;
-  fact_count: number;
-  pending_task_count: number;
-  unresolved_reference_count: number;
-  relation_count: number;
-  created_at: string;
-  updated_at: string;
-}
-
-interface DiscoveryRunDiagnosticsView {
-  run_id: string;
-  status: string;
-  review_status: string;
-  result_fingerprint: string | null;
-  message: string;
-  attempts: {
-    ordinal: number;
-    stage: string;
-    repair: boolean;
-    status: string;
-    error: string | null;
-    response_received: boolean;
-    elapsed_ms: number | null;
-  }[];
-  diagnostics: { report: number; code: string; path: string; message: string; checked: boolean }[];
-  events: string[];
-}
-
-interface DiscoveryReviewEnvelopeView {
-  run_id: string;
-  review_status: string;
-  created_at: string;
-  updated_at: string;
-  outcome: DiscoveryOutcome;
 }
 
 interface MarkerRuntimeStatus {
@@ -487,10 +453,9 @@ requiredElement<HTMLButtonElement>("#copy-workspace-id").addEventListener("click
 });
 void loadSnapshot();
 void llmSettings.loadSummary();
-window.addEventListener("mathscape:source-map-changed", () => void loadSnapshot());
-window.addEventListener("mathscape:discovery-runs-changed", () => void loadDiscoveryRuns());
-window.addEventListener("mathscape:open-source", (event) => {
-  const detail = (event as CustomEvent<{ artifactId: string; conversionId?: string | null; title: string; focus?: ReaderFocus; patchRunId?: string; patchMode?: PatchReviewMode; refreshMap?: boolean }>).detail;
+eventBus.on("source-map-changed", () => void loadSnapshot());
+eventBus.on("discovery-runs-changed", () => void loadDiscoveryRuns());
+eventBus.on("open-source", (detail) => {
   void (async () => {
     // Rendering the map closes the reader, so refresh before opening it.
     if (detail.refreshMap) await loadSnapshot();
@@ -565,43 +530,6 @@ async function loadSnapshot(): Promise<void> {
   }
 }
 
-function discoveryRunStatusLabel(status: string): string {
-  return ({
-    processing: "处理中",
-    reviewable: "待审核",
-    accepted: "已接受，尚未登记",
-    registered: "已登记",
-    discarded: "已放弃",
-    diagnostic: "需查看诊断",
-    terminal: "已结束",
-  } as Record<string, string>)[status] ?? status;
-}
-
-function discoveryWorkflowStatusLabel(status: string): string {
-  return ({
-    running: "运行中",
-    awaiting_patch_review: "等待 Markdown 修订审核",
-    completed: "完成",
-    partial: "部分完成",
-    needs_attention: "需要处理",
-    failed: "失败",
-    cancelled: "已取消",
-  } as Record<string, string>)[status] ?? status;
-}
-
-function discoveryStageLabel(stage: string): string {
-  return ({
-    "unit-discovery": "单元识别",
-    "source-facts": "来源事实发现",
-    "discovery-repair": "有界修订",
-    "markdown-patch": "Markdown 修订建议",
-  } as Record<string, string>)[stage] ?? stage;
-}
-
-function shortRunId(runId: string): string {
-  return runId.length > 34 ? `${runId.slice(0, 17)}…${runId.slice(-12)}` : runId;
-}
-
 const DISCOVERY_RUN_PREVIEW = 20;
 let showAllDiscoveryRuns = false;
 
@@ -638,11 +566,29 @@ async function loadDiscoveryRuns(): Promise<void> {
   }
 }
 
+function getArtifactDisplayName(artifactId: string, fallbackName?: string | null): string {
+  const node = currentSnapshot?.landscape_graph.nodes.find(
+    (n) => n.domain_kind === "SourceArtifact" && n.domain_id === artifactId,
+  );
+  if (node?.label) {
+    return node.label;
+  }
+  const pdf = currentSnapshot?.pdf_artifacts.find((p) => p.artifact_id === artifactId);
+  if (pdf?.filename) {
+    return pdf.filename;
+  }
+  if (fallbackName && fallbackName !== "document.md") {
+    return fallbackName;
+  }
+  return fallbackName || artifactId;
+}
+
 function renderDiscoveryRunItem(run: DiscoveryRunSummaryView): void {
   const item = textElement("article", `discovery-run-item state-${run.review_status}`, "");
   const heading = textElement("div", "discovery-run-item-heading", "");
+  const displayName = getArtifactDisplayName(run.artifact_id, run.artifact_name);
   heading.append(
-    textElement("strong", "", run.artifact_name ?? run.artifact_id),
+    textElement("strong", "", displayName),
     textElement("span", "discovery-run-state", discoveryRunStatusLabel(run.review_status)),
   );
   const counts = textElement(
@@ -680,9 +626,10 @@ async function openPersistedDiscoveryRun(
   button: HTMLButtonElement,
 ): Promise<void> {
   button.disabled = true;
+  const displayName = getArtifactDisplayName(run.artifact_id, run.artifact_name);
   try {
     if (run.status === "awaiting_patch_review") {
-      openDiscoveryPatchReview(run.run_id, run.artifact_id, run.conversion_id, run.artifact_name ?? "Markdown 修订审核");
+      openDiscoveryPatchReview(run.run_id, run.artifact_id, run.conversion_id, displayName);
       return;
     }
     const recoverable = run.result_fingerprint !== null
@@ -691,14 +638,14 @@ async function openPersistedDiscoveryRun(
       const diagnostics = await invoke<DiscoveryRunDiagnosticsView>("get_discovery_diagnostics", {
         runId: run.run_id,
       });
-      showDiscoveryDiagnostics(run, diagnostics);
+      showDiscoveryDiagnostics(run, diagnostics, displayName);
       return;
     }
     const envelope = await invoke<DiscoveryReviewEnvelopeView>("get_discovery_review", {
       runId: run.run_id,
     });
     openReviewWorkspace(envelope.outcome, {
-      title: run.artifact_name ?? undefined,
+      title: displayName,
       review_status: envelope.review_status,
       created_at: envelope.created_at,
       updated_at: envelope.updated_at,
@@ -713,6 +660,7 @@ async function openPersistedDiscoveryRun(
 function showDiscoveryDiagnostics(
   run: DiscoveryRunSummaryView,
   diagnostics: DiscoveryRunDiagnosticsView,
+  displayName = getArtifactDisplayName(run.artifact_id, run.artifact_name),
 ): void {
   const dialog = document.createElement("dialog");
   dialog.className = "discovery-diagnostics-dialog";
@@ -722,7 +670,7 @@ function showDiscoveryDiagnostics(
   const meta = textElement(
     "p",
     "discovery-diagnostics-meta",
-    `${run.artifact_name ?? run.artifact_id} · ${discoveryWorkflowStatusLabel(run.status)} · ${shortRunId(run.run_id)}`,
+    `${displayName} · ${discoveryWorkflowStatusLabel(run.status)} · ${shortRunId(run.run_id)}`,
   );
   const message = textElement("p", "discovery-diagnostics-message", diagnostics.message);
   const attempts = textElement("section", "discovery-diagnostics-section", "");
@@ -1603,12 +1551,6 @@ function showToast(message: string, kind: "success" | "error"): void {
   toast.dataset.kind = kind;
   toast.classList.add("is-visible");
   toastTimer = window.setTimeout(() => toast.classList.remove("is-visible"), 5000);
-}
-
-function errorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  return "发生了未知错误";
 }
 
 async function copyIdentifier(value: string): Promise<void> {

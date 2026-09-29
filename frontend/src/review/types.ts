@@ -73,7 +73,8 @@ export interface DiscoveryDiagnosticView {
   checked: boolean;
 }
 
-export type WorkflowStatus = "running" | "awaiting_patch_review" | "completed" | "partial" | "needs_attention" | "failed" | "cancelled";
+import type { WorkflowStatus } from "../discovery/types";
+export type { WorkflowStatus };
 
 export interface DiscoverySource {
   artifact_id: string;
