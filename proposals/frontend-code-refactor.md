@@ -135,13 +135,13 @@ frontend/src/
 2. 创建 `src/discovery/types.ts` 与 `src/discovery/labels.ts`，收敛来自 `main.ts`、`review/`、`discovery-task.ts` 的重复类型和标签映射；
 3. 将现有的 `window.dispatchEvent` 和 `window.addEventListener` 渐进迁移至类型化事件中心。
 
-### 阶段 F2: `main.ts` 控制器拆解
+### 阶段 F2: `main.ts` 控制器拆解（已完成）
 1. 抽离 `src/core/dom.ts` 与 `src/shell/app-shell.ts`，解耦 HTML 模板拼接与全局 DOM 句柄查询；
 2. 抽离 `src/graph/graph-controller.ts`，接管预设过滤、复选框同步、语义边切换与聚焦逻辑；
-3. 抽离 `src/artifact/artifact-controller.ts`，接管 PDF 导入与 Marker 解析调度；
-4. 抽离 `src/discovery/discovery-ledger.ts`，接管运行历史列表刷新与诊断渲染；
+3. 抽离 `src/artifact/types.ts` 与 `src/artifact/artifact-controller.ts`，接管 PDF 导入与 Marker 解析调度；
+4. 抽离 `src/discovery/discovery-ledger.ts`，接管运行历史列表刷新、人类可读片段名称转换与诊断渲染；
 5. 抽离 `src/inspector/inspector-controller.ts`，接管节点详情与 `map-edit` 模态切换；
-6. `main.ts` 改造为引导入口，实例化各控制器并绑定事件，整体结构控制在清晰、可测试的范围。
+6. `main.ts` 成功精简至 174 行（< 200 行标准），作为纯装配与协调引导入口，各子模块由 `eventBus` 及显式委托联动。
 
 ### 阶段 F3: 引入 Vitest 与纯逻辑单元测试基线
 1. 配置 `vitest` 与 `vite.config.ts`；
