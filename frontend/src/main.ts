@@ -30,7 +30,10 @@ import "./styles.css";
 import { ArtifactReader } from "./reader/reader";
 import { sourceNodeDetail } from "./reader/content";
 import { markdownRenderer } from "./reader/markdown";
-import { openDiscoveryOutcome, openDiscoveryPatchReview, type DiscoveryOutcome } from "./reader/selection";
+import { openDiscoveryPatchReview, type PatchReviewMode } from "./reader/selection";
+import type { ReaderFocus } from "./reader/reader";
+import { mountReviewWorkspace, openReviewWorkspace } from "./review/workspace";
+import type { DiscoveryOutcome } from "./review/types";
 import { LlmSettingsController } from "./llm/settings";
 import { mountDiscoveryTask } from "./discovery-task";
 import {
@@ -264,6 +267,7 @@ app.innerHTML = `
         </div>
         <div id="graph-legend" class="map-legend" aria-label="图例"></div>
         <section id="reader" class="reader-panel" aria-label="文件阅读器" hidden></section>
+        <section id="review-workspace" hidden></section>
         <div id="empty-state" class="empty-state">
           <strong id="empty-state-title">尚未导入材料</strong>
           <span id="empty-state-message">导入第一份 PDF 后，节点会出现在这里。</span>
@@ -331,6 +335,7 @@ const markerProblem = requiredElement<HTMLElement>("#marker-problem");
 const toast = requiredElement<HTMLElement>("#toast");
 const readerHost = requiredElement<HTMLElement>("#reader");
 const reader = new ArtifactReader(readerHost);
+mountReviewWorkspace(requiredElement<HTMLElement>("#review-workspace"));
 const llmSettings = new LlmSettingsController(
   requiredElement<HTMLElement>("#llm-settings-host"),
   requiredElement<HTMLButtonElement>("#llm-settings-button"),
@@ -466,12 +471,16 @@ void llmSettings.loadSummary();
 window.addEventListener("mathscape:source-map-changed", () => void loadSnapshot());
 window.addEventListener("mathscape:discovery-runs-changed", () => void loadDiscoveryRuns());
 window.addEventListener("mathscape:open-source", (event) => {
-  const detail = (event as CustomEvent<{ artifactId: string; conversionId?: string | null; title: string; focus?: { start: number; end: number; blockIds?: string[] }; patchRunId?: string; refreshMap?: boolean }>).detail;
+  const detail = (event as CustomEvent<{ artifactId: string; conversionId?: string | null; title: string; focus?: ReaderFocus; patchRunId?: string; patchMode?: PatchReviewMode; refreshMap?: boolean }>).detail;
   void (async () => {
     // Rendering the map closes the reader, so refresh before opening it.
     if (detail.refreshMap) await loadSnapshot();
     readerHost.hidden = false;
-    await reader.open(detail.artifactId, detail.title, detail.focus, detail.patchRunId, detail.conversionId);
+    await reader.open(detail.artifactId, detail.title, {
+      focus: detail.focus,
+      conversionId: detail.conversionId,
+      patch: detail.patchRunId ? { runId: detail.patchRunId, mode: detail.patchMode ?? "workflow" } : undefined,
+    });
   })();
 });
 window.setInterval(() => void syncParseState(), 1000);
@@ -564,6 +573,9 @@ function shortRunId(runId: string): string {
   return runId.length > 34 ? `${runId.slice(0, 17)}…${runId.slice(-12)}` : runId;
 }
 
+const DISCOVERY_RUN_PREVIEW = 20;
+let showAllDiscoveryRuns = false;
+
 async function loadDiscoveryRuns(): Promise<void> {
   refreshDiscoveryRunsButton.disabled = true;
   try {
@@ -575,7 +587,21 @@ async function loadDiscoveryRuns(): Promise<void> {
       discoveryRunsList.append(textElement("p", "ledger-empty", "尚无已保存的内容发现记录。"));
       return;
     }
-    runs.slice(0, 20).forEach(run => renderDiscoveryRunItem(run));
+    const visible = showAllDiscoveryRuns ? runs : runs.slice(0, DISCOVERY_RUN_PREVIEW);
+    visible.forEach(run => renderDiscoveryRunItem(run));
+    if (runs.length > DISCOVERY_RUN_PREVIEW) {
+      const toggle = textElement(
+        "button",
+        "ledger-more",
+        showAllDiscoveryRuns ? "只显示最近记录" : `显示全部 ${runs.length} 条记录`,
+      );
+      toggle.type = "button";
+      toggle.onclick = () => {
+        showAllDiscoveryRuns = !showAllDiscoveryRuns;
+        void loadDiscoveryRuns();
+      };
+      discoveryRunsList.append(toggle);
+    }
   } catch (error) {
     discoveryRunsList.replaceChildren(textElement("p", "ledger-error", `读取失败：${errorMessage(error)}`));
   } finally {
@@ -630,7 +656,12 @@ async function openPersistedDiscoveryRun(
     const envelope = await invoke<DiscoveryReviewEnvelopeView>("get_discovery_review", {
       runId: run.run_id,
     });
-    openDiscoveryOutcome(envelope.outcome);
+    openReviewWorkspace(envelope.outcome, {
+      title: run.artifact_name ?? undefined,
+      review_status: envelope.review_status,
+      created_at: envelope.created_at,
+      updated_at: envelope.updated_at,
+    });
   } catch (error) {
     showToast(`恢复内容发现结果失败：${errorMessage(error)}`, "error");
   } finally {
@@ -906,7 +937,43 @@ function renderNodeDetail(
       ["摘要", node.summary ?? "—"],
     ]),
   );
-  if (node.domain_id !== null && (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceSpan")) void renderSourceDetail(node, nodeDetail);
+  // Fixed slots keep the layout stable while async sections arrive in any order.
+  const sourceSlot = textElement("div", "detail-source", "");
+  const actions = textElement("div", "detail-actions", "");
+  const editSlot = textElement("div", "detail-edit-slot", "");
+  nodeDetail.append(sourceSlot, actions, editSlot);
+  if (node.domain_id !== null && (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceSpan")) void renderSourceDetail(node, sourceSlot, actions);
+  if (canFocus(node)) {
+    const focused = focusRootId === node.id;
+    const focusButton = textElement(
+      "button",
+      "parse-button",
+      focused ? "已以此为中心" : "以此为中心聚焦",
+    );
+    focusButton.type = "button";
+    focusButton.disabled = focused;
+    focusButton.onclick = () => setFocus(node.id, "all");
+    actions.append(focusButton);
+  }
+  if (node.domain_kind === "SourceArtifact" && node.domain_id !== null) {
+    const read = textElement("button", "parse-button", "阅读文件");
+    read.type = "button";
+    read.onclick = () => {
+      readerHost.hidden = false;
+      void reader.open(node.domain_id!, node.label);
+    };
+    actions.append(read);
+  }
+  if (pdf !== undefined) {
+    nodeDetail.append(createParseForm(pdf, marker));
+  }
+  // Map-edit: add edit/retire buttons for editable domain objects
+  if (
+    node.domain_id !== null &&
+    (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceUnitRelation")
+  ) {
+    void mountEditActions(node.domain_id, editSlot);
+  }
   const technical = document.createElement("details");
   technical.className = "technical-details";
   technical.append(textElement("summary", "", "技术详情"));
@@ -918,54 +985,23 @@ function renderNodeDetail(
     technical.append(copy);
   }
   nodeDetail.append(technical);
-  if (canFocus(node)) {
-    const focused = focusRootId === node.id;
-    const focusButton = textElement(
-      "button",
-      "parse-button",
-      focused ? "已以此为中心" : "以此为中心聚焦",
-    );
-    focusButton.type = "button";
-    focusButton.disabled = focused;
-    focusButton.onclick = () => setFocus(node.id, "all");
-    nodeDetail.append(focusButton);
-  }
-  if (node.domain_kind === "SourceArtifact" && node.domain_id !== null) {
-    const read = textElement("button", "parse-button", "阅读文件");
-    read.type = "button";
-    read.onclick = () => {
-      readerHost.hidden = false;
-      void reader.open(node.domain_id!, node.label);
-    };
-    nodeDetail.append(read);
-  }
-  if (pdf !== undefined) {
-    nodeDetail.append(createParseForm(pdf, marker));
-  }
-  // Map-edit: add edit/retire buttons for editable domain objects
-  if (
-    node.domain_id !== null &&
-    (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceUnitRelation")
-  ) {
-    void mountEditActions(node.domain_id);
-  }
 }
 
 // ---------------------------------------------------------------------------
 // Map-edit flow orchestrator
 // ---------------------------------------------------------------------------
 
-async function mountEditActions(objectId: string): Promise<void> {
+async function mountEditActions(objectId: string, host: HTMLElement): Promise<void> {
   try {
     const editCtx = await getEditContext(objectId);
     if (inspectorLocked || selectedNode?.domain_id !== objectId) return;
-    renderEditActions(nodeDetail, editCtx, () => enterEditMode(editCtx), () => enterRetireMode(editCtx));
+    renderEditActions(host, editCtx, () => enterEditMode(editCtx), () => enterRetireMode(editCtx));
   } catch (error) {
     const message = errorMessage(error);
     // Projection-synthesized relations (has_part / contains_span / located_in)
     // are not stored objects and have no edit context.
     if (message.includes("对象不存在")) return;
-    nodeDetail.append(textElement("p", "detail-error", `编辑上下文读取失败：${message}`));
+    host.append(textElement("p", "detail-error", `编辑上下文读取失败：${message}`));
   }
 }
 
@@ -1120,9 +1156,27 @@ function displayLifecycle(lifecycle: string | null): string {
     deleted: "已删除",
   } as Record<string, string>)[lifecycle] ?? lifecycle;
 }
-async function renderSourceDetail(node: IncidenceNode, host: HTMLElement): Promise<void> {
-  try { const detail = await sourceNodeDetail(node.domain_id!); if (detail.excerpt) { const preview = document.createElement("div"); preview.className = "source-preview markdown-body"; preview.innerHTML = markdownRenderer().render(detail.excerpt); host.append(preview); } if (detail.artifact_id) { const button = textElement("button", "parse-button", "打开并定位原文"); button.type = "button"; button.onclick = () => { readerHost.hidden = false; void reader.open(detail.artifact_id!, detail.display_title ?? node.label, detail.byte_range ? { ...detail.byte_range, blockIds: detail.markdown_block_ids } : undefined); }; host.append(button); } }
-  catch (error) { host.append(textElement("p", "detail-error", `来源详情读取失败：${error instanceof Error ? error.message : String(error)}`)); }
+async function renderSourceDetail(node: IncidenceNode, host: HTMLElement, actions: HTMLElement): Promise<void> {
+  try {
+    const detail = await sourceNodeDetail(node.domain_id!);
+    if (detail.excerpt) {
+      const preview = document.createElement("div");
+      preview.className = "source-preview markdown-body";
+      preview.innerHTML = markdownRenderer().render(detail.excerpt);
+      host.append(preview);
+    }
+    if (detail.artifact_id) {
+      const button = textElement("button", "parse-button", "打开并定位原文");
+      button.type = "button";
+      button.onclick = () => {
+        readerHost.hidden = false;
+        void reader.open(detail.artifact_id!, detail.display_title ?? node.label, { focus: detail.byte_range ? { ...detail.byte_range, blockIds: detail.markdown_block_ids } : undefined });
+      };
+      actions.prepend(button);
+    }
+  } catch (error) {
+    host.append(textElement("p", "detail-error", `来源详情读取失败：${error instanceof Error ? error.message : String(error)}`));
+  }
 }
 
 function renderFocusBar(focus: FocusResult | null, graph: IncidenceGraph): void {

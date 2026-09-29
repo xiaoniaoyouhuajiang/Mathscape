@@ -156,30 +156,59 @@ test("Markdown selection runs Discovery and shows an unregistered proposal", asy
   await page.getByRole("button", { name: "使用 LLM 发现内容" }).click();
   await expect(page.getByRole("button", { name: "使用 LLM 发现内容" })).toBeDisabled();
   await expect(page.locator(".discovery-status")).toContainText("LLM 正在分析");
-  await expect(page.locator(".discovery-result")).toContainText("测试命题");
-  await expect(page.locator(".discovery-reference")).toContainText("定义 2 · 未解析");
-  await expect(page.locator(".discovery-relations")).toContainText("测试命题 —证明→ u2");
-  await expect(page.locator(".discovery-issues")).toContainText("定义 2 不在选区中");
+  const workspace = page.locator(".review-workspace");
+  await expect(workspace).toBeVisible();
   await expect(page.locator(".discovery-status")).toContainText("尚未接受或入图");
-  await expect(page.locator(".discovery-run")).toContainText("150 tokens");
-  await expect(page.getByLabel("选择来源单元 测试命题")).toBeChecked();
-  await page.getByRole("button", { name: "清空选择" }).click();
-  await expect(page.getByRole("button", { name: "接受选中内容" })).toBeDisabled();
-  await page.getByRole("button", { name: "选择全部可接受单元" }).click();
-  await expect(page.getByLabel("选择来源单元 测试命题")).toBeChecked();
-  await page.getByRole("button", { name: "接受选中内容" }).click();
-  await expect(page.locator(".source-review-action-feedback")).toContainText("审核并注册完成：1 个单元");
-  await expect(page.locator(".discovery-status")).toContainText("已写入正式来源图");
-  await expect(page.getByRole("button", { name: "接受选中内容" })).toBeDisabled();
+  await expect(workspace.locator(".review-run")).toContainText("150 tokens");
+  // The first unit is locked on open: its whole block is outlined and rendered through KaTeX.
+  const preview = workspace.locator(".review-preview");
+  await expect(preview.locator(".review-fragment-block.is-anchor-block .katex")).toHaveCount(2);
+  await workspace.getByRole("tab", { name: "单元 2" }).click();
+  const unit = workspace.locator(".review-unit").first();
+  await expect(unit).toContainText("测试命题");
+  await expect(unit.locator(".review-excerpt .katex")).toHaveCount(2);
+  await expect(workspace.getByLabel("选择来源单元 测试命题")).toBeChecked();
+  await workspace.getByRole("button", { name: "清空选择" }).click();
+  await expect(workspace.getByRole("button", { name: "接受选中内容" })).toBeDisabled();
+  // Selecting the proof pulls in the unit it proves.
+  await workspace.getByLabel("选择来源单元 测试命题").check();
+  await expect(workspace.getByLabel("选择来源单元 被证命题")).toBeChecked();
+  await workspace.getByLabel("选择来源单元 被证命题").uncheck();
+  await expect(workspace.getByLabel("选择来源单元 测试命题")).not.toBeChecked();
+  await workspace.getByRole("button", { name: "选择全部可接受单元" }).click();
+  await expect(workspace.getByLabel("选择来源单元 测试命题")).toBeChecked();
+
+  // A reference anchored on a sub-range highlights exactly that formula.
+  await workspace.getByRole("tab", { name: "引用 1" }).click();
+  await expect(workspace.locator(".review-reference")).toContainText("定义 2 · 未解析");
+  await workspace.locator(".review-reference").click();
+  await expect(preview.locator(".review-anchor-highlight.markdown-patch-highlight-formula")).toHaveCount(1);
+  await expect(preview.locator(".review-fragment-block.is-anchor-block")).toHaveCount(0);
+  await expect(preview.locator(".review-raw-source mark")).toHaveText("$x^2$");
+
+  await workspace.getByRole("tab", { name: "关系 1" }).click();
+  await workspace.locator(".review-relation").click();
+  await expect(preview).toContainText("测试命题 —证明→ 被证命题");
+  await preview.getByRole("button", { name: "证据 2" }).click();
+  await expect(preview.locator(".review-raw-source mark")).toHaveText("$x^2$");
+
+  await workspace.getByRole("tab", { name: "诊断 2" }).click();
+  await workspace.locator(".review-issue").click();
+  await expect(preview.locator(".review-fallback-note")).toHaveCount(0);
+  await workspace.locator(".review-diagnostic").click();
+  await expect(preview.locator(".review-fallback-note")).toContainText("诊断未提供独立原文范围");
+  await expect(preview.locator(".review-fragment-block.is-anchor-block")).toHaveCount(1);
+
+  await workspace.getByRole("button", { name: "接受选中内容" }).click();
+  await expect(workspace.locator(".review-action-feedback")).toContainText("审核并注册完成：2 个单元");
+  await expect(workspace.locator(".review-selection-state")).toContainText("已写入正式来源图");
+  await expect(workspace.getByRole("button", { name: "接受选中内容" })).toBeDisabled();
   const acceptance = await page.evaluate(() => (window as any).harness.acceptanceRequests.at(-1));
   expect(acceptance).toEqual({
     run_id: "mathscape:discovery-run/browser-fixture",
     expected_result_fingerprint: "sha256:" + "1".repeat(64),
-    selection: { kind: "explicit_units", unit_refs: ["u1"] },
+    selection: { kind: "explicit_units", unit_refs: ["u1", "u2"] },
   });
-  await page.locator(".discovery-unit").getByRole("button", { name: "定位原文" }).click();
-  await expect(page.getByLabel("原文块 2", { exact: true })).toHaveClass(/is-discovery-anchor-block/);
-  await expect(page.locator(".discovery-anchor-preview mark")).toContainText("Inline $x^2$");
   const request = await page.evaluate(() => (window as any).harness.discoveryRequests.at(-1));
   expect(request.selector).toEqual({
     kind: "block_range", first: "test-block-1", last: "test-block-1",
@@ -199,7 +228,7 @@ test("Discovery paused for Markdown patch review shows a rendered comparison and
   const host = page.locator(".markdown-patch-host");
   await expect(host).toContainText("内容发现已暂停");
   await expect(page.locator(".discovery-status")).toContainText("审核 Markdown 修订后继续");
-  await expect(page.locator(".source-review-panel")).toHaveCount(0);
+  await expect(page.locator(".review-workspace")).toBeHidden();
   await expect(page.getByRole("button", { name: "生成 Markdown 修订建议" })).toHaveCount(0);
   // Both panes render the whole enclosing block through KaTeX.
   const panes = host.locator(".markdown-patch-pane .markdown-body");
@@ -215,9 +244,9 @@ test("Discovery paused for Markdown patch review shows a rendered comparison and
   await expect(host.locator(".markdown-patch-inline ins")).toHaveText("x^4");
   await expect(panes.nth(1)).toContainText("4");
   await host.getByRole("button", { name: "全部拒绝并继续发现" }).click();
-  await expect(page.locator(".discovery-result")).toContainText("测试命题");
+  await expect(page.locator(".review-workspace")).toBeVisible();
+  await expect(page.locator(".review-workspace .review-footer")).toContainText("已选择 2 个单元");
   await expect(host).toBeHidden();
-  await expect(page.locator(".source-review-panel")).toHaveCount(1);
   const recorded = await page.evaluate(() => ({
     decision: (window as any).harness.patchDecisions.at(-1),
     resume: (window as any).harness.resumeRequests.at(-1),
@@ -246,7 +275,8 @@ test("reopening a reader recovers a paused run and continues a recorded decision
   });
   await expect(host).toContainText("修订已应用");
   await host.getByRole("button", { name: "按已记录的决定继续内容发现" }).click();
-  await expect(page.locator(".discovery-result")).toContainText("测试命题");
+  await expect(page.locator(".review-workspace")).toBeVisible();
+  await expect(page.locator(".discovery-result")).toContainText("打开审核工作区");
   await expect(host).toBeHidden();
 });
 
@@ -277,8 +307,78 @@ test("partial staged discovery remains visible without claiming missing facts ar
   await page.getByRole("button", { name: "选择全文" }).click();
   await page.getByRole("button", { name: "使用 LLM 发现内容" }).click();
   await expect(page.locator(".discovery-status")).toContainText("两阶段内容发现部分完成");
-  await expect(page.locator(".discovery-unit")).toContainText("来源事实待发现");
-  await expect(page.locator(".discovery-pending")).toContainText("尚有 1 个事实任务未完成");
+  const workspace = page.locator(".review-workspace");
+  await expect(workspace.locator(".review-pending")).toContainText("尚有 1 个事实任务未完成");
+  await workspace.getByRole("tab", { name: "单元 2" }).click();
+  await expect(workspace.locator(".review-unit").first()).toContainText("来源事实待发现");
+});
+
+test("review workspace survives the reader, restores its draft and returns to the selection", async ({ page }) => {
+  await page.evaluate(async () => (window as any).harness.reader.open("md", "往返测试"));
+  await page.getByLabel("原文块 2", { exact: true }).click();
+  await page.getByRole("button", { name: "设置起点" }).click();
+  await page.getByRole("button", { name: "设置终点" }).click();
+  await page.getByRole("button", { name: "使用 LLM 发现内容" }).click();
+  const workspace = page.locator(".review-workspace");
+  await workspace.getByRole("tab", { name: "单元 2" }).click();
+  await workspace.getByRole("button", { name: "清空选择" }).click();
+  await workspace.getByRole("tab", { name: "引用 1" }).click();
+  await workspace.locator(".review-reference").click();
+
+  await workspace.getByRole("button", { name: "在阅读器中打开" }).click();
+  await expect(workspace).toBeHidden();
+  await expect(page.getByLabel("原文块 2", { exact: true })).toHaveClass(/source-block-focus/);
+  await page.getByRole("button", { name: /返回审核工作区/ }).click();
+  await expect(workspace).toBeVisible();
+  await expect(workspace.locator(".review-reference")).toHaveClass(/is-current/);
+
+  // Reopening the same run (e.g. from the ledger) restores the unaccepted draft.
+  await page.evaluate(async () => {
+    const h = (window as any).harness;
+    window.dispatchEvent(new CustomEvent("mathscape:open-review", { detail: { outcome: await h.discoveryOutcome(), meta: { title: "恢复" } } }));
+  });
+  await expect(workspace.getByRole("tab", { name: "引用 1" })).toHaveAttribute("aria-selected", "true");
+  await expect(workspace.locator(".review-reference")).toHaveClass(/is-current/);
+  await expect(workspace.locator(".review-selection-state")).toContainText("已选择 0 个单元");
+
+  await workspace.getByRole("button", { name: "返回选区" }).click();
+  await expect(workspace).toBeHidden();
+  await expect(page.getByLabel("原文块 2", { exact: true })).toHaveClass(/source-block-focus/);
+  await expect(page.getByLabel("原文块 1", { exact: true })).not.toHaveClass(/source-block-focus/);
+});
+
+test("review workspace refuses to locate anchors on a drifted Markdown snapshot", async ({ page }) => {
+  await page.evaluate(async () => {
+    const h = (window as any).harness;
+    h.behavior.documentHash = "other-hash";
+    window.dispatchEvent(new CustomEvent("mathscape:open-review", { detail: { outcome: await h.discoveryOutcome() } }));
+  });
+  const workspace = page.locator(".review-workspace");
+  await expect(workspace.locator(".review-state")).toHaveText("锚点失效");
+  await expect(workspace.locator(".review-preview .review-stale")).toContainText("不做近似定位");
+  await expect(workspace.locator(".review-fragment")).toHaveCount(0);
+  await expect(workspace.getByRole("button", { name: "接受选中内容" })).toBeDisabled();
+  await expect(workspace.getByRole("button", { name: "返回选区" })).toBeDisabled();
+});
+
+test("review graph shares unit refs with the lists and shows evidence markers on demand", async ({ page }) => {
+  await page.evaluate(async () => {
+    const h = (window as any).harness;
+    window.dispatchEvent(new CustomEvent("mathscape:open-review", { detail: { outcome: await h.discoveryOutcome() } }));
+  });
+  const workspace = page.locator(".review-workspace");
+  await workspace.getByRole("tab", { name: "局部结构图" }).click();
+  const graph = workspace.locator(".review-graph");
+  await expect(graph).toHaveAttribute("data-unit-count", "2");
+  await expect(graph).toHaveAttribute("data-current", "u1");
+  await workspace.getByLabel(/证据模式/).check();
+  await expect(graph).toHaveAttribute("data-evidence-count", "2");
+  await workspace.getByRole("button", { name: "切换为分层列表" }).click();
+  await expect(workspace.locator(".review-layered-row")).toHaveText(["测试命题", "被证命题"]);
+  await expect(workspace.locator(".review-layered-row").first()).toHaveClass(/is-current/);
+  await workspace.locator(".review-layered-row").nth(1).click();
+  await workspace.getByRole("button", { name: "切换为图模式" }).click();
+  await expect(workspace.locator(".review-graph")).toHaveAttribute("data-current", "u2");
 });
 
 test("streaming task survives reader changes and minimization", async ({ page }) => {
@@ -318,4 +418,22 @@ test("reversed endpoints, stale async validation, context switch and errors", as
   await page.getByRole("button", { name: "构建发现输入" }).click();
   await expect(page.locator(".selection-panel [role=status]")).toContainText("输入快照已改变");
   expect(await page.evaluate(() => (window as any).harness.selectionRequests.at(-1).snapshot.conversion_id)).toBe("conversion-two");
+});
+
+test("anchor fragments keep block syntax and never leak renderer markers", async ({ page }) => {
+  const result = await page.evaluate(() => {
+    const { fragment } = (window as any).harness;
+    return {
+      heading: fragment("## 定理 1 与 $x$\n", "heading", "定理 1"),
+      list: fragment("- 第一项\n- 第二项 $y$\n", "list", "第一项\n- 第二项"),
+      table: fragment("| a | b |\n|---|---|\n| 1 | 2 |\n", "table", "1"),
+      code: fragment("```\ncode x\n```\n", "code", "x"),
+      inlineCode: fragment("Use `abc` here\n", "text", "bc"),
+    };
+  });
+  expect(result.heading).toMatchObject({ heading: true, marks: 1, whole: false, leaked: false });
+  expect(result.list).toMatchObject({ items: 2, marks: 2, whole: false, leaked: false });
+  expect(result.table).toMatchObject({ table: true, marks: 0, whole: true, leaked: false });
+  expect(result.code).toMatchObject({ marks: 0, whole: true, leaked: false });
+  expect(result.inlineCode).toMatchObject({ whole: true, leaked: false });
 });

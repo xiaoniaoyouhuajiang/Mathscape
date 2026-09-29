@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use mathscape_domain::{
     ContentHash, DiscoveryContextRequest, DiscoveryIssueKind, DiscoveryRelationKind,
-    DiscoveryUnitKind, UnitCompleteness,
+    DiscoveryUnitKind, TextByteRange, UnitCompleteness,
 };
 use mathscape_llm::LlmFinishReason;
 use mathscape_orchestrator::{
@@ -36,6 +36,7 @@ pub struct DesktopDiscoverySourceView {
     conversion_id: Option<String>,
     content_hash: ContentHash,
     input_fingerprint: ContentHash,
+    requested_range: TextByteRange,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -173,6 +174,7 @@ impl DesktopDiscoveryView {
                     .map(ToString::to_string),
                 content_hash: input.snapshot.content_hash.clone(),
                 input_fingerprint: input.fingerprint.clone(),
+                requested_range: input.requested.source_range.clone(),
             });
         let tasks: HashMap<_, _> = result
             .as_ref()

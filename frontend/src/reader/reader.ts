@@ -3,7 +3,7 @@ import { ArtifactPdfTransport } from "./pdf-transport";
 import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import { contentInfo, readRange, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
 import { markdownRenderer } from "./markdown";
-import { markdownDocument, MarkdownSelection } from "./selection";
+import { markdownDocument, MarkdownSelection, type PatchReviewMode } from "./selection";
 import "./reader.css";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -12,6 +12,15 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, text = ""): HTML
   const result = document.createElement(tag);
   result.textContent = text;
   return result;
+}
+
+export interface ReaderFocus { start: number; end: number; blockIds?: string[] }
+
+export interface ReaderOpenOptions {
+  focus?: ReaderFocus;
+  /** Opens the Markdown patch review of a run instead of the latest pending one. */
+  patch?: { runId: string; mode: PatchReviewMode };
+  conversionId?: string | null;
 }
 
 export class ArtifactReader {
@@ -33,8 +42,10 @@ export class ArtifactReader {
     this.host.replaceChildren();
   }
 
-  async open(id: string, title: string, focus?: { start: number; end: number; blockIds?: string[] }, patchRunId?: string, conversionId?: string | null): Promise<void> {
+  async open(id: string, title: string, options: ReaderOpenOptions = {}): Promise<void> {
     this.close();
+    window.dispatchEvent(new Event("mathscape:reader-opened"));
+    const { focus, patch, conversionId } = options;
     const generation = this.generation;
     const heading = element("h2", title);
     const status = element("p", "正在读取…");
@@ -45,7 +56,7 @@ export class ArtifactReader {
       if (info.media_type === "application/pdf") {
         await this.pdf(info, generation);
       } else if (info.media_type === "text/markdown") {
-        await this.markdown(info, generation, focus, patchRunId, conversionId);
+        await this.markdown(info, generation, focus, patch, conversionId);
       } else if (info.media_type === "application/json" || info.media_type.startsWith("text/")) {
         const bytes = await readSmallFile(info);
         if (generation !== this.generation) return;
@@ -190,7 +201,7 @@ export class ArtifactReader {
     if (items) add(items, outline);
   }
 
-  private async markdown(info: ContentInfo, generation: number, focus?: { start: number; end: number; blockIds?: string[] }, patchRunId?: string, conversionId?: string | null): Promise<void> {
+  private async markdown(info: ContentInfo, generation: number, focus?: ReaderFocus, patch?: ReaderOpenOptions["patch"], conversionId?: string | null): Promise<void> {
     let document = await markdownDocument(info.artifact_id, conversionId ?? info.contexts[0]?.conversion_id ?? null);
     if (generation !== this.generation) return;
     const controls = element("div"); controls.className = "reader-controls";
@@ -202,7 +213,7 @@ export class ArtifactReader {
     if (info.contexts.length > 1) controls.append(contextSelect);
     const article = element("article"); article.className = "markdown-body";
     this.host.append(controls, article);
-    let selection = new MarkdownSelection(document, article, patchRunId);
+    let selection = new MarkdownSelection(document, article, patch);
     controls.after(selection.panel);
     this.disposeDocument = () => selection.dispose();
     let rawMode = false, version = 0;
@@ -270,7 +281,7 @@ export class ArtifactReader {
       void markdownDocument(info.artifact_id, info.contexts[Number(contextSelect.value)]?.conversion_id ?? null).then(data => {
         if (generation !== this.generation || current !== version) return;
         document = data;
-        selection = new MarkdownSelection(document, article, patchRunId);
+        selection = new MarkdownSelection(document, article, patch);
         controls.after(selection.panel);
         raw.disabled = false;
         return render();

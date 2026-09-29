@@ -29,7 +29,8 @@ code {
 .shell {
   display: grid;
   grid-template-rows: 72px minmax(0, 1fr);
-  min-height: 100%;
+  /* A fixed height lets the side panels scroll instead of overflowing the clipped body. */
+  height: 100%;
   background:
     radial-gradient(circle at 48% -10%, rgb(56 91 106 / 20%), transparent 36%),
     #0b1016;
@@ -220,7 +221,9 @@ code {
 
 .discovery-ledger { margin-top: 14px; border: 1px solid #2a3742; border-radius: 12px; background: #111b23; padding: 12px; }
 .ledger-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.discovery-runs-list { display: grid; gap: 8px; max-height: 34vh; overflow: auto; margin-top: 9px; }
+.discovery-runs-list { display: grid; gap: 8px; margin-top: 9px; }
+.ledger-more { justify-self: center; border: 1px dashed #3d5660; border-radius: 6px; padding: 5px 10px; background: transparent; color: #a9c9c0; cursor: pointer; font-size: 11px; }
+.ledger-more:hover { border-color: #5f8c84; color: #d6ece5; }
 .ledger-empty, .ledger-error { margin: 4px 0; color: #9eb0b9; font-size: 12px; }
 .ledger-error { color: #e7aaa1; }
 .discovery-run-item { padding: 9px; border: 1px solid #344953; border-radius: 7px; background: #16242b; font-size: 11px; }
@@ -565,6 +568,12 @@ code {
   font-weight: 400;
 }
 
+.detail-source:not(:empty) { margin-top: 16px; }
+.detail-actions { display: grid; gap: 8px; margin-top: 18px; }
+.detail-actions:empty { display: none; }
+.detail-actions .parse-button { width: 100%; padding: 0 12px; }
+.detail-edit-slot .edit-actions { margin-top: 10px; }
+.detail-edit-slot .retire-button { flex: 1; }
 .source-preview { max-height: 220px; overflow: auto; padding: 10px; border: 1px solid #294047; border-radius: 6px; color: #d3e2e1; background: #0d171d; white-space: pre-wrap; font: 11px/1.55 ui-monospace, monospace; }
 .detail-error { color: #df958d; font-size: 12px; }
 .graph-evidence-toggle { display: inline-flex; align-items: center; gap: 5px; color: #bdd6cf; font-size: 11px; }
@@ -579,7 +588,7 @@ code {
 .source-preview p:first-child { margin-top: 0; }
 
 .technical-details {
-  margin-top: 14px;
+  margin-top: 20px;
   color: #8593a1;
   font-size: 11px;
 }

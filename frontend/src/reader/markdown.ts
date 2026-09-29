@@ -3,10 +3,14 @@ import katex from "katex";
 import "katex/dist/katex.min.css";
 
 export type MarkdownPatchHighlight = "old" | "new";
+/** Source backlinks use their own variant: a located anchor is not a patch deletion or insertion. */
+export type MarkdownHighlight = MarkdownPatchHighlight | "anchor";
 
 type PatchMarkerKind = "start" | "end";
 
-const PATCH_MARKERS: Record<MarkdownPatchHighlight, Record<PatchMarkerKind, string>> = {
+const VARIANTS = ["old", "new", "anchor"] as const;
+
+export const HIGHLIGHT_MARKERS: Record<MarkdownHighlight, Record<PatchMarkerKind, string>> = {
   old: {
     start: "\uE000mathscape-patch-old-start\uE001",
     end: "\uE000mathscape-patch-old-end\uE001",
@@ -15,10 +19,21 @@ const PATCH_MARKERS: Record<MarkdownPatchHighlight, Record<PatchMarkerKind, stri
     start: "\uE000mathscape-patch-new-start\uE001",
     end: "\uE000mathscape-patch-new-end\uE001",
   },
+  anchor: {
+    start: "\uE000mathscape-anchor-start\uE001",
+    end: "\uE000mathscape-anchor-end\uE001",
+  },
+};
+const PATCH_MARKERS = HIGHLIGHT_MARKERS;
+
+const HIGHLIGHT_CLASS: Record<MarkdownHighlight, string> = {
+  old: "markdown-patch-highlight-old",
+  new: "markdown-patch-highlight-new",
+  anchor: "review-anchor-highlight",
 };
 
-function markerAt(source: string, position: number): { variant: MarkdownPatchHighlight; kind: PatchMarkerKind; length: number } | null {
-  for (const variant of ["old", "new"] as const) {
+function markerAt(source: string, position: number): { variant: MarkdownHighlight; kind: PatchMarkerKind; length: number } | null {
+  for (const variant of VARIANTS) {
     for (const kind of ["start", "end"] as const) {
       const value = PATCH_MARKERS[variant][kind];
       if (source.startsWith(value, position)) return { variant, kind, length: value.length };
@@ -27,16 +42,16 @@ function markerAt(source: string, position: number): { variant: MarkdownPatchHig
   return null;
 }
 
-function patchVariant(source: string): MarkdownPatchHighlight | null {
-  for (const variant of ["old", "new"] as const) {
+function patchVariant(source: string): MarkdownHighlight | null {
+  for (const variant of VARIANTS) {
     if (source.includes(PATCH_MARKERS[variant].start) || source.includes(PATCH_MARKERS[variant].end)) return variant;
   }
   return null;
 }
 
-function removePatchMarkers(source: string): string {
+export function removePatchMarkers(source: string): string {
   let result = source;
-  for (const variant of ["old", "new"] as const) {
+  for (const variant of VARIANTS) {
     result = result
       .split(PATCH_MARKERS[variant].start).join("")
       .split(PATCH_MARKERS[variant].end).join("");
@@ -53,7 +68,7 @@ export function markdownPatchSource(
   before: string,
   changed: string,
   after: string,
-  variant: MarkdownPatchHighlight,
+  variant: MarkdownHighlight,
 ): string {
   const markers = PATCH_MARKERS[variant];
   const delimiters = [
@@ -76,6 +91,11 @@ export function markdownPatchSource(
   }
   return before + (decorated ?? markers.start + changed + markers.end) + after;
 }
+
+const TEXT_TERMINATORS = new Set([
+  0x0a, 0x21, 0x23, 0x24, 0x25, 0x26, 0x2a, 0x2b, 0x2d, 0x3a, 0x3c, 0x3d, 0x40,
+  0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60, 0x7b, 0x7d, 0x7e, 0xe000,
+]);
 
 // Formula tokens are recognized before Markdown consumes backslash escapes.
 export function markdownRenderer(): MarkdownIt {
@@ -101,8 +121,17 @@ export function markdownRenderer(): MarkdownIt {
     state.line = lastLine + 1;
     return true;
   });
-  // This rule must precede MarkdownIt's text rule; otherwise a text token
-  // would consume the private-use marker before we can turn it into a span.
+  // MarkdownIt's text rule consumes every non-terminator character, which
+  // would swallow a marker that directly follows plain text. Same rule, with
+  // the private-use marker prefix added to the terminators.
+  md.inline.ruler.at("text", (state, silent) => {
+    let pos = state.pos;
+    while (pos < state.posMax && !TEXT_TERMINATORS.has(state.src.charCodeAt(pos))) pos++;
+    if (pos === state.pos) return false;
+    if (!silent) state.pending += state.src.slice(state.pos, pos);
+    state.pos = pos;
+    return true;
+  });
   md.inline.ruler.before("text", "mathscape_patch_marker", (state, silent) => {
     const marker = markerAt(state.src, state.pos);
     if (!marker) return false;
@@ -139,9 +168,8 @@ export function markdownRenderer(): MarkdownIt {
     return true;
   });
   md.renderer.rules.mathscape_patch_marker = (tokens, index) => {
-    const marker = tokens[index].meta as { variant: MarkdownPatchHighlight; kind: PatchMarkerKind };
-    const className = marker.variant === "old" ? "markdown-patch-highlight-old" : "markdown-patch-highlight-new";
-    return marker.kind === "start" ? `<mark class="${className}">` : "</mark>";
+    const marker = tokens[index].meta as { variant: MarkdownHighlight; kind: PatchMarkerKind };
+    return marker.kind === "start" ? `<mark class="${HIGHLIGHT_CLASS[marker.variant]}">` : "</mark>";
   };
   // Remove renderer markers before KaTeX sees the source. This keeps the
   // source correction out of the formula while retaining a visible wrapper.
@@ -154,9 +182,8 @@ export function markdownRenderer(): MarkdownIt {
       maxExpand: 1000, maxSize: 20,
     });
     if (!variant) return html;
-    const className = variant === "old" ? "markdown-patch-highlight-old" : "markdown-patch-highlight-new";
     const displayClass = token.meta.display ? " markdown-patch-highlight-formula-display" : "";
-    return `<span class="${className} markdown-patch-highlight-formula${displayClass}">${html}</span>`;
+    return `<span class="${HIGHLIGHT_CLASS[variant]} markdown-patch-highlight-formula${displayClass}">${html}</span>`;
   };
   // Never load original image URLs. The reader resolves them from the manifest.
   md.renderer.rules.image = (tokens, index) => {

@@ -4,6 +4,8 @@ import { ArtifactPdfTransport } from "../src/reader/pdf-transport";
 import { markdownRenderer } from "../src/reader/markdown";
 import { resolveProductPath, readRange, type ContentInfo } from "../src/reader/content";
 import type { AnchoredMarkdown, SelectionRequest } from "../src/reader/selection";
+import { mountReviewWorkspace } from "../src/review/workspace";
+import { renderAnchorFragment } from "../src/review/anchor-fragment";
 
 // Tiny reproducible PDF: two pages and one outline entry, no copyrighted assets.
 function samplePdf(): Uint8Array {
@@ -65,7 +67,7 @@ const discoveryRequests: SelectionRequest[] = [];
 const acceptanceRequests: unknown[] = [];
 const patchDecisions: any[] = [];
 const resumeRequests: unknown[] = [];
-const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null };
+const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash" };
 const byteOffset = (text: string): number => new TextEncoder().encode(markdown.slice(0, markdown.indexOf(text))).length;
 function patchReview(status: string): unknown {
   const start = byteOffset("x^2");
@@ -96,7 +98,7 @@ function anchored(conversion: string): AnchoredMarkdown {
     } })),
   };
 }
-mockIPC(function handle(command, payload): any {
+function handle(command: string, payload: any): any {
   if (command === "get_pending_markdown_patch_review") {
     return behavior.pendingPatchStatus === null ? null : patchReview(behavior.pendingPatchStatus);
   }
@@ -154,17 +156,26 @@ mockIPC(function handle(command, payload): any {
       start: unitBlock.range.start, end: unitBlock.range.end,
       block_ids: [unitBlock.id], excerpt: "Inline $x^2$ and \\(a_n\\to a\\).",
     };
+    // A strict sub-range of the unit block: the formula `$x^2$`.
+    const formula = { start: byteOffset("$x^2$"), end: byteOffset("$x^2$") + 5, block_ids: [unitBlock.id], excerpt: "$x^2$" };
+    const targetBlock = doc.blocks[2];
+    const target = { start: targetBlock.range.start, end: targetBlock.range.end, block_ids: [targetBlock.id], excerpt: "\\frac{1}{n}" };
+    const reviewAnchor = (purpose: string, a: typeof anchor) => ({ purpose, range: { start: a.start, end: a.end }, block_ids: a.block_ids, excerpt: a.excerpt });
     return new Promise(resolve => setTimeout(() => resolve({
       outcome: behavior.discoveryStatus,
       view: {
         version: "mathscape-desktop-discovery-view-1", status: behavior.discoveryStatus, complete: behavior.discoveryStatus === "completed",
-        source: { artifact_id: "md", conversion_id: request.snapshot.conversion_id, content_hash: "test-hash", input_fingerprint: "test-input" },
+        source: { artifact_id: "md", conversion_id: request.snapshot.conversion_id, content_hash: "test-hash", input_fingerprint: "test-input", requested_range: { start: unitBlock.range.start, end: unitBlock.range.end } },
         units: [{
           unit_ref: "u1", unit_kind: "statement", title: "测试命题", display_title: "测试命题",
           parent: null, completeness: "complete", fact_status: behavior.discoveryStatus === "completed" ? "processed" : "pending",
           source_excerpt: anchor.excerpt, anchors: [anchor], source_labels: [], source_title: null,
+        }, {
+          unit_ref: "u2", unit_kind: "statement", title: "被证命题", display_title: "被证命题",
+          parent: null, completeness: "complete", fact_status: "processed",
+          source_excerpt: target.excerpt, anchors: [target], source_labels: [], source_title: null,
         }],
-        references: [{ owner: "u1", text: "定义 2", anchor, status: "unresolved", candidates: [], reason: "no local declaration", origins: ["t1:r1"] }],
+        references: [{ owner: "u1", text: "定义 2", anchor: formula, status: "unresolved", candidates: [], reason: "no local declaration", origins: ["t1:r1"] }],
         relations: [{ source: "u1", target: "u2", relation: "proves", evidence: [anchor], bases: ["原文明示证明关系"], origins: ["t1:e1"] }],
         issues: [{ issue_ref: "t1:i1", stage: "source_facts", owner: "u1", kind: "missing_context", observation: "定义 2 不在选区中", requires_unit_revision: false, evidence: [anchor] }],
         pending_tasks: behavior.discoveryStatus === "completed" ? [] : [{ task_ref: "t1", owner: "u1" }], diagnostics: [],
@@ -181,8 +192,15 @@ mockIPC(function handle(command, payload): any {
           fact_status: behavior.discoveryStatus === "completed" ? "processed" : "pending",
           acceptance: "selectable", anchors: [{ purpose: "unit", range: { start: anchor.start, end: anchor.end }, block_ids: anchor.block_ids, excerpt: anchor.excerpt }],
           source_excerpt: anchor.excerpt,
+        }, {
+          unit_ref: "u2", unit_kind: "statement", display_title: "被证命题", source_title: null,
+          source_labels: [], parent: null, completeness: "complete", fact_status: "processed",
+          acceptance: "selectable", anchors: [reviewAnchor("unit", target)], source_excerpt: target.excerpt,
         }],
-        references: [], structure_relations: [], relations: [], diagnostics: [],
+        references: [{ reference_ref: "r1", owner: "u1", text: "定义 2", anchor: reviewAnchor("reference", formula), status: "unresolved", candidates: [], reason: "no local declaration", origins: ["t1:r1"] }],
+        structure_relations: [],
+        relations: [{ relation_ref: "e1", source: "u1", target: "u2", relation: "proves", evidence: [reviewAnchor("relation_evidence", anchor), reviewAnchor("relation_evidence", formula)], bases: ["原文明示证明关系"], origins: ["t1:e1"] }],
+        diagnostics: [{ diagnostic_ref: "d1", severity: "warning", stage: "source_facts", code: "warning_context", path: "/tasks/0", message: "上下文不足", checked: true, related_units: ["u1"] }],
         pending_tasks: behavior.discoveryStatus === "completed" ? [] : [{ task_ref: "t1", owner: "u1", reason: "待处理" }],
         acceptance: { state: "selectable", selected_units: [], required_units: [], missing_targets: [], blockers: [], allowed_scopes: [{ kind: "all_validated" }] },
       },
@@ -218,7 +236,11 @@ mockIPC(function handle(command, payload): any {
       });
     }, behavior.selectionDelay));
   }
-  if (command === "get_markdown_document") return anchored((payload as { conversionId: string }).conversionId);
+  if (command === "get_markdown_document") {
+    const doc = anchored((payload as { conversionId: string }).conversionId);
+    doc.snapshot.content_hash = behavior.documentHash;
+    return doc;
+  }
   const args = payload as { artifactId: string; offset: number; length: number };
   const file = files[args.artifactId];
   if (!file) throw new Error("Artifact 不存在");
@@ -235,9 +257,38 @@ mockIPC(function handle(command, payload): any {
     return file.bytes.slice(args.offset, args.offset + args.length).buffer;
   }
   throw new Error("Unexpected IPC: " + command);
+}
+mockIPC(handle);
+// Renders one block with `selected` (its first occurrence) as the anchor.
+function fragment(text: string, kind: string, selected: string) {
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(text);
+  const start = encoder.encode(text.slice(0, text.indexOf(selected))).length;
+  const anchor = { start, end: start + encoder.encode(selected).length, block_ids: ["b"], excerpt: selected, purpose: "unit" };
+  const doc: AnchoredMarkdown = { ...anchored("conversion"), source: text, blocks: [{ id: "b", kind, range: { start: 0, end: bytes.length } }] };
+  const node = renderAnchorFragment(doc, bytes, anchor, doc.blocks);
+  return {
+    marks: node.querySelectorAll(".review-anchor-highlight").length,
+    whole: node.querySelector(".is-anchor-block") !== null,
+    heading: node.querySelector("h2") !== null,
+    items: node.querySelectorAll("li").length,
+    table: node.querySelector("table") !== null,
+    leaked: (node.textContent ?? "").includes("\uE000"),
+  };
+}
+const discoveryOutcome = () => handle("run_discovery", {
+  request: { selection: { snapshot: anchored("conversion").snapshot, admission: "review_before_publish" } },
 });
 
 const reader = new ArtifactReader(document.querySelector<HTMLElement>("#reader")!);
+mountReviewWorkspace(document.querySelector<HTMLElement>("#review-workspace")!);
+window.addEventListener("mathscape:open-source", event => {
+  const detail = (event as CustomEvent).detail;
+  void reader.open(detail.artifactId, detail.title, {
+    focus: detail.focus, conversionId: detail.conversionId,
+    patch: detail.patchRunId ? { runId: detail.patchRunId, mode: detail.patchMode ?? "workflow" } : undefined,
+  });
+});
 Object.assign(window, {
-  harness: { ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, patchDecisions, resumeRequests, behavior, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
 });
