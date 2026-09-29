@@ -143,14 +143,16 @@ frontend/src/
 5. 抽离 `src/inspector/inspector-controller.ts`，接管节点详情与 `map-edit` 模态切换；
 6. `main.ts` 成功精简至 174 行（< 200 行标准），作为纯装配与协调引导入口，各子模块由 `eventBus` 及显式委托联动。
 
-### 阶段 F3: 引入 Vitest 与纯逻辑单元测试基线
-1. 配置 `vitest` 与 `vite.config.ts`；
-2. 编写首批纯逻辑单测：
-   - `tests/unit/graph-projection.spec.ts`：验证超边展开与 junction 规则；
-   - `tests/unit/graph-focus.spec.ts`：验证聚焦深度提取算法；
-   - `tests/unit/markdown-markers.spec.ts`：验证补丁高亮与标记清理；
-   - `tests/unit/map-edit-builder.spec.ts`：验证 `UserChangeRequest` 构造逻辑。
-3. 确保 `npm run typecheck`、`npm run test:unit` 以及原有 Playwright 测试全部通过。
+### 阶段 F3: 引入 Vitest 与纯逻辑单元测试基线（已完成）
+1. 配置 `vitest`、`vitest.config.ts` 与 `package.json`（新增 `npm run test:unit`）；
+2. 在 `playwright.config.ts` 中配置排除 `**/unit/**`，实现单元测试与端到端测试完全隔离；
+3. 编写并全绿通过首批 4 组纯逻辑单测（共 26 个测试用例，运行耗时约 130ms）：
+   - `tests/unit/graph-focus.spec.ts`：验证聚焦深度提取、链式遍历与收缩折叠中间节点计数；
+   - `tests/unit/graph-projection.spec.ts`：验证节点类型键分类、中文友好标签与视觉规范完整性；
+   - `tests/unit/markdown-markers.spec.ts`：验证不可见控制标记双向清洗与数学公式定界符保全；
+   - `tests/unit/map-edit-builder.spec.ts`：验证 `FieldChange` 三态信号与两阶段 `UserChangeRequest` 契约构造。
+4. 验证通过：`npm run typecheck`（0 错误）、`npm run test:unit`（26/26 通过）及 `npm run test:reader`（21/21 Playwright 测试全部通过）。
+
 
 ### 阶段 F4 (暂缓项，待未来阶段评估)
 - 探索声明式 UI（Svelte 5 / Preact）或轻量模板库（lit-html）；

@@ -7,6 +7,8 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test:reader": "playwright test",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
     "tauri:dev": "cd ../apps/mathscape-desktop && ../../frontend/node_modules/.bin/tauri dev",
     "tauri:dev:local_1": "cd ../apps/mathscape-desktop && MATHSCAPE_WORKSPACE_ROOT=\"$PWD/../../.mathscape-dev/workspace\" ../../frontend/node_modules/.bin/tauri dev",
     "tauri:dev:local_2": "cd ../apps/mathscape-desktop && MATHSCAPE_WORKSPACE_ROOT=\"$PWD/../../.mathscape-dev/workspace2\" ../../frontend/node_modules/.bin/tauri dev",
@@ -25,6 +27,7 @@
     "@types/katex": "^0.16.7",
     "@types/markdown-it": "^14.1.2",
     "typescript": "7.0.2",
-    "vite": "8.2.2"
+    "vite": "8.2.2",
+    "vitest": "^5.0.2"
   }
 }
