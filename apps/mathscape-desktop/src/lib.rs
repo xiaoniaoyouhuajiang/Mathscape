@@ -1,3 +1,4 @@
+mod backlink;
 mod content;
 mod discovery;
 mod discovery_view;
@@ -5,6 +6,7 @@ mod llm_settings;
 mod map_edit;
 mod markdown_patch;
 mod workspace_settings;
+pub use backlink::{SourceBacklink, SourceBacklinkRequest};
 pub use content::{ArtifactContentInfo, ContentContext, SourceNodeDetail};
 pub use discovery::{
     AcceptDiscoveryRequest, ActiveDiscoveryPhase, ActiveDiscoveryTask, DesktopDiscoveryAcceptance,
@@ -754,6 +756,7 @@ pub fn run() {
             content::get_artifact_content_info,
             content::get_source_node_detail,
             content::read_artifact_bytes,
+            backlink::get_source_backlink,
             llm_settings::get_llm_settings,
             llm_settings::set_default_llm_profile,
             llm_settings::save_llm_profile,
@@ -807,6 +810,7 @@ fn marker_product_role_label(role: MarkerProductRole) -> &'static str {
         MarkerProductRole::PrimaryMarkdown => "primary_markdown",
         MarkerProductRole::MarkdownCandidate => "markdown_candidate",
         MarkerProductRole::Metadata => "metadata",
+        MarkerProductRole::MarkdownPdfMap => "markdown_pdf_map",
         MarkerProductRole::Image => "image",
         MarkerProductRole::SupportingFile => "supporting_file",
         MarkerProductRole::DiagnosticLog => "diagnostic_log",

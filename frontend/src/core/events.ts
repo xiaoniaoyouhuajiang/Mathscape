@@ -8,6 +8,7 @@ export interface OpenSourceDetail {
   conversionId?: string | null;
   title: string;
   focus?: ReaderFocus;
+  pdfPageIndex?: number;
   patchRunId?: string;
   patchMode?: PatchReviewMode;
   refreshMap?: boolean;

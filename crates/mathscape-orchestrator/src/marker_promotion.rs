@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    fs,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -16,6 +17,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub const PRODUCT_PATHS_KEY: &str = "mathscape.product-paths.v1";
+pub const MARKDOWN_PDF_MAP_ARTIFACT_KEY: &str = "mathscape.markdown-pdf-map-artifact.v1";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProductPath {
@@ -38,6 +40,8 @@ pub enum MarkerPromotionError {
     InvalidProductDigest(String),
     #[error("artifact promotion failed: {0}")]
     Artifact(#[from] ArtifactPoolError),
+    #[error("could not build Markdown-PDF page map: {0}")]
+    PageMap(String),
     #[error("domain validation failed: {0}")]
     Domain(#[from] mathscape_domain::DomainError),
 }
@@ -128,6 +132,53 @@ pub fn promote_marker_inventory(
     }
 
     let page_range = run.command().page_range();
+    let conversion_id = unique_conversion_id()?;
+    let map_output = if let Some(markdown) = outputs
+        .iter()
+        .find(|output| output.role() == MarkerProductRole::PrimaryMarkdown)
+    {
+        let source = fs::read_to_string(inventory.root().join(markdown.relative_path()))
+            .map_err(|error| MarkerPromotionError::PageMap(error.to_string()))?;
+        let map = crate::build_markdown_pdf_block_map(
+            markdown.artifact().stable_id().clone(),
+            conversion_id.clone(),
+            input_artifact.clone(),
+            source,
+        )
+        .map_err(MarkerPromotionError::PageMap)?;
+        map.map(|map| (markdown, map))
+    } else {
+        None
+    };
+    if let Some((markdown, map)) = map_output {
+        let map_name = markdown
+            .relative_path()
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| format!("{stem}_pdf_map.json"))
+            .ok_or_else(|| MarkerPromotionError::PageMap("Markdown filename is invalid".into()))?;
+        let map_relative_path = markdown
+            .relative_path()
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .join(map_name);
+        let artifact = pool.import_bytes(
+            &serde_json::to_vec_pretty(&map)?,
+            ArtifactMetadata::derived(
+                mathscape_domain::MediaType::parse("application/json")?,
+                map_relative_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_owned),
+            )?,
+            actor.clone(),
+        )?;
+        outputs.push(MarkerArtifactPromotion {
+            role: MarkerProductRole::MarkdownPdfMap,
+            relative_path: map_relative_path,
+            artifact,
+        });
+    }
     let mut additional_options = BTreeMap::new();
     let paths: Vec<_> = outputs
         .iter()
@@ -142,6 +193,15 @@ pub fn promote_marker_inventory(
         })
         .collect();
     additional_options.insert(PRODUCT_PATHS_KEY.to_owned(), serde_json::to_string(&paths)?);
+    if let Some(map) = outputs
+        .iter()
+        .find(|output| output.role() == MarkerProductRole::MarkdownPdfMap)
+    {
+        additional_options.insert(
+            MARKDOWN_PDF_MAP_ARTIFACT_KEY.to_owned(),
+            map.artifact().stable_id().to_string(),
+        );
+    }
     additional_options.insert(
         "marker_profile".to_owned(),
         run.command().profile().id().to_owned(),
@@ -150,6 +210,7 @@ pub fn promote_marker_inventory(
         "marker_mode".to_owned(),
         run.command().profile().mode().cli_value().to_owned(),
     );
+    additional_options.insert("marker_paginate_output".to_owned(), "true".to_owned());
     additional_options.insert(
         "product_inventory_schema".to_owned(),
         inventory.schema_version().to_owned(),
@@ -165,11 +226,10 @@ pub fn promote_marker_inventory(
         additional_options,
     )?;
     let command_template = format!(
-        "marker_single {{source_pdf}} --page_range {} --output_format markdown --mode {} --output_dir {{run_root}}",
+        "marker_single {{source_pdf}} --page_range {} --output_format markdown --paginate_output --mode {} --output_dir {{run_root}}",
         page_range.as_str(),
         run.command().profile().mode().cli_value()
     );
-    let conversion_id = unique_conversion_id()?;
     let output_ids = outputs
         .iter()
         .map(|output| output.artifact.stable_id().clone())

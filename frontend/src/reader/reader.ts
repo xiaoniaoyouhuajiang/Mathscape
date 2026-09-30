@@ -19,6 +19,8 @@ export interface ReaderFocus { start: number; end: number; blockIds?: string[] }
 
 export interface ReaderOpenOptions {
   focus?: ReaderFocus;
+  /** Zero-based PDF page index used by provenance back-links. */
+  pdfPageIndex?: number;
   /** Opens the Markdown patch review of a run instead of the latest pending one. */
   patch?: { runId: string; mode: PatchReviewMode };
   conversionId?: string | null;
@@ -46,7 +48,7 @@ export class ArtifactReader {
   async open(id: string, title: string, options: ReaderOpenOptions = {}): Promise<void> {
     this.close();
     eventBus.emit("reader-opened");
-    const { focus, patch, conversionId } = options;
+    const { focus, patch, conversionId, pdfPageIndex } = options;
     const generation = this.generation;
     const heading = element("h2", title);
     const status = element("p", "正在读取…");
@@ -55,7 +57,7 @@ export class ArtifactReader {
       const info = await contentInfo(id);
       if (generation !== this.generation) return;
       if (info.media_type === "application/pdf") {
-        await this.pdf(info, generation);
+        await this.pdf(info, generation, pdfPageIndex);
       } else if (info.media_type === "text/markdown") {
         await this.markdown(info, generation, focus, patch, conversionId);
       } else if (info.media_type === "application/json" || info.media_type.startsWith("text/")) {
@@ -87,7 +89,7 @@ export class ArtifactReader {
     return url;
   }
 
-  private async pdf(info: ContentInfo, generation: number): Promise<void> {
+  private async pdf(info: ContentInfo, generation: number, requestedPageIndex?: number): Promise<void> {
     const initial = await readRange(info.artifact_id, 0, Math.min(65536, info.byte_size));
     if (generation !== this.generation) return;
     const failure = element("p");
@@ -147,7 +149,10 @@ export class ArtifactReader {
     const viewport = element("div"); viewport.className = "pdf-viewport";
     layout.append(outline, viewport);
     this.host.append(controls, layout);
-    let pageNumber = 1, renderVersion = 0;
+    let pageNumber = Number.isInteger(requestedPageIndex)
+      ? Math.min(Math.max((requestedPageIndex as number) + 1, 1), pdf.numPages)
+      : 1;
+    let renderVersion = 0;
     let renderTask: ReturnType<Awaited<ReturnType<PDFDocumentProxy["getPage"]>>["render"]> | undefined;
     const oldDispose = this.disposeDocument;
     this.disposeDocument = () => { renderVersion++; renderTask?.cancel(); oldDispose?.(); };
@@ -177,7 +182,7 @@ export class ArtifactReader {
     next.onclick = () => void show(pageNumber + 1);
     pageInput.onchange = () => void show(pageInput.valueAsNumber);
     zoom.onchange = () => void show(pageNumber);
-    await show(1);
+    await show(pageNumber);
     if (transport.stopped) return;
     const items = await pdf.getOutline().catch(error => {
       if (firstFailure || transport.stopped) return null;

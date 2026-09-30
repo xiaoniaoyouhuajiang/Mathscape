@@ -75,16 +75,22 @@ fn promotes_marker_products_and_records_one_conversion() {
         r#"#!/bin/sh
 source_path="$1"
 output_root=''
+paginate=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --output_dir) output_root="$2"; shift 2 ;;
+        --paginate_output) paginate=1; shift ;;
         *) shift ;;
     esac
 done
 source_name="${source_path##*/}"
 source_stem="${source_name%.*}"
 mkdir -p "$output_root/$source_stem"
-printf '# converted\n' > "$output_root/$source_stem/$source_stem.md"
+if [ "$paginate" -eq 1 ]; then
+    printf '{0}----------------\n\n# converted\n' > "$output_root/$source_stem/$source_stem.md"
+else
+    printf '# converted\n' > "$output_root/$source_stem/$source_stem.md"
+fi
 printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_stem}_meta.json"
 "#,
     )
@@ -126,7 +132,7 @@ printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_
     )
     .unwrap();
 
-    assert_eq!(result.outputs().len(), 2);
+    assert_eq!(result.outputs().len(), 3);
     assert!(
         result
             .outputs()
@@ -139,7 +145,13 @@ printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_
             .iter()
             .any(|output| output.role() == MarkerProductRole::Metadata)
     );
-    assert_eq!(pool.artifact_count().unwrap(), 3);
+    assert!(
+        result
+            .outputs()
+            .iter()
+            .any(|output| output.role() == MarkerProductRole::MarkdownPdfMap)
+    );
+    assert_eq!(pool.artifact_count().unwrap(), 4);
     assert_eq!(pool.conversion_count().unwrap(), 1);
     assert!(pool.audit_portability().unwrap().is_self_contained());
 

@@ -69,6 +69,10 @@ impl MarkerRequest {
             OsString::from(self.page_range.as_str()),
             OsString::from("--output_format"),
             OsString::from("markdown"),
+            // Preserve deterministic PDF page boundaries in the Markdown
+            // artifact. The ingestion layer consumes these markers to build
+            // the Markdown→PDF backlink map.
+            OsString::from("--paginate_output"),
             OsString::from("--mode"),
             OsString::from(self.profile.mode().cli_value()),
             OsString::from("--output_dir"),
@@ -168,6 +172,7 @@ mod tests {
                 OsString::from("1-3"),
                 OsString::from("--output_format"),
                 OsString::from("markdown"),
+                OsString::from("--paginate_output"),
                 OsString::from("--mode"),
                 OsString::from("fast"),
                 OsString::from("--output_dir"),

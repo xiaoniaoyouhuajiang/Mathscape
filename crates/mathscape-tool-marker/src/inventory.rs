@@ -19,6 +19,7 @@ pub enum MarkerProductRole {
     PrimaryMarkdown,
     MarkdownCandidate,
     Metadata,
+    MarkdownPdfMap,
     Image,
     SupportingFile,
     DiagnosticLog,

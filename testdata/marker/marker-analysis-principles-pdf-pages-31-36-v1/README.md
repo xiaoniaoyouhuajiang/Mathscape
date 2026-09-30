@@ -13,3 +13,7 @@
 `fixture.yaml` 固化来源文件摘要、页码映射、生成参数和产物摘要。回归测试还会读取 metadata 的 `page_stats`，确认实际处理的页索引严格为 `30, 31, 32, 33, 34, 35`。
 
 来源 PDF 不进入 Mathscape 仓库。fixture 通过相对语料路径和 SHA-256 与外部 Corpus 关联；扫描器的默认测试只读取本目录中的轻量产物，不依赖环境变量或原始 PDF。
+
+该 fixture 保留的是历史未分页 Marker 产物，用于验证旧转换兼容性；新的
+Mathscape Marker 请求会加入 `--paginate_output`，并在 promotion 阶段额外生成
+Markdown-PDF 页映射 sidecar。

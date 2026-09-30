@@ -1,4 +1,5 @@
 mod artifact;
+mod backlink;
 mod conversion;
 mod identity;
 mod span;
@@ -13,6 +14,7 @@ use crate::{
 };
 
 pub use artifact::*;
+pub use backlink::*;
 pub use conversion::*;
 pub use identity::*;
 pub use span::*;

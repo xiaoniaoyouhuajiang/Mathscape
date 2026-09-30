@@ -20,6 +20,7 @@ mod markdown_anchors;
 pub mod markdown_patch;
 mod markdown_patch_producer;
 mod markdown_patch_prompt;
+mod markdown_pdf_map;
 mod marker_promotion;
 mod occurrence_resolver;
 mod patch_review;
@@ -64,9 +65,10 @@ pub use markdown_patch_prompt::{
     build_markdown_patch_request_with_issues, markdown_patch_output_schema,
     markdown_patch_prompt_manifest,
 };
+pub use markdown_pdf_map::build_markdown_pdf_block_map;
 pub use marker_promotion::{
-    MarkerArtifactPromotion, MarkerPromotionError, MarkerPromotionResult, PRODUCT_PATHS_KEY,
-    ProductPath, promote_marker_inventory,
+    MARKDOWN_PDF_MAP_ARTIFACT_KEY, MarkerArtifactPromotion, MarkerPromotionError,
+    MarkerPromotionResult, PRODUCT_PATHS_KEY, ProductPath, promote_marker_inventory,
 };
 pub use patch_review::{
     AppliedPatchRecord, MarkdownPatchGate, MarkdownPatchWorkflowState, PatchContinuation,

@@ -148,6 +148,7 @@ eventBus.on("open-source", (detail) => {
     el.readerHost.hidden = false;
     await reader.open(detail.artifactId, detail.title, {
       focus: detail.focus,
+      pdfPageIndex: detail.pdfPageIndex,
       conversionId: detail.conversionId,
       patch: detail.patchRunId
         ? { runId: detail.patchRunId, mode: detail.patchMode ?? "workflow" }

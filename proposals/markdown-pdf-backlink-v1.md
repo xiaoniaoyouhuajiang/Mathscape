@@ -34,12 +34,14 @@ struct MarkdownPdfBlockMap {
 struct MarkdownPdfBlockEntry {
     block_id: String,
     markdown_range: TextByteRange,
-    pdf_page_index: u32,
-    marker_page_id: Option<u32>,
+    pdf_page_indices: Vec<u32>,
     text_fingerprint: ContentHash,
-    confidence: f32,
+    confidence: MappingConfidence,
 }
 ```
+
+`MappingConfidence` 使用 `exact`、`candidate`、`unmapped` 三态；一个
+Markdown block 可能跨越多个 PDF 页面，因此不能使用单一页码字段。
 
 规则：
 
@@ -58,12 +60,16 @@ Marker 产物扫描阶段应尽可能读取：
 - 输出片段的文本 fingerprint；
 - 公式或图片块的页码归属。
 
-如果 Marker 当前没有提供稳定 block/page 映射，增加一个确定性后处理器：
+当前固定 Marker 请求已启用 `--paginate_output`。Marker 2.x 会在 Markdown
+中写入带 `page_id` 的页分隔符；Mathscape 在 promotion 阶段用确定性解析器
+建立 sidecar map：
 
-1. 读取 Marker metadata 和 Markdown block 索引；
-2. 按页级文本或产物 manifest 建立候选匹配；
-3. 对无法唯一匹配的 block 标记 `ambiguous`；
-4. 生成 `MarkdownPdfBlockMap`，不修改 Markdown 字节。
+1. 读取 Markdown 页分隔符并建立页段；
+2. 用相同的 `anchor_markdown` 规则建立 Markdown block 索引；
+3. 计算 block 与页段的交集；
+4. 生成并放入 Artifact Pool 的 `MarkdownPdfBlockMap`，不修改 Markdown 字节。
+
+没有分页标记的旧转换不会猜测页码，继续返回 `MarkdownOnly`。
 
 这一步属于 PDF/Marker ingestion，不应交给 LLM。
 
@@ -127,4 +133,3 @@ enum SourceBacklink {
 - 不用 LLM 推断页码；
 - 不要求一次性为历史所有材料补齐映射；
 - 不改变 SourceSemanticUnit 的数学语义。
-

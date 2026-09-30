@@ -1068,16 +1068,22 @@ fn parses_a_managed_pdf_promotes_products_and_refreshes_the_conversion_graph() {
         r#"#!/bin/sh
 source_path="$1"
 output_root=''
+paginate=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --output_dir) output_root="$2"; shift 2 ;;
+        --paginate_output) paginate=1; shift ;;
         *) shift ;;
     esac
 done
 source_name="${source_path##*/}"
 source_stem="${source_name%.*}"
 mkdir -p "$output_root/$source_stem/images"
-printf '# Converted analysis\n![plot](images/plot.png)\n' > "$output_root/$source_stem/$source_stem.md"
+if [ "$paginate" -eq 1 ]; then
+    printf '{0}----------------\n\n# Converted analysis\n![plot](images/plot.png)\n' > "$output_root/$source_stem/$source_stem.md"
+else
+    printf '# Converted analysis\n![plot](images/plot.png)\n' > "$output_root/$source_stem/$source_stem.md"
+fi
 printf '\211PNG\r\n\032\n' > "$output_root/$source_stem/images/plot.png"
 printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_stem}_meta.json"
 "#,
@@ -1096,7 +1102,7 @@ printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_
             .conversion_id()
             .starts_with("mathscape:conversion/marker/")
     );
-    assert_eq!(parsed.outputs().len(), 3);
+    assert_eq!(parsed.outputs().len(), 4);
     let result = serde_json::to_value(&parsed).unwrap();
     let markdown_id = result["outputs"]
         .as_array()
@@ -1110,7 +1116,7 @@ printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_
     let reopened = DesktopService::open(&workspace).unwrap();
     let info = serde_json::to_value(reopened.content_info(markdown_id).unwrap()).unwrap();
     let paths = info["contexts"][0]["paths"].as_array().unwrap();
-    assert_eq!(paths.len(), 3);
+    assert_eq!(paths.len(), 4);
     let image = paths
         .iter()
         .find(|p| p["path"].as_str().unwrap().ends_with("/images/plot.png"))
@@ -1130,7 +1136,33 @@ printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_
         .markdown_document(markdown_id, Some(parsed.conversion_id()))
         .unwrap();
     assert!(anchored.source.contains("Converted analysis"));
-    assert_eq!(anchored.blocks.len(), 2);
+    assert!(anchored.blocks.len() >= 2);
+    let map_path = paths
+        .iter()
+        .find(|path| path["path"].as_str().unwrap().ends_with("_pdf_map.json"))
+        .unwrap();
+    let map_id = map_path["artifact_id"].as_str().unwrap();
+    let map_value: serde_json::Value =
+        serde_json::from_slice(&reopened.read_artifact_bytes(map_id, 0, 64 * 1024).unwrap())
+            .unwrap();
+    assert_eq!(map_value["marker_page_ids"], serde_json::json!([0]));
+    let backlink = reopened
+        .get_source_backlink(mathscape_desktop::SourceBacklinkRequest {
+            artifact_id: markdown_id.to_owned(),
+            conversion_id: Some(parsed.conversion_id().to_owned()),
+            start: 0,
+            end: anchored.source.len() as u64,
+            block_ids: anchored
+                .blocks
+                .iter()
+                .map(|block| block.id.clone())
+                .collect(),
+        })
+        .unwrap();
+    assert!(matches!(
+        backlink,
+        mathscape_desktop::SourceBacklink::ExactPdfPages { .. }
+    ));
     let request = DiscoverySelectionRequest {
         version: DISCOVERY_SELECTION_VERSION.into(),
         snapshot: anchored.snapshot.clone(),
@@ -1191,10 +1223,10 @@ printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_
             .unwrap()
             .contains("Converted analysis")
     );
-    assert_eq!(parsed.snapshot().artifact_count(), 4);
+    assert_eq!(parsed.snapshot().artifact_count(), 5);
     assert_eq!(parsed.snapshot().conversion_count(), 1);
-    assert_eq!(parsed.snapshot().landscape_graph().nodes().len(), 5);
-    assert_eq!(parsed.snapshot().landscape_graph().edges().len(), 4);
+    assert_eq!(parsed.snapshot().landscape_graph().nodes().len(), 6);
+    assert_eq!(parsed.snapshot().landscape_graph().edges().len(), 5);
     assert_eq!(parsed.snapshot().pdf_artifacts().len(), 1);
     assert_eq!(parsed.snapshot().pdf_artifacts()[0].page_count(), Some(1));
     assert!(

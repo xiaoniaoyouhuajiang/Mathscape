@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { markdownRenderer } from "../reader/markdown";
 import { markdownDocument, type AnchoredMarkdown } from "../reader/selection";
+import { getSourceBacklink, type SourceBacklinkView } from "../reader/backlink";
 import { checkAnchor, rawAnchorPreview, renderAnchorFragment, reviewAnchor, type ReviewAnchor } from "./anchor-fragment";
 import {
   acceptanceLabel, anchorPurposeLabel, completenessLabel, factStatusLabel, issueKindLabel,
@@ -794,6 +795,9 @@ export class DiscoveryReviewWorkspace {
     const open = button("在阅读器中打开", () => this.openSource(anchor));
     open.disabled = anchor === undefined || this.doc === null;
     controls.append(mode, open);
+    const pdf = button("PDF 原页", () => void this.openPdfBacklink(anchor), "review-pdf-backlink");
+    pdf.disabled = anchor === undefined || this.doc === null || this.stale !== null;
+    controls.append(pdf);
     const children: HTMLElement[] = [heading, controls];
     if (target.note) children.push(el("p", "review-fallback-note", target.note));
     if (this.stale) {
@@ -815,6 +819,49 @@ export class DiscoveryReviewWorkspace {
       }
     }
     this.preview.replaceChildren(...children);
+  }
+
+  private async openPdfBacklink(anchor?: ReviewAnchor): Promise<void> {
+    const source = this.outcome?.view.source;
+    if (!source || !anchor || this.stale !== null) return;
+    try {
+      const backlink = await getSourceBacklink({
+        artifact_id: source.artifact_id,
+        conversion_id: source.conversion_id,
+        start: anchor.start,
+        end: anchor.end,
+        block_ids: anchor.block_ids,
+      });
+      if (backlink.kind === "markdown_only" || !backlink.pdf_artifact_id || !backlink.pdf_page_indices?.length) {
+        this.preview.append(el("p", "review-fallback-note", backlink.reason ?? "当前锚点没有 PDF 页映射。"));
+        return;
+      }
+      const pages = backlink.pdf_page_indices;
+      if (backlink.kind === "candidate_pdf_pages" && pages.length > 1) {
+        const note = el("p", "review-fallback-note", backlink.reason ?? "该锚点对应多个候选 PDF 页面，请选择。");
+        const choices = el("div", "review-preview-controls");
+        pages.forEach((page) => {
+          choices.append(button("打开 PDF 第 " + (page + 1) + " 页", () => this.openPdfPage(backlink.pdf_artifact_id!, page)));
+        });
+        this.preview.append(note, choices);
+        return;
+      }
+      if (backlink.kind === "candidate_pdf_pages") {
+        this.preview.append(el("p", "review-fallback-note", backlink.reason ?? "当前页码是候选定位。"));
+      }
+      this.openPdfPage(backlink.pdf_artifact_id, pages[0]);
+    } catch (error) {
+      this.preview.append(el("p", "review-stale", "PDF 回链失败：" + String(error)));
+    }
+  }
+
+  private openPdfPage(artifactId: string, pageIndex: number): void {
+    this.suspend();
+    eventBus.emit("open-source", {
+      artifactId,
+      title: this.meta.title ?? "来源 PDF",
+      pdfPageIndex: pageIndex,
+    });
   }
 
   // ------------------------------------------------------------ acceptance
