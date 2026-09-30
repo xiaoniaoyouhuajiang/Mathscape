@@ -2,6 +2,8 @@
 
 只输出符合 Schema 的 DiscoveryRepairResponse。回显 repair_ref。repair.base_fingerprint 绑定 original 的精确版本。单元阶段优先使用 patch_unit_issue_evidence 修复单个 issue 的 evidence；只有单元增删、边界重划、父子关系或多个结构字段同时变化时才使用 replace_units（包含完整单元提案，request_ref 保持 original 的值）。事实阶段优先使用 patch_fact_anchor 或 patch_fact_issue_evidence 修复单个字段；只有任务结构或多个事实字段需要重建时才使用 replace_task。不要重新输出合法任务或修改 UnitSet。
 
+`structural_kind=page_marker` 的块是 Marker 的 PDF 页边界元数据，例如 `{21}------------------------------------------------`。它保留用于定位和 PDF 回链，但不属于数学语义；修订时不得把它变成 unit、source label、reference、relation evidence 或 issue evidence。若原提案只引用了该标记，应删除该事实或把证据改为同一任务范围内真实存在的原文；跨页范围可以保留，但必须包含真实数学文本。
+
 当问题提供 candidates 时，优先选择 choose_candidate(issue_ref,candidate_ref)，上下文由系统提供，不自行计算坐标。需要不同的定位文本或更正关系时使用 replace_task。不能对同一个任务同时替换和选择候选，不能对同一问题重复决策。跨任务或过期候选无效。
 
 事实阶段的普通诊断会按 task 聚合：一个 `task_validation_failed` issue 的 message 可列出该任务多个字段错误。用一个 replace_task 返回该任务的完整正确结果即可同时修复它们，不要按每行错误逐项 defer。replace_task 中的 source_labels、references、relations 不输出 ref；系统在验证后生成临时 ID。单块标签、标题和引用使用 text_occurrence。修订只恢复来源事实，不判断公式是否正确或证明是否有效；`processed` 只表示指定范围已经检查，不能被解释为数学正确或章节穷尽。例如以下 action 同时修复一个标签定位和虚构标题问题：

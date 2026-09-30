@@ -8,7 +8,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{AnchorError, resolve_selection};
+use crate::{AnchorError, PAGE_MARKER_STRUCTURAL_KIND, is_page_marker_text, resolve_selection};
 
 pub const DEFAULT_DISCOVERY_INPUT_BYTES: usize = 128 * 1024;
 pub const DEFAULT_DISCOVERY_INPUT_BLOCKS: usize = 512;
@@ -172,7 +172,15 @@ pub fn rebind_discovery_input(
                         "Markdown block disappeared",
                     ));
                 };
-                if block.range != *physical_range || block.kind != *structural_kind {
+                let legacy_page_marker_kind = structural_kind == "text"
+                    && block.kind == PAGE_MARKER_STRUCTURAL_KIND
+                    && document
+                        .source
+                        .get(block.range.start as usize..block.range.end as usize)
+                        .is_some_and(is_page_marker_text);
+                if block.range != *physical_range
+                    || (block.kind != *structural_kind && !legacy_page_marker_kind)
+                {
                     return Err(DiscoveryInputError::StaleCheckpoint(
                         "Markdown block changed",
                     ));

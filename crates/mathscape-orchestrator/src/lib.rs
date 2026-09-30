@@ -55,7 +55,10 @@ pub use discovery_validation::{
     ValidatedDiscoveryReference, ValidatedDiscoveryRelation, ValidatedDiscoverySourceLabel,
     ValidatedDiscoveryUnit, ValidatedProposalStatus, validate_discovery_proposal,
 };
-pub use markdown_anchors::{AnchorError, MAX_MARKDOWN_BYTES, anchor_markdown, resolve_selection};
+pub use markdown_anchors::{
+    AnchorError, MAX_MARKDOWN_BYTES, PAGE_MARKER_STRUCTURAL_KIND, anchor_markdown,
+    is_page_marker_text, page_marker_id, resolve_selection,
+};
 pub use markdown_patch_producer::{
     MarkdownPatchProducer, MarkdownPatchProductionOutcome, MarkdownPatchProductionSummary,
     MarkdownPatchRejection, MarkdownPatchResponseSummary,

@@ -3,9 +3,10 @@ use crate::discovery_input::discovery_input_fingerprint;
 use crate::discovery_validation::{authorize_discovery_input, is_ancestor};
 use crate::unit_discovery::{fingerprint, new_request_ref};
 use crate::{
-    FACT_SYSTEM_PROMPT, OccurrenceResolver, PreparedUnitDiscoveryRequest,
-    ResolvedDiscoverySelector, SelectorResolver, StageValidationReport, ValidatedUnitSet,
-    fact_output_schema, fact_prompt_manifest,
+    FACT_SYSTEM_PROMPT, OccurrenceResolver, PAGE_MARKER_STRUCTURAL_KIND,
+    PreparedUnitDiscoveryRequest, ResolvedDiscoverySelector, SelectorResolver,
+    StageValidationReport, ValidatedUnitSet, fact_output_schema, fact_prompt_manifest,
+    is_page_marker_text,
 };
 use mathscape_domain::*;
 use mathscape_llm::*;
@@ -76,6 +77,9 @@ impl PreparedFactRequest {
         let mut errors = vec![];
         let region = authorize_discovery_input(&self.input, &mut errors).ok_or("invalid input")?;
         let located = region.resolve(&canonical)?;
+        if located.is_page_marker_only() {
+            return Err("分页标记是非语义元数据，不能作为关系或 issue 证据".into());
+        }
         if !covers(
             &self.scopes.get(task).ok_or("unknown task")?.entire,
             located.range(),
@@ -191,7 +195,11 @@ pub fn plan_source_facts_with_warnings(
                     fragments.push(range.clone());
                     input.requested.segments.push(DiscoveryInputSegment::Block {
                         block_id: id,
-                        structural_kind: structural_kind.clone(),
+                        structural_kind: if is_page_marker_text(&text) {
+                            PAGE_MARKER_STRUCTURAL_KIND.into()
+                        } else {
+                            structural_kind.clone()
+                        },
                         physical_range: range.clone(),
                         source_range: range,
                         text,

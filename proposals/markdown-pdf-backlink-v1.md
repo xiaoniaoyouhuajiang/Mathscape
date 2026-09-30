@@ -69,6 +69,11 @@ Marker 产物扫描阶段应尽可能读取：
 3. 计算 block 与页段的交集；
 4. 生成并放入 Artifact Pool 的 `MarkdownPdfBlockMap`，不修改 Markdown 字节。
 
+分页行本身在锚点层标记为 `structural_kind=page_marker`。它继续保留在无损
+`DiscoveryInput` 中，供页级回链和重放使用，但不属于数学语义；Stage A/B
+不得把它单独用作 unit、label、reference 或 evidence。阅读器将其显示为页边界
+提示，Markdown patch 也不得修改这些分页行。
+
 没有分页标记的旧转换不会猜测页码，继续返回 `MarkdownOnly`。
 
 这一步属于 PDF/Marker ingestion，不应交给 LLM。

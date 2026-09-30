@@ -548,14 +548,14 @@ impl DesktopService {
             &selected,
             &unit_ranges,
         );
-        if safety
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "block_structure_changed")
-        {
+        if safety.diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.code.as_str(),
+                "block_structure_changed" | "page_marker_changed"
+            )
+        }) {
             return Err(DesktopMarkdownPatchError::Validation(
-                "所选修订会改变 Markdown 块结构（新增标题、列表或代码块），v1 不接受此类修订"
-                    .into(),
+                "所选修订会改变 Markdown 块结构或 PDF 分页标记，v1 不接受此类修订".into(),
             ));
         }
         let new_input = rebind_discovery_input_after_patch(

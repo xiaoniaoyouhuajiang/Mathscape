@@ -363,6 +363,24 @@ fn occurrence_matching_normalizes_layout_and_rejects_semantic_changes() {
 }
 
 #[test]
+fn pagination_marker_cannot_be_used_as_a_fact_anchor() {
+    let p = prepared("{21}------------------------------------------------\n");
+    let resolver =
+        OccurrenceResolver::new(p.input(), vec![p.input().requested.source_range.clone()]).unwrap();
+    assert_eq!(
+        resolver
+            .resolve(&occurrence(
+                "b1",
+                "{21}------------------------------------------------",
+                None
+            ))
+            .unwrap_err()
+            .code,
+        OccurrenceErrorCode::NonSemanticBlock
+    );
+}
+
+#[test]
 fn candidate_selection_binds_request_scope_revision_and_field() {
     let p = prepared("参考定义 2，再次参考定义 2。\n");
     let full = p.input().requested.source_range.clone();

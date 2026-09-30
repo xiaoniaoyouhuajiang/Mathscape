@@ -243,6 +243,15 @@ export class ArtifactReader {
         wrapper.setAttribute("aria-label", `原文块 ${i + 1}`);
         wrapper.title = `第 ${i + 1} 块 · ${block.kind} · UTF-8 [${block.range.start}, ${block.range.end})`;
         const text = decoder.decode(sourceBytes.subarray(block.range.start, block.range.end));
+        if (block.kind === "page_marker") {
+          const page = /^\s*\{(\d+)\}-{16,}\s*$/.exec(text)?.[1];
+          wrapper.classList.add("source-page-marker");
+          wrapper.setAttribute("aria-label", page ? `PDF 第 ${Number(page) + 1} 页` : "PDF 页边界");
+          wrapper.title = page ? `PDF 第 ${Number(page) + 1} 页（Marker page_id=${page}）` : "PDF 页边界";
+          wrapper.append(element("span", page ? `PDF 第 ${Number(page) + 1} 页` : "PDF 页边界"));
+          article.append(wrapper);
+          return;
+        }
         wrapper.innerHTML = md.render(text, environment);
         if (!wrapper.innerHTML.trim()) wrapper.append(element("pre", text));
         article.append(wrapper);

@@ -3,7 +3,7 @@
   "pipeline_version": "mathscape-discovery-pipeline-2",
   "input_version": "mathscape-unit-discovery-input-1",
   "output_version": "mathscape-unit-discovery-1",
-  "prompt_revision": "5",
+  "prompt_revision": "6",
   "schema_name": "unit_discovery_v1",
   "max_output_tokens": 131072,
   "max_response_bytes": 2097152

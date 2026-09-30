@@ -12,6 +12,10 @@ use thiserror::Error;
 
 pub const MAX_MARKDOWN_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BLOCKS: usize = 20_000;
+/// Structural kind used for Marker pagination metadata. The bytes remain part
+/// of the canonical Markdown snapshot, but this block is not mathematical
+/// content and must not be used as semantic evidence.
+pub const PAGE_MARKER_STRUCTURAL_KIND: &str = "page_marker";
 
 #[derive(Debug, Error)]
 pub enum AnchorError {
@@ -32,6 +36,27 @@ pub enum AnchorError {
 fn hash(bytes: &[u8]) -> ContentHash {
     ContentHash::parse(format!("sha256:{:x}", Sha256::digest(bytes)))
         .expect("SHA-256 always produces a valid content hash")
+}
+
+/// Returns the zero-based Marker page id when `text` is exactly a pagination
+/// separator such as `{21}------------------------------------------------`.
+///
+/// This deliberately accepts surrounding Markdown whitespace because parser
+/// ranges include the blank lines around a top-level paragraph. It does not
+/// recognize a separator embedded in ordinary prose or code.
+pub fn page_marker_id(text: &str) -> Option<u32> {
+    let marker = text.trim();
+    let close = marker.find('}')?;
+    if !marker.starts_with('{') || close <= 1 {
+        return None;
+    }
+    let page = marker[1..close].parse::<u32>().ok()?;
+    let dashes = &marker[close + 1..];
+    (dashes.len() >= 16 && dashes.bytes().all(|byte| byte == b'-')).then_some(page)
+}
+
+pub fn is_page_marker_text(text: &str) -> bool {
+    page_marker_id(text).is_some()
 }
 
 /// Top-level CommonMark containers are atomic (including lists/tables/code).
@@ -164,6 +189,10 @@ pub fn anchor_markdown(
     let blocks = ranges
         .into_iter()
         .map(|(range, kind)| {
+            let kind = source
+                .get(range.clone())
+                .filter(|text| kind == "text" && is_page_marker_text(text))
+                .map_or(kind, |_| PAGE_MARKER_STRUCTURAL_KIND.into());
             let identity = serde_json::to_vec(&(
                 &snapshot.artifact_id,
                 &snapshot.content_hash,

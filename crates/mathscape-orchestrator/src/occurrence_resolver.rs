@@ -20,6 +20,7 @@ pub enum OccurrenceErrorCode {
     InvalidOccurrence,
     UnauthorizedRange,
     InvalidRange,
+    NonSemanticBlock,
     StaleCandidate,
 }
 
@@ -194,6 +195,12 @@ impl OccurrenceResolver {
                 "outside task evidence",
             ));
         }
+        if selector.is_page_marker_only() {
+            return Err(error(
+                OccurrenceErrorCode::NonSemanticBlock,
+                "分页标记是非语义元数据，不能作为事实锚点",
+            ));
+        }
         Ok(LocatedOccurrence {
             original: original.clone(),
             selector,
@@ -267,6 +274,12 @@ impl OccurrenceResolver {
                     return Err(error(
                         OccurrenceErrorCode::UnauthorizedRange,
                         "range crosses task boundary",
+                    ));
+                }
+                if selector.is_page_marker_only() {
+                    return Err(error(
+                        OccurrenceErrorCode::NonSemanticBlock,
+                        "分页标记是非语义元数据，不能作为事实锚点",
                     ));
                 }
                 let normalized = rewrites

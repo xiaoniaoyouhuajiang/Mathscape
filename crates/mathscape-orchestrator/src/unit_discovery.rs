@@ -4,8 +4,8 @@ use crate::discovery_prompt::output_schema_for;
 use crate::discovery_validation::{authorize_discovery_input, is_ancestor, valid_temp_id};
 use crate::{
     DiscoveryInputError, DiscoveryInputLimits, DiscoveryProducerLimits, DiscoveryRunSummary,
-    DiscoveryValidationLimits, ResolvedDiscoverySelector, SelectorResolver, SelectorRewrite,
-    build_discovery_input,
+    DiscoveryValidationLimits, PAGE_MARKER_STRUCTURAL_KIND, ResolvedDiscoverySelector,
+    SelectorResolver, SelectorRewrite, build_discovery_input, is_page_marker_text,
 };
 use mathscape_domain::*;
 use mathscape_llm::*;
@@ -208,7 +208,11 @@ pub fn prepare_unit_discovery_request_from_input(
                 ..
             } => blocks.push(StageBlock {
                 block_ref: format!("b{}", blocks.len() + 1),
-                structural_kind: structural_kind.clone(),
+                structural_kind: if is_page_marker_text(text) {
+                    PAGE_MARKER_STRUCTURAL_KIND.into()
+                } else {
+                    structural_kind.clone()
+                },
                 clipped_start: segment.clipped_start(),
                 clipped_end: segment.clipped_end(),
                 text: text.clone(),

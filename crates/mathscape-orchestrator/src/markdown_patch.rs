@@ -19,7 +19,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::markdown_anchors::anchor_markdown;
+use crate::markdown_anchors::{PAGE_MARKER_STRUCTURAL_KIND, anchor_markdown};
 
 pub const PATCH_VALIDATOR_REVISION: &str = "markdown-patch-validator-1";
 
@@ -590,6 +590,19 @@ pub fn evaluate_patch_safety(
             path: "blocks".into(),
             message: "patched Markdown produced a different block sequence".into(),
         });
+    }
+    for (index, (old, new)) in original.blocks.iter().zip(&patched.blocks).enumerate() {
+        if old.kind == PAGE_MARKER_STRUCTURAL_KIND
+            && (new.kind != PAGE_MARKER_STRUCTURAL_KIND
+                || original.source[old.range.start as usize..old.range.end as usize]
+                    != patched.source[new.range.start as usize..new.range.end as usize])
+        {
+            diagnostics.push(PatchSafetyDiagnostic {
+                code: "page_marker_changed".into(),
+                path: format!("blocks[{index}]"),
+                message: "PDF 分页标记不可修改；请保留原始页边界后再应用 Markdown patch".into(),
+            });
+        }
     }
     for patch in &patch_set.patches {
         let in_one_unit = unit_ranges.iter().any(|(_, ranges)| {

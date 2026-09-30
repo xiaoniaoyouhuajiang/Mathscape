@@ -12,6 +12,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::is_page_marker_text;
 use crate::{
     discovery_input::discovery_input_fingerprint,
     selector_resolver::{MAX_DISAMBIGUATOR_CHARACTERS, context_matches},
@@ -129,6 +130,13 @@ impl ResolvedDiscoverySelector {
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// True when the selector contains only a Marker pagination separator.
+    /// A selector may still legitimately cross a page marker while selecting
+    /// mathematical content spanning two PDF pages.
+    pub fn is_page_marker_only(&self) -> bool {
+        is_page_marker_text(&self.text)
     }
 
     /// Returns the block identifiers from the persisted source input that
@@ -609,6 +617,12 @@ fn resolve_many(
     let mut resolved = Vec::new();
     for (index, selector) in selectors.iter().enumerate() {
         match region.resolve(selector) {
+            Ok(value) if value.is_page_marker_only() => diagnostic(
+                diagnostics,
+                DiscoveryValidationCode::InvalidSelector,
+                format!("{path}[{index}]"),
+                "分页标记是非语义元数据，不能作为数学内容、关系或证据的唯一范围",
+            ),
             Ok(value) => resolved.push(value),
             Err(message) => diagnostic(
                 diagnostics,
@@ -875,6 +889,15 @@ pub fn validate_discovery_proposal(
             );
             match authorized.resolve_quote(&label.selector) {
                 Ok(selector) => {
+                    if selector.is_page_marker_only() {
+                        diagnostic(
+                            &mut diagnostics,
+                            DiscoveryValidationCode::InvalidSelector,
+                            format!("{label_path}.selector"),
+                            "分页标记是非语义元数据，不能作为来源标签",
+                        );
+                        continue;
+                    }
                     if !unit_contains(&resolved, &selector) {
                         diagnostic(
                             &mut diagnostics,
@@ -1087,6 +1110,15 @@ pub fn validate_discovery_proposal(
                 continue;
             }
         };
+        if selector.is_page_marker_only() {
+            diagnostic(
+                &mut diagnostics,
+                DiscoveryValidationCode::InvalidSelector,
+                format!("{path}.selector"),
+                "分页标记是非语义元数据，不能作为引用位置",
+            );
+            continue;
+        }
         if let Some(source) = source
             && !unit_contains(&resolved_units[source], &selector)
         {

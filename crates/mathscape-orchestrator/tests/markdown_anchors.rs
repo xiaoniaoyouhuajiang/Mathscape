@@ -2,7 +2,10 @@ use mathscape_domain::{
     AnchoredMarkdown, DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest,
     SourceSelector, StableId,
 };
-use mathscape_orchestrator::{AnchorError, anchor_markdown, resolve_selection};
+use mathscape_orchestrator::{
+    AnchorError, PAGE_MARKER_STRUCTURAL_KIND, anchor_markdown, is_page_marker_text,
+    resolve_selection,
+};
 
 fn document(text: &str) -> AnchoredMarkdown {
     anchor_markdown(StableId::parse("test:markdown").unwrap(), None, text.into()).unwrap()
@@ -69,6 +72,28 @@ fn containers_and_display_formulas_stay_whole_and_code_is_not_math() {
             .any(|s| s.contains("~~~tex\n$$\n\ncode\n~~~") && !s.contains("After"))
     );
     assert!(chunks.iter().any(|s| s.contains("[p]: image.png")));
+}
+
+#[test]
+fn marker_pagination_is_a_nonsemantic_block_without_changing_source_ranges() {
+    let source = "{21}------------------------------------------------\n\n定义：连续函数。\n\n{22}------------------------------------------------\n\n证明。\n";
+    let doc = document(source);
+    assert_eq!(doc.blocks.len(), 4);
+    let marker_blocks: Vec<_> = doc
+        .blocks
+        .iter()
+        .filter(|block| block.kind == PAGE_MARKER_STRUCTURAL_KIND)
+        .collect();
+    assert_eq!(marker_blocks.len(), 2);
+    assert!(marker_blocks.iter().all(|block| {
+        is_page_marker_text(&source[block.range.start as usize..block.range.end as usize])
+    }));
+    assert!(doc.blocks.iter().any(|block| {
+        source[block.range.start as usize..block.range.end as usize].contains("定义：连续函数")
+    }));
+    assert!(doc.blocks.iter().any(|block| {
+        source[block.range.start as usize..block.range.end as usize].contains("证明")
+    }));
 }
 
 #[test]
