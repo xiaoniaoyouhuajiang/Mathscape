@@ -21,14 +21,23 @@ use thiserror::Error;
 
 use crate::markdown_anchors::{PAGE_MARKER_STRUCTURAL_KIND, anchor_markdown};
 
+use crate::{
+    MARKDOWN_PDF_BASE_CONVERSION_KEY, MARKDOWN_PDF_MAP_ARTIFACT_KEY,
+    MARKDOWN_PDF_SOURCE_PDF_ARTIFACT_KEY, build_markdown_pdf_block_map,
+};
+
 pub const PATCH_VALIDATOR_REVISION: &str = "markdown-patch-validator-1";
 
 #[derive(Debug, Error)]
 pub enum MarkdownPatchPromotionError {
     #[error("artifact promotion failed: {0}")]
     Artifact(#[from] mathscape_artifact::ArtifactPoolError),
+    #[error("could not build Markdown-PDF page map: {0}")]
+    PageMap(String),
     #[error("domain validation failed: {0}")]
     Domain(#[from] mathscape_domain::DomainError),
+    #[error("JSON encoding failed: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,6 +45,16 @@ pub struct MarkdownPatchPromotion {
     pub artifact: ManagedArtifact,
     pub conversion: mathscape_domain::SourceRelation,
     pub receipt: MarkdownPatchApplyReceipt,
+}
+
+/// Provenance inherited from the Marker conversion that produced the base
+/// Markdown. The patch conversion itself still has only the base Markdown as
+/// a direct input; these fields record the audited PDF ancestry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MarkdownPdfMapInheritance {
+    pub base_conversion_id: StableId,
+    pub pdf_artifact_id: StableId,
+    pub marker_page_ids: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -660,6 +679,7 @@ pub fn promote_applied_patch(
     base_artifact: &SourceArtifact,
     patch_set: &MarkdownPatchSet,
     applied: &AppliedMarkdownPatch,
+    pdf_inheritance: Option<&MarkdownPdfMapInheritance>,
     safety: PatchSafetyReport,
     new_input_fingerprint: Option<ContentHash>,
     actor: ActorRef,
@@ -677,6 +697,38 @@ pub fn promote_applied_patch(
     );
     let artifact = pool.import_bytes(applied.source.as_bytes(), metadata, actor.clone())?;
     let conversion_id = markdown_patch_conversion_id(patch_set)?;
+    let page_map_artifact = if let Some(inheritance) = pdf_inheritance {
+        let map = build_markdown_pdf_block_map(
+            artifact.stable_id().clone(),
+            conversion_id.clone(),
+            inheritance.pdf_artifact_id.clone(),
+            applied.source.clone(),
+        )
+        .map_err(MarkdownPatchPromotionError::PageMap)?
+        .ok_or_else(|| {
+            MarkdownPatchPromotionError::PageMap("继承 PDF 回链的 Markdown 缺少分页标记".into())
+        })?;
+        if map.marker_page_ids != inheritance.marker_page_ids {
+            return Err(MarkdownPatchPromotionError::PageMap(
+                "patch 产物的 PDF 分页标记序列与基础转换不一致".into(),
+            ));
+        }
+        let filename = base_artifact
+            .original_filename()
+            .unwrap_or("markdown")
+            .to_owned()
+            + ".pdf_map.json";
+        Some(pool.import_bytes(
+            &serde_json::to_vec_pretty(&map)?,
+            ArtifactMetadata::derived(
+                mathscape_domain::MediaType::parse("application/json")?,
+                Some(filename),
+            )?,
+            actor.clone(),
+        )?)
+    } else {
+        None
+    };
     let mut options = BTreeMap::new();
     options.insert(
         "patch_fingerprint".into(),
@@ -690,6 +742,24 @@ pub fn promote_applied_patch(
         "selection_fingerprint".into(),
         patch_set.base_input_fingerprint.to_string(),
     );
+    let output_artifacts = if let Some(map) = &page_map_artifact {
+        options.insert(
+            MARKDOWN_PDF_MAP_ARTIFACT_KEY.into(),
+            map.stable_id().to_string(),
+        );
+        let inheritance = pdf_inheritance.expect("page map implies inheritance");
+        options.insert(
+            MARKDOWN_PDF_BASE_CONVERSION_KEY.into(),
+            inheritance.base_conversion_id.to_string(),
+        );
+        options.insert(
+            MARKDOWN_PDF_SOURCE_PDF_ARTIFACT_KEY.into(),
+            inheritance.pdf_artifact_id.to_string(),
+        );
+        vec![artifact.stable_id().clone(), map.stable_id().clone()]
+    } else {
+        vec![artifact.stable_id().clone()]
+    };
     let parameters = ConversionParameters::new(None, "markdown".into(), None, options)?;
     let conversion = ConversionRun::new(
         "mathscape-markdown-patch".into(),
@@ -716,7 +786,7 @@ pub fn promote_applied_patch(
             Some(patch_set.run_id.clone()),
         ),
         vec![base_artifact_id.clone()],
-        vec![artifact.stable_id().clone()],
+        output_artifacts,
     )?;
     pool.record_conversion(&conversion)?;
     let receipt = MarkdownPatchApplyReceipt {

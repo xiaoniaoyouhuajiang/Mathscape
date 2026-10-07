@@ -4,11 +4,91 @@ use mathscape_artifact::ArtifactPool;
 use mathscape_domain::{
     MarkdownPdfBlockMap, MarkdownPdfMappingConfidence, SourcePayload, StableId, TextByteRange,
 };
-use mathscape_orchestrator::MARKDOWN_PDF_MAP_ARTIFACT_KEY;
+use mathscape_orchestrator::{
+    MARKDOWN_PDF_BASE_CONVERSION_KEY, MARKDOWN_PDF_MAP_ARTIFACT_KEY,
+    MARKDOWN_PDF_SOURCE_PDF_ARTIFACT_KEY,
+};
 use mathscape_store_sqlite::SqliteArtifactStore;
 use serde::{Deserialize, Serialize};
 
 use crate::DesktopService;
+
+pub(crate) fn conversion_has_pdf_lineage(
+    catalog: &mathscape_store_sqlite::ArtifactCatalogSnapshot,
+    conversion_id: &StableId,
+    expected_markdown_output: &StableId,
+    pdf_artifact_id: &StableId,
+    seen: &mut BTreeSet<StableId>,
+) -> bool {
+    if !seen.insert(conversion_id.clone()) {
+        return false;
+    }
+    let Some(conversion) = catalog
+        .conversions()
+        .iter()
+        .find(|conversion| conversion.header().stable_id() == conversion_id)
+    else {
+        return false;
+    };
+    if !conversion.endpoints().iter().any(|endpoint| {
+        endpoint.role().as_str() == "output" && endpoint.entity() == expected_markdown_output
+    }) {
+        return false;
+    }
+    if conversion
+        .endpoints()
+        .iter()
+        .any(|endpoint| endpoint.role().as_str() == "input" && endpoint.entity() == pdf_artifact_id)
+    {
+        return true;
+    }
+    let SourcePayload::ConversionRun(run) = conversion.payload() else {
+        return false;
+    };
+    let Some(base_conversion_id) = run
+        .parameters()
+        .additional_options()
+        .get(MARKDOWN_PDF_BASE_CONVERSION_KEY)
+        .and_then(|value| StableId::parse(value).ok())
+    else {
+        return false;
+    };
+    let Some(source_pdf) = run
+        .parameters()
+        .additional_options()
+        .get(MARKDOWN_PDF_SOURCE_PDF_ARTIFACT_KEY)
+        .and_then(|value| StableId::parse(value).ok())
+    else {
+        return false;
+    };
+    if source_pdf != *pdf_artifact_id {
+        return false;
+    }
+    let Some(base) = catalog
+        .conversions()
+        .iter()
+        .find(|candidate| candidate.header().stable_id() == &base_conversion_id)
+    else {
+        return false;
+    };
+    let Some(base_markdown) = conversion.endpoints().iter().find_map(|endpoint| {
+        (endpoint.role().as_str() == "input"
+            && base.endpoints().iter().any(|base_endpoint| {
+                base_endpoint.role().as_str() == "output"
+                    && base_endpoint.entity() == endpoint.entity()
+            }))
+        .then(|| endpoint.entity().clone())
+    }) else {
+        return false;
+    };
+    conversion_has_pdf_lineage(
+        catalog,
+        &base_conversion_id,
+        &base_markdown,
+        pdf_artifact_id,
+        seen,
+    )
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -125,11 +205,15 @@ impl DesktopService {
                 reason: "页映射与当前转换身份不一致".into(),
             });
         }
-        if !conversion.endpoints().iter().any(|endpoint| {
-            endpoint.role().as_str() == "input" && endpoint.entity() == &map.pdf_artifact_id
-        }) {
+        if !conversion_has_pdf_lineage(
+            &catalog,
+            conversion.header().stable_id(),
+            &markdown_id,
+            &map.pdf_artifact_id,
+            &mut BTreeSet::new(),
+        ) {
             return Ok(SourceBacklink::MarkdownOnly {
-                reason: "页映射中的 PDF 不属于当前转换".into(),
+                reason: "页映射中的 PDF 不属于当前转换或其已验证的基础转换".into(),
             });
         }
         if !catalog

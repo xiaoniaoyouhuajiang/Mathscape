@@ -76,6 +76,11 @@ Marker 产物扫描阶段应尽可能读取：
 
 没有分页标记的旧转换不会猜测页码，继续返回 `MarkdownOnly`。
 
+Markdown patch 产生的派生 artifact 也会重新建立页映射。patch ConversionRun
+保留 base conversion 与 PDF artifact 的 provenance 继承键；回链服务沿该链验证
+PDF ancestry，而不是把 PDF 伪装成 patch 的直接输入。连续 patch 分支可以递归继承
+同一 PDF 页映射。
+
 这一步属于 PDF/Marker ingestion，不应交给 LLM。
 
 ## 5. Desktop API

@@ -256,10 +256,19 @@ P 不应继承 A 或 B 的完整对话历史，也不应重复接收一份完整
 - `tool_version = "mathscape-markdown-patch-set-1"`；
 - `command_record_status = Unavailable`，`command_template = None`；
 - `page_range = None`、`redo_inline_math = None`、`output_format = "markdown"`；
-- `additional_options` 只包含 `patch_fingerprint`、`patch_schema_version`、`selection_fingerprint` 三个约定键；
+- `additional_options` 至少包含 `patch_fingerprint`、`patch_schema_version`、`selection_fingerprint`；
+- 如果 base Markdown 来自带 PDF 页映射的 Marker 转换，额外生成新的
+  `MarkdownPdfBlockMap`，并记录 `mathscape.markdown-pdf-map-artifact.v1`、
+  `mathscape.markdown-pdf-base-conversion.v1` 和
+  `mathscape.markdown-pdf-source-pdf-artifact.v1`；这些字段表达 provenance
+  继承，不把 PDF 伪装成 patch ConversionRun 的直接输入；
 - `exit_status = Succeeded`，时间字段由后端记录，环境、warnings 和 cost 按现有可选字段处理。
 
 输入端点是 base Markdown artifact，输出端点是修订 Markdown artifact。修订 artifact 的 media type、edition 和 rights 从 base Markdown 复制，文件名可以增加受控的 `.patched.md` 后缀。完整 patch set、审核决定和应用结果保存在 SQLite，便于查询和幂等；不能只把信息塞进不可检索的前端状态。
+
+如果存在 PDF 页映射，输出端点还包括新的页映射 artifact。该映射基于修订后的 Markdown
+重新计算，但要求分页标记序列与 base conversion 完全一致。回链服务沿着
+`base_conversion_id` 递归验证 PDF ancestry，支持连续 Markdown patch 分支；没有可靠页映射时回退为 Markdown-only provenance。
 
 建议新增表（或等价的版本化 JSON 记录）：
 

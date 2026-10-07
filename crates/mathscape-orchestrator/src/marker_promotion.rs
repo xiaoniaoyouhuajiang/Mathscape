@@ -18,6 +18,9 @@ use thiserror::Error;
 
 pub const PRODUCT_PATHS_KEY: &str = "mathscape.product-paths.v1";
 pub const MARKDOWN_PDF_MAP_ARTIFACT_KEY: &str = "mathscape.markdown-pdf-map-artifact.v1";
+pub const MARKDOWN_PDF_BASE_CONVERSION_KEY: &str = "mathscape.markdown-pdf-base-conversion.v1";
+pub const MARKDOWN_PDF_SOURCE_PDF_ARTIFACT_KEY: &str =
+    "mathscape.markdown-pdf-source-pdf-artifact.v1";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProductPath {

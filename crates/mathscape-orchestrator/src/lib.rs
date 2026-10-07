@@ -59,6 +59,7 @@ pub use markdown_anchors::{
     AnchorError, MAX_MARKDOWN_BYTES, PAGE_MARKER_STRUCTURAL_KIND, anchor_markdown,
     is_page_marker_text, page_marker_id, resolve_selection,
 };
+pub use markdown_patch::MarkdownPdfMapInheritance;
 pub use markdown_patch_producer::{
     MarkdownPatchProducer, MarkdownPatchProductionOutcome, MarkdownPatchProductionSummary,
     MarkdownPatchRejection, MarkdownPatchResponseSummary,
@@ -70,7 +71,8 @@ pub use markdown_patch_prompt::{
 };
 pub use markdown_pdf_map::build_markdown_pdf_block_map;
 pub use marker_promotion::{
-    MARKDOWN_PDF_MAP_ARTIFACT_KEY, MarkerArtifactPromotion, MarkerPromotionError,
+    MARKDOWN_PDF_BASE_CONVERSION_KEY, MARKDOWN_PDF_MAP_ARTIFACT_KEY,
+    MARKDOWN_PDF_SOURCE_PDF_ARTIFACT_KEY, MarkerArtifactPromotion, MarkerPromotionError,
     MarkerPromotionResult, PRODUCT_PATHS_KEY, ProductPath, promote_marker_inventory,
 };
 pub use patch_review::{

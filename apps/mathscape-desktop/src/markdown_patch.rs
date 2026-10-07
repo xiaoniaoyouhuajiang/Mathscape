@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use mathscape_artifact::ArtifactPool;
 use mathscape_domain::{
     ActorRef, AnchoredMarkdown, ContentHash, DiscoveryInput, EntityKind, LifecycleStatus,
     MarkdownPatchApplyReceipt, MarkdownPatchDecision, MarkdownPatchDecisionKind, MarkdownPatchSet,
-    MarkdownPatchStatus, StableId, UnitDiscoveryCheckpoint,
+    MarkdownPatchStatus, MarkdownPdfBlockMap, SourcePayload, StableId, UnitDiscoveryCheckpoint,
 };
 use mathscape_llm::{GenaiBackend, GenaiBackendOptions};
 use mathscape_orchestrator::markdown_patch::resolve_patch_proposals;
@@ -14,16 +14,18 @@ use mathscape_orchestrator::markdown_patch::{
     rewrite_patch_set_replacements, select_patch_set,
 };
 use mathscape_orchestrator::{
-    MarkdownPatchProducer, MarkdownPatchProductionOutcome, PreparedUnitDiscoveryRequest,
-    ValidatedUnitSet, build_markdown_patch_request_with_issues, canonical_discovery_issues,
-    canonical_discovery_issues_for_checkpoint, prepare_unit_discovery_request_from_input,
-    rebind_discovery_input, rebind_discovery_input_after_patch,
+    MarkdownPatchProducer, MarkdownPatchProductionOutcome, MarkdownPdfMapInheritance,
+    PreparedUnitDiscoveryRequest, ValidatedUnitSet, build_markdown_patch_request_with_issues,
+    canonical_discovery_issues, canonical_discovery_issues_for_checkpoint,
+    prepare_unit_discovery_request_from_input, rebind_discovery_input,
+    rebind_discovery_input_after_patch,
 };
-use mathscape_store_sqlite::SqliteArtifactStore;
+use mathscape_store_sqlite::{ArtifactCatalogSnapshot, SqliteArtifactStore};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use thiserror::Error;
 
+use crate::backlink::conversion_has_pdf_lineage;
 use crate::{DesktopService, DesktopState};
 
 /// Patch decisions and drafts record their actor as a `StableId`, which needs
@@ -150,6 +152,93 @@ fn patch_set_from_store(
     let drafts = store.markdown_patch_drafts(patch_set_id)?;
     rewrite_patch_set_replacements(&patch_set, &drafts)
         .map_err(DesktopMarkdownPatchError::Validation)
+}
+
+fn read_json_artifact(
+    pool: &ArtifactPool,
+    catalog: &ArtifactCatalogSnapshot,
+    artifact_id: &StableId,
+) -> Result<serde_json::Value, DesktopMarkdownPatchError> {
+    let record = catalog
+        .artifacts()
+        .iter()
+        .find(|record| record.entity().header().stable_id() == artifact_id)
+        .ok_or_else(|| {
+            DesktopMarkdownPatchError::Checkpoint(format!("页映射 Artifact {} 不存在", artifact_id))
+        })?;
+    let byte_size = record.entity().payload().byte_size();
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(byte_size)
+            .map_err(|_| DesktopMarkdownPatchError::Checkpoint("页映射过大".into()))?,
+    );
+    let mut offset = 0_u64;
+    while offset < byte_size {
+        let length = (byte_size - offset).min(4 * 1024 * 1024) as u32;
+        let chunk = pool.read_bytes(artifact_id, offset, length)?;
+        if chunk.len() != length as usize {
+            return Err(DesktopMarkdownPatchError::Checkpoint(
+                "页映射 Artifact 长度已改变".into(),
+            ));
+        }
+        bytes.extend(chunk);
+        offset += u64::from(length);
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|error| DesktopMarkdownPatchError::Checkpoint(format!("页映射损坏：{error}")))
+}
+
+fn markdown_pdf_map_inheritance(
+    catalog: &ArtifactCatalogSnapshot,
+    pool: &ArtifactPool,
+    markdown_artifact_id: &StableId,
+    requested_conversion_id: Option<&StableId>,
+) -> Result<Option<MarkdownPdfMapInheritance>, DesktopMarkdownPatchError> {
+    let conversion = catalog
+        .conversions()
+        .iter()
+        .filter(|conversion| {
+            requested_conversion_id.is_none_or(|id| conversion.header().stable_id() == id)
+        })
+        .find(|conversion| {
+            conversion.endpoints().iter().any(|endpoint| {
+                endpoint.role().as_str() == "output" && endpoint.entity() == markdown_artifact_id
+            })
+        });
+    let Some(conversion) = conversion else {
+        return Ok(None);
+    };
+    let SourcePayload::ConversionRun(run) = conversion.payload() else {
+        return Ok(None);
+    };
+    let Some(map_id) = run
+        .parameters()
+        .additional_options()
+        .get(mathscape_orchestrator::MARKDOWN_PDF_MAP_ARTIFACT_KEY)
+        .and_then(|value| StableId::parse(value).ok())
+    else {
+        return Ok(None);
+    };
+    let value = read_json_artifact(pool, catalog, &map_id)?;
+    let map: MarkdownPdfBlockMap = serde_json::from_value(value)?;
+    if map.conversion_id != *conversion.header().stable_id()
+        || map.markdown_artifact_id != *markdown_artifact_id
+        || !conversion_has_pdf_lineage(
+            catalog,
+            conversion.header().stable_id(),
+            markdown_artifact_id,
+            &map.pdf_artifact_id,
+            &mut BTreeSet::new(),
+        )
+    {
+        return Err(DesktopMarkdownPatchError::Checkpoint(
+            "基础 Markdown 的 PDF 页映射与转换身份不一致".into(),
+        ));
+    }
+    Ok(Some(MarkdownPdfMapInheritance {
+        base_conversion_id: conversion.header().stable_id().clone(),
+        pdf_artifact_id: map.pdf_artifact_id,
+        marker_page_ids: map.marker_page_ids,
+    }))
 }
 
 fn replay_patch_receipt(
@@ -606,12 +695,19 @@ impl DesktopService {
                 DesktopMarkdownPatchError::Checkpoint("base artifact not found".into())
             })?;
         let mut pool = ArtifactPool::open(&self.workspace_root)?;
+        let pdf_inheritance = markdown_pdf_map_inheritance(
+            landscape.artifacts(),
+            &pool,
+            &selected.base_snapshot.artifact_id,
+            selected.base_snapshot.conversion_id.as_ref(),
+        )?;
         let promotion = promote_applied_patch(
             &mut pool,
             &selected.base_snapshot.artifact_id,
             base.entity().payload(),
             &selected,
             &applied,
+            pdf_inheritance.as_ref(),
             safety,
             new_input_fingerprint,
             ActorRef::parse("mathscape-desktop-user")?,
