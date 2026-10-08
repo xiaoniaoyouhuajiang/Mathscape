@@ -47,6 +47,7 @@ export type IncidenceDirection =
   | "undirected";
 
 export interface IncidenceNode {
+  /** Projection-local RenderElementId, distinct from domain_id. */
   id: string;
   element_kind: IncidenceNodeKind;
   domain_id: string | null;
@@ -65,6 +66,8 @@ export interface IncidenceEdge {
   id: string;
   source: string;
   target: string;
+  /** Owner's domain StableId; find the relation vertex through source/target.
+   * Synthetic focus relations may instead use a projection-local owner id. */
   relation_id: string;
   role: string;
   ordinal: number | null;

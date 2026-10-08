@@ -7,6 +7,7 @@ mod discovery;
 mod map_edit;
 mod markdown_patch;
 mod read;
+mod registration;
 mod source_map;
 
 use std::path::Path;
@@ -49,7 +50,7 @@ const DISCOVERY_PATCH_REVIEW_MIGRATION: &str =
     include_str!("../../../migrations/0009_discovery_patch_review.sql");
 const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
     include_str!("../../../migrations/0010_discovery_run_recovery.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 10;
+const SUPPORTED_SCHEMA_VERSION: i64 = 11;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -206,6 +207,7 @@ impl SqliteArtifactStore {
         }
         validate_markdown_patch_schema(&connection)?;
         validate_discovery_run_recovery_schema(&connection)?;
+        validate_registration_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -272,7 +274,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=10 => {
+            6..=11 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -303,6 +305,12 @@ impl SqliteArtifactStore {
         if version < 10 {
             migrate_discovery_run_recovery(&connection)?;
         }
+        if version < 11 {
+            connection.execute_batch(include_str!(
+                "../../../migrations/0011_registration_reversal.sql"
+            ))?;
+        }
+        validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
         connection.prepare(
@@ -609,7 +617,9 @@ impl SqliteArtifactStore {
         patch: &MapPatch<SourcePayload>,
         committed_at: Timestamp,
     ) -> Result<SourceRegistrationReceipt, SqliteStoreError> {
-        let transaction = self.connection.transaction()?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let receipt = source_map::commit_source_registration(
             &transaction,
             decision_id,
@@ -1903,4 +1913,13 @@ fn invalid(field: &'static str, value: &str) -> SqliteStoreError {
         field,
         value: value.to_owned(),
     }
+}
+
+fn validate_registration_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
+    connection.prepare("SELECT request_id,decision_id,registration_commit_id,base_commit,plan_fingerprint,request_json,map_commit_id,receipt_json,decided_at FROM discovery_registration_reversals LIMIT 0")?;
+    connection.prepare("SELECT request_id,decision_id,request_json,plan_fingerprint,receipt_json FROM source_registration_requests LIMIT 0")?;
+    connection.prepare(
+        "SELECT commit_id,ordinal,object_id,revision_id,outcome FROM map_commit_objects LIMIT 0",
+    )?;
+    Ok(())
 }

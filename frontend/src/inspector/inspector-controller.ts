@@ -6,6 +6,7 @@ import type {
 import { definitionList, textElement } from "../core/dom";
 import { errorMessage } from "../core/ipc";
 import type { IncidenceNode } from "../graph/projection";
+import { isRetired } from "../graph/lifecycle";
 import { domainKindLabel, nodeTypeLabel } from "../graph/taxonomy";
 import {
   commitMapChange,
@@ -66,6 +67,7 @@ export class InspectorController {
       this.selectedNode = snapshot.landscape_graph.nodes.find(
         (node) => node.id === this.selectedNode?.id,
       );
+      if(this.selectedNode&&isRetired(this.selectedNode.lifecycle))this.inspectorLocked=false;
     }
   }
 
@@ -147,7 +149,7 @@ export class InspectorController {
 
     if (
       node.domain_id !== null &&
-      (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceUnitRelation")
+      (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceUnitRelation" || node.domain_kind === "SourceSpan")
     ) {
       void this.mountEditActions(node.domain_id, editSlot);
     }

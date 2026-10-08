@@ -5,6 +5,8 @@ mod discovery_view;
 mod llm_settings;
 mod map_edit;
 mod markdown_patch;
+mod registration;
+pub use registration::RegistrationSourceContext;
 mod workspace_settings;
 pub use backlink::{SourceBacklink, SourceBacklinkRequest};
 pub use content::{ArtifactContentInfo, ContentContext, SourceNodeDetail};
@@ -768,6 +770,17 @@ pub fn run() {
             discovery::get_discovery_review,
             discovery::get_discovery_diagnostics,
             discovery::discard_discovery_run,
+            registration::list_discovery_registrations,
+            registration::get_map_head,
+            registration::get_pending_source_registration_plans,
+            registration::plan_discovery_registration_reversal,
+            registration::commit_discovery_registration_reversal,
+            registration::get_discovery_registration_reversal,
+            registration::get_registration_history,
+            registration::get_registration_object_detail,
+            registration::get_source_registration_context,
+            registration::plan_source_registration_commit,
+            registration::commit_source_registration_commit,
             discovery::cancel_discovery,
             discovery::accept_discovery_result,
             discovery::run_discovery,

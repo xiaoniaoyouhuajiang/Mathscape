@@ -375,7 +375,7 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
         .and(path("/v1/chat/completions"))
         .and(header("authorization", "Bearer desktop-discovery-secret"))
         .respond_with(StagedDiscoveryResponder)
-        .expect(3)
+        .expect(5)
         .mount(&server)
         .await;
 
@@ -519,13 +519,18 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
     let accepted =
         serde_json::to_value(service.accept_discovery_result(acceptance.clone()).unwrap()).unwrap();
     assert_eq!(accepted["state"], "registered");
+    let standalone_context = service
+        .registration_source_context(accepted["decision_id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(standalone_context.artifact_id.as_str(), markdown_id);
+    assert!(standalone_context.conversion_id.is_none());
     assert_eq!(accepted["unit_count"], 2);
     assert_eq!(accepted["relation_count"], 1);
     assert_eq!(accepted["already_accepted"], false);
     assert_eq!(accepted["already_registered"], false);
     assert!(accepted["created_object_count"].as_u64().unwrap() >= 5);
     let repeated =
-        serde_json::to_value(service.accept_discovery_result(acceptance).unwrap()).unwrap();
+        serde_json::to_value(service.accept_discovery_result(acceptance.clone()).unwrap()).unwrap();
     assert_eq!(repeated["decision_id"], accepted["decision_id"]);
     assert_eq!(repeated["already_accepted"], true);
     assert_eq!(repeated["already_registered"], true);
@@ -580,6 +585,103 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
         projected.landscape_graph().nodes().len()
     );
 
+    // Exercise the actual accepted plan, withdrawal transaction and a NEW LLM run.
+    let mut store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+    let old_receipt = store
+        .source_registration_receipt(&decision_id)
+        .unwrap()
+        .unwrap();
+    let reverse = mathscape_domain::ReverseDiscoveryRequest {
+        request_id: "mathscape:test/withdraw-desktop".into(),
+        decision_id: decision_id.to_string(),
+        registration_commit_id: old_receipt.commit_id.to_string(),
+        base_commit: store.map_edit_snapshot().unwrap().base_commit,
+        reason: "重新整理".into(),
+    };
+    let actor = ActorRef::parse("mathscape-desktop-user").unwrap();
+    let planned = mathscape_orchestrator::registration::plan_registration_reversal(
+        &store.registration_snapshot().unwrap(),
+        &reverse,
+        &actor,
+    );
+    assert_eq!(
+        planned.plan.impact.status,
+        mathscape_domain::ImpactPlanStatus::Ready
+    );
+    store
+        .commit_registration_reversal(
+            &reverse,
+            &planned.plan.impact.plan_fingerprint,
+            &actor,
+            mathscape_domain::Timestamp::parse("unix:2").unwrap(),
+            |s| {
+                let p = mathscape_orchestrator::registration::plan_registration_reversal(
+                    s, &reverse, &actor,
+                );
+                (p.plan, p.patch)
+            },
+        )
+        .unwrap();
+    let history = store.registration_history(decision_id.as_str()).unwrap();
+    assert!(history.objects.iter().all(|o| o.lifecycle == "active"));
+    drop(store);
+    let old_replay =
+        serde_json::to_value(service.accept_discovery_result(acceptance).unwrap()).unwrap();
+    assert_eq!(old_replay["state"], "withdrawn");
+    let new_outcome = serde_json::to_value(
+        service
+            .run_discovery(RunDiscoveryRequest::new(selection.clone(), None))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let new_accept:AcceptDiscoveryRequest=serde_json::from_value(serde_json::json!({"run_id":new_outcome["run"]["run_id"],"expected_result_fingerprint":new_outcome["review"]["result_fingerprint"],"selection":{"kind":"explicit_units","unit_refs":["u1","u2"]}})).unwrap();
+    let pending =
+        serde_json::to_value(service.accept_discovery_result(new_accept).unwrap()).unwrap();
+    assert_eq!(pending["state"], "registration_review_required");
+    assert_eq!(pending["registration_plan"]["impact"]["status"], "ready");
+    let request: mathscape_domain::SourceRegistrationCommitRequest =
+        serde_json::from_value(pending["registration_plan"]["request"].clone()).unwrap();
+    let mut store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+    let record = store
+        .registration_plan(&StableId::parse(&request.decision_id).unwrap())
+        .unwrap()
+        .unwrap();
+    let candidate = mathscape_orchestrator::materialize_source_registration(
+        &serde_json::from_value::<mathscape_orchestrator::SourceRegistrationPlan>(record.plan)
+            .unwrap(),
+    )
+    .unwrap();
+    let registered = store
+        .commit_bound_source_registration(
+            &request,
+            pending["registration_plan"]["impact"]["plan_fingerprint"]
+                .as_str()
+                .unwrap(),
+            &actor,
+            mathscape_domain::Timestamp::parse("unix:3").unwrap(),
+            |s| {
+                let p = mathscape_orchestrator::registration::plan_registration_commit(
+                    s, &request, &candidate, &actor,
+                );
+                (p.plan, p.patch)
+            },
+        )
+        .unwrap();
+    assert_eq!(old_receipt.unit_ids, registered.unit_ids);
+    assert_eq!(
+        registered.reactivated_objects.len(),
+        old_receipt.created_objects.len()
+    );
+    assert!(
+        store
+            .map_objects()
+            .unwrap()
+            .iter()
+            .all(|o| o.lifecycle == mathscape_domain::LifecycleStatus::Active)
+    );
+    drop(store);
+
     let cancelled = {
         let service = service.clone();
         let request = RunDiscoveryRequest::new(selection, None);
@@ -604,12 +706,12 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
             .status,
         DiscoveryCheckpointStatus::Cancelled
     );
-    assert_eq!(store.discovery_run_count().unwrap(), 2);
+    assert_eq!(store.discovery_run_count().unwrap(), 3);
     assert!(service.active_discovery().is_none());
     assert!(!service.cancel_discovery());
 
     let received = server.received_requests().await.unwrap();
-    assert_eq!(received.len(), 3);
+    assert_eq!(received.len(), 5);
     let schema_names = received
         .iter()
         .map(|request| {
@@ -624,7 +726,13 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
         .collect::<Vec<_>>();
     assert_eq!(
         schema_names,
-        ["unit_discovery_v1", "source_facts_v1", "unit_discovery_v1"]
+        [
+            "unit_discovery_v1",
+            "source_facts_v1",
+            "unit_discovery_v1",
+            "source_facts_v1",
+            "unit_discovery_v1"
+        ]
     );
     directory.cleanup();
 }
@@ -936,6 +1044,48 @@ async fn discovery_pauses_for_markdown_patch_review_and_resumes_from_sqlite() {
         recovered_applied["outcome"]["view"]["source"]["artifact_id"],
         patched_artifact
     );
+    let acceptance: AcceptDiscoveryRequest = serde_json::from_value(serde_json::json!({
+        "run_id":applied_run.as_str(),
+        "expected_result_fingerprint":resumed["review"]["result_fingerprint"],
+        "selection":{"kind":"all_validated"}
+    }))
+    .unwrap();
+    let accepted =
+        serde_json::to_value(service.accept_discovery_result(acceptance).unwrap()).unwrap();
+    assert_eq!(accepted["state"], "registered");
+    let decision = accepted["decision_id"].as_str().unwrap();
+    let context = service.registration_source_context(decision).unwrap();
+    assert_eq!(context.artifact_id.as_str(), patched_artifact);
+    assert_eq!(
+        context.conversion_id.as_ref().map(StableId::as_str),
+        receipt["conversion_id"].as_str()
+    );
+    assert!(
+        service
+            .markdown_document(context.artifact_id.as_str(), None)
+            .is_err()
+    );
+    let doc = service
+        .markdown_document(
+            context.artifact_id.as_str(),
+            context.conversion_id.as_ref().map(StableId::as_str),
+        )
+        .unwrap();
+    assert!(doc.source.contains("N=2"));
+    let plan = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3"))
+        .unwrap()
+        .registration_plan(&StableId::parse(decision).unwrap())
+        .unwrap()
+        .unwrap();
+    let unit_id = plan.plan["units"][0]["stable_id"].as_str().unwrap();
+    let detail = service
+        .registration_object_detail(decision, unit_id)
+        .unwrap();
+    assert_eq!(
+        detail.artifact_id.as_deref(),
+        Some(patched_artifact.as_str())
+    );
+    assert!(detail.excerpt.is_some());
     assert_eq!(
         schemas(3).await,
         [
@@ -1132,8 +1282,52 @@ printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_
         "image/png"
     );
     assert_eq!(info["contexts"][0]["conversion_id"], parsed.conversion_id());
+    // A historical accepted plan's source identity remains readable without
+    // reconstructing any A/B checkpoint or fabricating validator authority.
+    let run_id = StableId::parse("mathscape:test/marker-preview-run").unwrap();
+    let decision_id = StableId::parse("mathscape:test/marker-preview-decision").unwrap();
+    let fp = mathscape_domain::ContentHash::parse(format!("sha256:{}", "1".repeat(64))).unwrap();
+    let mut store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+    store
+        .save_discovery_checkpoint(&mathscape_store_sqlite::DiscoveryRunCheckpoint {
+            run_id: run_id.clone(),
+            artifact_id: StableId::parse(markdown_id).unwrap(),
+            conversion_id: Some(StableId::parse(parsed.conversion_id()).unwrap()),
+            pipeline_version: "legacy-preview-only".into(),
+            input_fingerprint: fp.clone(),
+            selection_fingerprint: fp.clone(),
+            unit_set_fingerprint: None,
+            result_fingerprint: Some(fp.clone()),
+            status: DiscoveryCheckpointStatus::Completed,
+            admission: DiscoveryAdmission::ReviewBeforePublish,
+            profile_id: "test-no-live-profile".into(),
+            snapshot: serde_json::json!({}),
+            attempts: vec![],
+            reports: vec![],
+            units: vec![],
+            facts: vec![],
+            pending_tasks: vec![],
+        })
+        .unwrap();
+    store.save_registration_plan(&mathscape_store_sqlite::AcceptedRegistrationPlanRecord {
+        decision_id:decision_id.clone(),run_id,actor:ActorRef::parse("test-user").unwrap(),decided_at:mathscape_domain::Timestamp::parse("unix:1").unwrap(),
+        authority:mathscape_store_sqlite::StoredAcceptanceAuthority::HumanReview,expected_result_fingerprint:fp.clone(),selection:serde_json::json!({"kind":"all_validated"}),
+        plan_fingerprint:fp,plan:serde_json::json!({"markdown_artifact_id":markdown_id,"conversion_id":parsed.conversion_id()}),
+    }).unwrap();
+    drop(store);
+    let context = reopened
+        .registration_source_context(decision_id.as_str())
+        .unwrap();
+    assert_eq!(context.artifact_id.as_str(), markdown_id);
+    assert_eq!(
+        context.conversion_id.as_ref().map(StableId::as_str),
+        Some(parsed.conversion_id())
+    );
     let anchored = reopened
-        .markdown_document(markdown_id, Some(parsed.conversion_id()))
+        .markdown_document(
+            context.artifact_id.as_str(),
+            context.conversion_id.as_ref().map(StableId::as_str),
+        )
         .unwrap();
     assert!(anchored.source.contains("Converted analysis"));
     assert!(anchored.blocks.len() >= 2);

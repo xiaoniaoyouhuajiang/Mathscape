@@ -160,7 +160,8 @@ export interface SourceReviewProjection {
 }
 
 export interface DiscoveryAcceptanceOutcome {
-  state: "registered";
+  state: "registered" | "withdrawn" | "registration_review_required";
+  registration_plan?: import("../discovery/registration-types").SourceRegistrationCommitPlan | null;
   decision_id: string;
   run_id: string;
   result_fingerprint: string;
@@ -177,6 +178,8 @@ export interface DiscoveryAcceptanceOutcome {
   created_object_count: number;
   reused_object_count: number;
   already_registered: boolean;
+  reactivated_object_count?: number;
+  revised_object_count?: number;
 }
 
 /** Envelope metadata from the run ledger; absent for a run that just finished. */
@@ -185,4 +188,5 @@ export interface ReviewRunMeta {
   review_status?: string;
   created_at?: string;
   updated_at?: string;
+  registrations?: import("../discovery/registration-types").RegistrationSummary[];
 }

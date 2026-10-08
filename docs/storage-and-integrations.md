@@ -10,6 +10,8 @@ Managed 对象按 SHA-256 寻址，`pool:` URI 相对于显式 Workspace 根解�
 
 导入先复制到自有 staging、计算摘要、验证并去重，再无覆盖提升到对象池，最后登记 SQLite。文件与数据库不是一个跨系统原子事务：数据库失败可以留下未登记 orphan object，不能留下指向缺失字节的成功记录。重试按内容去重；自动垃圾回收尚未实现。
 
+来源登记以 `map_commit_objects` 保存实际成员与 revision，回执 v2 区分 create/reuse/reactivate/revise，旧 v1 回执继续可读。登记撤回审计与生命周期修订共用一次写事务；即使全部对象因共享而保留，也可只写撤回决定。预览指纹同时绑定地图 head 和有效采纳集合；同 request_id 的成功重试先返回原回执，再检查并发状态。撤回不回滚后续编辑，也不删除池文件或旧 revision。
+
 Workspace 关闭后可以整体搬迁。运行时直接复制目录不构成一致备份，应关闭写入并处理 SQLite WAL，或使用 SQLite backup 机制。完整性与 portability audit 已实现；缺失、损坏或外部依赖未解决时不能宣称自包含。搬迁不包含系统钥匙串里的凭据。
 
 External 是预留的显式模式，不是 Managed 导入失败时的回退。外部引用导入、hydrate、远程对象存储和运行中 Workspace 导出仍未接通。

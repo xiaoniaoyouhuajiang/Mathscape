@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::{SqliteStoreError, lifecycle};
 
-pub const SOURCE_REGISTRATION_RECEIPT_VERSION: &str = "mathscape-source-registration-receipt-1";
+pub const SOURCE_REGISTRATION_RECEIPT_VERSION: &str = "mathscape-source-registration-receipt-2";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,6 +25,10 @@ pub struct SourceRegistrationReceipt {
     pub commit_id: CommitId,
     pub created_objects: Vec<StableId>,
     pub reused_objects: Vec<StableId>,
+    #[serde(default)]
+    pub reactivated_objects: Vec<StableId>,
+    #[serde(default)]
+    pub revised_objects: Vec<StableId>,
     pub span_ids: Vec<StableId>,
     pub unit_ids: Vec<StableId>,
     pub relation_ids: Vec<StableId>,
@@ -62,6 +66,7 @@ pub(super) fn commit_source_registration(
     committed_at: Timestamp,
 ) -> Result<SourceRegistrationReceipt, SqliteStoreError> {
     patch.validate()?;
+    super::registration::ensure_not_discarded(transaction, decision_id.as_str())?;
     let accepted_plan = transaction
         .query_row(
             "SELECT plan_fingerprint FROM discovery_acceptance_decisions WHERE decision_id = ?1",
@@ -130,7 +135,7 @@ pub(super) fn commit_source_registration(
                 }
                 persisted.push((
                     entity.header().stable_id().clone(),
-                    entity.header().revision_id().clone(),
+                    current_revision(transaction, entity.header().stable_id())?,
                     outcome,
                 ));
             }
@@ -170,7 +175,7 @@ pub(super) fn commit_source_registration(
         relation_ids.push(relation.header().stable_id().clone());
         persisted.push((
             relation.header().stable_id().clone(),
-            relation.header().revision_id().clone(),
+            current_revision(transaction, relation.header().stable_id())?,
             outcome,
         ));
     }
@@ -208,6 +213,8 @@ pub(super) fn commit_source_registration(
         commit_id: commit_id.clone(),
         created_objects,
         reused_objects,
+        reactivated_objects: vec![],
+        revised_objects: vec![],
         span_ids,
         unit_ids,
         relation_ids,
@@ -253,22 +260,30 @@ fn persist_object(
         )
         .optional()?;
     let outcome = if let Some((stored_shape, stored_kind, stored_revision)) = existing {
-        if stored_shape != shape
-            || stored_kind != kind
-            || stored_revision != header.revision_id().as_str()
-        {
+        if stored_shape != shape || stored_kind != kind {
             return Err(SqliteStoreError::SourceRegistrationInvariant(format!(
                 "stable ID {} conflicts with an existing map object",
                 header.stable_id()
             )));
         }
-        let stored_payload = transaction.query_row(
-            "SELECT payload_json FROM map_object_revisions
+        let (stored_payload, stored_lifecycle) = transaction.query_row(
+            "SELECT payload_json,lifecycle FROM map_object_revisions
              WHERE object_id = ?1 AND revision_id = ?2",
-            params![header.stable_id().as_str(), header.revision_id().as_str()],
-            |row| row.get::<_, String>(0),
+            params![header.stable_id().as_str(), stored_revision],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )?;
-        if stored_payload != payload_json || !same_endpoints(transaction, header, endpoints)? {
+        if matches!(
+            stored_lifecycle.as_str(),
+            "deprecated" | "rejected" | "superseded"
+        ) {
+            return Err(SqliteStoreError::SourceRegistrationInvariant(
+                "registration_review_required: 重新激活需要登记变更审核".into(),
+            ));
+        }
+        if serde_json::from_str::<Value>(&stored_payload)?
+            != serde_json::from_str::<Value>(&payload_json)?
+            || !same_endpoints(transaction, header, endpoints, &stored_revision)?
+        {
             return Err(SqliteStoreError::SourceRegistrationInvariant(format!(
                 "revision {} has conflicting source content",
                 header.revision_id()
@@ -314,6 +329,7 @@ fn same_endpoints(
     transaction: &Transaction<'_>,
     header: &mathscape_domain::EntityHeader,
     expected: &[mathscape_domain::RelationEndpoint],
+    revision: &str,
 ) -> Result<bool, SqliteStoreError> {
     let mut statement = transaction.prepare(
         "SELECT role, ordinal, entity_id FROM map_relation_endpoints
@@ -321,16 +337,13 @@ fn same_endpoints(
          ORDER BY role, ordinal_key",
     )?;
     let stored = statement
-        .query_map(
-            params![header.stable_id().as_str(), header.revision_id().as_str()],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<u32>>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
-        )?
+        .query_map(params![header.stable_id().as_str(), revision], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<u32>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     let mut expected = expected
         .iter()
@@ -435,7 +448,7 @@ fn require_map_kind(
     let expected = kind_text(expected)?;
     let actual = transaction
         .query_row(
-            "SELECT entity_kind FROM map_objects WHERE object_id = ?1",
+            "SELECT o.entity_kind FROM map_objects o JOIN map_object_revisions r ON r.object_id=o.object_id AND r.revision_id=o.current_revision WHERE o.object_id = ?1 AND r.lifecycle NOT IN ('deprecated','superseded','rejected')",
             [object.as_str()],
             |row| row.get::<_, String>(0),
         )
@@ -446,6 +459,17 @@ fn require_map_kind(
         )));
     }
     Ok(())
+}
+fn current_revision(
+    transaction: &Transaction<'_>,
+    id: &StableId,
+) -> Result<RevisionId, SqliteStoreError> {
+    let revision: String = transaction.query_row(
+        "SELECT current_revision FROM map_objects WHERE object_id=?1",
+        [id.as_str()],
+        |r| r.get(0),
+    )?;
+    Ok(RevisionId::parse(revision)?)
 }
 
 fn record_outcome(

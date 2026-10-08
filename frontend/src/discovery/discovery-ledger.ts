@@ -16,6 +16,8 @@ import type {
   DiscoveryRunDiagnosticsView,
   DiscoveryRunSummaryView,
 } from "./types";
+import { openRegistrationReversal, openRegistrationHistory, openSourceRegistrationReview } from "./registration-workspace";
+import type { SourceRegistrationCommitPlan } from "./registration-types";
 
 export interface DiscoveryLedgerDelegate {
   getSnapshot: () => DesktopSnapshot | undefined;
@@ -105,10 +107,12 @@ export class DiscoveryLedgerController {
       textElement("strong", "", displayName),
       textElement("span", "discovery-run-state", discoveryRunStatusLabel(run.review_status)),
     );
+    const registrations=run.registrations??[];
+    const withdrawn=registrations.filter(r=>r.state==="withdrawn").length;
     const counts = textElement(
       "span",
       "discovery-run-counts",
-      `${discoveryWorkflowStatusLabel(run.status)} · ${run.unit_count} 单元 · ${run.relation_count} 关系 · ${run.unresolved_reference_count} 未解析引用`,
+      `${discoveryWorkflowStatusLabel(run.status)} · ${run.unit_count} 单元 · ${run.relation_count} 关系 · ${run.unresolved_reference_count} 未解析引用${registrations.length?` · ${registrations.length} 次登记，${withdrawn} 次已撤回`:""}`,
     );
     const actions = textElement("div", "discovery-run-actions", "");
     const recoverable =
@@ -129,11 +133,46 @@ export class DiscoveryLedgerController {
     }
     open.onclick = () => void this.openPersistedDiscoveryRun(run, open);
     actions.append(open);
-    if (run.review_status === "reviewable" && run.result_fingerprint !== null) {
+    if (["reviewable","accepted"].includes(run.review_status) && registrations.length===0 && run.result_fingerprint !== null) {
       const discard = textElement("button", "", "放弃结果");
       discard.type = "button";
       discard.onclick = () => void this.discardPersistedDiscoveryRun(run, discard);
       actions.append(discard);
+    }
+    if(run.review_status==="accepted") {
+      const resume=textElement("button","","继续登记审核");resume.type="button";
+      resume.onclick=()=>void (async()=>{
+        resume.disabled=true;
+        try {
+          const plans=await invoke<SourceRegistrationCommitPlan[]>("get_pending_source_registration_plans",{runId:run.run_id});
+          if(plans.length===1)openSourceRegistrationReview(plans[0]);
+          else if(plans.length>1) {
+            const choose=document.createElement("dialog");choose.className="discovery-diagnostics-dialog";choose.append(textElement("h2","","选择待登记的接受决定"));
+            for(const plan of plans){const b=textElement("button","",`${plan.objects.length} 个对象 · ${plan.request.decision_id.slice(-12)}`);b.onclick=()=>{choose.close();openSourceRegistrationReview(plan);};choose.append(b);}
+            const close=textElement("button","","取消");close.onclick=()=>choose.close();choose.append(close);choose.onclose=()=>choose.remove();document.body.append(choose);choose.showModal();
+          } else this.delegate.showToast("没有待登记的接受计划，请刷新记录。","success");
+        } catch(e){this.delegate.showToast(errorMessage(e),"error");}finally{resume.disabled=false;}
+      })();actions.append(resume);
+    }
+    for(const registration of registrations) {
+      const label=registrations.length>1?` · ${registration.selected_unit_refs.join("、")||registration.decision_id.slice(-8)}`:"";
+      const history=textElement("button","",`${registration.state==="withdrawn"?"查看撤回详情与原始登记":"查看登记快照"}${label}`);history.type="button";history.onclick=()=>void openRegistrationHistory(registration);actions.append(history);
+      if(registration.state==="registered") {
+        const reverse=textElement("button","",`撤回本次登记${label}`);reverse.type="button";reverse.onclick=()=>void openRegistrationReversal(registration);actions.append(reverse);
+      }
+    }
+    if(withdrawn>0) {
+      const rediscover=textElement("button","","重新发现");rediscover.type="button";
+      rediscover.onclick=()=>void (async()=>{
+        try{
+          const envelope=await invoke<DiscoveryReviewEnvelopeView>("get_discovery_review",{runId:run.run_id});
+          const source=envelope.outcome.view.source;
+          const range=source?.requested_range;
+          if(!source)throw new Error("原来源快照不可恢复，请从 Markdown 重新选择范围");
+          eventBus.emit("open-source",{artifactId:source.artifact_id,conversionId:source.conversion_id,title:displayName,focus:range?{...range}:undefined});
+          this.delegate.showToast("已定位原选区；请在阅读器明确选择内容并启动新的发现。不会复用已撤回的旧登记。","success");
+        }catch(e){eventBus.emit("open-source",{artifactId:run.artifact_id,conversionId:run.conversion_id,title:displayName});this.delegate.showToast(`原选区不可恢复，请重新选择：${errorMessage(e)}`,"error");}
+      })();actions.append(rediscover);
     }
     item.append(
       heading,
@@ -176,6 +215,7 @@ export class DiscoveryLedgerController {
         review_status: envelope.review_status,
         created_at: envelope.created_at,
         updated_at: envelope.updated_at,
+        registrations: envelope.registrations,
       });
     } catch (error) {
       this.delegate.showToast(`恢复内容发现结果失败：${errorMessage(error)}`, "error");

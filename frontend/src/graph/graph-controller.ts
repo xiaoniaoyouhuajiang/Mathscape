@@ -14,6 +14,7 @@ import {
 } from "./cytoscape";
 import { focusSubgraph, type FocusDepth, type FocusResult } from "./focus";
 import type { IncidenceGraph, IncidenceNode } from "./projection";
+import { activityGraph } from "./lifecycle";
 import {
   EDGE_TYPES,
   NODE_TYPES,
@@ -65,6 +66,7 @@ export class GraphController {
 
   private visibleNodeKinds = new Set<string>(PRESET_NODE_KINDS.source);
   private activePreset: PresetName | "custom" = "source";
+  private showRetired = false;
 
   constructor(
     private readonly elements: GraphControllerElements,
@@ -141,6 +143,11 @@ export class GraphController {
   }
 
   private bindDOMControls(): void {
+    const retiredLabel=document.createElement("label");retiredLabel.className="graph-evidence-toggle";
+    const retired=document.createElement("input");retired.type="checkbox";retired.setAttribute("aria-label","显示退役对象");
+    retired.onchange=()=>{this.showRetired=retired.checked;this.renderCurrentGraph();};
+    retiredLabel.append(retired,document.createTextNode(" 显示退役对象（当前状态）"));
+    this.elements.renderModeToggle.parentElement?.after(retiredLabel);
     document.querySelectorAll<HTMLButtonElement>(".preset-button").forEach((button) => {
       button.onclick = () => {
         const preset = button.dataset.preset as PresetName;
@@ -243,10 +250,11 @@ export class GraphController {
     if (snapshot === undefined) return;
     this.delegate.onBeforeRenderGraph?.();
     hideContextMenu();
+    const landscape=activityGraph(snapshot.landscape_graph,this.showRetired);
 
     if (
       this.focusRootId !== null &&
-      !snapshot.landscape_graph.nodes.some((n) => n.id === this.focusRootId)
+      !landscape.nodes.some((n) => n.id === this.focusRootId)
     ) {
       this.focusRootId = null;
     }
@@ -254,18 +262,18 @@ export class GraphController {
     const focus =
       this.focusRootId === null
         ? null
-        : focusSubgraph(snapshot.landscape_graph, this.focusRootId, {
+        : focusSubgraph(landscape, this.focusRootId, {
             depth: this.focusDepth,
             isEntityVisible: (node) => this.isEntityVisible(node),
           });
 
-    const filtered = this.filterGraph(snapshot.landscape_graph);
+    const filtered = this.filterGraph(landscape);
     this.displayedGraph = focus === null ? filtered : this.mergeGraphs(filtered, focus.graph);
     const focusScope =
       focus === null ? null : new Set(focus.graph.nodes.map((node) => node.id));
 
     this.syncPresetHighlight();
-    this.renderFocusBar(focus, snapshot.landscape_graph);
+    this.renderFocusBar(focus, landscape);
 
     const entityCount = (focus === null ? filtered : focus.graph).nodes.filter(
       (n) => n.element_kind === "entity",
@@ -314,6 +322,7 @@ export class GraphController {
   }
 
   private filterGraph(graph: IncidenceGraph): IncidenceGraph {
+    graph=activityGraph(graph,this.showRetired);
     const knownRelationKinds = new Set(["ConversionRun", "SourceUnitRelation"]);
     const allowUnknownKinds = this.activePreset === "overview";
     const relationKinds = new Set<string>();

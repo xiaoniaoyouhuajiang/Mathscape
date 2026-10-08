@@ -115,6 +115,7 @@ pub struct StoredDiscoveryRunSummary {
     pub pipeline_version: String,
     pub status: DiscoveryCheckpointStatus,
     pub review_status: String,
+    pub registrations: Vec<mathscape_domain::RegistrationSummary>,
     pub profile_id: String,
     pub unit_count: usize,
     pub fact_count: usize,
@@ -557,6 +558,7 @@ pub(super) fn list_discovery_run_summaries(
     connection: &Connection,
     artifact_id: Option<&StableId>,
 ) -> Result<Vec<StoredDiscoveryRunSummary>, SqliteStoreError> {
+    let adoptions = super::registration::adoptions(connection)?;
     let mut statement = connection.prepare(
         "SELECT d.run_id, d.artifact_id, ar.original_filename, d.conversion_id, d.input_fingerprint,
                 d.result_fingerprint, d.pipeline_version, d.status, d.profile_id,
@@ -626,8 +628,19 @@ pub(super) fn list_discovery_run_summaries(
             discarded,
         ) = row?;
         let status = parse_status(&status)?;
+        let registrations = adoptions
+            .iter()
+            .filter(|r| r.summary.run_id == run_id)
+            .map(|r| r.summary.clone())
+            .collect::<Vec<_>>();
         let review_status = if discarded != 0 {
             "discarded"
+        } else if registered != 0
+            && registrations
+                .iter()
+                .all(|r| r.state == mathscape_domain::RegistrationState::Withdrawn)
+        {
+            "withdrawn"
         } else if registered != 0 {
             "registered"
         } else if accepted != 0 {
@@ -661,6 +674,7 @@ pub(super) fn list_discovery_run_summaries(
             pipeline_version,
             status,
             review_status: review_status.into(),
+            registrations,
             profile_id,
             unit_count: usize::try_from(unit_count).map_err(|_| {
                 SqliteStoreError::InvalidStoredValue {
@@ -713,7 +727,8 @@ pub(super) fn discard_discovery_run(
             "discovery run disposition reason cannot be blank".into(),
         ));
     }
-    let transaction = connection.transaction()?;
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let row = transaction
         .query_row(
             "SELECT result_fingerprint, status FROM discovery_runs WHERE run_id = ?1",
@@ -739,14 +754,14 @@ pub(super) fn discard_discovery_run(
             "a running or patch-paused discovery run cannot be discarded here".into(),
         ));
     }
-    let accepted: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM discovery_acceptance_decisions WHERE run_id = ?1)",
+    let registered: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_registration_commits c JOIN discovery_acceptance_decisions a ON a.decision_id=c.decision_id WHERE a.run_id = ?1)",
         [run_id.as_str()],
         |row| row.get(0),
     )?;
-    if accepted {
+    if registered {
         return Err(SqliteStoreError::DiscoveryInvariant(
-            "an accepted discovery run must use registration reversal".into(),
+            "a registered discovery run must use registration reversal".into(),
         ));
     }
     if let Some(existing) = transaction

@@ -122,6 +122,7 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
   });
   artifactController.renderMarkerStatus(snapshot.marker);
   graphController.renderCurrentGraph(snapshot);
+  inspectorController.refreshIfUnlocked();
 }
 
 async function loadSnapshot(): Promise<void> {

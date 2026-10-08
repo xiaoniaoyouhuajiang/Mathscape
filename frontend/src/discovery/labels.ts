@@ -6,6 +6,7 @@ export const discoveryRunStatusLabel: (status: ReviewStatus | string) => string 
   processing: "处理中",
   reviewable: "待审核",
   accepted: "已接受，尚未登记",
+  withdrawn: "登记已撤回",
   registered: "已登记",
   discarded: "已放弃",
   diagnostic: "需查看诊断",

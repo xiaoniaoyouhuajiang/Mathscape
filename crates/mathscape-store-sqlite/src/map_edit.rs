@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 fn invalid(message: impl Into<String>) -> SqliteStoreError {
     SqliteStoreError::SourceRegistrationInvariant(message.into())
 }
-fn snapshot(c: &Connection) -> Result<MapEditSnapshot, SqliteStoreError> {
+pub(crate) fn snapshot(c: &Connection) -> Result<MapEditSnapshot, SqliteStoreError> {
     let source = source_map::source_map_snapshot(c)?;
     let base_commit = c
         .query_row(
@@ -44,6 +44,21 @@ fn snapshot(c: &Connection) -> Result<MapEditSnapshot, SqliteStoreError> {
     Ok(MapEditSnapshot {
         base_commit,
         objects,
+        adopted_by: {
+            let mut claims = std::collections::BTreeMap::<String, Vec<String>>::new();
+            for r in super::registration::adoptions(c)?
+                .into_iter()
+                .filter(|r| r.summary.state == RegistrationState::Registered)
+            {
+                for m in r.members {
+                    claims
+                        .entry(m.object_id)
+                        .or_default()
+                        .push(r.summary.decision_id.clone());
+                }
+            }
+            claims
+        },
     })
 }
 
@@ -98,123 +113,8 @@ impl SqliteArtifactStore {
         if patch.author() != actor {
             return Err(invalid("actor mismatch"));
         }
-        let commit_id = expected_plan.to_owned();
-        RevisionId::parse(&commit_id)?;
-        tx.execute("INSERT INTO map_commits(commit_id,author,generation_run,message,committed_at) VALUES(?1,?2,NULL,?3,?4)",params![commit_id,actor.as_str(),request.reason,time.as_str()])?;
-        let mut entries = vec![];
-        // Create all identity rows first; relation FK checks can then span the batch.
-        for op in patch.operations() {
-            let (h, relation, expected) = match op {
-                MapOperation::CreateEntity { entity } => (entity.header(), false, None),
-                MapOperation::CreateRelation { relation } => (relation.header(), true, None),
-                MapOperation::ReviseEntity {
-                    replacement,
-                    expected_revision,
-                    ..
-                } => (replacement.header(), false, Some(expected_revision)),
-                MapOperation::ReviseRelation {
-                    replacement,
-                    expected_revision,
-                    ..
-                } => (replacement.header(), true, Some(expected_revision)),
-            };
-            let existing = current
-                .objects
-                .iter()
-                .find(|o| o.object_id == h.stable_id().as_str());
-            if let Some(expected) = expected {
-                if !existing.is_some_and(|o| o.revision == expected.as_str()) {
-                    return Err(invalid("revision_conflict"));
-                }
-            } else {
-                if existing.is_some() {
-                    return Err(invalid("object_exists"));
-                }
-                tx.execute("INSERT INTO map_objects(object_id,object_shape,entity_kind,current_revision) VALUES(?1,?2,?3,?4)",params![h.stable_id().as_str(),if relation{"relation"}else{"entity"},serde_json::to_value(h.kind())?.as_str().unwrap(),h.revision_id().as_str()])?;
-            }
-        }
-        for op in patch.operations() {
-            let (h, p, endpoints, previous) = match op {
-                MapOperation::CreateEntity { entity } => {
-                    (entity.header(), entity.payload(), &[][..], None)
-                }
-                MapOperation::CreateRelation { relation } => (
-                    relation.header(),
-                    relation.payload(),
-                    relation.endpoints(),
-                    None,
-                ),
-                MapOperation::ReviseEntity {
-                    replacement,
-                    expected_revision,
-                    ..
-                } => (
-                    replacement.header(),
-                    replacement.payload(),
-                    &[][..],
-                    Some(expected_revision),
-                ),
-                MapOperation::ReviseRelation {
-                    replacement,
-                    expected_revision,
-                    ..
-                } => (
-                    replacement.header(),
-                    replacement.payload(),
-                    replacement.endpoints(),
-                    Some(expected_revision),
-                ),
-            };
-            let life = serde_json::to_value(h.lifecycle())?
-                .as_str()
-                .unwrap()
-                .to_owned();
-            let kind = serde_json::to_value(h.kind())?.as_str().unwrap().to_owned();
-            if !matches!(kind.as_str(), "SourceSemanticUnit" | "SourceUnitRelation") {
-                return Err(invalid("unsupported edit kind"));
-            }
-            // Keep the original generator as provenance; record human edit actor
-            // and time on this revision and the commit separately.
-            let generation: Option<String> = if previous.is_some() {
-                tx.query_row("SELECT generation_run FROM map_object_revisions WHERE object_id=?1 AND revision_id=?2",params![h.stable_id().as_str(),previous.unwrap().as_str()],|r|r.get(0))?
-            } else {
-                None
-            };
-            tx.execute("INSERT INTO map_object_revisions(object_id,revision_id,schema_version,lifecycle,created_at,created_by,generation_run,payload_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![h.stable_id().as_str(),h.revision_id().as_str(),h.schema_version().as_str(),life,time.as_str(),actor.as_str(),generation,serde_json::to_string(p)?])?;
-            for e in endpoints {
-                tx.execute("INSERT INTO map_relation_endpoints(relation_id,revision_id,role,ordinal_key,ordinal,entity_id) VALUES(?1,?2,?3,?4,?5,?6)",params![h.stable_id().as_str(),h.revision_id().as_str(),e.role().as_str(),e.ordinal().map(i64::from).unwrap_or(-1),e.ordinal(),e.entity().as_str()])?;
-            }
-            tx.execute(
-                "UPDATE map_objects SET current_revision=?2 WHERE object_id=?1",
-                params![h.stable_id().as_str(), h.revision_id().as_str()],
-            )?;
-            let action = if life == "deprecated" {
-                "retire"
-            } else if previous.is_none() {
-                "create"
-            } else {
-                "revise"
-            };
-            tx.execute("INSERT INTO map_edit_operations(commit_id,object_id,previous_revision,current_revision,action,reason) VALUES(?1,?2,?3,?4,?5,?6)",params![commit_id,h.stable_id().as_str(),previous.map(RevisionId::as_str),h.revision_id().as_str(),action,request.reason])?;
-            entries.push(ObjectRevisionReceipt {
-                object_id: h.stable_id().to_string(),
-                kind,
-                previous_revision: previous.map(ToString::to_string),
-                current_revision: h.revision_id().to_string(),
-                lifecycle: life,
-                action: action.into(),
-            });
-        }
-        let receipt = CommitReceipt {
-            version: "mathscape-map-commit-receipt-1".into(),
-            request_id: request.request_id.clone(),
-            plan_fingerprint: expected_plan.into(),
-            base_commit: current.base_commit,
-            commit_id: commit_id.clone(),
-            committed_at: time.to_string(),
-            objects: entries,
-        };
-        tx.execute("INSERT INTO map_change_requests(request_id,request_json,plan_fingerprint,commit_id,receipt_json) VALUES(?1,?2,?3,?4,?5)",params![request.request_id,request_json,expected_plan,commit_id,serde_json::to_string(&receipt)?])?;
+        let receipt = write_patch(&tx, &current, &patch, request, expected_plan, actor, &time)?;
+        tx.execute("INSERT INTO map_change_requests(request_id,request_json,plan_fingerprint,commit_id,receipt_json) VALUES(?1,?2,?3,?4,?5)",params![request.request_id,request_json,expected_plan,receipt.commit_id,serde_json::to_string(&receipt)?])?;
         tx.commit()?;
         Ok(receipt)
     }
@@ -227,4 +127,148 @@ impl SqliteArtifactStore {
         let row=self.connection.query_row("SELECT payload_json,lifecycle,created_at,created_by,generation_run FROM map_object_revisions WHERE object_id=?1 AND revision_id=?2",params![object,revision],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?))).optional()?;
         row.map(|(p,l,t,a,g)|Ok(serde_json::json!({"object_id":object,"revision_id":revision,"payload":serde_json::from_str::<serde_json::Value>(&p)?,"lifecycle":l,"created_at":t,"created_by":a,"generation_run":g}))).transpose()
     }
+}
+
+/// Shared writer; caller owns the transaction and its business audit/receipt.
+pub(crate) fn write_patch(
+    tx: &rusqlite::Transaction<'_>,
+    current: &MapEditSnapshot,
+    patch: &MapPatch<MapEditPayload>,
+    request: &UserChangeRequest,
+    expected_plan: &str,
+    actor: &ActorRef,
+    time: &Timestamp,
+) -> Result<CommitReceipt, SqliteStoreError> {
+    patch.validate()?;
+    if patch.author() != actor {
+        return Err(invalid("actor mismatch"));
+    }
+    let commit_id = expected_plan.to_owned();
+    RevisionId::parse(&commit_id)?;
+    tx.execute("INSERT INTO map_commits(commit_id,author,generation_run,message,committed_at) VALUES(?1,?2,NULL,?3,?4)",params![commit_id,actor.as_str(),request.reason,time.as_str()])?;
+    let mut entries = vec![];
+    // Create all identity rows first; relation FK checks can then span the batch.
+    for op in patch.operations() {
+        let (h, relation, expected) = match op {
+            MapOperation::CreateEntity { entity } => (entity.header(), false, None),
+            MapOperation::CreateRelation { relation } => (relation.header(), true, None),
+            MapOperation::ReviseEntity {
+                replacement,
+                expected_revision,
+                ..
+            } => (replacement.header(), false, Some(expected_revision)),
+            MapOperation::ReviseRelation {
+                replacement,
+                expected_revision,
+                ..
+            } => (replacement.header(), true, Some(expected_revision)),
+        };
+        let existing = current
+            .objects
+            .iter()
+            .find(|o| o.object_id == h.stable_id().as_str());
+        if let Some(expected) = expected {
+            if !existing.is_some_and(|o| o.revision == expected.as_str()) {
+                return Err(invalid("revision_conflict"));
+            }
+            if existing.is_some_and(|o| {
+                o.kind != serde_json::to_value(h.kind()).unwrap().as_str().unwrap()
+                    || (o.kind == "SourceUnitRelation") != relation
+            }) {
+                return Err(invalid(
+                    "object_identity_conflict: revision 不能改变对象类型或形状",
+                ));
+            }
+        } else {
+            if existing.is_some() {
+                return Err(invalid("object_exists"));
+            }
+            tx.execute("INSERT INTO map_objects(object_id,object_shape,entity_kind,current_revision) VALUES(?1,?2,?3,?4)",params![h.stable_id().as_str(),if relation{"relation"}else{"entity"},serde_json::to_value(h.kind())?.as_str().unwrap(),h.revision_id().as_str()])?;
+        }
+    }
+    for op in patch.operations() {
+        let (h, p, endpoints, previous) = match op {
+            MapOperation::CreateEntity { entity } => {
+                (entity.header(), entity.payload(), &[][..], None)
+            }
+            MapOperation::CreateRelation { relation } => (
+                relation.header(),
+                relation.payload(),
+                relation.endpoints(),
+                None,
+            ),
+            MapOperation::ReviseEntity {
+                replacement,
+                expected_revision,
+                ..
+            } => (
+                replacement.header(),
+                replacement.payload(),
+                &[][..],
+                Some(expected_revision),
+            ),
+            MapOperation::ReviseRelation {
+                replacement,
+                expected_revision,
+                ..
+            } => (
+                replacement.header(),
+                replacement.payload(),
+                replacement.endpoints(),
+                Some(expected_revision),
+            ),
+        };
+        let life = serde_json::to_value(h.lifecycle())?
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let kind = serde_json::to_value(h.kind())?.as_str().unwrap().to_owned();
+        if !matches!(
+            kind.as_str(),
+            "SourceSemanticUnit" | "SourceUnitRelation" | "SourceSpan"
+        ) {
+            return Err(invalid("unsupported edit kind"));
+        }
+        // Keep the original generator as provenance; record human edit actor
+        // and time on this revision and the commit separately.
+        let generation: Option<String> = if let Some(previous) = previous {
+            tx.query_row("SELECT generation_run FROM map_object_revisions WHERE object_id=?1 AND revision_id=?2",params![h.stable_id().as_str(),previous.as_str()],|r|r.get(0))?
+        } else {
+            None
+        };
+        tx.execute("INSERT INTO map_object_revisions(object_id,revision_id,schema_version,lifecycle,created_at,created_by,generation_run,payload_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![h.stable_id().as_str(),h.revision_id().as_str(),h.schema_version().as_str(),life,time.as_str(),actor.as_str(),generation,serde_json::to_string(p)?])?;
+        for e in endpoints {
+            tx.execute("INSERT INTO map_relation_endpoints(relation_id,revision_id,role,ordinal_key,ordinal,entity_id) VALUES(?1,?2,?3,?4,?5,?6)",params![h.stable_id().as_str(),h.revision_id().as_str(),e.role().as_str(),e.ordinal().map(i64::from).unwrap_or(-1),e.ordinal(),e.entity().as_str()])?;
+        }
+        tx.execute(
+            "UPDATE map_objects SET current_revision=?2 WHERE object_id=?1",
+            params![h.stable_id().as_str(), h.revision_id().as_str()],
+        )?;
+        let action = if life == "deprecated" {
+            "retire"
+        } else if previous.is_none() {
+            "create"
+        } else {
+            "revise"
+        };
+        tx.execute("INSERT INTO map_edit_operations(commit_id,object_id,previous_revision,current_revision,action,reason) VALUES(?1,?2,?3,?4,?5,?6)",params![commit_id,h.stable_id().as_str(),previous.map(RevisionId::as_str),h.revision_id().as_str(),action,request.reason])?;
+        entries.push(ObjectRevisionReceipt {
+            object_id: h.stable_id().to_string(),
+            kind,
+            previous_revision: previous.map(ToString::to_string),
+            current_revision: h.revision_id().to_string(),
+            lifecycle: life,
+            action: action.into(),
+        });
+    }
+    let receipt = CommitReceipt {
+        version: "mathscape-map-commit-receipt-1".into(),
+        request_id: request.request_id.clone(),
+        plan_fingerprint: expected_plan.into(),
+        base_commit: current.base_commit.clone(),
+        commit_id: commit_id.clone(),
+        committed_at: time.to_string(),
+        objects: entries,
+    };
+    Ok(receipt)
 }

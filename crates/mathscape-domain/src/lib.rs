@@ -12,6 +12,7 @@ mod id;
 mod map_edit;
 mod markdown_patch;
 mod patch;
+mod registration;
 mod relation;
 mod source;
 mod source_review;
@@ -28,6 +29,7 @@ pub use id::{ActorRef, CommitId, ContentHash, RevisionId, SchemaVersion, StableI
 pub use map_edit::*;
 pub use markdown_patch::*;
 pub use patch::{MapOperation, MapPatch};
+pub use registration::*;
 pub use relation::{EndpointRole, RelationEndpoint, RelationRecord};
 pub use source::*;
 pub use source_review::*;

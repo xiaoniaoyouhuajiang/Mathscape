@@ -1,4 +1,5 @@
 import type { DiscoveryOutcome } from "../review/types";
+import type { RegistrationSummary } from "./registration-types";
 
 export type WorkflowStatus =
   | "running"
@@ -14,6 +15,7 @@ export type ReviewStatus =
   | "reviewable"
   | "accepted"
   | "registered"
+  | "withdrawn"
   | "discarded"
   | "diagnostic"
   | "terminal";
@@ -36,6 +38,7 @@ export interface DiscoveryRunSummaryView {
   relation_count: number;
   created_at: string;
   updated_at: string;
+  registrations?: RegistrationSummary[];
 }
 
 export interface DiscoveryRunAttemptView {
@@ -73,6 +76,7 @@ export interface DiscoveryReviewEnvelopeView {
   created_at: string;
   updated_at: string;
   outcome: DiscoveryOutcome;
+  registrations?: RegistrationSummary[];
 }
 
 export interface WorkflowEvent {

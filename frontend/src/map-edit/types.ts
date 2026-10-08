@@ -153,6 +153,10 @@ export interface ImpactItem {
   reason: string;
   current_revision: string | null;
   proposed_revision: string | null;
+  display_title?: string | null;
+  reason_codes?: string[];
+  related_objects?: { object_id: string; revision_id: string; kind: string; display_title: string | null; reference_kind: string }[];
+  protected_by_decisions?: string[];
 }
 
 export interface ImpactPlan {

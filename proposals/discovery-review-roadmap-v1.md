@@ -9,7 +9,7 @@
 | [Discovery Run Ledger & Recovery](discovery-run-recovery-v1.md) | 1. 结果恢复与持久化入口 | 后端运行记录查询、重放验证、前端任务入口 |
 | [Discovery Review Workspace](discovery-review-workspace-v1.md) | 2. 页面重构、3. 渲染回链、4. 审核局部图 | 前端审核工作区、Markdown/KaTeX 预览、局部图 |
 | [Markdown–PDF Provenance Backlink](markdown-pdf-backlink-v1.md) | 5. Markdown 到 PDF 的精确回链 | Marker 页码/块映射、来源定位 DTO、PDF 阅读器联动 |
-| [Discovery Registration Reversal](discovery-registration-reversal-v1.md) | 6. 按一次 run 撤回已入图结果 | ImpactPlan、批量退役、安全处理复用对象 |
+| [Discovery Registration Reversal](discovery-registration-reversal-v1.md) | 6. 按一次实际登记撤回已入图结果 | ImpactPlan、两种退役政策、共享保护、SourceSpan 与重新登记闭环 |
 
 ## 2. 推荐顺序
 
@@ -47,6 +47,5 @@ P4 Registration Reversal ←─┘
 2. 点击 unit、引用、关系和诊断，右侧显示带公式渲染和精确高亮的 Markdown 上下文；
 3. 在审核工作区中查看局部结构图，悬停/点击节点与原文高亮双向同步；
 4. 如果存在页码映射，从 Markdown anchor 打开对应 PDF 页，否则明确提示只能定位到转换页范围；
-5. 对已经登记的 run 生成撤回 ImpactPlan，复用对象、受影响关系和可安全退役对象分别显示；
+5. 对 run 下选定的实际登记生成撤回 ImpactPlan，复用对象、受影响关系和可安全退役对象分别显示；
 6. 取消或失败不产生半个 revision、半个撤回 commit，也不丢失原始发现记录。
-

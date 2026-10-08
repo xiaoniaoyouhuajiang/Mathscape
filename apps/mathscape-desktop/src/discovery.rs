@@ -77,6 +77,9 @@ pub struct DesktopDiscoveryAcceptance {
     created_object_count: usize,
     reused_object_count: usize,
     already_registered: bool,
+    registration_plan: Option<mathscape_domain::SourceRegistrationCommitPlan>,
+    reactivated_object_count: usize,
+    revised_object_count: usize,
 }
 
 impl RunDiscoveryRequest {
@@ -201,6 +204,7 @@ pub struct DesktopDiscoveryRunSummary {
     pipeline_version: String,
     status: DiscoveryCheckpointStatus,
     review_status: String,
+    registrations: Vec<mathscape_domain::RegistrationSummary>,
     profile_id: String,
     unit_count: usize,
     fact_count: usize,
@@ -253,6 +257,7 @@ pub struct DesktopDiscoveryReviewEnvelope {
     created_at: String,
     updated_at: String,
     outcome: DesktopDiscoveryOutcome,
+    registrations: Vec<mathscape_domain::RegistrationSummary>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -622,6 +627,13 @@ impl DesktopService {
             match summary.review_status.as_str() {
                 "accepted" => review.acceptance.state = SourceReviewAcceptanceState::Accepted,
                 "registered" => review.acceptance.state = SourceReviewAcceptanceState::Registered,
+                "withdrawn" => {
+                    review.acceptance.state = SourceReviewAcceptanceState::Blocked;
+                    review
+                        .units
+                        .iter_mut()
+                        .for_each(|unit| unit.acceptance = SourceReviewAcceptanceState::Blocked);
+                }
                 "discarded" => {
                     review.acceptance.state = SourceReviewAcceptanceState::Blocked;
                     review.acceptance.blockers = review
@@ -652,6 +664,7 @@ impl DesktopService {
             created_at: summary.created_at,
             updated_at: summary.updated_at,
             outcome,
+            registrations: summary.registrations,
         })
     }
 
@@ -730,6 +743,29 @@ impl DesktopService {
             return Err(DesktopDiscoveryError::Acceptance(
                 "该内容发现结果已被放弃，不能再次接受；请重新运行内容发现".into(),
             ));
+        }
+        // A replay of an already registered decision is historical, not re-adoption.
+        // It must remain readable even if a newer validator cannot replay the run.
+        let replay_id = acceptance_decision_id(
+            &run_id,
+            &request.expected_result_fingerprint,
+            &actor,
+            &request.selection,
+        )
+        .map_err(|e| DesktopDiscoveryError::Acceptance(e.to_string()))?;
+        if let (Some(record), Some(receipt)) = (
+            store.registration_plan(&replay_id)?,
+            store.source_registration_receipt(&replay_id)?,
+        ) {
+            let withdrawn = store
+                .discovery_registration_reversal(replay_id.as_str())?
+                .is_some();
+            let mut result =
+                DesktopDiscoveryAcceptance::from_registration(record, receipt, true, true)?;
+            if withdrawn {
+                result.state = "withdrawn".into();
+            }
+            return Ok(result);
         }
         if checkpoint.pipeline_version != DISCOVERY_PIPELINE_VERSION {
             return Err(DesktopDiscoveryError::Acceptance(format!(
@@ -817,7 +853,7 @@ impl DesktopService {
                 let record = AcceptedRegistrationPlanRecord {
                     decision_id,
                     run_id,
-                    actor,
+                    actor: actor.clone(),
                     decided_at: plan.decision.decided_at.clone(),
                     authority: StoredAcceptanceAuthority::HumanReview,
                     expected_result_fingerprint: reproduced,
@@ -835,11 +871,41 @@ impl DesktopService {
         let already_registered = store
             .source_registration_receipt(&record.decision_id)?
             .is_some();
-        let receipt = store.commit_source_registration(
-            &record.decision_id,
-            &record.plan_fingerprint,
+        let bound_request = mathscape_domain::SourceRegistrationCommitRequest {
+            request_id: format!(
+                "mathscape:source-registration/{}",
+                timestamp_now()?.as_str()
+            ),
+            decision_id: record.decision_id.to_string(),
+            acceptance_plan_fingerprint: record.plan_fingerprint.to_string(),
+            base_commit: store.map_edit_snapshot()?.base_commit,
+            replacement_approvals: vec![],
+        };
+        let bound = mathscape_orchestrator::registration::plan_registration_commit(
+            &store.registration_snapshot()?,
+            &bound_request,
             &patch,
+            &actor,
+        );
+        if bound.plan.requires_confirmation
+            || bound.plan.impact.status != mathscape_domain::ImpactPlanStatus::Ready
+        {
+            return DesktopDiscoveryAcceptance::from_pending(record, bound.plan, already_accepted);
+        }
+        let receipt = store.commit_bound_source_registration(
+            &bound_request,
+            &bound.plan.impact.plan_fingerprint,
+            &actor,
             timestamp_now()?,
+            |snapshot| {
+                let e = mathscape_orchestrator::registration::plan_registration_commit(
+                    snapshot,
+                    &bound_request,
+                    &patch,
+                    &actor,
+                );
+                (e.plan, e.patch)
+            },
         )?;
         DesktopDiscoveryAcceptance::from_registration(
             record,
@@ -1366,6 +1432,28 @@ impl DesktopDiscoveryAcceptance {
         already_accepted: bool,
         already_registered: bool,
     ) -> Result<Self, DesktopDiscoveryError> {
+        Self::from_parts(
+            record,
+            Some(receipt),
+            None,
+            already_accepted,
+            already_registered,
+        )
+    }
+    fn from_pending(
+        record: AcceptedRegistrationPlanRecord,
+        plan: mathscape_domain::SourceRegistrationCommitPlan,
+        already: bool,
+    ) -> Result<Self, DesktopDiscoveryError> {
+        Self::from_parts(record, None, Some(plan), already, false)
+    }
+    fn from_parts(
+        record: AcceptedRegistrationPlanRecord,
+        receipt: Option<SourceRegistrationReceipt>,
+        registration_plan: Option<mathscape_domain::SourceRegistrationCommitPlan>,
+        already_accepted: bool,
+        already_registered: bool,
+    ) -> Result<Self, DesktopDiscoveryError> {
         let plan = record
             .plan
             .as_object()
@@ -1390,7 +1478,12 @@ impl DesktopDiscoveryAcceptance {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
-            state: "registered".into(),
+            state: if receipt.is_some() {
+                "registered"
+            } else {
+                "registration_review_required"
+            }
+            .into(),
             decision_id: record.decision_id.to_string(),
             run_id: record.run_id.to_string(),
             result_fingerprint: record.expected_result_fingerprint,
@@ -1406,9 +1499,27 @@ impl DesktopDiscoveryAcceptance {
             relation_count: array("relations")?.len(),
             pending_task_count: array("pending_tasks")?.len(),
             already_accepted,
-            commit_id: receipt.commit_id.to_string(),
-            created_object_count: receipt.created_objects.len(),
-            reused_object_count: receipt.reused_objects.len(),
+            commit_id: receipt
+                .as_ref()
+                .map(|r| r.commit_id.to_string())
+                .unwrap_or_default(),
+            created_object_count: receipt
+                .as_ref()
+                .map(|r| r.created_objects.len())
+                .unwrap_or(0),
+            reused_object_count: receipt
+                .as_ref()
+                .map(|r| r.reused_objects.len())
+                .unwrap_or(0),
+            reactivated_object_count: receipt
+                .as_ref()
+                .map(|r| r.reactivated_objects.len())
+                .unwrap_or(0),
+            revised_object_count: receipt
+                .as_ref()
+                .map(|r| r.revised_objects.len())
+                .unwrap_or(0),
+            registration_plan,
             already_registered,
         })
     }
@@ -1606,6 +1717,7 @@ impl From<StoredDiscoveryRunSummary> for DesktopDiscoveryRunSummary {
             pipeline_version: summary.pipeline_version,
             status: summary.status,
             review_status: summary.review_status,
+            registrations: summary.registrations,
             profile_id: summary.profile_id,
             unit_count: summary.unit_count,
             fact_count: summary.fact_count,

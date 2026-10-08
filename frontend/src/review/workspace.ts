@@ -11,6 +11,7 @@ import { ReviewGraph } from "./review-graph";
 import type { DiscoveryAcceptanceOutcome, DiscoveryOutcome, DiscoveryRun, ReviewRunMeta, SourceReviewProjection } from "./types";
 import { eventBus } from "../core/events";
 import "./review.css";
+import { openSourceRegistrationReview } from "../discovery/registration-workspace";
 
 export const OPEN_REVIEW_EVENT = "mathscape:open-review";
 export type { OpenReviewDetail } from "../core/events";
@@ -183,6 +184,22 @@ export class DiscoveryReviewWorkspace {
     this.returnChip.querySelector(".review-return-close")!.setAttribute("aria-label", "关闭审核工作区");
     (host.parentElement ?? document.body).append(this.returnChip);
     eventBus.on("reader-opened", () => { if (this.isOpen()) this.suspend(); });
+    eventBus.on("discovery-runs-changed",()=>void this.refreshRegistrationState());
+  }
+  private async refreshRegistrationState():Promise<void> {
+    const runId=this.outcome?.run.run_id;
+    if(!runId)return;
+    const generation=this.generation;
+    try {
+      const registrations=await invoke<import("../discovery/registration-types").RegistrationSummary[]>("list_discovery_registrations",{runId});
+      if(generation!==this.generation||registrations.length===0)return;
+      this.meta.registrations=registrations;
+      this.meta.review_status=registrations.every(r=>r.state==="withdrawn")?"withdrawn":"registered";
+      this.accepted=true;
+      if(this.outcome?.review){this.outcome.review.acceptance.state=this.meta.review_status==="withdrawn"?"blocked":"registered";}
+      if(this.model)this.model.units.forEach(u=>{u.acceptance=this.meta.review_status==="withdrawn"?"blocked":u.acceptance;});
+      this.renderHeader();this.renderFooter();this.syncCheckboxes();
+    }catch { /* The ledger can retry; do not discard an open review/draft on read failure. */ }
   }
 
   isOpen(): boolean { return !this.host.hidden; }
@@ -197,8 +214,8 @@ export class DiscoveryReviewWorkspace {
     this.locked = null; this.lockedAnchor = 0; this.rawMode = false;
     this.graphMode = this.model.units.length < GRAPH_UNIT_LIMIT; this.evidenceMode = false;
     const review = outcome.review;
-    this.accepted = review?.acceptance.state === "registered" || review?.acceptance.state === "accepted"
-      || meta.review_status === "registered" || meta.review_status === "accepted";
+    this.accepted = review?.acceptance.state === "registered"
+      || meta.review_status === "registered" || meta.review_status === "withdrawn";
     this.eligible = new Set(review?.units.filter(unit => unit.acceptance !== "blocked").map(unit => unit.unit_ref) ?? []);
     this.selected = new Set(review?.acceptance.selected_units ?? []);
     if (this.selected.size === 0) this.eligible.forEach(ref => this.selected.add(ref));
@@ -503,7 +520,7 @@ export class DiscoveryReviewWorkspace {
     );
     this.list.append(
       summary,
-      el("p", "review-note", `两阶段内容发现${workflowStatusLabel(outcome.outcome)}。结果${this.accepted ? "已写入正式来源图" : "尚未接受或入图"}；审核图中的对象都是候选，不是正式地图对象。`),
+      el("p", "review-note", `两阶段内容发现${workflowStatusLabel(outcome.outcome)}。${this.meta.review_status==="withdrawn"?"该登记已撤回；这是原始发现结果，不代表活动地图。":this.accepted?"已保存登记；部分对象可能已撤回或后续修改，请以登记回执为准。":"结果尚未登记。"}审核图中的对象都是候选，不是当前正式地图对象。`),
     );
     if (model.pending.length > 0) {
       this.list.append(el("p", "review-warning review-pending", `尚有 ${model.pending.length} 个事实任务未完成：${model.pending.map(task => task.owner ? this.title(task.owner) : task.task_ref).join("、")}`));
@@ -911,7 +928,7 @@ export class DiscoveryReviewWorkspace {
     const missing = this.missingDependencies(review);
     const blocked = this.accepting || this.accepted || this.stale !== null;
     const state = el("p", "review-selection-state", this.accepted
-      ? "结果已写入正式来源图。"
+      ? this.meta.review_status==="withdrawn"?"登记已撤回；当前查看的是原始发现结果。重新采纳请启动新的发现。":"已保存登记；活动状态与历史请从登记回执查看。"
       : missing.length > 0
         ? `已选择 ${this.selected.size} 个单元；仍缺少依赖：${missing.map(ref => this.title(ref)).join("、")}`
         : `已选择 ${this.selected.size} 个单元；父级与来源关系端点闭合。`);
@@ -949,6 +966,20 @@ export class DiscoveryReviewWorkspace {
         },
       });
       if (generation !== this.generation) return;
+      if(outcome.state==="registration_review_required"&&outcome.registration_plan) {
+        openSourceRegistrationReview(outcome.registration_plan,()=>{
+          if(generation!==this.generation)return;
+          this.accepted=true;this.meta.review_status="registered";
+          review.acceptance.state="registered";this.renderHeader();this.renderFooter();this.syncCheckboxes();
+        });
+        this.accepting=false;this.renderFooter();this.syncCheckboxes();
+        this.footer.querySelector(".review-action-feedback")!.textContent="已接受发现结果；需要审查重新激活或内容替换，尚未登记。关闭后可从发现记录继续。";
+        eventBus.emit("discovery-runs-changed");return;
+      }
+      if(outcome.state==="withdrawn") {
+        this.accepted=true;this.meta.review_status="withdrawn";this.accepting=false;this.renderHeader();this.renderFooter();this.syncCheckboxes();
+        this.footer.querySelector(".review-action-feedback")!.textContent="这是已撤回登记的历史回执；如需重新采纳，请启动新的发现。";return;
+      }
       this.accepted = true;
       review.acceptance.state = "registered";
       review.acceptance.selected_units = outcome.selected_units;

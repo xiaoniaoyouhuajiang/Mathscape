@@ -51,11 +51,63 @@ pub struct ByteRangeView {
 }
 
 impl DesktopService {
+    pub fn registration_object_detail(
+        &self,
+        decision: &str,
+        node_id: &str,
+    ) -> Result<SourceNodeDetail, String> {
+        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
+            .map_err(|e| e.to_string())?;
+        let history = store
+            .registration_history(decision)
+            .map_err(|e| e.to_string())?;
+        let mut endpoints = std::collections::BTreeMap::new();
+        let mut objects = vec![];
+        for o in history.objects {
+            let id = StableId::parse(&o.object_id).map_err(|e| e.to_string())?;
+            endpoints.insert(
+                id.clone(),
+                o.endpoints
+                    .iter()
+                    .map(|e| mathscape_store_sqlite::StoredMapEndpoint {
+                        role: e.role().as_str().into(),
+                        ordinal: e.ordinal(),
+                        entity_id: e.entity().clone(),
+                    })
+                    .collect(),
+            );
+            objects.push(mathscape_store_sqlite::StoredMapObject {
+                stable_id: id,
+                revision_id: mathscape_domain::RevisionId::parse(o.revision)
+                    .map_err(|e| e.to_string())?,
+                kind: serde_json::from_value(serde_json::json!(o.kind))
+                    .map_err(|e| e.to_string())?,
+                relation: o.kind == "SourceUnitRelation",
+                payload: o.payload,
+                lifecycle: serde_json::from_value(serde_json::json!(o.lifecycle))
+                    .map_err(|e| e.to_string())?,
+            });
+        }
+        self.read_source_detail(
+            node_id,
+            &mathscape_store_sqlite::SourceMapSnapshot {
+                objects,
+                relation_endpoints: endpoints,
+            },
+        )
+    }
     pub fn source_node_detail(&self, node_id: &str) -> Result<SourceNodeDetail, String> {
-        let id = StableId::parse(node_id).map_err(|e| e.to_string())?;
         let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
             .map_err(|e| e.to_string())?;
         let snapshot = store.source_map_snapshot().map_err(|e| e.to_string())?;
+        self.read_source_detail(node_id, &snapshot)
+    }
+    fn read_source_detail(
+        &self,
+        node_id: &str,
+        snapshot: &mathscape_store_sqlite::SourceMapSnapshot,
+    ) -> Result<SourceNodeDetail, String> {
+        let id = StableId::parse(node_id).map_err(|e| e.to_string())?;
         let object = snapshot
             .objects
             .iter()
@@ -65,6 +117,7 @@ impl DesktopService {
             object.kind,
             mathscape_domain::EntityKind::SourceSpan
                 | mathscape_domain::EntityKind::SourceSemanticUnit
+                | mathscape_domain::EntityKind::SourceUnitRelation
         ) {
             return Err("该节点不是来源节点".into());
         }
@@ -85,6 +138,13 @@ impl DesktopService {
                         .find(|candidate| candidate.stable_id == span_id)
                 })
                 .map(|span| span.payload.get("payload").unwrap_or(&span.payload))
+        } else if object.kind == mathscape_domain::EntityKind::SourceUnitRelation {
+            snapshot
+                .relation_endpoints
+                .get(&id)
+                .and_then(|es| es.iter().find(|e| e.role == "evidence"))
+                .and_then(|e| snapshot.objects.iter().find(|o| o.stable_id == e.entity_id))
+                .map(|s| s.payload.get("payload").unwrap_or(&s.payload))
         } else {
             None
         };

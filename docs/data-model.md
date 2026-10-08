@@ -17,7 +17,7 @@ EMIR 区分来源方言 DialectScope、连接方言与共享表示的 Representa
 - ArtifactLocation 与追加式 ArtifactCheck 独立于内容身份；移动文件或重新检查不产生新的数学对象。
 - 转换和来源关系使用角色化端点，证据也是明确端点；不能将超边压成失去证据与身份的普通边。
 - 来源单元只保存 parent，不复制 children、对齐或证明上下文的反向列表。新增关联不应迫使原单元修订。
-- 当前登记按 Artifact 与范围确定性生成来源身份，不执行跨来源数学去重。同一稳定身份的内容冲突必须显式失败，不能借幂等之名覆盖。
+- 当前登记按 Artifact 与范围确定性生成来源身份，不执行跨来源数学去重。同一稳定身份可复用当前 revision，或经明确审核重新激活/替换；定位身份冲突和共享内容替换必须阻断，不能借幂等之名覆盖。
 
 ## 定位与输入授权
 
@@ -45,8 +45,11 @@ Markdown 精确定位不等于 PDF 精确定位。SourceSpan 可以只含有效 
 
 接受决定绑定结果、审核者和选择；重复提交复用决定与回执。来源对象、关系端点和登记回执在一次提交事务中写入。接受计划与正式提交是不同步骤，提交失败不能被展示成已登记。来源登记后的类型仍可 unchecked，证明为 none，对齐为 unmatched。
 
+退役创建 Deprecated revision，不物理删除。普通退役会级联必要的关联关系，但不自动删除子单元或引用者；登记撤回仅退役实际登记范围内无其他采纳或活动依赖的创建/重新激活对象，保留共享对象、后续修改与其依赖闭包。登记采纳状态、工作流状态和对象 lifecycle 独立。旧回执绑定原 revision；旧决定的重试不重新激活对象，重新采纳使用新 run 和登记变更审核。
+
 ## 代码入口
 
 - 身份与来源：[domain](../crates/mathscape-domain/src/lib.rs)、[source](../crates/mathscape-domain/src/source/mod.rs)、[trust](../crates/mathscape-domain/src/trust.rs)。
 - 不可信阶段 DTO：[staged_discovery](../crates/mathscape-domain/src/staged_discovery.rs)；定位：[selector_resolver](../crates/mathscape-orchestrator/src/selector_resolver.rs)、[occurrence_resolver](../crates/mathscape-orchestrator/src/occurrence_resolver.rs)。
 - 验证与登记：[unit_discovery](../crates/mathscape-orchestrator/src/unit_discovery.rs)、[source_facts](../crates/mathscape-orchestrator/src/source_facts.rs)、[source_registration](../crates/mathscape-orchestrator/src/source_registration.rs)、[原子提交](../crates/mathscape-store-sqlite/src/source_map.rs)。
+- 登记生命周期：[契约](../crates/mathscape-domain/src/registration.rs)、[规划](../crates/mathscape-orchestrator/src/registration.rs)、[原子撤回与重新登记](../crates/mathscape-store-sqlite/src/registration.rs)。

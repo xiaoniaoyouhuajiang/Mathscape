@@ -288,9 +288,9 @@ pub fn plan_map_change(
                 UserChangeOperation::RetireObject { .. } => {
                     if !matches!(
                         out.kind.as_str(),
-                        "SourceSemanticUnit" | "SourceUnitRelation"
+                        "SourceSemanticUnit" | "SourceUnitRelation" | "SourceSpan"
                     ) {
-                        return Err("第一版只允许退役内容单元和来源关系".into());
+                        return Err("只允许退役来源单元、关系和原文证据".into());
                     }
                     out.lifecycle = "deprecated".into();
                 }
@@ -308,7 +308,7 @@ pub fn plan_map_change(
     // through citations, no cascading of other content units.
     let retired: BTreeSet<_> = final_map
         .values()
-        .filter(|o| o.kind == "SourceSemanticUnit" && !active(o))
+        .filter(|o| touched.contains(&o.object_id) && !active(o))
         .map(|o| o.object_id.clone())
         .collect();
     for o in final_map.values_mut() {
@@ -322,6 +322,9 @@ pub fn plan_map_change(
         }
     }
     // Check final graph, including dependent objects not explicitly edited.
+    diagnostics.extend(crate::source_integrity::validate_live_references(
+        &final_map,
+    ));
     for o in final_map.values().filter(|o| active(o)) {
         if o.kind == "SourceSemanticUnit" {
             let p = body(o);
@@ -464,13 +467,29 @@ pub fn plan_map_change(
             reason: request.reason.clone(),
             current_revision: old.map(|v| v.revision.clone()),
             proposed_revision: Some(o.revision.clone()),
+            display_title: crate::source_integrity::object_title(o),
+            reason_codes: vec![],
+            related_objects: original
+                .values()
+                .filter_map(|v| {
+                    crate::source_integrity::source_references(v)
+                        .ok()?
+                        .into_iter()
+                        .find(|(target, _)| target == id)
+                        .map(|(_, role)| crate::source_integrity::related_object(v, &role))
+                })
+                .collect(),
+            protected_by_decisions: snapshot.adopted_by.get(id).cloned().unwrap_or_default(),
         };
         if touched.contains(id) {
             direct.push(item);
         } else {
             affected.push(item);
         }
-        if !matches!(o.kind.as_str(), "SourceSemanticUnit" | "SourceUnitRelation") {
+        if !matches!(
+            o.kind.as_str(),
+            "SourceSemanticUnit" | "SourceUnitRelation" | "SourceSpan"
+        ) {
             continue;
         }
         let make = (|| -> Result<MapOperation<MapEditPayload>, DomainError> {
@@ -684,7 +703,10 @@ pub fn get_edit_context(snapshot: &MapEditSnapshot, id: &str) -> Result<EditCont
             .collect(),
         evidence_spans,
         can_retire: active(o)
-            && matches!(o.kind.as_str(), "SourceSemanticUnit" | "SourceUnitRelation"),
+            && matches!(
+                o.kind.as_str(),
+                "SourceSemanticUnit" | "SourceUnitRelation" | "SourceSpan"
+            ),
     })
 }
 
@@ -715,6 +737,7 @@ mod tests {
     fn edit_context_limits_parents_to_the_same_artifact() {
         let snapshot = MapEditSnapshot {
             base_commit: None,
+            adopted_by: Default::default(),
             objects: vec![
                 unit("unit-a", "mathscape:artifact/a"),
                 unit("unit-b", "mathscape:artifact/a"),

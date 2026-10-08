@@ -136,6 +136,22 @@ pub struct ImpactItem {
     pub reason: String,
     pub current_revision: Option<String>,
     pub proposed_revision: Option<String>,
+    #[serde(default)]
+    pub display_title: Option<String>,
+    #[serde(default)]
+    pub reason_codes: Vec<String>,
+    #[serde(default)]
+    pub related_objects: Vec<ImpactObjectRef>,
+    #[serde(default)]
+    pub protected_by_decisions: Vec<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ImpactObjectRef {
+    pub object_id: String,
+    pub revision_id: String,
+    pub kind: String,
+    pub display_title: Option<String>,
+    pub reference_kind: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ImpactPlan {
@@ -208,6 +224,8 @@ pub struct MapEditObject {
 pub struct MapEditSnapshot {
     pub base_commit: Option<String>,
     pub objects: Vec<MapEditObject>,
+    #[serde(default)]
+    pub adopted_by: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// Internal materialized payload, validated by the planner and transaction
@@ -217,10 +235,10 @@ pub struct MapEditSnapshot {
 pub struct MapEditPayload(pub Value);
 impl EntityPayload for MapEditPayload {
     fn entity_kind(&self) -> EntityKind {
-        if self.0["payload_kind"] == "unit_relation" {
-            EntityKind::SourceUnitRelation
-        } else {
-            EntityKind::SourceSemanticUnit
+        match self.0["payload_kind"].as_str() {
+            Some("unit_relation") => EntityKind::SourceUnitRelation,
+            Some("span") => EntityKind::SourceSpan,
+            _ => EntityKind::SourceSemanticUnit,
         }
     }
     fn payload_shape(&self) -> PayloadShape {

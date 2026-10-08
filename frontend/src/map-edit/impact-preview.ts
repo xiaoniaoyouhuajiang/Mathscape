@@ -144,10 +144,25 @@ function renderItem(item: ImpactItem): HTMLElement {
   idLabel.className = "impact-id";
   // Show a short suffix to help identification
   const idParts = item.object_id.split("/");
-  idLabel.textContent = idParts.at(-1) ?? item.object_id;
+  idLabel.textContent = item.display_title ?? idParts.at(-1) ?? item.object_id;
   idLabel.title = item.object_id;
 
   li.append(actionBadge, kindLabel, idLabel);
+  const reason = document.createElement("p");
+  reason.textContent = item.reason;
+  li.append(reason);
+  if (item.related_objects?.length || item.protected_by_decisions?.length) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary"); summary.textContent = "关联依赖与登记";
+    details.append(summary);
+    for (const ref of item.related_objects ?? []) {
+      const line = document.createElement("p"); line.textContent = `${ref.display_title ?? ref.object_id} · ${ref.reference_kind}`; details.append(line);
+    }
+    for (const id of item.protected_by_decisions ?? []) {
+      const line = document.createElement("p"); line.textContent = `有效登记：${id}`; details.append(line);
+    }
+    li.append(details);
+  }
   return li;
 }
 
