@@ -8,6 +8,7 @@ mod map_edit;
 mod markdown_patch;
 mod read;
 mod registration;
+mod run_disposition;
 mod source_map;
 
 use std::path::Path;
@@ -50,7 +51,7 @@ const DISCOVERY_PATCH_REVIEW_MIGRATION: &str =
     include_str!("../../../migrations/0009_discovery_patch_review.sql");
 const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
     include_str!("../../../migrations/0010_discovery_run_recovery.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 11;
+const SUPPORTED_SCHEMA_VERSION: i64 = 12;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -274,7 +275,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=11 => {
+            6..=12 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -308,6 +309,11 @@ impl SqliteArtifactStore {
         if version < 11 {
             connection.execute_batch(include_str!(
                 "../../../migrations/0011_registration_reversal.sql"
+            ))?;
+        }
+        if version < 12 {
+            connection.execute_batch(include_str!(
+                "../../../migrations/0012_discovery_review_restore.sql"
             ))?;
         }
         validate_registration_schema(&connection)?;
@@ -552,7 +558,10 @@ impl SqliteArtifactStore {
         &self,
         artifact_id: Option<&StableId>,
     ) -> Result<Vec<StoredDiscoveryRunSummary>, SqliteStoreError> {
-        discovery::list_discovery_run_summaries(&self.connection, artifact_id)
+        let tx = self.connection.unchecked_transaction()?;
+        let summaries = discovery::list_discovery_run_summaries(&tx, artifact_id)?;
+        tx.commit()?;
+        Ok(summaries)
     }
 
     pub fn discard_discovery_run(
@@ -578,7 +587,7 @@ impl SqliteArtifactStore {
     pub fn discovery_run_is_discarded(&self, run_id: &StableId) -> Result<bool, SqliteStoreError> {
         self.connection
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM discovery_run_dispositions WHERE run_id = ?1)",
+                "SELECT EXISTS(SELECT 1 FROM discovery_run_dispositions WHERE run_id = ?1 AND disposition='discarded')",
                 params![run_id.as_str()],
                 |row| row.get(0),
             )
@@ -1640,6 +1649,10 @@ fn validate_discovery_run_recovery_schema(connection: &Connection) -> Result<(),
                 name: index,
             });
         }
+    }
+    let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if version >= 12 {
+        connection.prepare("SELECT request_id,run_id,disposition,previous_request_id,result_fingerprint,actor,reason,decided_at FROM discovery_run_disposition_events LIMIT 0")?;
     }
     Ok(())
 }

@@ -39,6 +39,15 @@ export interface DiscoveryRunSummaryView {
   created_at: string;
   updated_at: string;
   registrations?: RegistrationSummary[];
+  disposition?: DiscoveryDispositionReceipt | null;
+}
+export interface DiscoveryDispositionReceipt {
+  run_id:string;request_id:string;disposition:"discarded"|"restored";
+  actor:string;reason:string;decided_at:string;previous_request_id:string|null;
+}
+export interface DiscoveryDispositionRequest {
+  run_id:string;request_id:string;expected_result_fingerprint:string;
+  expected_disposition_request_id:string|null;reason:string;
 }
 
 export interface DiscoveryRunAttemptView {
@@ -77,6 +86,7 @@ export interface DiscoveryReviewEnvelopeView {
   updated_at: string;
   outcome: DiscoveryOutcome;
   registrations?: RegistrationSummary[];
+  disposition?: DiscoveryDispositionReceipt|null;
 }
 
 export interface WorkflowEvent {

@@ -15,6 +15,8 @@ import type {
   DiscoveryReviewEnvelopeView,
   DiscoveryRunDiagnosticsView,
   DiscoveryRunSummaryView,
+  DiscoveryDispositionRequest,
+  DiscoveryDispositionReceipt,
 } from "./types";
 import { openRegistrationReversal, openRegistrationHistory, openSourceRegistrationReview } from "./registration-workspace";
 import type { SourceRegistrationCommitPlan } from "./registration-types";
@@ -28,6 +30,7 @@ export class DiscoveryLedgerController {
   private static readonly PREVIEW_LIMIT = 20;
   private showAllRuns = false;
   private unsubscribeEvent?: () => void;
+  private readonly dispositionRequests=new Map<string,DiscoveryDispositionRequest>();
 
   constructor(
     private readonly listContainer: HTMLElement,
@@ -139,6 +142,11 @@ export class DiscoveryLedgerController {
       discard.onclick = () => void this.discardPersistedDiscoveryRun(run, discard);
       actions.append(discard);
     }
+    if(run.review_status==="discarded"&&registrations.length===0&&run.result_fingerprint!==null&&run.disposition?.disposition==="discarded") {
+      const restore=textElement("button","","恢复审核");restore.type="button";
+      restore.title="保留放弃历史，不调用 LLM、不自动接受或入图；先重新验证原文与结果。";
+      restore.onclick=()=>void this.restorePersistedDiscoveryRun(run,restore);actions.append(restore);
+    }
     if(run.review_status==="accepted") {
       const resume=textElement("button","","继续登记审核");resume.type="button";
       resume.onclick=()=>void (async()=>{
@@ -216,6 +224,7 @@ export class DiscoveryLedgerController {
         created_at: envelope.created_at,
         updated_at: envelope.updated_at,
         registrations: envelope.registrations,
+        disposition: envelope.disposition,
       });
     } catch (error) {
       this.delegate.showToast(`恢复内容发现结果失败：${errorMessage(error)}`, "error");
@@ -307,19 +316,36 @@ export class DiscoveryLedgerController {
     const reason = "用户从内容发现记录中放弃本次未登记结果";
     button.disabled = true;
     try {
-      await invoke("discard_discovery_run", {
-        request: {
-          run_id: run.run_id,
-          request_id: `mathscape:discovery-disposition/${crypto.randomUUID()}`,
-          expected_result_fingerprint: run.result_fingerprint,
-          reason,
-        },
-      });
+      await invoke("discard_discovery_run", {request:this.dispositionRequest(run,"discarded",reason)});
+      eventBus.emit("discovery-runs-changed");
       await this.loadDiscoveryRuns();
       this.delegate.showToast("已放弃本次内容发现结果；原始检查点仍保留。", "success");
     } catch (error) {
       this.delegate.showToast(`放弃内容发现结果失败：${errorMessage(error)}`, "error");
       button.disabled = false;
+    }
+  }
+  private dispositionRequest(run:DiscoveryRunSummaryView,action:string,reason:string):DiscoveryDispositionRequest {
+    const key=`${run.run_id}:${action}:${run.disposition?.request_id??"none"}`;
+    let request=this.dispositionRequests.get(key);
+    if(!request) {
+      request={run_id:run.run_id,request_id:`mathscape:discovery-disposition/${crypto.randomUUID()}`,expected_result_fingerprint:run.result_fingerprint!,expected_disposition_request_id:run.disposition?.request_id??null,reason};
+      this.dispositionRequests.set(key,request);
+    }
+    return request;
+  }
+  private async restorePersistedDiscoveryRun(run:DiscoveryRunSummaryView,button:HTMLButtonElement):Promise<void> {
+    button.disabled=true;
+    try {
+      await invoke<DiscoveryDispositionReceipt>("restore_discovery_review",{request:this.dispositionRequest(run,"restored","用户恢复本次未登记结果的审核")});
+      eventBus.emit("discovery-runs-changed");
+      await this.loadDiscoveryRuns();
+      const envelope=await invoke<DiscoveryReviewEnvelopeView>("get_discovery_review",{runId:run.run_id});
+      openReviewWorkspace(envelope.outcome,{title:this.getArtifactDisplayName(run.artifact_id,run.artifact_name),review_status:envelope.review_status,created_at:envelope.created_at,updated_at:envelope.updated_at,registrations:envelope.registrations,disposition:envelope.disposition});
+      this.delegate.showToast(envelope.review_status==="discarded"?"该恢复请求曾经完成，但结果后来再次放弃；请根据最新记录操作。":"已恢复审核；未调用 LLM，尚未接受或入图。","success");
+    } catch(error) {
+      this.delegate.showToast(`恢复审核失败：${errorMessage(error)}。可刷新记录，或以同一请求重试。`,"error");
+      button.disabled=false;
     }
   }
 }

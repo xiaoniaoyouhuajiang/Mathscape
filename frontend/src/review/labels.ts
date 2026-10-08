@@ -37,6 +37,7 @@ export const issueKindLabel = lookup({
 
 export const acceptanceLabel = lookup({
   not_selected: "未选择", selectable: "可接受", blocked: "阻塞", accepted: "已接受", registered: "已登记",
+  discarded: "已放弃", withdrawn: "登记已撤回", restored: "已恢复审核", reviewable: "待审核",
 });
 
 export const anchorPurposeLabel = lookup({

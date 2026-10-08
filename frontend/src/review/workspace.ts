@@ -191,6 +191,17 @@ export class DiscoveryReviewWorkspace {
     if(!runId)return;
     const generation=this.generation;
     try {
+      const summaries=await invoke<import("../discovery/types").DiscoveryRunSummaryView[]>("list_discovery_runs",{request:{artifact_id:null}});
+      const summary=summaries.find(s=>s.run_id===runId);
+      if(generation!==this.generation)return;
+      if(summary&&summary.registrations?.length===0&&summary.review_status!==this.meta.review_status) {
+        if(summary.review_status==="discarded") {
+          this.meta.review_status="discarded";this.renderHeader();this.renderFooter();this.syncCheckboxes();
+        }
+        const envelope=await invoke<import("../discovery/types").DiscoveryReviewEnvelopeView>("get_discovery_review",{runId});
+        if(generation!==this.generation)return;
+        await this.open(envelope.outcome,{...this.meta,review_status:envelope.review_status,disposition:envelope.disposition,registrations:envelope.registrations});return;
+      }
       const registrations=await invoke<import("../discovery/registration-types").RegistrationSummary[]>("list_discovery_registrations",{runId});
       if(generation!==this.generation||registrations.length===0)return;
       this.meta.registrations=registrations;
@@ -297,6 +308,9 @@ export class DiscoveryReviewWorkspace {
 
   /** A presentation draft only; the backend re-validates any acceptance. */
   private saveDraft(): void {
+    // A read-only historical/discarded view has no eligible selection. Do not
+    // replace the user's actual pre-discard review draft with that empty set.
+    if(this.accepted||this.meta.review_status==="discarded"||this.meta.review_status==="withdrawn")return;
     const key = this.draftKey();
     if (!key) return;
     const draft: Draft = {
@@ -520,7 +534,7 @@ export class DiscoveryReviewWorkspace {
     );
     this.list.append(
       summary,
-      el("p", "review-note", `两阶段内容发现${workflowStatusLabel(outcome.outcome)}。${this.meta.review_status==="withdrawn"?"该登记已撤回；这是原始发现结果，不代表活动地图。":this.accepted?"已保存登记；部分对象可能已撤回或后续修改，请以登记回执为准。":"结果尚未登记。"}审核图中的对象都是候选，不是当前正式地图对象。`),
+      el("p", "review-note", `两阶段内容发现${workflowStatusLabel(outcome.outcome)}。${this.meta.review_status==="discarded"?"结果已放弃，仅供查看；可从发现记录点击恢复审核。":this.meta.review_status==="withdrawn"?"该登记已撤回；这是原始发现结果，不代表活动地图。":this.accepted?"已保存登记；部分对象可能已撤回或后续修改，请以登记回执为准。":"结果尚未登记。"}审核图中的对象都是候选，不是当前正式地图对象。`),
     );
     if (model.pending.length > 0) {
       this.list.append(el("p", "review-warning review-pending", `尚有 ${model.pending.length} 个事实任务未完成：${model.pending.map(task => task.owner ? this.title(task.owner) : task.task_ref).join("、")}`));
@@ -901,7 +915,7 @@ export class DiscoveryReviewWorkspace {
     this.list.querySelectorAll<HTMLInputElement>(".review-unit-checkbox").forEach(checkbox => {
       const ref = checkbox.dataset.unit!;
       checkbox.checked = this.selected.has(ref);
-      checkbox.disabled = this.accepting || this.accepted || !this.eligible.has(ref) || this.stale !== null;
+      checkbox.disabled = this.accepting || this.accepted || this.meta.review_status==="discarded" || !this.eligible.has(ref) || this.stale !== null;
     });
     this.graph?.setSelected(this.selected);
   }
@@ -926,8 +940,8 @@ export class DiscoveryReviewWorkspace {
       return;
     }
     const missing = this.missingDependencies(review);
-    const blocked = this.accepting || this.accepted || this.stale !== null;
-    const state = el("p", "review-selection-state", this.accepted
+    const blocked = this.accepting || this.accepted || this.meta.review_status==="discarded" || this.stale !== null;
+    const state = el("p", "review-selection-state", this.meta.review_status==="discarded"?"结果已放弃，不能接受。请先从发现记录恢复审核。":this.accepted
       ? this.meta.review_status==="withdrawn"?"登记已撤回；当前查看的是原始发现结果。重新采纳请启动新的发现。":"已保存登记；活动状态与历史请从登记回执查看。"
       : missing.length > 0
         ? `已选择 ${this.selected.size} 个单元；仍缺少依赖：${missing.map(ref => this.title(ref)).join("、")}`

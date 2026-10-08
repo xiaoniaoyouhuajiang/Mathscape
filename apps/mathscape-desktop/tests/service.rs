@@ -516,6 +516,85 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
         "selection": {"kind": "explicit_units", "unit_refs": ["u1", "u2"]}
     }))
     .unwrap();
+    let discard = mathscape_domain::DiscoveryDispositionRequest {
+        run_id: run_id.clone(),
+        request_id: StableId::parse("mathscape:test/discard-review").unwrap(),
+        expected_result_fingerprint: serde_json::from_value(
+            value["review"]["result_fingerprint"].clone(),
+        )
+        .unwrap(),
+        expected_disposition_request_id: None,
+        reason: "整理后再审核".into(),
+    };
+    let discarded = service.discard_discovery_run(discard).unwrap();
+    let readonly =
+        serde_json::to_value(service.get_discovery_review(run_id.as_str()).unwrap()).unwrap();
+    assert_eq!(readonly["review_status"], "discarded");
+    assert!(
+        readonly["outcome"]["review"]["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|u| u["acceptance"] == "blocked")
+    );
+    assert!(service.accept_discovery_result(acceptance.clone()).is_err());
+    let restore = mathscape_domain::DiscoveryDispositionRequest {
+        run_id: run_id.clone(),
+        request_id: StableId::parse("mathscape:test/restore-review").unwrap(),
+        expected_result_fingerprint: serde_json::from_value(
+            value["review"]["result_fingerprint"].clone(),
+        )
+        .unwrap(),
+        expected_disposition_request_id: Some(discarded.request_id),
+        reason: "恢复审核".into(),
+    };
+    let mut store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+    let original = store
+        .discovery_checkpoint(&run_id)
+        .unwrap()
+        .unwrap()
+        .checkpoint;
+    let mut incompatible = original.clone();
+    incompatible.snapshot["source"]["snapshot"]["content_hash"] =
+        serde_json::json!(format!("sha256:{}", "f".repeat(64)));
+    store.save_discovery_checkpoint(&incompatible).unwrap();
+    assert!(service.restore_discovery_review(restore.clone()).is_err());
+    assert!(store.discovery_run_is_discarded(&run_id).unwrap());
+    assert_eq!(
+        store.discovery_disposition_history(&run_id).unwrap().len(),
+        1
+    );
+    store.save_discovery_checkpoint(&original).unwrap();
+    drop(store);
+    let restored = service.restore_discovery_review(restore.clone()).unwrap();
+    assert_eq!(restored.disposition, "restored");
+    assert_eq!(
+        service.restore_discovery_review(restore.clone()).unwrap(),
+        restored
+    );
+    let reopened_review = serde_json::to_value(
+        DesktopService::open(&workspace)
+            .unwrap()
+            .get_discovery_review(run_id.as_str())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(reopened_review["review_status"], "reviewable");
+    assert!(
+        reopened_review["outcome"]["review"]["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|u| u["acceptance"] != "blocked")
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    assert!(
+        SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3"))
+            .unwrap()
+            .map_objects()
+            .unwrap()
+            .is_empty()
+    );
     let accepted =
         serde_json::to_value(service.accept_discovery_result(acceptance.clone()).unwrap()).unwrap();
     assert_eq!(accepted["state"], "registered");

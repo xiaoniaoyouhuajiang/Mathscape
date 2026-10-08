@@ -16,7 +16,7 @@ pub use discovery::{
     DesktopDiscoveryProgress, DesktopDiscoveryReviewEnvelope, DesktopDiscoveryRun,
     DesktopDiscoveryRunDiagnostics, DesktopDiscoveryRunSummary,
     DesktopDiscoveryValidationDiagnostic, DiscardDiscoveryRunRequest, ListDiscoveryRunsRequest,
-    ResumeDiscoveryRequest, RunDiscoveryRequest,
+    RestoreDiscoveryReviewRequest, ResumeDiscoveryRequest, RunDiscoveryRequest,
 };
 pub use discovery_view::{DESKTOP_DISCOVERY_VIEW_VERSION, DesktopDiscoveryView};
 pub use llm_settings::{
@@ -770,6 +770,7 @@ pub fn run() {
             discovery::get_discovery_review,
             discovery::get_discovery_diagnostics,
             discovery::discard_discovery_run,
+            discovery::restore_discovery_review,
             registration::list_discovery_registrations,
             registration::get_map_head,
             registration::get_pending_source_registration_plans,

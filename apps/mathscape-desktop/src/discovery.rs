@@ -205,6 +205,7 @@ pub struct DesktopDiscoveryRunSummary {
     status: DiscoveryCheckpointStatus,
     review_status: String,
     registrations: Vec<mathscape_domain::RegistrationSummary>,
+    disposition: Option<DiscoveryRunDispositionReceipt>,
     profile_id: String,
     unit_count: usize,
     fact_count: usize,
@@ -258,6 +259,7 @@ pub struct DesktopDiscoveryReviewEnvelope {
     updated_at: String,
     outcome: DesktopDiscoveryOutcome,
     registrations: Vec<mathscape_domain::RegistrationSummary>,
+    disposition: Option<DiscoveryRunDispositionReceipt>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -266,14 +268,8 @@ pub struct ListDiscoveryRunsRequest {
     artifact_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscardDiscoveryRunRequest {
-    run_id: String,
-    request_id: String,
-    expected_result_fingerprint: ContentHash,
-    reason: String,
-}
+pub type DiscardDiscoveryRunRequest = mathscape_domain::DiscoveryDispositionRequest;
+pub type RestoreDiscoveryReviewRequest = mathscape_domain::DiscoveryDispositionRequest;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DesktopDiscoveryRun {
@@ -665,6 +661,7 @@ impl DesktopService {
             updated_at: summary.updated_at,
             outcome,
             registrations: summary.registrations,
+            disposition: summary.disposition,
         })
     }
 
@@ -672,19 +669,36 @@ impl DesktopService {
         &self,
         request: DiscardDiscoveryRunRequest,
     ) -> Result<DiscoveryRunDispositionReceipt, DesktopDiscoveryError> {
-        let run_id = StableId::parse(&request.run_id)?;
-        let request_id = StableId::parse(&request.request_id)?;
         let actor = ActorRef::parse("mathscape-desktop-user")?;
         let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
         store
-            .discard_discovery_run(
-                &run_id,
-                &request_id,
-                &request.expected_result_fingerprint,
-                &actor,
-                &request.reason,
-                &timestamp_now()?,
-            )
+            .discard_discovery_run_checked(&request, &actor, &timestamp_now()?)
+            .map_err(Into::into)
+    }
+
+    pub fn restore_discovery_review(
+        &self,
+        request: RestoreDiscoveryReviewRequest,
+    ) -> Result<DiscoveryRunDispositionReceipt, DesktopDiscoveryError> {
+        let actor = ActorRef::parse("mathscape-desktop-user")?;
+        let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        if let Some(receipt) = store.replay_discovery_restore(&request, &actor)? {
+            return Ok(receipt);
+        }
+        let checkpoint = store
+            .discovery_checkpoint(&request.run_id)?
+            .ok_or_else(|| DesktopDiscoveryError::Checkpoint("内容发现运行不存在".into()))?
+            .checkpoint;
+        if checkpoint.result_fingerprint.as_ref() != Some(&request.expected_result_fingerprint) {
+            return Err(DesktopDiscoveryError::Checkpoint(
+                "结果已变化，请刷新记录".into(),
+            ));
+        }
+        // Read-only deterministic replay; no LLM, credentials or map writes.
+        // The writer rechecks this complete checkpoint under its lock.
+        self.get_discovery_review(request.run_id.as_str())?;
+        store
+            .restore_discovery_review(&request, &actor, &timestamp_now()?, &checkpoint)
             .map_err(Into::into)
     }
 
@@ -1718,6 +1732,7 @@ impl From<StoredDiscoveryRunSummary> for DesktopDiscoveryRunSummary {
             status: summary.status,
             review_status: summary.review_status,
             registrations: summary.registrations,
+            disposition: summary.disposition,
             profile_id: summary.profile_id,
             unit_count: summary.unit_count,
             fact_count: summary.fact_count,
@@ -1783,6 +1798,18 @@ pub(crate) async fn discard_discovery_run(
         .await
         .map_err(|error| format!("放弃内容发现结果线程失败：{error}"))?
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub(crate) async fn restore_discovery_review(
+    state: State<'_, DesktopState>,
+    request: RestoreDiscoveryReviewRequest,
+) -> Result<DiscoveryRunDispositionReceipt, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.restore_discovery_review(request))
+        .await
+        .map_err(|e| format!("恢复审核线程失败：{e}"))?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

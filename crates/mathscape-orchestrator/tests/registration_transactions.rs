@@ -709,7 +709,7 @@ fn upgrade_v10_preserves_registered_revisions_endpoints_and_reads_v1_receipts() 
         params![id("a").as_str(), serde_json::to_string(&old).unwrap()],
     )
     .unwrap();
-    c.execute_batch("DROP TABLE source_registration_requests; DROP TABLE discovery_registration_reversals; DROP INDEX map_commit_objects_by_object; DELETE FROM schema_migrations WHERE version=11; PRAGMA user_version=10;").unwrap();
+    c.execute_batch("DROP TABLE discovery_run_dispositions; DROP TABLE discovery_run_disposition_events; CREATE TABLE discovery_run_dispositions(run_id TEXT PRIMARY KEY,disposition TEXT NOT NULL,reason TEXT NOT NULL,actor TEXT NOT NULL,request_id TEXT NOT NULL UNIQUE,decided_at TEXT NOT NULL); CREATE INDEX discovery_run_dispositions_by_decision ON discovery_run_dispositions(request_id); DROP TABLE source_registration_requests; DROP TABLE discovery_registration_reversals; DROP INDEX map_commit_objects_by_object; DELETE FROM schema_migrations WHERE version IN (11,12); PRAGMA user_version=10;").unwrap();
     drop(c);
     let upgraded = SqliteArtifactStore::prepare(&f.root.join("catalog.sqlite3")).unwrap();
     let old = upgraded

@@ -47,6 +47,8 @@ Markdown 精确定位不等于 PDF 精确定位。SourceSpan 可以只含有效 
 
 退役创建 Deprecated revision，不物理删除。普通退役会级联必要的关联关系，但不自动删除子单元或引用者；登记撤回仅退役实际登记范围内无其他采纳或活动依赖的创建/重新激活对象，保留共享对象、后续修改与其依赖闭包。登记采纳状态、工作流状态和对象 lifecycle 独立。旧回执绑定原 revision；旧决定的重试不重新激活对象，重新采纳使用新 run 和登记变更审核。
 
+未登记结果的放弃/恢复也是独立的用户决定：追加审计保留所有周期，当前指针确定是否允许审核。恢复前需重绑定原文、重放校验；成功只开放原结果审核，不调用 LLM 或自动入图，已有登记不能走此恢复入口。
+
 ## 代码入口
 
 - 身份与来源：[domain](../crates/mathscape-domain/src/lib.rs)、[source](../crates/mathscape-domain/src/source/mod.rs)、[trust](../crates/mathscape-domain/src/trust.rs)。

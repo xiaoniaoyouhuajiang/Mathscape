@@ -6,6 +6,7 @@ import { resolveProductPath, readRange, type ContentInfo } from "../src/reader/c
 import type { AnchoredMarkdown, SelectionRequest } from "../src/reader/selection";
 import { mountReviewWorkspace } from "../src/review/workspace";
 import { renderAnchorFragment } from "../src/review/anchor-fragment";
+import { DiscoveryLedgerController } from "../src/discovery/discovery-ledger";
 
 // Tiny reproducible PDF: two pages and one outline entry, no copyrighted assets.
 function samplePdf(): Uint8Array {
@@ -65,6 +66,10 @@ const reads: { id: string; offset: number; length: number }[] = [];
 const selectionRequests: SelectionRequest[] = [];
 const discoveryRequests: SelectionRequest[] = [];
 const acceptanceRequests: unknown[] = [];
+const dispositionRequests:any[]=[];
+let persistedOutcome:any=null;
+let disposition:any=null;
+let restoreFailure=false, restoreLostResponse=false, restoredRequest:string|null=null;
 const patchDecisions: any[] = [];
 const resumeRequests: unknown[] = [];
 const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash" };
@@ -99,6 +104,24 @@ function anchored(conversion: string): AnchoredMarkdown {
   };
 }
 function handle(command: string, payload: any): any {
+  if(command==="list_discovery_runs")return persistedOutcome?[{
+    run_id:persistedOutcome.run.run_id,artifact_id:"md",artifact_name:"数学笔记.md",conversion_id:"conversion",input_fingerprint:"test-input",result_fingerprint:persistedOutcome.review.result_fingerprint,pipeline_version:"test",status:"completed",review_status:disposition?.disposition==="discarded"?"discarded":"reviewable",profile_id:"test",unit_count:2,fact_count:2,pending_task_count:0,unresolved_reference_count:1,relation_count:1,created_at:"test",updated_at:"test",registrations:[],disposition,
+  }]:[];
+  if(command==="list_discovery_registrations")return [];
+  if(command==="get_discovery_review") {
+    const outcome=structuredClone(persistedOutcome);
+    if(disposition?.disposition==="discarded") {outcome.review.acceptance.state="blocked";outcome.review.units.forEach((u:any)=>u.acceptance="blocked");}
+    return {run_id:outcome.run.run_id,review_status:disposition?.disposition==="discarded"?"discarded":"reviewable",created_at:"test",updated_at:"test",outcome,registrations:[],disposition};
+  }
+  if(command==="discard_discovery_run"||command==="restore_discovery_review") {
+    const r=payload.request;dispositionRequests.push({command,request:r});
+    if(command==="restore_discovery_review"&&restoreFailure)throw new Error("原文不可读取，恢复验证失败");
+    if(command==="restore_discovery_review"&&restoredRequest===r.request_id)return disposition;
+    if(r.expected_disposition_request_id!==(disposition?.request_id??null))throw new Error("disposition_conflict");
+    disposition={run_id:r.run_id,request_id:r.request_id,disposition:command==="restore_discovery_review"?"restored":"discarded",actor:"test",reason:r.reason,decided_at:"test",previous_request_id:r.expected_disposition_request_id};
+    if(command==="restore_discovery_review") {restoredRequest=r.request_id;if(restoreLostResponse){restoreLostResponse=false;throw new Error("响应丢失");}}
+    return disposition;
+  }
   if (command === "get_pending_markdown_patch_review") {
     return behavior.pendingPatchStatus === null ? null : patchReview(behavior.pendingPatchStatus);
   }
@@ -282,6 +305,12 @@ const discoveryOutcome = () => handle("run_discovery", {
 
 const reader = new ArtifactReader(document.querySelector<HTMLElement>("#reader")!);
 mountReviewWorkspace(document.querySelector<HTMLElement>("#review-workspace")!);
+const ledger=new DiscoveryLedgerController(document.querySelector<HTMLElement>("#discovery-ledger")!,document.querySelector<HTMLButtonElement>("#refresh-ledger")!,{getSnapshot:()=>undefined,showToast:(text)=>document.querySelector("#ledger-toast")!.textContent=text});
+async function prepareRecovery():Promise<void> {
+  persistedOutcome=await discoveryOutcome();
+  disposition={run_id:persistedOutcome.run.run_id,request_id:"mathscape:test/discarded",disposition:"discarded",actor:"test",reason:"放弃",decided_at:"test",previous_request_id:null};
+  await ledger.loadDiscoveryRuns();
+}
 window.addEventListener("mathscape:open-source", event => {
   const detail = (event as CustomEvent).detail;
   void reader.open(detail.artifactId, detail.title, {
@@ -290,5 +319,5 @@ window.addEventListener("mathscape:open-source", event => {
   });
 });
 Object.assign(window, {
-  harness: { ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
 });

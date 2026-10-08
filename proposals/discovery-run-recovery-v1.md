@@ -134,7 +134,7 @@ discovery_run_dispositions(
 
 阅读器中暂时可以保留当前内嵌结果，但不再把它作为唯一入口。
 
-- [ ] TODO：对已放弃但未登记的 run 提供“恢复审核”，保留放弃历史、追加恢复审计，不重新调用 LLM 或自动入图；仍走正常原文重绑定与接受验证。具体边界见[撤回提案中的恢复审核 TODO](discovery-registration-reversal-v1.md)。当前实现仍禁止接受已放弃 run，此项尚未实现。
+- [x] 已实现“恢复审核”：对已放弃但未登记的 run 保留放弃历史、追加恢复审计，不重新调用 LLM 或自动入图；仍走正常原文重绑定与接受验证。具体状态、并发及迁移契约见[撤回提案中的恢复审核](discovery-registration-reversal-v1.md)。未完成独立恢复的 discarded run 仍禁止接受。
 
 ## 7. 验收标准
 

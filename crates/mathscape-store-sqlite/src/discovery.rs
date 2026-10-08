@@ -116,6 +116,7 @@ pub struct StoredDiscoveryRunSummary {
     pub status: DiscoveryCheckpointStatus,
     pub review_status: String,
     pub registrations: Vec<mathscape_domain::RegistrationSummary>,
+    pub disposition: Option<DiscoveryRunDispositionReceipt>,
     pub profile_id: String,
     pub unit_count: usize,
     pub fact_count: usize,
@@ -134,6 +135,8 @@ pub struct DiscoveryRunDispositionReceipt {
     pub actor: ActorRef,
     pub reason: String,
     pub decided_at: Timestamp,
+    #[serde(default)]
+    pub previous_request_id: Option<StableId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -574,7 +577,7 @@ pub(super) fn list_discovery_run_summaries(
                 EXISTS(SELECT 1 FROM source_registration_commits c
                        JOIN discovery_acceptance_decisions a ON a.decision_id = c.decision_id
                        WHERE a.run_id = d.run_id),
-                EXISTS(SELECT 1 FROM discovery_run_dispositions x WHERE x.run_id = d.run_id)
+                EXISTS(SELECT 1 FROM discovery_run_dispositions x WHERE x.run_id = d.run_id AND x.disposition='discarded')
          FROM discovery_runs d
          JOIN artifacts a ON a.artifact_id = d.artifact_id
          JOIN artifact_revisions ar ON ar.artifact_id = a.artifact_id
@@ -665,7 +668,7 @@ pub(super) fn list_discovery_run_summaries(
             }
         };
         Ok(StoredDiscoveryRunSummary {
-            run_id: StableId::parse(run_id)?,
+            run_id: StableId::parse(&run_id)?,
             artifact_id: StableId::parse(artifact_id)?,
             artifact_name,
             conversion_id: conversion_id.map(StableId::parse).transpose()?,
@@ -675,6 +678,10 @@ pub(super) fn list_discovery_run_summaries(
             status,
             review_status: review_status.into(),
             registrations,
+            disposition: super::run_disposition::current_disposition(
+                connection,
+                &StableId::parse(&run_id)?,
+            )?,
             profile_id,
             unit_count: usize::try_from(unit_count).map_err(|_| {
                 SqliteStoreError::InvalidStoredValue {
@@ -722,97 +729,36 @@ pub(super) fn discard_discovery_run(
     reason: &str,
     decided_at: &Timestamp,
 ) -> Result<DiscoveryRunDispositionReceipt, SqliteStoreError> {
-    if reason.trim().is_empty() {
-        return Err(SqliteStoreError::DiscoveryInvariant(
-            "discovery run disposition reason cannot be blank".into(),
-        ));
-    }
-    let transaction =
-        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let row = transaction
+    // Compatibility entry for non-UI callers. Desktop supplies its explicit
+    // current request id instead, so a stale window cannot change a new cycle.
+    let past: Option<Option<String>> = connection
         .query_row(
-            "SELECT result_fingerprint, status FROM discovery_runs WHERE run_id = ?1",
-            [run_id.as_str()],
-            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+            "SELECT previous_request_id FROM discovery_run_disposition_events WHERE request_id=?1",
+            [request_id.as_str()],
+            |r| r.get(0),
         )
         .optional()?;
-    let Some((stored_result, status)) = row else {
-        return Err(SqliteStoreError::DiscoveryInvariant(
-            "discovery run does not exist".into(),
-        ));
+    let previous = match past {
+        Some(previous) => previous.map(StableId::parse).transpose()?,
+        None => {
+            super::run_disposition::current_disposition(connection, run_id)?.map(|r| r.request_id)
+        }
     };
-    if stored_result.as_deref() != Some(expected_result_fingerprint.as_str()) {
-        return Err(SqliteStoreError::DiscoveryInvariant(
-            "discovery result fingerprint is stale".into(),
-        ));
-    }
-    if matches!(
-        parse_status(&status)?,
-        DiscoveryCheckpointStatus::Running | DiscoveryCheckpointStatus::AwaitingPatchReview
-    ) {
-        return Err(SqliteStoreError::DiscoveryInvariant(
-            "a running or patch-paused discovery run cannot be discarded here".into(),
-        ));
-    }
-    let registered: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM source_registration_commits c JOIN discovery_acceptance_decisions a ON a.decision_id=c.decision_id WHERE a.run_id = ?1)",
-        [run_id.as_str()],
-        |row| row.get(0),
-    )?;
-    if registered {
-        return Err(SqliteStoreError::DiscoveryInvariant(
-            "a registered discovery run must use registration reversal".into(),
-        ));
-    }
-    if let Some(existing) = transaction
-        .query_row(
-            "SELECT run_id, disposition, reason, actor, request_id, decided_at
-             FROM discovery_run_dispositions WHERE run_id = ?1",
-            [run_id.as_str()],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                ))
-            },
-        )
-        .optional()?
-    {
-        transaction.commit()?;
-        return Ok(DiscoveryRunDispositionReceipt {
-            run_id: StableId::parse(existing.0)?,
-            disposition: existing.1,
-            request_id: StableId::parse(existing.4)?,
-            actor: ActorRef::parse(existing.3)?,
-            reason: existing.2,
-            decided_at: Timestamp::parse(existing.5)?,
-        });
-    }
-    transaction.execute(
-        "INSERT INTO discovery_run_dispositions
-         (run_id, disposition, reason, actor, request_id, decided_at)
-         VALUES (?1, 'discarded', ?2, ?3, ?4, ?5)",
-        params![
-            run_id.as_str(),
-            reason,
-            actor.as_str(),
-            request_id.as_str(),
-            decided_at.as_str(),
-        ],
-    )?;
-    transaction.commit()?;
-    Ok(DiscoveryRunDispositionReceipt {
+    let request = mathscape_domain::DiscoveryDispositionRequest {
         run_id: run_id.clone(),
-        disposition: "discarded".into(),
         request_id: request_id.clone(),
-        actor: actor.clone(),
+        expected_result_fingerprint: expected_result_fingerprint.clone(),
+        expected_disposition_request_id: previous,
         reason: reason.into(),
-        decided_at: decided_at.clone(),
-    })
+    };
+    super::run_disposition::change_disposition(
+        connection,
+        &request,
+        "discarded",
+        actor,
+        decided_at,
+        None,
+    )
 }
 
 pub(super) fn save_registration_plan(
@@ -840,7 +786,7 @@ pub(super) fn save_registration_plan(
         ));
     }
     let discarded: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM discovery_run_dispositions WHERE run_id = ?1)",
+        "SELECT EXISTS(SELECT 1 FROM discovery_run_dispositions WHERE run_id = ?1 AND disposition='discarded')",
         [record.run_id.as_str()],
         |row| row.get(0),
     )?;

@@ -189,4 +189,5 @@ export interface ReviewRunMeta {
   created_at?: string;
   updated_at?: string;
   registrations?: import("../discovery/registration-types").RegistrationSummary[];
+  disposition?: import("../discovery/types").DiscoveryDispositionReceipt|null;
 }

@@ -9,7 +9,7 @@ fn invalid(message: impl Into<String>) -> SqliteStoreError {
     SqliteStoreError::SourceRegistrationInvariant(message.into())
 }
 pub(crate) fn ensure_not_discarded(c: &Connection, decision: &str) -> Result<(), SqliteStoreError> {
-    let discarded: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM discovery_run_dispositions x JOIN discovery_acceptance_decisions a ON a.run_id=x.run_id WHERE a.decision_id=?1)",[decision],|r|r.get(0))?;
+    let discarded: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM discovery_run_dispositions x JOIN discovery_acceptance_decisions a ON a.run_id=x.run_id WHERE a.decision_id=?1 AND x.disposition='discarded')",[decision],|r|r.get(0))?;
     if discarded {
         return Err(invalid("run_discarded: 已放弃的结果不能登记"));
     }
@@ -130,7 +130,7 @@ impl SqliteArtifactStore {
         &self,
         run: &str,
     ) -> Result<Vec<String>, SqliteStoreError> {
-        let mut q=self.connection.prepare("SELECT a.decision_id FROM discovery_acceptance_decisions a LEFT JOIN source_registration_commits c ON c.decision_id=a.decision_id WHERE a.run_id=?1 AND c.decision_id IS NULL AND NOT EXISTS(SELECT 1 FROM discovery_run_dispositions x WHERE x.run_id=a.run_id) ORDER BY a.decision_id")?;
+        let mut q=self.connection.prepare("SELECT a.decision_id FROM discovery_acceptance_decisions a LEFT JOIN source_registration_commits c ON c.decision_id=a.decision_id WHERE a.run_id=?1 AND c.decision_id IS NULL AND NOT EXISTS(SELECT 1 FROM discovery_run_dispositions x WHERE x.run_id=a.run_id AND x.disposition='discarded') ORDER BY a.decision_id")?;
         Ok(q.query_map([run], |r| r.get(0))?
             .collect::<Result<Vec<_>, _>>()?)
     }

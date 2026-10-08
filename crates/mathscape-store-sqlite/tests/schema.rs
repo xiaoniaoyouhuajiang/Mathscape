@@ -146,7 +146,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 1",
@@ -362,7 +362,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::prepare(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 11
+            supported: 12
         })
     ));
     cleanup(&directory);
@@ -383,7 +383,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -421,7 +421,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 3",
@@ -457,7 +457,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        11
+        12
     );
     assert_eq!(
         connection
@@ -510,7 +510,7 @@ fn repairs_a_v5_discovery_schema_missing_result_fingerprint() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        11
+        12
     );
     let has_result_fingerprint = connection
         .prepare("PRAGMA table_info(discovery_runs)")
@@ -765,6 +765,208 @@ fn discarding_a_run_is_idempotent_and_blocks_acceptance() {
 }
 
 #[test]
+fn restoring_review_preserves_audit_cycles_and_rejects_stale_decisions() {
+    let directory = test_directory("restore-review");
+    let database = directory.join("catalog.sqlite3");
+    let mut store = SqliteArtifactStore::prepare(&database).unwrap();
+    let artifact = StableId::parse("mathscape:artifact/restore").unwrap();
+    insert_fixture_artifact(&database, &artifact, &hash('a'));
+    let run = StableId::parse("mathscape:run/restore").unwrap();
+    Connection::open(&database).unwrap().execute("INSERT INTO artifact_revisions(artifact_id,revision_id,media_type,rights_status,permitted_uses,schema_version,lifecycle,created_at,created_by) VALUES(?1,?2,'text/markdown','not_assessed','[]','mathscape-source-1','active','unix:1','reviewer')",rusqlite::params![artifact.as_str(),hash('f').as_str()]).unwrap();
+    let checkpoint = discovery_checkpoint(run.clone(), artifact);
+    store.save_discovery_checkpoint(&checkpoint).unwrap();
+    let actor = ActorRef::parse("reviewer").unwrap();
+    let time = Timestamp::parse("unix:1").unwrap();
+    let discard = mathscape_domain::DiscoveryDispositionRequest {
+        run_id: run.clone(),
+        request_id: StableId::parse("mathscape:decision/discard-1").unwrap(),
+        expected_result_fingerprint: hash('4'),
+        expected_disposition_request_id: None,
+        reason: "放弃".into(),
+    };
+    let first = store
+        .discard_discovery_run_checked(&discard, &actor, &time)
+        .unwrap();
+    let restore = mathscape_domain::DiscoveryDispositionRequest {
+        request_id: StableId::parse("mathscape:decision/restore-1").unwrap(),
+        expected_disposition_request_id: Some(first.request_id.clone()),
+        reason: "恢复".into(),
+        ..discard.clone()
+    };
+    let mut wrong = checkpoint.clone();
+    wrong.snapshot = json!({"not":"the validated checkpoint"});
+    assert!(
+        store
+            .restore_discovery_review(&restore, &actor, &time, &wrong)
+            .unwrap_err()
+            .to_string()
+            .contains("checkpoint_conflict")
+    );
+    assert!(store.discovery_run_is_discarded(&run).unwrap());
+    assert_eq!(store.discovery_disposition_history(&run).unwrap().len(), 1);
+    let restored = store
+        .restore_discovery_review(&restore, &actor, &time, &checkpoint)
+        .unwrap();
+    assert_eq!(restored.disposition, "restored");
+    assert!(!store.discovery_run_is_discarded(&run).unwrap());
+    let pending = AcceptedRegistrationPlanRecord {
+        decision_id: StableId::parse("mathscape:acceptance/restored-pending").unwrap(),
+        run_id: run.clone(),
+        actor: actor.clone(),
+        decided_at: time.clone(),
+        authority: StoredAcceptanceAuthority::HumanReview,
+        expected_result_fingerprint: hash('4'),
+        selection: json!({"kind":"all_validated"}),
+        plan_fingerprint: hash('5'),
+        plan: json!({"version":"fixture"}),
+    };
+    store.save_registration_plan(&pending).unwrap();
+    assert_eq!(
+        store
+            .pending_registration_decisions(run.as_str())
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .discovery_checkpoint(&run)
+            .unwrap()
+            .unwrap()
+            .checkpoint,
+        checkpoint
+    );
+    assert_eq!(store.map_objects().unwrap().len(), 0);
+    assert_eq!(
+        store
+            .restore_discovery_review(&restore, &actor, &time, &checkpoint)
+            .unwrap(),
+        restored
+    );
+    let second = mathscape_domain::DiscoveryDispositionRequest {
+        request_id: StableId::parse("mathscape:decision/discard-2").unwrap(),
+        expected_disposition_request_id: Some(restored.request_id.clone()),
+        ..discard.clone()
+    };
+    let second_receipt = store
+        .discard_discovery_run_checked(&second, &actor, &time)
+        .unwrap();
+    assert!(store.discovery_run_is_discarded(&run).unwrap());
+    assert_eq!(
+        store
+            .restore_discovery_review(&restore, &actor, &time, &checkpoint)
+            .unwrap(),
+        restored
+    ); // replay is historical, never changes current pointer
+    let stale = mathscape_domain::DiscoveryDispositionRequest {
+        request_id: StableId::parse("mathscape:decision/stale").unwrap(),
+        ..restore.clone()
+    };
+    assert!(
+        store
+            .restore_discovery_review(&stale, &actor, &time, &checkpoint)
+            .unwrap_err()
+            .to_string()
+            .contains("disposition_conflict")
+    );
+    let mut conflict = restore.clone();
+    conflict.reason = "different".into();
+    assert!(
+        store
+            .restore_discovery_review(&conflict, &actor, &time, &checkpoint)
+            .unwrap_err()
+            .to_string()
+            .contains("idempotency_conflict")
+    );
+    let fresh = mathscape_domain::DiscoveryDispositionRequest {
+        request_id: StableId::parse("mathscape:decision/restore-2").unwrap(),
+        expected_disposition_request_id: Some(second_receipt.request_id),
+        ..restore
+    };
+    store
+        .restore_discovery_review(&fresh, &actor, &time, &checkpoint)
+        .unwrap();
+    assert_eq!(
+        store
+            .discovery_disposition_history(&run)
+            .unwrap()
+            .iter()
+            .map(|r| r.disposition.as_str())
+            .collect::<Vec<_>>(),
+        ["discarded", "restored", "discarded", "restored"]
+    );
+    assert_eq!(
+        store.list_discovery_run_summaries(None).unwrap()[0].review_status,
+        "accepted"
+    );
+    drop(store);
+    let reopened = SqliteArtifactStore::open(&database).unwrap();
+    assert!(!reopened.discovery_run_is_discarded(&run).unwrap());
+    assert_eq!(
+        reopened.discovery_disposition_history(&run).unwrap().len(),
+        4
+    );
+    cleanup(&directory);
+}
+
+#[test]
+fn restoring_review_is_atomic_and_v11_discard_migrates_to_history() {
+    let directory = test_directory("restore-migration");
+    let database = directory.join("catalog.sqlite3");
+    let mut store = SqliteArtifactStore::prepare(&database).unwrap();
+    let artifact = StableId::parse("mathscape:artifact/restore-migration").unwrap();
+    insert_fixture_artifact(&database, &artifact, &hash('a'));
+    let run = StableId::parse("mathscape:run/restore-migration").unwrap();
+    let cp = discovery_checkpoint(run.clone(), artifact);
+    store.save_discovery_checkpoint(&cp).unwrap();
+    let actor = ActorRef::parse("reviewer").unwrap();
+    let time = Timestamp::parse("unix:1").unwrap();
+    let discard = StableId::parse("mathscape:decision/discard-old").unwrap();
+    store
+        .discard_discovery_run(&run, &discard, &hash('4'), &actor, "old discard", &time)
+        .unwrap();
+    drop(store);
+    let sql = Connection::open(&database).unwrap();
+    sql.execute_batch("PRAGMA foreign_keys=OFF; ALTER TABLE discovery_run_dispositions RENAME TO temp_dispositions; CREATE TABLE discovery_run_dispositions(run_id TEXT PRIMARY KEY,disposition TEXT NOT NULL CHECK(disposition='discarded'),reason TEXT NOT NULL,actor TEXT NOT NULL,request_id TEXT NOT NULL UNIQUE,decided_at TEXT NOT NULL); INSERT INTO discovery_run_dispositions SELECT * FROM temp_dispositions; DROP TABLE temp_dispositions; DROP TABLE discovery_run_disposition_events; CREATE INDEX discovery_run_dispositions_by_decision ON discovery_run_dispositions(request_id); DELETE FROM schema_migrations WHERE version=12; PRAGMA user_version=11;").unwrap();
+    drop(sql);
+    let mut store = SqliteArtifactStore::prepare(&database).unwrap();
+    assert_eq!(store.discovery_disposition_history(&run).unwrap().len(), 1);
+    assert!(store.discovery_run_is_discarded(&run).unwrap());
+    let request = mathscape_domain::DiscoveryDispositionRequest {
+        run_id: run.clone(),
+        request_id: StableId::parse("mathscape:decision/restore-migrated").unwrap(),
+        expected_result_fingerprint: hash('4'),
+        expected_disposition_request_id: Some(discard),
+        reason: "restore".into(),
+    };
+    let sql = Connection::open(&database).unwrap();
+    sql.execute_batch("CREATE TRIGGER fail_restore BEFORE UPDATE ON discovery_run_dispositions BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+    assert!(
+        store
+            .restore_discovery_review(&request, &actor, &time, &cp)
+            .is_err()
+    );
+    assert_eq!(store.discovery_disposition_history(&run).unwrap().len(), 1);
+    assert!(store.discovery_run_is_discarded(&run).unwrap());
+    sql.execute_batch("DROP TRIGGER fail_restore;").unwrap();
+    store
+        .restore_discovery_review(&request, &actor, &time, &cp)
+        .unwrap();
+    assert_eq!(store.discovery_disposition_history(&run).unwrap().len(), 2);
+    assert_eq!(
+        sql.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r
+            .get::<_, i64>(
+            0
+        ))
+        .unwrap(),
+        0
+    );
+    drop(sql);
+    drop(store);
+    cleanup(&directory);
+}
+
+#[test]
 fn only_a_run_awaiting_patch_review_moves_onto_a_patched_snapshot() {
     let directory = test_directory("patch-review-rebind");
     let database = directory.join("catalog.sqlite3");
@@ -860,10 +1062,11 @@ fn upgrading_to_v10_preserves_discovery_runs_and_their_children() {
              CREATE INDEX discovery_runs_by_source
                 ON discovery_runs(artifact_id, input_fingerprint, updated_at);
              DROP TABLE discovery_run_dispositions;
+             DROP TABLE discovery_run_disposition_events;
              DROP TABLE source_registration_requests;
              DROP TABLE discovery_registration_reversals;
              DROP INDEX map_commit_objects_by_object;
-             DELETE FROM schema_migrations WHERE version IN (9, 10, 11);
+             DELETE FROM schema_migrations WHERE version IN (9, 10, 11, 12);
              PRAGMA user_version = 8;
              COMMIT;",
         )
@@ -885,7 +1088,7 @@ fn upgrading_to_v10_preserves_discovery_runs_and_their_children() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        11
+        12
     );
     let violations = connection
         .prepare("PRAGMA foreign_key_check")
