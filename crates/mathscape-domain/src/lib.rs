@@ -9,6 +9,7 @@ mod discovery_proposal;
 mod entity;
 mod error;
 mod id;
+mod ink;
 mod map_edit;
 mod markdown_patch;
 mod patch;
@@ -27,6 +28,7 @@ pub use entity::{
 };
 pub use error::DomainError;
 pub use id::{ActorRef, CommitId, ContentHash, RevisionId, SchemaVersion, StableId, Timestamp};
+pub use ink::*;
 pub use map_edit::*;
 pub use markdown_patch::*;
 pub use patch::{MapOperation, MapPatch};

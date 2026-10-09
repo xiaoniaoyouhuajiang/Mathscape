@@ -12,20 +12,27 @@
     "tauri:dev": "cd ../apps/mathscape-desktop && ../../frontend/node_modules/.bin/tauri dev",
     "tauri:dev:local_1": "cd ../apps/mathscape-desktop && MATHSCAPE_WORKSPACE_ROOT=\"$PWD/../../.mathscape-dev/workspace\" ../../frontend/node_modules/.bin/tauri dev",
     "tauri:dev:local_2": "cd ../apps/mathscape-desktop && MATHSCAPE_WORKSPACE_ROOT=\"$PWD/../../.mathscape-dev/workspace2\" ../../frontend/node_modules/.bin/tauri dev",
-    "tauri:build": "cd ../apps/mathscape-desktop && ../../frontend/node_modules/.bin/tauri build"
+    "tauri:build": "cd ../apps/mathscape-desktop && ../../frontend/node_modules/.bin/tauri build",
+    "ink:build": "tsc --noEmit && vite build --config vite.ink.config.ts && vite build --config vite.ink.config.ts --mode contract",
+    "ink:lab": "npm run ink:build && node scripts/ink-lab-server.mjs",
+    "test:ink-server": "npm run ink:build && node --test tests/ink-server.test.mjs",
+    "test:ink-browser": "npm run ink:build && playwright test --config playwright.ink.config.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
     "cytoscape": "3.34.2",
     "katex": "0.18.6",
     "markdown-it": "14.3.1",
-    "pdfjs-dist": "6.3.289"
+    "pdfjs-dist": "6.3.289",
+    "perfect-freehand": "1.2.3",
+    "qrcode": "1.5.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@tauri-apps/cli": "2.11.4",
     "@types/katex": "^0.16.7",
     "@types/markdown-it": "^14.1.2",
+    "@types/qrcode": "1.5.6",
     "typescript": "7.0.2",
     "vite": "8.2.2",
     "vitest": "^5.0.2"

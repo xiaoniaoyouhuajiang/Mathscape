@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
-  testIgnore: ["**/unit/**"],
+  testIgnore: ["**/unit/**", "**/ink-lab.spec.ts", "**/ink-server.test.mjs"],
   outputDir: "../.test-runs/reader",
   use: {
     baseURL: "http://127.0.0.1:1431",

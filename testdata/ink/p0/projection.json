@@ -1,0 +1,12 @@
+{
+  "visible_stroke_ids": [
+    "stroke-a",
+    "stroke-c"
+  ],
+  "undo": [
+    "cmd-a",
+    "cmd-c"
+  ],
+  "redo": [],
+  "point_count": 7
+}

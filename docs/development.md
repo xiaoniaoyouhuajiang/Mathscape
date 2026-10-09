@@ -11,6 +11,14 @@ npm --prefix frontend run tauri:dev:local
 
 该命令使用被忽略的 `.mathscape-dev/workspace/`。普通 `tauri:dev` 使用应用数据目录；可用 `MATHSCAPE_WORKSPACE_ROOT` 显式指定。Marker 为可选外部安装，通过 `MATHSCAPE_MARKER_EXECUTABLE` 指向绝对 `marker_single` 路径；模型连接在桌面设置页配置。
 
+手写 P0 原型使用独立 Ink Lab，不需要运行 Tauri、Marker 或模型服务：
+
+```sh
+npm --prefix frontend run ink:lab
+```
+
+打开终端打印的电脑页面，选择与平板同一局域网的地址并扫码。画板支持即时书写、擦除与撤销，手动下载/导入 Ink JSON，也可把完整文件保存到 `.mathscape-dev/ink-lab/exports/`。画板会保留 `#session` 临时凭据并在首次连接失败时自动重试；右上角显示“电脑可连接”后再保存。这是一条实验文件路径，不写入 Workspace 或来源图；自动保存与断线恢复尚未实现。端口默认 1440，可用 `INK_LAB_PORT` 修改。详细操作和设备实验步骤见 [Ink Lab](../frontend/ink-lab/README.md)。
+
 ## 验证与测试入口
 
 按改动选择检查，不为纯文档调整运行整套应用：
@@ -23,6 +31,8 @@ cargo test -p mathscape-desktop --test service
 npm --prefix frontend run build
 npm --prefix frontend run test:reader
 ```
+
+Ink Lab 验证使用 `cargo test -p mathscape-domain --test ink_lab`、`npm --prefix frontend run test:unit`、`npm --prefix frontend run test:ink-server` 和 `npm --prefix frontend run test:ink-browser`。Ink 浏览器测试使用独立打包页面与真实实验服务，默认端口 1451；仍不代表物理 S Pen 或实际 Tauri WebView 的采样质量。
 
 需要全量 Rust 回归时运行 `cargo test --workspace`。浏览器测试初次需在 `frontend/` 执行 `npx playwright install chromium`，也可指定 `PLAYWRIGHT_CHROMIUM_EXECUTABLE`。脚本与测试配置以 [package.json](../frontend/package.json) 和 [Playwright 配置](../frontend/playwright.config.ts) 为准。
 

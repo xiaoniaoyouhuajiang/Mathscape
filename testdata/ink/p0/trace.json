@@ -1,0 +1,211 @@
+{
+  "version": "mathscape-ink-lab-1",
+  "document_id": "fixture-document",
+  "title": "Synthetic ink trace",
+  "created_at": "2026-10-09T01:00:00.000Z",
+  "exported_at": "2026-10-09T01:20:00.000Z",
+  "pages": [
+    {
+      "id": "page-a",
+      "width": 1200,
+      "height": 1600
+    },
+    {
+      "id": "page-b",
+      "width": 1200,
+      "height": 1600
+    }
+  ],
+  "capture_segments": [
+    {
+      "id": "segment-a",
+      "started_at": "2026-10-09T01:00:00.000Z",
+      "user_agent": "Synthetic Ink Lab fixture; no device measurement",
+      "secure_context": false,
+      "coalesced_events": false,
+      "pointer_raw_update": false,
+      "device_pixel_ratio": 2,
+      "time_origin_ms": 1791507600000,
+      "pressure_capability": "unknown",
+      "tilt_capability": "unknown"
+    },
+    {
+      "id": "segment-b",
+      "started_at": "2026-10-09T01:00:00.000Z",
+      "user_agent": "Synthetic Ink Lab fixture; no device measurement",
+      "secure_context": false,
+      "coalesced_events": false,
+      "pointer_raw_update": false,
+      "device_pixel_ratio": 2,
+      "time_origin_ms": 1791507610000,
+      "pressure_capability": "unknown",
+      "tilt_capability": "unknown"
+    }
+  ],
+  "operations": [
+    {
+      "kind": "stroke",
+      "command_id": "cmd-a",
+      "stroke": {
+        "id": "stroke-a",
+        "page_id": "page-a",
+        "capture_segment_id": "segment-a",
+        "pointer_type": "pen",
+        "status": "completed",
+        "brush": {
+          "renderer": "perfect-freehand@1.2.3",
+          "color": "#193a66",
+          "width": 4,
+          "smoothing": 0.35,
+          "streamline": 0.15,
+          "thinning": 0.4,
+          "simulate_pressure": false
+        },
+        "points": [
+          {
+            "x": 100,
+            "y": 100,
+            "t_us": 100000,
+            "pressure": 0.3,
+            "tilt_x_deg": 0,
+            "tilt_y_deg": 0,
+            "buttons": 1
+          },
+          {
+            "x": 130,
+            "y": 140,
+            "t_us": 110000,
+            "pressure": 0.7,
+            "tilt_x_deg": 0,
+            "tilt_y_deg": 0,
+            "buttons": 1
+          },
+          {
+            "x": 170,
+            "y": 100,
+            "t_us": 120000,
+            "pressure": 0.4,
+            "tilt_x_deg": 0,
+            "tilt_y_deg": 0,
+            "buttons": 1
+          }
+        ]
+      },
+      "seq": 1
+    },
+    {
+      "kind": "stroke",
+      "command_id": "cmd-b",
+      "stroke": {
+        "id": "stroke-b",
+        "page_id": "page-b",
+        "capture_segment_id": "segment-b",
+        "pointer_type": "mouse",
+        "status": "interrupted",
+        "brush": {
+          "renderer": "perfect-freehand@1.2.3",
+          "color": "#193a66",
+          "width": 4,
+          "smoothing": 0.35,
+          "streamline": 0.15,
+          "thinning": 0.4,
+          "simulate_pressure": false
+        },
+        "points": [
+          {
+            "x": -2,
+            "y": 200,
+            "t_us": 10000,
+            "pressure": null,
+            "tilt_x_deg": null,
+            "tilt_y_deg": null,
+            "buttons": 1
+          },
+          {
+            "x": 80,
+            "y": 250,
+            "t_us": 20000,
+            "pressure": null,
+            "tilt_x_deg": null,
+            "tilt_y_deg": null,
+            "buttons": 1
+          },
+          {
+            "x": 120,
+            "y": 200,
+            "t_us": 30000,
+            "pressure": null,
+            "tilt_x_deg": null,
+            "tilt_y_deg": null,
+            "buttons": 1
+          }
+        ]
+      },
+      "seq": 2
+    },
+    {
+      "kind": "erase",
+      "command_id": "cmd-erase",
+      "stroke_ids": [
+        "stroke-a"
+      ],
+      "seq": 3
+    },
+    {
+      "kind": "undo",
+      "command_id": "cmd-undo1",
+      "target_command_id": "cmd-erase",
+      "seq": 4
+    },
+    {
+      "kind": "redo",
+      "command_id": "cmd-redo1",
+      "target_command_id": "cmd-erase",
+      "seq": 5
+    },
+    {
+      "kind": "undo",
+      "command_id": "cmd-undo2",
+      "target_command_id": "cmd-erase",
+      "seq": 6
+    },
+    {
+      "kind": "undo",
+      "command_id": "cmd-undo3",
+      "target_command_id": "cmd-b",
+      "seq": 7
+    },
+    {
+      "kind": "stroke",
+      "command_id": "cmd-c",
+      "stroke": {
+        "id": "stroke-c",
+        "page_id": "page-a",
+        "capture_segment_id": "segment-b",
+        "pointer_type": "pen",
+        "status": "cancelled",
+        "brush": {
+          "renderer": "perfect-freehand@1.2.3",
+          "color": "#193a66",
+          "width": 4,
+          "smoothing": 0.35,
+          "streamline": 0.15,
+          "thinning": 0.4,
+          "simulate_pressure": false
+        },
+        "points": [
+          {
+            "x": 210,
+            "y": 220,
+            "t_us": 40000,
+            "pressure": 0.5,
+            "tilt_x_deg": 0,
+            "tilt_y_deg": 0,
+            "buttons": 1
+          }
+        ]
+      },
+      "seq": 8
+    }
+  ]
+}

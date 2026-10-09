@@ -1,0 +1,397 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InkLabDocument",
+  "type": "object",
+  "properties": {
+    "capture_segments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/InkLabCaptureSegment"
+      }
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "document_id": {
+      "type": "string"
+    },
+    "exported_at": {
+      "type": "string"
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/InkLabOperation"
+      }
+    },
+    "pages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/InkLabPage"
+      }
+    },
+    "title": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "document_id",
+    "title",
+    "created_at",
+    "exported_at",
+    "pages",
+    "capture_segments",
+    "operations"
+  ],
+  "$defs": {
+    "InkLabBrush": {
+      "type": "object",
+      "properties": {
+        "color": {
+          "type": "string"
+        },
+        "renderer": {
+          "type": "string"
+        },
+        "simulate_pressure": {
+          "type": "boolean"
+        },
+        "smoothing": {
+          "type": "number",
+          "format": "double"
+        },
+        "streamline": {
+          "type": "number",
+          "format": "double"
+        },
+        "thinning": {
+          "type": "number",
+          "format": "double"
+        },
+        "width": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "renderer",
+        "color",
+        "width",
+        "smoothing",
+        "streamline",
+        "thinning",
+        "simulate_pressure"
+      ]
+    },
+    "InkLabCapability": {
+      "type": "string",
+      "enum": [
+        "unknown"
+      ]
+    },
+    "InkLabCaptureSegment": {
+      "type": "object",
+      "properties": {
+        "coalesced_events": {
+          "type": "boolean"
+        },
+        "device_pixel_ratio": {
+          "type": "number",
+          "format": "double"
+        },
+        "id": {
+          "type": "string"
+        },
+        "pointer_raw_update": {
+          "type": "boolean"
+        },
+        "pressure_capability": {
+          "$ref": "#/$defs/InkLabCapability"
+        },
+        "secure_context": {
+          "type": "boolean"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "tilt_capability": {
+          "$ref": "#/$defs/InkLabCapability"
+        },
+        "time_origin_ms": {
+          "type": "number",
+          "format": "double"
+        },
+        "user_agent": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "started_at",
+        "user_agent",
+        "secure_context",
+        "coalesced_events",
+        "pointer_raw_update",
+        "device_pixel_ratio",
+        "time_origin_ms",
+        "pressure_capability",
+        "tilt_capability"
+      ]
+    },
+    "InkLabOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "command_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "stroke"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "stroke": {
+              "$ref": "#/$defs/InkLabStroke"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "seq",
+            "command_id",
+            "stroke"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "erase"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "stroke_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "seq",
+            "command_id",
+            "stroke_ids"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "undo"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "target_command_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "seq",
+            "command_id",
+            "target_command_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "redo"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "target_command_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "seq",
+            "command_id",
+            "target_command_id"
+          ]
+        }
+      ]
+    },
+    "InkLabPage": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "number",
+          "format": "double"
+        },
+        "id": {
+          "type": "string"
+        },
+        "width": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "width",
+        "height"
+      ]
+    },
+    "InkLabPoint": {
+      "type": "object",
+      "properties": {
+        "buttons": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "pressure": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "t_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tilt_x_deg": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "tilt_y_deg": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "t_us",
+        "pressure",
+        "tilt_x_deg",
+        "tilt_y_deg",
+        "buttons"
+      ]
+    },
+    "InkLabPointerType": {
+      "type": "string",
+      "enum": [
+        "pen",
+        "mouse",
+        "touch",
+        "unknown"
+      ]
+    },
+    "InkLabStroke": {
+      "type": "object",
+      "properties": {
+        "brush": {
+          "$ref": "#/$defs/InkLabBrush"
+        },
+        "capture_segment_id": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "page_id": {
+          "type": "string"
+        },
+        "pointer_type": {
+          "$ref": "#/$defs/InkLabPointerType"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InkLabPoint"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/InkLabStrokeStatus"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "page_id",
+        "capture_segment_id",
+        "pointer_type",
+        "status",
+        "brush",
+        "points"
+      ]
+    },
+    "InkLabStrokeStatus": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "cancelled",
+        "interrupted"
+      ]
+    }
+  }
+}

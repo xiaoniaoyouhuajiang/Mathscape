@@ -1,0 +1,254 @@
+[
+  {
+    "name": "unknown version",
+    "changes": [
+      {
+        "path": "/version",
+        "value": "mathscape-ink-lab-99"
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "sequence gap",
+    "changes": [
+      {
+        "path": "/operations/1/seq",
+        "value": 4
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "duplicate command",
+    "changes": [
+      {
+        "path": "/operations/1/command_id",
+        "value": "cmd-a"
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "duplicate stroke",
+    "changes": [
+      {
+        "path": "/operations/1/stroke/id",
+        "value": "stroke-a"
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "unknown page",
+    "changes": [
+      {
+        "path": "/operations/0/stroke/page_id",
+        "value": "missing"
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "unknown segment",
+    "changes": [
+      {
+        "path": "/operations/0/stroke/capture_segment_id",
+        "value": "missing"
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "invalid erase",
+    "changes": [
+      {
+        "path": "/operations/2/stroke_ids",
+        "value": [
+          "missing"
+        ]
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "duplicate erase",
+    "changes": [
+      {
+        "path": "/operations/2/stroke_ids",
+        "value": [
+          "stroke-a",
+          "stroke-a"
+        ]
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "wrong undo target",
+    "changes": [
+      {
+        "path": "/operations/3/target_command_id",
+        "value": "cmd-a"
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "wrong redo target",
+    "changes": [
+      {
+        "path": "/operations/4/target_command_id",
+        "value": "cmd-b"
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "invalid pressure",
+    "changes": [
+      {
+        "path": "/operations/0/stroke/points/0/pressure",
+        "value": 1.1
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "time reversed",
+    "changes": [
+      {
+        "path": "/operations/0/stroke/points/1/t_us",
+        "value": 1
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "unsafe time",
+    "changes": [
+      {
+        "path": "/operations/0/stroke/points/0/t_us",
+        "value": 9007199254740992
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "fractional time",
+    "changes": [
+      {
+        "path": "/operations/0/stroke/points/0/t_us",
+        "value": 1.5
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "invalid brush",
+    "changes": [
+      {
+        "path": "/operations/0/stroke/brush/simulate_pressure",
+        "value": true
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "empty stroke",
+    "changes": [
+      {
+        "path": "/operations/0/stroke/points",
+        "value": []
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "unknown pointer",
+    "changes": [
+      {
+        "path": "/operations/0/stroke/pointer_type",
+        "value": "stylus"
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "unknown field",
+    "changes": [
+      {
+        "path": "/unexpected",
+        "value": true
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "inferred hardware ability",
+    "changes": [
+      {
+        "path": "/capture_segments/0/pressure_capability",
+        "value": "supported"
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "absent nullable field",
+    "changes": [],
+    "removes": [
+      "/operations/0/stroke/points/0/pressure"
+    ]
+  },
+  {
+    "name": "array pointer type",
+    "changes": [
+      {
+        "path": "/operations/0/stroke/pointer_type",
+        "value": [
+          "pen"
+        ]
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "array status",
+    "changes": [
+      {
+        "path": "/operations/0/stroke/status",
+        "value": [
+          "completed"
+        ]
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "array kind",
+    "changes": [
+      {
+        "path": "/operations/4/kind",
+        "value": [
+          "redo"
+        ]
+      }
+    ],
+    "removes": []
+  },
+  {
+    "name": "numeric page reference",
+    "changes": [
+      {
+        "path": "/pages/0/id",
+        "value": "123"
+      },
+      {
+        "path": "/operations/0/stroke/page_id",
+        "value": 123
+      }
+    ],
+    "removes": []
+  }
+]
