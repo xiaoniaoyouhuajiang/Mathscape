@@ -23,12 +23,23 @@ export interface InkStroke {
   status: "completed" | "cancelled" | "interrupted";
   brush: InkBrush; points: InkPoint[];
 }
+export interface InkTransform { a: number; b: number; c: number; d: number; e: number; f: number }
 type Command = { seq: number; command_id: string };
 export type InkOperation = Command & (
   { kind: "stroke"; stroke: InkStroke } |
   { kind: "erase"; stroke_ids: string[] } |
+  { kind: "partial_erase"; source_stroke_id: string; fragments: InkStroke[] } |
+  { kind: "transform"; stroke_ids: string[]; matrix: InkTransform } |
+  { kind: "page_add"; page: InkPage } |
   { kind: "undo" | "redo"; target_command_id: string }
 );
+export type InkAppendCommand =
+  | { kind: "stroke"; stroke: InkStroke }
+  | { kind: "erase"; stroke_ids: string[] }
+  | { kind: "partial_erase"; source_stroke_id: string; fragments: InkStroke[] }
+  | { kind: "transform"; stroke_ids: string[]; matrix: InkTransform }
+  | { kind: "page_add"; page: InkPage }
+  | { kind: "undo" | "redo"; target_command_id: string };
 export interface InkDocument {
   version: typeof INK_LAB_VERSION; document_id: string; title: string;
   created_at: string; exported_at: string; pages: InkPage[];
@@ -75,6 +86,35 @@ function array(value: unknown, min: number, max: number, at: string): asserts va
 function uniqueId(value: unknown, seen: Set<string>, at: string): void {
   text(value, at); if (seen.has(value)) fail(`${at} 重复`); seen.add(value);
 }
+function validateTransform(value: unknown, at: string): InkTransform {
+  const matrix = object(value, ["a", "b", "c", "d", "e", "f"], at);
+  for (const key of ["a", "b", "c", "d", "e", "f"]) number(matrix[key], -1_000_000, 1_000_000, `${at}.${key}`);
+  return matrix as unknown as InkTransform;
+}
+function validateStroke(value: unknown, pages: Set<string>, segments: Set<string>, strokes: Set<string>, total: { value: number }, at: string): InkStroke {
+  const s = object(value, ["id", "page_id", "capture_segment_id", "pointer_type", "status", "brush", "points"], at);
+  uniqueId(s.id, strokes, `${at}.id`);
+  text(s.page_id, `${at}.page_id`); text(s.capture_segment_id, `${at}.capture_segment_id`);
+  if (!pages.has(s.page_id) || !segments.has(s.capture_segment_id)) fail(`${at} 来源页或采集片段不存在`);
+  if (typeof s.pointer_type !== "string" || !["pen", "mouse", "touch", "unknown"].includes(s.pointer_type)) fail(`${at}.pointer_type 无效`);
+  if (typeof s.status !== "string" || !["completed", "cancelled", "interrupted"].includes(s.status)) fail(`${at}.status 无效`);
+  const b = object(s.brush, ["renderer", "color", "width", "smoothing", "streamline", "thinning", "simulate_pressure"], `${at}.brush`);
+  if (b.renderer !== "perfect-freehand@1.2.3" || b.simulate_pressure !== false) fail(`${at}.brush 渲染契约无效`);
+  if (typeof b.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(b.color)) fail(`${at}.brush.color 无效`);
+  number(b.width, 0.1, 100, `${at}.brush.width`); number(b.smoothing, 0, 1, `${at}.brush.smoothing`);
+  number(b.streamline, 0, 1, `${at}.brush.streamline`); number(b.thinning, -1, 1, `${at}.brush.thinning`);
+  array(s.points, 1, 100_000, `${at}.points`); total.value += s.points.length;
+  if (total.value > MAX_INK_POINTS) fail("样本总量超过实验上限");
+  let previous = -1;
+  for (const value of s.points) {
+    const p = object(value, ["x", "y", "t_us", "pressure", "tilt_x_deg", "tilt_y_deg", "buttons"], `${at}.point`);
+    number(p.x, -1_000_000, 1_000_000, "point.x"); number(p.y, -1_000_000, 1_000_000, "point.y");
+    integer(p.t_us, 0, Number.MAX_SAFE_INTEGER, "point.t_us"); if (p.t_us < previous) fail("采样时间倒退"); previous = p.t_us;
+    nullable(p.pressure, 0, 1, "point.pressure"); nullable(p.tilt_x_deg, -90, 90, "point.tilt_x_deg");
+    nullable(p.tilt_y_deg, -90, 90, "point.tilt_y_deg"); integer(p.buttons, 0, 65535, "point.buttons");
+  }
+  return s as unknown as InkStroke;
+}
 
 export function parseInkDocument(input: unknown): InkDocument {
   const d = object(input, ["version", "document_id", "title", "created_at", "exported_at", "pages", "capture_segments", "operations"], "document");
@@ -94,58 +134,63 @@ export function parseInkDocument(input: unknown): InkDocument {
     number(s.device_pixel_ratio, 0.1, 20, "device_pixel_ratio"); number(s.time_origin_ms, 0, Number.MAX_SAFE_INTEGER, "time_origin_ms");
     if (s.pressure_capability !== "unknown" || s.tilt_capability !== "unknown") fail("P0 不能认证传感器能力");
   }
-  let total = 0;
-  d.operations.forEach((value, index) => {
+  const total = { value: 0 };
+  for (const [index, value] of d.operations.entries()) {
     if (value === null || typeof value !== "object") fail("operation 必须是对象");
     const kind = (value as Record<string, unknown>).kind;
-    const extra = kind === "stroke" ? "stroke" : kind === "erase" ? "stroke_ids" : "target_command_id";
-    if (typeof kind !== "string" || !["stroke", "erase", "undo", "redo"].includes(kind)) fail("未知 operation kind");
-    const op = object(value, ["kind", "seq", "command_id", extra], "operation");
+    if (typeof kind !== "string" || !["stroke", "erase", "partial_erase", "transform", "page_add", "undo", "redo"].includes(kind)) fail("未知 operation kind");
+    const operationKeys = kind === "stroke" ? ["kind", "seq", "command_id", "stroke"] : kind === "erase" ? ["kind", "seq", "command_id", "stroke_ids"] : kind === "partial_erase" ? ["kind", "seq", "command_id", "source_stroke_id", "fragments"] : kind === "transform" ? ["kind", "seq", "command_id", "stroke_ids", "matrix"] : kind === "page_add" ? ["kind", "seq", "command_id", "page"] : ["kind", "seq", "command_id", "target_command_id"];
+    const op = object(value, operationKeys, "operation");
     integer(op.seq, index + 1, index + 1, "operation.seq"); uniqueId(op.command_id, commands, "command_id");
+    if (kind === "page_add") {
+      const page = object(op.page, ["id", "width", "height"], "page_add.page"); text(page.id, "page_add.page.id");
+      if (!pages.has(page.id)) fail("page_add.page 必须出现在 document.pages");
+      number(page.width, 1, 20_000, "page_add.page.width"); number(page.height, 1, 20_000, "page_add.page.height");
+      continue;
+    }
     if (kind === "erase") {
       array(op.stroke_ids, 1, MAX_INK_OPERATIONS, "stroke_ids");
       for (const id of op.stroke_ids) text(id, "stroke_ids[]");
-      return;
+      continue;
     }
-    if (kind === "undo" || kind === "redo") { text(op.target_command_id, "target_command_id"); return; }
-    const s = object(op.stroke, ["id", "page_id", "capture_segment_id", "pointer_type", "status", "brush", "points"], "stroke");
-    uniqueId(s.id, strokes, "stroke.id");
-    text(s.page_id, "stroke.page_id"); text(s.capture_segment_id, "stroke.capture_segment_id");
-    if (!pages.has(s.page_id) || !segments.has(s.capture_segment_id)) fail("stroke 来源页或采集片段不存在");
-    if (typeof s.pointer_type !== "string" || !["pen", "mouse", "touch", "unknown"].includes(s.pointer_type)) fail("未知 pointer_type");
-    if (typeof s.status !== "string" || !["completed", "cancelled", "interrupted"].includes(s.status)) fail("未知 stroke status");
-    const b = object(s.brush, ["renderer", "color", "width", "smoothing", "streamline", "thinning", "simulate_pressure"], "brush");
-    if (b.renderer !== "perfect-freehand@1.2.3" || b.simulate_pressure !== false) fail("不支持的笔刷渲染契约");
-    if (typeof b.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(b.color)) fail("非法笔刷颜色");
-    number(b.width, 0.1, 100, "brush.width"); number(b.smoothing, 0, 1, "smoothing");
-    number(b.streamline, 0, 1, "streamline"); number(b.thinning, -1, 1, "thinning");
-    array(s.points, 1, 100_000, "stroke.points"); total += s.points.length;
-    if (total > MAX_INK_POINTS) fail("样本总量超过实验上限");
-    let previous = -1;
-    for (const value of s.points) {
-      const p = object(value, ["x", "y", "t_us", "pressure", "tilt_x_deg", "tilt_y_deg", "buttons"], "point");
-      number(p.x, -1_000_000, 1_000_000, "x"); number(p.y, -1_000_000, 1_000_000, "y");
-      integer(p.t_us, 0, Number.MAX_SAFE_INTEGER, "t_us"); if (p.t_us < previous) fail("采样时间倒退"); previous = p.t_us;
-      nullable(p.pressure, 0, 1, "pressure"); nullable(p.tilt_x_deg, -90, 90, "tilt_x_deg");
-      nullable(p.tilt_y_deg, -90, 90, "tilt_y_deg"); integer(p.buttons, 0, 65535, "buttons");
+    if (kind === "partial_erase") {
+      text(op.source_stroke_id, "partial_erase.source_stroke_id");
+      if (!strokes.has(op.source_stroke_id)) fail("partial_erase 来源笔迹不存在");
+      array(op.fragments, 1, 1000, "partial_erase.fragments");
+      for (const fragment of op.fragments) validateStroke(fragment, pages, segments, strokes, total, "partial_erase.fragment");
+      continue;
     }
-  });
+    if (kind === "transform") {
+      array(op.stroke_ids, 1, MAX_INK_OPERATIONS, "transform.stroke_ids");
+      for (const id of op.stroke_ids) { text(id, "transform.stroke_ids[]"); if (!strokes.has(id)) fail("transform 来源笔迹不存在"); }
+      validateTransform(op.matrix, "transform.matrix");
+      continue;
+    }
+    if (kind === "undo" || kind === "redo") { text(op.target_command_id, "target_command_id"); continue; }
+    validateStroke(op.stroke, pages, segments, strokes, total, "stroke");
+  }
   const result = input as InkDocument;
   projectInk(result); // Check erase ownership and the complete undo/redo chain.
   return result;
 }
 
 export function projectInk(document: InkDocument): InkProjection {
-  const base: (Extract<InkOperation, { kind: "stroke" }> | Extract<InkOperation, { kind: "erase" }>)[] = [];
+  const base: InkOperation[] = [];
   const active = new Map<string, boolean>();
   const undo: string[] = [], redo: string[] = [];
   const knownStrokes = new Set<string>();
   let pointCount = 0;
   for (const op of document.operations) {
-    if (op.kind === "stroke" || op.kind === "erase") {
+    if (op.kind === "stroke" || op.kind === "erase" || op.kind === "partial_erase" || op.kind === "transform" || op.kind === "page_add") {
+      if (op.kind === "page_add") { base.push(op); active.set(op.command_id, true); continue; }
       if (op.kind === "stroke") { knownStrokes.add(op.stroke.id); pointCount += op.stroke.points.length; }
-      else {
+      else if (op.kind === "erase") {
         if (!op.stroke_ids.length || new Set(op.stroke_ids).size !== op.stroke_ids.length || op.stroke_ids.some(id => !knownStrokes.has(id))) fail("擦除引用不存在或重复的笔迹");
+      } else if (op.kind === "partial_erase") {
+        if (!knownStrokes.has(op.source_stroke_id)) fail("局部擦除来源不存在");
+        for (const fragment of op.fragments) { knownStrokes.add(fragment.id); pointCount += fragment.points.length; }
+      } else if (op.kind === "transform") {
+        if (op.stroke_ids.some(id => !knownStrokes.has(id))) fail("变换引用不存在的笔迹");
       }
       base.push(op); active.set(op.command_id, true); undo.push(op.command_id); redo.length = 0;
     } else {
@@ -160,12 +205,17 @@ export function projectInk(document: InkDocument): InkProjection {
     if (op.kind === "stroke") strokes.push(op.stroke);
     if (!active.get(op.command_id)) continue;
     if (op.kind === "stroke") visible.set(op.stroke.id, op.stroke);
-    else for (const id of op.stroke_ids) visible.delete(id);
+    else if (op.kind === "erase") for (const id of op.stroke_ids) visible.delete(id);
+    else if (op.kind === "partial_erase") { visible.delete(op.source_stroke_id); for (const fragment of op.fragments) visible.set(fragment.id, fragment); }
+    else if (op.kind === "transform") {
+      const m = op.matrix;
+      for (const id of op.stroke_ids) { const stroke = visible.get(id); if (!stroke) continue; visible.set(id, { ...stroke, points: stroke.points.map(p => ({ ...p, x: m.a * p.x + m.c * p.y + m.e, y: m.b * p.x + m.d * p.y + m.f })) }); }
+    }
   }
   return { strokes, visible: [...visible.values()], undo, redo, pointCount };
 }
 
-export function appendInk(document: InkDocument, command: Omit<Extract<InkOperation, { kind: "stroke" }>, "seq" | "command_id"> | Omit<Extract<InkOperation, { kind: "erase" }>, "seq" | "command_id"> | { kind: "undo" | "redo"; target_command_id: string }): void {
+export function appendInk(document: InkDocument, command: InkAppendCommand): void {
   if (document.operations.length >= MAX_INK_OPERATIONS) throw new Error("操作达到实验上限，请导出文件后新建画板。");
   document.operations.push({ ...command, seq: document.operations.length + 1, command_id: inkId() } as InkOperation);
 }

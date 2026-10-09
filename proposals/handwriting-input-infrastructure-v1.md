@@ -374,7 +374,6 @@ InkViewAdapter
           └── eraser preview
 ```
 
-优先验证 Konva 作为 P0.1 的交互和渲染适配器。Konva 的 `Transformer` 已覆盖多对象拖动、缩放和旋转控制点，[官方示例](https://konvajs.org/docs/select_and_transform/Basic_demo.html)也把 Transformer 与被选节点分开管理。Konva 的 Layer 可以让静态笔迹和动态 Overlay 分开刷新，[性能文档](https://konvajs.org/docs/performance/All_Performance_Tips.html)提供了减少重绘、减少命中检测和拖动时隔离动态层的做法。
 
 Konva 节点只保存 `stroke_id`、当前显示几何和临时变换，不保存 Mathscape 的完整来源数据。`transform` 提交时把矩阵写入 InkOperation；取消手势只丢弃 PreviewState，不能产生空操作。
 

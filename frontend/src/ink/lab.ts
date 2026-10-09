@@ -1,6 +1,6 @@
 import QRCode from "qrcode";
-import { InkCanvas, type CanvasMetrics } from "./canvas";
-import { appendInk, encodeInk, inkId, MAX_INK_BYTES, newDocument, parseInkDocument, projectInk, type CaptureSegment, type InkBrush, type InkDocument, type InkStroke } from "./model";
+import { InkCanvas, type CanvasMetrics, type InkTool } from "./canvas";
+import { appendInk, encodeInk, inkId, MAX_INK_BYTES, newDocument, parseInkDocument, projectInk, type CaptureSegment, type InkBrush, type InkDocument, type InkStroke, type InkPage, type InkTransform } from "./model";
 import "./lab.css";
 
 const root = document.querySelector<HTMLDivElement>("#ink-app")!;
@@ -117,15 +117,15 @@ async function pad(): Promise<void> {
     <main class="lab-pad">
       <header class="pad-header"><div class="pad-title"><span class="lab-mark">M</span><input id="ink-title" aria-label="手稿标题" value="数学手稿" maxlength="200"><span class="lab-badge">P0</span></div><span id="ink-connection" class="pad-connection">连接中…</span></header>
       <nav class="ink-toolbar" aria-label="书写工具">
-        <div class="ink-tool-group"><button id="ink-pen" class="is-active" aria-pressed="true">笔</button><button id="ink-erase" aria-pressed="false">整笔擦除</button><button id="ink-undo" disabled>撤销</button><button id="ink-redo" disabled>重做</button></div>
+        <div class="ink-tool-group"><button id="ink-pen" class="is-active" aria-pressed="true">笔</button><button id="ink-select" aria-pressed="false">套索选择</button><button id="ink-erase" aria-pressed="false">整笔擦除</button><button id="ink-partial_erase" aria-pressed="false">局部擦除</button><button id="ink-undo" disabled>撤销</button><button id="ink-redo" disabled>重做</button></div>
         <div class="ink-tool-group"><label class="ink-control">颜色<input id="ink-color" type="color" value="#193a66"></label><label class="ink-control">笔宽<input id="ink-width" type="range" min="1" max="16" step="0.5" value="4"></label><label class="ink-control"><input id="ink-finger" type="checkbox">手指书写</label></div>
-        <div class="ink-tool-group"><select id="ink-page" aria-label="页面"></select><button id="ink-zoom-out" aria-label="缩小">−</button><button id="ink-fit">整页</button><button id="ink-zoom-in" aria-label="放大">＋</button></div>
+        <div class="ink-tool-group"><select id="ink-page" aria-label="页面"></select><button id="ink-add-page">新增页面</button><button id="ink-zoom-out" aria-label="缩小">−</button><button id="ink-fit">整页</button><button id="ink-zoom-in" aria-label="放大">＋</button></div>
       </nav>
       <section id="ink-board" class="ink-board" aria-label="画板区域"></section>
       <footer class="pad-footer"><div class="ink-file-actions"><button id="ink-export" class="lab-primary">导出 Ink JSON</button><button id="ink-send">保存到电脑</button><button id="ink-png">导出 PNG</button><button id="ink-import">导入 Ink JSON</button><button id="ink-new">新建画板</button><button id="ink-retry" hidden>重试连接</button><input id="ink-file" type="file" accept="application/json,.json" hidden></div><p id="ink-status" class="lab-status" role="status">使用笔书写；触摸拖动或双指缩放。刷新前请手动导出文件。</p><details class="ink-diagnostics"><summary>输入诊断 <span id="ink-summary"></span></summary><div id="ink-diagnostics"></div></details></footer>
     </main>`;
   let documentState: InkDocument = newDocument(), currentPage = documentState.pages[0].id;
-  let currentSegment: CaptureSegment | undefined, tool: "pen" | "erase" = "pen";
+  let currentSegment: CaptureSegment | undefined, tool: InkTool = "pen", selectedStrokeIds: string[] = [];
   let revision = 0, lastExportRevision = 0, lastSavedRevision = -1, documentEpoch = 0;
   let lastSavedSeq = -1;
   const status = element("#ink-status"), connection = element("#ink-connection");
@@ -148,7 +148,7 @@ async function pad(): Promise<void> {
     const projection = projectInk(documentState);
     element<HTMLButtonElement>("#ink-undo").disabled = !projection.undo.length;
     element<HTMLButtonElement>("#ink-redo").disabled = !projection.redo.length;
-    element("#ink-summary").textContent = `${projection.visible.length} 笔 · ${projection.pointCount + metrics.activePoints} 点`;
+    element("#ink-summary").textContent = `${projection.visible.length} 笔 · ${projection.pointCount + metrics.activePoints} 点${selectedStrokeIds.length ? ` · 已选 ${selectedStrokeIds.length} 笔` : ""}`;
     const latest = projection.strokes.at(-1);
     const pressure = latest?.pointer_type === "pen" ? latest.points.filter(p => p.buttons !== 0 && p.pressure !== null).map(p => p.pressure!) : [];
     let minimum = 1, maximum = 0;
@@ -162,6 +162,9 @@ async function pad(): Promise<void> {
     segmentId: segment, brush, tool: () => tool, fingerWriting: () => element<HTMLInputElement>("#ink-finger").checked,
     onStroke: stroke => { appendInk(documentState, { kind: "stroke", stroke }); revision++; changed(); },
     onErase: stroke_ids => { appendInk(documentState, { kind: "erase", stroke_ids }); revision++; changed(); },
+    onPartialErase: (source_stroke_id, fragments) => { if (fragments.length) appendInk(documentState, { kind: "partial_erase", source_stroke_id, fragments }); else appendInk(documentState, { kind: "erase", stroke_ids: [source_stroke_id] }); revision++; changed(); },
+    onTransform: (stroke_ids, matrix) => { appendInk(documentState, { kind: "transform", stroke_ids, matrix }); revision++; changed(); },
+    onSelection: ids => { selectedStrokeIds = ids; changed(); },
     onMessage: message, onMetrics: m => { metrics = m; },
   });
   const pages = () => {
@@ -171,9 +174,13 @@ async function pad(): Promise<void> {
   };
   pages(); update();
   window.setInterval(update, 250);
-  for (const type of ["pen", "erase"] as const) element(`#ink-${type}`).addEventListener("click", () => {
+  for (const type of ["pen", "select", "erase", "partial_erase"] as const) element(`#ink-${type}`).addEventListener("click", () => {
     board.finish(); tool = type;
-    for (const value of ["pen", "erase"]) { element(`#ink-${value}`).classList.toggle("is-active", value === tool); element(`#ink-${value}`).setAttribute("aria-pressed", String(value === tool)); }
+    for (const value of ["pen", "select", "erase", "partial_erase"] as const) { element(`#ink-${value}`).classList.toggle("is-active", value === tool); element(`#ink-${value}`).setAttribute("aria-pressed", String(value === tool)); }
+  });
+  element("#ink-add-page").addEventListener("click", () => {
+    board.finish(); tool = "pen"; for (const value of ["pen", "select", "erase", "partial_erase"] as const) { element(`#ink-${value}`).classList.toggle("is-active", value === tool); element(`#ink-${value}`).setAttribute("aria-pressed", String(value === tool)); } const page: InkPage = { id: inkId(), width: 1200, height: 1600 };
+    documentState.pages.push(page); appendInk(documentState, { kind: "page_add", page }); currentPage = page.id; selectedStrokeIds = []; revision++; pages(); board.fit(); changed(); message("已新增页面。");
   });
   for (const kind of ["undo", "redo"] as const) element(`#ink-${kind}`).addEventListener("click", () => {
     try {
@@ -225,7 +232,7 @@ async function pad(): Promise<void> {
         board.finish();
         if (revision !== lastExportRevision && !confirm("当前手稿有尚未导出的修改。导入会替换画板，是否继续？")) return;
         documentState = imported; currentPage = imported.pages[0].id;
-        currentSegment = undefined; lastSavedSeq = -1; revision = 0; lastExportRevision = 0; lastSavedRevision = -1; documentEpoch++;
+        currentSegment = undefined; lastSavedSeq = -1; revision = 0; lastExportRevision = 0; lastSavedRevision = -1; documentEpoch++; selectedStrokeIds = []; board.setSelection([]);
         element<HTMLInputElement>("#ink-title").value = imported.title; pages(); board.fit(); changed();
         message(`已导入 ${projectInk(imported).strokes.length} 笔及完整编辑历史，可以继续书写。`);
       } catch (error) { message(errorText(error)); }
@@ -236,7 +243,7 @@ async function pad(): Promise<void> {
     board.finish();
     if (revision !== lastExportRevision && !confirm("当前手稿有尚未导出的修改。是否新建画板？")) return;
     documentState = newDocument(); currentPage = documentState.pages[0].id;
-    currentSegment = undefined; lastSavedSeq = -1; revision = 0; lastExportRevision = 0; lastSavedRevision = -1; documentEpoch++;
+    currentSegment = undefined; lastSavedSeq = -1; revision = 0; lastExportRevision = 0; lastSavedRevision = -1; documentEpoch++; selectedStrokeIds = []; board.setSelection([]);
     element<HTMLInputElement>("#ink-title").value = documentState.title; pages(); board.fit(); changed(); message("已新建画板。刷新前请手动导出。");
   });
   window.addEventListener("beforeunload", e => { board.finish(); if (revision !== lastExportRevision && revision !== lastSavedRevision) { e.preventDefault(); e.returnValue = ""; } });

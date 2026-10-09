@@ -129,6 +129,17 @@ pub struct InkLabStroke {
     pub points: Vec<InkLabPoint>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InkTransform {
+    pub a: f64,
+    pub b: f64,
+    pub c: f64,
+    pub d: f64,
+    pub e: f64,
+    pub f: f64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InkLabOperation {
@@ -141,6 +152,23 @@ pub enum InkLabOperation {
         seq: u32,
         command_id: String,
         stroke_ids: Vec<String>,
+    },
+    PartialErase {
+        seq: u32,
+        command_id: String,
+        source_stroke_id: String,
+        fragments: Vec<InkLabStroke>,
+    },
+    Transform {
+        seq: u32,
+        command_id: String,
+        stroke_ids: Vec<String>,
+        matrix: InkTransform,
+    },
+    PageAdd {
+        seq: u32,
+        command_id: String,
+        page: InkLabPage,
     },
     Undo {
         seq: u32,
@@ -161,6 +189,15 @@ impl InkLabOperation {
                 seq, command_id, ..
             }
             | Self::Erase {
+                seq, command_id, ..
+            }
+            | Self::PartialErase {
+                seq, command_id, ..
+            }
+            | Self::Transform {
+                seq, command_id, ..
+            }
+            | Self::PageAdd {
                 seq, command_id, ..
             }
             | Self::Undo {
@@ -331,6 +368,68 @@ impl InkLabDocument {
                     undo.push(command_id.to_owned());
                     redo.clear();
                 }
+                InkLabOperation::PartialErase {
+                    source_stroke_id,
+                    fragments,
+                    ..
+                } => {
+                    text(source_stroke_id, 200, "partial_erase.source_stroke_id")?;
+                    require(
+                        strokes.contains(source_stroke_id.as_str()),
+                        "partial_erase.reference",
+                    )?;
+                    require(
+                        !fragments.is_empty() && fragments.len() <= 1000,
+                        "partial_erase.fragments",
+                    )?;
+                    for fragment in fragments {
+                        text(&fragment.id, 200, "partial_erase.fragment.id")?;
+                        require(strokes.insert(fragment.id.as_str()), "duplicate fragment")?;
+                        require(
+                            pages.contains(fragment.page_id.as_str()),
+                            "fragment.page_id",
+                        )?;
+                        require(
+                            segments.contains(fragment.capture_segment_id.as_str()),
+                            "fragment.capture_segment_id",
+                        )?;
+                        require(
+                            !fragment.points.is_empty() && fragment.points.len() <= 100_000,
+                            "fragment.points",
+                        )?;
+                        point_count += fragment.points.len();
+                        require(point_count <= INK_LAB_MAX_POINTS, "point_count")?;
+                    }
+                    active.insert(command_id, true);
+                    undo.push(command_id.to_owned());
+                    redo.clear();
+                }
+                InkLabOperation::Transform {
+                    stroke_ids, matrix, ..
+                } => {
+                    require(
+                        !stroke_ids.is_empty() && stroke_ids.len() <= INK_LAB_MAX_OPERATIONS,
+                        "transform.stroke_ids",
+                    )?;
+                    for id in stroke_ids {
+                        text(id, 200, "transform.stroke_id")?;
+                        require(strokes.contains(id.as_str()), "transform.reference")?;
+                    }
+                    for value in [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f] {
+                        numeric(value, -1_000_000.0, 1_000_000.0, "transform.matrix")?;
+                    }
+                    active.insert(command_id, true);
+                    undo.push(command_id.to_owned());
+                    redo.clear();
+                }
+                InkLabOperation::PageAdd { page, .. } => {
+                    text(&page.id, 200, "page_add.page.id")?;
+                    require(pages.contains(page.id.as_str()), "page_add.page")?;
+                    numeric(page.width, 1.0, 20_000.0, "page_add.page.width")?;
+                    numeric(page.height, 1.0, 20_000.0, "page_add.page.height")?;
+                    active.insert(command_id, true);
+                    // Page creation is structural and is not removed by stroke undo.
+                }
                 InkLabOperation::Undo {
                     target_command_id, ..
                 }
@@ -365,6 +464,16 @@ impl InkLabDocument {
                 InkLabOperation::Erase { stroke_ids, .. } => {
                     for id in stroke_ids {
                         visible.remove(id.as_str());
+                    }
+                }
+                InkLabOperation::PartialErase {
+                    source_stroke_id,
+                    fragments,
+                    ..
+                } => {
+                    visible.remove(source_stroke_id.as_str());
+                    for fragment in fragments {
+                        visible.insert(fragment.id.as_str());
                     }
                 }
                 _ => {}

@@ -210,6 +210,101 @@
             "command_id": {
               "type": "string"
             },
+            "fragments": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/InkLabStroke"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "partial_erase"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "source_stroke_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "seq",
+            "command_id",
+            "source_stroke_id",
+            "fragments"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "transform"
+            },
+            "matrix": {
+              "$ref": "#/$defs/InkTransform"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "stroke_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "seq",
+            "command_id",
+            "stroke_ids",
+            "matrix"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "page_add"
+            },
+            "page": {
+              "$ref": "#/$defs/InkLabPage"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "seq",
+            "command_id",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command_id": {
+              "type": "string"
+            },
             "kind": {
               "type": "string",
               "const": "undo"
@@ -391,6 +486,44 @@
         "completed",
         "cancelled",
         "interrupted"
+      ]
+    },
+    "InkTransform": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "number",
+          "format": "double"
+        },
+        "b": {
+          "type": "number",
+          "format": "double"
+        },
+        "c": {
+          "type": "number",
+          "format": "double"
+        },
+        "d": {
+          "type": "number",
+          "format": "double"
+        },
+        "e": {
+          "type": "number",
+          "format": "double"
+        },
+        "f": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f"
       ]
     }
   }

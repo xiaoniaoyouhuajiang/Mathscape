@@ -139,3 +139,29 @@ test("a transient first connection failure is retried without losing the session
   expect(page.url()).toBe(url);
   expect(failures).toBeGreaterThanOrEqual(2);
 });
+
+test("adds pages, selects strokes with a lasso, transforms them and supports partial erasing", async ({ page }, info) => {
+  const access = await credentials(); await page.goto(`/pad#session=${access.padToken}`); await writeStroke(page);
+  const board = (await page.locator("#ink-board").boundingBox())!;
+  await page.getByRole("button", { name: "套索选择", exact: true }).click();
+  const x = board.x + board.width / 2, y = board.y + board.height / 2;
+  await page.mouse.move(x - 150, y - 130); await page.mouse.down();
+  await page.mouse.move(x + 130, y - 130, { steps: 4 }); await page.mouse.move(x + 130, y + 110, { steps: 4 });
+  await page.mouse.move(x - 150, y + 110, { steps: 4 }); await page.mouse.move(x - 150, y - 130, { steps: 4 }); await page.mouse.up();
+  await expect(page.locator("#ink-summary")).toContainText("已选 1 笔");
+  await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + 30, y + 20, { steps: 5 }); await page.mouse.up();
+  await page.getByRole("button", { name: "新增页面", exact: true }).click();
+  await expect(page.locator("#ink-page").locator("option")).toHaveCount(2);
+  const secondBoard = (await page.locator("#ink-board").boundingBox())!;
+  const sx = secondBoard.x + secondBoard.width / 2 - 70, sy = secondBoard.y + secondBoard.height / 2 - 50;
+  await page.mouse.move(sx, sy); await page.mouse.down(); await page.mouse.move(sx + 30, sy + 65, { steps: 15 }); await page.mouse.move(sx + 70, sy, { steps: 15 }); await page.mouse.up();
+  await expect(page.locator("#ink-summary")).toContainText("2 笔");
+  await page.getByRole("button", { name: "局部擦除", exact: true }).click();
+  const pageTwo = (await page.locator("#ink-board").boundingBox())!;
+  await page.mouse.move(pageTwo.x + pageTwo.width / 2 - 80, pageTwo.y + pageTwo.height / 2); await page.mouse.down(); await page.mouse.move(pageTwo.x + pageTwo.width / 2 + 80, pageTwo.y + pageTwo.height / 2, { steps: 8 }); await page.mouse.up();
+  const downloaded = page.waitForEvent("download"); await page.getByRole("button", { name: "导出 Ink JSON", exact: true }).click();
+  const filename = info.outputPath("editing-tools.json"); await (await downloaded).saveAs(filename);
+  const document = parseInkDocument(JSON.parse(await readFile(filename, "utf8")));
+  expect(document.pages).toHaveLength(2);
+  expect(document.operations.map(op => op.kind)).toEqual(expect.arrayContaining(["page_add", "transform", "partial_erase"]));
+});

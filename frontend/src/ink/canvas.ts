@@ -1,251 +1,71 @@
 import { getStroke } from "perfect-freehand";
-import { inkId, MAX_INK_POINTS, projectInk, type InkBrush, type InkDocument, type InkPage, type InkPoint, type InkStroke } from "./model";
+import { inkId, MAX_INK_POINTS, projectInk, type InkBrush, type InkDocument, type InkPage, type InkPoint, type InkStroke, type InkTransform } from "./model";
 
+export type InkTool = "pen" | "erase" | "partial_erase" | "select";
 export interface InkCanvasOptions {
-  document: () => InkDocument;
-  page: () => InkPage;
-  segmentId: () => string;
-  brush: () => InkBrush;
-  tool: () => "pen" | "erase";
-  fingerWriting: () => boolean;
-  onStroke: (stroke: InkStroke) => void;
-  onErase: (ids: string[]) => void;
-  onMessage: (message: string) => void;
+  document: () => InkDocument; page: () => InkPage; segmentId: () => string;
+  brush: () => InkBrush; tool: () => InkTool; fingerWriting: () => boolean;
+  onStroke: (stroke: InkStroke) => void; onErase: (ids: string[]) => void;
+  onPartialErase: (sourceStrokeId: string, fragments: InkStroke[]) => void;
+  onTransform: (strokeIds: string[], matrix: InkTransform) => void;
+  onSelection: (strokeIds: string[]) => void; onMessage: (message: string) => void;
   onMetrics: (metrics: CanvasMetrics) => void;
 }
-export interface CanvasMetrics {
-  pointerEvents: number; coalescedSamples: number; cancelled: number;
-  lastPointer: string; frameMs: number; activePoints: number;
-}
+export interface CanvasMetrics { pointerEvents: number; coalescedSamples: number; cancelled: number; lastPointer: string; frameMs: number; activePoints: number }
 const paths = new WeakMap<InkStroke, Path2D>();
 export function drawInkStroke(ctx: CanvasRenderingContext2D, stroke: InkStroke, complete = true): void {
   const cached = complete ? paths.get(stroke) : undefined;
   if (cached) { ctx.fillStyle = stroke.brush.color; ctx.fill(cached); return; }
-  const outline = getStroke(stroke.points.map(p => [p.x, p.y, p.pressure ?? 0.5]), {
-    size: stroke.brush.width, thinning: stroke.brush.thinning,
-    smoothing: stroke.brush.smoothing, streamline: stroke.brush.streamline,
-    simulatePressure: false, last: complete,
-  });
+  const outline = getStroke(stroke.points.map(p => [p.x, p.y, p.pressure ?? 0.5]), { size: stroke.brush.width, thinning: stroke.brush.thinning, smoothing: stroke.brush.smoothing, streamline: stroke.brush.streamline, simulatePressure: false, last: complete });
   if (!outline.length) return;
-  ctx.fillStyle = stroke.brush.color;
-  const path = new Path2D(); path.moveTo(outline[0][0], outline[0][1]);
-  for (let i = 1; i < outline.length; i++) path.lineTo(outline[i][0], outline[i][1]);
-  path.closePath(); ctx.fill(path); if (complete) paths.set(stroke, path);
+  const path = new Path2D(); path.moveTo(outline[0][0], outline[0][1]); for (let i = 1; i < outline.length; i++) path.lineTo(outline[i][0], outline[i][1]); path.closePath(); ctx.fillStyle = stroke.brush.color; ctx.fill(path); if (complete) paths.set(stroke, path);
 }
+type Point = { x: number; y: number }; type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
+type TransformState = { mode: "drag" | "scale" | "rotate"; handle?: string; start: Point; bounds: Bounds; matrix: InkTransform };
+const identity: InkTransform = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+const apply = (m: InkTransform, p: Point): Point => ({ x: m.a * p.x + m.c * p.y + m.e, y: m.b * p.x + m.d * p.y + m.f });
+const polygonContains = (p: Point, polygon: Point[]) => { let inside = false; for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) { const a = polygon[i], b = polygon[j]; if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside; } return inside; };
+const pointSegmentDistance = (p: Point, a: Point, b: Point) => { const dx = b.x - a.x, dy = b.y - a.y, t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1))); return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy); };
+function boundsFor(strokes: InkStroke[]): Bounds | undefined { const points = strokes.flatMap(s => s.points); if (!points.length) return undefined; return { minX: Math.min(...points.map(p => p.x)), minY: Math.min(...points.map(p => p.y)), maxX: Math.max(...points.map(p => p.x)), maxY: Math.max(...points.map(p => p.y)) }; }
 
 export class InkCanvas {
-  private scale = 1;
-  private offset = { x: 0, y: 0 };
-  private width = 1;
-  private height = 1;
-  private dpr = 1;
-  private active: InkStroke | undefined;
-  private activePointer: number | undefined;
-  private erased = new Set<string>();
-  private touches = new Map<number, { x: number; y: number }>();
-  private navigation: { id: number; x: number; y: number } | undefined;
-  private frame = 0;
-  private committedPoints = 0;
-  private metrics: CanvasMetrics = { pointerEvents: 0, coalescedSamples: 0, cancelled: 0, lastPointer: "—", frameMs: 0, activePoints: 0 };
-  private readonly staticCanvas = document.createElement("canvas");
-  private readonly input = document.createElement("canvas");
-  private readonly observer: ResizeObserver;
-  private readonly blur = () => this.finish("interrupted");
+  private scale = 1; private offset = { x: 0, y: 0 }; private width = 1; private height = 1; private dpr = 1;
+  private active: InkStroke | undefined; private activePointer: number | undefined; private erasePath: Point[] = [];
+  private wholeErase = new Set<string>(); private selected = new Set<string>(); private lasso: Point[] = [];
+  private transform: TransformState | undefined; private touches = new Map<number, Point>(); private navigation: { id: number; x: number; y: number } | undefined;
+  private frame = 0; private committedPoints = 0; private metrics: CanvasMetrics = { pointerEvents: 0, coalescedSamples: 0, cancelled: 0, lastPointer: "—", frameMs: 0, activePoints: 0 };
+  private readonly staticCanvas = document.createElement("canvas"); private readonly input = document.createElement("canvas"); private readonly observer: ResizeObserver; private readonly blur = () => this.finish("interrupted");
   constructor(private readonly host: HTMLElement, private readonly options: InkCanvasOptions) {
-    this.staticCanvas.className = "ink-canvas ink-settled";
-    this.input.className = "ink-canvas ink-input";
-    this.input.setAttribute("aria-label", "手写画板");
-    host.append(this.staticCanvas, this.input);
-    this.input.addEventListener("pointerdown", e => this.down(e));
-    this.input.addEventListener("pointermove", e => this.move(e));
-    this.input.addEventListener("pointerup", e => this.up(e, "completed"));
-    this.input.addEventListener("pointercancel", e => this.up(e, "cancelled"));
-    this.input.addEventListener("lostpointercapture", e => {
-      if (this.activePointer === e.pointerId) this.finish("interrupted");
-      this.touches.delete(e.pointerId);
-      if (this.navigation?.id === e.pointerId) this.navigation = undefined;
-    });
-    this.input.addEventListener("contextmenu", e => e.preventDefault());
-    this.input.addEventListener("wheel", e => {
-      e.preventDefault(); if (this.activePointer !== undefined) return;
-      const point = this.local(e.clientX, e.clientY); this.zoom(Math.exp(-e.deltaY * 0.002), point);
-    }, { passive: false });
-    window.addEventListener("blur", this.blur);
-    document.addEventListener("visibilitychange", () => { if (document.hidden) this.finish("interrupted"); });
-    let first = true;
-    this.observer = new ResizeObserver(() => {
-      this.width = Math.max(1, host.clientWidth); this.height = Math.max(1, host.clientHeight);
-      this.dpr = Math.min(window.devicePixelRatio || 1, 2);
-      for (const c of [this.staticCanvas, this.input]) { c.width = Math.round(this.width * this.dpr); c.height = Math.round(this.height * this.dpr); }
-      if (first) { first = false; this.fit(); } else this.refresh();
-    });
-    this.observer.observe(host);
+    this.staticCanvas.className = "ink-canvas ink-settled"; this.input.className = "ink-canvas ink-input"; this.input.setAttribute("aria-label", "手写画板"); host.append(this.staticCanvas, this.input);
+    this.input.addEventListener("pointerdown", e => this.down(e)); this.input.addEventListener("pointermove", e => this.move(e)); this.input.addEventListener("pointerup", e => this.up(e, "completed")); this.input.addEventListener("pointercancel", e => this.up(e, "cancelled"));
+    this.input.addEventListener("lostpointercapture", e => { if (this.activePointer === e.pointerId) this.finish("interrupted"); this.touches.delete(e.pointerId); if (this.navigation?.id === e.pointerId) this.navigation = undefined; }); this.input.addEventListener("contextmenu", e => e.preventDefault());
+    this.input.addEventListener("wheel", e => { e.preventDefault(); if (this.activePointer === undefined) this.zoom(Math.exp(-e.deltaY * 0.002), this.local(e.clientX, e.clientY)); }, { passive: false }); window.addEventListener("blur", this.blur); document.addEventListener("visibilitychange", () => { if (document.hidden) this.finish("interrupted"); });
+    let first = true; this.observer = new ResizeObserver(() => { this.width = Math.max(1, host.clientWidth); this.height = Math.max(1, host.clientHeight); this.dpr = Math.min(window.devicePixelRatio || 1, 2); for (const c of [this.staticCanvas, this.input]) { c.width = Math.round(this.width * this.dpr); c.height = Math.round(this.height * this.dpr); } if (first) { first = false; this.fit(); } else this.refresh(); }); this.observer.observe(host);
   }
-  private local(clientX: number, clientY: number): { x: number; y: number } {
-    const rect = this.input.getBoundingClientRect(); return { x: clientX - rect.left, y: clientY - rect.top };
-  }
-  private world(point: { x: number; y: number }): { x: number; y: number } {
-    return { x: (point.x - this.offset.x) / this.scale, y: (point.y - this.offset.y) / this.scale };
-  }
-  fit(): void {
-    if (this.activePointer !== undefined) return;
-    const page = this.options.page();
-    this.scale = Math.min((this.width - 32) / page.width, (this.height - 32) / page.height);
-    this.scale = Math.max(0.05, this.scale);
-    this.offset = { x: (this.width - page.width * this.scale) / 2, y: (this.height - page.height * this.scale) / 2 };
-    this.refresh();
-  }
-  zoom(factor: number, center = { x: this.width / 2, y: this.height / 2 }): void {
-    if (this.activePointer !== undefined) return;
-    const world = this.world(center), next = Math.max(0.05, Math.min(8, this.scale * factor));
-    this.offset = { x: center.x - world.x * next, y: center.y - world.y * next }; this.scale = next; this.refresh();
-  }
-  private setup(canvas: HTMLCanvasElement, clear: boolean): CanvasRenderingContext2D {
-    const ctx = canvas.getContext("2d")!;
-    if (clear) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height); }
-    ctx.setTransform(this.dpr * this.scale, 0, 0, this.dpr * this.scale, this.offset.x * this.dpr, this.offset.y * this.dpr);
-    return ctx;
-  }
-  refresh(): void {
-    const page = this.options.page(), ctx = this.setup(this.staticCanvas, true);
-    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, page.width, page.height);
-    ctx.strokeStyle = "#e8edf4"; ctx.lineWidth = 1 / this.scale;
-    ctx.beginPath();
-    for (let y = 40; y < page.height; y += 40) { ctx.moveTo(0, y); ctx.lineTo(page.width, y); }
-    ctx.stroke();
-    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, page.width, page.height); ctx.clip();
-    const projection = projectInk(this.options.document()); this.committedPoints = projection.pointCount;
-    for (const stroke of projection.visible) if (stroke.page_id === page.id && !this.erased.has(stroke.id)) drawInkStroke(ctx, stroke);
-    ctx.restore(); this.schedule();
-  }
-  private schedule(): void {
-    if (this.frame) return;
-    this.frame = requestAnimationFrame(() => {
-      this.frame = 0; const started = performance.now();
-      const ctx = this.setup(this.input, true);
-      const page = this.options.page();
-      ctx.save(); ctx.beginPath(); ctx.rect(0, 0, page.width, page.height); ctx.clip();
-      if (this.active) drawInkStroke(ctx, this.active, false);
-      ctx.restore();
-      this.metrics.activePoints = this.active?.points.length ?? 0;
-      this.metrics.frameMs = performance.now() - started;
-      this.options.onMetrics({ ...this.metrics });
-    });
-  }
-  private down(e: PointerEvent): void {
-    e.preventDefault();
-    if (this.activePointer !== undefined) return; // Pen takes precedence over palm/touch input.
-    this.input.setPointerCapture(e.pointerId);
-    const position = this.local(e.clientX, e.clientY);
-    if (e.pointerType === "touch" && !this.options.fingerWriting()) { this.touches.set(e.pointerId, position); return; }
-    if (e.pointerType === "mouse" && e.button !== 0) {
-      if (e.button === 1) this.navigation = { id: e.pointerId, ...position };
-      return;
-    }
-    const world = this.world(position), page = this.options.page();
-    if (world.x < 0 || world.y < 0 || world.x > page.width || world.y > page.height) return;
-    if (this.options.document().operations.length >= 19_990) { this.options.onMessage("操作接近实验上限，请先导出并新建画板。"); return; }
-    this.touches.clear(); this.activePointer = e.pointerId; this.metrics.lastPointer = e.pointerType || "unknown";
-    if (this.options.tool() === "erase") { this.erased.clear(); this.erase(world); return; }
-    if (projectInk(this.options.document()).pointCount >= MAX_INK_POINTS) { this.activePointer = undefined; this.options.onMessage("样本达到实验上限，请导出并新建画板。"); return; }
-    const pointerType = ["pen", "mouse", "touch"].includes(e.pointerType) ? e.pointerType as "pen" | "mouse" | "touch" : "unknown";
-    let segmentId: string;
-    try { segmentId = this.options.segmentId(); }
-    catch (error) { this.activePointer = undefined; this.options.onMessage(error instanceof Error ? error.message : String(error)); return; }
-    this.active = { id: inkId(), page_id: page.id, capture_segment_id: segmentId,
-      pointer_type: pointerType, status: "completed", brush: { ...this.options.brush() }, points: [] };
-    this.samples(e); this.schedule();
-  }
-  private move(e: PointerEvent): void {
-    if (e.pointerId === this.activePointer) {
-      e.preventDefault();
-      if (this.active) { this.samples(e); this.schedule(); }
-      else this.erase(this.world(this.local(e.clientX, e.clientY)));
-      return;
-    }
-    if (this.navigation?.id === e.pointerId) {
-      const p = this.local(e.clientX, e.clientY);
-      this.offset.x += p.x - this.navigation.x; this.offset.y += p.y - this.navigation.y;
-      this.navigation = { id: e.pointerId, ...p }; this.refresh(); return;
-    }
-    if (this.activePointer !== undefined || !this.touches.has(e.pointerId)) return;
-    const before = [...this.touches.values()];
-    this.touches.set(e.pointerId, this.local(e.clientX, e.clientY));
-    const after = [...this.touches.values()];
-    if (before.length === 1) { this.offset.x += after[0].x - before[0].x; this.offset.y += after[0].y - before[0].y; }
-    else {
-      const center = (list: { x: number; y: number }[]) => ({ x: (list[0].x + list[1].x) / 2, y: (list[0].y + list[1].y) / 2 });
-      const distance = (list: { x: number; y: number }[]) => Math.hypot(list[1].x - list[0].x, list[1].y - list[0].y);
-      const previous = center(before), next = center(after), world = this.world(previous);
-      this.scale = Math.max(0.05, Math.min(8, this.scale * distance(after) / Math.max(1, distance(before))));
-      this.offset = { x: next.x - world.x * this.scale, y: next.y - world.y * this.scale };
-    }
-    this.refresh();
-  }
-  private samples(e: PointerEvent): void {
-    if (!this.active) return;
-    this.metrics.pointerEvents++;
-    let events: PointerEvent[] = [];
-    try { events = e.getCoalescedEvents?.() ?? []; } catch { /* LAN HTTP can lack this API. */ }
-    if (events.length) this.metrics.coalescedSamples += events.length;
-    else events = [e];
-    for (const sample of events) {
-      if (!this.active) break;
-      if (this.active.points.length >= 100_000 || this.active.points.length + this.committedPoints >= MAX_INK_POINTS) {
-        this.finish("interrupted"); this.options.onMessage("采样达到实验上限；已保留当前笔迹，请导出。"); break;
-      }
-      const world = this.world(this.local(sample.clientX, sample.clientY));
-      const pen = this.active.pointer_type === "pen";
-      const point: InkPoint = { ...world, t_us: Math.max(0, Math.round(sample.timeStamp * 1000)),
-        pressure: pen && Number.isFinite(sample.pressure) ? sample.pressure : null,
-        tilt_x_deg: pen && Number.isFinite(sample.tiltX) ? sample.tiltX : null,
-        tilt_y_deg: pen && Number.isFinite(sample.tiltY) ? sample.tiltY : null, buttons: sample.buttons };
-      const previous = this.active.points.at(-1);
-      if (previous && point.t_us < previous.t_us) { this.finish("interrupted"); this.options.onMessage("采样时间倒退，当前笔迹已标记为中断。"); break; }
-      if (!previous || Object.keys(point).some(k => point[k as keyof InkPoint] !== previous[k as keyof InkPoint])) this.active.points.push(point);
-    }
-  }
-  private erase(point: { x: number; y: number }): void {
-    for (const stroke of projectInk(this.options.document()).visible) {
-      if (stroke.page_id !== this.options.page().id || this.erased.has(stroke.id)) continue;
-      const radius = stroke.brush.width / 2 + 10 / this.scale;
-      for (let i = 0; i < stroke.points.length; i++) {
-        const a = stroke.points[Math.max(0, i - 1)], b = stroke.points[i];
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
-        if (Math.hypot(point.x - a.x - t * dx, point.y - a.y - t * dy) <= radius) { this.erased.add(stroke.id); break; }
-      }
-    }
-    this.refresh();
-  }
-  private up(e: PointerEvent, status: InkStroke["status"]): void {
-    if (e.pointerId === this.activePointer) {
-      if (status === "completed" && this.active) this.samples(e);
-      this.finish(status);
-    }
-    this.touches.delete(e.pointerId);
-    if (this.navigation?.id === e.pointerId) this.navigation = undefined;
-  }
-  finish(status: InkStroke["status"] = "interrupted"): void {
-    const stroke = this.active, erased = [...this.erased];
-    this.active = undefined; this.activePointer = undefined; this.erased.clear();
-    if (stroke?.points.length) { stroke.status = status; if (status === "cancelled") this.metrics.cancelled++; this.options.onStroke(stroke); }
-    else if (erased.length) this.options.onErase(erased);
-    this.refresh();
-  }
-  png(): HTMLCanvasElement {
-    this.finish();
-    const page = this.options.page(), canvas = document.createElement("canvas");
-    const width = Math.min(2400, Math.round(page.width)), height = Math.max(1, Math.round(page.height * width / page.width));
-    if (height > 4800) throw new Error("页面尺寸过大，无法生成 PNG；请导出 Ink JSON。");
-    canvas.width = width; canvas.height = height;
-    const ctx = canvas.getContext("2d")!; ctx.scale(canvas.width / page.width, canvas.height / page.height);
-    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, page.width, page.height);
-    for (const stroke of projectInk(this.options.document()).visible) if (stroke.page_id === page.id) drawInkStroke(ctx, stroke);
-    return canvas;
-  }
-  dispose(): void {
-    this.observer.disconnect(); window.removeEventListener("blur", this.blur);
-    cancelAnimationFrame(this.frame);
-  }
+  private local(x: number, y: number): Point { const rect = this.input.getBoundingClientRect(); return { x: x - rect.left, y: y - rect.top }; }
+  private world(p: Point): Point { return { x: (p.x - this.offset.x) / this.scale, y: (p.y - this.offset.y) / this.scale }; }
+  private visible(): InkStroke[] { return projectInk(this.options.document()).visible.filter(s => s.page_id === this.options.page().id && !this.wholeErase.has(s.id)); }
+  private selectedStrokes(): InkStroke[] { const byId = new Map(this.visible().map(s => [s.id, s])); return [...this.selected].map(id => byId.get(id)).filter((s): s is InkStroke => Boolean(s)); }
+  setSelection(ids: string[]): void { this.selected = new Set(ids.filter(id => this.visible().some(s => s.id === id))); this.schedule(); }
+  fit(): void { if (this.activePointer !== undefined) return; const page = this.options.page(); this.scale = Math.max(0.05, Math.min((this.width - 32) / page.width, (this.height - 32) / page.height)); this.offset = { x: (this.width - page.width * this.scale) / 2, y: (this.height - page.height * this.scale) / 2 }; this.refresh(); }
+  zoom(factor: number, center = { x: this.width / 2, y: this.height / 2 }): void { if (this.activePointer !== undefined) return; const world = this.world(center), next = Math.max(0.05, Math.min(8, this.scale * factor)); this.offset = { x: center.x - world.x * next, y: center.y - world.y * next }; this.scale = next; this.refresh(); }
+  private setup(canvas: HTMLCanvasElement, clear: boolean): CanvasRenderingContext2D { const ctx = canvas.getContext("2d")!; if (clear) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height); } ctx.setTransform(this.dpr * this.scale, 0, 0, this.dpr * this.scale, this.offset.x * this.dpr, this.offset.y * this.dpr); return ctx; }
+  refresh(): void { const page = this.options.page(), ctx = this.setup(this.staticCanvas, true); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, page.width, page.height); ctx.strokeStyle = "#e8edf4"; ctx.lineWidth = 1 / this.scale; ctx.beginPath(); for (let y = 40; y < page.height; y += 40) { ctx.moveTo(0, y); ctx.lineTo(page.width, y); } ctx.stroke(); const preview = this.transform?.matrix; ctx.save(); ctx.beginPath(); ctx.rect(0, 0, page.width, page.height); ctx.clip(); const projection = projectInk(this.options.document()); this.committedPoints = projection.pointCount; for (const stroke of this.visible()) drawInkStroke(ctx, preview && this.selected.has(stroke.id) ? { ...stroke, points: stroke.points.map(p => ({ ...p, ...apply(preview, p) })) } : stroke); ctx.restore(); this.schedule(); }
+  private schedule(): void { if (this.frame) return; this.frame = requestAnimationFrame(() => { this.frame = 0; const started = performance.now(), ctx = this.setup(this.input, true), page = this.options.page(); ctx.save(); ctx.beginPath(); ctx.rect(0, 0, page.width, page.height); ctx.clip(); if (this.active) drawInkStroke(ctx, this.active, false); this.drawOverlay(ctx); ctx.restore(); this.metrics.activePoints = this.active?.points.length ?? 0; this.metrics.frameMs = performance.now() - started; this.options.onMetrics({ ...this.metrics }); }); }
+  private drawOverlay(ctx: CanvasRenderingContext2D): void { if (this.lasso.length > 1) { ctx.strokeStyle = "#2c8976"; ctx.lineWidth = 2 / this.scale; ctx.setLineDash([8 / this.scale, 5 / this.scale]); ctx.beginPath(); ctx.moveTo(this.lasso[0].x, this.lasso[0].y); for (const p of this.lasso.slice(1)) ctx.lineTo(p.x, p.y); ctx.stroke(); ctx.setLineDash([]); } const b = boundsFor(this.selectedStrokes()); if (!b) return; const pad = 10 / this.scale; ctx.strokeStyle = "#2c8976"; ctx.lineWidth = 2 / this.scale; ctx.strokeRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + pad * 2, b.maxY - b.minY + pad * 2); ctx.fillStyle = "#fff"; for (const p of [[b.minX - pad, b.minY - pad], [b.maxX + pad, b.minY - pad], [b.minX - pad, b.maxY + pad], [b.maxX + pad, b.maxY + pad]]) { ctx.fillRect(p[0] - 7 / this.scale, p[1] - 7 / this.scale, 14 / this.scale, 14 / this.scale); ctx.strokeRect(p[0] - 7 / this.scale, p[1] - 7 / this.scale, 14 / this.scale, 14 / this.scale); } ctx.beginPath(); ctx.moveTo((b.minX + b.maxX) / 2, b.minY - pad); ctx.lineTo((b.minX + b.maxX) / 2, b.minY - 45 / this.scale); ctx.stroke(); ctx.beginPath(); ctx.arc((b.minX + b.maxX) / 2, b.minY - 55 / this.scale, 8 / this.scale, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+  private down(e: PointerEvent): void { e.preventDefault(); if (this.activePointer !== undefined) return; this.input.setPointerCapture(e.pointerId); const position = this.local(e.clientX, e.clientY), world = this.world(position); if (e.pointerType === "touch" && !this.options.fingerWriting()) { this.touches.set(e.pointerId, position); return; } if (e.pointerType === "mouse" && e.button !== 0) { if (e.button === 1) this.navigation = { id: e.pointerId, ...position }; return; } const page = this.options.page(); if (world.x < 0 || world.y < 0 || world.x > page.width || world.y > page.height) return; if (this.options.document().operations.length >= 19_990) { this.options.onMessage("操作接近实验上限，请先导出并新建画板。"); return; } this.activePointer = e.pointerId; this.metrics.lastPointer = e.pointerType || "unknown"; this.touches.clear(); const tool = this.options.tool(); if (tool === "select") { this.beginSelect(world); return; } if (tool === "erase" || tool === "partial_erase") { this.erasePath = [world]; this.wholeErase.clear(); this.schedule(); if (tool === "erase") this.erase(world); return; } if (projectInk(this.options.document()).pointCount >= MAX_INK_POINTS) { this.activePointer = undefined; this.options.onMessage("样本达到实验上限，请导出并新建画板。"); return; } const pointerType = ["pen", "mouse", "touch"].includes(e.pointerType) ? e.pointerType as "pen" | "mouse" | "touch" : "unknown"; let segmentId: string; try { segmentId = this.options.segmentId(); } catch (error) { this.activePointer = undefined; this.options.onMessage(error instanceof Error ? error.message : String(error)); return; } this.active = { id: inkId(), page_id: page.id, capture_segment_id: segmentId, pointer_type: pointerType, status: "completed", brush: { ...this.options.brush() }, points: [] }; this.samples(e); this.schedule(); }
+  private beginSelect(point: Point): void { const b = boundsFor(this.selectedStrokes()); if (!b) { this.lasso = [point]; return; } const pad = 12 / this.scale, handle = this.handleAt(point, b, pad); if (handle) { this.transform = { mode: handle === "rotate" ? "rotate" : handle === "move" ? "drag" : "scale", handle, start: point, bounds: b, matrix: { ...identity } }; return; } this.lasso = [point]; this.selected.clear(); this.options.onSelection([]); }
+  private handleAt(p: Point, b: Bounds, pad: number): string | undefined { const corners: Record<string, Point> = { nw: { x: b.minX - pad, y: b.minY - pad }, ne: { x: b.maxX + pad, y: b.minY - pad }, sw: { x: b.minX - pad, y: b.maxY + pad }, se: { x: b.maxX + pad, y: b.maxY + pad }, rotate: { x: (b.minX + b.maxX) / 2, y: b.minY - 55 / this.scale } }; for (const [name, point] of Object.entries(corners)) if (distance(p, point) <= 18 / this.scale) return name; if (p.x >= b.minX - pad && p.x <= b.maxX + pad && p.y >= b.minY - pad && p.y <= b.maxY + pad) return "move"; return undefined; }
+  private move(e: PointerEvent): void { const p = this.local(e.clientX, e.clientY); if (e.pointerId === this.activePointer) { e.preventDefault(); const world = this.world(p), tool = this.options.tool(); if (this.active) this.samples(e); else if (tool === "erase" || tool === "partial_erase") { this.erasePath.push(world); if (tool === "erase") this.erase(world); } else if (tool === "select") { if (this.transform) this.updateTransform(world); else this.lasso.push(world); } this.schedule(); return; } if (this.navigation?.id === e.pointerId) { this.offset.x += p.x - this.navigation.x; this.offset.y += p.y - this.navigation.y; this.navigation = { id: e.pointerId, ...p }; this.refresh(); return; } if (this.activePointer !== undefined || !this.touches.has(e.pointerId)) return; const before = [...this.touches.values()]; this.touches.set(e.pointerId, p); const after = [...this.touches.values()]; if (before.length === 1) { this.offset.x += after[0].x - before[0].x; this.offset.y += after[0].y - before[0].y; } else { const center = (list: Point[]) => ({ x: (list[0].x + list[1].x) / 2, y: (list[0].y + list[1].y) / 2 }); const len = (list: Point[]) => Math.hypot(list[1].x - list[0].x, list[1].y - list[0].y); const previous = center(before), next = center(after), world = this.world(previous); this.scale = Math.max(0.05, Math.min(8, this.scale * len(after) / Math.max(1, len(before)))); this.offset = { x: next.x - world.x * this.scale, y: next.y - world.y * this.scale }; } this.refresh(); }
+  private updateTransform(point: Point): void { const state = this.transform!; const b = state.bounds; if (state.mode === "drag") state.matrix = { ...identity, e: point.x - state.start.x, f: point.y - state.start.y }; else if (state.mode === "rotate") { const center = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 }, a = Math.atan2(state.start.y - center.y, state.start.x - center.x), z = Math.atan2(point.y - center.y, point.x - center.x), cos = Math.cos(z - a), sin = Math.sin(z - a); state.matrix = { a: cos, b: sin, c: -sin, d: cos, e: center.x - cos * center.x + sin * center.y, f: center.y - sin * center.x - cos * center.y }; } else { const anchor = state.handle === "nw" ? { x: b.maxX, y: b.maxY } : state.handle === "ne" ? { x: b.minX, y: b.maxY } : state.handle === "sw" ? { x: b.maxX, y: b.minY } : { x: b.minX, y: b.minY }; const sx = Math.max(0.05, Math.abs((point.x - anchor.x) / Math.max(1, state.start.x - anchor.x))) * Math.sign(point.x - anchor.x || 1) * Math.sign(state.start.x - anchor.x || 1); const sy = Math.max(0.05, Math.abs((point.y - anchor.y) / Math.max(1, state.start.y - anchor.y))) * Math.sign(point.y - anchor.y || 1) * Math.sign(state.start.y - anchor.y || 1); state.matrix = { a: sx, b: 0, c: 0, d: sy, e: anchor.x - sx * anchor.x, f: anchor.y - sy * anchor.y }; } }
+  private samples(e: PointerEvent): void { if (!this.active) return; this.metrics.pointerEvents++; let events: PointerEvent[] = []; try { events = e.getCoalescedEvents?.() ?? []; } catch { /* unavailable on LAN HTTP */ } if (events.length) this.metrics.coalescedSamples += events.length; else events = [e]; for (const sample of events) { if (!this.active) break; if (this.active.points.length >= 100_000 || this.active.points.length + this.committedPoints >= MAX_INK_POINTS) { this.finish("interrupted"); this.options.onMessage("采样达到实验上限；已保留当前笔迹，请导出。"); break; } const world = this.world(this.local(sample.clientX, sample.clientY)), pen = this.active.pointer_type === "pen"; const point: InkPoint = { ...world, t_us: Math.max(0, Math.round(sample.timeStamp * 1000)), pressure: pen && Number.isFinite(sample.pressure) ? sample.pressure : null, tilt_x_deg: pen && Number.isFinite(sample.tiltX) ? sample.tiltX : null, tilt_y_deg: pen && Number.isFinite(sample.tiltY) ? sample.tiltY : null, buttons: sample.buttons }; const previous = this.active.points.at(-1); if (previous && point.t_us < previous.t_us) { this.finish("interrupted"); this.options.onMessage("采样时间倒退，当前笔迹已标记为中断。"); break; } if (!previous || Object.keys(point).some(k => point[k as keyof InkPoint] !== previous[k as keyof InkPoint])) this.active.points.push(point); } }
+  private erase(point: Point): void { for (const stroke of this.visible()) { const radius = stroke.brush.width / 2 + 10 / this.scale; if (stroke.points.some((p, i) => pointSegmentDistance(point, p, stroke.points[i + 1] ?? p) <= radius)) this.wholeErase.add(stroke.id); } this.refresh(); }
+  private fragmentsFor(stroke: InkStroke): InkStroke[] { const radius = stroke.brush.width / 2 + 10 / this.scale, kept = stroke.points.map(p => !this.erasePath.some((q, i) => pointSegmentDistance(p, q, this.erasePath[i + 1] ?? q) <= radius)), fragments: InkStroke[] = []; let points: InkPoint[] = []; const flush = () => { if (points.length) fragments.push({ ...stroke, id: inkId(), points }); points = []; }; stroke.points.forEach((p, i) => { if (kept[i]) points.push(p); else flush(); }); flush(); return fragments; }
+  private finishPartial(): void { const touched = this.visible().filter(s => s.points.some(p => this.erasePath.some((q, i) => pointSegmentDistance(p, q, this.erasePath[i + 1] ?? q) <= s.brush.width / 2 + 10 / this.scale))); for (const stroke of touched) this.options.onPartialErase(stroke.id, this.fragmentsFor(stroke)); }
+  private selectLasso(): void { if (this.lasso.length < 3) return; const ids = this.visible().filter(s => s.points.some(p => polygonContains(p, this.lasso))).map(s => s.id); this.selected = new Set(ids); this.options.onSelection(ids); }
+  private up(e: PointerEvent, status: InkStroke["status"]): void { if (e.pointerId === this.activePointer) { if (status === "completed" && this.active) this.samples(e); if (this.options.tool() === "select") { if (this.transform) { const ids = [...this.selected]; if (JSON.stringify(this.transform.matrix) !== JSON.stringify(identity)) this.options.onTransform(ids, this.transform.matrix); this.transform = undefined; } else { this.selectLasso(); this.lasso = []; } } else if (this.options.tool() === "partial_erase") this.finishPartial(); this.finish(status); } this.touches.delete(e.pointerId); if (this.navigation?.id === e.pointerId) this.navigation = undefined; }
+  finish(status: InkStroke["status"] = "interrupted"): void { const stroke = this.active, erased = [...this.wholeErase]; this.active = undefined; this.activePointer = undefined; this.erasePath = []; this.wholeErase.clear(); if (stroke?.points.length) { stroke.status = status; if (status === "cancelled") this.metrics.cancelled++; this.options.onStroke(stroke); } else if (erased.length) this.options.onErase(erased); this.refresh(); }
+  png(): HTMLCanvasElement { this.finish(); const page = this.options.page(), canvas = document.createElement("canvas"), width = Math.min(2400, Math.round(page.width)), height = Math.max(1, Math.round(page.height * width / page.width)); if (height > 4800) throw new Error("页面尺寸过大，无法生成 PNG；请导出 Ink JSON。"); canvas.width = width; canvas.height = height; const ctx = canvas.getContext("2d")!; ctx.scale(canvas.width / page.width, canvas.height / page.height); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, page.width, page.height); for (const stroke of this.visible()) drawInkStroke(ctx, stroke); return canvas; }
+  dispose(): void { this.observer.disconnect(); window.removeEventListener("blur", this.blur); cancelAnimationFrame(this.frame); }
 }
