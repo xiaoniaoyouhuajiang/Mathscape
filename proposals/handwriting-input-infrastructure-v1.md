@@ -45,7 +45,7 @@ Ink v0 的完成条件是这个闭环可靠成立。模型分析和数学语义�
 
 ### 3.2 后续扩展
 
-本次不实施：多写入者协作、CRDT、云同步、完整 Android Mathscape、局部擦除、移动旋转笔迹、复杂笔刷、无限画布、OCR/HMER、自动来源单元切分、共享语义对齐、ProofState 或 Lean 工作流。
+本次不实施：多写入者协作、CRDT、云同步、完整 Android Mathscape、移动端原生变换、复杂笔刷、无限画布、OCR/HMER、自动来源单元切分、共享语义对齐、ProofState 或 Lean 工作流。桌面 Ink Lab 已实现有限页面、套索变换和局部擦除的 P0 版本。
 
 Android 原生输入是由设备实验触发的扩展分支。若 Web 输入达不到基本书写要求，可提前验证原生采集，但仍遵循同一 Ink 契约，不同时扩展完整移动产品。
 
@@ -320,7 +320,105 @@ v0 提供“登记此选区为来源证据”：后端从受管快照重建选�
 
 框选或套索首先选择整笔；可预览实际选中笔迹，再登记来源证据。未来“询问 Mathscape”使用固定快照与选区，另由多模态提案定义，不在 v0 接入按钮占位或自动发起模型请求。
 
-## 11. 开发任务与依赖
+## 11. 交互与渲染优化方案
+
+本节记录 P0 实机验收后确认的优化方向。它们属于 Ink Lab 的 P0.1 交互优化阶段；不可变快照、EMIR Ink locator 和来源登记仍按 P2 实施。
+
+### 11.1 当前问题与目标
+
+当前原型把笔迹、套索框、变换控制点和擦除预览放在同一个 Canvas 状态中，导致工具切换后残留选择框、控制点没有独立命中区域、变换过程中缺少稳定的实时预览，局部擦除还会重复扫描大量采样点。
+
+P0.1 的目标是：
+
+- 工具切换、页面切换和手势结束时清理所有临时选择与预览状态；
+- 为套索框、四角缩放点、旋转点、拖动区域和局部擦除器提供独立命中区域与光标；
+- 变换过程只更新临时矩阵和预览层，抬笔时才追加一个 `transform` 操作；
+- 局部擦除过程显示擦除光标和受影响片段的实时预览，抬笔时才追加 `partial_erase`；
+- 变换、擦除和页面操作继续使用 Mathscape 自己的 InkOperation，不让渲染库的对象 JSON 成为权威数据。
+
+### 11.2 状态和渲染层分离
+
+前端把状态分为四类：
+
+```text
+ToolState       pen | select | erase | partial_erase
+SelectionState  selected_stroke_ids | lasso_path | handles
+GestureState    idle | writing | lasso | dragging | scaling | rotating | erasing
+PreviewState    transform_matrix | erase_path | preview_fragments
+```
+
+渲染划分为四层：
+
+```text
+SettledInkLayer       已完成笔迹
+ActiveStrokeLayer     当前正在书写的笔迹
+SelectionOverlay      套索、边框、控制点和光标
+PreviewLayer           变换与局部擦除的临时结果
+```
+
+切换工具必须执行统一的 `resetTransientInteraction()`：终结或取消当前手势、清除套索路径、清除变换矩阵、清除擦除预览和释放指针捕获。选择状态可以保留，但选择框只在 `ToolState = select` 时显示；切换到笔或擦除时隐藏 Overlay。
+
+选择框的命中优先级固定为：旋转点 → 四角缩放点 → 框内拖动区域 → 已选笔迹 → 空白区域套索。每个命中区域返回语义工具和 CSS cursor，例如 `grab`、`grabbing`、`nwse-resize`、`nesw-resize`、`crosshair` 和 `cell`。Android 触控不依赖鼠标 hover，触碰控制点时显示短暂的控制状态和预览变化。
+
+### 11.3 渲染适配器路线
+
+保留 `InkDocument`、`InkStroke`、`InkOperation` 和当前的 `perfect-freehand` 输入样本格式，把画布交互改为可替换的渲染适配器：
+
+```text
+InkDocument / InkOperation
+          ↓
+InkViewAdapter
+          ├── settled stroke nodes
+          ├── selection / Transformer
+          ├── active stroke preview
+          └── eraser preview
+```
+
+优先验证 Konva 作为 P0.1 的交互和渲染适配器。Konva 的 `Transformer` 已覆盖多对象拖动、缩放和旋转控制点，[官方示例](https://konvajs.org/docs/select_and_transform/Basic_demo.html)也把 Transformer 与被选节点分开管理。Konva 的 Layer 可以让静态笔迹和动态 Overlay 分开刷新，[性能文档](https://konvajs.org/docs/performance/All_Performance_Tips.html)提供了减少重绘、减少命中检测和拖动时隔离动态层的做法。
+
+Konva 节点只保存 `stroke_id`、当前显示几何和临时变换，不保存 Mathscape 的完整来源数据。`transform` 提交时把矩阵写入 InkOperation；取消手势只丢弃 PreviewState，不能产生空操作。
+
+Fabric.js 作为局部擦除算法的对照实现。其官方 EraserBrush 示例支持擦除笔刷、可擦除对象和擦除撤销，[EraserBrush 文档](https://fabric5.fabricjs.com/erasing)可用于评估交互差异。即使采用 Fabric，也只把它当作渲染适配器，不能直接采用 Fabric JSON 作为 Ink 文档。
+
+tldraw 暂不作为基础依赖。其 SDK 的生产使用需要 trial、hobby 或 commercial license 和有效 license key，[官方许可说明](https://tldraw.dev/community/license)与 Mathscape 的本地优先基础设施目标不匹配。Excalidraw 继续作为交互参考，但其公开 issue 中仍有整笔擦除与局部擦除语义的限制报告，[issue #9199](https://github.com/excalidraw/excalidraw/issues/9199)，需要单独验证后才能复用。
+
+### 11.4 局部擦除算法和性能
+
+当前的局部擦除会在移动事件中重复比较所有笔迹的采样点。P0.1 改为：
+
+1. 每个可见笔迹缓存页面坐标 bounding box；
+2. 使用均匀网格或 R-tree 找到与擦除路径相交的候选笔迹；
+3. 只有候选笔迹进入局部几何计算；
+4. 擦除过程中只更新候选笔迹的 PreviewLayer，不重建整页；
+5. 抬笔时把受影响笔迹切成有序片段，追加一个 `partial_erase` 操作；
+6. 原始 stroke 和原始采样继续保留，撤销通过恢复 source stroke 实现；
+7. 片段 ID、采样顺序、page_id 和 capture_segment_id 必须可确定性重建。
+
+局部擦除器使用屏幕半径映射到页面坐标，显示圆形擦除光标。笔迹密度高时采用采样分桶和线段距离检查，不在每个移动事件中调用完整渲染器。静态完成笔迹缓存轮廓几何；变换只修改节点矩阵，不能因为拖动每帧重新生成所有 `perfect-freehand` 轮廓。
+
+P0.1 以真实 Tab S8+ 样本收敛性能阈值，至少记录：输入事件到 Overlay 更新的延迟、局部擦除时的帧时间、受影响笔迹数、采样点数、页面总笔迹数和内存。验收要求是变换预览和擦除光标连续跟手，局部擦除不因页面中存在大量无关笔迹而出现明显额外延迟；具体数值写入设备报告后冻结。
+
+### 11.5 P0.1 开发步骤
+
+1. **状态清理**：实现工具切换、页面切换、取消和 `pointercancel` 的统一状态复位；补充选择框残留回归。
+2. **交互命中层**：建立控制点和擦除光标的命中区域、光标状态、触控反馈及选择层测试。
+3. **实时预览**：变换和局部擦除只写入 PreviewState；验证拖动、四角缩放、旋转、取消和抬笔提交的一致性。
+4. **Konva 适配器实验**：在独立分支或可切换实现中比较当前 Canvas 与 Konva 的帧时间、控制点命中和 S Pen 触控表现。迁移只覆盖 ViewAdapter，不改变 Ink JSON。
+5. **局部几何优化**：加入空间索引、候选笔迹过滤、片段切分缓存和受影响区域重绘；用 5 分钟和 20 分钟真实手稿回放测量。
+6. **多页交互完善**：页面缩略条、添加/切换页面、当前页选择状态和导出/导入回归；页面结构操作与笔迹操作保持可区分。
+
+### 11.6 P0.1 验收标准
+
+- 切换到笔、整笔擦除或局部擦除后，选择框、套索路径和变换控制点立即隐藏；
+- 旋转点、四角缩放点、框内拖动区和擦除路径具有正确命中区域与光标；
+- 拖动、缩放和旋转过程中每一帧显示临时结果；取消手势不产生操作，完成手势只产生一个 `transform`；
+- 局部擦除过程中圆形光标和片段预览跟随笔尖，完成后产生可回放、可撤销的 `partial_erase`；
+- 页面新增、页面切换、导出和导入保持 page_id、笔迹归属和历史顺序；
+- 原始采样、pressure、tilt、时间和 source stroke 在变换与局部擦除后仍可读取；
+- 使用真实 Tab S8+ / S Pen 回放至少一份短手稿和一份 20 分钟手稿，记录性能数据和未解决问题；
+- 所有 P0.1 浏览器测试、Ink 契约测试和既有 P0 回归通过。
+
+## 12. 开发任务与依赖
 
 ### P0 设备实验与契约 fixture
 
@@ -332,6 +430,7 @@ P0 的 LAN 服务是独立 Node HTTP harness，仅提供打包画板与实验文
 
 - [x] 带局域网地址选择与二维码的电脑启动页面；
 - [x] Pointer Events + Canvas 画板，普通笔、整笔擦除、撤销重做与缩放平移；
+- [x] 有限多页、套索选择、拖动/缩放/旋转变换，以及整笔/局部擦除切换；编辑动作写入 Ink JSON 操作历史；
 - [x] Ink JSON 下载、校验后导入继续书写、PNG 附加预览；
 - [x] 手动发送到电脑、文件完整写入后的回执与下载入口；
 - [x] Rust DTO、生成 Schema、TS 投影，以及跨采集片段和取消/中断笔迹的共享 fixtures；
@@ -364,7 +463,7 @@ P0 的 LAN 服务是独立 Node HTTP harness，仅提供打包画板与实验文
 
 依赖关系为 P0 → P1 → P2 → P3。P0 可以使用小型临时 LAN harness 测量设备，正式网络协议与产品服务仍由 P3 交付。多模态输入和 Android 增强分别以 v0 契约为前提，不改变这个来源闭环。
 
-## 12. 验证与验收
+## 13. 验证与验收
 
 ### 12.1 自动化验证
 
@@ -397,7 +496,7 @@ P0 的 LAN 服务是独立 Node HTTP harness，仅提供打包画板与实验文
 11. LAN 正式使用的传输信任、恢复认证与单写入者边界经真实设备验证；
 12. 首个端到端场景、设备矩阵、性能结果和故障恢复证据进入验收记录。
 
-## 13. 技术选择与后续接口
+## 14. 技术选择与后续接口
 
 第一版采用 Pointer Events + Canvas 2D + 可替换的 perfect-freehand 渲染适配；真正的存储模型属于 Mathscape。使用实测压感时关闭渲染器的模拟压力，保存笔刷与渲染配置以支持回放。
 
@@ -412,7 +511,7 @@ Android 高质量输入候选为 Tauri Kotlin 插件与 AndroidX Ink。原生端
 - [Tauri 移动插件](https://v2.tauri.app/develop/plugins/develop-mobile/)：原生 Kotlin 适配边界；
 - [AndroidX Ink](https://developer.android.com/jetpack/androidx/releases/ink)：后续原生采集与低延迟渲染候选。
 
-## 14. 实施前需收敛的决定与文档维护
+## 15. 实施前需收敛的决定与文档维护
 
 P0 收敛数值编码、批次大小、性能门槛、基础笔刷以及 Ink locator 的粒度规则；P3 收敛局域网传输与设备信任方案。这些决定必须由 fixture 或实测支撑并更新本提案，不能以“后续再说”绕过对应阶段验收。
 
