@@ -17,6 +17,14 @@ async function writeStroke(page: Page): Promise<void> {
 async function pixels(page: Page): Promise<string> {
   return page.locator(".ink-settled").evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
 }
+async function alphaPixels(page: Page, selector = ".ink-input"): Promise<number> {
+  return page.locator(selector).evaluate((canvas: HTMLCanvasElement) => {
+    const data = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+    let count = 0;
+    for (let index = 3; index < data.length; index += 4) if (data[index] > 0) count++;
+    return count;
+  });
+}
 
 test("QR launcher, writing, reversible edits, JSON download/import and desktop save", async ({ page }, info) => {
   const access = await credentials();
@@ -164,4 +172,28 @@ test("adds pages, selects strokes with a lasso, transforms them and supports par
   const document = parseInkDocument(JSON.parse(await readFile(filename, "utf8")));
   expect(document.pages).toHaveLength(2);
   expect(document.operations.map(op => op.kind)).toEqual(expect.arrayContaining(["page_add", "transform", "partial_erase"]));
+});
+
+test("P0.1 clears transient selection overlays and exposes interaction cursors", async ({ page }) => {
+  const access = await credentials(); await page.goto(`/pad#session=${access.padToken}`); await writeStroke(page);
+  const board = (await page.locator("#ink-board").boundingBox())!;
+  const x = board.x + board.width / 2, y = board.y + board.height / 2;
+  await page.getByRole("button", { name: "套索选择", exact: true }).click();
+  await page.mouse.move(x - 150, y - 130); await page.mouse.down();
+  await page.mouse.move(x + 130, y - 130, { steps: 4 }); await page.mouse.move(x + 130, y + 110, { steps: 4 });
+  await page.mouse.move(x - 150, y + 110, { steps: 4 }); await page.mouse.move(x - 150, y - 130, { steps: 4 }); await page.mouse.up();
+  await expect(page.locator("#ink-summary")).toContainText("已选 1 笔");
+  await page.mouse.move(x, y);
+  await expect(page.locator(".ink-input")).toHaveCSS("cursor", "grab");
+  expect(await alphaPixels(page)).toBeGreaterThan(0);
+  await page.mouse.down(); await page.mouse.move(x + 30, y + 20, { steps: 3 });
+  expect(await alphaPixels(page, ".ink-preview")).toBeGreaterThan(0);
+  await page.mouse.up();
+  await expect.poll(() => alphaPixels(page, ".ink-preview")).toBe(0);
+  await page.getByRole("button", { name: "笔", exact: true }).click();
+  await expect.poll(() => alphaPixels(page)).toBe(0);
+  await page.getByRole("button", { name: "局部擦除", exact: true }).click();
+  await page.mouse.move(x, y);
+  await expect(page.locator(".ink-input")).toHaveCSS("cursor", "crosshair");
+  expect(await alphaPixels(page)).toBeGreaterThan(0);
 });

@@ -49,7 +49,7 @@ interface LabInfo { pad_urls: string[]; output_directory: string; exports: Recei
 async function host(): Promise<void> {
   root.innerHTML = `
     <main class="lab-host">
-      <header class="lab-brand"><span class="lab-mark">M</span><div><strong>Mathscape</strong><span>手写实验 · P0</span></div></header>
+      <header class="lab-brand"><span class="lab-mark">M</span><div><strong>Mathscape</strong><span>手写实验 · P0.1</span></div></header>
       <section class="lab-intro"><span class="lab-eyebrow">INK LAB</span><h1>让草稿进入 Mathscape</h1><p>电脑与平板连接同一局域网，选择电脑地址，再用平板扫码打开画板。</p></section>
       <section class="host-grid">
         <article class="lab-card pairing-card"><h2>在平板上书写</h2><label for="lab-address">电脑的局域网地址</label><select id="lab-address"></select><canvas id="lab-qr" aria-label="画板二维码"></canvas><input id="lab-url" aria-label="平板画板地址" readonly><div class="lab-actions"><button id="lab-copy">复制地址</button><a id="lab-local" class="lab-primary" target="_blank" rel="noopener">本机试写</a></div><p class="lab-note">此实验通过 HTTP 提供画板。合并采样等能力以画板诊断为准；停止服务后链接失效。</p></article>
@@ -115,7 +115,7 @@ async function host(): Promise<void> {
 async function pad(): Promise<void> {
   root.innerHTML = `
     <main class="lab-pad">
-      <header class="pad-header"><div class="pad-title"><span class="lab-mark">M</span><input id="ink-title" aria-label="手稿标题" value="数学手稿" maxlength="200"><span class="lab-badge">P0</span></div><span id="ink-connection" class="pad-connection">连接中…</span></header>
+      <header class="pad-header"><div class="pad-title"><span class="lab-mark">M</span><input id="ink-title" aria-label="手稿标题" value="数学手稿" maxlength="200"><span class="lab-badge">P0.1</span></div><span id="ink-connection" class="pad-connection">连接中…</span></header>
       <nav class="ink-toolbar" aria-label="书写工具">
         <div class="ink-tool-group"><button id="ink-pen" class="is-active" aria-pressed="true">笔</button><button id="ink-select" aria-pressed="false">套索选择</button><button id="ink-erase" aria-pressed="false">整笔擦除</button><button id="ink-partial_erase" aria-pressed="false">局部擦除</button><button id="ink-undo" disabled>撤销</button><button id="ink-redo" disabled>重做</button></div>
         <div class="ink-tool-group"><label class="ink-control">颜色<input id="ink-color" type="color" value="#193a66"></label><label class="ink-control">笔宽<input id="ink-width" type="range" min="1" max="16" step="0.5" value="4"></label><label class="ink-control"><input id="ink-finger" type="checkbox">手指书写</label></div>
@@ -154,7 +154,7 @@ async function pad(): Promise<void> {
     let minimum = 1, maximum = 0;
     for (const value of pressure) { minimum = Math.min(minimum, value); maximum = Math.max(maximum, value); }
     const pressureText = pressure.length ? `${minimum.toFixed(3)}–${maximum.toFixed(3)}（API 报告值，能力待实测）` : "未记录笔输入压感";
-    element("#ink-diagnostics").textContent = `安全上下文：${window.isSecureContext ? "是" : "否（LAN HTTP）"} · 合并采样 API：${typeof PointerEvent.prototype.getCoalescedEvents === "function" ? "可用" : "不可用"}\n当前输入：${metrics.lastPointer} · 接收事件：${metrics.pointerEvents} · 合并采样：${metrics.coalescedSamples} · pointercancel：${metrics.cancelled}\n最近笔压：${pressureText} · 最近前景绘制：${metrics.frameMs.toFixed(2)} ms（不是笔尖物理延迟）\n历史：${documentState.operations.length} 个操作 · 桌面保存至：${lastSavedSeq < 0 ? "尚未保存" : `操作 ${lastSavedSeq}`}\n${navigator.userAgent}`;
+    element("#ink-diagnostics").textContent = `安全上下文：${window.isSecureContext ? "是" : "否（LAN HTTP）"} · 合并采样 API：${typeof PointerEvent.prototype.getCoalescedEvents === "function" ? "可用" : "不可用"}\n当前输入：${metrics.lastPointer} · 接收事件：${metrics.pointerEvents} · 合并采样：${metrics.coalescedSamples} · pointercancel：${metrics.cancelled}\n预览：${metrics.previewStrokes ?? 0} 笔 · 擦除候选：${metrics.candidateStrokes ?? 0} 笔\n最近笔压：${pressureText} · 最近前景绘制：${metrics.frameMs.toFixed(2)} ms（不是笔尖物理延迟）\n历史：${documentState.operations.length} 个操作 · 桌面保存至：${lastSavedSeq < 0 ? "尚未保存" : `操作 ${lastSavedSeq}`}\n${navigator.userAgent}`;
   }
   const changed = () => { update(); };
   const board = new InkCanvas(element("#ink-board"), {
@@ -175,23 +175,24 @@ async function pad(): Promise<void> {
   pages(); update();
   window.setInterval(update, 250);
   for (const type of ["pen", "select", "erase", "partial_erase"] as const) element(`#ink-${type}`).addEventListener("click", () => {
-    board.finish(); tool = type;
+    board.resetTransientInteraction(); tool = type;
     for (const value of ["pen", "select", "erase", "partial_erase"] as const) { element(`#ink-${value}`).classList.toggle("is-active", value === tool); element(`#ink-${value}`).setAttribute("aria-pressed", String(value === tool)); }
+    board.refresh();
   });
   element("#ink-add-page").addEventListener("click", () => {
-    board.finish(); tool = "pen"; for (const value of ["pen", "select", "erase", "partial_erase"] as const) { element(`#ink-${value}`).classList.toggle("is-active", value === tool); element(`#ink-${value}`).setAttribute("aria-pressed", String(value === tool)); } const page: InkPage = { id: inkId(), width: 1200, height: 1600 };
+    board.resetTransientInteraction(); tool = "pen"; for (const value of ["pen", "select", "erase", "partial_erase"] as const) { element(`#ink-${value}`).classList.toggle("is-active", value === tool); element(`#ink-${value}`).setAttribute("aria-pressed", String(value === tool)); } const page: InkPage = { id: inkId(), width: 1200, height: 1600 };
     documentState.pages.push(page); appendInk(documentState, { kind: "page_add", page }); currentPage = page.id; selectedStrokeIds = []; revision++; pages(); board.fit(); changed(); message("已新增页面。");
   });
   for (const kind of ["undo", "redo"] as const) element(`#ink-${kind}`).addEventListener("click", () => {
     try {
-      board.finish(); const target = projectInk(documentState)[kind].at(-1);
+      board.resetTransientInteraction(); const target = projectInk(documentState)[kind].at(-1);
       if (target) { appendInk(documentState, { kind, target_command_id: target }); revision++; board.refresh(); changed(); }
     } catch (error) { message(errorText(error)); }
   });
   element("#ink-fit").addEventListener("click", () => board.fit());
   element("#ink-zoom-in").addEventListener("click", () => board.zoom(1.3));
   element("#ink-zoom-out").addEventListener("click", () => board.zoom(1 / 1.3));
-  element<HTMLSelectElement>("#ink-page").addEventListener("change", e => { board.finish(); currentPage = (e.target as HTMLSelectElement).value; board.fit(); });
+  element<HTMLSelectElement>("#ink-page").addEventListener("change", e => { board.resetTransientInteraction(); currentPage = (e.target as HTMLSelectElement).value; selectedStrokeIds = []; board.setSelection([]); board.fit(); });
   element<HTMLInputElement>("#ink-title").addEventListener("input", e => {
     const title = (e.target as HTMLInputElement).value.trim() || "数学手稿";
     if (title !== documentState.title) { documentState.title = title; revision++; }
