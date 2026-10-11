@@ -45,6 +45,18 @@ export interface InkDocument {
   created_at: string; exported_at: string; pages: InkPage[];
   capture_segments: CaptureSegment[]; operations: InkOperation[];
 }
+export type InkDocumentMetadata = Pick<InkDocument, "version" | "document_id" | "title" | "created_at" | "exported_at" | "pages" | "capture_segments">;
+export function inkMetadata(document: InkDocument): InkDocumentMetadata {
+  return {
+    version: document.version,
+    document_id: document.document_id,
+    title: document.title,
+    created_at: document.created_at,
+    exported_at: document.exported_at,
+    pages: structuredClone(document.pages),
+    capture_segments: structuredClone(document.capture_segments),
+  };
+}
 export interface InkProjection {
   strokes: InkStroke[]; visible: InkStroke[]; undo: string[]; redo: string[];
   pointCount: number;

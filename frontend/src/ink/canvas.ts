@@ -621,5 +621,8 @@ export class InkCanvas {
     this.observer.disconnect();
     window.removeEventListener("blur", this.blur);
     cancelAnimationFrame(this.frame);
+    this.settledCanvas.remove();
+    this.previewCanvas.remove();
+    this.input.remove();
   }
 }

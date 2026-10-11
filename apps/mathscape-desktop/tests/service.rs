@@ -11,13 +11,14 @@ use std::{
 use lopdf::{Document, Object, Stream, content::Content, content::Operation, dictionary};
 use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_desktop::{
-    AcceptDiscoveryRequest, DesktopDiscoveryError, DesktopService, DesktopServiceError,
-    MarkerProfileChoice, ParsePdfRequest, PdfImportOutcome, ResumeDiscoveryRequest,
-    RunDiscoveryRequest, SaveWorkspaceSettingsRequest,
+    AcceptDiscoveryRequest, AppendInkOperationRequest, CreateInkDocumentRequest,
+    DesktopDiscoveryError, DesktopService, DesktopServiceError, MarkerProfileChoice,
+    ParsePdfRequest, PdfImportOutcome, ResumeDiscoveryRequest, RunDiscoveryRequest,
+    SaveWorkspaceSettingsRequest,
 };
 use mathscape_domain::{
     ActorRef, DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest,
-    MediaType, RightsRecord, RightsStatus, SourceSelector, StableId,
+    InkLabDocument, MediaType, RightsRecord, RightsStatus, SourceSelector, StableId,
 };
 use mathscape_llm::{CredentialRef, CredentialResolver, MemoryCredentialResolver};
 use mathscape_store_sqlite::{DiscoveryCheckpointStatus, SqliteArtifactStore};
@@ -30,6 +31,50 @@ use wiremock::{
 use std::os::unix::fs::PermissionsExt;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn ink_operations_survive_desktop_reopen_and_duplicate_submission() {
+    let directory = TestDirectory::create("ink-p1-service");
+    let credentials = Arc::new(MemoryCredentialResolver::default());
+    let workspace = directory.path().join("workspace");
+    let service =
+        DesktopService::open_with_credential_store(&workspace, credentials.clone()).unwrap();
+    let mut document: InkLabDocument =
+        serde_json::from_str(include_str!("../../../testdata/ink/p0/trace.json")).unwrap();
+    let operation = document.operations[0].clone();
+    document.operations.clear();
+    let session = service
+        .create_ink_document(CreateInkDocumentRequest {
+            document: document.clone(),
+            session_id: "session-p1".into(),
+            writer_id: "tablet-p1".into(),
+            device: serde_json::json!({"browser":"Chrome","model":"Tab S8+"}),
+        })
+        .unwrap();
+    let request = AppendInkOperationRequest {
+        request_id: "request-p1".into(),
+        document_id: document.document_id.clone(),
+        session_id: session.session_id.clone(),
+        writer_epoch: session.writer_epoch,
+        expected_head: 0,
+        metadata: document.metadata(),
+        operation,
+    };
+    let first = service.append_ink_operation(request.clone()).unwrap();
+    assert!(first.durable);
+    assert!(!first.replayed);
+    let replay = service.append_ink_operation(request).unwrap();
+    assert!(replay.replayed);
+
+    let reopened = DesktopService::open_with_credential_store(&workspace, credentials).unwrap();
+    let stored = reopened
+        .open_ink_document(document.document_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.head_seq, 1);
+    assert_eq!(stored.document.operations.len(), 1);
+    directory.cleanup();
+}
 
 #[derive(Clone, Debug)]
 struct StagedDiscoveryResponder;

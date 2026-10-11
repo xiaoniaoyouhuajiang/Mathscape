@@ -8,6 +8,7 @@ import { mountDiscoveryTask } from "./discovery-task";
 import { GraphController } from "./graph/graph-controller";
 import { InspectorController } from "./inspector/inspector-controller";
 import { LlmSettingsController } from "./llm/settings";
+import { DesktopInkWorkspace } from "./ink/desktop";
 import { ArtifactReader } from "./reader/reader";
 import { mountReviewWorkspace } from "./review/workspace";
 import { AppShell } from "./shell/app-shell";
@@ -23,6 +24,27 @@ const shell = new AppShell(app, {
   isParseActive: () => artifactController?.isParseActive() ?? false,
 });
 const el = shell.elements;
+
+let inkWorkspace!: DesktopInkWorkspace;
+let inkOpen = false;
+const closeInkWorkspace = () => {
+  inkOpen = false;
+  el.inkHost.hidden = true;
+  el.workspaceGrid.hidden = false;
+  el.inkButton.textContent = "手写";
+};
+inkWorkspace = new DesktopInkWorkspace(el.inkHost, closeInkWorkspace, (message, kind) => shell.showToast(message, kind));
+el.inkButton.addEventListener("click", () => {
+  inkOpen = !inkOpen;
+  if (inkOpen) {
+    el.workspaceGrid.hidden = true;
+    el.inkHost.hidden = false;
+    el.inkButton.textContent = "返回地图";
+    void inkWorkspace.open();
+  } else {
+    closeInkWorkspace();
+  }
+});
 
 mountDiscoveryTask();
 mountReviewWorkspace(el.reviewWorkspaceHost);

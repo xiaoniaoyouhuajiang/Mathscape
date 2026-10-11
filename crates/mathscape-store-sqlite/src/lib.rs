@@ -4,6 +4,7 @@
 //! authoritative metadata and provenance transactions.
 
 mod discovery;
+mod ink;
 mod map_edit;
 mod markdown_patch;
 mod read;
@@ -30,6 +31,10 @@ pub use discovery::{
     DiscoveryRunDispositionReceipt, DiscoveryUnitCheckpointRecord, DiscoveryValidationCheckpoint,
     PendingDiscoveryTask, StoredAcceptanceAuthority, StoredDiscoveryRun, StoredDiscoveryRunSummary,
 };
+pub use ink::{
+    INK_STORAGE_VERSION, InkOperationReceipt, StoredInkDocument, StoredInkDocumentSummary,
+    StoredInkSession,
+};
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use source_map::{
@@ -51,7 +56,8 @@ const DISCOVERY_PATCH_REVIEW_MIGRATION: &str =
     include_str!("../../../migrations/0009_discovery_patch_review.sql");
 const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
     include_str!("../../../migrations/0010_discovery_run_recovery.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 12;
+const INK_MIGRATION: &str = include_str!("../../../migrations/0013_ink_p1.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 13;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -84,6 +90,36 @@ pub enum SqliteStoreError {
     DiscoveryInvariant(String),
     #[error("source registration invariant failed: {0}")]
     SourceRegistrationInvariant(String),
+    #[error("ink document was not found: {0}")]
+    InkDocumentNotFound(String),
+    #[error("ink session was not found: {0}")]
+    InkSessionNotFound(String),
+    #[error("ink invariant failed: {0}")]
+    InkInvariant(String),
+    #[error("ink document validation failed: {0}")]
+    InkValidation(String),
+    #[error("ink request has already been used with different content: {0}")]
+    InkRequestConflict(String),
+    #[error("ink head conflict: expected {expected}, actual {actual}")]
+    InkHeadConflict { expected: u64, actual: u64 },
+    #[error("ink sequence conflict: expected {expected}, actual {actual}")]
+    InkSequenceConflict { expected: u64, actual: u64 },
+    #[error(
+        "ink writer conflict for document {document_id}: session {session_id} by {writer_id} is active"
+    )]
+    InkWriterConflict {
+        document_id: String,
+        session_id: String,
+        writer_id: String,
+    },
+    #[error(
+        "ink writer epoch conflict for document {document_id}: expected {expected}, actual {actual}"
+    )]
+    InkWriterEpochConflict {
+        document_id: String,
+        expected: u64,
+        actual: u64,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -208,6 +244,7 @@ impl SqliteArtifactStore {
         }
         validate_markdown_patch_schema(&connection)?;
         validate_discovery_run_recovery_schema(&connection)?;
+        ink::validate_schema(&connection)?;
         validate_registration_schema(&connection)?;
         Ok(Self { connection })
     }
@@ -220,6 +257,89 @@ impl SqliteArtifactStore {
 
     pub fn open_in_memory() -> Result<Self, SqliteStoreError> {
         Self::initialize(Connection::open_in_memory()?)
+    }
+
+    pub fn create_ink_document(
+        &mut self,
+        document: &mathscape_domain::InkLabDocument,
+        session_id: &str,
+        writer_id: &str,
+        device: &serde_json::Value,
+    ) -> Result<StoredInkSession, SqliteStoreError> {
+        ink::create_document(
+            &mut self.connection,
+            document,
+            session_id,
+            writer_id,
+            device,
+        )
+    }
+
+    pub fn start_ink_session(
+        &mut self,
+        document_id: &str,
+        session_id: &str,
+        writer_id: &str,
+        device: &serde_json::Value,
+    ) -> Result<StoredInkSession, SqliteStoreError> {
+        ink::start_session(
+            &mut self.connection,
+            document_id,
+            session_id,
+            writer_id,
+            device,
+        )
+    }
+
+    pub fn close_ink_session(&mut self, session_id: &str) -> Result<(), SqliteStoreError> {
+        ink::close_session(&mut self.connection, session_id)
+    }
+
+    pub fn append_ink_operation(
+        &mut self,
+        request_id: &str,
+        document_id: &str,
+        session_id: &str,
+        writer_epoch: u64,
+        expected_head: u64,
+        metadata: &mathscape_domain::InkLabDocumentMetadata,
+        operation: &mathscape_domain::InkLabOperation,
+    ) -> Result<InkOperationReceipt, SqliteStoreError> {
+        ink::append_operation(
+            &mut self.connection,
+            request_id,
+            document_id,
+            session_id,
+            writer_epoch,
+            expected_head,
+            metadata,
+            operation,
+        )
+    }
+
+    pub fn open_ink_document(
+        &self,
+        document_id: &str,
+    ) -> Result<Option<StoredInkDocument>, SqliteStoreError> {
+        ink::open_document(&self.connection, document_id)
+    }
+
+    pub fn list_ink_documents(&self) -> Result<Vec<StoredInkDocumentSummary>, SqliteStoreError> {
+        ink::list_documents(&self.connection)
+    }
+
+    pub fn ink_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<StoredInkSession>, SqliteStoreError> {
+        ink::read_session(&self.connection, session_id)
+    }
+
+    pub fn list_ink_sessions(
+        &self,
+        document_id: &str,
+    ) -> Result<Vec<StoredInkSession>, SqliteStoreError> {
+        ink::list_sessions(&self.connection, document_id)
     }
 
     fn configure_connection(connection: &Connection) -> Result<(), SqliteStoreError> {
@@ -275,7 +395,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=12 => {
+            6..=13 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -316,6 +436,22 @@ impl SqliteArtifactStore {
                 "../../../migrations/0012_discovery_review_restore.sql"
             ))?;
         }
+        if version < 13 {
+            let ink_migration_exists: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 13",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if ink_migration_exists.is_none() {
+                connection.execute_batch(INK_MIGRATION)?;
+            } else {
+                // A manually restored catalog may have an older user_version
+                // marker while retaining the already applied Ink migration.
+                connection.pragma_update(None, "user_version", 13)?;
+            }
+        }
         validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -324,6 +460,7 @@ impl SqliteArtifactStore {
         )?;
         validate_markdown_patch_schema(&connection)?;
         validate_discovery_run_recovery_schema(&connection)?;
+        ink::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 

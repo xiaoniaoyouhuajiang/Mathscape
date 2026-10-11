@@ -1016,3 +1016,53 @@ code {
     grid-template-columns: 220px minmax(430px, 1fr) 240px;
   }
 }
+
+.secondary-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #405563;
+  border-radius: 8px;
+  color: #d6e9e4;
+  background: #182932;
+  cursor: pointer;
+}
+.secondary-button:hover:not(:disabled) { border-color: #78aa9e; background: #203a42; }
+.secondary-button:disabled { cursor: default; opacity: .5; }
+.ink-workspace { position: absolute; inset: 72px 0 0; z-index: 8; min-height: 0; background: #0d151b; }
+.ink-desktop-shell { display: grid; grid-template-rows: 66px minmax(0, 1fr); height: 100%; color: #dce8e5; }
+.ink-desktop-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 22px; border-bottom: 1px solid #2a3b43; background: #111c23; }
+.ink-desktop-header h2 { margin: 4px 0 0; font-family: Georgia, serif; font-size: 19px; font-weight: 400; }
+.ink-desktop-actions { display: flex; align-items: center; gap: 9px; }
+.ink-persistence-status { max-width: 340px; overflow: hidden; color: #91aaa7; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.ink-desktop-body { display: grid; grid-template-columns: 235px minmax(0, 1fr); min-height: 0; }
+.ink-session-panel { min-width: 0; overflow: auto; padding: 16px 12px; border-right: 1px solid #2a3b43; background: #111a21; }
+.ink-session-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #b8ceca; font-size: 13px; }
+.ink-session-list { display: grid; gap: 7px; margin-top: 13px; }
+.ink-session-list > p { color: #71838a; font-size: 11px; }
+.ink-session-item { display: grid; gap: 5px; width: 100%; padding: 10px; border: 1px solid #2b4148; border-radius: 8px; color: #c9dcd7; background: #15232a; text-align: left; cursor: pointer; }
+.ink-session-item:hover { border-color: #609087; background: #1b3338; }
+.ink-session-item.is-active { border-color: #77afa2; background: #21403f; }
+.ink-session-item strong { overflow: hidden; font-size: 12px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+.ink-session-item span { color: #88a19e; font-size: 10px; }
+.ink-desktop-main { display: grid; grid-template-rows: 52px minmax(0, 1fr) 38px; min-width: 0; min-height: 0; }
+.ink-desktop-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 13px; border-bottom: 1px solid #2a3b43; background: #101c22; }
+.ink-tool-buttons, .ink-page-controls { display: flex; align-items: center; gap: 6px; }
+.ink-tool-buttons button { min-height: 30px; padding: 0 9px; border: 1px solid #354e55; border-radius: 6px; color: #c7dbd6; background: #17272e; font-size: 11px; cursor: pointer; }
+.ink-tool-buttons button.is-active { border-color: #83b8ab; color: #f1fffa; background: #28534e; }
+.ink-page-controls select { min-height: 30px; max-width: 100px; border: 1px solid #405863; border-radius: 6px; color: #c7dbd6; background: #17272e; font-size: 11px; }
+.ink-desktop-board { position: relative; min-height: 0; overflow: hidden; background: #e7ebe9; touch-action: none; }
+.ink-desktop-board .ink-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.ink-desktop-board .ink-settled { z-index: 1; pointer-events: none; }
+.ink-desktop-board .ink-preview { z-index: 2; pointer-events: none; }
+.ink-desktop-board .ink-input { z-index: 3; }
+.ink-desktop-footer { display: flex; align-items: center; gap: 12px; padding: 5px 12px; border-top: 1px solid #2a3b43; color: #90aaa6; background: #111c23; font-size: 11px; }
+.ink-desktop-title { width: 190px; padding: 5px 7px; border: 1px solid #354b54; border-radius: 6px; color: #dce8e5; background: #17262d; font-size: 11px; }
+#desktop-ink-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#desktop-ink-summary { margin-left: auto; white-space: nowrap; }
+@media (max-width: 760px) {
+  .ink-desktop-body { grid-template-columns: 165px minmax(0, 1fr); }
+  .ink-desktop-header { padding: 0 12px; }
+  .ink-persistence-status { display: none; }
+  .ink-desktop-toolbar { overflow: auto; }
+  .ink-tool-buttons button { padding: 0 6px; }
+}

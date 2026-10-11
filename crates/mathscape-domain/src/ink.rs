@@ -24,6 +24,32 @@ pub struct InkLabDocument {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct InkLabDocumentMetadata {
+    pub version: String,
+    pub document_id: String,
+    pub title: String,
+    pub created_at: String,
+    pub exported_at: String,
+    pub pages: Vec<InkLabPage>,
+    pub capture_segments: Vec<InkLabCaptureSegment>,
+}
+
+impl InkLabDocument {
+    pub fn metadata(&self) -> InkLabDocumentMetadata {
+        InkLabDocumentMetadata {
+            version: self.version.clone(),
+            document_id: self.document_id.clone(),
+            title: self.title.clone(),
+            created_at: self.created_at.clone(),
+            exported_at: self.exported_at.clone(),
+            pages: self.pages.clone(),
+            capture_segments: self.capture_segments.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct InkLabPage {
     pub id: String,
     pub width: f64,
@@ -183,6 +209,14 @@ pub enum InkLabOperation {
 }
 
 impl InkLabOperation {
+    pub fn seq(&self) -> u32 {
+        self.identity().0
+    }
+
+    pub fn command_id(&self) -> &str {
+        self.identity().1
+    }
+
     fn identity(&self) -> (u32, &str) {
         match self {
             Self::Stroke {

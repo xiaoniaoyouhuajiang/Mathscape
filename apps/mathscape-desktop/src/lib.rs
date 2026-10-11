@@ -2,6 +2,7 @@ mod backlink;
 mod content;
 mod discovery;
 mod discovery_view;
+mod ink;
 mod llm_settings;
 mod map_edit;
 mod markdown_patch;
@@ -19,6 +20,7 @@ pub use discovery::{
     RestoreDiscoveryReviewRequest, ResumeDiscoveryRequest, RunDiscoveryRequest,
 };
 pub use discovery_view::{DESKTOP_DISCOVERY_VIEW_VERSION, DesktopDiscoveryView};
+pub use ink::{AppendInkOperationRequest, CreateInkDocumentRequest, StartInkSessionRequest};
 pub use llm_settings::{
     LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,
 };
@@ -797,7 +799,14 @@ pub fn run() {
             get_desktop_snapshot,
             choose_and_import_pdf,
             get_active_parse,
-            parse_pdf
+            parse_pdf,
+            ink::create_ink_document,
+            ink::start_ink_session,
+            ink::append_ink_operation,
+            ink::get_ink_document,
+            ink::list_ink_documents,
+            ink::list_ink_sessions,
+            ink::close_ink_session
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Mathscape desktop application");

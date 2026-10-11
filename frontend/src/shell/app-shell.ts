@@ -37,6 +37,8 @@ export interface AppElements {
   llmSettingsHost: HTMLElement;
   llmSettingsButton: HTMLButtonElement;
   llmSettingsLabel: HTMLElement;
+  inkButton: HTMLButtonElement;
+  inkHost: HTMLElement;
 }
 
 export class AppShell {
@@ -72,6 +74,7 @@ export class AppShell {
           <span aria-hidden="true">⚙</span>
           <span id="llm-settings-label">设置</span>
         </button>
+        <button id="ink-button" class="secondary-button" type="button">手写</button>
         <button id="import-pdf" class="primary-button" type="button">
           <span aria-hidden="true">＋</span> 导入 PDF
         </button>
@@ -188,6 +191,8 @@ export class AppShell {
       </aside>
     </main>
 
+    <section id="ink-workspace" class="ink-workspace" hidden aria-label="数学手稿工作区"></section>
+
     <div id="llm-settings-host"></div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
@@ -230,6 +235,8 @@ export class AppShell {
       llmSettingsHost: requiredElement<HTMLElement>("#llm-settings-host", root),
       llmSettingsButton: requiredElement<HTMLButtonElement>("#llm-settings-button", root),
       llmSettingsLabel: requiredElement<HTMLElement>("#llm-settings-label", root),
+      inkButton: requiredElement<HTMLButtonElement>("#ink-button", root),
+      inkHost: requiredElement<HTMLElement>("#ink-workspace", root),
     };
   }
 
