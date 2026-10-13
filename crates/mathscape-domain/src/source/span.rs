@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ContentHash, DomainError, EntityKind, EntityPayload, StableId};
 
-use super::ensure_optional_non_blank;
+use super::{ensure_non_blank, ensure_optional_non_blank};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,6 +25,69 @@ pub enum LayoutKind {
     Figure,
     Footnote,
     Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InkSelectionMode {
+    WholeStrokes,
+    Lasso,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct InkLocator {
+    snapshot_artifact: StableId,
+    page_id: String,
+    stroke_ids: Vec<String>,
+    selection_mode: InkSelectionMode,
+}
+
+impl InkLocator {
+    pub fn new(
+        snapshot_artifact: StableId,
+        page_id: String,
+        stroke_ids: Vec<String>,
+        selection_mode: InkSelectionMode,
+    ) -> Result<Self, DomainError> {
+        ensure_non_blank(&page_id, "ink.page_id")?;
+        let mut seen = HashSet::new();
+        for stroke_id in &stroke_ids {
+            ensure_non_blank(stroke_id, "ink.stroke_id")?;
+            if !seen.insert(stroke_id) {
+                return Err(DomainError::DuplicateValue {
+                    field: "ink.duplicate_stroke_id",
+                    value: stroke_id.clone(),
+                });
+            }
+        }
+        if stroke_ids.is_empty() {
+            return Err(DomainError::EmptyCollection {
+                field: "ink.stroke_ids",
+            });
+        }
+        Ok(Self {
+            snapshot_artifact,
+            page_id,
+            stroke_ids,
+            selection_mode,
+        })
+    }
+
+    pub fn snapshot_artifact(&self) -> &StableId {
+        &self.snapshot_artifact
+    }
+
+    pub fn page_id(&self) -> &str {
+        &self.page_id
+    }
+
+    pub fn stroke_ids(&self) -> &[String] {
+        &self.stroke_ids
+    }
+
+    pub fn selection_mode(&self) -> InkSelectionMode {
+        self.selection_mode
+    }
 }
 
 /// A coordinate normalized to millionths of a page dimension.
@@ -235,6 +298,8 @@ pub struct SourceSpan {
     markdown: Option<MarkdownLocator>,
     exact_text_artifact: Option<StableId>,
     normalized_text_hash: Option<ContentHash>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ink: Option<InkLocator>,
 }
 
 impl SourceSpan {
@@ -304,6 +369,21 @@ impl SourceSpan {
             markdown,
             exact_text_artifact,
             normalized_text_hash,
+            ink: None,
+        })
+    }
+
+    pub fn new_ink(layout: LayoutKind, locator: InkLocator) -> Result<Self, DomainError> {
+        Ok(Self {
+            granularity: SpanGranularity::Inline,
+            layout,
+            page: None,
+            bounding_boxes: vec![],
+            marker_block_ids: vec![],
+            markdown: None,
+            exact_text_artifact: None,
+            normalized_text_hash: None,
+            ink: Some(locator),
         })
     }
 
@@ -314,6 +394,7 @@ impl SourceSpan {
             .as_ref()
             .map(MarkdownLocator::artifact)
             .or_else(|| self.page.as_ref().map(PageCoordinate::artifact))
+            .or_else(|| self.ink.as_ref().map(InkLocator::snapshot_artifact))
             .expect("SourceSpan requires at least one locator")
     }
 
@@ -347,6 +428,10 @@ impl SourceSpan {
 
     pub fn normalized_text_hash(&self) -> Option<&ContentHash> {
         self.normalized_text_hash.as_ref()
+    }
+
+    pub fn ink(&self) -> Option<&InkLocator> {
+        self.ink.as_ref()
     }
 }
 
@@ -429,5 +514,29 @@ mod tests {
                 field: "source_span.locators"
             })
         ));
+    }
+
+    #[test]
+    fn ink_locator_grounds_a_snapshot_and_deduplicates_strokes() {
+        let snapshot = StableId::parse("mathscape:artifact/sha256/snapshot").unwrap();
+        let locator = InkLocator::new(
+            snapshot.clone(),
+            "page-1".into(),
+            vec!["stroke-a".into(), "stroke-b".into()],
+            InkSelectionMode::Lasso,
+        )
+        .unwrap();
+        let span = SourceSpan::new_ink(LayoutKind::Equation, locator).unwrap();
+        assert_eq!(span.primary_artifact(), &snapshot);
+        assert_eq!(span.ink().unwrap().stroke_ids().len(), 2);
+        assert!(
+            InkLocator::new(
+                snapshot,
+                "page-1".into(),
+                vec!["stroke-a".into(), "stroke-a".into()],
+                InkSelectionMode::WholeStrokes,
+            )
+            .is_err()
+        );
     }
 }

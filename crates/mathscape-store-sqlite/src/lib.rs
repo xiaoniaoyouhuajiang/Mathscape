@@ -33,7 +33,7 @@ pub use discovery::{
 };
 pub use ink::{
     INK_STORAGE_VERSION, InkOperationReceipt, StoredInkDocument, StoredInkDocumentSummary,
-    StoredInkSession,
+    StoredInkSession, StoredInkSnapshot,
 };
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
@@ -57,7 +57,8 @@ const DISCOVERY_PATCH_REVIEW_MIGRATION: &str =
 const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
     include_str!("../../../migrations/0010_discovery_run_recovery.sql");
 const INK_MIGRATION: &str = include_str!("../../../migrations/0013_ink_p1.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 13;
+const INK_SNAPSHOT_MIGRATION: &str = include_str!("../../../migrations/0014_ink_snapshots_p2.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 14;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -342,6 +343,53 @@ impl SqliteArtifactStore {
         ink::list_sessions(&self.connection, document_id)
     }
 
+    pub fn record_ink_snapshot(
+        &mut self,
+        request_id: &str,
+        document_id: &str,
+        through_seq: u64,
+        snapshot_id: &str,
+        artifact_id: &str,
+        content_hash: &str,
+        byte_size: u64,
+        manifest_json: &str,
+        created_at: &str,
+    ) -> Result<StoredInkSnapshot, SqliteStoreError> {
+        ink::record_snapshot(
+            &mut self.connection,
+            request_id,
+            document_id,
+            through_seq,
+            snapshot_id,
+            artifact_id,
+            content_hash,
+            byte_size,
+            manifest_json,
+            created_at,
+        )
+    }
+
+    pub fn ink_snapshot_for_request(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<StoredInkSnapshot>, SqliteStoreError> {
+        ink::snapshot_for_request(&self.connection, request_id)
+    }
+
+    pub fn open_ink_snapshot(
+        &self,
+        snapshot_id: &str,
+    ) -> Result<Option<StoredInkSnapshot>, SqliteStoreError> {
+        ink::read_snapshot(&self.connection, snapshot_id)
+    }
+
+    pub fn list_ink_snapshots(
+        &self,
+        document_id: &str,
+    ) -> Result<Vec<StoredInkSnapshot>, SqliteStoreError> {
+        ink::list_snapshots(&self.connection, document_id)
+    }
+
     fn configure_connection(connection: &Connection) -> Result<(), SqliteStoreError> {
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", true)?;
@@ -395,7 +443,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=13 => {
+            6..=14 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -450,6 +498,20 @@ impl SqliteArtifactStore {
                 // A manually restored catalog may have an older user_version
                 // marker while retaining the already applied Ink migration.
                 connection.pragma_update(None, "user_version", 13)?;
+            }
+        }
+        if version < 14 {
+            let snapshot_migration_exists: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 14",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if snapshot_migration_exists.is_none() {
+                connection.execute_batch(INK_SNAPSHOT_MIGRATION)?;
+            } else {
+                connection.pragma_update(None, "user_version", 14)?;
             }
         }
         validate_registration_schema(&connection)?;

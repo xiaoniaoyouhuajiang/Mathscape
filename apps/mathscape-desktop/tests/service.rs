@@ -12,13 +12,14 @@ use lopdf::{Document, Object, Stream, content::Content, content::Operation, dict
 use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_desktop::{
     AcceptDiscoveryRequest, AppendInkOperationRequest, CreateInkDocumentRequest,
-    DesktopDiscoveryError, DesktopService, DesktopServiceError, MarkerProfileChoice,
-    ParsePdfRequest, PdfImportOutcome, ResumeDiscoveryRequest, RunDiscoveryRequest,
-    SaveWorkspaceSettingsRequest,
+    CreateInkSnapshotRequest, DesktopDiscoveryError, DesktopService, DesktopServiceError,
+    MarkerProfileChoice, ParsePdfRequest, PdfImportOutcome, ResumeDiscoveryRequest,
+    RunDiscoveryRequest, SaveWorkspaceSettingsRequest,
 };
 use mathscape_domain::{
     ActorRef, DISCOVERY_SELECTION_VERSION, DiscoveryAdmission, DiscoverySelectionRequest,
-    InkLabDocument, MediaType, RightsRecord, RightsStatus, SourceSelector, StableId,
+    InkLabDocument, InkSnapshotManifest, MediaType, RightsRecord, RightsStatus, SourceSelector,
+    StableId,
 };
 use mathscape_llm::{CredentialRef, CredentialResolver, MemoryCredentialResolver};
 use mathscape_store_sqlite::{DiscoveryCheckpointStatus, SqliteArtifactStore};
@@ -73,6 +74,110 @@ fn ink_operations_survive_desktop_reopen_and_duplicate_submission() {
         .unwrap();
     assert_eq!(stored.head_seq, 1);
     assert_eq!(stored.document.operations.len(), 1);
+    directory.cleanup();
+}
+
+#[test]
+fn ink_snapshot_keeps_a_fixed_operation_prefix_after_later_editing() {
+    let directory = TestDirectory::create("ink-p2-snapshot");
+    let credentials = Arc::new(MemoryCredentialResolver::default());
+    let workspace = directory.path().join("workspace");
+    let service = DesktopService::open_with_credential_store(&workspace, credentials).unwrap();
+    let mut document: InkLabDocument =
+        serde_json::from_str(include_str!("../../../testdata/ink/p0/trace.json")).unwrap();
+    let first_operation = document.operations[0].clone();
+    let second_operation = document.operations[1].clone();
+    document.operations.clear();
+    let session = service
+        .create_ink_document(CreateInkDocumentRequest {
+            document: document.clone(),
+            session_id: "session-p2".into(),
+            writer_id: "desktop-local".into(),
+            device: serde_json::json!({"source":"desktop"}),
+        })
+        .unwrap();
+    let first_request = AppendInkOperationRequest {
+        request_id: "request-p2-1".into(),
+        document_id: document.document_id.clone(),
+        session_id: session.session_id.clone(),
+        writer_epoch: session.writer_epoch,
+        expected_head: 0,
+        metadata: document.metadata(),
+        operation: first_operation,
+    };
+    service.append_ink_operation(first_request).unwrap();
+    let snapshot = service
+        .create_ink_snapshot(CreateInkSnapshotRequest {
+            request_id: "snapshot-request-1".into(),
+            document_id: document.document_id.clone(),
+            expected_head: 1,
+        })
+        .unwrap();
+    let second_request = AppendInkOperationRequest {
+        request_id: "request-p2-2".into(),
+        document_id: document.document_id.clone(),
+        session_id: session.session_id,
+        writer_epoch: session.writer_epoch,
+        expected_head: 1,
+        metadata: document.metadata(),
+        operation: second_operation,
+    };
+    service.append_ink_operation(second_request).unwrap();
+    let mut other_document = document.clone();
+    other_document.document_id = "fixture-document-other".into();
+    service
+        .create_ink_document(CreateInkDocumentRequest {
+            document: other_document.clone(),
+            session_id: "session-p2-other".into(),
+            writer_id: "desktop-local".into(),
+            device: serde_json::json!({"source":"desktop"}),
+        })
+        .unwrap();
+    let catalog = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+    assert_eq!(
+        catalog
+            .list_ink_snapshots(&document.document_id)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        catalog
+            .list_ink_snapshots(&other_document.document_id)
+            .unwrap()
+            .is_empty()
+    );
+    let stored = catalog
+        .open_ink_snapshot(&snapshot.snapshot_id)
+        .unwrap()
+        .unwrap();
+    let manifest: InkSnapshotManifest = serde_json::from_str(&stored.manifest_json).unwrap();
+    assert_eq!(manifest.through_document_seq, 1);
+    assert_eq!(manifest.document.operations.len(), 1);
+    assert_eq!(
+        catalog
+            .open_ink_document(&document.document_id)
+            .unwrap()
+            .unwrap()
+            .head_seq,
+        2
+    );
+    let retry = service
+        .create_ink_snapshot(CreateInkSnapshotRequest {
+            request_id: "snapshot-request-1".into(),
+            document_id: document.document_id,
+            expected_head: 1,
+        })
+        .unwrap();
+    assert_eq!(retry.snapshot_id, snapshot.snapshot_id);
+    let snapshot_artifact = StableId::parse(&snapshot.artifact_id).unwrap();
+    let pool = ArtifactPool::open(&workspace).unwrap();
+    let artifact_path = pool.managed_path(&snapshot_artifact).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&artifact_path, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::write(&artifact_path, b"corrupted snapshot").unwrap();
+    let error = service.open_ink_snapshot(snapshot.snapshot_id).unwrap_err();
+    assert!(error.contains("完整性校验未通过"));
     directory.cleanup();
 }
 

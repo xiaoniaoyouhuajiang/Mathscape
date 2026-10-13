@@ -61,6 +61,14 @@ export interface InkProjection {
   strokes: InkStroke[]; visible: InkStroke[]; undo: string[]; redo: string[];
   pointCount: number;
 }
+export interface InkSnapshotManifest {
+  version: "mathscape-ink-snapshot-1";
+  document_id: string;
+  through_document_seq: number;
+  document: InkDocument;
+  visible_stroke_ids: string[];
+  point_count: number;
+}
 
 export function inkId(): string {
   // getRandomValues is available on LAN HTTP, unlike randomUUID.
@@ -184,6 +192,15 @@ export function parseInkDocument(input: unknown): InkDocument {
   const result = input as InkDocument;
   projectInk(result); // Check erase ownership and the complete undo/redo chain.
   return result;
+}
+
+export function parseInkSnapshotManifest(input: unknown): InkSnapshotManifest {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) throw new Error("Ink 快照无效：manifest 必须是对象");
+  const value = input as Record<string, unknown>;
+  if (value.version !== "mathscape-ink-snapshot-1" || typeof value.document_id !== "string" || typeof value.through_document_seq !== "number" || !Array.isArray(value.visible_stroke_ids) || typeof value.point_count !== "number") throw new Error("Ink 快照无效：manifest 字段不符合契约");
+  const document = parseInkDocument(value.document);
+  if (document.document_id !== value.document_id || document.operations.length !== value.through_document_seq) throw new Error("Ink 快照无效：历史前缀不一致");
+  return { version: value.version, document_id: value.document_id, through_document_seq: value.through_document_seq, document, visible_stroke_ids: value.visible_stroke_ids.map(String), point_count: value.point_count };
 }
 
 export function projectInk(document: InkDocument): InkProjection {

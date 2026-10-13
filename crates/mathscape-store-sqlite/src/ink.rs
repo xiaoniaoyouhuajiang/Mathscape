@@ -50,6 +50,19 @@ pub struct InkOperationReceipt {
     pub replayed: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StoredInkSnapshot {
+    pub snapshot_id: String,
+    pub request_id: String,
+    pub document_id: String,
+    pub through_seq: u64,
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub byte_size: u64,
+    pub manifest_json: String,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct RequestFingerprint<'a> {
     document_id: &'a str,
@@ -155,6 +168,21 @@ pub(crate) fn validate_schema(connection: &Connection) -> Result<(), SqliteStore
             ]
             .as_slice(),
         ),
+        (
+            "ink_snapshots",
+            [
+                "snapshot_id",
+                "request_id",
+                "document_id",
+                "through_seq",
+                "artifact_id",
+                "content_hash",
+                "byte_size",
+                "manifest_json",
+                "created_at",
+            ]
+            .as_slice(),
+        ),
     ] {
         if !schema_object_exists(connection, "table", table)? {
             return Err(SqliteStoreError::MissingSchemaObject {
@@ -175,6 +203,7 @@ pub(crate) fn validate_schema(connection: &Connection) -> Result<(), SqliteStore
         "ink_sessions_by_document",
         "ink_operations_by_command",
         "ink_requests_by_document",
+        "ink_snapshots_by_document",
     ] {
         if !schema_object_exists(connection, "index", index)? {
             return Err(SqliteStoreError::MissingSchemaObject {
@@ -184,6 +213,159 @@ pub(crate) fn validate_schema(connection: &Connection) -> Result<(), SqliteStore
         }
     }
     Ok(())
+}
+
+pub(crate) fn record_snapshot(
+    connection: &mut Connection,
+    request_id: &str,
+    document_id: &str,
+    through_seq: u64,
+    snapshot_id: &str,
+    artifact_id: &str,
+    content_hash: &str,
+    byte_size: u64,
+    manifest_json: &str,
+    created_at: &str,
+) -> Result<StoredInkSnapshot, SqliteStoreError> {
+    validate_identifier(request_id, "snapshot.request_id")?;
+    validate_identifier(document_id, "snapshot.document_id")?;
+    validate_identifier(snapshot_id, "snapshot.snapshot_id")?;
+    validate_identifier(artifact_id, "snapshot.artifact_id")?;
+    validate_identifier(content_hash, "snapshot.content_hash")?;
+    let manifest: mathscape_domain::InkSnapshotManifest = serde_json::from_str(manifest_json)?;
+    manifest
+        .validate()
+        .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
+    if manifest.document_id != document_id
+        || u64::from(manifest.through_document_seq) != through_seq
+    {
+        return Err(SqliteStoreError::InkInvariant(
+            "snapshot manifest does not match its binding".to_owned(),
+        ));
+    }
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    if let Some(existing) = transaction
+        .query_row(
+            "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
+                    content_hash, byte_size, manifest_json, created_at
+             FROM ink_snapshots WHERE request_id = ?1",
+            [request_id],
+            snapshot_from_row,
+        )
+        .optional()?
+    {
+        if existing.document_id == document_id
+            && existing.through_seq == through_seq
+            && existing.manifest_json == manifest_json
+        {
+            transaction.commit()?;
+            return Ok(existing);
+        }
+        return Err(SqliteStoreError::InkRequestConflict(request_id.to_owned()));
+    }
+    if let Some(existing) = transaction
+        .query_row(
+            "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
+                    content_hash, byte_size, manifest_json, created_at
+             FROM ink_snapshots
+             WHERE document_id = ?1 AND through_seq = ?2 AND artifact_id = ?3",
+            params![
+                document_id,
+                sqlite_u64(through_seq, "snapshot.through_seq")?,
+                artifact_id
+            ],
+            snapshot_from_row,
+        )
+        .optional()?
+    {
+        transaction.commit()?;
+        return Ok(existing);
+    }
+    let actual_head: i64 = transaction
+        .query_row(
+            "SELECT head_seq FROM ink_documents WHERE document_id = ?1",
+            [document_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| SqliteStoreError::InkDocumentNotFound(document_id.to_owned()))?;
+    let actual_head = rust_u64(actual_head, "ink head")?;
+    if actual_head != through_seq {
+        return Err(SqliteStoreError::InkHeadConflict {
+            expected: through_seq,
+            actual: actual_head,
+        });
+    }
+    transaction.execute(
+        "INSERT INTO ink_snapshots
+         (snapshot_id, request_id, document_id, through_seq, artifact_id, content_hash,
+          byte_size, manifest_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            snapshot_id,
+            request_id,
+            document_id,
+            sqlite_u64(through_seq, "snapshot.through_seq")?,
+            artifact_id,
+            content_hash,
+            sqlite_u64(byte_size, "snapshot.byte_size")?,
+            manifest_json,
+            created_at,
+        ],
+    )?;
+    transaction.commit()?;
+    read_snapshot(connection, snapshot_id)?.ok_or_else(|| {
+        SqliteStoreError::InkInvariant("snapshot disappeared after commit".to_owned())
+    })
+}
+
+pub(crate) fn read_snapshot(
+    connection: &Connection,
+    snapshot_id: &str,
+) -> Result<Option<StoredInkSnapshot>, SqliteStoreError> {
+    connection
+        .query_row(
+            "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
+                    content_hash, byte_size, manifest_json, created_at
+             FROM ink_snapshots WHERE snapshot_id = ?1",
+            [snapshot_id],
+            snapshot_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+pub(crate) fn snapshot_for_request(
+    connection: &Connection,
+    request_id: &str,
+) -> Result<Option<StoredInkSnapshot>, SqliteStoreError> {
+    connection
+        .query_row(
+            "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
+                    content_hash, byte_size, manifest_json, created_at
+             FROM ink_snapshots WHERE request_id = ?1",
+            [request_id],
+            snapshot_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+pub(crate) fn list_snapshots(
+    connection: &Connection,
+    document_id: &str,
+) -> Result<Vec<StoredInkSnapshot>, SqliteStoreError> {
+    let mut statement = connection.prepare(
+        "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
+                content_hash, byte_size, manifest_json, created_at
+         FROM ink_snapshots WHERE document_id = ?1
+         ORDER BY through_seq DESC, created_at DESC, snapshot_id DESC",
+    )?;
+    statement
+        .query_map([document_id], snapshot_from_row)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 pub(crate) fn create_document(
@@ -764,6 +946,32 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredInkSessio
         })?,
         started_at: row.get(6)?,
         last_seen_at: row.get(7)?,
+    })
+}
+
+fn snapshot_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredInkSnapshot> {
+    Ok(StoredInkSnapshot {
+        snapshot_id: row.get(0)?,
+        request_id: row.get(1)?,
+        document_id: row.get(2)?,
+        through_seq: rust_u64(row.get(3)?, "snapshot.through_seq").map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Integer,
+                Box::new(error),
+            )
+        })?,
+        artifact_id: row.get(4)?,
+        content_hash: row.get(5)?,
+        byte_size: rust_u64(row.get(6)?, "snapshot.byte_size").map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                6,
+                rusqlite::types::Type::Integer,
+                Box::new(error),
+            )
+        })?,
+        manifest_json: row.get(7)?,
+        created_at: row.get(8)?,
     })
 }
 

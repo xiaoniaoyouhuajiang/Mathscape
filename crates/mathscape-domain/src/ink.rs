@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const INK_LAB_VERSION: &str = "mathscape-ink-lab-1";
+pub const INK_SNAPSHOT_VERSION: &str = "mathscape-ink-snapshot-1";
 pub const INK_LAB_MAX_POINTS: usize = 500_000;
 pub const INK_LAB_MAX_OPERATIONS: usize = 20_000;
 const JS_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -45,6 +46,55 @@ impl InkLabDocument {
             pages: self.pages.clone(),
             capture_segments: self.capture_segments.clone(),
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InkSnapshotManifest {
+    pub version: String,
+    pub document_id: String,
+    pub through_document_seq: u32,
+    pub document: InkLabDocument,
+    pub visible_stroke_ids: Vec<String>,
+    pub point_count: usize,
+}
+
+impl InkSnapshotManifest {
+    pub fn from_document(document: &InkLabDocument, through_document_seq: u64) -> Result<Self> {
+        require(
+            through_document_seq <= document.operations.len() as u64,
+            "snapshot.head",
+        )?;
+        let mut prefix = document.clone();
+        prefix.operations.truncate(through_document_seq as usize);
+        let projection = prefix.validate()?;
+        Ok(Self {
+            version: INK_SNAPSHOT_VERSION.to_owned(),
+            document_id: prefix.document_id.clone(),
+            through_document_seq: through_document_seq as u32,
+            document: prefix,
+            visible_stroke_ids: projection.visible_stroke_ids,
+            point_count: projection.point_count,
+        })
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        require(self.version == INK_SNAPSHOT_VERSION, "snapshot.version")?;
+        require(
+            self.document_id == self.document.document_id,
+            "snapshot.document_id",
+        )?;
+        require(
+            self.through_document_seq as usize == self.document.operations.len(),
+            "snapshot.head",
+        )?;
+        let projection = self.document.validate()?;
+        require(
+            projection.visible_stroke_ids == self.visible_stroke_ids
+                && projection.point_count == self.point_count,
+            "snapshot.projection",
+        )
     }
 }
 

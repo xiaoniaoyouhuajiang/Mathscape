@@ -1031,7 +1031,14 @@ code {
 .ink-workspace { position: absolute; inset: 72px 0 0; z-index: 8; min-height: 0; background: #0d151b; }
 .ink-desktop-shell { display: grid; grid-template-rows: 66px minmax(0, 1fr); height: 100%; color: #dce8e5; }
 .ink-desktop-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 22px; border-bottom: 1px solid #2a3b43; background: #111c23; }
-.ink-desktop-header h2 { margin: 4px 0 0; font-family: Georgia, serif; font-size: 19px; font-weight: 400; }
+.ink-document-heading { min-width: 0; }
+.ink-desktop-header h2 { max-width: 32vw; margin: 4px 0 0; overflow: hidden; font-family: Georgia, serif; font-size: 19px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.ink-state-row { display: flex; align-items: center; gap: 5px; margin-top: 5px; }
+.ink-state-badge { display: inline-flex; align-items: center; min-height: 18px; padding: 0 6px; border: 1px solid #40545a; border-radius: 999px; color: #a9bfbb; background: #17272e; font-size: 10px; white-space: nowrap; }
+.ink-state-badge.is-current, .ink-state-badge.is-editable, .ink-state-badge.is-saved { border-color: #5c9c8e; color: #bce8dd; background: #1d3c3b; }
+.ink-state-badge.is-snapshot, .ink-state-badge.is-readonly { border-color: #8d8262; color: #ead9a5; background: #3b3527; }
+.ink-state-badge.is-pending { border-color: #8d754f; color: #f0d39a; background: #3a3022; }
+.ink-state-badge.is-error { border-color: #a76060; color: #ffc4ba; background: #3e2528; }
 .ink-desktop-actions { display: flex; align-items: center; gap: 9px; }
 .ink-persistence-status { max-width: 340px; overflow: hidden; color: #91aaa7; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .ink-desktop-body { display: grid; grid-template-columns: 235px minmax(0, 1fr); min-height: 0; }
@@ -1046,9 +1053,15 @@ code {
 .ink-session-item span { color: #88a19e; font-size: 10px; }
 .ink-desktop-main { display: grid; grid-template-rows: 52px minmax(0, 1fr) 38px; min-width: 0; min-height: 0; }
 .ink-desktop-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 13px; border-bottom: 1px solid #2a3b43; background: #101c22; }
-.ink-tool-buttons, .ink-page-controls { display: flex; align-items: center; gap: 6px; }
+.ink-tool-buttons, .ink-brush-controls, .ink-page-controls { display: flex; align-items: center; gap: 6px; }
 .ink-tool-buttons button { min-height: 30px; padding: 0 9px; border: 1px solid #354e55; border-radius: 6px; color: #c7dbd6; background: #17272e; font-size: 11px; cursor: pointer; }
 .ink-tool-buttons button.is-active { border-color: #83b8ab; color: #f1fffa; background: #28534e; }
+.ink-brush-controls { color: #9eb6b1; font-size: 10px; }
+.ink-brush-controls label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.ink-brush-controls input[type="color"] { width: 25px; height: 25px; padding: 2px; border: 1px solid #405863; border-radius: 5px; background: #17272e; }
+.ink-brush-controls input[type="range"] { width: 70px; accent-color: #78aa9e; }
+.ink-brush-controls output { min-width: 22px; color: #c7dbd6; }
+.ink-check-control input { accent-color: #78aa9e; }
 .ink-page-controls select { min-height: 30px; max-width: 100px; border: 1px solid #405863; border-radius: 6px; color: #c7dbd6; background: #17272e; font-size: 11px; }
 .ink-desktop-board { position: relative; min-height: 0; overflow: hidden; background: #e7ebe9; touch-action: none; }
 .ink-desktop-board .ink-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
@@ -1059,10 +1072,16 @@ code {
 .ink-desktop-title { width: 190px; padding: 5px 7px; border: 1px solid #354b54; border-radius: 6px; color: #dce8e5; background: #17262d; font-size: 11px; }
 #desktop-ink-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #desktop-ink-summary { margin-left: auto; white-space: nowrap; }
+.ink-export-actions { display: flex; gap: 5px; }
+.ink-export-actions .secondary-button { min-height: 27px; padding: 0 8px; font-size: 10px; }
+.ink-session-item.is-context { border-color: #827b61; background: #302d25; }
 @media (max-width: 760px) {
   .ink-desktop-body { grid-template-columns: 165px minmax(0, 1fr); }
   .ink-desktop-header { padding: 0 12px; }
   .ink-persistence-status { display: none; }
   .ink-desktop-toolbar { overflow: auto; }
+  .ink-brush-controls { display: none; }
   .ink-tool-buttons button { padding: 0 6px; }
+  .ink-export-actions { display: none; }
 }
+.ink-snapshot-heading { margin-top: 18px; padding-top: 13px; border-top: 1px solid #2a3b43; color: #a8c1bd; font-size: 12px; }

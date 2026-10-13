@@ -1,9 +1,11 @@
 import { InkCanvas, type CanvasMetrics, type InkTool } from "./canvas";
 import {
   appendInk,
+  encodeInk,
   inkId,
   newDocument,
   parseInkDocument,
+  parseInkSnapshotManifest,
   projectInk,
   type CaptureSegment,
   type InkBrush,
@@ -12,12 +14,16 @@ import {
 } from "./model";
 import {
   InkDesktopTransport,
+  createInkSnapshot,
   createInkDocument,
   inkOutboxItem,
   listInkDocuments,
   listInkSessions,
+  listInkSnapshots,
   openInkDocument,
   startInkSession,
+  openInkSnapshot,
+  type StoredInkSnapshot,
 } from "./persistence";
 import { InkOutbox, type InkOutboxFlushError } from "./outbox";
 
@@ -45,10 +51,31 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function displayTimestamp(value: string): string {
+  const unix = /^unix:(\d+)$/.exec(value);
+  const date = unix ? new Date(Number(unix[1]) * 1000) : new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function download(bytes: Blob, name: string): void {
+  const url = URL.createObjectURL(bytes);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+type PersistenceState = "loading" | "saved" | "pending" | "syncing" | "error";
+
 export class DesktopInkWorkspace {
   private documentState: InkDocument | undefined;
   private currentPage = "";
   private currentSession: SessionRecord | undefined;
+  private currentSnapshot: StoredInkSnapshot | undefined;
+  private readOnly = false;
   private currentSegment: CaptureSegment | undefined;
   private board: InkCanvas | undefined;
   private outbox: InkOutbox | undefined;
@@ -58,6 +85,12 @@ export class DesktopInkWorkspace {
   private logicalHead = 0;
   private loading = false;
   private sessionSummaries: SessionSummary[] = [];
+  private snapshotListRevision = 0;
+  private persistenceState: PersistenceState = "loading";
+  private pendingCount = 0;
+  private brushColor = "#b9e3d8";
+  private brushWidth = 4;
+  private fingerWriting = false;
   private metrics: CanvasMetrics = { pointerEvents: 0, coalescedSamples: 0, cancelled: 0, lastPointer: "—", frameMs: 0, activePoints: 0 };
   private rendered = false;
 
@@ -86,16 +119,18 @@ export class DesktopInkWorkspace {
   private render(): void {
     this.host.innerHTML = [
       '<div class="ink-desktop-shell">',
-      '<header class="ink-desktop-header"><div><span class="eyebrow">INK DOCUMENT</span><h2>数学手稿</h2></div>',
-      '<div class="ink-desktop-actions"><span id="ink-persistence-status" class="ink-persistence-status">正在加载本地手稿…</span><button id="ink-save-now" class="secondary-button" type="button">立即保存</button><button id="ink-close" class="secondary-button" type="button">返回地图</button></div></header>',
-      '<div class="ink-desktop-body"><aside class="ink-session-panel"><div class="ink-session-heading"><strong>手稿会话</strong><button id="ink-new-document" class="secondary-button" type="button">新建</button></div><div id="ink-session-list" class="ink-session-list"><p>正在读取…</p></div></aside>',
+      '<header class="ink-desktop-header"><div class="ink-document-heading"><span class="eyebrow">INK DOCUMENT</span><h2 id="ink-document-heading">数学手稿</h2><div class="ink-state-row"><span id="ink-mode-badge" class="ink-state-badge">未打开</span><span id="ink-editability-badge" class="ink-state-badge">—</span><span id="ink-save-badge" class="ink-state-badge">正在加载</span></div></div>',
+      '<div class="ink-desktop-actions"><span id="ink-persistence-status" class="ink-persistence-status">正在加载本地手稿…</span><button id="ink-continue-current" class="secondary-button" type="button" hidden>继续编辑当前手稿</button><button id="ink-save-now" class="secondary-button" type="button">立即保存</button><button id="ink-snapshot" class="secondary-button" type="button">保存快照</button><button id="ink-close" class="secondary-button" type="button">返回地图</button></div></header>',
+      '<div class="ink-desktop-body"><aside class="ink-session-panel"><div class="ink-session-heading"><strong>手稿会话</strong><button id="ink-new-document" class="secondary-button" type="button">新建</button></div><div id="ink-session-list" class="ink-session-list"><p>正在读取…</p></div><div class="ink-snapshot-heading"><strong>历史快照</strong></div><div id="ink-snapshot-list" class="ink-session-list"><p>请选择手稿。</p></div></aside>',
       '<main class="ink-desktop-main"><nav class="ink-desktop-toolbar" aria-label="手稿工具"><div class="ink-tool-buttons">',
       '<button id="desktop-ink-pen" class="is-active" type="button">笔</button><button id="desktop-ink-erase" type="button">整笔擦除</button><button id="desktop-ink-partial_erase" type="button">局部擦除</button><button id="desktop-ink-select" type="button">套索选择</button><button id="desktop-ink-undo" type="button" disabled>撤销</button><button id="desktop-ink-redo" type="button" disabled>重做</button>',
-      '</div><div class="ink-page-controls"><select id="desktop-ink-page" aria-label="手稿页面"></select><button id="desktop-ink-add-page" class="secondary-button" type="button">新增页面</button></div></nav>',
-      '<div id="desktop-ink-board" class="ink-desktop-board" aria-label="数学手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="200" value="数学手稿" aria-label="手稿标题" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span></footer></main></div></div>',
+      '</div><div class="ink-brush-controls"><label title="之后创建的笔迹使用此颜色">颜色<input id="desktop-ink-color" type="color" value="#b9e3d8" aria-label="笔迹颜色"></label><label title="之后创建的笔迹使用此笔宽">笔宽<input id="desktop-ink-width" type="range" min="1" max="16" step="0.5" value="4" aria-label="笔迹宽度"><output id="desktop-ink-width-value">4</output></label><label class="ink-check-control"><input id="desktop-ink-finger" type="checkbox">手指书写</label></div><div class="ink-page-controls"><select id="desktop-ink-page" aria-label="手稿页面"></select><button id="desktop-ink-add-page" class="secondary-button" type="button">新增页面</button><button id="desktop-ink-zoom-out" class="secondary-button" type="button" aria-label="缩小">−</button><button id="desktop-ink-fit" class="secondary-button" type="button">整页</button><button id="desktop-ink-zoom-in" class="secondary-button" type="button" aria-label="放大">＋</button></div></nav>',
+      '<div id="desktop-ink-board" class="ink-desktop-board" aria-label="数学手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="200" value="数学手稿" aria-label="手稿标题" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div></div>',
     ].join("");
     element<HTMLButtonElement>(this.host, "#ink-close").addEventListener("click", () => this.close());
     element<HTMLButtonElement>(this.host, "#ink-save-now").addEventListener("click", () => void this.flush("手动保存完成。"));
+    element<HTMLButtonElement>(this.host, "#ink-snapshot").addEventListener("click", () => void this.createSnapshot());
+    element<HTMLButtonElement>(this.host, "#ink-continue-current").addEventListener("click", () => void this.continueCurrentDocument());
     element<HTMLButtonElement>(this.host, "#ink-new-document").addEventListener("click", () => void this.createDocument());
     element<HTMLButtonElement>(this.host, "#desktop-ink-add-page").addEventListener("click", () => this.addPage());
     element<HTMLSelectElement>(this.host, "#desktop-ink-page").addEventListener("change", event => {
@@ -106,6 +141,21 @@ export class DesktopInkWorkspace {
       this.board?.fit();
       this.renderSummary();
     });
+    element<HTMLInputElement>(this.host, "#desktop-ink-color").addEventListener("input", event => {
+      this.brushColor = (event.target as HTMLInputElement).value;
+    });
+    element<HTMLInputElement>(this.host, "#desktop-ink-width").addEventListener("input", event => {
+      this.brushWidth = Number((event.target as HTMLInputElement).value);
+      element<HTMLOutputElement>(this.host, "#desktop-ink-width-value").value = String(this.brushWidth);
+    });
+    element<HTMLInputElement>(this.host, "#desktop-ink-finger").addEventListener("change", event => {
+      this.fingerWriting = (event.target as HTMLInputElement).checked;
+    });
+    element<HTMLButtonElement>(this.host, "#desktop-ink-zoom-out").addEventListener("click", () => this.board?.zoom(1 / 1.3));
+    element<HTMLButtonElement>(this.host, "#desktop-ink-fit").addEventListener("click", () => this.board?.fit());
+    element<HTMLButtonElement>(this.host, "#desktop-ink-zoom-in").addEventListener("click", () => this.board?.zoom(1.3));
+    element<HTMLButtonElement>(this.host, "#desktop-ink-export-json").addEventListener("click", () => this.exportJson());
+    element<HTMLButtonElement>(this.host, "#desktop-ink-export-png").addEventListener("click", () => void this.exportPng());
     for (const type of ["pen", "erase", "partial_erase", "select"] as const) {
       element<HTMLButtonElement>(this.host, "#desktop-ink-" + type).addEventListener("click", () => {
         this.board?.resetTransientInteraction();
@@ -149,10 +199,13 @@ export class DesktopInkWorkspace {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "ink-session-item";
-      button.classList.toggle("is-active", summary.document_id === this.documentState?.document_id);
+      const isCurrentDocument = summary.document_id === this.documentState?.document_id;
+      button.classList.toggle("is-active", isCurrentDocument && !this.readOnly);
+      button.classList.toggle("is-context", isCurrentDocument && this.readOnly);
+      if (isCurrentDocument) button.setAttribute("aria-current", this.readOnly ? "location" : "true");
       button.innerHTML = '<strong></strong><span></span>';
       button.querySelector("strong")!.textContent = summary.title;
-      button.querySelector("span")!.textContent = summary.head_seq + " 个已保存操作 · " + new Date(summary.updated_at).toLocaleString();
+      button.querySelector("span")!.textContent = summary.head_seq + " 个已保存操作 · " + displayTimestamp(summary.updated_at);
       button.addEventListener("click", () => void this.openDocument(summary));
       list.append(button);
     }
@@ -187,14 +240,28 @@ export class DesktopInkWorkspace {
     }
   }
 
-  private async mountDocument(documentState: InkDocument, session: SessionRecord, head: number): Promise<void> {
+  private async openSnapshot(snapshotId: string): Promise<void> {
+    try {
+      const stored = await openInkSnapshot(snapshotId);
+      if (!stored) throw new Error("快照不存在或已被移除");
+      const manifest = parseInkSnapshotManifest(JSON.parse(stored.manifest_json));
+      await this.mountDocument(manifest.document, undefined, manifest.through_document_seq, true, stored);
+      this.status("当前正在查看只读历史快照。", false);
+    } catch (error) {
+      this.status("打开快照失败：" + errorText(error), true);
+    }
+  }
+
+  private async mountDocument(documentState: InkDocument, session: SessionRecord | undefined, head: number, readOnly = false, snapshot?: StoredInkSnapshot): Promise<void> {
     this.board?.dispose();
     this.documentState = documentState;
     this.currentPage = documentState.pages[0]?.id ?? "";
     this.currentSession = session;
+    this.currentSnapshot = snapshot;
+    this.readOnly = readOnly;
     this.currentSegment = undefined;
     this.logicalHead = head;
-    await this.replayPending(documentState, session.session_id, head);
+    if (!readOnly && session) await this.replayPending(documentState, session.session_id, head);
     this.renderSessionList(this.sessionSummaries);
     element<HTMLInputElement>(this.host, "#desktop-ink-title").value = documentState.title;
     this.renderPages();
@@ -204,7 +271,8 @@ export class DesktopInkWorkspace {
       segmentId: () => this.segmentId(),
       brush: () => this.brush(),
       tool: () => this.tool,
-      fingerWriting: () => false,
+      fingerWriting: () => this.fingerWriting,
+      readOnly,
       onStroke: stroke => this.commit({ kind: "stroke", stroke }),
       onErase: strokeIds => this.commit({ kind: "erase", stroke_ids: strokeIds }),
       onPartialErase: (sourceStrokeId, fragments) => this.commit(fragments.length ? { kind: "partial_erase", source_stroke_id: sourceStrokeId, fragments } : { kind: "erase", stroke_ids: [sourceStrokeId] }),
@@ -215,7 +283,60 @@ export class DesktopInkWorkspace {
     });
     this.board.refresh();
     this.renderSummary();
-    void this.flush();
+    this.setReadOnlyControls(readOnly);
+    this.renderViewState();
+    void this.refreshSnapshots();
+    if (!readOnly) {
+      this.persistenceState = "saved";
+      void this.flush();
+    }
+  }
+
+  private setReadOnlyControls(readOnly: boolean): void {
+    for (const selector of ["#desktop-ink-pen", "#desktop-ink-erase", "#desktop-ink-partial_erase", "#desktop-ink-select", "#desktop-ink-undo", "#desktop-ink-redo", "#desktop-ink-add-page", "#ink-save-now", "#ink-snapshot"]) {
+      element<HTMLButtonElement>(this.host, selector).disabled = readOnly;
+    }
+    for (const selector of ["#desktop-ink-color", "#desktop-ink-width", "#desktop-ink-finger"]) {
+      element<HTMLInputElement>(this.host, selector).disabled = readOnly;
+    }
+    element<HTMLButtonElement>(this.host, "#ink-continue-current").hidden = !readOnly;
+  }
+
+  private async refreshSnapshots(): Promise<void> {
+    const documentId = this.documentState?.document_id;
+    if (!documentId) return;
+    const revision = ++this.snapshotListRevision;
+    const list = element(this.host, "#ink-snapshot-list");
+    list.replaceChildren();
+    const loading = document.createElement("p");
+    loading.textContent = "正在读取历史快照…";
+    list.append(loading);
+    try {
+      const snapshots = await listInkSnapshots(documentId);
+      if (revision !== this.snapshotListRevision || this.documentState?.document_id !== documentId) return;
+      list.replaceChildren();
+      if (!snapshots.length) {
+        const empty = document.createElement("p");
+        empty.textContent = "还没有历史快照。";
+        list.append(empty);
+        return;
+      }
+      for (const snapshot of snapshots) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "ink-session-item";
+        button.classList.toggle("is-active", snapshot.snapshot_id === this.currentSnapshot?.snapshot_id);
+        button.innerHTML = "<strong></strong><span></span>";
+        button.querySelector("strong")!.textContent = "head " + snapshot.through_seq;
+        button.querySelector("span")!.textContent = (snapshot.snapshot_id === this.currentSnapshot?.snapshot_id ? "正在查看 · " : "") + displayTimestamp(snapshot.created_at);
+        button.addEventListener("click", () => void this.openSnapshot(snapshot.snapshot_id));
+        list.append(button);
+      }
+    } catch (error) {
+      if (revision !== this.snapshotListRevision || this.documentState?.document_id !== documentId) return;
+      list.replaceChildren();
+      this.status("读取历史快照失败：" + errorText(error), true);
+    }
   }
 
   private async replayPending(documentState: InkDocument, sessionId: string, head: number): Promise<void> {
@@ -257,17 +378,23 @@ export class DesktopInkWorkspace {
   }
 
   private brush(): InkBrush {
-    return { renderer: "perfect-freehand@1.2.3", color: "#b9e3d8", width: 4, smoothing: 0.35, streamline: 0.15, thinning: 0.4, simulate_pressure: false };
+    return { renderer: "perfect-freehand@1.2.3", color: this.brushColor, width: this.brushWidth, smoothing: 0.35, streamline: 0.15, thinning: 0.4, simulate_pressure: false };
   }
 
   private commit(command: Parameters<typeof appendInk>[1]): void {
-    if (!this.documentState || !this.currentSession || !this.outbox) return;
+    if (this.readOnly || !this.documentState || !this.currentSession || !this.outbox) return;
     try {
       appendInk(this.documentState, command);
       const operation = this.documentState.operations.at(-1)!;
       const item = inkOutboxItem(this.documentState, operation, inkId(), this.currentSession.session_id, this.currentSession.writer_epoch, this.logicalHead, operation.seq);
       this.logicalHead = operation.seq;
-      void this.outbox.enqueue(item).then(() => this.flush()).catch(error => this.status("本地保存队列失败：" + errorText(error), true));
+      this.persistenceState = "pending";
+      this.pendingCount = Math.max(1, this.pendingCount);
+      this.renderViewState();
+      void this.outbox.enqueue(item).then(async () => {
+        await this.updatePendingState("pending");
+        await this.flush();
+      }).catch(error => this.status("本地保存队列失败：" + errorText(error), true));
       this.board?.refresh();
       this.renderSummary();
     } catch (error) {
@@ -275,15 +402,69 @@ export class DesktopInkWorkspace {
     }
   }
 
-  private async flush(message?: string): Promise<void> {
-    if (!this.outbox) return;
+  private async flush(message?: string): Promise<boolean> {
+    if (!this.outbox) return false;
+    if (this.readOnly) return true;
+    this.persistenceState = "syncing";
+    this.renderViewState();
     this.status("正在保存到本地 Workspace…", false);
     try {
       const result = await this.outbox.flush(this.transport);
+      await this.updatePendingState(result.remaining ? "pending" : "saved");
       if (result.sent || message) this.status(message ?? "已保存 " + result.sent + " 个操作。", false);
+      return true;
     } catch (error) {
       const failure = error as InkOutboxFlushError;
+      this.persistenceState = "error";
+      await this.updatePendingState("error");
       this.status("保存暂时失败，已保留 " + (failure.remaining ?? "待处理") + " 个操作；可稍后重试。", true);
+      return false;
+    }
+  }
+
+  private async createSnapshot(): Promise<void> {
+    if (!this.documentState) return;
+    const saved = await this.flush();
+    if (!saved) return;
+    try {
+      const snapshot = await createInkSnapshot(inkId(), this.documentState.document_id, this.logicalHead);
+      this.status("快照已保存：" + snapshot.snapshot_id, false);
+      await this.refreshSnapshots();
+    } catch (error) {
+      this.status("保存快照失败：" + errorText(error), true);
+    }
+  }
+
+  private async continueCurrentDocument(): Promise<void> {
+    if (!this.documentState) return;
+    const summary = this.sessionSummaries.find(item => item.document_id === this.documentState!.document_id);
+    if (summary) await this.openDocument(summary);
+    else this.status("当前手稿列表尚未加载完成。", true);
+  }
+
+  private exportJson(): void {
+    if (!this.documentState) return;
+    try {
+      const json = encodeInk(this.documentState);
+      const suffix = this.readOnly ? `snapshot-head-${this.logicalHead}` : "current";
+      download(new Blob([json], { type: "application/json" }), `mathscape-ink-${this.documentState.document_id}-${suffix}.json`);
+      this.status(this.readOnly ? "历史快照 Ink JSON 已生成下载。" : "当前手稿 Ink JSON 已生成下载。", false);
+    } catch (error) {
+      this.status("Ink JSON 导出失败：" + errorText(error), true);
+    }
+  }
+
+  private async exportPng(): Promise<void> {
+    if (!this.board || !this.documentState) return;
+    try {
+      const canvas = this.board.png();
+      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
+      if (!blob) throw new Error("PNG 生成失败");
+      const suffix = this.readOnly ? `snapshot-head-${this.logicalHead}` : "current";
+      download(blob, `mathscape-ink-${this.documentState.document_id}-${suffix}.png`);
+      this.status("当前页面 PNG 预览已生成下载；完整编辑历史请使用 Ink JSON。", false);
+    } catch (error) {
+      this.status("PNG 导出失败：" + errorText(error), true);
     }
   }
 
@@ -328,14 +509,56 @@ export class DesktopInkWorkspace {
   private renderSummary(): void {
     if (!this.documentState) return;
     const projection = projectInk(this.documentState);
-    element<HTMLButtonElement>(this.host, "#desktop-ink-undo").disabled = !projection.undo.length;
-    element<HTMLButtonElement>(this.host, "#desktop-ink-redo").disabled = !projection.redo.length;
+    element<HTMLButtonElement>(this.host, "#desktop-ink-undo").disabled = this.readOnly || !projection.undo.length;
+    element<HTMLButtonElement>(this.host, "#desktop-ink-redo").disabled = this.readOnly || !projection.redo.length;
     element(this.host, "#desktop-ink-summary").textContent = projection.visible.length + " 笔 · " + (projection.pointCount + this.metrics.activePoints) + " 点 · head " + this.logicalHead;
+    this.renderViewState();
+  }
+
+  private async updatePendingState(preferred: PersistenceState): Promise<void> {
+    if (!this.documentState || !this.outbox || this.readOnly) return;
+    const documentId = this.documentState.document_id;
+    const sessionId = this.currentSession?.session_id;
+    const pending = (await this.outbox.pending()).filter(item => item.document_id === documentId && (!sessionId || item.session_id === sessionId));
+    this.pendingCount = pending.length;
+    this.persistenceState = pending.length ? (preferred === "error" ? "error" : "pending") : (preferred === "error" ? "error" : "saved");
+    this.renderViewState();
   }
 
   private status(message: string, error: boolean): void {
     element(this.host, "#desktop-ink-status").textContent = message;
-    element(this.host, "#ink-persistence-status").textContent = error ? "本地保存异常" : message;
-    if (error) this.showToast(message, "error");
+    if (error) {
+      this.persistenceState = "error";
+      this.renderViewState();
+      this.showToast(message, "error");
+    } else {
+      element(this.host, "#ink-persistence-status").textContent = message;
+    }
+  }
+
+  private renderViewState(): void {
+    if (!this.documentState) return;
+    element(this.host, "#ink-document-heading").textContent = this.documentState.title;
+    const mode = element(this.host, "#ink-mode-badge");
+    const editable = element(this.host, "#ink-editability-badge");
+    const saved = element(this.host, "#ink-save-badge");
+    mode.textContent = this.readOnly ? "历史快照" : "当前手稿";
+    mode.className = "ink-state-badge " + (this.readOnly ? "is-snapshot" : "is-current");
+    editable.textContent = this.readOnly ? "只读" : "可编辑";
+    editable.className = "ink-state-badge " + (this.readOnly ? "is-readonly" : "is-editable");
+    if (this.readOnly && this.currentSnapshot) {
+      saved.textContent = "截止 head " + this.currentSnapshot.through_seq + " · " + displayTimestamp(this.currentSnapshot.created_at);
+      saved.className = "ink-state-badge is-snapshot";
+    } else {
+      const labels: Record<PersistenceState, string> = {
+        loading: "正在加载",
+        saved: "桌面已保存 · head " + this.logicalHead,
+        pending: "待保存 " + this.pendingCount + " 个操作",
+        syncing: "保存中…",
+        error: "保存失败 · 待处理 " + this.pendingCount,
+      };
+      saved.textContent = labels[this.persistenceState];
+      saved.className = "ink-state-badge " + (this.persistenceState === "saved" ? "is-saved" : this.persistenceState === "error" ? "is-error" : "is-pending");
+    }
   }
 }

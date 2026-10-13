@@ -29,6 +29,18 @@ export interface StoredInkDocument {
   updated_at: string;
 }
 
+export interface StoredInkSnapshot {
+  snapshot_id: string;
+  request_id: string;
+  document_id: string;
+  through_seq: number;
+  artifact_id: string;
+  content_hash: string;
+  byte_size: number;
+  manifest_json: string;
+  created_at: string;
+}
+
 export async function createInkDocument(
   document: InkDocument,
   sessionId: string,
@@ -61,6 +73,24 @@ export async function listInkSessions(documentId: string): Promise<StoredInkSess
 
 export async function openInkDocument(documentId: string): Promise<StoredInkDocument | null> {
   return await safeInvoke<StoredInkDocument | null>("get_ink_document", { documentId });
+}
+
+export async function createInkSnapshot(
+  requestId: string,
+  documentId: string,
+  expectedHead: number,
+): Promise<StoredInkSnapshot> {
+  return await safeInvoke<StoredInkSnapshot>("create_ink_snapshot", {
+    request: { request_id: requestId, document_id: documentId, expected_head: expectedHead },
+  });
+}
+
+export async function listInkSnapshots(documentId: string): Promise<StoredInkSnapshot[]> {
+  return await safeInvoke<StoredInkSnapshot[]>("list_ink_snapshots", { documentId });
+}
+
+export async function openInkSnapshot(snapshotId: string): Promise<StoredInkSnapshot | null> {
+  return await safeInvoke<StoredInkSnapshot | null>("get_ink_snapshot", { snapshotId });
 }
 
 export async function closeInkSession(sessionId: string): Promise<void> {

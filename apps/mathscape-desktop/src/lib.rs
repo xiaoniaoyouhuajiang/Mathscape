@@ -20,7 +20,10 @@ pub use discovery::{
     RestoreDiscoveryReviewRequest, ResumeDiscoveryRequest, RunDiscoveryRequest,
 };
 pub use discovery_view::{DESKTOP_DISCOVERY_VIEW_VERSION, DesktopDiscoveryView};
-pub use ink::{AppendInkOperationRequest, CreateInkDocumentRequest, StartInkSessionRequest};
+pub use ink::{
+    AppendInkOperationRequest, CreateInkDocumentRequest, CreateInkSnapshotRequest,
+    StartInkSessionRequest,
+};
 pub use llm_settings::{
     LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,
 };
@@ -803,6 +806,9 @@ pub fn run() {
             ink::create_ink_document,
             ink::start_ink_session,
             ink::append_ink_operation,
+            ink::create_ink_snapshot,
+            ink::list_ink_snapshots,
+            ink::get_ink_snapshot,
             ink::get_ink_document,
             ink::list_ink_documents,
             ink::list_ink_sessions,

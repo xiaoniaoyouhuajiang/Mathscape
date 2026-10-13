@@ -9,6 +9,7 @@ export interface InkCanvasOptions {
   brush: () => InkBrush;
   tool: () => InkTool;
   fingerWriting: () => boolean;
+  readOnly?: boolean;
   onStroke: (stroke: InkStroke) => void;
   onErase: (ids: string[]) => void;
   onPartialErase: (sourceStrokeId: string, fragments: InkStroke[]) => void;
@@ -140,6 +141,7 @@ export class InkCanvas {
     this.previewCanvas.className = "ink-canvas ink-preview";
     this.input.className = "ink-canvas ink-input";
     this.input.setAttribute("aria-label", "手写画板");
+    if (options.readOnly) this.input.style.pointerEvents = "none";
     this.input.dataset.cursor = "crosshair";
     host.append(this.settledCanvas, this.previewCanvas, this.input);
     this.input.addEventListener("pointerdown", e => this.down(e));
@@ -359,6 +361,7 @@ export class InkCanvas {
   }
   private down(e: PointerEvent): void {
     e.preventDefault();
+    if (this.options.readOnly) return;
     if (this.activePointer !== undefined) return;
     const position = this.local(e.clientX, e.clientY), world = this.world(position);
     if (e.pointerType === "touch" && !this.options.fingerWriting()) { this.touches.set(e.pointerId, position); return; }
