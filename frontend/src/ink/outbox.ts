@@ -190,7 +190,8 @@ export class InkOutbox {
     for (const item of pending) {
       try {
         const acknowledgement = await transport.submit(item);
-        if (!acknowledgement.durable || acknowledgement.request_id !== item.request_id) {
+        if (!acknowledgement.durable || acknowledgement.request_id !== item.request_id
+            || acknowledgement.document_id !== item.document_id || acknowledgement.command_id !== item.operation.command_id || acknowledgement.seq !== item.operation.seq) {
           throw new Error("server response is not a durable ACK for this request");
         }
         await this.store.remove(item.request_id);

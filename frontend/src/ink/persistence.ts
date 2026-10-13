@@ -40,6 +40,40 @@ export interface StoredInkSnapshot {
   manifest_json: string;
   created_at: string;
 }
+export type StoredInkSnapshotSummary = Omit<StoredInkSnapshot, "manifest_json">;
+
+export interface InkSelection {
+  page_id: string;
+  stroke_ids: string[];
+  selection_mode: "whole_strokes" | "lasso";
+}
+
+export interface InkEvidenceRequest extends InkSelection {
+  request_id: string;
+  snapshot_id: string;
+  expected_artifact_id: string;
+  expected_content_hash: string;
+}
+
+export interface InkEvidenceReceipt extends InkSelection {
+  version: string;
+  request_id: string;
+  snapshot_id: string;
+  artifact_id: string;
+  span_id: string;
+  revision_id: string;
+  commit_id: string;
+  outcome: "created" | "reused";
+  committed_at: string;
+}
+
+export function registerInkEvidence(request: InkEvidenceRequest): Promise<InkEvidenceReceipt> {
+  return safeInvoke("register_ink_evidence", { request });
+}
+
+export function listInkEvidence(snapshotId: string): Promise<InkEvidenceReceipt[]> {
+  return safeInvoke("list_ink_evidence", { snapshotId });
+}
 
 export async function createInkDocument(
   document: InkDocument,
@@ -85,8 +119,8 @@ export async function createInkSnapshot(
   });
 }
 
-export async function listInkSnapshots(documentId: string): Promise<StoredInkSnapshot[]> {
-  return await safeInvoke<StoredInkSnapshot[]>("list_ink_snapshots", { documentId });
+export async function listInkSnapshots(documentId: string): Promise<StoredInkSnapshotSummary[]> {
+  return await safeInvoke<StoredInkSnapshotSummary[]>("list_ink_snapshots", { documentId });
 }
 
 export async function openInkSnapshot(snapshotId: string): Promise<StoredInkSnapshot | null> {

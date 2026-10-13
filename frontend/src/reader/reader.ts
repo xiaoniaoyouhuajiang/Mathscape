@@ -5,6 +5,8 @@ import { contentInfo, readRange, readSmallFile, resolveProductPath, type Content
 import { markdownRenderer } from "./markdown";
 import { markdownDocument, MarkdownSelection, type PatchReviewMode } from "./selection";
 import { eventBus } from "../core/events";
+import { openInkSnapshot } from "../ink/persistence";
+import { mountInkSnapshotReader, type InkReaderFocus } from "../ink/snapshot-reader";
 import "./reader.css";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -24,12 +26,14 @@ export interface ReaderOpenOptions {
   /** Opens the Markdown patch review of a run instead of the latest pending one. */
   patch?: { runId: string; mode: PatchReviewMode };
   conversionId?: string | null;
+  inkFocus?: InkReaderFocus;
 }
 
 export class ArtifactReader {
   private generation = 0;
   private disposeDocument: (() => void) | undefined;
   private urls: string[] = [];
+  private inkOpen = false;
   constructor(private host: HTMLElement) {}
 
   private revokeImages(): void {
@@ -43,7 +47,10 @@ export class ArtifactReader {
     this.disposeDocument = undefined;
     this.revokeImages();
     this.host.replaceChildren();
+    this.inkOpen = false;
   }
+
+  isInkOpen(): boolean { return this.inkOpen; }
 
   async open(id: string, title: string, options: ReaderOpenOptions = {}): Promise<void> {
     this.close();
@@ -56,7 +63,13 @@ export class ArtifactReader {
     try {
       const info = await contentInfo(id);
       if (generation !== this.generation) return;
-      if (info.media_type === "application/pdf") {
+      if (info.ink_snapshot_id) {
+        const snapshot = await openInkSnapshot(info.ink_snapshot_id);
+        if (generation !== this.generation) return;
+        if (!snapshot || snapshot.artifact_id !== id) throw new Error("Ink 快照与所选 Artifact 不一致");
+        this.disposeDocument = mountInkSnapshotReader(this.host,snapshot,options.inkFocus);
+        this.inkOpen = true;
+      } else if (info.media_type === "application/pdf") {
         await this.pdf(info, generation, pdfPageIndex);
       } else if (info.media_type === "text/markdown") {
         await this.markdown(info, generation, focus, patch, conversionId);

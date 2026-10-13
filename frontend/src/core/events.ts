@@ -23,6 +23,7 @@ export interface MathscapeEventMap {
   "source-map-changed": { reason?: string } | void;
   "discovery-runs-changed": void;
   "open-source": OpenSourceDetail;
+  "open-ink-document": { documentId: string };
   "open-review": OpenReviewDetail;
   "reader-opened": void;
   "open-settings": void;
@@ -58,6 +59,7 @@ export class MathscapeEventBus {
       "source-map-changed",
       "discovery-runs-changed",
       "open-source",
+      "open-ink-document",
       "open-review",
       "reader-opened",
       "open-settings",

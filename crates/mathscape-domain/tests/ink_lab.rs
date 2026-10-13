@@ -1,9 +1,50 @@
-use mathscape_domain::{InkLabDocument, InkLabOperation, InkLabProjection};
+use mathscape_domain::{InkLabDocument, InkLabOperation, InkLabProjection, InkSnapshotManifest};
 use serde_json::Value;
 
 const TRACE: &str = include_str!("../../../testdata/ink/p0/trace.json");
 const EXPECTED: &str = include_str!("../../../testdata/ink/p0/projection.json");
 const INVALID: &str = include_str!("../../../testdata/ink/p0/invalid-cases.json");
+
+#[test]
+fn immutable_snapshot_and_page_selection_match_the_shared_fixture() {
+    let document: InkLabDocument = serde_json::from_str(TRACE).unwrap();
+    let manifest = InkSnapshotManifest::from_document(&document, 2).unwrap();
+    let fixture: InkSnapshotManifest =
+        serde_json::from_str(include_str!("../../../testdata/ink/p2/snapshot.json")).unwrap();
+    assert_eq!(manifest, fixture);
+    fixture
+        .validate_selection("page-a", &["stroke-a".into()])
+        .unwrap();
+    assert!(
+        fixture
+            .validate_selection("page-a", &["stroke-b".into()])
+            .is_err()
+    );
+    let mut bad = fixture;
+    bad.visible_stroke_ids.clear();
+    assert!(bad.validate().is_err());
+}
+
+#[test]
+fn legacy_fragment_summary_is_compatible_but_new_snapshots_include_fragments() {
+    let old: InkSnapshotManifest = serde_json::from_str(include_str!(
+        "../../../testdata/ink/p2/legacy-fragments.json"
+    ))
+    .unwrap();
+    old.validate_selection("page-a", &["fragment-a".into()])
+        .unwrap();
+    let new = InkSnapshotManifest::from_document(&old.document, 2).unwrap();
+    assert_eq!(new.version, "mathscape-ink-snapshot-2");
+    assert_eq!(new.visible_stroke_ids, vec!["fragment-a"]);
+    let mut invalid = new.clone();
+    invalid.visible_stroke_ids.clear();
+    assert!(invalid.validate().is_err());
+    let mut bad_document = new.document;
+    if let InkLabOperation::PartialErase { fragments, .. } = &mut bad_document.operations[1] {
+        fragments[0].points[0].pressure = Some(2.0);
+    }
+    assert!(bad_document.validate().is_err());
+}
 
 #[test]
 fn interchange_replays_edits_and_preserves_cancelled_and_interrupted_samples() {

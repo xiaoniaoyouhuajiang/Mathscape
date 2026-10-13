@@ -141,7 +141,6 @@ export class InkCanvas {
     this.previewCanvas.className = "ink-canvas ink-preview";
     this.input.className = "ink-canvas ink-input";
     this.input.setAttribute("aria-label", "手写画板");
-    if (options.readOnly) this.input.style.pointerEvents = "none";
     this.input.dataset.cursor = "crosshair";
     host.append(this.settledCanvas, this.previewCanvas, this.input);
     this.input.addEventListener("pointerdown", e => this.down(e));
@@ -202,6 +201,7 @@ export class InkCanvas {
   setSelection(ids: string[]): void {
     const visible = new Set(this.visible().map(stroke => stroke.id));
     this.selected = new Set(ids.filter(id => visible.has(id)));
+    this.options.onSelection([...this.selected]);
     this.schedule();
   }
   /** Clear only transient gesture state; the selected ids remain available when re-entering lasso mode. */
@@ -294,6 +294,13 @@ export class InkCanvas {
   }
   private drawOverlay(ctx: CanvasRenderingContext2D): void {
     if (this.options.tool() === "select") {
+      if (this.options.readOnly && this.selected.size) {
+        ctx.save();
+        ctx.shadowColor = "#2c8976";
+        ctx.shadowBlur = 8;
+        for (const stroke of this.selectedStrokes()) drawInkStroke(ctx, stroke);
+        ctx.restore();
+      }
       if (this.lasso.length > 1) {
         ctx.strokeStyle = "#2c8976";
         ctx.lineWidth = 2 / this.scale;
@@ -321,6 +328,7 @@ export class InkCanvas {
     ctx.strokeStyle = "#2c8976";
     ctx.lineWidth = 2 / this.scale;
     ctx.strokeRect(bounds.minX - pad, bounds.minY - pad, bounds.maxX - bounds.minX + pad * 2, bounds.maxY - bounds.minY + pad * 2);
+    if (this.options.readOnly) return;
     ctx.fillStyle = "#fff";
     for (const [handle, point] of corners) {
       const active = this.activeTarget === handle || this.hoverTarget === handle;
@@ -355,20 +363,21 @@ export class InkCanvas {
     return undefined;
   }
   private targetAt(point: Point): InteractionTarget {
+    if (this.options.readOnly) return "canvas";
     const bounds = this.boundsForSelection();
     if (!bounds) return "canvas";
     return this.handleAt(point, bounds, 12 / this.scale) ?? "canvas";
   }
   private down(e: PointerEvent): void {
     e.preventDefault();
-    if (this.options.readOnly) return;
     if (this.activePointer !== undefined) return;
     const position = this.local(e.clientX, e.clientY), world = this.world(position);
     if (e.pointerType === "touch" && !this.options.fingerWriting()) { this.touches.set(e.pointerId, position); return; }
     if (e.pointerType === "mouse" && e.button !== 0) { if (e.button === 1) this.navigation = { id: e.pointerId, ...position }; return; }
+    if (this.options.readOnly && this.options.tool() !== "select") return;
     const page = this.options.page();
     if (world.x < 0 || world.y < 0 || world.x > page.width || world.y > page.height) return;
-    if (this.options.document().operations.length >= 19_990) { this.options.onMessage("操作接近实验上限，请先导出并新建画板。"); return; }
+    if (!this.options.readOnly && this.options.document().operations.length >= 19_990) { this.options.onMessage("操作接近实验上限，请先导出并新建画板。"); return; }
     this.input.setPointerCapture(e.pointerId);
     this.activePointer = e.pointerId;
     this.metrics.lastPointer = e.pointerType || "unknown";
@@ -396,7 +405,7 @@ export class InkCanvas {
   }
   private beginSelect(point: Point): void {
     const bounds = this.boundsForSelection();
-    const target = bounds ? this.handleAt(point, bounds, 12 / this.scale) : undefined;
+    const target = !this.options.readOnly && bounds ? this.handleAt(point, bounds, 12 / this.scale) : undefined;
     this.activeTarget = target ?? "canvas";
     this.setCursor(this.activeTarget);
     if (target) {
@@ -561,7 +570,7 @@ export class InkCanvas {
     if (tool === "select") {
       if (this.transform) {
         const ids = [...this.selected];
-        if (!sameMatrix(this.transform.matrix, identity)) this.options.onTransform(ids, this.transform.matrix);
+        if (!this.options.readOnly && !sameMatrix(this.transform.matrix, identity)) this.options.onTransform(ids, this.transform.matrix);
       } else this.selectLasso();
     } else if (tool === "erase" && this.wholeErase.size) this.options.onErase([...this.wholeErase]);
     else if (tool === "partial_erase") this.finishPartial();

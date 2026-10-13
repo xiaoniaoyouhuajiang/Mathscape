@@ -1,11 +1,11 @@
 use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_domain::{
     ActorRef, ArtifactCheckResult, InkLabDocument, InkLabDocumentMetadata, InkLabOperation,
-    InkSnapshotManifest, MediaType, StableId,
+    InkSnapshotManifest, MediaType, RegisterInkEvidenceRequest, StableId, Timestamp,
 };
 use mathscape_store_sqlite::{
-    InkOperationReceipt, StoredInkDocument, StoredInkDocumentSummary, StoredInkSession,
-    StoredInkSnapshot,
+    InkEvidenceReceipt, InkOperationReceipt, StoredInkDocument, StoredInkDocumentSummary,
+    StoredInkSession, StoredInkSnapshot, StoredInkSnapshotSummary,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -13,6 +13,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
 use crate::{DesktopService, DesktopState};
+
+#[derive(Deserialize)]
+struct SnapshotTitle {
+    document: SnapshotDocumentTitle,
+}
+#[derive(Deserialize)]
+struct SnapshotDocumentTitle {
+    title: String,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CreateInkDocumentRequest {
@@ -59,31 +68,37 @@ impl DesktopService {
             &self.workspace_root().join("mathscape.sqlite3"),
         )
         .map_err(|error| error.to_string())?;
+        let created_at = format!(
+            "unix:{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| error.to_string())?
+                .as_secs()
+        );
+        let reservation = store
+            .reserve_ink_snapshot(
+                &request.request_id,
+                &request.document_id,
+                request.expected_head,
+                &created_at,
+            )
+            .map_err(|error| error.to_string())?;
         if let Some(existing) = store
             .ink_snapshot_for_request(&request.request_id)
             .map_err(|error| error.to_string())?
         {
             return Ok(existing);
         }
-        let stored = store
-            .open_ink_document(&request.document_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "手稿不存在或已被移除".to_owned())?;
-        if stored.head_seq != request.expected_head {
-            return Err(format!(
-                "手稿 head 已变化：预期 {}，当前 {}",
-                request.expected_head, stored.head_seq
-            ));
-        }
-        let manifest = InkSnapshotManifest::from_document(&stored.document, request.expected_head)
-            .map_err(|error| error.to_string())?;
-        let manifest_json = serde_json::to_string(&manifest).map_err(|error| error.to_string())?;
+        let manifest_json = reservation.manifest_json;
+        let title: SnapshotTitle =
+            serde_json::from_str(&manifest_json).map_err(|error| error.to_string())?;
         let actor = ActorRef::parse("mathscape-desktop").map_err(|error| error.to_string())?;
         let metadata = ArtifactMetadata::derived(
-            MediaType::parse("application/json").map_err(|error| error.to_string())?,
+            MediaType::parse("application/vnd.mathscape.ink-snapshot+json")
+                .map_err(|error| error.to_string())?,
             Some(format!(
-                "mathscape-ink-snapshot-{}.json",
-                request.document_id
+                "{} · 手稿快照 head {}.json",
+                title.document.title, reservation.through_seq
             )),
         )
         .map_err(|error| error.to_string())?;
@@ -99,13 +114,6 @@ impl DesktopService {
             .unwrap_or(imported.content_hash().as_str());
         let snapshot_id = StableId::parse(format!("mathscape:ink-snapshot/{digest}"))
             .map_err(|error| error.to_string())?;
-        let created_at = format!(
-            "unix:{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|error| error.to_string())?
-                .as_secs()
-        );
         store
             .record_ink_snapshot(
                 &request.request_id,
@@ -116,7 +124,7 @@ impl DesktopService {
                 imported.content_hash().as_str(),
                 imported.byte_size(),
                 &manifest_json,
-                &created_at,
+                &reservation.created_at,
             )
             .map_err(|error| error.to_string())
     }
@@ -124,7 +132,7 @@ impl DesktopService {
     pub fn list_ink_snapshots(
         &self,
         document_id: String,
-    ) -> Result<Vec<StoredInkSnapshot>, String> {
+    ) -> Result<Vec<StoredInkSnapshotSummary>, String> {
         let store = mathscape_store_sqlite::SqliteArtifactStore::open(
             &self.workspace_root().join("mathscape.sqlite3"),
         )
@@ -150,6 +158,22 @@ impl DesktopService {
         };
         let snapshot_artifact = StableId::parse(&snapshot.artifact_id)
             .map_err(|error| format!("快照 Artifact 标识无效：{error}"))?;
+        let catalog = store
+            .read_catalog_snapshot()
+            .map_err(|error| error.to_string())?;
+        let artifact = catalog
+            .artifacts()
+            .iter()
+            .find(|record| record.entity().header().stable_id() == &snapshot_artifact)
+            .ok_or("快照 Artifact 未登记")?
+            .entity()
+            .payload();
+        if !matches!(
+            artifact.media_type().as_str(),
+            "application/json" | "application/vnd.mathscape.ink-snapshot+json"
+        ) {
+            return Err("快照 Artifact 媒体类型无效".into());
+        }
         let mut pool =
             ArtifactPool::open(&self.workspace_root()).map_err(|error| error.to_string())?;
         let verification = pool
@@ -192,6 +216,71 @@ impl DesktopService {
             return Err("快照 manifest 与索引绑定不一致".to_owned());
         }
         Ok(Some(snapshot))
+    }
+
+    pub fn open_ink_snapshot_for_artifact(
+        &self,
+        artifact_id: String,
+    ) -> Result<Option<StoredInkSnapshot>, String> {
+        let store = mathscape_store_sqlite::SqliteArtifactStore::open(
+            &self.workspace_root().join("mathscape.sqlite3"),
+        )
+        .map_err(|error| error.to_string())?;
+        let Some(snapshot) = store
+            .ink_snapshot_for_artifact(&artifact_id)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(None);
+        };
+        self.open_ink_snapshot(snapshot.snapshot_id)
+    }
+
+    pub fn register_ink_evidence(
+        &self,
+        request: RegisterInkEvidenceRequest,
+    ) -> Result<InkEvidenceReceipt, String> {
+        let request = request.canonicalized().map_err(|error| error.to_string())?;
+        let snapshot = self
+            .open_ink_snapshot(request.snapshot_id.clone())?
+            .ok_or("快照不存在")?;
+        if snapshot.artifact_id != request.expected_artifact_id.as_str()
+            || snapshot.content_hash != request.expected_content_hash.as_str()
+        {
+            return Err("快照身份已变化，请重新打开".into());
+        }
+        let actor = ActorRef::parse("mathscape-desktop-user").map_err(|error| error.to_string())?;
+        let duration = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| error.to_string())?;
+        let now = Timestamp::parse(format!(
+            "unix:{}.{:09}",
+            duration.as_secs(),
+            duration.subsec_nanos()
+        ))
+        .map_err(|error| error.to_string())?;
+        let mut store = mathscape_store_sqlite::SqliteArtifactStore::open(
+            &self.workspace_root().join("mathscape.sqlite3"),
+        )
+        .map_err(|error| error.to_string())?;
+        store
+            .register_ink_evidence(&request, &actor, now.clone(), |stored| {
+                let manifest: InkSnapshotManifest = serde_json::from_str(&stored.manifest_json)
+                    .map_err(|error| error.to_string())?;
+                mathscape_orchestrator::plan_ink_evidence(&manifest, &request, &actor, now)
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn list_ink_evidence(
+        &self,
+        snapshot_id: String,
+    ) -> Result<Vec<InkEvidenceReceipt>, String> {
+        mathscape_store_sqlite::SqliteArtifactStore::open(
+            &self.workspace_root().join("mathscape.sqlite3"),
+        )
+        .map_err(|error| error.to_string())?
+        .list_ink_evidence(&snapshot_id)
+        .map_err(|error| error.to_string())
     }
 
     pub fn create_ink_document(
@@ -343,7 +432,7 @@ pub async fn create_ink_snapshot(
 pub async fn list_ink_snapshots(
     state: State<'_, DesktopState>,
     document_id: String,
-) -> Result<Vec<StoredInkSnapshot>, String> {
+) -> Result<Vec<StoredInkSnapshotSummary>, String> {
     let service = state.service.clone();
     tauri::async_runtime::spawn_blocking(move || service.list_ink_snapshots(document_id))
         .await
@@ -359,6 +448,41 @@ pub async fn get_ink_snapshot(
     tauri::async_runtime::spawn_blocking(move || service.open_ink_snapshot(snapshot_id))
         .await
         .map_err(|error| format!("Ink snapshot read worker failed: {error}"))?
+}
+
+#[tauri::command]
+pub(crate) async fn get_ink_snapshot_for_artifact(
+    state: State<'_, DesktopState>,
+    artifact_id: String,
+) -> Result<Option<StoredInkSnapshot>, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        service.open_ink_snapshot_for_artifact(artifact_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn register_ink_evidence(
+    state: State<'_, DesktopState>,
+    request: RegisterInkEvidenceRequest,
+) -> Result<InkEvidenceReceipt, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.register_ink_evidence(request))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn list_ink_evidence(
+    state: State<'_, DesktopState>,
+    snapshot_id: String,
+) -> Result<Vec<InkEvidenceReceipt>, String> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.list_ink_evidence(snapshot_id))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

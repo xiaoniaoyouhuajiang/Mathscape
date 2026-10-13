@@ -361,27 +361,37 @@ pub fn project_landscape(
         .filter(|object| object.kind == EntityKind::SourceSpan && !object.relation)
     {
         let payload = object_payload(object);
-        let Some(markdown) = payload
+        let locator = payload
             .get("markdown")
             .and_then(|value| value.get("artifact"))
             .and_then(serde_json::Value::as_str)
-            .and_then(|value| StableId::parse(value).ok())
-        else {
+            .map(|id| (id, "来源于 Markdown", "SourceSpan Markdown 定位"))
+            .or_else(|| {
+                payload
+                    .pointer("/ink/snapshot_artifact")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|id| (id, "来源于手稿快照", "SourceSpan Ink 笔迹定位"))
+            });
+        let Some((artifact, label, summary)) = locator.and_then(|(id, label, summary)| {
+            StableId::parse(id)
+                .ok()
+                .map(|artifact| (artifact, label, summary))
+        }) else {
             continue;
         };
-        if !material_ids.contains(&markdown) || !source_ids.contains(&object.stable_id) {
+        if !material_ids.contains(&artifact) || !source_ids.contains(&object.stable_id) {
             return Err(SourceGraphProjectionError::UnknownEndpoint {
                 relation: object.stable_id.clone(),
-                entity: markdown,
+                entity: artifact,
             });
         }
-        let relation_id = synthetic_relation_id("located-in", &object.stable_id, &markdown);
+        let relation_id = synthetic_relation_id("located-in", &object.stable_id, &artifact);
         relations.push(
             ProjectionRelation::new(
                 relation_id,
                 EntityKind::Evidence,
                 ViewLayer::Source,
-                "来源于 Markdown",
+                label,
                 vec![
                     ProjectionEndpoint::new(
                         object.stable_id.clone(),
@@ -390,7 +400,7 @@ pub fn project_landscape(
                         IncidenceDirection::IntoRelation,
                     ),
                     ProjectionEndpoint::new(
-                        markdown,
+                        artifact,
                         mathscape_domain::EndpointRole::parse("artifact")?,
                         None,
                         IncidenceDirection::OutOfRelation,
@@ -398,7 +408,7 @@ pub fn project_landscape(
                 ],
             )?
             .relation_kind(ProjectionRelationKind::LocatedIn)
-            .summary("SourceSpan Markdown 定位")?,
+            .summary(summary)?,
         );
     }
     GraphProjection::new(ProjectionLens::Landscape, groups, nodes, relations).map_err(Into::into)
@@ -424,6 +434,7 @@ fn object_label(object: &StoredMapObject) -> (String, Option<String>, bool) {
         })
         .map(str::to_owned)
         .unwrap_or_else(|| match object.kind {
+            EntityKind::SourceSpan if payload.get("ink").is_some() => "手稿笔迹证据".into(),
             EntityKind::SourceSpan => "来源范围".into(),
             EntityKind::SourceSemanticUnit => "来源单元".into(),
             _ => object.stable_id.to_string(),
@@ -432,7 +443,17 @@ fn object_label(object: &StoredMapObject) -> (String, Option<String>, bool) {
         EntityKind::SourceSpan => payload
             .get("markdown")
             .and_then(|markdown| markdown.get("byte_range"))
-            .map(|range| format!("Markdown 字节范围 {}", range)),
+            .map(|range| format!("Markdown 字节范围 {}", range))
+            .or_else(|| {
+                payload.get("ink").map(|ink| {
+                    format!(
+                        "手稿快照选区 · {} 笔",
+                        ink.get("stroke_ids")
+                            .and_then(serde_json::Value::as_array)
+                            .map_or(0, Vec::len)
+                    )
+                })
+            }),
         EntityKind::SourceSemanticUnit => Some(
             payload
                 .get("kind")

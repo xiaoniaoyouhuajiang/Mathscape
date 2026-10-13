@@ -189,6 +189,7 @@ fn product_label(media: &str) -> &'static str {
     match media {
         "text/markdown" => "解析正文",
         "application/json" => "解析元数据",
+        "application/vnd.mathscape.ink-snapshot+json" => "手稿快照",
         "application/pdf" => "PDF",
         _ if media.starts_with("image/") => "解析图片",
         _ => "附件",

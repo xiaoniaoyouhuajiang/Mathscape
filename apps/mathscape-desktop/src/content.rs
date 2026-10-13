@@ -28,6 +28,16 @@ pub struct ArtifactContentInfo {
     byte_size: u64,
     content_hash: ContentHash,
     contexts: Vec<ContentContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ink_snapshot_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InkSourceLocation {
+    pub snapshot_id: String,
+    pub document_id: String,
+    pub page_id: String,
+    pub stroke_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,6 +52,8 @@ pub struct SourceNodeDetail {
     pub excerpt: Option<String>,
     pub markdown_block_ids: Vec<String>,
     pub payload: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ink: Option<InkSourceLocation>,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,7 +164,49 @@ impl DesktopService {
         let artifact_id = locator
             .pointer("/markdown/artifact")
             .and_then(Value::as_str)
+            .or_else(|| {
+                locator
+                    .pointer("/ink/snapshot_artifact")
+                    .and_then(Value::as_str)
+            })
             .or_else(|| body.get("surface_content_artifact").and_then(Value::as_str));
+        let ink = if let Some(value) = locator.get("ink").filter(|value| !value.is_null()) {
+            let artifact = value
+                .get("snapshot_artifact")
+                .and_then(Value::as_str)
+                .ok_or("Ink 来源缺少快照 Artifact")?;
+            let page_id = value
+                .get("page_id")
+                .and_then(Value::as_str)
+                .ok_or("Ink 来源缺少 page_id")?
+                .to_owned();
+            let stroke_ids: Vec<String> = serde_json::from_value(
+                value
+                    .get("stroke_ids")
+                    .cloned()
+                    .ok_or("Ink 来源缺少笔迹集合")?,
+            )
+            .map_err(|error| error.to_string())?;
+            let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
+                .map_err(|error| error.to_string())?;
+            let snapshot = store
+                .ink_snapshot_for_artifact(artifact)
+                .map_err(|error| error.to_string())?
+                .ok_or("Ink 来源快照不存在")?;
+            let manifest: mathscape_domain::InkSnapshotManifest =
+                serde_json::from_str(&snapshot.manifest_json).map_err(|error| error.to_string())?;
+            manifest
+                .validate_selection(&page_id, &stroke_ids)
+                .map_err(|error| error.to_string())?;
+            Some(InkSourceLocation {
+                snapshot_id: snapshot.snapshot_id,
+                document_id: snapshot.document_id,
+                page_id,
+                stroke_ids,
+            })
+        } else {
+            None
+        };
         let range = locator.pointer("/markdown/byte_range").and_then(|value| {
             Some(ByteRangeView {
                 start: value.get("start")?.as_u64()?,
@@ -201,6 +255,7 @@ impl DesktopService {
             byte_range: range,
             excerpt,
             markdown_block_ids: block_ids,
+            ink,
             payload,
         })
     }
@@ -255,6 +310,10 @@ impl DesktopService {
             byte_size: artifact.byte_size(),
             content_hash: artifact.content_hash().clone(),
             contexts,
+            ink_snapshot_id: store
+                .ink_snapshot_for_artifact(id.as_str())
+                .map_err(|error| error.to_string())?
+                .map(|snapshot| snapshot.snapshot_id),
         })
     }
 

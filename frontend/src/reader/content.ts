@@ -4,11 +4,12 @@ export interface ProductPath { path: string; artifact_id: string }
 export interface ContentInfo {
   artifact_id: string;
   media_type: string;
+  ink_snapshot_id?: string;
   byte_size: number;
   contexts: { conversion_id: string; paths: ProductPath[] }[];
 }
 
-export interface SourceNodeDetail { node_id: string; kind: string; display_title: string | null; unit_kind: string | null; parent: string | null; artifact_id: string | null; byte_range: { start: number; end: number } | null; excerpt: string | null; markdown_block_ids: string[]; payload: unknown; }
+export interface SourceNodeDetail { node_id: string; kind: string; display_title: string | null; unit_kind: string | null; parent: string | null; artifact_id: string | null; byte_range: { start: number; end: number } | null; excerpt: string | null; markdown_block_ids: string[]; payload: unknown; ink?: { snapshot_id: string; document_id: string; page_id: string; stroke_ids: string[] }; }
 export function sourceNodeDetail(nodeId: string): Promise<SourceNodeDetail> { return invoke("get_source_node_detail", { nodeId }); }
 
 export function contentInfo(id: string): Promise<ContentInfo> {

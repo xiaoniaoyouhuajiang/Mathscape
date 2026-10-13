@@ -2910,6 +2910,7 @@ dependencies = [
  "mathscape-query",
  "mathscape-store-sqlite",
  "mathscape-tool-marker",
+ "rusqlite",
  "secrecy",
  "serde",
  "serde_json",

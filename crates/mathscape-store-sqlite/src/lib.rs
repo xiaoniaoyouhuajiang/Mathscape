@@ -5,6 +5,7 @@
 
 mod discovery;
 mod ink;
+mod ink_evidence;
 mod map_edit;
 mod markdown_patch;
 mod read;
@@ -32,9 +33,10 @@ pub use discovery::{
     PendingDiscoveryTask, StoredAcceptanceAuthority, StoredDiscoveryRun, StoredDiscoveryRunSummary,
 };
 pub use ink::{
-    INK_STORAGE_VERSION, InkOperationReceipt, StoredInkDocument, StoredInkDocumentSummary,
-    StoredInkSession, StoredInkSnapshot,
+    INK_STORAGE_VERSION, InkOperationReceipt, InkSnapshotReservation, StoredInkDocument,
+    StoredInkDocumentSummary, StoredInkSession, StoredInkSnapshot, StoredInkSnapshotSummary,
 };
+pub use ink_evidence::InkEvidenceReceipt;
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use source_map::{
@@ -58,7 +60,7 @@ const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
     include_str!("../../../migrations/0010_discovery_run_recovery.sql");
 const INK_MIGRATION: &str = include_str!("../../../migrations/0013_ink_p1.sql");
 const INK_SNAPSHOT_MIGRATION: &str = include_str!("../../../migrations/0014_ink_snapshots_p2.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 14;
+const SUPPORTED_SCHEMA_VERSION: i64 = 15;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -246,6 +248,7 @@ impl SqliteArtifactStore {
         validate_markdown_patch_schema(&connection)?;
         validate_discovery_run_recovery_schema(&connection)?;
         ink::validate_schema(&connection)?;
+        ink_evidence::validate_schema(&connection)?;
         validate_registration_schema(&connection)?;
         Ok(Self { connection })
     }
@@ -369,6 +372,29 @@ impl SqliteArtifactStore {
         )
     }
 
+    pub fn reserve_ink_snapshot(
+        &mut self,
+        request_id: &str,
+        document_id: &str,
+        expected_head: u64,
+        created_at: &str,
+    ) -> Result<InkSnapshotReservation, SqliteStoreError> {
+        ink::reserve_snapshot(
+            &mut self.connection,
+            request_id,
+            document_id,
+            expected_head,
+            created_at,
+        )
+    }
+
+    pub fn ink_snapshot_for_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> Result<Option<StoredInkSnapshot>, SqliteStoreError> {
+        ink::snapshot_for_artifact(&self.connection, artifact_id)
+    }
+
     pub fn ink_snapshot_for_request(
         &self,
         request_id: &str,
@@ -386,7 +412,7 @@ impl SqliteArtifactStore {
     pub fn list_ink_snapshots(
         &self,
         document_id: &str,
-    ) -> Result<Vec<StoredInkSnapshot>, SqliteStoreError> {
+    ) -> Result<Vec<StoredInkSnapshotSummary>, SqliteStoreError> {
         ink::list_snapshots(&self.connection, document_id)
     }
 
@@ -443,7 +469,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=14 => {
+            6..=15 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -514,6 +540,21 @@ impl SqliteArtifactStore {
                 connection.pragma_update(None, "user_version", 14)?;
             }
         }
+        if version < 15 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 15",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                connection
+                    .execute_batch(include_str!("../../../migrations/0015_ink_evidence_p2.sql"))?;
+            } else {
+                connection.pragma_update(None, "user_version", 15)?;
+            }
+        }
         validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -523,6 +564,7 @@ impl SqliteArtifactStore {
         validate_markdown_patch_schema(&connection)?;
         validate_discovery_run_recovery_schema(&connection)?;
         ink::validate_schema(&connection)?;
+        ink_evidence::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -873,7 +915,11 @@ impl SqliteArtifactStore {
             .observed_size()
             .map(|value| sqlite_u64(value, "artifact_check.observed_size"))
             .transpose()?;
-        let transaction = self.connection.transaction()?;
+        // Acquire the writer before reading the expected identity. Concurrent
+        // verification must not try to upgrade an older WAL read snapshot.
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if check.result() == ArtifactCheckResult::Valid {
             let expected = transaction
                 .query_row(

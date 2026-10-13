@@ -29,6 +29,10 @@ SelectorResolver 只做受限、可记录的规范化，不用编辑距离猜测
 
 Markdown 精确定位不等于 PDF 精确定位。SourceSpan 可以只含有效 Markdown 定位；没有可靠映射时不制造 PDF bbox。PDF 物理页索引为零起点，印刷页码、Marker 页号与界面页码不能混用；持久坐标采用显式、归一化坐标约定。
 
+Ink 区分可编辑 `InkDocument`、书写会话、追加式操作历史和固定前缀 `InkSnapshotManifest`。新建和自动保存保留操作事实；显式保存快照才生成 Artifact。`SourceSpan.ink` 保存快照 Artifact、稳定 page_id、排序去重的 stroke_ids 和选择方式，验证笔迹在该前缀中可见且属于指定页；局部擦除后的 fragment 有独立身份。只读选择不编辑笔迹，当前文档的后续修改不改变旧定位。
+
+用户指定 Ink 选区的来源登记是独立入口：只创建可定位的 SourceSpan，不伪造 discovery run，也不自动晋升为数学单元或证明。请求绑定快照和选区，事务保存地图对象、成员 revision 与幂等回执；相同证据复用，退役对象须经现有治理流程处理。草稿删除、快照清理与引用保护待系统级删除模型统一设计，自动保存不意味着永久留存。
+
 ## 从提案到登记
 
 ```text

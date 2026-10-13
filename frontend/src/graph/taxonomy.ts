@@ -11,6 +11,7 @@ export type NodeTypeKey =
   | "pdf"
   | "markdown"
   | "parse_metadata"
+  | "ink_snapshot"
   | "parse_image"
   | "attachment"
   | "artifact"
@@ -73,6 +74,10 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
     borderStyle: "solid",
     backgroundOpacity: 0.9,
     fontSize: 9,
+  },
+  ink_snapshot: {
+    label: "手稿快照", shape: "round-rectangle", width: 46, height: 30,
+    background: "#356657", border: "#9ecbbb", borderStyle: "solid", backgroundOpacity: 1, fontSize: 10,
   },
   parse_image: {
     label: "解析图片",
@@ -273,6 +278,7 @@ function artifactTypeKey(summary: string | null): NodeTypeKey {
   if (mediaType === "application/pdf") return "pdf";
   if (mediaType === "text/markdown") return "markdown";
   if (mediaType === "application/json") return "parse_metadata";
+  if (mediaType === "application/vnd.mathscape.ink-snapshot+json") return "ink_snapshot";
   if (mediaType.startsWith("image/")) return "parse_image";
   return "attachment";
 }

@@ -5,7 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const INK_LAB_VERSION: &str = "mathscape-ink-lab-1";
-pub const INK_SNAPSHOT_VERSION: &str = "mathscape-ink-snapshot-1";
+pub const INK_SNAPSHOT_VERSION: &str = "mathscape-ink-snapshot-2";
+pub const INK_LEGACY_SNAPSHOT_VERSION: &str = "mathscape-ink-snapshot-1";
 pub const INK_LAB_MAX_POINTS: usize = 500_000;
 pub const INK_LAB_MAX_OPERATIONS: usize = 20_000;
 const JS_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -80,7 +81,10 @@ impl InkSnapshotManifest {
     }
 
     pub fn validate(&self) -> Result<()> {
-        require(self.version == INK_SNAPSHOT_VERSION, "snapshot.version")?;
+        require(
+            self.version == INK_SNAPSHOT_VERSION || self.version == INK_LEGACY_SNAPSHOT_VERSION,
+            "snapshot.version",
+        )?;
         require(
             self.document_id == self.document.document_id,
             "snapshot.document_id",
@@ -90,11 +94,105 @@ impl InkSnapshotManifest {
             "snapshot.head",
         )?;
         let projection = self.document.validate()?;
+        // v1's writer omitted partial-erase fragments from its summary. Its
+        // immutable bytes still contain the complete, valid operation history.
+        let originals = self
+            .document
+            .operations
+            .iter()
+            .filter_map(|operation| match operation {
+                InkLabOperation::Stroke { stroke, .. } => Some(stroke.id.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let legacy_visible = projection
+            .visible_stroke_ids
+            .iter()
+            .filter(|id| originals.contains(id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let compatible_summary = self.version == INK_LEGACY_SNAPSHOT_VERSION
+            && self.visible_stroke_ids == legacy_visible;
         require(
-            projection.visible_stroke_ids == self.visible_stroke_ids
+            (projection.visible_stroke_ids == self.visible_stroke_ids || compatible_summary)
                 && projection.point_count == self.point_count,
             "snapshot.projection",
         )
+    }
+
+    /// Bind a whole-stroke selection to this fixed prefix, including fragments
+    /// produced by partial erasing. Displayed page numbers are not identities.
+    pub fn validate_selection(&self, page_id: &str, stroke_ids: &[String]) -> Result<()> {
+        self.validate()?;
+        require(
+            self.document.pages.iter().any(|page| page.id == page_id),
+            "selection.page_id",
+        )?;
+        require(
+            !stroke_ids.is_empty() && stroke_ids.len() <= INK_LAB_MAX_POINTS,
+            "selection.stroke_ids",
+        )?;
+        require(
+            stroke_ids.iter().collect::<BTreeSet<_>>().len() == stroke_ids.len(),
+            "selection.duplicate_stroke_id",
+        )?;
+        let projection = self.document.validate()?;
+        let visible = projection
+            .visible_stroke_ids
+            .iter()
+            .collect::<BTreeSet<_>>();
+        let mut pages = BTreeMap::new();
+        for operation in &self.document.operations {
+            match operation {
+                InkLabOperation::Stroke { stroke, .. } => {
+                    pages.insert(&stroke.id, &stroke.page_id);
+                }
+                InkLabOperation::PartialErase { fragments, .. } => {
+                    for stroke in fragments {
+                        pages.insert(&stroke.id, &stroke.page_id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for id in stroke_ids {
+            require(
+                visible.contains(id) && pages.get(id).is_some_and(|page| page.as_str() == page_id),
+                "selection.visible_stroke_on_page",
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegisterInkEvidenceRequest {
+    pub request_id: String,
+    pub snapshot_id: String,
+    pub expected_artifact_id: crate::StableId,
+    pub expected_content_hash: crate::ContentHash,
+    pub page_id: String,
+    pub stroke_ids: Vec<String>,
+    pub selection_mode: crate::InkSelectionMode,
+}
+
+impl RegisterInkEvidenceRequest {
+    pub fn canonicalized(&self) -> Result<Self> {
+        text(&self.request_id, 200, "evidence.request_id")?;
+        text(&self.snapshot_id, 200, "evidence.snapshot_id")?;
+        text(&self.page_id, 200, "evidence.page_id")?;
+        require(
+            !self.stroke_ids.is_empty() && self.stroke_ids.len() <= INK_LAB_MAX_POINTS,
+            "evidence.stroke_ids",
+        )?;
+        for id in &self.stroke_ids {
+            text(id, 200, "evidence.stroke_id")?;
+        }
+        let mut canonical = self.clone();
+        canonical.stroke_ids.sort();
+        canonical.stroke_ids.dedup();
+        Ok(canonical)
     }
 }
 
@@ -332,6 +430,60 @@ fn numeric(value: f64, min: f64, max: f64, field: &str) -> Result<()> {
     require(value.is_finite() && value >= min && value <= max, field)
 }
 
+fn validate_stroke_data(
+    stroke: &InkLabStroke,
+    pages: &BTreeSet<&str>,
+    segments: &BTreeSet<&str>,
+    point_count: &mut usize,
+) -> Result<()> {
+    require(pages.contains(stroke.page_id.as_str()), "stroke.page_id")?;
+    require(
+        segments.contains(stroke.capture_segment_id.as_str()),
+        "stroke.capture_segment_id",
+    )?;
+    let brush = &stroke.brush;
+    require(
+        brush.renderer == "perfect-freehand@1.2.3" && !brush.simulate_pressure,
+        "brush.renderer",
+    )?;
+    require(
+        brush.color.len() == 7
+            && brush.color.starts_with('#')
+            && brush.color[1..].bytes().all(|b| b.is_ascii_hexdigit()),
+        "brush.color",
+    )?;
+    numeric(brush.width, 0.1, 100.0, "brush.width")?;
+    numeric(brush.smoothing, 0.0, 1.0, "brush.smoothing")?;
+    numeric(brush.streamline, 0.0, 1.0, "brush.streamline")?;
+    numeric(brush.thinning, -1.0, 1.0, "brush.thinning")?;
+    require(
+        !stroke.points.is_empty() && stroke.points.len() <= 100_000,
+        "stroke.points",
+    )?;
+    *point_count += stroke.points.len();
+    require(*point_count <= INK_LAB_MAX_POINTS, "point_count")?;
+    let mut previous = 0;
+    for point in &stroke.points {
+        numeric(point.x, -1_000_000.0, 1_000_000.0, "point.x")?;
+        numeric(point.y, -1_000_000.0, 1_000_000.0, "point.y")?;
+        require(
+            point.t_us >= previous && point.t_us <= JS_SAFE_INTEGER,
+            "point.t_us",
+        )?;
+        previous = point.t_us;
+        if let Some(value) = point.pressure {
+            numeric(value, 0.0, 1.0, "point.pressure")?;
+        }
+        if let Some(value) = point.tilt_x_deg {
+            numeric(value, -90.0, 90.0, "point.tilt_x_deg")?;
+        }
+        if let Some(value) = point.tilt_y_deg {
+            numeric(value, -90.0, 90.0, "point.tilt_y_deg")?;
+        }
+    }
+    Ok(())
+}
+
 impl InkLabDocument {
     /// Deserialization is shape checking; this method checks references and history.
     pub fn validate(&self) -> Result<InkLabProjection> {
@@ -386,51 +538,7 @@ impl InkLabDocument {
                 InkLabOperation::Stroke { stroke, .. } => {
                     text(&stroke.id, 200, "stroke.id")?;
                     require(strokes.insert(stroke.id.as_str()), "duplicate stroke")?;
-                    require(pages.contains(stroke.page_id.as_str()), "stroke.page_id")?;
-                    require(
-                        segments.contains(stroke.capture_segment_id.as_str()),
-                        "stroke.capture_segment_id",
-                    )?;
-                    let brush = &stroke.brush;
-                    require(
-                        brush.renderer == "perfect-freehand@1.2.3" && !brush.simulate_pressure,
-                        "brush.renderer",
-                    )?;
-                    require(
-                        brush.color.len() == 7
-                            && brush.color.starts_with('#')
-                            && brush.color[1..].bytes().all(|b| b.is_ascii_hexdigit()),
-                        "brush.color",
-                    )?;
-                    numeric(brush.width, 0.1, 100.0, "brush.width")?;
-                    numeric(brush.smoothing, 0.0, 1.0, "brush.smoothing")?;
-                    numeric(brush.streamline, 0.0, 1.0, "brush.streamline")?;
-                    numeric(brush.thinning, -1.0, 1.0, "brush.thinning")?;
-                    require(
-                        !stroke.points.is_empty() && stroke.points.len() <= 100_000,
-                        "stroke.points",
-                    )?;
-                    point_count += stroke.points.len();
-                    require(point_count <= INK_LAB_MAX_POINTS, "point_count")?;
-                    let mut previous = 0;
-                    for point in &stroke.points {
-                        numeric(point.x, -1_000_000.0, 1_000_000.0, "point.x")?;
-                        numeric(point.y, -1_000_000.0, 1_000_000.0, "point.y")?;
-                        require(
-                            point.t_us >= previous && point.t_us <= JS_SAFE_INTEGER,
-                            "point.t_us",
-                        )?;
-                        previous = point.t_us;
-                        if let Some(value) = point.pressure {
-                            numeric(value, 0.0, 1.0, "point.pressure")?;
-                        }
-                        if let Some(value) = point.tilt_x_deg {
-                            numeric(value, -90.0, 90.0, "point.tilt_x_deg")?;
-                        }
-                        if let Some(value) = point.tilt_y_deg {
-                            numeric(value, -90.0, 90.0, "point.tilt_y_deg")?;
-                        }
-                    }
+                    validate_stroke_data(stroke, &pages, &segments, &mut point_count)?;
                     active.insert(command_id, true);
                     undo.push(command_id.to_owned());
                     redo.clear();
@@ -469,20 +577,7 @@ impl InkLabDocument {
                     for fragment in fragments {
                         text(&fragment.id, 200, "partial_erase.fragment.id")?;
                         require(strokes.insert(fragment.id.as_str()), "duplicate fragment")?;
-                        require(
-                            pages.contains(fragment.page_id.as_str()),
-                            "fragment.page_id",
-                        )?;
-                        require(
-                            segments.contains(fragment.capture_segment_id.as_str()),
-                            "fragment.capture_segment_id",
-                        )?;
-                        require(
-                            !fragment.points.is_empty() && fragment.points.len() <= 100_000,
-                            "fragment.points",
-                        )?;
-                        point_count += fragment.points.len();
-                        require(point_count <= INK_LAB_MAX_POINTS, "point_count")?;
+                        validate_stroke_data(fragment, &pages, &segments, &mut point_count)?;
                     }
                     active.insert(command_id, true);
                     undo.push(command_id.to_owned());
@@ -563,16 +658,22 @@ impl InkLabDocument {
                 _ => {}
             }
         }
-        let visible_stroke_ids = self
-            .operations
-            .iter()
-            .filter_map(|op| match op {
+        let mut visible_stroke_ids = Vec::new();
+        for operation in &self.operations {
+            match operation {
                 InkLabOperation::Stroke { stroke, .. } if visible.contains(stroke.id.as_str()) => {
-                    Some(stroke.id.clone())
+                    visible_stroke_ids.push(stroke.id.clone())
                 }
-                _ => None,
-            })
-            .collect();
+                InkLabOperation::PartialErase { fragments, .. } => {
+                    for fragment in fragments {
+                        if visible.contains(fragment.id.as_str()) {
+                            visible_stroke_ids.push(fragment.id.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         Ok(InkLabProjection {
             visible_stroke_ids,
             undo,

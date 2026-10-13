@@ -31,7 +31,7 @@ function item(requestId: string, clientSeq: number, expectedHead = clientSeq - 1
       pages: document.pages,
       capture_segments: document.capture_segments,
     },
-    operation,
+    operation: { ...operation, seq: clientSeq, command_id: "command-" + clientSeq },
   };
 }
 
@@ -88,5 +88,13 @@ describe("P1 Ink outbox", () => {
     const [first, second] = await Promise.all([outbox.flush(transport), outbox.flush(transport)]);
     expect(first).toEqual(second);
     expect(submissions).toBe(1);
+  });
+
+  it("retains an item when the ACK belongs to another document or sequence", async () => {
+    const outbox = new InkOutbox(new MemoryInkOutboxStore());
+    await outbox.enqueue(item("r1", 1));
+    await expect(outbox.flush({ submit: async value => ({ request_id: value.request_id, document_id: "wrong-document", command_id: value.operation.command_id, seq: 1, durable: true }) })).rejects.toBeInstanceOf(InkOutboxFlushError);
+    await expect(outbox.flush({ submit: async value => ({ request_id: value.request_id, document_id: value.document_id, command_id: value.operation.command_id, seq: 2, durable: true }) })).rejects.toBeInstanceOf(InkOutboxFlushError);
+    expect((await outbox.pending()).map(value => value.request_id)).toEqual(["r1"]);
   });
 });

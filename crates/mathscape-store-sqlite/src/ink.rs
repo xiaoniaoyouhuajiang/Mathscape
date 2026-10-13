@@ -63,6 +63,27 @@ pub struct StoredInkSnapshot {
     pub created_at: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StoredInkSnapshotSummary {
+    pub snapshot_id: String,
+    pub request_id: String,
+    pub document_id: String,
+    pub through_seq: u64,
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub byte_size: u64,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InkSnapshotReservation {
+    pub request_id: String,
+    pub document_id: String,
+    pub through_seq: u64,
+    pub manifest_json: String,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct RequestFingerprint<'a> {
     document_id: &'a str,
@@ -215,6 +236,59 @@ pub(crate) fn validate_schema(connection: &Connection) -> Result<(), SqliteStore
     Ok(())
 }
 
+pub(crate) fn reserve_snapshot(
+    connection: &mut Connection,
+    request_id: &str,
+    document_id: &str,
+    expected_head: u64,
+    created_at: &str,
+) -> Result<InkSnapshotReservation, SqliteStoreError> {
+    validate_identifier(request_id, "snapshot.request_id")?;
+    validate_identifier(document_id, "snapshot.document_id")?;
+    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    if let Some(existing) = read_reservation(&tx, request_id)? {
+        if existing.document_id != document_id || existing.through_seq != expected_head {
+            return Err(SqliteStoreError::InkRequestConflict(request_id.into()));
+        }
+        tx.commit()?;
+        return Ok(existing);
+    }
+    let stored = load_document(&tx, document_id)?
+        .ok_or_else(|| SqliteStoreError::InkDocumentNotFound(document_id.into()))?;
+    if stored.head_seq != expected_head {
+        return Err(SqliteStoreError::InkHeadConflict {
+            expected: expected_head,
+            actual: stored.head_seq,
+        });
+    }
+    let manifest =
+        mathscape_domain::InkSnapshotManifest::from_document(&stored.document, expected_head)
+            .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
+    let reservation = InkSnapshotReservation {
+        request_id: request_id.into(),
+        document_id: document_id.into(),
+        through_seq: expected_head,
+        manifest_json: serde_json::to_string(&manifest)?,
+        created_at: created_at.into(),
+    };
+    tx.execute("INSERT INTO ink_snapshot_requests(request_id,document_id,through_seq,manifest_json,created_at) VALUES(?1,?2,?3,?4,?5)",
+        params![request_id,document_id,sqlite_u64(expected_head,"snapshot.head")?,reservation.manifest_json,created_at])?;
+    tx.commit()?;
+    Ok(reservation)
+}
+
+fn read_reservation(
+    connection: &Connection,
+    request_id: &str,
+) -> Result<Option<InkSnapshotReservation>, SqliteStoreError> {
+    connection.query_row("SELECT r.document_id,r.through_seq,COALESCE(r.manifest_json,s.manifest_json),r.created_at FROM ink_snapshot_requests r LEFT JOIN ink_snapshots s ON r.snapshot_id=s.snapshot_id WHERE r.request_id=?1", [request_id], |row| {
+        Ok(InkSnapshotReservation {
+            request_id: request_id.into(), document_id: row.get(0)?, through_seq: u64::from(row.get::<_,u32>(1)?),
+            manifest_json: row.get(2)?, created_at: row.get(3)?,
+        })
+    }).optional().map_err(Into::into)
+}
+
 pub(crate) fn record_snapshot(
     connection: &mut Connection,
     request_id: &str,
@@ -245,6 +319,30 @@ pub(crate) fn record_snapshot(
     }
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let reservation = read_reservation(&transaction, request_id)?
+        .ok_or_else(|| SqliteStoreError::InkInvariant("snapshot prefix was not reserved".into()))?;
+    if reservation.document_id != document_id
+        || reservation.through_seq != through_seq
+        || reservation.manifest_json != manifest_json
+        || reservation.created_at != created_at
+    {
+        return Err(SqliteStoreError::InkRequestConflict(request_id.into()));
+    }
+    let computed_hash = format!("sha256:{}", sha256_hex(manifest_json.as_bytes()));
+    let catalog: (String, i64) = transaction.query_row(
+        "SELECT content_hash,byte_size FROM artifacts WHERE artifact_id=?1",
+        [artifact_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if computed_hash != content_hash
+        || byte_size != manifest_json.len() as u64
+        || catalog.0 != content_hash
+        || u64::try_from(catalog.1).ok() != Some(byte_size)
+    {
+        return Err(SqliteStoreError::InkInvariant(
+            "snapshot Artifact binding is inconsistent".into(),
+        ));
+    }
     if let Some(existing) = transaction
         .query_row(
             "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
@@ -264,7 +362,7 @@ pub(crate) fn record_snapshot(
         }
         return Err(SqliteStoreError::InkRequestConflict(request_id.to_owned()));
     }
-    if let Some(existing) = transaction
+    if let Some(mut existing) = transaction
         .query_row(
             "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
                     content_hash, byte_size, manifest_json, created_at
@@ -279,23 +377,13 @@ pub(crate) fn record_snapshot(
         )
         .optional()?
     {
+        transaction.execute(
+            "UPDATE ink_snapshot_requests SET snapshot_id=?2,manifest_json=NULL WHERE request_id=?1",
+            params![request_id, existing.snapshot_id],
+        )?;
         transaction.commit()?;
+        existing.request_id = request_id.into();
         return Ok(existing);
-    }
-    let actual_head: i64 = transaction
-        .query_row(
-            "SELECT head_seq FROM ink_documents WHERE document_id = ?1",
-            [document_id],
-            |row| row.get(0),
-        )
-        .optional()?
-        .ok_or_else(|| SqliteStoreError::InkDocumentNotFound(document_id.to_owned()))?;
-    let actual_head = rust_u64(actual_head, "ink head")?;
-    if actual_head != through_seq {
-        return Err(SqliteStoreError::InkHeadConflict {
-            expected: through_seq,
-            actual: actual_head,
-        });
     }
     transaction.execute(
         "INSERT INTO ink_snapshots
@@ -313,6 +401,10 @@ pub(crate) fn record_snapshot(
             manifest_json,
             created_at,
         ],
+    )?;
+    transaction.execute(
+        "UPDATE ink_snapshot_requests SET snapshot_id=?2,manifest_json=NULL WHERE request_id=?1",
+        params![request_id, snapshot_id],
     )?;
     transaction.commit()?;
     read_snapshot(connection, snapshot_id)?.ok_or_else(|| {
@@ -342,9 +434,10 @@ pub(crate) fn snapshot_for_request(
 ) -> Result<Option<StoredInkSnapshot>, SqliteStoreError> {
     connection
         .query_row(
-            "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
-                    content_hash, byte_size, manifest_json, created_at
-             FROM ink_snapshots WHERE request_id = ?1",
+            "SELECT s.snapshot_id, r.request_id, s.document_id, s.through_seq, s.artifact_id,
+                    s.content_hash, s.byte_size, s.manifest_json, s.created_at
+             FROM ink_snapshot_requests r JOIN ink_snapshots s ON r.snapshot_id=s.snapshot_id
+             WHERE r.request_id = ?1",
             [request_id],
             snapshot_from_row,
         )
@@ -352,18 +445,39 @@ pub(crate) fn snapshot_for_request(
         .map_err(Into::into)
 }
 
+pub(crate) fn snapshot_for_artifact(
+    connection: &Connection,
+    artifact_id: &str,
+) -> Result<Option<StoredInkSnapshot>, SqliteStoreError> {
+    connection.query_row("SELECT snapshot_id,request_id,document_id,through_seq,artifact_id,content_hash,byte_size,manifest_json,created_at FROM ink_snapshots WHERE artifact_id=?1", [artifact_id], snapshot_from_row).optional().map_err(Into::into)
+}
+
 pub(crate) fn list_snapshots(
     connection: &Connection,
     document_id: &str,
-) -> Result<Vec<StoredInkSnapshot>, SqliteStoreError> {
+) -> Result<Vec<StoredInkSnapshotSummary>, SqliteStoreError> {
     let mut statement = connection.prepare(
         "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
-                content_hash, byte_size, manifest_json, created_at
+                content_hash, byte_size, created_at
          FROM ink_snapshots WHERE document_id = ?1
          ORDER BY through_seq DESC, created_at DESC, snapshot_id DESC",
     )?;
     statement
-        .query_map([document_id], snapshot_from_row)?
+        .query_map([document_id], |row| {
+            Ok(StoredInkSnapshotSummary {
+                snapshot_id: row.get(0)?,
+                request_id: row.get(1)?,
+                document_id: row.get(2)?,
+                through_seq: u64::from(row.get::<_, u32>(3)?),
+                artifact_id: row.get(4)?,
+                content_hash: row.get(5)?,
+                byte_size: row
+                    .get::<_, i64>(6)?
+                    .try_into()
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(6, -1))?,
+                created_at: row.get(7)?,
+            })
+        })?
         .collect::<Result<Vec<_>, _>>()
         .map_err(Into::into)
 }

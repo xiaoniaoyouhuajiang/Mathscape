@@ -27,13 +27,14 @@ import {
 import { sourceNodeDetail } from "../reader/content";
 import { markdownRenderer } from "../reader/markdown";
 import type { ReaderFocus } from "../reader/reader";
+import type { InkReaderFocus } from "../ink/snapshot-reader";
 
 export interface InspectorControllerDelegate {
   getSnapshot: () => DesktopSnapshot | undefined;
   showToast: (message: string, kind: "success" | "error") => void;
   copyIdentifier: (id: string) => Promise<void> | void;
   onFocusNode: (nodeId: string) => void;
-  onOpenReader: (artifactId: string, label: string) => void;
+  onOpenReader: (artifactId: string, label: string, inkFocus?: InkReaderFocus) => void;
   onOpenReaderWithFocus: (artifactId: string, title: string, focus: ReaderFocus) => void;
   createParseForm: (pdf: PdfArtifactSummary, marker: MarkerRuntimeStatus) => HTMLFormElement;
   refreshSnapshot: () => Promise<void>;
@@ -192,6 +193,7 @@ export class InspectorController {
   ): Promise<void> {
     try {
       const detail = await sourceNodeDetail(node.domain_id!);
+      if (this.selectedNode?.domain_id !== node.domain_id) return;
       if (detail.excerpt) {
         const preview = document.createElement("div");
         preview.className = "source-preview markdown-body";
@@ -199,9 +201,13 @@ export class InspectorController {
         host.append(preview);
       }
       if (detail.artifact_id) {
-        const button = textElement("button", "parse-button", "打开并定位原文");
+        const button = textElement("button", "parse-button", detail.ink ? "打开并定位手稿证据" : "打开并定位原文");
         button.type = "button";
         button.onclick = () => {
+          if (detail.ink) {
+            this.delegate.onOpenReader(detail.artifact_id!, detail.display_title ?? node.label, detail.ink);
+            return;
+          }
           this.delegate.onOpenReaderWithFocus(
             detail.artifact_id!,
             detail.display_title ?? node.label,

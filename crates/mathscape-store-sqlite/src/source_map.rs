@@ -235,7 +235,7 @@ pub(super) fn commit_source_registration(
     Ok(receipt)
 }
 
-fn persist_object(
+pub(crate) fn persist_object(
     transaction: &Transaction<'_>,
     header: &mathscape_domain::EntityHeader,
     payload: &SourcePayload,
@@ -395,6 +395,9 @@ fn validate_source_entities(
                 }
                 if let Some(page) = span.page() {
                     require_artifact(transaction, page.artifact())?;
+                }
+                if let Some(ink) = span.ink() {
+                    require_artifact(transaction, ink.snapshot_artifact())?;
                 }
             }
             SourcePayload::SemanticUnit(unit) => {

@@ -42,7 +42,7 @@ el.inkButton.addEventListener("click", () => {
     el.inkButton.textContent = "返回地图";
     void inkWorkspace.open();
   } else {
-    closeInkWorkspace();
+    inkWorkspace.close();
   }
 });
 
@@ -88,6 +88,7 @@ const graphController = new GraphController(
     onRequestCreateRelation: (sourceId, targetId) =>
       void inspectorController.enterCreateRelationMode(sourceId, targetId),
     onBeforeRenderGraph: () => {
+      if (reader.isInkOpen()) return;
       reader.close();
       el.readerHost.hidden = true;
     },
@@ -102,9 +103,9 @@ inspectorController = new InspectorController(el.nodeDetail, {
   showToast: (msg, kind) => shell.showToast(msg, kind),
   copyIdentifier: (id) => shell.copyIdentifier(id),
   onFocusNode: (nodeId) => graphController.setFocus(nodeId, "all"),
-  onOpenReader: (artifactId, label) => {
+  onOpenReader: (artifactId, label, inkFocus) => {
     el.readerHost.hidden = false;
-    void reader.open(artifactId, label);
+    void reader.open(artifactId, label, { inkFocus });
   },
   onOpenReaderWithFocus: (artifactId, title, focus) => {
     el.readerHost.hidden = false;
@@ -165,6 +166,12 @@ async function loadSnapshot(): Promise<void> {
 el.importButton.addEventListener("click", () => void artifactController.importPdf());
 
 eventBus.on("source-map-changed", () => void loadSnapshot());
+eventBus.on("open-ink-document", ({ documentId }) => {
+  reader.close(); el.readerHost.hidden = true;
+  inkOpen = true; el.workspaceGrid.hidden = true; el.inkHost.hidden = false;
+  el.inkButton.textContent = "返回地图";
+  void inkWorkspace.openDocumentId(documentId);
+});
 eventBus.on("open-source", (detail) => {
   void (async () => {
     if (detail.refreshMap) await loadSnapshot();

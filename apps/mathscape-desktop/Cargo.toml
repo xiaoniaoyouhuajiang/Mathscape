@@ -29,6 +29,7 @@ url.workspace = true
 tauri-build.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 lopdf.workspace = true
 tokio.workspace = true
 wiremock.workspace = true

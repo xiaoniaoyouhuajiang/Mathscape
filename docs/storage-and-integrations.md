@@ -20,6 +20,16 @@ External 是预留的显式模式，不是 Managed 导入失败时的回退。�
 
 代码：[Artifact Pool](../crates/mathscape-artifact/src/pool.rs)、[Workspace](../crates/mathscape-artifact/src/workspace.rs)、[store](../crates/mathscape-store-sqlite/src/lib.rs)、[发现记录](../crates/mathscape-store-sqlite/src/discovery.rs)。
 
+## 手稿历史、快照与来源证据
+
+Ink 的文档、会话、操作顺序、写入者 epoch 和 durable ACK 保存在 SQLite（migration 13）；前端 IndexedDB outbox 先保留待提交操作，后台持久确认后才移除。快照（migration 14）把固定历史前缀导入 Artifact Pool，不随着当前手稿编辑而覆盖。
+
+migration 15 增加快照请求绑定和独立的 Ink 来源证据回执。快照请求先在写事务中固定当时的元数据、head 和自包含 manifest，再完成池导入与快照登记；中断后沿用原请求前缀，多个请求可复用同一 Artifact。完成的请求只保留快照引用，未完成的请求保留恢复所需 manifest；历史列表不批量传输完整笔迹。
+
+来源登记前重新验证实际受管字节、媒体类型、manifest 与索引，拒绝缺失/损坏、错误页或不可见笔迹。登记事务复用现有地图对象写入设施，原子写入 SourceSpan、map commit/member 和 `ink_evidence_requests` 回执。失败不产生部分地图对象，相同选区可以复用既有证据；历史 SourceSpan 继续引用原快照。ArtifactCheck 写入先取得 SQLite 写锁，避免并发校验时升级旧 WAL 读快照导致锁冲突。
+
+新快照媒体类型为 `application/vnd.mathscape.ink-snapshot+json`、manifest 为 v2；旧 `application/json` / v1 快照通过登记索引和版本化 Schema 识别。v1 摘要遗漏局部擦除 fragment 的已知情况按原操作历史兼容重建，旧字节保持不变，v2 摘要须完整一致。普通 JSON 和 PDF/Markdown 不自动转换为 Ink。代码：[快照与会话服务](../apps/mathscape-desktop/src/ink.rs)、[证据规划](../crates/mathscape-orchestrator/src/ink.rs)、[原子证据登记](../crates/mathscape-store-sqlite/src/ink_evidence.rs)、[Ink Reader](../frontend/src/ink/snapshot-reader.ts)。
+
 ## PDF、Marker 与阅读器
 
 `mathscape-pdf` 做打开检查、页几何、内容分类、OCR 建议和原生定位文本提取；不做数学解释或 OCR。Rust PDF crate 尚无渲染实现；桌面阅读使用本地打包的 PDF.js，两者不要混淆。

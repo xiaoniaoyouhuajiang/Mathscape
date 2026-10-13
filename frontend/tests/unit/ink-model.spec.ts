@@ -2,9 +2,23 @@ import { describe, expect, it } from "vitest";
 import trace from "../../../testdata/ink/p0/trace.json";
 import expected from "../../../testdata/ink/p0/projection.json";
 import invalid from "../../../testdata/ink/p0/invalid-cases.json";
-import { appendInk, inkId, parseInkDocument, projectInk } from "../../src/ink/model";
+import snapshot from "../../../testdata/ink/p2/snapshot.json";
+import legacy from "../../../testdata/ink/p2/legacy-fragments.json";
+import { appendInk, inkId, parseInkDocument, parseInkSnapshotManifest, projectInk } from "../../src/ink/model";
 
 describe("P0 ink interchange", () => {
+  it("reads the same snapshot prefix and refuses a false visible-state summary", () => {
+    const manifest = parseInkSnapshotManifest(structuredClone(snapshot));
+    expect(projectInk(manifest.document).visible.map(stroke => stroke.id)).toEqual(["stroke-a","stroke-b"]);
+    expect(() => parseInkSnapshotManifest({...structuredClone(snapshot),visible_stroke_ids:["stroke-a"]})).toThrow("可见笔迹摘要不一致");
+    expect(() => parseInkSnapshotManifest({...structuredClone(snapshot),point_count:999})).toThrow("可见笔迹摘要不一致");
+  });
+  it("keeps legacy fragment snapshots readable without weakening version 2 summaries", () => {
+    const manifest = parseInkSnapshotManifest(structuredClone(legacy));
+    expect(projectInk(manifest.document).visible.map(stroke => stroke.id)).toEqual(["fragment-a"]);
+    expect(manifest.visible_stroke_ids).toEqual([]);
+    expect(() => parseInkSnapshotManifest({...structuredClone(legacy),version:"mathscape-ink-snapshot-2"})).toThrow("可见笔迹摘要不一致");
+  });
   it("replays the same visibility and history fixture as Rust", () => {
     const document = parseInkDocument(structuredClone(trace));
     const projection = projectInk(document);

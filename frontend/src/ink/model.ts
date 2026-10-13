@@ -62,7 +62,7 @@ export interface InkProjection {
   pointCount: number;
 }
 export interface InkSnapshotManifest {
-  version: "mathscape-ink-snapshot-1";
+  version: "mathscape-ink-snapshot-1" | "mathscape-ink-snapshot-2";
   document_id: string;
   through_document_seq: number;
   document: InkDocument;
@@ -197,10 +197,14 @@ export function parseInkDocument(input: unknown): InkDocument {
 export function parseInkSnapshotManifest(input: unknown): InkSnapshotManifest {
   if (input === null || typeof input !== "object" || Array.isArray(input)) throw new Error("Ink 快照无效：manifest 必须是对象");
   const value = input as Record<string, unknown>;
-  if (value.version !== "mathscape-ink-snapshot-1" || typeof value.document_id !== "string" || typeof value.through_document_seq !== "number" || !Array.isArray(value.visible_stroke_ids) || typeof value.point_count !== "number") throw new Error("Ink 快照无效：manifest 字段不符合契约");
+  if (!["mathscape-ink-snapshot-1", "mathscape-ink-snapshot-2"].includes(String(value.version)) || typeof value.document_id !== "string" || !Number.isSafeInteger(value.through_document_seq) || !Array.isArray(value.visible_stroke_ids) || value.visible_stroke_ids.some(id => typeof id !== "string") || !Number.isSafeInteger(value.point_count)) throw new Error("Ink 快照无效：manifest 字段不符合契约");
   const document = parseInkDocument(value.document);
   if (document.document_id !== value.document_id || document.operations.length !== value.through_document_seq) throw new Error("Ink 快照无效：历史前缀不一致");
-  return { version: value.version, document_id: value.document_id, through_document_seq: value.through_document_seq, document, visible_stroke_ids: value.visible_stroke_ids.map(String), point_count: value.point_count };
+  const projection = projectInk(document);
+  const originals = new Set(projection.strokes.map(stroke => stroke.id));
+  const legacy = value.version === "mathscape-ink-snapshot-1" && JSON.stringify(projection.visible.filter(stroke => originals.has(stroke.id)).map(stroke => stroke.id)) === JSON.stringify(value.visible_stroke_ids);
+  if (projection.pointCount !== value.point_count || (!legacy && JSON.stringify(projection.visible.map(stroke => stroke.id)) !== JSON.stringify(value.visible_stroke_ids))) throw new Error("Ink 快照无效：可见笔迹摘要不一致");
+  return { version: value.version as InkSnapshotManifest["version"], document_id: value.document_id, through_document_seq: value.through_document_seq as number, document, visible_stroke_ids: value.visible_stroke_ids as string[], point_count: value.point_count as number };
 }
 
 export function projectInk(document: InkDocument): InkProjection {
