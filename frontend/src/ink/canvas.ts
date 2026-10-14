@@ -10,6 +10,9 @@ export interface InkCanvasOptions {
   tool: () => InkTool;
   fingerWriting: () => boolean;
   readOnly?: boolean;
+  refitOnResize?: boolean;
+  externalPreview?: () => InkStroke | undefined;
+  onPreview?: (stroke: InkStroke | undefined) => void;
   onStroke: (stroke: InkStroke) => void;
   onErase: (ids: string[]) => void;
   onPartialErase: (sourceStrokeId: string, fragments: InkStroke[]) => void;
@@ -135,6 +138,7 @@ export class InkCanvas {
     if (this.active) this.finish("interrupted");
     else this.cancelTransientInteraction();
   };
+  private readonly visibility = () => { if (document.hidden) this.blur(); };
 
   constructor(private readonly host: HTMLElement, private readonly options: InkCanvasOptions) {
     this.settledCanvas.className = "ink-canvas ink-settled";
@@ -161,9 +165,11 @@ export class InkCanvas {
       if (this.activePointer === undefined) this.zoom(Math.exp(-e.deltaY * 0.002), this.local(e.clientX, e.clientY));
     }, { passive: false });
     window.addEventListener("blur", this.blur);
-    document.addEventListener("visibilitychange", () => { if (document.hidden) this.blur(); });
+    document.addEventListener("visibilitychange", this.visibility);
     let first = true;
     this.observer = new ResizeObserver(() => {
+      const changed=this.width!==Math.max(1,host.clientWidth)||this.height!==Math.max(1,host.clientHeight);
+      if (!first && changed && this.options.refitOnResize) this.resetTransientInteraction();
       this.width = Math.max(1, host.clientWidth);
       this.height = Math.max(1, host.clientHeight);
       this.dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -171,7 +177,7 @@ export class InkCanvas {
         canvas.width = Math.round(this.width * this.dpr);
         canvas.height = Math.round(this.height * this.dpr);
       }
-      if (first) { first = false; this.fit(); } else this.refresh();
+      if (first || (changed && this.options.refitOnResize)) { first = false; this.fit(); } else this.refresh();
     });
     this.observer.observe(host);
   }
@@ -284,12 +290,15 @@ export class InkCanvas {
       const ctx = this.setup(this.input, true), page = this.options.page();
       this.pageClip(ctx, page);
       if (this.active) drawInkStroke(ctx, this.active, false);
+      const external = this.options.externalPreview?.();
+      if (external && external.page_id === page.id) drawInkStroke(ctx, external, false);
       this.drawOverlay(ctx);
       ctx.restore();
       this.metrics.activePoints = this.active?.points.length ?? 0;
       this.metrics.previewStrokes = this.partialPreview.size + (this.transform ? this.selected.size : 0);
       this.metrics.frameMs = performance.now() - started;
       this.options.onMetrics({ ...this.metrics });
+      this.options.onPreview?.(this.active);
     });
   }
   private drawOverlay(ctx: CanvasRenderingContext2D): void {
@@ -632,6 +641,7 @@ export class InkCanvas {
   dispose(): void {
     this.observer.disconnect();
     window.removeEventListener("blur", this.blur);
+    document.removeEventListener("visibilitychange", this.visibility);
     cancelAnimationFrame(this.frame);
     this.settledCanvas.remove();
     this.previewCanvas.remove();

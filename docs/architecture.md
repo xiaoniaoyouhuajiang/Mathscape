@@ -65,7 +65,9 @@ Planner 分配事实 owner 和可提取范围；每批 B 仍可阅读完整授�
 
 SQLite 的 Artifact Catalog 与 Source Map 通过同一读事务组成景观快照。来源链可表达 `SourceSemanticUnit → SourceSpan → Markdown ← ConversionRun ← PDF`，转换溯源并不提供精确 PDF 位置。
 
-手写采用另一条输入路径：桌面画板 → IndexedDB outbox → Ink 应用服务 → SQLite 操作历史 → 固定前缀快照 → Artifact Pool → Ink SourceSpan。快照创建先持久固定请求及前缀，来源选区由后端重绑定受管字节，再经 orchestrator 构建 SourceSpan 和原子登记回执；不经过发现模型或自动创建数学解释。景观图的 `located_in` 连接 Ink 证据与快照，专用只读 Reader 支持选区定位和返回当前可编辑文档。正式局域网 InkPad 接入仍属于 P3。
+手写采用另一条输入路径：桌面画板或 HTTPS InkPad → IndexedDB outbox → Ink 应用服务 → SQLite 操作历史 → 固定前缀快照 → Artifact Pool → Ink SourceSpan。快照创建先持久固定请求及前缀，来源选区由后端重绑定受管字节，再经 orchestrator 构建 SourceSpan 和原子登记回执；不经过发现模型或自动创建数学解释。景观图的 `located_in` 连接 Ink 证据与快照，专用只读 Reader 支持选区定位和返回当前可编辑文档。
+
+P3 的 Axum HTTPS/WSS 服务属于 DesktopService，静态画板随应用打包；短时单次二维码换取指定手稿的设备租约，持久请求复用本地写入验证及 durable ACK。配对后电脑只读镜像，预览不落历史，SQLite 前缀用于快照。断线保留 epoch，显式接管才转移写入权；旧队列可导出并导入独立恢复草稿。网络不开放通用 Tauri 命令或 Workspace 文件读取。服务可恢复不等于设备已信任 TLS，正式端到端验收还需目标平板验证。
 
 `GraphProjection` 保留第一类超边及带角色端点；`IncidenceGraph` 把超边展开为关系节点与连接边。端点方向由 Rust 显式给出，前端不能从角色名称猜测或自行折叠关系。渲染 ID 确定性派生，petgraph 内存索引不能用作持久身份。
 

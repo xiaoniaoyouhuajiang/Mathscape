@@ -31,6 +31,8 @@ Markdown 精确定位不等于 PDF 精确定位。SourceSpan 可以只含有效 
 
 Ink 区分可编辑 `InkDocument`、书写会话、追加式操作历史和固定前缀 `InkSnapshotManifest`。新建和自动保存保留操作事实；显式保存快照才生成 Artifact。`SourceSpan.ink` 保存快照 Artifact、稳定 page_id、排序去重的 stroke_ids 和选择方式，验证笔迹在该前缀中可见且属于指定页；局部擦除后的 fragment 有独立身份。只读选择不编辑笔迹，当前文档的后续修改不改变旧定位。
 
+LAN 写入租约绑定 document/session/writer/epoch；短时配对和设备凭据只持久保存摘要。持久消息的 client_seq 与文档绝对操作序号相同，同时校验前驱 command_id；ACK 绑定原请求、操作身份和保存序号。断线、刷新和正常重启不改变 epoch，明确接管或撤销才阻断旧端；旧端 outbox 不改身份自动重投。恢复导入验证完整 Ink JSON 后创建独立文档和导入回执，保留原采集片段及操作历史，不生成旧操作的虚假 ACK。
+
 用户指定 Ink 选区的来源登记是独立入口：只创建可定位的 SourceSpan，不伪造 discovery run，也不自动晋升为数学单元或证明。请求绑定快照和选区，事务保存地图对象、成员 revision 与幂等回执；相同证据复用，退役对象须经现有治理流程处理。草稿删除、快照清理与引用保护待系统级删除模型统一设计，自动保存不意味着永久留存。
 
 ## 从提案到登记

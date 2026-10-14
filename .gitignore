@@ -10,3 +10,5 @@
 .mathscape-dev/
 .test-runs/
 /apps/mathscape-desktop/gen/
+
+/frontend/dist-inkpad/

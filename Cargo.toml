@@ -9,6 +9,14 @@ rust-version = "1.88"
 license = "UNLICENSED"
 
 [workspace.dependencies]
+axum = { version = "=0.8.9", features = ["ws"] }
+axum-server = { version = "=0.8.0", features = ["tls-rustls-no-provider"] }
+rcgen = { version = "=0.14.10", features = ["x509-parser"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+getrandom = "0.3"
+if-addrs = "0.15"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+time = "0.3"
 futures = "0.3"
 genai = "=0.6.5"
 keyring = "=4.2.0"

@@ -3,6 +3,9 @@ mod content;
 mod discovery;
 mod discovery_view;
 mod ink;
+mod ink_lan;
+mod ink_tls;
+pub use ink_lan::{InkLanMirror, InkLanStatus, InkPairingLink};
 mod llm_settings;
 mod map_edit;
 mod markdown_patch;
@@ -77,6 +80,7 @@ pub struct DesktopService {
     credentials: Arc<dyn CredentialStore>,
     active_parse: Arc<Mutex<Option<ParsePdfRequest>>>,
     active_discovery: Arc<Mutex<Option<discovery::ActiveDiscoveryControl>>>,
+    ink_lan: Arc<ink_lan::InkLanRuntime>,
 }
 
 impl DesktopService {
@@ -130,6 +134,7 @@ impl DesktopService {
             credentials,
             active_parse: Arc::new(Mutex::new(None)),
             active_discovery: Arc::new(Mutex::new(None)),
+            ink_lan: Arc::new(ink_lan::InkLanRuntime::default()),
         })
     }
 
@@ -409,6 +414,7 @@ mod task_tests {
             credentials: Arc::new(mathscape_llm::MemoryCredentialResolver::default()),
             active_parse: Arc::new(Mutex::new(None)),
             active_discovery: Arc::new(Mutex::new(None)),
+            ink_lan: Arc::new(ink_lan::InkLanRuntime::default()),
         };
         let request = ParsePdfRequest::new("test:pdf", 2, 4, MarkerProfileChoice::MathOcrV1);
         let permit = service.begin_parse(&request).unwrap();
@@ -753,6 +759,16 @@ pub fn run() {
                 Some(path) if !path.is_empty() => DesktopService::open_with_marker(root, path)?,
                 _ => DesktopService::open(root)?,
             };
+            let resume = service.clone();
+            tauri::async_runtime::spawn(async move {
+                if resume
+                    .ink_lan_status()
+                    .await
+                    .is_ok_and(|status| status.enabled)
+                {
+                    let _ = resume.start_ink_lan(None).await;
+                }
+            });
             app.manage(DesktopState { service });
             Ok(())
         })
@@ -815,10 +831,26 @@ pub fn run() {
             ink::get_ink_document,
             ink::list_ink_documents,
             ink::list_ink_sessions,
-            ink::close_ink_session
+            ink::close_ink_session,
+            ink_lan::start_ink_lan,
+            ink_lan::stop_ink_lan,
+            ink_lan::get_ink_lan_status,
+            ink_lan::create_ink_pairing,
+            ink_lan::cancel_ink_pairing,
+            ink_lan::get_ink_lan_mirror,
+            ink_lan::reclaim_ink_writer,
+            ink_lan::export_ink_trust_certificate,
+            ink_lan::choose_ink_recovery
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run Mathscape desktop application");
+        .build(tauri::generate_context!())
+        .expect("failed to build Mathscape desktop application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(state) = app.try_state::<DesktopState>() {
+                    tauri::async_runtime::block_on(state.service.shutdown_ink_lan(false)).ok();
+                }
+            }
+        });
 }
 
 fn workspace_root(app: &AppHandle) -> Result<PathBuf, Box<dyn std::error::Error>> {

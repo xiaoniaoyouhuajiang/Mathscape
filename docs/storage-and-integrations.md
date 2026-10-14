@@ -30,6 +30,10 @@ migration 15 增加快照请求绑定和独立的 Ink 来源证据回执。快�
 
 新快照媒体类型为 `application/vnd.mathscape.ink-snapshot+json`、manifest 为 v2；旧 `application/json` / v1 快照通过登记索引和版本化 Schema 识别。v1 摘要遗漏局部擦除 fragment 的已知情况按原操作历史兼容重建，旧字节保持不变，v2 摘要须完整一致。普通 JSON 和 PDF/Markdown 不自动转换为 Ink。代码：[快照与会话服务](../apps/mathscape-desktop/src/ink.rs)、[证据规划](../crates/mathscape-orchestrator/src/ink.rs)、[原子证据登记](../crates/mathscape-store-sqlite/src/ink_evidence.rs)、[Ink Reader](../frontend/src/ink/snapshot-reader.ts)。
 
+migration 16 保存 LAN 服务设置、配对摘要、设备租约、写入权转移审计和恢复导入回执。配对领取、设备授权校验与操作提交/快照前缀固定分别在同一事务中进行；不同文档、会话或旧 epoch 的请求不能写入。正常退出保留启用状态及凭据，重启重新签发同一 CA 下的叶证书；显式停止服务则撤销凭据和待配对二维码。Workspace 的 `ink-lan/trust/` 包含公开根证书和私有 CA 密钥，搬迁或备份时应一同保护，丢失其中之一不静默更换信任根。
+
+远端 IndexedDB 按 session/epoch 保留草稿头、逐条历史及未确认队列；每笔只追加新的历史操作，避免每次复制整稿。durable ACK 才移除 outbox，历史仍用于离线打开与恢复导出。Service Worker 仅缓存静态画板，不缓存认证或材料 API；Origin 改变后浏览器旧队列不会自动迁移。WebSocket 预览是最多 2048 点、短时失效的内存数据，最终持久笔迹保留原始样本。电脑镜像的快照只涵盖已保存前缀；平板快照先排空 outbox。代码：[LAN 服务](../apps/mathscape-desktop/src/ink_lan.rs)、[租约事务](../crates/mathscape-store-sqlite/src/ink_lan.rs)、[平板存储](../frontend/src/ink/pad-store.ts)。
+
 ## PDF、Marker 与阅读器
 
 `mathscape-pdf` 做打开检查、页几何、内容分类、OCR 建议和原生定位文本提取；不做数学解释或 OCR。Rust PDF crate 尚无渲染实现；桌面阅读使用本地打包的 PDF.js，两者不要混淆。

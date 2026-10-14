@@ -243,17 +243,28 @@ pub(crate) fn reserve_snapshot(
     expected_head: u64,
     created_at: &str,
 ) -> Result<InkSnapshotReservation, SqliteStoreError> {
+    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let result = reserve_snapshot_in(&tx, request_id, document_id, expected_head, created_at)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+pub(crate) fn reserve_snapshot_in(
+    tx: &Transaction<'_>,
+    request_id: &str,
+    document_id: &str,
+    expected_head: u64,
+    created_at: &str,
+) -> Result<InkSnapshotReservation, SqliteStoreError> {
     validate_identifier(request_id, "snapshot.request_id")?;
     validate_identifier(document_id, "snapshot.document_id")?;
-    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    if let Some(existing) = read_reservation(&tx, request_id)? {
+    if let Some(existing) = read_reservation(tx, request_id)? {
         if existing.document_id != document_id || existing.through_seq != expected_head {
             return Err(SqliteStoreError::InkRequestConflict(request_id.into()));
         }
-        tx.commit()?;
         return Ok(existing);
     }
-    let stored = load_document(&tx, document_id)?
+    let stored = load_document(tx, document_id)?
         .ok_or_else(|| SqliteStoreError::InkDocumentNotFound(document_id.into()))?;
     if stored.head_seq != expected_head {
         return Err(SqliteStoreError::InkHeadConflict {
@@ -273,7 +284,6 @@ pub(crate) fn reserve_snapshot(
     };
     tx.execute("INSERT INTO ink_snapshot_requests(request_id,document_id,through_seq,manifest_json,created_at) VALUES(?1,?2,?3,?4,?5)",
         params![request_id,document_id,sqlite_u64(expected_head,"snapshot.head")?,reservation.manifest_json,created_at])?;
-    tx.commit()?;
     Ok(reservation)
 }
 
@@ -709,6 +719,32 @@ pub(crate) fn append_operation(
     metadata: &InkLabDocumentMetadata,
     operation: &InkLabOperation,
 ) -> Result<InkOperationReceipt, SqliteStoreError> {
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let receipt = append_operation_in(
+        &transaction,
+        request_id,
+        document_id,
+        session_id,
+        writer_epoch,
+        expected_head,
+        metadata,
+        operation,
+    )?;
+    transaction.commit()?;
+    Ok(receipt)
+}
+
+pub(crate) fn append_operation_in(
+    transaction: &Transaction<'_>,
+    request_id: &str,
+    document_id: &str,
+    session_id: &str,
+    writer_epoch: u64,
+    expected_head: u64,
+    metadata: &InkLabDocumentMetadata,
+    operation: &InkLabOperation,
+) -> Result<InkOperationReceipt, SqliteStoreError> {
     validate_identifier(request_id, "request_id")?;
     validate_identifier(document_id, "document_id")?;
     validate_identifier(session_id, "session_id")?;
@@ -722,8 +758,6 @@ pub(crate) fn append_operation(
     )?;
     let operation_json = serde_json::to_string(operation)?;
     let operation_fingerprint = sha256_hex(operation_json.as_bytes());
-    let transaction =
-        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
     if let Some((stored_fingerprint, response_json)) = transaction
         .query_row(
@@ -738,7 +772,6 @@ pub(crate) fn append_operation(
         }
         let mut receipt: InkOperationReceipt = serde_json::from_str(&response_json)?;
         receipt.replayed = true;
-        transaction.commit()?;
         return Ok(receipt);
     }
 
@@ -793,7 +826,7 @@ pub(crate) fn append_operation(
             "operation metadata refers to a different document".to_owned(),
         ));
     }
-    let mut document = load_document(&transaction, document_id)?
+    let mut document = load_document(transaction, document_id)?
         .ok_or_else(|| SqliteStoreError::InkDocumentNotFound(document_id.to_owned()))?;
     if metadata.version != document.document.version
         || metadata.created_at != document.document.created_at
@@ -816,7 +849,7 @@ pub(crate) fn append_operation(
     let pages_json = serde_json::to_string(&metadata.pages)?;
     let segments_json = serde_json::to_string(&metadata.capture_segments)?;
 
-    let now = sqlite_now(&transaction)?;
+    let now = sqlite_now(transaction)?;
     transaction.execute(
         "INSERT INTO ink_operations
          (document_id, seq, command_id, operation_json, operation_fingerprint, recorded_at)
@@ -876,7 +909,6 @@ pub(crate) fn append_operation(
             now,
         ],
     )?;
-    transaction.commit()?;
     Ok(receipt)
 }
 

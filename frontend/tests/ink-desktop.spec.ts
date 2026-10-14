@@ -110,3 +110,14 @@ test("a delayed snapshot open cannot override a newer document selection", async
   await expect(page.locator("#ink-document-heading")).toHaveText("手稿 B");
   await expect(page.locator("#ink-mode-badge")).toHaveText("当前手稿");
 });
+
+test("P3 pairing displays a QR and switches the desktop into a read-only mirror",async({page})=>{
+  await page.getByRole("button",{name:"平板书写",exact:true}).click();
+  await page.getByRole("button",{name:"生成配对二维码",exact:true}).click();
+  await expect(page.locator("[data-qr]")).toBeVisible();
+  expect(await page.locator("[data-link]").inputValue()).toContain("#pair=");
+  await expect(page.locator("#ink-mode-badge")).toHaveText("平板镜像");
+  await expect(page.locator("#desktop-ink-pen")).toBeDisabled();
+  await page.getByRole("button",{name:"取消待配对",exact:true}).click();
+  await expect(page.locator("#ink-mode-badge")).toHaveText("当前手稿");await expect(page.locator("#desktop-ink-pen")).toBeEnabled();
+});

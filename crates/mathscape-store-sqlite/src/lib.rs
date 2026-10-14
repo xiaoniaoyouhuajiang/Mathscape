@@ -6,6 +6,7 @@
 mod discovery;
 mod ink;
 mod ink_evidence;
+mod ink_lan;
 mod map_edit;
 mod markdown_patch;
 mod read;
@@ -37,6 +38,7 @@ pub use ink::{
     StoredInkDocumentSummary, StoredInkSession, StoredInkSnapshot, StoredInkSnapshotSummary,
 };
 pub use ink_evidence::InkEvidenceReceipt;
+pub use ink_lan::{InkLanSettings, InkMirrorDelta, InkPairingOffer, InkRemoteLease, InkWriterView};
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use source_map::{
@@ -60,7 +62,7 @@ const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
     include_str!("../../../migrations/0010_discovery_run_recovery.sql");
 const INK_MIGRATION: &str = include_str!("../../../migrations/0013_ink_p1.sql");
 const INK_SNAPSHOT_MIGRATION: &str = include_str!("../../../migrations/0014_ink_snapshots_p2.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 15;
+const SUPPORTED_SCHEMA_VERSION: i64 = 16;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -249,6 +251,7 @@ impl SqliteArtifactStore {
         validate_discovery_run_recovery_schema(&connection)?;
         ink::validate_schema(&connection)?;
         ink_evidence::validate_schema(&connection)?;
+        ink_lan::validate_schema(&connection)?;
         validate_registration_schema(&connection)?;
         Ok(Self { connection })
     }
@@ -469,7 +472,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=15 => {
+            6..=16 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -555,6 +558,21 @@ impl SqliteArtifactStore {
                 connection.pragma_update(None, "user_version", 15)?;
             }
         }
+        if version < 16 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version=16",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                connection
+                    .execute_batch(include_str!("../../../migrations/0016_ink_lan_p3.sql"))?;
+            } else {
+                connection.pragma_update(None, "user_version", 16)?;
+            }
+        }
         validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -565,6 +583,7 @@ impl SqliteArtifactStore {
         validate_discovery_run_recovery_schema(&connection)?;
         ink::validate_schema(&connection)?;
         ink_evidence::validate_schema(&connection)?;
+        ink_lan::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 

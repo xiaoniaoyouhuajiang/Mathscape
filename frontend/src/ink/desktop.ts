@@ -11,6 +11,7 @@ import {
   type InkBrush,
   type InkDocument,
   type InkPage,
+  type InkStroke,
 } from "./model";
 import {
   InkDesktopTransport,
@@ -29,6 +30,8 @@ import { InkOutbox, type InkOutboxItem } from "./outbox";
 import { InkEvidencePanel } from "./evidence-panel";
 import { eventBus } from "../core/events";
 import type { InkSelection } from "./persistence";
+import { safeInvoke } from "../core/ipc";
+import { InkLanPanel,inkLanMirror,type InkWriterView } from "./lan";
 
 interface SessionSummary {
   document_id: string;
@@ -104,6 +107,14 @@ export class DesktopInkWorkspace {
   private activeFlush: Promise<boolean> | undefined;
   private readonly confirmedHeads = new Map<string, number>();
   private navigationRevision = 0;
+  private mirrorMode=false;
+  private remotePreview:InkStroke|undefined;
+  private writerView:InkWriterView|undefined;
+  private lanPanel:InkLanPanel|undefined;
+  private mirrorTimer:ReturnType<typeof setInterval>|undefined;
+  private mirrorPolling=false;
+  private snapshotCount=-1;
+  private followPadPage=true;
 
   constructor(
     private readonly host: HTMLElement,
@@ -120,10 +131,12 @@ export class DesktopInkWorkspace {
       if (!this.outbox.persistent) this.status("本地恢复队列不可用；当前窗口关闭前请保持应用运行。", true);
     }
     await this.refreshDocuments();
+    if(!this.mirrorTimer)this.mirrorTimer=setInterval(()=>void this.refreshMirror(),300);
   }
 
   close(): void {
     this.navigationRevision++;
+    if(this.mirrorTimer){clearInterval(this.mirrorTimer);this.mirrorTimer=undefined;}
     this.board?.resetTransientInteraction();
     void this.flush();
     this.onClose();
@@ -140,28 +153,33 @@ export class DesktopInkWorkspace {
     this.host.innerHTML = [
       '<div class="ink-desktop-shell">',
       '<header class="ink-desktop-header"><div class="ink-document-heading"><span class="eyebrow">INK DOCUMENT</span><h2 id="ink-document-heading">数学手稿</h2><div class="ink-state-row"><span id="ink-mode-badge" class="ink-state-badge">未打开</span><span id="ink-editability-badge" class="ink-state-badge">—</span><span id="ink-save-badge" class="ink-state-badge">正在加载</span></div></div>',
-      '<div class="ink-desktop-actions"><span id="ink-persistence-status" class="ink-persistence-status">正在加载本地手稿…</span><button id="ink-continue-current" class="secondary-button" type="button" hidden>继续编辑当前手稿</button><button id="ink-save-now" class="secondary-button" type="button">立即保存</button><button id="ink-snapshot" class="secondary-button" type="button">保存快照</button><button id="ink-close" class="secondary-button" type="button">返回地图</button></div></header>',
-      '<div class="ink-desktop-body"><aside class="ink-session-panel"><div class="ink-session-heading"><strong>手稿会话</strong><button id="ink-new-document" class="secondary-button" type="button">新建</button></div><div id="ink-session-list" class="ink-session-list"><p>正在读取…</p></div><div class="ink-snapshot-heading"><strong>历史快照</strong></div><div id="ink-snapshot-list" class="ink-session-list"><p>请选择手稿。</p></div></aside>',
+      '<div class="ink-desktop-actions"><span id="ink-persistence-status" class="ink-persistence-status">正在加载本地手稿…</span><button id="ink-lan" class="secondary-button" type="button">平板书写</button><button id="ink-continue-current" class="secondary-button" type="button" hidden>继续编辑当前手稿</button><button id="ink-save-now" class="secondary-button" type="button">立即保存</button><button id="ink-snapshot" class="secondary-button" type="button">保存快照</button><button id="ink-close" class="secondary-button" type="button">返回地图</button></div></header>',
+      '<div class="ink-desktop-body"><aside class="ink-session-panel"><div class="ink-session-heading"><strong>手稿会话</strong><button id="ink-new-document" class="secondary-button" type="button">新建</button></div><button id="ink-import-recovery" class="secondary-button" type="button">导入恢复草稿</button><div id="ink-session-list" class="ink-session-list"><p>正在读取…</p></div><div class="ink-snapshot-heading"><strong>历史快照</strong></div><div id="ink-snapshot-list" class="ink-session-list"><p>请选择手稿。</p></div></aside>',
       '<main class="ink-desktop-main"><nav class="ink-desktop-toolbar" aria-label="手稿工具"><div class="ink-tool-buttons">',
       '<button id="desktop-ink-pen" class="is-active" type="button">笔</button><button id="desktop-ink-erase" type="button">整笔擦除</button><button id="desktop-ink-partial_erase" type="button">局部擦除</button><button id="desktop-ink-select" type="button">套索选择</button><button id="desktop-ink-undo" type="button" disabled>撤销</button><button id="desktop-ink-redo" type="button" disabled>重做</button>',
-      '</div><div class="ink-brush-controls"><label title="之后创建的笔迹使用此颜色">颜色<input id="desktop-ink-color" type="color" value="#b9e3d8" aria-label="笔迹颜色"></label><label title="之后创建的笔迹使用此笔宽">笔宽<input id="desktop-ink-width" type="range" min="1" max="16" step="0.5" value="4" aria-label="笔迹宽度"><output id="desktop-ink-width-value">4</output></label><label class="ink-check-control"><input id="desktop-ink-finger" type="checkbox">手指书写</label></div><div class="ink-page-controls"><select id="desktop-ink-page" aria-label="手稿页面"></select><button id="desktop-ink-add-page" class="secondary-button" type="button">新增页面</button><button id="desktop-ink-zoom-out" class="secondary-button" type="button" aria-label="缩小">−</button><button id="desktop-ink-fit" class="secondary-button" type="button">整页</button><button id="desktop-ink-zoom-in" class="secondary-button" type="button" aria-label="放大">＋</button></div></nav>',
-      '<div id="desktop-ink-evidence" hidden></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="数学手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="200" value="数学手稿" aria-label="手稿标题" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div></div>',
+      '</div><div class="ink-brush-controls"><label title="之后创建的笔迹使用此颜色">颜色<input id="desktop-ink-color" type="color" value="#b9e3d8" aria-label="笔迹颜色"></label><label title="之后创建的笔迹使用此笔宽">笔宽<input id="desktop-ink-width" type="range" min="1" max="16" step="0.5" value="4" aria-label="笔迹宽度"><output id="desktop-ink-width-value">4</output></label><label class="ink-check-control"><input id="desktop-ink-finger" type="checkbox">手指书写</label></div><div class="ink-page-controls"><label id="desktop-ink-follow-label" hidden><input id="desktop-ink-follow-pad" type="checkbox" checked>跟随平板页</label><select id="desktop-ink-page" aria-label="手稿页面"></select><button id="desktop-ink-add-page" class="secondary-button" type="button">新增页面</button><button id="desktop-ink-zoom-out" class="secondary-button" type="button" aria-label="缩小">−</button><button id="desktop-ink-fit" class="secondary-button" type="button">整页</button><button id="desktop-ink-zoom-in" class="secondary-button" type="button" aria-label="放大">＋</button></div></nav>',
+      '<div id="desktop-ink-evidence" hidden></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="数学手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="200" value="数学手稿" aria-label="手稿标题" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div><section id="ink-lan-panel" hidden></section></div>',
     ].join("");
     element<HTMLButtonElement>(this.host, "#ink-close").addEventListener("click", () => this.close());
     element<HTMLButtonElement>(this.host, "#ink-save-now").addEventListener("click", () => void this.flush("手动保存完成。"));
     element<HTMLButtonElement>(this.host, "#ink-snapshot").addEventListener("click", () => void this.createSnapshot());
+    this.lanPanel=new InkLanPanel(element(this.host,"#ink-lan-panel"),()=>this.preparePad(),()=>this.writerView,()=>this.refreshMirror(true));
+    element<HTMLButtonElement>(this.host,"#ink-lan").onclick=()=>{if(this.documentState)void this.lanPanel!.open(this.documentState.document_id).catch(error=>this.status(errorText(error),true));};
     element<HTMLButtonElement>(this.host, "#ink-continue-current").addEventListener("click", () => void this.continueCurrentDocument());
     element<HTMLButtonElement>(this.host, "#ink-new-document").addEventListener("click", () => void this.createDocument());
+    element<HTMLButtonElement>(this.host,"#ink-import-recovery").onclick=()=>void this.importRecovery();
     element<HTMLButtonElement>(this.host, "#desktop-ink-add-page").addEventListener("click", () => this.addPage());
     element<HTMLSelectElement>(this.host, "#desktop-ink-page").addEventListener("change", event => {
       const value = (event.target as HTMLSelectElement).value;
       if (!this.documentState || !value) return;
       this.board?.resetTransientInteraction();
       this.currentPage = value;
+      if(this.mirrorMode){this.followPadPage=false;element<HTMLInputElement>(this.host,"#desktop-ink-follow-pad").checked=false;}
       this.board?.setSelection([]);
       this.board?.fit();
       this.renderSummary();
     });
+    element<HTMLInputElement>(this.host,"#desktop-ink-follow-pad").onchange=event=>{this.followPadPage=(event.target as HTMLInputElement).checked;};
     element<HTMLInputElement>(this.host, "#desktop-ink-color").addEventListener("input", event => {
       this.brushColor = (event.target as HTMLInputElement).value;
     });
@@ -258,8 +276,15 @@ export class DesktopInkWorkspace {
       const stored = await openInkDocument(summary.document_id);
       if (revision !== this.navigationRevision) return;
       if (!stored) throw new Error("手稿不存在或已被移除");
+      const mirror=await inkLanMirror(summary.document_id,stored.head_seq);
+      if(revision!==this.navigationRevision)return;
+      this.writerView=mirror.delta.writer;
+      if(mirror.delta.writer.remote||mirror.delta.writer.pairing_pending){
+        await this.mountDocument(stored.document,mirror.delta.writer.session??undefined,stored.head_seq,true,undefined,revision);
+        this.status("电脑显示手稿镜像，平板书写后会自动同步。",false);return;
+      }
       const sessions = summary.active_session_id ? [] : await listInkSessions(summary.document_id);
-      const sessionId = summary.active_session_id ?? sessions[0]?.session_id ?? inkId();
+      const sessionId = mirror.delta.writer.session?.session_id ?? sessions.find(session=>session.writer_id===this.writerId&&session.writer_epoch===mirror.delta.writer.writer_epoch)?.session_id ?? inkId();
       const session = await startInkSession(summary.document_id, sessionId, this.writerId, { source: "desktop" });
       if (revision !== this.navigationRevision) return;
       await this.mountDocument(stored.document, session, stored.head_seq, false, undefined, revision);
@@ -296,8 +321,13 @@ export class DesktopInkWorkspace {
     this.documentState = documentState;
     this.currentPage = documentState.pages[0]?.id ?? "";
     this.currentSession = session;
+    if(this.writerView?.document_id!==documentState.document_id)this.writerView=undefined;
     this.currentSnapshot = snapshot;
     this.readOnly = readOnly;
+    this.mirrorMode=readOnly&&!snapshot;
+    element(this.host,"#desktop-ink-follow-label").hidden=!this.mirrorMode;
+    this.remotePreview=undefined;
+    this.snapshotCount=-1;
     this.setTool(readOnly ? "select" : "pen");
     this.currentSegment = undefined;
     this.logicalHead = localHead;
@@ -313,6 +343,7 @@ export class DesktopInkWorkspace {
       tool: () => this.tool,
       fingerWriting: () => this.fingerWriting,
       readOnly,
+      externalPreview:()=>this.remotePreview,
       onStroke: stroke => this.commit({ kind: "stroke", stroke }),
       onErase: strokeIds => this.commit({ kind: "erase", stroke_ids: strokeIds }),
       onPartialErase: (sourceStrokeId, fragments) => this.commit(fragments.length ? { kind: "partial_erase", source_stroke_id: sourceStrokeId, fragments } : { kind: "erase", stroke_ids: [sourceStrokeId] }),
@@ -352,7 +383,10 @@ export class DesktopInkWorkspace {
     for (const selector of ["#desktop-ink-color", "#desktop-ink-width", "#desktop-ink-finger"]) {
       element<HTMLInputElement>(this.host, selector).disabled = readOnly;
     }
-    element<HTMLButtonElement>(this.host, "#ink-continue-current").hidden = !readOnly;
+    element<HTMLButtonElement>(this.host, "#ink-continue-current").hidden = !this.currentSnapshot;
+    element<HTMLButtonElement>(this.host,"#ink-lan").disabled=!!this.currentSnapshot;
+    element<HTMLButtonElement>(this.host,"#ink-snapshot").disabled=!!this.currentSnapshot;
+    element<HTMLButtonElement>(this.host,"#ink-snapshot").textContent=this.mirrorMode?"保存已同步快照":"保存快照";
   }
 
   private async refreshSnapshots(): Promise<void> {
@@ -510,7 +544,7 @@ export class DesktopInkWorkspace {
   }
 
   private async createSnapshot(): Promise<void> {
-    if (!this.documentState || this.readOnly) return;
+    if (!this.documentState || this.currentSnapshot) return;
     this.board?.finish();
     const documentId = this.documentState.document_id;
     const expectedHead = this.logicalHead;
@@ -634,13 +668,16 @@ export class DesktopInkWorkspace {
     const mode = element(this.host, "#ink-mode-badge");
     const editable = element(this.host, "#ink-editability-badge");
     const saved = element(this.host, "#ink-save-badge");
-    mode.textContent = this.readOnly ? "历史快照" : "当前手稿";
-    mode.className = "ink-state-badge " + (this.readOnly ? "is-snapshot" : "is-current");
-    editable.textContent = this.readOnly ? "只读" : "可编辑";
+    mode.textContent = this.currentSnapshot ? "历史快照" : this.mirrorMode?"平板镜像":"当前手稿";
+    mode.className = "ink-state-badge " + (this.currentSnapshot ? "is-snapshot" : "is-current");
+    editable.textContent = this.mirrorMode?"电脑只读":this.readOnly ? "只读" : "可编辑";
     editable.className = "ink-state-badge " + (this.readOnly ? "is-readonly" : "is-editable");
     if (this.readOnly && this.currentSnapshot) {
       saved.textContent = "截止 head " + this.currentSnapshot.through_seq + " · " + displayTimestamp(this.currentSnapshot.created_at);
       saved.className = "ink-state-badge is-snapshot";
+    } else if(this.mirrorMode){
+      saved.textContent="电脑已保存 · head "+this.logicalHead;
+      saved.className="ink-state-badge is-saved";
     } else {
       const labels: Record<PersistenceState, string> = {
         loading: "正在加载",
@@ -652,5 +689,53 @@ export class DesktopInkWorkspace {
       saved.textContent = labels[this.persistenceState];
       saved.className = "ink-state-badge " + (this.persistenceState === "saved" ? "is-saved" : this.persistenceState === "error" ? "is-error" : "is-pending");
     }
+  }
+
+  private async preparePad():Promise<{documentId:string;head:number}> {
+    if(!this.documentState||this.currentSnapshot)throw new Error("请先打开当前可编辑手稿。");
+    this.board?.finish();if(!await this.flush())throw new Error("请先完成本机保存，再交给平板书写。");
+    return {documentId:this.documentState.document_id,head:this.logicalHead};
+  }
+  private async importRecovery():Promise<void> {
+    try{
+      this.board?.finish();await this.flush();
+      const session=await safeInvoke<SessionRecord|null>("choose_ink_recovery",{requestId:inkId()});
+      if(!session)return;
+      const stored=await openInkDocument(session.document_id);if(!stored)throw new Error("恢复草稿不存在。");
+      this.navigationRevision++;await this.mountDocument(stored.document,session,stored.head_seq);
+      await this.refreshDocuments();this.status("恢复文件已导入为独立草稿，原手稿与旧会话保持原有记录。",false);
+    }catch(error){this.status("导入恢复草稿失败："+errorText(error),true);}
+  }
+  private async refreshMirror(force=false):Promise<void> {
+    if(!this.documentState||this.currentSnapshot||this.mirrorPolling)return;
+    this.mirrorPolling=true;const id=this.documentState.document_id,revision=this.navigationRevision;
+    try {
+      const after=Math.min(this.logicalHead,this.confirmedHeads.get(id)??this.logicalHead);
+      const mirror=await inkLanMirror(id,after);
+      if(this.documentState?.document_id!==id||revision!==this.navigationRevision||this.currentSnapshot)return;
+      this.writerView=mirror.delta.writer;
+      if(mirror.delta.snapshot_count!==this.snapshotCount){this.snapshotCount=mirror.delta.snapshot_count;void this.refreshSnapshots();}
+      const observe=mirror.delta.writer.remote||mirror.delta.writer.pairing_pending;
+      if(!observe){
+        if(this.mirrorMode){const summary=this.sessionSummaries.find(item=>item.document_id===id);if(summary)await this.openDocument(summary);}
+        return;
+      }
+      if(!this.mirrorMode){
+        const stored=await openInkDocument(id);if(stored&&revision===this.navigationRevision)await this.mountDocument(stored.document,mirror.delta.writer.session??undefined,stored.head_seq,true);
+      }else{
+        for(const operation of mirror.delta.operations){if(operation.seq>this.documentState!.operations.length){if(operation.seq!==this.documentState!.operations.length+1)throw new Error("镜像历史出现序号缺口，请重新打开手稿。");this.documentState!.operations.push(operation);}}
+        Object.assign(this.documentState!,mirror.delta.metadata);
+        this.logicalHead=this.documentState!.operations.length;this.confirmedHeads.set(id,this.logicalHead);
+        if(!this.documentState!.pages.some(page=>page.id===this.currentPage))this.currentPage=this.documentState!.pages[0].id;
+        const oldPage=this.currentPage;
+        const padPage=mirror.preview?.page_id??mirror.client?.page_id;
+        if(this.followPadPage&&padPage&&this.documentState!.pages.some(page=>page.id===padPage))this.currentPage=padPage;
+        this.renderPages();this.remotePreview=mirror.preview??undefined;if(this.currentPage!==oldPage)this.board?.fit();else this.board?.refresh();this.renderSummary();
+        const summary=this.sessionSummaries.find(item=>item.document_id===id);if(summary){summary.head_seq=mirror.delta.server_head;summary.updated_at=new Date().toISOString();this.renderSessionList(this.sessionSummaries);}
+      }
+      element<HTMLButtonElement>(this.host,"#ink-snapshot").disabled=this.logicalHead!==mirror.delta.server_head;
+      this.status(mirror.delta.writer.pairing_pending?"等待平板扫码。":mirror.connected?`平板已连接，电脑显示镜像；平板待同步 ${mirror.client?.pending_count??0} 个操作。`:"平板暂时离线；已同步笔迹保留，恢复连接后继续同步。",false);
+    }catch(error){if(force)this.status(errorText(error),true);}
+    finally{this.mirrorPolling=false;}
   }
 }

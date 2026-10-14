@@ -19,7 +19,11 @@ npm --prefix frontend run ink:lab
 
 打开终端打印的电脑页面，选择与平板同一局域网的地址并扫码。画板支持即时书写、擦除与撤销，手动下载/导入 Ink JSON，也可把完整文件保存到 `.mathscape-dev/ink-lab/exports/`。画板会保留 `#session` 临时凭据并在首次连接失败时自动重试；右上角显示“电脑可连接”后再保存。这是一条实验文件路径，不写入 Workspace 或来源图；自动保存与断线恢复尚未实现。端口默认 1440，可用 `INK_LAB_PORT` 修改。详细操作和设备实验步骤见 [Ink Lab](../frontend/ink-lab/README.md)。
 
-桌面 P1/P2 使用应用顶部“手写”入口，书写操作自动提交到当前 Workspace。“保存快照”生成固定版本；打开历史快照后，可套索或选择本页全部笔迹并“登记选区为来源证据”。返回地图后启用“原文证据”，点击证据节点的“打开并定位手稿证据”，应打开当时的只读内容与选区；“继续编辑当前手稿”返回最新状态。回归时在保存后擦改当前文档，再验证旧证据及重启后的定位。正式二维码配对和远端自动同步尚待 P3；删除语义按系统级方案后续实施。
+桌面 P1/P2 使用应用顶部“手写”入口，书写操作自动提交到当前 Workspace。“保存快照”生成固定版本；打开历史快照后，可套索或选择本页全部笔迹并“登记选区为来源证据”。返回地图后启用“原文证据”，点击证据节点的“打开并定位手稿证据”，应打开当时的只读内容与选区；“继续编辑当前手稿”返回最新状态。回归时在保存后擦改当前文档，再验证旧证据及重启后的定位。删除语义按系统级方案后续实施。
+
+P3 正式平板入口已接入桌面：打开当前手稿 → “平板书写” → 开启服务 → 保存设备信任证书并在平板安装为 CA → 选择局域网地址并生成二维码 → 扫码书写。默认 HTTPS 端口 1443，与 P0 的 1440 独立；不再需要运行 Node 接收后台。配对后电脑只读镜像，笔迹自动同步，平板可离线保存并在恢复后补传。已启用服务随应用重启恢复；UI 的“停止平板服务”会撤销设备凭据。详见 [InkPad 使用与验收](../frontend/ink-pad/README.md)，真实设备信任与 S Pen 验收仍需执行。
+
+桌面 `dev`/`build` 会先构建 `dist-inkpad/`，Rust build script 将这些静态资源嵌入程序；修改平板页后重新构建并启动 Rust 程序才会生效。仅执行 Rust 检查时可以没有这些产物，此时 UI 禁止生成二维码；验证 P3 前应运行 `npm --prefix frontend run pad:build`。
 
 ## 验证与测试入口
 
@@ -37,6 +41,8 @@ npm --prefix frontend run test:reader
 Ink Lab 验证使用 `cargo test -p mathscape-domain --test ink_lab`、`npm --prefix frontend run test:unit`、`npm --prefix frontend run test:ink-server` 和 `npm --prefix frontend run test:ink-browser`。Ink 浏览器测试使用独立打包页面与真实实验服务，默认端口 1451；仍不代表物理 S Pen 或实际 Tauri WebView 的采样质量。
 
 P2 回归入口为 `cargo test -p mathscape-desktop --test ink_p2` 和在 `frontend/` 运行 `npx playwright test tests/ink-desktop.spec.ts`。服务测试使用真实 Pool/SQLite，覆盖前缀恢复、并发/幂等、局部擦除 fragment、损坏拒绝、登记回滚和 v14 升级；浏览器测试覆盖真实画板交互及从来源详情定位快照，替换 Tauri IPC。
+
+P3 回归入口为 `cargo test -p mathscape-desktop --test ink_lan` 与 `npm --prefix frontend run test:pad-browser`。后者构建 InkPad 并在独立测试 Workspace 启动真实 Rust HTTPS 服务（端口 1453），覆盖自动同步、离线刷新、重启、接管和本机存储失败。测试使用文件控制 fixture，不添加产品管理 API；Chromium 的证书例外仅存在测试配置中，Rust 测试独立验证 CA 信任链。先完成前端打包，再编译 Rust；避免同时重建同一资源目录。
 
 需要全量 Rust 回归时运行 `cargo test --workspace`。浏览器测试初次需在 `frontend/` 执行 `npx playwright install chromium`，也可指定 `PLAYWRIGHT_CHROMIUM_EXECUTABLE`。脚本与测试配置以 [package.json](../frontend/package.json) 和 [Playwright 配置](../frontend/playwright.config.ts) 为准。
 

@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 1420",
-    "build": "tsc --noEmit && vite build",
+    "dev": "npm run pad:build && vite --host 127.0.0.1 --port 1420",
+    "build": "tsc --noEmit && npm run pad:build && vite build",
     "typecheck": "tsc --noEmit",
     "test:reader": "playwright test",
     "test:unit": "vitest run",
@@ -16,7 +16,9 @@
     "ink:build": "tsc --noEmit && vite build --config vite.ink.config.ts && vite build --config vite.ink.config.ts --mode contract",
     "ink:lab": "npm run ink:build && node scripts/ink-lab-server.mjs",
     "test:ink-server": "npm run ink:build && node --test tests/ink-server.test.mjs",
-    "test:ink-browser": "npm run ink:build && playwright test --config playwright.ink.config.ts"
+    "test:ink-browser": "npm run ink:build && playwright test --config playwright.ink.config.ts",
+    "pad:build": "vite build --config vite.pad.config.ts",
+    "test:pad-browser": "playwright test --config playwright.pad.config.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

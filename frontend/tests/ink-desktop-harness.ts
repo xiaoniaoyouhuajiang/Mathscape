@@ -1,6 +1,6 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { DesktopInkWorkspace } from "../src/ink/desktop";
-import { newDocument, projectInk, type InkDocument, type InkOperation, type InkDocumentMetadata } from "../src/ink/model";
+import { newDocument, projectInk, inkMetadata, type InkDocument, type InkOperation, type InkDocumentMetadata } from "../src/ink/model";
 import type { StoredInkSnapshot, InkEvidenceReceipt, InkEvidenceRequest } from "../src/ink/persistence";
 import { ArtifactReader } from "../src/reader/reader";
 import { InspectorController } from "../src/inspector/inspector-controller";
@@ -17,10 +17,20 @@ const evidence = new Map<string, InkEvidenceReceipt>();
 const evidenceRequests: InkEvidenceRequest[] = [];
 const operationReceipts = new Map<string, unknown>();
 const calls: Array<{ command: string; documentId?: string }> = [];
-const behavior = { delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, loseEvidenceAck: false };
+const behavior = { delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, loseEvidenceAck: false, remoteDocumentId:"", pairingPending:false,epoch:1 };
 
 mockIPC(async (command, payload) => {
   const args = payload as Record<string, unknown>;
+  if(command==="get_ink_lan_mirror") {
+    const document=documents.get(args.documentId as string)!;
+    const remote=behavior.remoteDocumentId===document.document_id;
+    const session={document_id:document.document_id,session_id:sessions.get(document.document_id)!,writer_id:remote?"inkpad-test":"desktop-local",writer_epoch:behavior.epoch,status:"active",device:{},started_at:document.created_at,last_seen_at:document.created_at};
+    return {delta:{metadata:inkMetadata(document),operations:document.operations.filter(operation=>operation.seq>Number(args.afterSeq)),head_seq:document.operations.length,server_head:document.operations.length,writer:{document_id:document.document_id,head_seq:document.operations.length,writer_epoch:behavior.epoch,session,remote,pairing_pending:behavior.pairingPending},snapshot_count:snapshots.get(document.document_id)!.length},connected:remote,preview:null,client:null};
+  }
+  if(command==="get_ink_lan_status"||command==="start_ink_lan")return {enabled:true,running:true,port:1443,urls:["https://127.0.0.1:1443/pad/"],certificate_file_sha256:"fixture",assets_ready:true,error:null};
+  if(command==="create_ink_pairing"){behavior.pairingPending=true;return{document_id:args.documentId,expires_at:Date.now()/1000+120,urls:["https://127.0.0.1:1443/pad/#pair="+"a".repeat(64)]};}
+  if(command==="cancel_ink_pairing"){behavior.pairingPending=false;return;}
+  if(command==="reclaim_ink_writer"){behavior.remoteDocumentId="";behavior.pairingPending=false;behavior.epoch++;return{document_id:args.documentId,writer_epoch:behavior.epoch,writer_id:"desktop-local",session_id:sessions.get(args.documentId as string)};}
   if (command === "list_ink_documents") {
     return [...documents.values()].map(document => ({
       document_id: document.document_id,

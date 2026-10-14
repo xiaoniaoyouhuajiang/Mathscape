@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 pub const INK_LAB_VERSION: &str = "mathscape-ink-lab-1";
 pub const INK_SNAPSHOT_VERSION: &str = "mathscape-ink-snapshot-2";
 pub const INK_LEGACY_SNAPSHOT_VERSION: &str = "mathscape-ink-snapshot-1";
+pub const INK_LAN_PROTOCOL_VERSION: &str = "mathscape-ink-lan-1";
+pub const INK_LAN_OPERATION_BYTES: usize = 16 * 1024 * 1024;
+pub const INK_LAN_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
 pub const INK_LAB_MAX_POINTS: usize = 500_000;
 pub const INK_LAB_MAX_OPERATIONS: usize = 20_000;
 const JS_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -175,6 +178,58 @@ pub struct RegisterInkEvidenceRequest {
     pub page_id: String,
     pub stroke_ids: Vec<String>,
     pub selection_mode: crate::InkSelectionMode,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InkLanOperation {
+    pub protocol_version: String,
+    pub request_id: String,
+    pub document_id: String,
+    pub session_id: String,
+    pub writer_epoch: u64,
+    pub operation_id: String,
+    pub client_seq: u32,
+    pub previous_operation_id: Option<String>,
+    pub metadata: InkLabDocumentMetadata,
+    pub operation: InkLabOperation,
+}
+
+impl InkLanOperation {
+    pub fn validate_envelope(&self) -> Result<()> {
+        require(
+            self.protocol_version == INK_LAN_PROTOCOL_VERSION,
+            "protocol_version",
+        )?;
+        for (field, value) in [
+            ("request_id", &self.request_id),
+            ("document_id", &self.document_id),
+            ("session_id", &self.session_id),
+            ("operation_id", &self.operation_id),
+        ] {
+            text(value, 200, field)?;
+        }
+        require(
+            self.writer_epoch > 0
+                && self.client_seq == self.operation.seq()
+                && self.client_seq > 0
+                && self.operation_id == self.operation.command_id()
+                && self.metadata.document_id == self.document_id,
+            "operation.envelope",
+        )?;
+        if let Some(previous) = &self.previous_operation_id {
+            text(previous, 200, "previous_operation_id")?;
+        }
+        Ok(())
+    }
+}
+
+pub fn validate_ink_preview(stroke: &InkLabStroke) -> Result<()> {
+    text(&stroke.id, 200, "preview.stroke_id")?;
+    require(stroke.points.len() <= 2048, "preview.points")?;
+    let pages = [stroke.page_id.as_str()].into_iter().collect();
+    let segments = [stroke.capture_segment_id.as_str()].into_iter().collect();
+    validate_stroke_data(stroke, &pages, &segments, &mut 0)
 }
 
 impl RegisterInkEvidenceRequest {
