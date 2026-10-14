@@ -1,5 +1,6 @@
 import { getStroke } from "perfect-freehand";
 import { inkId, MAX_INK_POINTS, projectInk, type InkBrush, type InkDocument, type InkPage, type InkPoint, type InkProjection, type InkStroke, type InkTransform } from "./model";
+import { handleScale } from "./transform-math";
 
 export type InkTool = "pen" | "erase" | "partial_erase" | "select";
 export interface InkCanvasOptions {
@@ -483,8 +484,8 @@ export class InkCanvas {
       state.matrix = { a: cos, b: sin, c: -sin, d: cos, e: center.x - cos * center.x + sin * center.y, f: center.y - sin * center.x - cos * center.y };
     } else {
       const anchor = state.handle === "nw" ? { x: bounds.maxX, y: bounds.maxY } : state.handle === "ne" ? { x: bounds.minX, y: bounds.maxY } : state.handle === "sw" ? { x: bounds.maxX, y: bounds.minY } : { x: bounds.minX, y: bounds.minY };
-      const sx = Math.max(0.05, Math.abs((point.x - anchor.x) / Math.max(1, state.start.x - anchor.x))) * Math.sign(point.x - anchor.x || 1) * Math.sign(state.start.x - anchor.x || 1);
-      const sy = Math.max(0.05, Math.abs((point.y - anchor.y) / Math.max(1, state.start.y - anchor.y))) * Math.sign(point.y - anchor.y || 1) * Math.sign(state.start.y - anchor.y || 1);
+      const sx = handleScale(point.x, anchor.x, state.start.x);
+      const sy = handleScale(point.y, anchor.y, state.start.y);
       state.matrix = { a: sx, b: 0, c: 0, d: sy, e: anchor.x - sx * anchor.x, f: anchor.y - sy * anchor.y };
     }
     this.refreshPreviewOnly();
