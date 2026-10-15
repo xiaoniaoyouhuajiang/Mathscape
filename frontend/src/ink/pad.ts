@@ -46,7 +46,16 @@ class InkPad {
     this.events();this.controls();
     try{
       this.database=await InkPadStore.open();
-      this.binding=await this.database.active();
+      const target=new URLSearchParams(location.hash.slice(1));
+      let missingDocument=false;
+      if(target.has("doc")&&!target.has("pair")){
+        // Resume links carry no credential; they select one already stored on this device.
+        const id=target.get("doc")!;
+        const match=(await this.database.drafts()).filter(draft=>draft.binding.lease.document_id===id).sort((a,b)=>b.binding.lease.writer_epoch-a.binding.lease.writer_epoch)[0];
+        if(match)await this.database.activate(match.binding);else missingDocument=true;
+        history.replaceState(null,"",location.pathname);
+      }
+      this.binding=missingDocument?undefined:await this.database.active();
       if(this.binding){const cached=await this.database.draft(this.binding.key);if(cached){this.confirmed=cached.confirmed_head;this.mount(parseInkDocument(cached.document),cached.page_id);this.pending=(await this.database.pending(this.binding)).length;}}
       await this.refreshDrafts();
       const token=new URLSearchParams(location.hash.slice(1)).get("pair");
@@ -62,7 +71,9 @@ class InkPad {
         history.replaceState(null,"",location.pathname);
       }
       if(this.binding)this.connect();else element("#pad-connection").textContent="尚未配对";
-      if("serviceWorker" in navigator){try{if(!navigator.serviceWorker.controller)await navigator.serviceWorker.register("/pad/sw.js",{scope:"/pad/"});await navigator.serviceWorker.ready;if(!this.fenced)this.message("画板已准备离线恢复；书写会自动同步到电脑。");}catch{if(!this.fenced)this.message("操作队列可恢复，离线页面缓存未完成；保持本页打开或先导出恢复草稿。");}}
+      const quiet=this.fenced||missingDocument;
+      if("serviceWorker" in navigator){try{if(!navigator.serviceWorker.controller)await navigator.serviceWorker.register("/pad/sw.js",{scope:"/pad/"});await navigator.serviceWorker.ready;if(!quiet&&!this.fenced)this.message("画板已准备离线恢复；书写会自动同步到电脑。");}catch{if(!quiet&&!this.fenced)this.message("操作队列可恢复，离线页面缓存未完成；保持本页打开或先导出恢复草稿。");}}
+      if(missingDocument)this.message("这台设备没有这份手稿的书写授权。请在电脑的“平板书写”中选择“换一台设备书写”，再扫码。");
       setInterval(()=>{this.transport?.report(this.pending,this.persisted,this.page);this.summary();},1000);
     }catch(error){this.message(error instanceof Error?error.message:String(error));element("#pad-connection").textContent="配对或本机恢复存储不可用";}
   }
@@ -82,7 +93,8 @@ class InkPad {
     window.addEventListener("pagehide",()=>{this.board?.finish();this.transport?.close();});
     window.addEventListener("pageshow",event=>{if(event.persisted&&this.binding)this.connect();});
     window.addEventListener("hashchange",()=>{
-      if(!new URLSearchParams(location.hash.slice(1)).has("pair"))return;
+      const next=new URLSearchParams(location.hash.slice(1));
+      if(!next.has("pair")&&!next.has("doc"))return;
       this.board?.finish();void this.enqueueTail.then(()=>{if(this.buffered.size)this.message("当前笔迹尚未保存到本机，请先导出恢复草稿，再打开新的配对链接。");else location.reload();});
     });
     window.addEventListener("beforeunload",event=>{if(this.buffered.size){event.preventDefault();event.returnValue="";}});

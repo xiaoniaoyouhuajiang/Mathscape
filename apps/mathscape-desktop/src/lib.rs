@@ -5,7 +5,7 @@ mod discovery_view;
 mod ink;
 mod ink_lan;
 mod ink_tls;
-pub use ink_lan::{InkLanMirror, InkLanStatus, InkPairingLink};
+pub use ink_lan::{InkLanMirror, InkLanStatus, InkPairingLink, InkSetupCheck, InkSetupStatus};
 mod llm_settings;
 mod map_edit;
 mod markdown_patch;
@@ -840,7 +840,11 @@ pub fn run() {
             ink_lan::get_ink_lan_mirror,
             ink_lan::reclaim_ink_writer,
             ink_lan::export_ink_trust_certificate,
-            ink_lan::choose_ink_recovery
+            ink_lan::choose_ink_recovery,
+            ink_lan::start_ink_setup,
+            ink_lan::get_ink_setup_status,
+            ink_lan::prepare_ink_setup_handoff,
+            ink_lan::cancel_ink_setup
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Mathscape desktop application")

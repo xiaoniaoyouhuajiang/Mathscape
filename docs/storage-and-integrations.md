@@ -32,7 +32,7 @@ migration 15 增加快照请求绑定和独立的 Ink 来源证据回执。快�
 
 migration 16 保存 LAN 服务设置、配对摘要、设备租约、写入权转移审计和恢复导入回执。配对领取、设备授权校验与操作提交/快照前缀固定分别在同一事务中进行；不同文档、会话或旧 epoch 的请求不能写入。正常退出保留启用状态及凭据，重启重新签发同一 CA 下的叶证书；显式停止服务则撤销凭据和待配对二维码。Workspace 的 `ink-lan/trust/` 包含公开根证书和私有 CA 密钥，搬迁或备份时应一同保护，丢失其中之一不静默更换信任根。
 
-远端 IndexedDB 按 session/epoch 保留草稿头、逐条历史及未确认队列；每笔只追加新的历史操作，避免每次复制整稿。durable ACK 才移除 outbox，历史仍用于离线打开与恢复导出。Service Worker 仅缓存静态画板，不缓存认证或材料 API；Origin 改变后浏览器旧队列不会自动迁移。WebSocket 预览是最多 2048 点、短时失效的内存数据，最终持久笔迹保留原始样本。电脑镜像的快照只涵盖已保存前缀；平板快照先排空 outbox。代码：[LAN 服务](../apps/mathscape-desktop/src/ink_lan.rs)、[租约事务](../crates/mathscape-store-sqlite/src/ink_lan.rs)、[平板存储](../frontend/src/ink/pad-store.ts)。
+远端 IndexedDB 按 session/epoch 保留草稿头、逐条历史及未确认队列；每笔只追加新的历史操作，避免每次复制整稿。durable ACK 才移除 outbox，历史仍用于离线打开与恢复导出。Service Worker 仅缓存静态画板，不缓存认证或材料 API；Origin 改变后浏览器旧队列不会自动迁移。`#doc=` 恢复入口只在本机 IndexedDB 中选择该手稿已保存的凭据，不携带或签发凭据；设置衔接时平板通过 HTTPS 提交本机凭据供服务端判断是否可恢复，服务端不记录不匹配的凭据。转交和设置衔接的配对状态只在内存和既有 `ink_pairings` 表中，不新增迁移。WebSocket 预览是最多 2048 点、短时失效的内存数据，最终持久笔迹保留原始样本。电脑镜像的快照只涵盖已保存前缀；平板快照先排空 outbox。代码：[LAN 服务](../apps/mathscape-desktop/src/ink_lan.rs)、[租约事务](../crates/mathscape-store-sqlite/src/ink_lan.rs)、[平板存储](../frontend/src/ink/pad-store.ts)。
 
 ## PDF、Marker 与阅读器
 

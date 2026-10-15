@@ -2,7 +2,9 @@ import { defineConfig } from "vite";
 import { fileURLToPath } from "node:url";
 export default defineConfig({
   root:fileURLToPath(new URL("./ink-pad",import.meta.url)),base:"/pad/",
-  build:{outDir:fileURLToPath(new URL("./dist-inkpad",import.meta.url)),emptyOutDir:true},
+  build:{outDir:fileURLToPath(new URL("./dist-inkpad",import.meta.url)),emptyOutDir:true,
+    // The setup guide is a second entry served by the short-lived HTTP helper.
+    rolldownOptions:{input:{index:fileURLToPath(new URL("./ink-pad/index.html",import.meta.url)),setup:fileURLToPath(new URL("./ink-pad/setup.html",import.meta.url))}}},
   plugins:[{
     name:"inkpad-offline-assets",
     generateBundle(_,bundle) {

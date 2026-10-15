@@ -17,7 +17,7 @@ const evidence = new Map<string, InkEvidenceReceipt>();
 const evidenceRequests: InkEvidenceRequest[] = [];
 const operationReceipts = new Map<string, unknown>();
 const calls: Array<{ command: string; documentId?: string }> = [];
-const behavior = { delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, loseEvidenceAck: false, remoteDocumentId:"", pairingPending:false,epoch:1 };
+const behavior = { delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, loseEvidenceAck: false, remoteDocumentId:"", pairingPending:false,epoch:1,setupStep:0,remoteConnected:true,remotePending:0,setupDocumentId:"" as string|null,handoff:"",transferConfirmation:false,pairingArgs:[] as unknown[],strictPairing:false,autoRequest:true };
 
 mockIPC(async (command, payload) => {
   const args = payload as Record<string, unknown>;
@@ -25,10 +25,15 @@ mockIPC(async (command, payload) => {
     const document=documents.get(args.documentId as string)!;
     const remote=behavior.remoteDocumentId===document.document_id;
     const session={document_id:document.document_id,session_id:sessions.get(document.document_id)!,writer_id:remote?"inkpad-test":"desktop-local",writer_epoch:behavior.epoch,status:"active",device:{},started_at:document.created_at,last_seen_at:document.created_at};
-    return {delta:{metadata:inkMetadata(document),operations:document.operations.filter(operation=>operation.seq>Number(args.afterSeq)),head_seq:document.operations.length,server_head:document.operations.length,writer:{document_id:document.document_id,head_seq:document.operations.length,writer_epoch:behavior.epoch,session,remote,pairing_pending:behavior.pairingPending},snapshot_count:snapshots.get(document.document_id)!.length},connected:remote,preview:null,client:null};
+    return {delta:{metadata:inkMetadata(document),operations:document.operations.filter(operation=>operation.seq>Number(args.afterSeq)),head_seq:document.operations.length,server_head:document.operations.length,writer:{document_id:document.document_id,head_seq:document.operations.length,writer_epoch:behavior.epoch,session,remote,pairing_pending:behavior.pairingPending},snapshot_count:snapshots.get(document.document_id)!.length},connected:remote&&behavior.remoteConnected,preview:null,client:remote&&behavior.remoteConnected?{pending_count:behavior.remotePending,locally_durable:true,secure_context:true,page_id:document.pages[0].id}:null};
   }
   if(command==="get_ink_lan_status"||command==="start_ink_lan")return {enabled:true,running:true,port:1443,urls:["https://127.0.0.1:1443/pad/"],certificate_file_sha256:"fixture",assets_ready:true,error:null};
-  if(command==="create_ink_pairing"){behavior.pairingPending=true;return{document_id:args.documentId,expires_at:Date.now()/1000+120,urls:["https://127.0.0.1:1443/pad/#pair="+"a".repeat(64)]};}
+  if(command==="create_ink_pairing"){behavior.pairingArgs.push(structuredClone(args));if(behavior.strictPairing&&behavior.remoteDocumentId===args.documentId&&!args.allowTransfer)throw new Error("ink invariant failed: takeover_required");behavior.pairingPending=true;return{document_id:args.documentId,expires_at:Date.now()/1000+120,urls:["https://127.0.0.1:1443/pad/#pair="+"a".repeat(64)]};}
+  if(command==="start_ink_setup"){behavior.setupStep=0;behavior.setupDocumentId=(args.documentId as string|null)??null;behavior.handoff=behavior.setupDocumentId?"idle":"unbound";return{active:true,expires_at:Date.now()/1000+900,urls:["http://127.0.0.1:1442/setup/#setup="+"b".repeat(64),"http://localhost:1442/setup/#setup="+"b".repeat(64)],opened:false,certificate_downloaded:false,https_trusted:false,check:null,complete:false};}
+  const setupStatus=()=>{const step=behavior.setupStep;return{active:true,expires_at:Date.now()/1000+900,urls:[],opened:step>=1,certificate_downloaded:step>=2,https_trusted:step>=3,check:step>=4?{secure_context:true,indexed_db:true,service_worker:true,user_agent:"fixture"}:null,complete:step>=4,document_id:behavior.setupDocumentId,handoff:behavior.handoff,transfer_confirmation:behavior.transferConfirmation};};
+  if(command==="get_ink_setup_status"){behavior.setupStep=Math.min(4,behavior.setupStep+1);if(behavior.setupStep===4&&behavior.handoff==="idle"&&behavior.autoRequest)behavior.handoff="requested";return setupStatus();}
+  if(command==="prepare_ink_setup_handoff"){behavior.pairingArgs.push({setup:true,...structuredClone(args)});if(behavior.remoteDocumentId===behavior.setupDocumentId&&!args.confirmTransfer){behavior.transferConfirmation=true;return setupStatus();}behavior.transferConfirmation=false;behavior.handoff="ready";behavior.pairingPending=true;return setupStatus();}
+  if(command==="cancel_ink_setup"){behavior.setupStep=0;return;}
   if(command==="cancel_ink_pairing"){behavior.pairingPending=false;return;}
   if(command==="reclaim_ink_writer"){behavior.remoteDocumentId="";behavior.pairingPending=false;behavior.epoch++;return{document_id:args.documentId,writer_epoch:behavior.epoch,writer_id:"desktop-local",session_id:sessions.get(args.documentId as string)};}
   if (command === "list_ink_documents") {

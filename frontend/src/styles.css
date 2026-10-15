@@ -1114,3 +1114,14 @@ code {
 .ink-lan-pairing canvas{display:block;margin-top:10px;background:#fff;border-radius:8px;}.ink-lan-pairing input{width:100%;margin:10px 0;}.ink-lan-panel code{display:block;overflow-wrap:anywhere;font-size:10px;}
 #desktop-ink-follow-label {font-size:10px;color:#a7c3b6;white-space:nowrap;}
 #ink-import-recovery {width:100%;margin-top:9px;font-size:11px;min-height:30px;}
+.ink-lan-setup-intro {display:flex;align-items:center;justify-content:space-between;gap:14px;margin:12px 0;padding:12px 14px;border:1px solid #4f8676;border-radius:10px;background:linear-gradient(110deg,#1e3a38,#183034);}
+.ink-lan-setup-intro p {margin:4px 0 0;}.ink-lan-panel button.is-primary {background:#b9e3d8;color:#15282e;border-color:#b9e3d8;font-weight:600;white-space:nowrap;}
+.ink-lan-setup {display:grid;grid-template-columns:210px 1fr;gap:15px;margin:0 0 14px;padding-bottom:14px;border-bottom:1px solid #2f5149;}.ink-lan-setup[hidden]{display:none;}
+.ink-lan-setup canvas {display:block;margin-top:10px;background:#fff;border-radius:8px;}.ink-lan-setup input {width:100%;margin:8px 0;}
+.ink-lan-setup-progress {list-style:none;padding:0;margin:10px 0;display:grid;gap:7px;}.ink-lan-setup-progress li {display:flex;gap:9px;align-items:center;color:#8fb0a3;}
+.ink-lan-setup-progress li::before {content:"";width:14px;height:14px;border:1px solid #6b998a;border-radius:50%;flex:none;}
+.ink-lan-setup-progress li.is-done {color:#d6eee1;}.ink-lan-setup-progress li.is-done::before {content:"✓";display:grid;place-items:center;background:#b9e3d8;color:#15282e;font-size:10px;}
+.ink-lan-setup-progress li[hidden] {display:none;}
+.ink-lan-writer {display:grid;gap:10px;margin:0 0 14px;padding:12px 14px;border:1px solid #c9a35f;border-radius:10px;background:#2b2f27;}.ink-lan-writer[hidden]{display:none;}
+.ink-lan-writer strong {color:#f1dfb5;}.ink-lan-writer p {margin:4px 0 0;}
+.ink-lan-warning {padding:10px 12px;border-left:3px solid #e0a95a;border-radius:6px;background:#3a3122;}.ink-lan-warning[hidden]{display:none;}.ink-lan-warning p {margin:0 0 8px;color:#f0d6a8;}

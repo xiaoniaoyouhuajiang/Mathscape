@@ -31,7 +31,7 @@ import { InkEvidencePanel } from "./evidence-panel";
 import { eventBus } from "../core/events";
 import type { InkSelection } from "./persistence";
 import { safeInvoke } from "../core/ipc";
-import { InkLanPanel,inkLanMirror,type InkWriterView } from "./lan";
+import { InkLanPanel,inkLanMirror,type InkWriterPresence,type InkWriterView } from "./lan";
 
 interface SessionSummary {
   document_id: string;
@@ -110,6 +110,7 @@ export class DesktopInkWorkspace {
   private mirrorMode=false;
   private remotePreview:InkStroke|undefined;
   private writerView:InkWriterView|undefined;
+  private writerPresence:InkWriterPresence|undefined;
   private lanPanel:InkLanPanel|undefined;
   private mirrorTimer:ReturnType<typeof setInterval>|undefined;
   private mirrorPolling=false;
@@ -163,7 +164,7 @@ export class DesktopInkWorkspace {
     element<HTMLButtonElement>(this.host, "#ink-close").addEventListener("click", () => this.close());
     element<HTMLButtonElement>(this.host, "#ink-save-now").addEventListener("click", () => void this.flush("手动保存完成。"));
     element<HTMLButtonElement>(this.host, "#ink-snapshot").addEventListener("click", () => void this.createSnapshot());
-    this.lanPanel=new InkLanPanel(element(this.host,"#ink-lan-panel"),()=>this.preparePad(),()=>this.writerView,()=>this.refreshMirror(true));
+    this.lanPanel=new InkLanPanel(element(this.host,"#ink-lan-panel"),documentId=>this.preparePad(documentId),()=>this.writerView,()=>this.refreshMirror(true),()=>this.writerView?.remote?this.writerPresence:undefined);
     element<HTMLButtonElement>(this.host,"#ink-lan").onclick=()=>{if(this.documentState)void this.lanPanel!.open(this.documentState.document_id).catch(error=>this.status(errorText(error),true));};
     element<HTMLButtonElement>(this.host, "#ink-continue-current").addEventListener("click", () => void this.continueCurrentDocument());
     element<HTMLButtonElement>(this.host, "#ink-new-document").addEventListener("click", () => void this.createDocument());
@@ -278,7 +279,7 @@ export class DesktopInkWorkspace {
       if (!stored) throw new Error("手稿不存在或已被移除");
       const mirror=await inkLanMirror(summary.document_id,stored.head_seq);
       if(revision!==this.navigationRevision)return;
-      this.writerView=mirror.delta.writer;
+      this.writerView=mirror.delta.writer;this.writerPresence={connected:mirror.connected,pending:mirror.client?.pending_count??null};
       if(mirror.delta.writer.remote||mirror.delta.writer.pairing_pending){
         await this.mountDocument(stored.document,mirror.delta.writer.session??undefined,stored.head_seq,true,undefined,revision);
         this.status("电脑显示手稿镜像，平板书写后会自动同步。",false);return;
@@ -691,7 +692,13 @@ export class DesktopInkWorkspace {
     }
   }
 
-  private async preparePad():Promise<{documentId:string;head:number}> {
+  /** With `documentId`, a setup hand-off may target a manuscript that is not
+   * open for editing; local writes are flushed and the service reads its head. */
+  private async preparePad(documentId?:string):Promise<{documentId:string;head:number|null}> {
+    if(documentId&&(this.documentState?.document_id!==documentId||this.currentSnapshot)){
+      this.board?.finish();if(!await this.flush())throw new Error("请先完成本机保存，再交给平板书写。");
+      return {documentId,head:null};
+    }
     if(!this.documentState||this.currentSnapshot)throw new Error("请先打开当前可编辑手稿。");
     this.board?.finish();if(!await this.flush())throw new Error("请先完成本机保存，再交给平板书写。");
     return {documentId:this.documentState.document_id,head:this.logicalHead};
@@ -713,7 +720,7 @@ export class DesktopInkWorkspace {
       const after=Math.min(this.logicalHead,this.confirmedHeads.get(id)??this.logicalHead);
       const mirror=await inkLanMirror(id,after);
       if(this.documentState?.document_id!==id||revision!==this.navigationRevision||this.currentSnapshot)return;
-      this.writerView=mirror.delta.writer;
+      this.writerView=mirror.delta.writer;this.writerPresence={connected:mirror.connected,pending:mirror.client?.pending_count??null};
       if(mirror.delta.snapshot_count!==this.snapshotCount){this.snapshotCount=mirror.delta.snapshot_count;void this.refreshSnapshots();}
       const observe=mirror.delta.writer.remote||mirror.delta.writer.pairing_pending;
       if(!observe){

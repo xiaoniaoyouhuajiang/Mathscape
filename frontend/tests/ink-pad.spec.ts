@@ -1,4 +1,4 @@
-import { expect,test,type Page } from "@playwright/test";
+import { expect,test,type Browser,type Page } from "@playwright/test";
 import { readFile,writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -83,4 +83,67 @@ test("a failed local transaction preserves the drawing and retries the original 
   await expect(page.locator("#pad-desktop-status")).toContainText("head 1");await expect(page.locator("#pad-local-status")).toContainText("待同步 0");
   await page.reload();await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
   expect((await control("status")).document.document.operations).toHaveLength(1);
+});
+
+test("first-time setup downloads the public CA, detects HTTPS trust and reports readiness",async({page})=>{
+  const fixture=await control("setup");
+  await page.goto(fixture.setup_url);
+  await expect(page.getByRole("heading",{name:"保存电脑的信任证书"})).toBeVisible();
+  const downloaded=page.waitForEvent("download");await page.getByRole("link",{name:"下载证书"}).click();
+  const file=await downloaded;expect(file.suggestedFilename()).toMatch(/^Mathscape-InkPad-[0-9a-f]{8}\.crt$/);
+  expect((await readFile((await file.path())!)).toString("latin1")).not.toContain("PRIVATE KEY");
+  await expect(page.locator("#setup-trust")).toContainText("已信任当前电脑");
+  await page.getByRole("link",{name:"完成安装检测"}).click();
+  await expect(page.getByRole("heading",{name:"设置完成"})).toBeVisible();
+  await expect(page.locator("#setup-summary")).toContainText("生成书写二维码");
+  const status=(await control("status")).setup;
+  expect(status).toMatchObject({opened:true,certificate_downloaded:true,https_trusted:true,complete:true});
+});
+
+/** A second tablet: its own IndexedDB, so it holds no credential for the manuscript. */
+async function otherDevice(browser:Browser):Promise<Page>{const context=await browser.newContext({ignoreHTTPSErrors:true,acceptDownloads:true,viewport:{width:1100,height:820}});return context.newPage();}
+async function finishSetup(page:Page,url:string){
+  await page.goto(url);await expect(page.locator("#setup-trust")).toContainText("已信任当前电脑");
+  await page.getByRole("link",{name:"完成安装检测"}).click();await expect(page.getByRole("heading",{name:"设置完成"})).toBeVisible();
+}
+
+test("setup on the tablet that already holds the manuscript resumes it without a second QR code",async({page})=>{
+  await writeLine(page);await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  const fixture=await control("setup_bound");await finishSetup(page,fixture.setup_url);
+  await expect(page.locator("#setup-start-text")).toContainText("已持有这份手稿的书写权");
+  await page.getByRole("button",{name:"开始书写",exact:true}).click();
+  await expect(page.locator("#pad-connection")).toContainText("电脑已连接");await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  expect(new URL(page.url()).hash).toBe("");
+  await writeLine(page,40);await expect(page.locator("#pad-desktop-status")).toContainText("head 2");
+  expect((await control("status")).setup.handoff).toBe("resumed");
+});
+
+test("setup on a new tablet waits for desktop confirmation, then takes over writing",async({page,browser})=>{
+  await writeLine(page);await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  const fixture=await control("setup_bound");const tablet=await otherDevice(browser);await finishSetup(tablet,fixture.setup_url);
+  await expect(tablet.locator("#setup-start-text")).toContainText("等待电脑");
+  expect((await control("prepare_handoff")).setup).toMatchObject({handoff:"requested",transfer_confirmation:true});
+  await expect(tablet.locator("#setup-start-text")).toContainText("确认转交");
+  await expect(tablet.getByRole("button",{name:"开始书写",exact:true})).toBeDisabled();
+  await writeLine(page,40);await expect(page.locator("#pad-desktop-status")).toContainText("head 2");
+  await control("confirm_handoff");
+  await tablet.getByRole("button",{name:"开始书写",exact:true}).click();
+  await expect(tablet.locator("#pad-connection")).toContainText("电脑已连接");await expect(tablet.locator("#pad-desktop-status")).toContainText("head 2");
+  await expect(page.locator("#pad-connection")).toContainText("写入权已转移");
+  await writeLine(tablet,-40);await expect(tablet.locator("#pad-desktop-status")).toContainText("head 3");
+  const state=await control("status");expect(state.setup.handoff).toBe("claimed");expect(state.document.document.operations).toHaveLength(3);
+  await tablet.context().close();
+});
+
+test("a resume link reopens the stored session and a transfer QR moves writing to another device",async({page,browser})=>{
+  await writeLine(page);await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  const fixture=await control("status");
+  await page.goto(`${fixture.base}/pad/#doc=missing-document`);await expect(page.locator("#pad-status")).toContainText("没有这份手稿的书写授权");
+  await page.goto(`${fixture.base}/pad/#doc=${encodeURIComponent(fixture.document_id)}`);
+  await expect(page.locator("#pad-connection")).toContainText("电脑已连接");await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  const offer=await control("transfer");const tablet=await otherDevice(browser);
+  await writeLine(page,40);await expect(page.locator("#pad-desktop-status")).toContainText("head 2");
+  await tablet.goto(offer.transfer_url);await expect(tablet.locator("#pad-connection")).toContainText("电脑已连接");await expect(tablet.locator("#pad-desktop-status")).toContainText("head 2");
+  await expect(page.locator("#pad-connection")).toContainText("写入权已转移");
+  await tablet.context().close();
 });

@@ -51,6 +51,9 @@ pub struct InkPairingOffer {
     pub session_id: String,
     pub writer_id: String,
     pub expires_at: i64,
+    /// Required when another device holds the lease. The holder keeps writing
+    /// until the new device claims the offer; claim checks the epoch again.
+    pub allow_transfer: bool,
 }
 
 pub(crate) fn validate_schema(c: &Connection) -> Result<(), SqliteStoreError> {
@@ -99,14 +102,16 @@ fn writer_view(
         .map(|id| ink::read_session(c, &id))
         .transpose()?
         .flatten();
-    let pending:bool = c.query_row("SELECT EXISTS(SELECT 1 FROM ink_pairings WHERE document_id=?1 AND credential_hash IS NULL AND expires_at>?2 AND expected_epoch=?3 AND expected_head=?4)",params![document,now,epoch,head],|r|r.get(0))?;
+    let remote = session
+        .as_ref()
+        .is_some_and(|s| s.writer_id != "desktop-local");
+    // A transfer offer stays valid while the remote holder keeps syncing.
+    let pending:bool = c.query_row("SELECT EXISTS(SELECT 1 FROM ink_pairings WHERE document_id=?1 AND credential_hash IS NULL AND expires_at>?2 AND expected_epoch=?3 AND (expected_head=?4 OR ?5))",params![document,now,epoch,head,remote],|r|r.get(0))?;
     Ok(InkWriterView {
         document_id: document.into(),
         head_seq: head.try_into().map_err(|_| invalid("negative head"))?,
         writer_epoch: epoch.try_into().map_err(|_| invalid("negative epoch"))?,
-        remote: session
-            .as_ref()
-            .is_some_and(|s| s.writer_id != "desktop-local"),
+        remote,
         session,
         pairing_pending: pending,
     })
@@ -330,10 +335,10 @@ impl SqliteArtifactStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let view = writer_view(&tx, &offer.document_id, now)?;
-        if view.remote {
+        if view.remote && !offer.allow_transfer {
             return Err(invalid("takeover_required"));
         }
-        if view.head_seq != offer.expected_head {
+        if !view.remote && view.head_seq != offer.expected_head {
             return Err(SqliteStoreError::InkHeadConflict {
                 expected: offer.expected_head,
                 actual: view.head_seq,
@@ -358,6 +363,18 @@ impl SqliteArtifactStore {
         device: &Value,
         now: i64,
     ) -> Result<InkRemoteLease, SqliteStoreError> {
+        self.claim_ink_pairing_detailed(token, credential, device, now)
+            .map(|(lease, _)| lease)
+    }
+    /// Also reports whether this call transferred the lease, so the caller can
+    /// close the previous holder's connection exactly once.
+    pub fn claim_ink_pairing_detailed(
+        &mut self,
+        token: &str,
+        credential: &str,
+        device: &Value,
+        now: i64,
+    ) -> Result<(InkRemoteLease, bool), SqliteStoreError> {
         digest(token)?;
         digest(credential)?;
         if token == credential || serde_json::to_vec(device)?.len() > 8192 {
@@ -376,16 +393,23 @@ impl SqliteArtifactStore {
             }
             let lease = authenticate(&tx, credential, now)?;
             tx.commit()?;
-            return Ok(lease);
+            return Ok((lease, false));
         }
         if expires <= now {
             return Err(invalid("pairing_expired"));
         }
+        let epoch: u64 = epoch.try_into().map_err(|_| invalid("negative epoch"))?;
+        let mut head: u64 = head.try_into().map_err(|_| invalid("negative head"))?;
+        let current = writer_view(&tx, &document, now)?;
+        if current.remote && current.writer_epoch == epoch {
+            // The previous tablet's acknowledged operations move with the lease.
+            head = current.head_seq;
+        }
         let assigned = transfer(
             &tx,
             &document,
-            epoch.try_into().map_err(|_| invalid("negative epoch"))?,
-            head.try_into().map_err(|_| invalid("negative head"))?,
+            epoch,
+            head,
             &session,
             &writer,
             device,
@@ -401,7 +425,15 @@ impl SqliteArtifactStore {
         )?;
         let lease = authenticate(&tx, credential, now)?;
         tx.commit()?;
-        Ok(lease)
+        Ok((lease, true))
+    }
+    /// Checks a device credential digest without changing any lease state.
+    pub fn authenticate_ink_device(
+        &self,
+        credential: &str,
+        now: i64,
+    ) -> Result<InkRemoteLease, SqliteStoreError> {
+        authenticate(&self.connection, credential, now)
     }
     pub fn ink_remote_context(
         &self,

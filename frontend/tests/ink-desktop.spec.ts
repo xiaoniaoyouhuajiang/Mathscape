@@ -121,3 +121,84 @@ test("P3 pairing displays a QR and switches the desktop into a read-only mirror"
   await page.getByRole("button",{name:"取消待配对",exact:true}).click();
   await expect(page.locator("#ink-mode-badge")).toHaveText("当前手稿");await expect(page.locator("#desktop-ink-pen")).toBeEnabled();
 });
+
+test("P3.1 setup shows a separate QR and tracks tablet trust progress",async({page})=>{
+  // The tablet has not asked to start writing, so the desktop stays editable.
+  await page.evaluate(()=>{(window as unknown as {inkDesktopHarness:{behavior:{autoRequest:boolean}}}).inkDesktopHarness.behavior.autoRequest=false;});
+  await page.getByRole("button",{name:"平板书写",exact:true}).click();
+  await page.getByRole("button",{name:"首次设置平板",exact:true}).click();
+  await expect(page.locator("[data-setup-qr]")).toBeVisible();
+  expect(await page.locator("[data-setup-link]").inputValue()).toContain("#setup=");
+  await expect(page.locator("[data-setup-address] option")).toHaveCount(1);
+  await expect(page.locator('[data-setup-step="complete"]')).toHaveClass(/is-done/);
+  await expect(page.locator("[data-setup-status]")).toContainText("等待平板进入手稿");
+  await expect(page.locator("#ink-mode-badge")).toHaveText("当前手稿");
+  await page.getByRole("button",{name:"结束设置",exact:true}).click();
+  await expect(page.locator(".ink-lan-setup")).toBeHidden();
+});
+
+type Harness={behavior:Record<string,unknown>&{pairingArgs:Array<Record<string,unknown>>};documents:{a:string}};
+async function setBehavior(page:Page,values:Record<string,unknown>){await page.evaluate(values=>{Object.assign((window as unknown as {inkDesktopHarness:Harness}).inkDesktopHarness.behavior,values);},values);}
+async function remoteHolder(page:Page,values:Record<string,unknown>={}){
+  await page.evaluate(values=>{const harness=(window as unknown as {inkDesktopHarness:Harness}).inkDesktopHarness;Object.assign(harness.behavior,{remoteDocumentId:harness.documents.a,strictPairing:true,...values});},values);
+  await expect(page.locator("#ink-mode-badge")).toHaveText("平板镜像");
+}
+
+test("P3.1.1 a tablet-held manuscript offers continue and transfer instead of a raw error",async({page})=>{
+  await remoteHolder(page);
+  await page.getByRole("button",{name:"平板书写",exact:true}).click();
+  await expect(page.locator(".ink-lan-writer")).toBeVisible();
+  await expect(page.locator("[data-writer-detail]")).toContainText("平板已连接");
+  await expect(page.getByRole("button",{name:"生成配对二维码",exact:true})).toBeHidden();
+  await page.getByRole("button",{name:"在这台平板继续",exact:true}).click();
+  const resume=await page.locator("[data-link]").inputValue();
+  expect(resume).toContain("#doc=");expect(resume).not.toContain("pair=");
+  await page.getByRole("button",{name:"换一台设备书写",exact:true}).click();
+  expect(await page.locator("[data-link]").inputValue()).toContain("#pair=");
+  await expect(page.locator("[data-link-note]")).toContainText("原平板仍可继续书写");
+  const args=await page.evaluate(()=>(window as unknown as {inkDesktopHarness:Harness}).inkDesktopHarness.behavior.pairingArgs);
+  expect(args.at(-1)).toMatchObject({allowTransfer:true});
+  await expect(page.locator(".ink-lan-panel")).not.toContainText("takeover_required");
+});
+
+test("P3.1.1 transferring away from an offline or unsynced tablet asks first",async({page})=>{
+  await remoteHolder(page,{remoteConnected:false});
+  await page.getByRole("button",{name:"平板书写",exact:true}).click();
+  await expect(page.locator("[data-writer-detail]")).toContainText("平板当前未连接");
+  await page.getByRole("button",{name:"换一台设备书写",exact:true}).click();
+  await expect(page.locator("[data-transfer-warning]")).toContainText("导出恢复草稿");
+  await expect(page.locator(".ink-lan-pairing")).toBeHidden();
+  await page.getByRole("button",{name:"先去原平板同步",exact:true}).click();
+  await setBehavior(page,{remoteConnected:true,remotePending:3});
+  await expect(page.locator("[data-writer-detail]")).toContainText("待同步 3");
+  await page.getByRole("button",{name:"换一台设备书写",exact:true}).click();
+  await expect(page.locator("[data-transfer-warning]")).toContainText("3 个操作未同步");
+  await page.getByRole("button",{name:"仍然转交",exact:true}).click();
+  await expect(page.locator(".ink-lan-pairing")).toBeVisible();
+  expect(await page.locator("[data-link]").inputValue()).toContain("#pair=");
+});
+
+test("P3.1.1 setup is bound to the manuscript and hands the tablet straight into writing",async({page})=>{
+  await page.getByRole("button",{name:"平板书写",exact:true}).click();
+  await page.getByRole("button",{name:"首次设置平板",exact:true}).click();
+  await expect(page.locator('[data-setup-step="writing"]')).toBeVisible();
+  await expect(page.locator("[data-setup-status]")).toContainText("平板上点击“开始书写”");
+  const args=await page.evaluate(()=>(window as unknown as {inkDesktopHarness:Harness}).inkDesktopHarness.behavior.pairingArgs);
+  expect(args.at(-1)).toMatchObject({setup:true,confirmTransfer:false,expectedHead:0});
+  await expect(page.locator("#ink-mode-badge")).toHaveText("平板镜像");
+  await setBehavior(page,{handoff:"claimed"});
+  await expect(page.locator('[data-setup-step="writing"]')).toHaveClass(/is-done/);
+  await expect(page.locator("[data-status]")).toContainText("平板已接手这份手稿");
+});
+
+test("P3.1.1 setup for a manuscript held by another tablet needs an explicit transfer",async({page})=>{
+  await remoteHolder(page);
+  await page.getByRole("button",{name:"平板书写",exact:true}).click();
+  await page.getByRole("button",{name:"首次设置平板",exact:true}).click();
+  await expect(page.locator("[data-setup-transfer]")).toBeVisible();
+  await expect(page.locator("[data-setup-status]")).toContainText("正在由另一台设备书写");
+  await page.getByRole("button",{name:"转交给这台平板",exact:true}).click();
+  await expect(page.locator("[data-setup-status]")).toContainText("平板上点击“开始书写”");
+  const args=await page.evaluate(()=>(window as unknown as {inkDesktopHarness:Harness}).inkDesktopHarness.behavior.pairingArgs);
+  expect(args.at(-1)).toMatchObject({setup:true,confirmTransfer:true});
+});

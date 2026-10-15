@@ -102,6 +102,49 @@ async fn main() {
                                 )
                                 .unwrap();
                         }
+                        "setup" => {
+                            let setup = service.start_ink_setup().await.unwrap();
+                            ready["setup_url"] = setup
+                                .urls
+                                .iter()
+                                .find(|url| url.contains("127.0.0.1"))
+                                .unwrap()
+                                .clone()
+                                .into();
+                        }
+                        "setup_bound" => {
+                            let setup = service
+                                .start_ink_setup_for(Some(document_id.clone()))
+                                .await
+                                .unwrap();
+                            ready["setup_url"] = setup
+                                .urls
+                                .iter()
+                                .find(|url| url.contains("127.0.0.1"))
+                                .unwrap()
+                                .clone()
+                                .into();
+                        }
+                        "prepare_handoff" | "confirm_handoff" => {
+                            let confirm = command["action"] == "confirm_handoff";
+                            service
+                                .prepare_ink_setup_handoff(None, confirm)
+                                .await
+                                .unwrap();
+                        }
+                        "transfer" => {
+                            let pair = service
+                                .create_ink_pairing_with(document_id.clone(), 0, true)
+                                .await
+                                .unwrap();
+                            ready["transfer_url"] = pair
+                                .urls
+                                .iter()
+                                .find(|url| url.contains("127.0.0.1"))
+                                .unwrap()
+                                .clone()
+                                .into();
+                        }
                         "status" => {}
                         "stop" => {
                             service.shutdown_ink_lan(false).await.unwrap();
@@ -111,6 +154,7 @@ async fn main() {
                     }
                     last = id;
                     ready["action_id"] = id.into();
+                    ready["setup"] = serde_json::to_value(service.ink_setup_status()).unwrap();
                     if !document_id.is_empty() {
                         ready["document"] = serde_json::to_value(
                             service

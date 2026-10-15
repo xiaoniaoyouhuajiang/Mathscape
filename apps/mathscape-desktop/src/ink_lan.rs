@@ -2,10 +2,10 @@ use crate::{CreateInkSnapshotRequest, DesktopService, DesktopState, ink_tls};
 use axum::{
     Json, Router,
     extract::{
-        DefaultBodyLimit, OriginalUri, Path, State, WebSocketUpgrade,
+        DefaultBodyLimit, OriginalUri, Path, Query, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
@@ -29,6 +29,13 @@ use tauri_plugin_dialog::DialogExt;
 use tokio::sync::{Semaphore, broadcast};
 
 include!(concat!(env!("OUT_DIR"), "/inkpad_assets.rs"));
+/// A setup link only exposes the public CA and guide; it never grants writing.
+const SETUP_SECONDS: i64 = 15 * 60;
+/// Setup hand-off pairings are reissued on demand, so they stay short-lived.
+const HANDOFF_PAIRING_SECONDS: i64 = 300;
+const HANDOFF_CREDENTIALS: usize = 16;
+const HTTPS_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+const SETUP_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -83,6 +90,101 @@ pub struct InkLanMirror {
     pub preview: Option<InkLabStroke>,
     pub client: Option<InkClientReport>,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InkSetupCheck {
+    pub secure_context: bool,
+    pub indexed_db: bool,
+    pub service_worker: bool,
+    pub user_agent: String,
+}
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct InkSetupStatus {
+    pub active: bool,
+    pub expires_at: Option<i64>,
+    /// Only returned when the link is created; the server keeps a token digest.
+    pub urls: Vec<String>,
+    pub opened: bool,
+    pub certificate_downloaded: bool,
+    pub https_trusted: bool,
+    pub check: Option<InkSetupCheck>,
+    pub complete: bool,
+    /// Manuscript the tablet enters after setup; `None` keeps P3.1 behavior.
+    pub document_id: Option<String>,
+    /// `unbound`, `idle`, `requested`, `ready`, `resumed` or `claimed`.
+    pub handoff: String,
+    /// Another device holds the lease and the desktop user must confirm.
+    pub transfer_confirmation: bool,
+}
+struct SetupPairing {
+    token: String,
+    token_hash: String,
+    expires_at: i64,
+}
+struct SetupState {
+    token_hash: String,
+    /// Writing hand-off code. It only travels in URL fragments and HTTPS bodies.
+    grant_hash: String,
+    expires_at: i64,
+    http_port: u16,
+    https_port: u16,
+    opened: bool,
+    downloaded: bool,
+    trusted: bool,
+    check: Option<InkSetupCheck>,
+    document_id: Option<String>,
+    title: Option<String>,
+    requested: bool,
+    confirm_needed: bool,
+    pairing: Option<SetupPairing>,
+    outcome: Option<&'static str>,
+}
+impl SetupState {
+    fn complete(&self) -> bool {
+        self.trusted
+            && self
+                .check
+                .as_ref()
+                .is_some_and(|c| c.secure_context && c.indexed_db)
+    }
+    fn live_pairing(&self) -> Option<&SetupPairing> {
+        self.pairing.as_ref().filter(|p| p.expires_at > now())
+    }
+    fn handoff(&self) -> &'static str {
+        if self.document_id.is_none() {
+            "unbound"
+        } else if let Some(outcome) = self.outcome {
+            outcome
+        } else if self.live_pairing().is_some() {
+            "ready"
+        } else if self.requested {
+            "requested"
+        } else {
+            "idle"
+        }
+    }
+    fn status(&self) -> InkSetupStatus {
+        let active = self.expires_at > now();
+        InkSetupStatus {
+            active,
+            expires_at: Some(self.expires_at),
+            urls: vec![],
+            opened: self.opened,
+            certificate_downloaded: self.downloaded,
+            https_trusted: self.trusted,
+            complete: self.complete(),
+            check: self.check.clone(),
+            document_id: self.document_id.clone(),
+            handoff: self.handoff().into(),
+            transfer_confirmation: self.confirm_needed && self.handoff() == "requested",
+        }
+    }
+}
+struct SetupServer {
+    handle: axum_server::Handle<std::net::SocketAddr>,
+    task: tokio::task::JoinHandle<()>,
+    port: u16,
+}
 struct Preview {
     stroke: InkLabStroke,
     epoch: u64,
@@ -108,6 +210,7 @@ struct Live {
     slots: Mutex<HashMap<String, Slot>>,
     previews: Mutex<HashMap<String, Preview>>,
     reports: Mutex<HashMap<String, Report>>,
+    setup: Mutex<Option<SetupState>>,
     control: broadcast::Sender<Control>,
     connections: Arc<Semaphore>,
 }
@@ -118,6 +221,7 @@ impl Live {
             slots: Mutex::new(HashMap::new()),
             previews: Mutex::new(HashMap::new()),
             reports: Mutex::new(HashMap::new()),
+            setup: Mutex::new(None),
             control,
             connections: Arc::new(Semaphore::new(8)),
         }
@@ -130,6 +234,7 @@ struct Running {
 }
 pub struct InkLanRuntime {
     running: tokio::sync::Mutex<Option<Running>>,
+    setup_server: tokio::sync::Mutex<Option<SetupServer>>,
     live: Arc<Live>,
 }
 impl std::fmt::Debug for InkLanRuntime {
@@ -141,6 +246,7 @@ impl Default for InkLanRuntime {
     fn default() -> Self {
         Self {
             running: tokio::sync::Mutex::new(None),
+            setup_server: tokio::sync::Mutex::new(None),
             live: Arc::new(Live::new()),
         }
     }
@@ -216,16 +322,16 @@ fn public_error(message: &str) -> Value {
     };
     error(code, text)
 }
-fn secure_response(mut response: Response) -> Response {
+fn secure_response(response: Response) -> Response {
+    secure_response_with(response, HTTPS_CSP)
+}
+fn secure_response_with(mut response: Response, csp: &'static str) -> Response {
     for (name, value) in [
         ("x-content-type-options", "nosniff"),
         ("x-frame-options", "DENY"),
         ("referrer-policy", "no-referrer"),
         ("cache-control", "no-store"),
-        (
-            "content-security-policy",
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
-        ),
+        ("content-security-policy", csp),
     ] {
         response.headers_mut().insert(
             axum::http::HeaderName::from_static(name),
@@ -245,6 +351,9 @@ async fn index(
     asset_response("index.html")
 }
 fn asset_response(name: &str) -> Response {
+    asset_response_with(name, HTTPS_CSP)
+}
+fn asset_response_with(name: &str, csp: &'static str) -> Response {
     let Some((_, bytes)) = INKPAD_ASSETS.iter().find(|(path, _)| *path == name) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -257,7 +366,10 @@ fn asset_response(name: &str) -> Response {
     } else {
         "application/octet-stream"
     };
-    secure_response(([(header::CONTENT_TYPE, mime)], *bytes).into_response())
+    secure_response_with(
+        ([(header::CONTENT_TYPE, mime)], *bytes).into_response(),
+        csp,
+    )
 }
 async fn asset(
     State(state): State<HttpState>,
@@ -300,15 +412,27 @@ async fn pair(
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    let service = state.service;
+    let service = state.service.clone();
+    let token_hash = token.clone();
     let result = tokio::task::spawn_blocking(move || {
         store(&service)?
-            .claim_ink_pairing(&token, &credential, &request.device, now())
+            .claim_ink_pairing_detailed(&token, &credential, &request.device, now())
             .map_err(|e| e.to_string())
     })
     .await;
     match result {
-        Ok(Ok(lease))=>secure_response(Json(json!({"protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease})).into_response()),
+        Ok(Ok((lease, transferred)))=>{
+            if transferred {
+                // The previous holder's credential is revoked in the same transaction.
+                let _ = state.live.control.send(Control::Revoke(lease.document_id.clone()));
+                if let Some(setup) = state.live.setup.lock().unwrap().as_mut() {
+                    if setup.pairing.as_ref().is_some_and(|p| p.token_hash == token_hash) {
+                        setup.outcome = Some("claimed");
+                    }
+                }
+            }
+            secure_response(Json(json!({"protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease})).into_response())
+        }
         Ok(Err(message))=>secure_response((StatusCode::CONFLICT,Json(json!({"code":error_code(&message),"message":"配对无效、已使用或书写状态已变化，请在电脑重新配对。"}))).into_response()),
         Err(_)=>StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
@@ -546,6 +670,497 @@ fn release(state: &HttpState, credential: &str, instance: &str) {
     }
 }
 
+#[derive(Clone)]
+struct SetupHttpState {
+    service: DesktopService,
+    hosts: Arc<HashSet<String>>,
+}
+#[derive(Deserialize)]
+struct SetupQuery {
+    t: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetupCheckRequest {
+    token: String,
+    check: InkSetupCheck,
+}
+/// Applies `update` only for the active, unexpired setup token.
+fn with_setup<T>(
+    live: &Live,
+    token: &str,
+    update: impl FnOnce(&mut SetupState) -> T,
+) -> Result<T, StatusCode> {
+    let digest = hash(token).map_err(|_| StatusCode::NOT_FOUND)?;
+    let mut setup = live.setup.lock().unwrap();
+    match setup.as_mut() {
+        Some(state) if state.token_hash == digest && state.expires_at > now() => Ok(update(state)),
+        _ => Err(StatusCode::GONE),
+    }
+}
+fn setup_host(headers: &HeaderMap, hosts: &HashSet<String>) -> Result<String, StatusCode> {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .ok_or(StatusCode::FORBIDDEN)?;
+    if hosts.contains(host) {
+        Ok(host.to_owned())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+async fn setup_index(State(state): State<SetupHttpState>, headers: HeaderMap) -> Response {
+    if let Err(code) = setup_host(&headers, &state.hosts) {
+        return code.into_response();
+    }
+    asset_response_with("setup.html", SETUP_CSP)
+}
+async fn setup_asset(
+    State(state): State<SetupHttpState>,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+) -> Response {
+    if let Err(code) = setup_host(&headers, &state.hosts) {
+        return code.into_response();
+    }
+    asset_response_with(&format!("assets/{path}"), SETUP_CSP)
+}
+async fn setup_open(
+    State(state): State<SetupHttpState>,
+    headers: HeaderMap,
+    Query(query): Query<SetupQuery>,
+) -> Response {
+    if let Err(code) = setup_host(&headers, &state.hosts) {
+        return code.into_response();
+    }
+    let opened = with_setup(&state.service.ink_lan.live, &query.t, |setup| {
+        setup.opened = true;
+        (setup.https_port, setup.expires_at, setup.trusted)
+    });
+    let Ok((https_port, expires_at, trusted)) = opened else {
+        return StatusCode::GONE.into_response();
+    };
+    let Ok((_, fingerprint)) = ink_tls::certificate(state.service.workspace_root()) else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    secure_response_with(
+        Json(json!({"https_port":https_port,"expires_at":expires_at,"trusted":trusted,"certificate_name":format!("Mathscape-InkPad-{}.crt",&fingerprint[..8]),"fingerprint":fingerprint})).into_response(),
+        SETUP_CSP,
+    )
+}
+async fn setup_certificate(
+    State(state): State<SetupHttpState>,
+    headers: HeaderMap,
+    Query(query): Query<SetupQuery>,
+) -> Response {
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    if let Err(code) = setup_host(&headers, &state.hosts) {
+        return code.into_response();
+    }
+    if with_setup(&state.service.ink_lan.live, &query.t, |setup| {
+        setup.downloaded = true
+    })
+    .is_err()
+    {
+        return StatusCode::GONE.into_response();
+    }
+    let Ok((pem, fingerprint)) = ink_tls::certificate(state.service.workspace_root()) else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let Ok(der) = CertificateDer::from_pem_slice(pem.as_bytes()) else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    // A generic binary type keeps Android browsers from routing the file to an
+    // installer that rejects CA certificates; the user installs it in Settings.
+    let mut response = (
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        der.as_ref().to_vec(),
+    )
+        .into_response();
+    if let Ok(value) = HeaderValue::from_str(&format!(
+        "attachment; filename=\"Mathscape-InkPad-{}.crt\"",
+        &fingerprint[..8]
+    )) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_DISPOSITION, value);
+    }
+    secure_response_with(response, SETUP_CSP)
+}
+/// Reachable from the HTTP guide only after the device trusts the HTTPS chain.
+async fn setup_probe(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    Query(query): Query<SetupQuery>,
+) -> Response {
+    // HTTP/2 carries the authority in the URI rather than a Host header.
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .or_else(|| uri.authority().map(|authority| authority.as_str()))
+        .filter(|host| state.hosts.contains(*host))
+    else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let hostname = host
+        .rsplit_once(':')
+        .map_or(host, |(name, _)| name)
+        .to_owned();
+    let origin = headers.get(header::ORIGIN).and_then(|h| h.to_str().ok());
+    let result = with_setup(&state.live, &query.t, |setup| {
+        let expected = format!("http://{hostname}:{}", setup.http_port);
+        if origin != Some(expected.as_str()) {
+            return None;
+        }
+        setup.trusted = true;
+        Some(expected)
+    });
+    let Ok(Some(allowed)) = result else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let mut response = secure_response(Json(json!({"trusted":true})).into_response());
+    if let Ok(value) = HeaderValue::from_str(&allowed) {
+        response
+            .headers_mut()
+            .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+        response
+            .headers_mut()
+            .insert(header::VARY, HeaderValue::from_static("Origin"));
+    }
+    response
+}
+async fn setup_check_page(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+) -> Response {
+    if let Err(code) = origin(&headers, &state, false, &uri) {
+        return code.into_response();
+    }
+    asset_response("setup.html")
+}
+async fn setup_check(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    Json(request): Json<SetupCheckRequest>,
+) -> Response {
+    if let Err(code) = origin(&headers, &state, true, &uri) {
+        return code.into_response();
+    }
+    let mut check = request.check;
+    check.user_agent = check.user_agent.chars().take(512).collect();
+    match with_setup(&state.live, &request.token, |setup| {
+        setup.trusted = true;
+        setup.check = Some(check);
+        (setup.complete(), setup.document_id.clone(), setup.title.clone())
+    }) {
+        Ok((complete, document_id, title)) => secure_response(
+            Json(json!({"complete":complete,"document_id":document_id,"title":title}))
+                .into_response(),
+        ),
+        Err(code) => code.into_response(),
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetupHandoffRequest {
+    token: String,
+    grant: String,
+    #[serde(default)]
+    credentials: Vec<String>,
+}
+/// Lets the checked tablet enter the bound manuscript without a second QR code.
+/// It resumes with an existing device credential or receives a one-time pairing
+/// token prepared by the desktop; the HTTP setup token alone is never enough.
+async fn setup_handoff(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    Json(request): Json<SetupHandoffRequest>,
+) -> Response {
+    if let Err(code) = origin(&headers, &state, true, &uri) {
+        return code.into_response();
+    }
+    if request.credentials.len() > HANDOFF_CREDENTIALS {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+    let Ok(grant) = hash(&request.grant) else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let snapshot = with_setup(&state.live, &request.token, |setup| {
+        if setup.grant_hash != grant || !setup.complete() {
+            return None;
+        }
+        Some((
+            setup.token_hash.clone(),
+            setup.document_id.clone(),
+            setup.title.clone(),
+        ))
+    });
+    let (setup_hash, document, title) = match snapshot {
+        Ok(Some(value)) => value,
+        Ok(None) => return StatusCode::FORBIDDEN.into_response(),
+        Err(code) => return code.into_response(),
+    };
+    let Some(document) = document else {
+        return secure_response(Json(json!({"state":"unbound"})).into_response());
+    };
+    let digests: Vec<String> = request
+        .credentials
+        .iter()
+        .filter_map(|value| hash(value).ok())
+        .collect();
+    let service = state.service.clone();
+    let target = document.clone();
+    let resumable = tokio::task::spawn_blocking(move || {
+        let database = store(&service).ok()?;
+        let time = now();
+        Some(digests.iter().any(|digest| {
+            database
+                .authenticate_ink_device(digest, time)
+                .is_ok_and(|lease| lease.document_id == target)
+        }))
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false);
+    let mut guard = state.live.setup.lock().unwrap();
+    let Some(setup) = guard
+        .as_mut()
+        .filter(|setup| setup.token_hash == setup_hash && setup.expires_at > now())
+    else {
+        return StatusCode::GONE.into_response();
+    };
+    let reply = if resumable || setup.outcome == Some("resumed") {
+        setup.outcome = Some("resumed");
+        json!({"state":"resume","document_id":document,"title":title})
+    } else if let Some(pairing) = setup.live_pairing() {
+        json!({"state":"pair","pairing_token":pairing.token,"document_id":document,"title":title})
+    } else if setup.outcome == Some("claimed") {
+        json!({"state":"claimed","document_id":document,"title":title})
+    } else {
+        setup.requested = true;
+        let reason = if setup.confirm_needed { "confirm" } else { "desktop" };
+        json!({"state":"waiting","reason":reason,"document_id":document,"title":title})
+    };
+    drop(guard);
+    secure_response(Json(reply).into_response())
+}
+
+impl DesktopService {
+    /// Starts the HTTPS service if needed, then opens a short HTTP guide that
+    /// only serves the public CA and setup page.
+    pub async fn start_ink_setup(&self) -> Result<InkSetupStatus, String> {
+        self.start_ink_setup_for(None).await
+    }
+    /// Binds the setup to a manuscript so the tablet can start writing directly.
+    pub async fn start_ink_setup_for(
+        &self,
+        document: Option<String>,
+    ) -> Result<InkSetupStatus, String> {
+        let title = match &document {
+            Some(id) => {
+                let database = store(self)?;
+                let view = database
+                    .ink_writer_view(id, now())
+                    .map_err(|_| "手稿不存在或已被移除。".to_string())?;
+                Some(
+                    database
+                        .ink_mirror_delta(id, view.head_seq, now())
+                        .map_err(|e| e.to_string())?
+                        .metadata
+                        .title,
+                )
+            }
+            None => None,
+        };
+        let mut status = self.ink_lan_status().await?;
+        if !status.running {
+            status = self.start_ink_lan(None).await?;
+        }
+        if !status.assets_ready {
+            return Err("InkPad 页面尚未构建，无法开始平板设置。".into());
+        }
+        let https_port = status.port;
+        let hosts = ink_tls::addresses();
+        let mut server = self.ink_lan.setup_server.lock().await;
+        if server
+            .as_ref()
+            .is_some_and(|active| active.task.is_finished())
+        {
+            server.take();
+        }
+        if server.is_none() {
+            let preferred = https_port.saturating_sub(1).max(1024);
+            let listener =
+                std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, preferred))
+                    .or_else(|_| std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)))
+                    .map_err(|e| format!("无法开启平板设置端口：{e}"))?;
+            let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+            listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+            let state = SetupHttpState {
+                service: self.clone(),
+                hosts: Arc::new(hosts.iter().map(|host| format!("{host}:{port}")).collect()),
+            };
+            let router = Router::new()
+                .route("/", get(|| async { Redirect::temporary("/setup/") }))
+                .route("/setup", get(|| async { Redirect::temporary("/setup/") }))
+                .route("/setup/", get(setup_index))
+                .route("/setup/ca.crt", get(setup_certificate))
+                .route("/pad/assets/{*path}", get(setup_asset))
+                .route("/api/setup/open", get(setup_open))
+                .layer(DefaultBodyLimit::max(4 * 1024))
+                .with_state(state);
+            let handle = axum_server::Handle::new();
+            let shutdown = handle.clone();
+            let http = axum_server::from_tcp(listener).map_err(|e| e.to_string())?;
+            let task = tokio::spawn(async move {
+                let _ = http
+                    .handle(shutdown)
+                    .serve(router.into_make_service())
+                    .await;
+            });
+            *server = Some(SetupServer { handle, task, port });
+        }
+        let http_port = server
+            .as_ref()
+            .map(|active| active.port)
+            .unwrap_or_default();
+        drop(server);
+        let token = secret()?;
+        let digest = hash(&token)?;
+        let grant = secret()?;
+        let expires_at = now() + SETUP_SECONDS;
+        let state = SetupState {
+            token_hash: digest.clone(),
+            grant_hash: hash(&grant)?,
+            expires_at,
+            http_port,
+            https_port,
+            opened: false,
+            downloaded: false,
+            trusted: false,
+            check: None,
+            document_id: document,
+            title,
+            requested: false,
+            confirm_needed: false,
+            pairing: None,
+            outcome: None,
+        };
+        let mut result = state.status();
+        *self.ink_lan.live.setup.lock().unwrap() = Some(state);
+        let service = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(SETUP_SECONDS as u64)).await;
+            let current = service
+                .ink_lan
+                .live
+                .setup
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|setup| setup.token_hash == digest);
+            if current {
+                service.cancel_ink_setup().await;
+            }
+        });
+        result.urls = hosts
+            .iter()
+            .map(|host| format!("http://{host}:{http_port}/setup/#setup={token}&grant={grant}"))
+            .collect();
+        Ok(result)
+    }
+    /// Called by the desktop panel after the tablet reaches "start writing".
+    /// The panel flushes local writes first; a remote holder needs confirmation.
+    pub async fn prepare_ink_setup_handoff(
+        &self,
+        expected_head: Option<u64>,
+        confirm_transfer: bool,
+    ) -> Result<InkSetupStatus, String> {
+        let (setup_hash, document) = {
+            let guard = self.ink_lan.live.setup.lock().unwrap();
+            let Some(setup) = guard.as_ref().filter(|setup| setup.expires_at > now()) else {
+                return Err("平板设置已结束，请重新开始设置。".into());
+            };
+            let Some(document) = setup.document_id.clone() else {
+                return Ok(setup.status());
+            };
+            if !setup.complete() || setup.handoff() != "requested" {
+                return Ok(setup.status());
+            }
+            (setup.token_hash.clone(), document)
+        };
+        let view = store(self)?
+            .ink_writer_view(&document, now())
+            .map_err(|e| e.to_string())?;
+        if view.remote && !confirm_transfer {
+            let mut guard = self.ink_lan.live.setup.lock().unwrap();
+            let setup = guard
+                .as_mut()
+                .filter(|setup| setup.token_hash == setup_hash)
+                .ok_or("平板设置已结束，请重新开始设置。")?;
+            setup.confirm_needed = true;
+            return Ok(setup.status());
+        }
+        let (token, expires_at, _) = self
+            .issue_pairing(
+                &document,
+                expected_head.unwrap_or(view.head_seq),
+                view.remote,
+                HANDOFF_PAIRING_SECONDS,
+            )
+            .await?;
+        let mut guard = self.ink_lan.live.setup.lock().unwrap();
+        let Some(setup) = guard
+            .as_mut()
+            .filter(|setup| setup.token_hash == setup_hash)
+        else {
+            drop(guard);
+            let _ = store(self)?.cancel_ink_pairing(&document, now());
+            return Err("平板设置已结束，请重新开始设置。".into());
+        };
+        setup.pairing = Some(SetupPairing {
+            token_hash: hash(&token)?,
+            token,
+            expires_at,
+        });
+        setup.confirm_needed = false;
+        Ok(setup.status())
+    }
+    pub fn ink_setup_status(&self) -> InkSetupStatus {
+        self.ink_lan
+            .live
+            .setup
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(SetupState::status)
+            .unwrap_or_default()
+    }
+    pub async fn cancel_ink_setup(&self) {
+        let previous = self.ink_lan.live.setup.lock().unwrap().take();
+        // An unclaimed hand-off pairing would otherwise keep the desktop read-only.
+        if let Some(setup) = previous {
+            if let (Some(document), Some(_), None) =
+                (setup.document_id.as_ref(), setup.live_pairing(), setup.outcome)
+            {
+                if let Ok(mut database) = store(self) {
+                    let _ = database.cancel_ink_pairing(document, now());
+                }
+            }
+        }
+        let active = self.ink_lan.setup_server.lock().await.take();
+        if let Some(active) = active {
+            active.handle.shutdown();
+            let _ = tokio::time::timeout(Duration::from_secs(2), active.task).await;
+        }
+    }
+}
+
 impl DesktopService {
     pub fn import_ink_recovery(
         &self,
@@ -605,6 +1220,10 @@ impl DesktopService {
             .route("/pad/sw.js", get(sw))
             .route("/api/pair", post(pair))
             .route("/api/ws", get(ws))
+            .route("/pad/setup.html", get(setup_check_page))
+            .route("/api/setup/probe", get(setup_probe))
+            .route("/api/setup/check", post(setup_check))
+            .route("/api/setup/handoff", post(setup_handoff))
             .route(
                 "/health",
                 get(|| async {
@@ -663,6 +1282,7 @@ impl DesktopService {
                 .revoke_ink_lan(now())
                 .map_err(|e| e.to_string())?;
         }
+        self.cancel_ink_setup().await;
         let _ = self.ink_lan.live.control.send(Control::Stop(revoke));
         let active = self.ink_lan.running.lock().await.take();
         if let Some(active) = active {
@@ -679,6 +1299,35 @@ impl DesktopService {
         document: String,
         head: u64,
     ) -> Result<InkPairingLink, String> {
+        self.create_ink_pairing_with(document, head, false).await
+    }
+    /// `allow_transfer` hands the lease from another device to whichever device
+    /// scans next; the current holder keeps writing until that moment.
+    pub async fn create_ink_pairing_with(
+        &self,
+        document: String,
+        head: u64,
+        allow_transfer: bool,
+    ) -> Result<InkPairingLink, String> {
+        let (token, expires_at, urls) = self
+            .issue_pairing(&document, head, allow_transfer, 120)
+            .await?;
+        Ok(InkPairingLink {
+            urls: urls
+                .into_iter()
+                .map(|url| format!("{url}#pair={token}"))
+                .collect(),
+            expires_at,
+            document_id: document,
+        })
+    }
+    async fn issue_pairing(
+        &self,
+        document: &str,
+        head: u64,
+        allow_transfer: bool,
+        seconds: i64,
+    ) -> Result<(String, i64, Vec<String>), String> {
         let status = self.ink_lan_status().await?;
         if !status.running {
             return Err("请先开启平板书写服务。".into());
@@ -686,32 +1335,25 @@ impl DesktopService {
         let token = secret()?;
         let mut database = store(self)?;
         let view = database
-            .ink_writer_view(&document, now())
+            .ink_writer_view(document, now())
             .map_err(|e| e.to_string())?;
-        let expiry = now() + 120;
+        let expiry = now() + seconds;
         database
             .issue_ink_pairing(
                 &InkPairingOffer {
                     token_hash: hash(&token)?,
-                    document_id: document.clone(),
-                    expected_head: head,
+                    document_id: document.into(),
+                    expected_head: if view.remote { view.head_seq } else { head },
                     expected_epoch: view.writer_epoch,
                     session_id: format!("inkpad-session-{}", &secret()?[..32]),
                     writer_id: format!("inkpad-{}", &secret()?[..32]),
                     expires_at: expiry,
+                    allow_transfer,
                 },
                 now(),
             )
             .map_err(|e| e.to_string())?;
-        Ok(InkPairingLink {
-            urls: status
-                .urls
-                .into_iter()
-                .map(|url| format!("{url}#pair={token}"))
-                .collect(),
-            expires_at: expiry,
-            document_id: document,
-        })
+        Ok((token, expiry, status.urls))
     }
     pub fn ink_lan_mirror(&self, document: &str, head: u64) -> Result<InkLanMirror, String> {
         let delta = store(self)?
@@ -806,10 +1448,11 @@ pub(crate) async fn create_ink_pairing(
     state: TauriState<'_, DesktopState>,
     document_id: String,
     expected_head: u64,
+    allow_transfer: Option<bool>,
 ) -> Result<InkPairingLink, String> {
     state
         .service
-        .create_ink_pairing(document_id, expected_head)
+        .create_ink_pairing_with(document_id, expected_head, allow_transfer.unwrap_or(false))
         .await
 }
 #[tauri::command]
@@ -898,4 +1541,34 @@ pub(crate) async fn choose_ink_recovery(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn start_ink_setup(
+    state: TauriState<'_, DesktopState>,
+    document_id: Option<String>,
+) -> Result<InkSetupStatus, String> {
+    state.service.start_ink_setup_for(document_id).await
+}
+#[tauri::command]
+pub(crate) async fn prepare_ink_setup_handoff(
+    state: TauriState<'_, DesktopState>,
+    expected_head: Option<u64>,
+    confirm_transfer: bool,
+) -> Result<InkSetupStatus, String> {
+    state
+        .service
+        .prepare_ink_setup_handoff(expected_head, confirm_transfer)
+        .await
+}
+#[tauri::command]
+pub(crate) async fn get_ink_setup_status(
+    state: TauriState<'_, DesktopState>,
+) -> Result<InkSetupStatus, String> {
+    Ok(state.service.ink_setup_status())
+}
+#[tauri::command]
+pub(crate) async fn cancel_ink_setup(state: TauriState<'_, DesktopState>) -> Result<(), String> {
+    state.service.cancel_ink_setup().await;
+    Ok(())
 }
