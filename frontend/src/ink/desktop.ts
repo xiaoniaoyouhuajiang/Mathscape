@@ -106,7 +106,8 @@ export class DesktopInkWorkspace {
   private readonly writerId = "desktop-local";
   private tool: InkTool = "pen";
   private logicalHead = 0;
-  private loading = false;
+  private listReload: Promise<void> | undefined;
+  private listReloadAgain = false;
   private sessionSummaries: SessionSummary[] = [];
   private snapshotListRevision = 0;
   private persistenceState: PersistenceState = "loading";
@@ -164,7 +165,7 @@ export class DesktopInkWorkspace {
       this.outbox = await InkOutbox.openDefault();
       if (!this.outbox.persistent) this.status("本地恢复队列不可用；当前窗口关闭前请保持应用运行。", true);
     }
-    await this.refreshDocuments();
+    await this.refreshDocuments(true);
     if(!this.mirrorTimer)this.mirrorTimer=setInterval(()=>void this.refreshMirror(),300);
   }
 
@@ -256,31 +257,43 @@ export class DesktopInkWorkspace {
     }
   }
 
-  private async refreshDocuments(): Promise<void> {
-    if (this.loading) return;
-    this.loading = true;
-    try {
-      const [documents, trashed] = await Promise.all([
-        listInkDocuments(),
-        listTrashedInkDocuments().catch(() => [] as SessionSummary[]),
-      ]);
-      // The store lists active documents only; older hosts may still mix them.
-      this.sessionSummaries = documents.filter(item => item.lifecycle !== "trashed");
-      this.trashedSummaries = trashed;
-      this.renderSessionList(this.sessionSummaries);
-      if (!this.documentState) {
-        // No blank document is created automatically (§6); a requested
-        // document opens instead of the most recent one.
-        const first = this.sessionSummaries[0];
-        if (first && !this.targetDocumentId) await this.openDocument(first);
-        else if (!first) this.renderEmpty();
-      }
-    } catch (error) {
-      this.status("读取手稿失败：" + errorText(error), true);
-    } finally {
-      this.loading = false;
-    }
+  /**
+   * Reloads both lists. Overlapping calls coalesce into one more reload rather
+   * than being dropped, so a list never stays stale after trash or restore.
+   * Only opening the panel picks a document automatically; after the open
+   * document is trashed the empty state stays until the user chooses (§6).
+   */
+  private async refreshDocuments(autoOpen = false): Promise<void> {
+    await this.reloadLists();
+    if (this.documentState) return;
+    const first = this.sessionSummaries[0];
+    if (autoOpen && first && !this.targetDocumentId) await this.openDocument(first);
+    else if (!this.targetDocumentId) this.renderEmpty();
   }
+
+  private reloadLists(): Promise<void> {
+    if (this.listReload) { this.listReloadAgain = true; return this.listReload; }
+    const task = (async () => {
+      do {
+        this.listReloadAgain = false;
+        try {
+          const [documents, trashed] = await Promise.all([
+            listInkDocuments(),
+            listTrashedInkDocuments().catch(() => [] as SessionSummary[]),
+          ]);
+          // The store lists active documents only; older hosts may still mix them.
+          this.sessionSummaries = documents.filter(item => item.lifecycle !== "trashed");
+          this.trashedSummaries = trashed;
+          this.renderSessionList(this.sessionSummaries);
+        } catch (error) {
+          this.status("读取手稿失败：" + errorText(error), true);
+        }
+      } while (this.listReloadAgain);
+    })();
+    this.listReload = task.finally(() => { this.listReload = undefined; });
+    return this.listReload;
+  }
+
 
   private showList(view: "active" | "trash"): void {
     this.listView = view;

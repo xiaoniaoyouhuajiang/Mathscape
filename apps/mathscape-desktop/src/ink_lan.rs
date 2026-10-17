@@ -296,9 +296,9 @@ fn error(code: &str, message: &str) -> Value {
     json!({"type":"operation_conflict","code":code,"message":message})
 }
 fn error_code(message: &str) -> &'static str {
-    if message.contains(TRASHED_REASON) {
-        "writer_revoked"
-    } else if message.contains("writer_revoked")
+    // A trashed document keeps the code old pads already fence on (D7).
+    if message.contains(TRASHED_REASON)
+        || message.contains("writer_revoked")
         || message.contains("writer epoch")
         || message.contains("writer_epoch_conflict")
     {
@@ -513,7 +513,10 @@ enum ClientMessage {
     Ping,
 }
 /// Remote rename outcome mapped to a wire reply.
-fn rename_reply(request_id: &str, result: Result<mathscape_store_sqlite::InkNoteReceipt, SqliteStoreError>) -> Value {
+fn rename_reply(
+    request_id: &str,
+    result: Result<mathscape_store_sqlite::InkNoteReceipt, SqliteStoreError>,
+) -> Value {
     match result {
         Ok(receipt) => json!({"type":"rename_receipt","request_id":request_id,"note":receipt.note,"replayed":receipt.replayed}),
         Err(SqliteStoreError::InkTitleConflict { current_title, current_title_mode, current_revision, .. }) => json!({

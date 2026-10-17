@@ -58,6 +58,10 @@ test("N1 trashing asks first, offers undo and a read-only trash view with restor
   await rowAction(page, "手稿 B").click();
   await choose(page, "移到回收站");
   await expect(page.locator("#ink-empty-state")).toBeVisible();
+  // Trashing the open note never jumps to another note on its own.
+  await page.waitForTimeout(200);
+  await expect(page.locator("#ink-empty-state")).toBeVisible();
+  await expect(page.locator("#ink-session-list .ink-session-item.is-active")).toHaveCount(0);
   await page.locator("#ink-tab-trash").click();
   await expect(page.locator("#ink-session-list .ink-session-item")).toHaveCount(1);
   await page.locator("#ink-session-list .ink-session-item", { hasText: "手稿 B" }).click();
