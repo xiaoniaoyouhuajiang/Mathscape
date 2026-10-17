@@ -9,6 +9,12 @@ import { GraphController } from "./graph/graph-controller";
 import { InspectorController } from "./inspector/inspector-controller";
 import { LlmSettingsController } from "./llm/settings";
 import { DesktopInkWorkspace } from "./ink/desktop";
+import {
+  createInkNoteFromContext,
+  getInkLinkOverlay,
+  setInkContextCreator,
+  setInkSourceCandidateProvider,
+} from "./ink/links";
 import { ArtifactReader } from "./reader/reader";
 import { mountReviewWorkspace } from "./review/workspace";
 import { AppShell } from "./shell/app-shell";
@@ -95,6 +101,7 @@ const graphController = new GraphController(
     onGraphRendered: () => artifactController.refreshParseState(),
     showToast: (msg, kind) => shell.showToast(msg, kind),
     getSnapshot: () => currentSnapshot,
+    onOpenInkNote: (documentId) => eventBus.emit("open-ink-document", { documentId }),
   },
 );
 
@@ -146,6 +153,19 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
   artifactController.renderMarkerStatus(snapshot.marker);
   graphController.renderCurrentGraph(snapshot);
   inspectorController.refreshIfUnlocked();
+  void loadInkOverlay();
+}
+
+// N2: map count markers and "我的手稿" come from a separate overlay query.
+let inkOverlayRevision = 0;
+async function loadInkOverlay(): Promise<void> {
+  const revision = ++inkOverlayRevision;
+  try {
+    const overlay = await getInkLinkOverlay();
+    if (revision === inkOverlayRevision) graphController.setInkOverlay(overlay);
+  } catch {
+    // Older hosts have no overlay; the map stays as projected.
+  }
 }
 
 async function loadSnapshot(): Promise<void> {
@@ -166,11 +186,55 @@ async function loadSnapshot(): Promise<void> {
 el.importButton.addEventListener("click", () => void artifactController.importPdf());
 
 eventBus.on("source-map-changed", () => void loadSnapshot());
-eventBus.on("open-ink-document", ({ documentId }) => {
+function showInkWorkspace(): void {
   reader.close(); el.readerHost.hidden = true;
   inkOpen = true; el.workspaceGrid.hidden = true; el.inkHost.hidden = false;
   el.inkButton.textContent = "返回地图";
+}
+eventBus.on("open-ink-document", ({ documentId }) => {
+  showInkWorkspace();
   void inkWorkspace.openDocumentId(documentId);
+});
+
+// N2 context creation (§6.5): one transaction creates the note and its first
+// link; then the note opens on the desktop or with the tablet pairing panel.
+setInkContextCreator(async (target, choice, draft) => {
+  const receipt = await createInkNoteFromContext(draft, target, choice.role, choice.title);
+  eventBus.emit("ink-links-changed");
+  showInkWorkspace();
+  await inkWorkspace.openDocumentId(receipt.document_id);
+  if (choice.mode === "tablet") await inkWorkspace.pairTablet(receipt.document_id);
+});
+setInkSourceCandidateProvider(() => {
+  const nodes = currentSnapshot?.landscape_graph.nodes ?? [];
+  return nodes
+    .filter((node) => node.domain_kind === "SourceSemanticUnit" && node.domain_id !== null)
+    .filter((node) => !["superseded", "rejected", "deprecated"].includes(node.lifecycle ?? ""))
+    .map((node) => ({ object_id: node.domain_id!, label: node.label, kind: node.domain_kind! }));
+});
+eventBus.on("ink-links-changed", () => {
+  void loadInkOverlay();
+  inspectorController.refreshIfUnlocked();
+});
+eventBus.on("open-ink-link-target", ({ link }) => {
+  const target = link.target;
+  if (target.kind === "ink_note") {
+    eventBus.emit("open-ink-document", { documentId: target.document_id });
+    return;
+  }
+  inkWorkspace.close();
+  const nodes = currentSnapshot?.landscape_graph.nodes ?? [];
+  if (target.kind === "source_object") {
+    const node = nodes.find((item) => item.domain_id === target.object_id && item.element_kind === "entity");
+    if (node === undefined) { shell.showToast("关联的来源对象不在当前地图中。", "error"); return; }
+    inspectorController.selectNodeById(node.id);
+    return;
+  }
+  const artifact = nodes.find((item) => item.domain_kind === "SourceArtifact" && item.domain_id === target.artifact_id);
+  el.readerHost.hidden = false;
+  void reader.open(target.artifact_id, artifact?.label ?? link.target_label, {
+    focus: { start: target.start, end: target.end, blockIds: target.block_ids },
+  });
 });
 eventBus.on("open-source", (detail) => {
   void (async () => {

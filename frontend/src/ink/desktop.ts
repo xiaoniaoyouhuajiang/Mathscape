@@ -44,6 +44,21 @@ import { InkEvidencePanel } from "./evidence-panel";
 import { eventBus } from "../core/events";
 import type { InkSelection } from "./persistence";
 import { errorCode, safeInvoke } from "../core/ipc";
+import {
+  INK_LINK_ROLES,
+  exportInkUnsavedWriting,
+  linkInkNote,
+  listInkNoteLinks,
+  openAddLinkPopover,
+  openInkLinkTarget,
+  roleLabel,
+  setInkPrimaryLink,
+  targetStatusLabel,
+  unlinkInkNote,
+  type InkLinkReceipt,
+  type InkLinkRole,
+  type InkNoteLink,
+} from "./links";
 import { InkLanPanel,inkLanMirror,type InkWriterPresence,type InkWriterView } from "./lan";
 
 /** Older hosts return only the first fields; N1 adds the note columns. */
@@ -161,6 +176,8 @@ export class DesktopInkWorkspace {
   private titleBusy = false;
   private undoTimer: ReturnType<typeof setTimeout> | undefined;
   private dialogResolve: ((value: string | null) => void) | undefined;
+  private noteLinks: InkNoteLink[] = [];
+  private linksRevision = 0;
 
   constructor(
     private readonly host: HTMLElement,
@@ -173,6 +190,7 @@ export class DesktopInkWorkspace {
     if (!this.rendered) {
       this.rendered = true;
       this.render();
+      eventBus.on("ink-links-changed", () => void this.refreshLinks());
       this.outbox = await InkOutbox.openDefault();
       if (!this.outbox.persistent) this.status("本地恢复队列不可用；当前窗口关闭前请保持应用运行。", true);
     }
@@ -198,16 +216,22 @@ export class DesktopInkWorkspace {
     this.status("手稿不存在或已被移除。", true);
   }
 
+  /** N2 "用平板书写" from a context menu: the pairing panel for this note. */
+  async pairTablet(documentId: string): Promise<void> {
+    if (this.documentState?.document_id !== documentId || !this.lanPanel) return;
+    await this.lanPanel.open(documentId).catch(error => this.status(errorText(error), true));
+  }
+
   private render(): void {
     this.host.innerHTML = [
       '<div class="ink-desktop-shell">',
-      '<header class="ink-desktop-header"><div class="ink-document-heading"><span class="eyebrow">INK DOCUMENT</span><h2 id="ink-document-heading">数学手稿</h2><div class="ink-state-row"><span id="ink-mode-badge" class="ink-state-badge">未打开</span><span id="ink-editability-badge" class="ink-state-badge">—</span><span id="ink-save-badge" class="ink-state-badge">正在加载</span></div></div>',
+      '<header class="ink-desktop-header"><div class="ink-document-heading"><span class="eyebrow">手写</span><h2 id="ink-document-heading">未打开手稿</h2><div class="ink-state-row"><span id="ink-mode-badge" class="ink-state-badge">未打开</span><span id="ink-editability-badge" class="ink-state-badge">—</span><span id="ink-save-badge" class="ink-state-badge">正在加载</span></div></div>',
       '<div id="ink-undo-bar" class="ink-undo-bar" role="status" hidden><span id="ink-undo-text"></span><button id="ink-undo-trash" class="secondary-button" type="button">撤销</button></div><div class="ink-desktop-actions"><span id="ink-persistence-status" class="ink-persistence-status">正在加载本地手稿…</span><button id="ink-lan" class="secondary-button" type="button">平板书写</button><button id="ink-continue-current" class="secondary-button" type="button" hidden>继续编辑当前手稿</button><button id="ink-save-now" class="secondary-button" type="button">立即保存</button><button id="ink-snapshot" class="secondary-button" type="button">保存快照</button><button id="ink-close" class="secondary-button" type="button">返回地图</button></div></header>',
       '<div class="ink-desktop-body"><aside class="ink-session-panel"><div class="ink-session-heading"><strong>手稿</strong><button id="ink-new-document" class="secondary-button" type="button">新建</button></div><div class="ink-session-tabs" role="tablist" aria-label="手稿列表"><button id="ink-tab-active" role="tab" type="button" aria-selected="true">最近手稿</button><button id="ink-tab-trash" role="tab" type="button" aria-selected="false">回收站</button></div><div class="ink-session-tools"><button id="ink-import-recovery" class="secondary-button" type="button">导入恢复草稿</button><button id="ink-clean-blank" class="secondary-button" type="button">清理空白稿</button></div><div id="ink-session-list" class="ink-session-list"><p>正在读取…</p></div><div class="ink-snapshot-heading"><strong>历史快照</strong></div><div id="ink-snapshot-list" class="ink-session-list"><p>请选择手稿。</p></div></aside>',
       '<main class="ink-desktop-main"><nav class="ink-desktop-toolbar" aria-label="手稿工具"><div class="ink-tool-buttons">',
       '<button id="desktop-ink-pen" class="is-active" type="button">笔</button><button id="desktop-ink-erase" type="button">整笔擦除</button><button id="desktop-ink-partial_erase" type="button">局部擦除</button><button id="desktop-ink-select" type="button">套索选择</button><button id="desktop-ink-undo" type="button" disabled>撤销</button><button id="desktop-ink-redo" type="button" disabled>重做</button>',
       '</div><div class="ink-brush-controls"><label title="之后创建的笔迹使用此颜色">颜色<input id="desktop-ink-color" type="color" value="#b9e3d8" aria-label="笔迹颜色"></label><label title="之后创建的笔迹使用此笔宽">笔宽<input id="desktop-ink-width" type="range" min="1" max="16" step="0.5" value="4" aria-label="笔迹宽度"><output id="desktop-ink-width-value">4</output></label><label class="ink-check-control"><input id="desktop-ink-finger" type="checkbox">手指书写</label></div><div class="ink-page-controls"><label id="desktop-ink-follow-label" hidden><input id="desktop-ink-follow-pad" type="checkbox" checked>跟随平板页</label><select id="desktop-ink-page" aria-label="手稿页面"></select><button id="desktop-ink-add-page" class="secondary-button" type="button">新增页面</button><button id="desktop-ink-zoom-out" class="secondary-button" type="button" aria-label="缩小">−</button><button id="desktop-ink-fit" class="secondary-button" type="button">整页</button><button id="desktop-ink-zoom-in" class="secondary-button" type="button" aria-label="放大">＋</button></div></nav>',
-      '<div id="ink-trash-banner" class="ink-trash-banner" role="status" hidden><span>这份手稿在回收站中，只能查看和导出。</span><button id="ink-trash-restore" class="secondary-button" type="button">恢复手稿</button></div><div id="desktop-ink-evidence" hidden></div><div id="ink-empty-state" class="ink-empty-state" hidden><p>还没有打开的手稿。</p><button id="ink-empty-create" class="secondary-button" type="button">新建手稿</button></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="数学手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="'+INK_TITLE_MAX+'" value="" placeholder="留空恢复自动标题" aria-label="手稿标题" title="点击改名；回车保存，Esc 取消" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div><section id="ink-lan-panel" hidden></section><div id="ink-dialog" class="ink-dialog" role="dialog" aria-modal="true" aria-labelledby="ink-dialog-text" hidden><div class="ink-dialog-box"><p id="ink-dialog-text"></p><div id="ink-dialog-actions" class="ink-dialog-actions"></div></div></div></div>',
+      '<div id="ink-trash-banner" class="ink-trash-banner" role="status" hidden><span>这份手稿在回收站中，只能查看和导出。</span><button id="ink-trash-restore" class="secondary-button" type="button">恢复手稿</button></div><div id="ink-link-bar" class="ink-link-bar" aria-label="手稿关联" hidden></div><div id="desktop-ink-evidence" hidden></div><div id="ink-empty-state" class="ink-empty-state" hidden><p>还没有打开的手稿。</p><button id="ink-empty-create" class="secondary-button" type="button">新建手稿</button></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="'+INK_TITLE_MAX+'" value="" placeholder="留空恢复自动标题" aria-label="手稿标题" title="点击改名；回车保存，Esc 取消" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div><section id="ink-lan-panel" hidden></section><div id="ink-dialog" class="ink-dialog" role="dialog" aria-modal="true" aria-labelledby="ink-dialog-text" hidden><div class="ink-dialog-box"><p id="ink-dialog-text"></p><div id="ink-dialog-actions" class="ink-dialog-actions"></div></div></div></div>',
     ].join("");
     element<HTMLButtonElement>(this.host, "#ink-close").addEventListener("click", () => this.close());
     element<HTMLButtonElement>(this.host, "#ink-save-now").addEventListener("click", () => void this.flush("手动保存完成。"));
@@ -393,7 +417,7 @@ export class DesktopInkWorkspace {
     element(this.host, "#ink-empty-state").hidden = !empty;
     element(this.host, "#desktop-ink-board").hidden = empty;
     if (!empty) return;
-    element(this.host, "#ink-document-heading").textContent = "数学手稿";
+    element(this.host, "#ink-document-heading").textContent = "未打开手稿";
     element(this.host, "#ink-mode-badge").textContent = "未打开";
     element(this.host, "#ink-editability-badge").textContent = "—";
     element(this.host, "#ink-save-badge").textContent = "—";
@@ -422,7 +446,127 @@ export class DesktopInkWorkspace {
     this.readOnly = false;
     this.mirrorMode = false;
     this.writerView = undefined;
+    this.noteLinks = [];
+    this.linksRevision++;
+    this.renderLinks();
     this.renderEmpty();
+  }
+
+  /** N2 note-page links (§6.2): primary first, then by creation. Hidden for
+   * historical snapshots; read-only in the trash (trashed notes reject every
+   * link operation). */
+  private async refreshLinks(): Promise<void> {
+    const documentId = this.documentState?.document_id;
+    const revision = ++this.linksRevision;
+    if (!documentId || this.currentSnapshot) { this.noteLinks = []; this.renderLinks(); return; }
+    try {
+      const links = await listInkNoteLinks(documentId);
+      if (revision !== this.linksRevision || this.documentState?.document_id !== documentId) return;
+      this.noteLinks = links.filter(link => link.state === "active");
+    } catch {
+      if (revision !== this.linksRevision) return;
+      this.noteLinks = [];
+    }
+    this.renderLinks();
+  }
+
+  private renderLinks(): void {
+    const bar = element(this.host, "#ink-link-bar");
+    const documentId = this.documentState?.document_id;
+    if (!documentId || this.currentSnapshot) { bar.hidden = true; bar.replaceChildren(); return; }
+    const editable = !this.trashedView;
+    bar.hidden = false;
+    const label = document.createElement("strong");
+    label.textContent = "关联";
+    const list = document.createElement("ul");
+    list.className = "ink-link-list";
+    const ordered = [...this.noteLinks].sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || a.created_at - b.created_at);
+    for (const link of ordered) {
+      const item = document.createElement("li");
+      item.className = "ink-link-chip" + (link.is_primary ? " is-primary" : "") + (link.target_status !== "active" ? " is-stale" : "");
+      item.dataset.linkId = link.link_id;
+      const open = document.createElement("button");
+      open.type = "button"; open.className = "link-button";
+      open.textContent = link.target_label;
+      open.title = "打开关联目标";
+      open.disabled = link.target_status === "missing";
+      open.onclick = () => openInkLinkTarget(link);
+      const meta = document.createElement("span");
+      meta.className = "ink-related-meta";
+      const status = targetStatusLabel(link.target_status);
+      meta.textContent = [link.is_primary ? "主关联" : "", status].filter(Boolean).join(" · ");
+      if (!editable) {
+        meta.textContent = `${roleLabel(link.role)}${link.is_primary ? " · 主关联" : ""}${status ? ` · ${status}` : ""}`;
+        item.append(open, meta);
+        list.append(item);
+        continue;
+      }
+      const role = document.createElement("select");
+      role.setAttribute("aria-label", "用途");
+      for (const option of INK_LINK_ROLES) role.add(new Option(option.label, option.role));
+      role.value = link.role;
+      role.onchange = () => void this.linkAction(documentId, () =>
+        linkInkNote(inkId(), documentId, this.linkTargetRef(link), role.value as InkLinkRole, link.is_primary, link.link_id), "改用途");
+      item.append(open, role, meta);
+      if (!link.is_primary) {
+        const primary = document.createElement("button");
+        primary.type = "button"; primary.className = "secondary-button";
+        primary.textContent = "设为主关联";
+        primary.onclick = () => void this.linkAction(documentId, () => setInkPrimaryLink(inkId(), documentId, link.link_id), "设为主关联");
+        item.append(primary);
+      }
+      const remove = document.createElement("button");
+      remove.type = "button"; remove.className = "secondary-button";
+      remove.textContent = "解除";
+      remove.onclick = () => void this.linkAction(documentId, () => unlinkInkNote(inkId(), documentId, link.link_id), "解除关联");
+      item.append(remove);
+      list.append(item);
+    }
+    if (!ordered.length) {
+      const empty = document.createElement("li");
+      empty.className = "ink-related-meta";
+      empty.textContent = editable ? "还没有关联。" : "没有关联。";
+      list.append(empty);
+    }
+    bar.replaceChildren(label, list);
+    if (editable) {
+      const add = document.createElement("button");
+      add.type = "button"; add.className = "secondary-button"; add.id = "ink-add-link";
+      add.textContent = "添加关联";
+      add.onclick = () => {
+        const bounds = add.getBoundingClientRect();
+        openAddLinkPopover({
+          x: bounds.left, y: bounds.bottom + 4, documentId,
+          hasPrimary: this.noteLinks.some(link => link.is_primary),
+          onLinked: receipt => this.afterLink(documentId, receipt, receipt.existing ? "这条关联已存在。" : "已添加关联。"),
+        });
+      };
+      bar.append(add);
+    }
+  }
+
+  /** The stored target as a request target; Markdown keeps its block range. */
+  private linkTargetRef(link: InkNoteLink) {
+    const target = link.target;
+    if (target.kind === "markdown") {
+      return { kind: "markdown" as const, artifact_id: target.artifact_id, content_hash: target.content_hash, first_block: target.first_block, last_block: target.last_block };
+    }
+    return target;
+  }
+
+  private async linkAction(documentId: string, action: () => Promise<InkLinkReceipt>, label: string): Promise<void> {
+    try {
+      this.afterLink(documentId, await action(), `已${label}。`);
+    } catch (error) {
+      this.status(`${label}失败：` + errorText(error), true);
+      void this.refreshLinks();
+    }
+  }
+
+  private afterLink(documentId: string, receipt: InkLinkReceipt, message: string): void {
+    if (receipt.note.document_id === documentId) this.applyNote(receipt.note);
+    this.status(message + (receipt.title_changed ? `标题已更新为「${receipt.note.title}」。` : ""), false);
+    eventBus.emit("ink-links-changed");
   }
 
   /** Small in-page dialog; resolves to the chosen id or `null` (Esc). */
@@ -523,20 +667,84 @@ export class DesktopInkWorkspace {
     return stored + buffered;
   }
 
-  /** D6: sync first, report what is affected, then trash and offer undo. */
+  /** Every locally held, unconfirmed item of a document (A1). */
+  private async unsavedItems(documentId: string): Promise<InkOutboxItem[]> {
+    const stored = this.outbox
+      ? [...await this.outbox.pending(documentId), ...await this.outbox.quarantined(documentId)]
+      : [];
+    const buffered = [...this.bufferedOperations.values()].filter(item => item.document_id === documentId);
+    const seen = new Set<string>();
+    return [...stored, ...buffered].filter(item => !seen.has(item.request_id) && (seen.add(item.request_id), true));
+  }
+
+  /**
+   * A1 export: the saved document with the unsaved operations chained on top,
+   * importable through "导入恢复草稿". When the items do not chain (for example
+   * they belong to an older writer epoch), the raw items are exported instead
+   * so nothing is lost.
+   */
+  private async exportUnsaved(documentId: string, items: InkOutboxItem[]): Promise<boolean> {
+    let contents: string;
+    try {
+      const stored = await openInkDocument(documentId);
+      if (!stored) throw new Error("missing");
+      const recovery = structuredClone(stored.document);
+      const ordered = [...items].sort((a, b) => a.operation.seq - b.operation.seq || a.client_seq - b.client_seq);
+      let applied = 0;
+      for (const item of ordered) {
+        if (item.operation.seq !== recovery.operations.length + 1) continue;
+        recovery.pages = structuredClone(item.metadata.pages);
+        recovery.capture_segments = structuredClone(item.metadata.capture_segments);
+        recovery.operations.push(structuredClone(item.operation));
+        applied++;
+      }
+      if (applied !== items.length) throw new Error("unchained");
+      parseInkDocument(recovery);
+      contents = encodeInk(recovery);
+    } catch {
+      contents = JSON.stringify({ format: "mathscape-ink-unsaved-operations", version: 1, document_id: documentId, exported_at: new Date().toISOString(), items }, null, 2);
+    }
+    try {
+      const path = await exportInkUnsavedWriting(`mathscape-ink-${documentId}-unsaved.json`, contents);
+      if (!path) return false;
+      this.status(`未保存的笔迹已导出到 ${path}。`, false);
+      return true;
+    } catch (error) {
+      this.status("导出未保存的笔迹失败：" + errorText(error), true);
+      return false;
+    }
+  }
+
+  /** D6: sync first, report what is affected, then trash and offer undo.
+   * A1: unsaved or quarantined writing can be discarded explicitly, after a
+   * second confirmation and an optional export. */
   private async trashDocument(summary: SessionSummary): Promise<void> {
     const documentId = summary.document_id;
     if (this.documentState?.document_id === documentId) this.board?.finish();
+    let discard: Set<string> | undefined;
     for (;;) {
       await this.flush(undefined, true);
-      const pending = await this.unsavedFor(documentId);
-      if (!pending) break;
-      const choice = await this.choose(`这份手稿还有 ${pending} 个操作尚未确认保存，暂时不能移到回收站。请先完成保存；未同步的笔迹会继续保留在本机。`, [
+      const unsaved = await this.unsavedItems(documentId);
+      if (!unsaved.length) break;
+      const choice = await this.choose(`这份手稿还有 ${unsaved.length} 个操作尚未确认保存，暂时不能移到回收站。可以重试保存；也可以放弃这些笔迹后移入回收站。`, [
         { id: "retry", label: "重试保存", primary: true },
+        { id: "discard", label: "放弃这些未保存的笔迹并移入回收站" },
         { id: "cancel", label: "取消" },
       ]);
       if (choice === "retry") continue;
-      return;
+      if (choice !== "discard") return;
+      for (;;) {
+        const second = await this.choose(`确定放弃 ${unsaved.length} 个未保存的操作？放弃后无法从本机恢复。可以先把它们导出到文件。`, [
+          { id: "export", label: "导出到文件…" },
+          { id: "discard", label: "放弃并移入回收站", primary: true },
+          { id: "cancel", label: "取消" },
+        ]);
+        if (second === "export") { await this.exportUnsaved(documentId, unsaved); continue; }
+        if (second !== "discard") return;
+        break;
+      }
+      discard = new Set(unsaved.map(item => item.request_id));
+      break;
     }
     let impact;
     try { impact = await getInkTrashImpact(documentId); }
@@ -565,7 +773,18 @@ export class DesktopInkWorkspace {
     try {
       if (this.documentState?.document_id === documentId) this.board?.finish();
       await this.enqueueTail;
+      // A3: one more flush so writing added while the dialog was open gets a
+      // chance to land before the recheck.
+      await this.flush(undefined, true);
+      if (discard) {
+        await this.outbox?.discard(discard);
+        for (const requestId of discard) this.bufferedOperations.delete(requestId);
+      }
       if (await this.unsavedFor(documentId)) {
+        if (discard && this.documentState?.document_id === documentId) {
+          const reopened = this.sessionSummaries.find(item => item.document_id === documentId);
+          if (reopened) await this.openDocument(reopened);
+        }
         this.status("确认期间又有笔迹尚未保存，手稿没有移到回收站。请保存后重试。", true);
         return;
       }
@@ -576,8 +795,13 @@ export class DesktopInkWorkspace {
       const quarantined = this.outbox ? (await this.outbox.quarantined(documentId)).length + (await this.outbox.pending(documentId)).length : 0;
       this.status(`已将「${receipt.note.title}」移到回收站。` + (quarantined ? `${quarantined} 个未保存操作保留在本机恢复队列。` : ""), false);
     } catch (error) {
-      this.status("移到回收站失败：" + errorText(error), true);
       await this.refreshDocuments();
+      // The discarded writing is gone; show the stored state, not the stale board.
+      if (discard && this.documentState?.document_id === documentId) {
+        const reopened = this.sessionSummaries.find(item => item.document_id === documentId);
+        if (reopened) await this.openDocument(reopened);
+      }
+      this.status("移到回收站失败：" + errorText(error), true);
     }
   }
 
@@ -786,6 +1010,7 @@ export class DesktopInkWorkspace {
     this.board.refresh();
     this.renderSummary();
     this.setReadOnlyControls(readOnly);
+    void this.refreshLinks();
     const evidenceHost = element(this.host, "#desktop-ink-evidence");
     evidenceHost.hidden = !snapshot;
     evidenceHost.replaceChildren();
