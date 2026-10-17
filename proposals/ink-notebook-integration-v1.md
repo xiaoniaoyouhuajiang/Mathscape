@@ -114,7 +114,7 @@ PDF 页、Agent 产物和学习计划条目可以在相应能力落地后再加�
 
 显示标题和标题来源属于笔记元数据，改名使用独立请求，不进入笔迹操作历史。改名不会被撤销/重做，也不应改变手稿的 head。
 
-迁移后，笔迹操作中的 metadata 不再有权修改标题。为兼容现有平板和 outbox，后端应保留当前标题，并在 ACK、镜像或会话状态中返回最新标题；旧客户端提交不同标题时不能覆盖桌面改名，也不能因此让笔迹提交失败。
+迁移后，笔迹操作中的 metadata 不再有权修改标题。为兼容现有平板和 outbox，后端应保留当前标题，并在镜像、会话状态或单独的笔记元数据推送中返回最新标题；旧客户端提交不同标题时不能覆盖桌面改名，也不能因此让笔迹提交失败。ACK 不携带标题（见 §13.2）。
 
 快照 manifest 继续保存创建快照时的标题。之后改名只影响当前手稿和活动列表，历史快照仍显示原标题，并可以附带“当前笔记名”。
 
@@ -128,7 +128,7 @@ PDF 页、Agent 产物和学习计划条目可以在相应能力落地后再加�
 - 自动标题允许重复；列表通过关联目标、最近修改时间和页数辅助区分，不用 `(2)`、`(3)` 这类会随删除顺序变化的序号。
 - 用户手动改名后切换到 `manual`。之后更改主关联不会覆盖标题；界面可以提供“恢复自动命名”。
 
-标题需去除首尾空白并限制长度。空标题提交视为恢复自动命名。
+标题需去除首尾空白并限制长度（N1 定为 100 个字符，见 §13.1 D5）。空标题提交视为恢复自动命名。
 
 ### 5.3 改名入口
 
@@ -352,6 +352,8 @@ Agent 读取手稿、生成解释或建立语义对象时，应把当前 NoteLin
 
 ## 12. 需要在实现前确认的产品决定
 
+N1 已确认的决定和实现澄清见 §13，本节保留原始建议。
+
 | 问题 | 建议 |
 | --- | --- |
 | 删除入口名称 | 首版使用“移到回收站”和“恢复”；永久删除留到系统级删除设计 |
@@ -359,3 +361,68 @@ Agent 读取手稿、生成解释或建立语义对象时，应把当前 NoteLin
 | 地图默认显示 | 默认显示对象上的笔记数量标记，不默认展开全部笔记节点 |
 | 关联角色 | 首版提供尝试、另证、验算、学习笔记、疑问、参考；每份笔记最多一个主关联 |
 | 改名冲突 | 在线时按 revision 立即判断；离线改名恢复后若冲突，由用户选择保留的标题 |
+
+## 13. N1 实施决定与澄清
+
+本节记录 N1 实施前风险审查（H1–H6、M1–M10）之后用户确认的决定，以及对上文歧义的解释。实现以本节为准；与上文冲突时以本节为准。
+
+### 13.1 已确认的决定
+
+| # | 决定 |
+| --- | --- |
+| D1 | 笔记元数据作为 `ink_documents` 的新列：`title_mode`、`title_revision`、`lifecycle`、`lifecycle_revision`、`trashed_at`、`last_used_at`。所有 `INSERT INTO ink_documents` 路径（新建、恢复草稿导入）显式写出新列，不依赖列默认值。 |
+| D2 | `title_revision` 与 `lifecycle_revision` 分开计数。“回收→恢复”不会让平板的离线改名被误判为冲突。 |
+| D3 | 自动标题物化存进 `title` 列，基准为手稿的创建时间（`created_at`），按电脑本机时区格式化为“手稿 · 10月17日 14:30”；创建年份与生成标题时的年份不同时显示年份，例如“手稿 · 2025年10月17日 14:30”。快照 manifest 和 Artifact 名因此带有可读标题。 |
+| D4 | 迁移时，标题恰好为默认值“数学手稿”的行改为 `title_mode = auto`，并改写为按创建时间生成的自动标题；`created_at` 无法解析时保留原标题并记为 `manual`。其他标题一律记为 `manual`。恢复草稿（“… · 恢复草稿”）虽由系统生成，但带有“这是恢复内容”的明确含义，也记为 `manual`，因此不会被“清理空白稿”处理，也不会被自动标题覆盖。已有快照中的“数学手稿”保持不变。 |
+| D5 | 标题去除首尾空白后最多 100 个字符，拒绝控制字符；空标题等于“恢复自动命名”（重新按创建时间生成，`title_mode` 回到 `auto`）。存储层仍接受 ≤200 UTF-16 的历史标题（例如恢复草稿后缀）。 |
+| D6 | 移到回收站前必须先同步本机 outbox；同步失败时只能在“重试同步 / 导出恢复草稿后继续 / 明确放弃待同步笔迹”中选择。有已配对或在线的平板时一律弹出确认，并写明“平板将断开，恢复后需要重新配对”。 |
+| D7 | 不升级 `mathscape-ink-lan-1`。回收站相关的拒绝使用旧平板已经会锁定的码：实时连接收到 `session_closed`，新的写入或重连收到 `operation_conflict{code:"writer_revoked", reason:"document_trashed"}`。新页面读取 `reason` 显示专门文案；旧页面按 `writer_revoked` 锁定，不会无限重连。新增的消息类型（`note_metadata`、`rename_request`、`rename_receipt`）对旧页面都是可选的。 |
+| D8 | 回收站中手稿的历史快照仍可打开、可读，已登记的证据照常解析；但**不能**从这些快照新登记来源证据。恢复手稿后才能继续登记。 |
+| D9 | 改名不更新 `updated_at`（“最近修改”），也不更新 `last_used_at`。`last_used_at` 只在笔迹操作写入时更新（新建和恢复草稿导入时初始化为当时时间）；打开、镜像轮询、列表读取都不更新。活动列表按 `last_used_at` 倒序。 |
+| D10 | “清理空白稿”跳过当前在桌面打开的手稿，也跳过有活动远程会话、有效平板凭据或待领取配对的手稿。桌面本机会话（`desktop-local`）不算“活动设备会话”。 |
+| D11 | 回收站中的手稿不能改名，恢复后再改。 |
+| D12 | `create_ink_document` 在 N1 即支持可选的 `request_id`：同 request_id 同内容重放原回执，异内容拒绝。 |
+| D13 | 修复 `start_session` 以旧 epoch 复活已关闭会话的问题：复活旧 session 时要求其 epoch 等于当前 `writer_epoch`，且手稿必须是 `active`。新列一律用整数毫秒时间戳；旧列（`updated_at`、`last_seen_at`）ISO 与 `unix:N` 混用的问题不在 N1 修复，因为排序已改用 `last_used_at`。 |
+
+### 13.2 标题权威与兼容
+
+- `InkLabDocument`、`InkLabDocumentMetadata` 的结构和请求指纹算法**不变**。笔迹操作 metadata 里的 `title` 仍需是合法文本，但只“接收、校验、忽略”：后端写回时保留库中的标题，其余字段（`pages`、`capture_segments`、`exported_at`）仍按现状由客户端整体提交。只有 `title` 被剥夺了权威。
+- 升级前已入队、但 ACK 丢失的请求在升级后用同一 request_id 重放，指纹仍然一致，返回原 ACK；不会被报成 `idempotency_conflict`。
+- ACK（`InkOperationReceipt`）不携带标题。ACK 会被原样存进 `ink_requests.response_json` 并在重放时返回，若带标题，重放时会把旧标题当成新状态。最新标题通过三条通道下发：镜像增量（`note` 与 `metadata.title`）、`session_context` 顶层的 `note` 键、以及服务端推送 `note_metadata`。`note` 只包含 `document_id`、`title`、`title_mode`、`title_revision`、`lifecycle`、`lifecycle_revision`，不放进 `document`，快照 manifest 格式不变。
+- 已入队的 outbox 项 metadata 不能被改写（会改变指纹），客户端只能接受“队列里的旧标题由后端忽略”。平板和桌面恢复本地队列时，标题以服务端下发的 `note.title` 为准，不再用队列项 metadata 覆盖。
+
+### 13.3 改名请求
+
+- 改名是独立请求：`{request_id, document_id, title, expected_title_revision}`。不写操作历史，不改 head、`updated_at`、`last_used_at`、writer 状态。改名与书写权无关：桌面随时可以改（包括平板持有书写权时）；平板只能凭当前有效的设备凭据改自己这份手稿。
+- 预期 revision 不一致时返回 `title_conflict`，并附带当前标题、`title_mode` 和 `title_revision`；结果与当前状态相同时视为成功但不增加 revision。`title_conflict` 不会让平板锁定。
+- 平板离线时只保存“最新一次”改名意图，存在现有 IndexedDB `meta` store（键 `rename:<binding.key>`），**不升级** IndexedDB 版本。意图发出后若 ACK 丢失，下次连接用原 request_id 重放；用户选择“保留本机标题”时用新的 request_id 和最新 revision 重新提交。
+
+### 13.4 回收站事务与凭据
+
+- “移到回收站”是单个后端事务：lifecycle 改为 `trashed`、写 `trashed_at`、`lifecycle_revision + 1`；该手稿所有活动会话关闭；`writer_epoch + 1` 且清空活动会话；该手稿未撤销的设备凭据全部撤销；未领取的配对立即过期；写入幂等记录。桌面服务随后向该手稿的实时连接推送 `session_closed`，清理预览与状态报告，若平板设置正绑定这份手稿则结束设置。
+- 恢复只改 lifecycle（`active`、清空 `trashed_at`、`lifecycle_revision + 1`），不新建会话、不恢复凭据。桌面再次打开时找不到同 epoch 的会话，会以新的 session 开始写入（epoch 再 + 1）；平板必须重新配对。
+- 回收站中的手稿拒绝：新笔迹、改名、开始会话、签发或领取配对、设备认证、新建快照预留、新登记证据。已经落盘的笔迹请求重放仍返回原 ACK（先查重放再查 lifecycle），减少误报的“未同步内容”。快照只在**新建预留**时检查 lifecycle；回收前已受理的预留允许完成记录，避免产生孤儿 Artifact。
+- 同 request_id 重放回收、恢复、清理时直接返回原回执，不重新检查当前状态。目标状态已经达成（例如对已恢复的手稿再次恢复）时按幂等成功处理。
+
+### 13.5 “撤销”的含义
+
+“撤销”等于用新的 request_id 调用恢复，预期 revision 取回收回执里的值。撤销不会恢复平板凭据或旧会话，平板仍需重新配对，平板上未同步的内容只能通过导出恢复草稿找回。确认框和撤销提示都会说明这一点。
+
+### 13.6 空白稿
+
+空白稿 = `lifecycle = active`、`head_seq = 0`（从未提交过任何操作，包括新增页面）、`title_mode = auto`、没有快照、没有未完成的快照预留、没有活动远程会话、没有未撤销的平板凭据、没有未过期的待领取配对（N2 起再加“没有活动 NoteLink”）。写了又全部擦掉的手稿**不算**空白。前端在清理前先同步，并排除当前打开的手稿和本机仍有待提交项的手稿；后端在事务内对每份候选重新检查，返回实际回收和跳过的列表。
+
+### 13.7 桌面 outbox 按文档隔离
+
+桌面 outbox 仍是一个 IndexedDB store，但提交时按文档隔离：某份手稿的项失败时，只跳过这份手稿余下的项，继续提交其他手稿。遇到终态错误（`document_trashed`、`writer_epoch_conflict`、`idempotency_conflict`、`document_not_found`）时，该文档该会话的项被标记为“已隔离”，保留在本机，不再自动重试，可导出恢复草稿；其他手稿的保存、快照和平板交接不受影响。
+
+### 13.8 结构化错误码
+
+桌面 Tauri 命令（手写相关）返回 `{code, message, details}`。N1 使用的稳定码：`document_trashed`、`title_conflict`（details 含 `current_title`、`current_title_mode`、`current_title_revision`）、`lifecycle_conflict`（details 含 `lifecycle`、`lifecycle_revision`）、`title_invalid`、`idempotency_conflict`、`writer_epoch_conflict`、`writer_conflict`、`head_conflict`、`sequence_conflict`、`document_not_found`。LAN 线协议沿用旧码并以 `reason` 区分（D7）。
+
+### 13.9 N1 暂缓的内容
+
+- 多选批量移到回收站（单份回收与“清理空白稿”已提供）。
+- 回收站的永久删除与自动清空（与上文一致）。
+- 旧时间列 ISO/`unix:N` 混用的修复（D13）。
+- 地图快照节点显示“当前笔记名”。
