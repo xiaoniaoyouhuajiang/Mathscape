@@ -3,8 +3,11 @@ import type { InkOperationAck, InkOutboxItem } from "./outbox";
 import type { PadBinding, PadLease } from "./pad-store";
 
 export const INK_LAN_PROTOCOL="mathscape-ink-lan-1";
-export class PadTransportError extends Error { constructor(readonly code:string,message:string){super(message);} }
-export interface PadContext { type:"session_context";protocol_version:string;lease:PadLease;document:InkDocument;head_seq:number;limits:{operation_bytes:number;document_bytes:number;queue_bytes:number} }
+export class PadTransportError extends Error { constructor(readonly code:string,message:string,readonly details:Record<string,unknown>={}){super(message);} }
+/** N1 note metadata; older desktops omit it and the document title is used. */
+export interface PadNote { document_id:string;title:string;title_mode:"auto"|"manual";title_revision:number;lifecycle:"active"|"trashed";lifecycle_revision:number }
+export const TRASHED_REASON="document_trashed";
+export interface PadContext { type:"session_context";protocol_version:string;lease:PadLease;note?:PadNote;document:InkDocument;head_seq:number;limits:{operation_bytes:number;document_bytes:number;queue_bytes:number} }
 interface Pending {resolve:(value:Record<string,unknown>)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}
 function tabClientId():string {
   // Survives refresh in this tab, so a half-open old socket can be replaced.
@@ -27,6 +30,7 @@ export class InkPadTransport {
     private readonly context:(context:PadContext)=>Promise<void>,
     private readonly status:(state:"connecting"|"ready"|"offline"|"conflict",message:string,code?:string)=>void,
     private readonly onReady:()=>void,
+    private readonly onNote:(note:PadNote)=>void=()=>{},
   ) {}
   isReady():boolean{return this.ready;}
   connect():void {
@@ -65,19 +69,23 @@ export class InkPadTransport {
       const task=this.pending.get(receipt?.request_id);
       if(task){clearTimeout(task.timer);this.pending.delete(receipt.request_id);task.resolve(message);}return;
     }
-    if(message.type==="snapshot_receipt") {
+    if(message.type==="note_metadata") {if(message.note&&typeof message.note==="object")this.onNote(message.note as PadNote);return;}
+    if(message.type==="snapshot_receipt"||message.type==="rename_receipt") {
       const id=message.request_id as string,task=this.pending.get(id);
       if(task){clearTimeout(task.timer);this.pending.delete(id);task.resolve(message);}return;
     }
     if(message.type==="operation_conflict") {
-      const code=String(message.code),error=new PadTransportError(code,String(message.message??"请求未完成。"));
+      const code=String(message.code),error=new PadTransportError(message.reason===TRASHED_REASON?TRASHED_REASON:code,String(message.message??"请求未完成。"),message);
       const id=message.request_id as string,task=this.pending.get(id);
       if(task){clearTimeout(task.timer);this.pending.delete(id);task.reject(error);}
+      // Title codes are answers to a rename and never fence writing.
+      if(message.reason===TRASHED_REASON){this.fence(error.message,TRASHED_REASON);return;}
       if(["writer_revoked","credential_expired","authentication_failed","device_busy","protocol_mismatch","idempotency_conflict","sequence_conflict","operation_limit"].includes(code))this.fence(error.message,code);
       return;
     }
     if(message.type==="session_closed") {
       if(message.code==="server_restart"||message.code==="reconnect_required")socket.close();
+      else if(message.reason===TRASHED_REASON)this.fence(String(message.message??"这份手稿已在电脑上移到回收站。"),TRASHED_REASON);
       else this.fence("书写会话已关闭或写入权已转移；待同步内容保留在本机，可导出恢复草稿。","writer_revoked");
     }
   }
@@ -106,6 +114,10 @@ export class InkPadTransport {
     const receipt=message.receipt as InkOperationAck;
     if(!receipt?.durable||receipt.request_id!==item.request_id||receipt.document_id!==item.document_id||receipt.command_id!==item.operation.command_id||receipt.seq!==item.operation.seq)throw new PadTransportError("invalid_ack","电脑确认与本次操作不匹配，恢复队列保持不变。");
     return receipt;
+  }
+  async rename(id:string,title:string,expected:number):Promise<PadNote> {
+    const message=await this.request(id,{type:"rename_request",request_id:id,title,expected_title_revision:expected});
+    return message.note as PadNote;
   }
   async snapshot(id:string,head:number):Promise<Record<string,unknown>> {return this.request(id,{type:"snapshot_request",request_id:id,expected_head:head});}
   close():void {this.closed=true;this.ready=false;if(this.retry)clearTimeout(this.retry);if(this.heartbeat)clearInterval(this.heartbeat);for(const task of this.pending.values()){clearTimeout(task.timer);task.reject(new PadTransportError("offline","连接已关闭，原操作保留在本机。"));}this.pending.clear();this.socket?.close();}

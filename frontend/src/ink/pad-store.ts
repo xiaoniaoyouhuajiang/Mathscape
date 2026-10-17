@@ -41,6 +41,12 @@ export class InkPadStore {
     const existing=await this.read<PadPairing>("meta",key);if(existing)return existing;
     const value={token,credential};await this.write("meta",()=>[key,value]);return value;
   }
+  /** Small records in the existing meta store (no schema bump), e.g. offline rename intents. */
+  async metaGet<T>(key:string):Promise<T|undefined> {return this.read<T>("meta",key);}
+  async metaPut(key:string,value:unknown):Promise<void> {await this.write("meta",()=>[key,value]);}
+  async metaDelete(key:string):Promise<void> {
+    return new Promise((resolve,reject)=>{const tx=this.database.transaction("meta","readwrite");tx.objectStore("meta").delete(key);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});
+  }
   async activate(binding:PadBinding):Promise<void> {await this.write("meta",()=>["active",binding]);}
   async active():Promise<PadBinding|undefined> {return this.read("meta","active");}
   async draft(key:string):Promise<PadDraft|undefined> {
