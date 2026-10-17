@@ -7,6 +7,7 @@ mod discovery;
 mod ink;
 mod ink_evidence;
 mod ink_lan;
+mod ink_note;
 mod map_edit;
 mod markdown_patch;
 mod read;
@@ -39,6 +40,12 @@ pub use ink::{
 };
 pub use ink_evidence::InkEvidenceReceipt;
 pub use ink_lan::{InkLanSettings, InkMirrorDelta, InkPairingOffer, InkRemoteLease, InkWriterView};
+pub use ink_note::{
+    INK_NOTE_TITLE_MAX_CHARS, InkCleanBlankReceipt, InkCleanBlankRequest, InkCleanSkip,
+    InkCreateReceipt, InkLifecycle, InkLifecycleRequest, InkNoteReceipt, InkNoteState,
+    InkRenameRequest, InkTitleMode, InkTrashImpact, format_ink_auto_title, ink_auto_title,
+    parse_ink_timestamp_ms,
+};
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use source_map::{
@@ -62,7 +69,7 @@ const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
     include_str!("../../../migrations/0010_discovery_run_recovery.sql");
 const INK_MIGRATION: &str = include_str!("../../../migrations/0013_ink_p1.sql");
 const INK_SNAPSHOT_MIGRATION: &str = include_str!("../../../migrations/0014_ink_snapshots_p2.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 16;
+const SUPPORTED_SCHEMA_VERSION: i64 = 17;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -125,6 +132,68 @@ pub enum SqliteStoreError {
         expected: u64,
         actual: u64,
     },
+    /// The document is in the trash; it accepts no new writes, sessions or pairings.
+    #[error("ink document_trashed: {0}")]
+    InkDocumentTrashed(String),
+    #[error(
+        "ink title_conflict for document {document_id}: current title revision {current_revision}"
+    )]
+    InkTitleConflict {
+        document_id: String,
+        current_title: String,
+        current_title_mode: String,
+        current_revision: u64,
+    },
+    #[error(
+        "ink lifecycle_conflict for document {document_id}: {lifecycle} at revision {current_revision}"
+    )]
+    InkLifecycleConflict {
+        document_id: String,
+        lifecycle: String,
+        current_revision: u64,
+    },
+    #[error("ink title_invalid: {0}")]
+    InkTitleInvalid(String),
+}
+
+impl SqliteStoreError {
+    /// Stable machine-readable code for Ink errors, used by the desktop
+    /// commands and the LAN service instead of matching on display text.
+    pub fn ink_code(&self) -> &'static str {
+        match self {
+            Self::InkDocumentTrashed(_) => "document_trashed",
+            Self::InkTitleConflict { .. } => "title_conflict",
+            Self::InkLifecycleConflict { .. } => "lifecycle_conflict",
+            Self::InkTitleInvalid(_) => "title_invalid",
+            Self::InkRequestConflict(_) => "idempotency_conflict",
+            Self::InkHeadConflict { .. } => "head_conflict",
+            Self::InkSequenceConflict { .. } => "sequence_conflict",
+            Self::InkWriterConflict { .. } => "writer_conflict",
+            Self::InkWriterEpochConflict { .. } => "writer_epoch_conflict",
+            Self::InkDocumentNotFound(_) => "document_not_found",
+            Self::InkSessionNotFound(_) => "session_not_found",
+            Self::InkValidation(_) => "validation_failed",
+            Self::InkInvariant(message) => {
+                for code in [
+                    "writer_revoked",
+                    "credential_expired",
+                    "authentication_failed",
+                    "writer_epoch_conflict",
+                    "takeover_required",
+                    "pairing_already_used",
+                    "pairing_expired",
+                    "pairing_invalid",
+                    "document_byte_limit",
+                ] {
+                    if message.contains(code) {
+                        return code;
+                    }
+                }
+                "invariant_failed"
+            }
+            _ => "storage_failed",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -252,6 +321,7 @@ impl SqliteArtifactStore {
         ink::validate_schema(&connection)?;
         ink_evidence::validate_schema(&connection)?;
         ink_lan::validate_schema(&connection)?;
+        ink_note::validate_schema(&connection)?;
         validate_registration_schema(&connection)?;
         Ok(Self { connection })
     }
@@ -331,8 +401,37 @@ impl SqliteArtifactStore {
         ink::open_document(&self.connection, document_id)
     }
 
+    /// Active documents, most recently edited first. Trashed documents are
+    /// listed separately by [`Self::list_trashed_ink_documents`].
     pub fn list_ink_documents(&self) -> Result<Vec<StoredInkDocumentSummary>, SqliteStoreError> {
-        ink::list_documents(&self.connection)
+        ink::list_documents(&self.connection, InkLifecycle::Active)
+    }
+
+    pub fn list_trashed_ink_documents(
+        &self,
+    ) -> Result<Vec<StoredInkDocumentSummary>, SqliteStoreError> {
+        ink::list_documents(&self.connection, InkLifecycle::Trashed)
+    }
+
+    /// Creates a document with note metadata; `request_id` makes it idempotent.
+    pub fn create_ink_note(
+        &mut self,
+        document: &mathscape_domain::InkLabDocument,
+        session_id: &str,
+        writer_id: &str,
+        device: &serde_json::Value,
+        title_mode: InkTitleMode,
+        request_id: Option<&str>,
+    ) -> Result<InkCreateReceipt, SqliteStoreError> {
+        ink::create_note(
+            &mut self.connection,
+            document,
+            session_id,
+            writer_id,
+            device,
+            title_mode,
+            request_id,
+        )
     }
 
     pub fn ink_session(
@@ -472,7 +571,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=16 => {
+            6..=17 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -573,6 +672,20 @@ impl SqliteArtifactStore {
                 connection.pragma_update(None, "user_version", 16)?;
             }
         }
+        if version < 17 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version=17",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                ink_note::migrate_v17(&connection)?;
+            } else {
+                connection.pragma_update(None, "user_version", 17)?;
+            }
+        }
         validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -584,6 +697,7 @@ impl SqliteArtifactStore {
         ink::validate_schema(&connection)?;
         ink_evidence::validate_schema(&connection)?;
         ink_lan::validate_schema(&connection)?;
+        ink_note::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 

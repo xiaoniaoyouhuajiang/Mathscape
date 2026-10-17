@@ -1,8 +1,8 @@
 //! Persistent pairing and writer leases. Only credential digests cross this
 //! boundary; operation validation and durable receipts reuse the P1 writer.
 use crate::{
-    InkOperationReceipt, SqliteArtifactStore, SqliteStoreError, StoredInkDocument,
-    StoredInkSession, ink,
+    InkNoteReceipt, InkNoteState, InkOperationReceipt, InkRenameRequest, SqliteArtifactStore,
+    SqliteStoreError, StoredInkDocument, StoredInkSession, ink, ink_note,
 };
 use mathscape_domain::{InkLabDocumentMetadata, InkLabOperation, InkLanOperation};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -41,6 +41,8 @@ pub struct InkMirrorDelta {
     pub server_head: u64,
     pub writer: InkWriterView,
     pub snapshot_count: u64,
+    /// Current title and lifecycle, so the desktop follows tablet renames.
+    pub note: InkNoteState,
 }
 #[derive(Clone, Debug)]
 pub struct InkPairingOffer {
@@ -126,6 +128,9 @@ fn authenticate(
     let Some((document_id, session_id, writer_id, epoch, device, expires_at, revoked)) = row else {
         return Err(invalid("authentication_failed"));
     };
+    // Checked before revocation and epoch so a trashed document reports a
+    // specific reason instead of a generic epoch conflict (H4).
+    ink_note::require_active(c, &document_id)?;
     if revoked.is_some() {
         return Err(invalid("writer_revoked"));
     }
@@ -274,7 +279,8 @@ impl SqliteArtifactStore {
             .validate()
             .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
         let head = document.operations.len() as i64;
-        tx.execute("INSERT INTO ink_documents(document_id,version,title,created_at,exported_at,pages_json,capture_segments_json,head_seq,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?4)",params![document.document_id,document.version,document.title,date,document.exported_at,serde_json::to_string(&document.pages)?,serde_json::to_string(&document.capture_segments)?,head])?;
+        // Recovery drafts carry a meaningful manual title (D4) and start active.
+        tx.execute("INSERT INTO ink_documents(document_id,version,title,created_at,exported_at,pages_json,capture_segments_json,head_seq,updated_at,title_mode,title_revision,lifecycle,lifecycle_revision,trashed_at,last_used_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?4,'manual',0,'active',0,NULL,?9)",params![document.document_id,document.version,document.title,date,document.exported_at,serde_json::to_string(&document.pages)?,serde_json::to_string(&document.capture_segments)?,head,now.saturating_mul(1000)])?;
         let device = serde_json::json!({"source":"recovery_import","original_document_id":original.document_id,"original_created_at":original.created_at});
         tx.execute("INSERT INTO ink_sessions(session_id,document_id,writer_id,writer_epoch,status,device_json,started_at,last_seen_at) VALUES(?1,?2,'desktop-local',1,'active',?3,?4,?4)",params![session,document.document_id,serde_json::to_string(&device)?,date])?;
         tx.execute("INSERT INTO ink_writer_state(document_id,writer_epoch,active_session_id,writer_id,head_seq,updated_at) VALUES(?1,1,?2,'desktop-local',?3,?4)",params![document.document_id,session,head,date])?;
@@ -334,6 +340,7 @@ impl SqliteArtifactStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ink_note::require_active(&tx, &offer.document_id)?;
         let view = writer_view(&tx, &offer.document_id, now)?;
         if view.remote && !offer.allow_transfer {
             return Err(invalid("takeover_required"));
@@ -387,6 +394,8 @@ impl SqliteArtifactStore {
         let Some((document, head, epoch, session, writer, expires, claimed)) = offer else {
             return Err(invalid("pairing_invalid"));
         };
+        // Trash already expires unclaimed pairings; this keeps the rule explicit.
+        ink_note::require_active(&tx, &document)?;
         if let Some(previous) = claimed {
             if previous != credential {
                 return Err(invalid("pairing_already_used"));
@@ -505,6 +514,34 @@ impl SqliteArtifactStore {
         tx.commit()?;
         Ok(receipt)
     }
+    /// Tablet rename (§5.3): only the current lease holder may rename, and
+    /// only its own document. Renaming does not need the writer epoch to be
+    /// unchanged beyond what authentication already enforces.
+    pub fn rename_remote_ink_note(
+        &mut self,
+        credential: &str,
+        request_id: &str,
+        title: &str,
+        expected_title_revision: u64,
+        now: i64,
+    ) -> Result<InkNoteReceipt, SqliteStoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let lease = authenticate(&tx, credential, now)?;
+        let receipt = ink_note::rename_in(
+            &tx,
+            &InkRenameRequest {
+                request_id: request_id.into(),
+                document_id: lease.document_id,
+                title: title.into(),
+                expected_title_revision,
+            },
+            now.saturating_mul(1000),
+        )?;
+        tx.commit()?;
+        Ok(receipt)
+    }
     pub fn take_ink_writer(
         &mut self,
         document: &str,
@@ -616,6 +653,8 @@ impl SqliteArtifactStore {
             [document],
             |r| r.get(0),
         )?;
+        let note = ink_note::read_note(&tx, document)?
+            .ok_or_else(|| SqliteStoreError::InkDocumentNotFound(document.into()))?;
         let delta = InkMirrorDelta {
             metadata: InkLabDocumentMetadata {
                 version: metadata.0,
@@ -633,6 +672,7 @@ impl SqliteArtifactStore {
             snapshot_count: snapshot_count
                 .try_into()
                 .map_err(|_| invalid("negative snapshot count"))?,
+            note,
         };
         tx.commit()?;
         Ok(delta)

@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+chrono.workspace = true
 mathscape-domain.workspace = true
 mathscape-llm.workspace = true
 rusqlite.workspace = true
