@@ -4,6 +4,7 @@ import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import { contentInfo, readRange, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
 import { markdownRenderer } from "./markdown";
 import { markdownDocument, MarkdownSelection, type PatchReviewMode } from "./selection";
+import { ReaderInkLinks } from "./ink-links";
 import { eventBus } from "../core/events";
 import { openInkSnapshot } from "../ink/persistence";
 import { mountInkSnapshotReader, type InkReaderFocus } from "../ink/snapshot-reader";
@@ -232,14 +233,21 @@ export class ArtifactReader {
     if (info.contexts.length > 1) controls.append(contextSelect);
     const article = element("article"); article.className = "markdown-body";
     this.host.append(controls, article);
-    let selection = new MarkdownSelection(document, article, patch);
-    controls.after(selection.panel);
-    this.disposeDocument = () => selection.dispose();
     let rawMode = false, version = 0;
+    let inkLinks: ReaderInkLinks | undefined;
+    const handwrite = (range: { first: number; last: number }, anchor: HTMLElement) => {
+      const bounds = anchor.getBoundingClientRect();
+      inkLinks?.create(range, bounds.left, bounds.bottom + 4);
+    };
+    let selection = new MarkdownSelection(document, article, patch, handwrite);
+    controls.after(selection.panel);
+    inkLinks = new ReaderInkLinks(document, article, () => selection, () => rawMode);
+    controls.after(inkLinks.hint);
+    this.disposeDocument = () => { selection.dispose(); inkLinks?.dispose(); };
     const render = async (): Promise<void> => {
       const current = ++version;
       this.revokeImages();
-      if (rawMode) { article.replaceChildren(element("pre", document.source)); return; }
+      if (rawMode) { article.replaceChildren(element("pre", document.source)); inkLinks?.decorate(); return; }
       const md = markdownRenderer();
       const environment = {};
       // Parse the full source once to retain reference-style link/image definitions.
@@ -271,6 +279,7 @@ export class ArtifactReader {
       });
       if (focus) (article.querySelector<HTMLElement>(".source-block-focus") as HTMLElement | null)?.scrollIntoView({ behavior: "smooth", block: "center" });
       selection.refresh();
+      inkLinks?.decorate();
       article.querySelectorAll("a").forEach(link => {
         link.removeAttribute("href");
         link.title = "链接导航尚未启用";
@@ -309,8 +318,9 @@ export class ArtifactReader {
       void markdownDocument(info.artifact_id, info.contexts[Number(contextSelect.value)]?.conversion_id ?? null).then(data => {
         if (generation !== this.generation || current !== version) return;
         document = data;
-        selection = new MarkdownSelection(document, article, patch);
+        selection = new MarkdownSelection(document, article, patch, handwrite);
         controls.after(selection.panel);
+        inkLinks?.setDocument(document);
         raw.disabled = false;
         return render();
       }).catch(error => {

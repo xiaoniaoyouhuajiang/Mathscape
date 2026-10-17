@@ -191,8 +191,15 @@ export class MarkdownSelection {
   private endButton: HTMLButtonElement;
   private indexes: Map<string, number>;
   private unsubscribeSettings?: () => void;
+  private handwriteButton?: HTMLButtonElement;
 
-  constructor(private data: AnchoredMarkdown, private article: HTMLElement, patch?: { runId: string; mode: PatchReviewMode }) {
+  constructor(
+    private data: AnchoredMarkdown,
+    private article: HTMLElement,
+    patch?: { runId: string; mode: PatchReviewMode },
+    /** N2 "手写这段": same target rule and request as the right-click menu. */
+    private readonly handwrite?: (range: { first: number; last: number }, anchor: HTMLElement) => void,
+  ) {
     this.indexes = new Map(data.blocks.map((b, i) => [b.id, i]));
     this.panel.className = "selection-panel";
     this.panel.setAttribute("aria-label", "来源发现选区");
@@ -217,6 +224,13 @@ export class MarkdownSelection {
     button("修改设置", () => eventBus.emit("open-settings"));
     this.validate = button("构建发现输入", () => void this.resolve());
     this.discover = button("使用 LLM 发现内容", () => void this.runDiscovery());
+    if (handwrite) {
+      this.handwriteButton = button("手写这段", () => {
+        const range = this.targetRange();
+        if (range) handwrite(range, this.handwriteButton!);
+      });
+      this.handwriteButton.title = "为所选段落新建关联手稿；没有完整选区时使用当前块";
+    }
     this.status.setAttribute("role", "status");
     this.discoveryStatus.setAttribute("aria-live", "polite");
     this.discoveryStatus.className = "discovery-status";
@@ -411,8 +425,26 @@ export class MarkdownSelection {
     this.refresh();
   }
 
+  /**
+   * Block range for a note (§6.5). Without `index`: the block selection, or
+   * else the current block. With `index` (a right-click): the selection when
+   * the click is inside it, otherwise only that block. Ranges made only of
+   * page markers are not linkable.
+   */
+  targetRange(index?: number): { first: number; last: number } | null {
+    const valid = this.first >= 0 && this.last >= this.first && this.last < this.data.blocks.length;
+    let range: { first: number; last: number } | null;
+    if (index === undefined) range = valid ? { first: this.first, last: this.last } : this.current >= 0 ? { first: this.current, last: this.current } : null;
+    else if (index < 0 || index >= this.data.blocks.length) range = null;
+    else range = valid && index >= this.first && index <= this.last ? { first: this.first, last: this.last } : { first: index, last: index };
+    if (!range) return null;
+    const blocks = this.data.blocks.slice(range.first, range.last + 1);
+    return blocks.some(block => block.kind !== "page_marker") ? range : null;
+  }
+
   refresh(): void {
     const valid = this.first >= 0 && this.last >= this.first && this.data.blocks.length > 0;
+    if (this.handwriteButton) this.handwriteButton.disabled = this.targetRange() === null;
     const admissionSelected = this.policy.value === "review_before_publish"
       || this.policy.value === "automatic_candidate";
     this.validate.disabled = !valid || !admissionSelected || this.pending;

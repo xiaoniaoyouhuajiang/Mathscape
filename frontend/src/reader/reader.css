@@ -76,3 +76,13 @@
 .source-block-focus { outline: 2px solid #d7aa58; outline-offset: 4px; background: rgba(215, 170, 88, 0.12); }
 .source-page-marker { cursor: default; margin: 12px 0; padding: 4px 10px; border-left-color: #82939b; color: #687983; background: #e9edef; font-size: 11px; text-align: center; }
 .source-page-marker:hover { background: #e9edef; }
+
+/* N2 note markers (§6.4). */
+.source-block { position: relative; }
+.ink-block-marker {
+  position: absolute; top: 2px; right: 4px; padding: 1px 7px; border: 1px solid #8a6fb5; border-radius: 10px;
+  color: #4b3473; background: #f1ebfa; font-size: 11px; cursor: pointer;
+}
+.ink-block-marker:hover { background: #e3d7f5; }
+.source-block.is-ink-menu-target { background: #efe8fa; border-left-color: #8a6fb5; }
+.ink-patch-hint { margin: 6px 0; padding: 6px 10px; border-left: 3px solid #8a6fb5; color: #4b3473; background: #f4effb; font-size: 13px; }

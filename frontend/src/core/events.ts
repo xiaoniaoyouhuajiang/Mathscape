@@ -2,6 +2,7 @@ import type { ReaderFocus } from "../reader/reader";
 import type { PatchReviewMode } from "../reader/selection";
 import type { DiscoveryOutcome, ReviewRunMeta } from "../review/types";
 import type { WorkspaceSettings } from "../workspace-settings";
+import type { InkNoteLink } from "../ink/links";
 
 export interface OpenSourceDetail {
   artifactId: string;
@@ -24,6 +25,10 @@ export interface MathscapeEventMap {
   "discovery-runs-changed": void;
   "open-source": OpenSourceDetail;
   "open-ink-document": { documentId: string };
+  /** N2: a note link changed; overlays and reader markers reload. */
+  "ink-links-changed": void;
+  /** N2: open the target of a note link from the note page. */
+  "open-ink-link-target": { link: InkNoteLink };
   "open-review": OpenReviewDetail;
   "reader-opened": void;
   "open-settings": void;
@@ -60,6 +65,8 @@ export class MathscapeEventBus {
       "discovery-runs-changed",
       "open-source",
       "open-ink-document",
+      "ink-links-changed",
+      "open-ink-link-target",
       "open-review",
       "reader-opened",
       "open-settings",
