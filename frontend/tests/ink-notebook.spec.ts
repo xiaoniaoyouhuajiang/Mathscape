@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { InkOutboxItem } from "../src/ink/outbox";
 
 const dialog = (page: Page) => page.locator("#ink-dialog");
 const choose = async (page: Page, label: string | RegExp) => {
@@ -6,6 +7,31 @@ const choose = async (page: Page, label: string | RegExp) => {
   await dialog(page).getByRole("button", { name: label }).click();
 };
 const rowAction = (page: Page, title: string) => page.locator(".ink-session-row", { hasText: title }).locator(".ink-session-action");
+
+async function writeLine(page: Page): Promise<void> {
+  const canvas = page.locator("#desktop-ink-board .ink-input");
+  await expect(canvas).toBeVisible();
+  const box = (await canvas.boundingBox())!;
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  await page.mouse.move(x - 60, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 60, y, { steps: 8 });
+  await page.mouse.up();
+}
+
+async function localQueue(page: Page): Promise<InkOutboxItem[]> {
+  return page.evaluate(() => new Promise<InkOutboxItem[]>((resolve, reject) => {
+    const request = indexedDB.open("mathscape-ink-p1", 1);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const database = request.result;
+      const transaction = database.transaction("operations", "readonly");
+      const items = transaction.objectStore("operations").getAll();
+      transaction.oncomplete = () => { database.close(); resolve(items.result); };
+      transaction.onabort = () => { database.close(); reject(transaction.error); };
+    };
+  }));
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/tests/ink-desktop.html");
@@ -123,3 +149,78 @@ test("N1 snapshots of a trashed note stay readable but cannot register evidence"
   await expect(page.locator(".ink-evidence-source")).toContainText("回收站");
   await expect(page.getByRole("button", { name: "登记选区为来源证据" })).toBeDisabled();
 });
+
+test("N1 failed local sync blocks trash until the writing is durably saved", async ({ page }) => {
+  await page.evaluate(() => { window.inkDesktopHarness.behavior.failAppend = true; });
+  await writeLine(page);
+  await expect(page.locator("#ink-save-badge")).toContainText("保存失败");
+  await rowAction(page, "手稿 A").click();
+  await expect(page.locator("#ink-dialog-text")).toContainText("暂时不能移到回收站");
+  await expect(dialog(page).getByRole("button", { name: /仍移到回收站/ })).toHaveCount(0);
+  await choose(page, "取消");
+  expect((await localQueue(page))).toHaveLength(1);
+  expect(await page.evaluate(() => window.inkDesktopHarness.noteCalls.filter(call => call.command === "trash_ink_note"))).toHaveLength(0);
+  await expect(page.locator("#desktop-ink-summary")).toContainText("1 笔");
+
+  await rowAction(page, "手稿 A").click();
+  await expect(dialog(page).getByRole("button", { name: "重试保存" })).toBeVisible();
+  await page.evaluate(() => { window.inkDesktopHarness.behavior.failAppend = false; });
+  await choose(page, "重试保存");
+  await expect(page.locator("#ink-dialog-text")).toContainText("1 个已保存操作");
+  expect(await localQueue(page)).toHaveLength(0);
+  await choose(page, "移到回收站");
+  await expect(page.locator("#ink-empty-state")).toBeVisible();
+  expect(await page.evaluate(() => {
+    const h = window.inkDesktopHarness;
+    return { lifecycle: h.notes.get(h.documents.a)!.lifecycle, operations: h.storedDocuments.get(h.documents.a)!.operations.length };
+  })).toEqual({ lifecycle: "trashed", operations: 1 });
+});
+
+test("N1 quarantined local writing blocks trash and blank cleanup", async ({ page }) => {
+  await page.evaluate(() => {
+    const h = window.inkDesktopHarness;
+    h.behavior.appendErrorCode = "writer_epoch_conflict";
+    h.notes.get(h.documents.a)!.title_mode = "auto";
+  });
+  await writeLine(page);
+  await expect.poll(async () => (await localQueue(page))[0]?.quarantined?.code).toBe("writer_epoch_conflict");
+  await rowAction(page, "手稿 A").click();
+  await expect(page.locator("#ink-dialog-text")).toContainText("暂时不能移到回收站");
+  await choose(page, "取消");
+
+  await page.locator("#ink-session-list .ink-session-item", { hasText: "手稿 B" }).click();
+  await expect(page.locator("#ink-document-heading")).toHaveText("手稿 B");
+  await page.locator("#ink-clean-blank").click();
+  await expect(page.locator("#desktop-ink-status")).toContainText("没有可清理的空白稿");
+  expect(await localQueue(page)).toHaveLength(1);
+  expect(await page.evaluate(() => {
+    const h = window.inkDesktopHarness;
+    return { lifecycle: h.notes.get(h.documents.a)!.lifecycle, calls: h.noteCalls.filter(call => call.command === "trash_ink_note" || call.command === "clean_blank_ink_notes").length };
+  })).toEqual({ lifecycle: "active", calls: 0 });
+});
+
+for (const connected of [true, false]) {
+  test(`N1 one click switches notes across ${connected ? "connected" : "offline"} tablet mirror refreshes`, async ({ page }) => {
+    await expect(page.locator("#ink-mode-badge")).toHaveText("当前手稿");
+    await page.evaluate(connected => {
+      const h = window.inkDesktopHarness;
+      Object.assign(h.behavior, { remoteDocumentId: h.documents.a, remoteConnected: connected });
+    }, connected);
+    await expect(page.locator("#ink-mode-badge")).toHaveText("平板镜像");
+    const button = page.locator("#ink-session-list .ink-session-item", { hasText: "手稿 B" });
+    const pressed = (await button.elementHandle())!;
+    const box = (await button.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    try {
+      const before = await page.evaluate(() => window.inkDesktopHarness.behavior.mirrorPolls);
+      // Keep the pointer down until polling has crossed two refreshes.
+      await expect.poll(() => page.evaluate(() => window.inkDesktopHarness.behavior.mirrorPolls)).toBeGreaterThanOrEqual(before + 2);
+      expect(await pressed.evaluate(button => button.isConnected)).toBe(true);
+    } finally {
+      await page.mouse.up();
+    }
+    await expect(page.locator("#ink-document-heading")).toHaveText("手稿 B");
+    await expect(page.locator("#ink-session-list .ink-session-item.is-active")).toContainText("手稿 B");
+  });
+}

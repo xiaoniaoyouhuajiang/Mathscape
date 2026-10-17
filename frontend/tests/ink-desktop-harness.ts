@@ -24,11 +24,12 @@ const noteCalls: Array<{ command: string; request: Record<string, unknown> }> = 
 const noteState = (id: string) => { const document = documents.get(id)!; return { document_id: id, title: document.title, created_at: document.created_at, ...notes.get(id)! }; };
 const summary = (document: InkDocument) => ({ document_id: document.document_id, title: document.title, created_at: document.created_at, head_seq: document.operations.length, session_count: 1, active_session_id: sessions.get(document.document_id), updated_at: document.created_at, page_count: document.pages.length, snapshot_count: snapshots.get(document.document_id)?.length ?? 0, remote_active: behavior.remoteDocumentId === document.document_id, ...notes.get(document.document_id)! });
 const structuredError = (code: string, message: string, details?: Record<string, unknown>) => ({ code, message, details });
-const behavior = { renameConflictTitle: "", delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, loseEvidenceAck: false, remoteDocumentId:"", pairingPending:false,epoch:1,setupStep:0,remoteConnected:true,remotePending:0,setupDocumentId:"" as string|null,handoff:"",transferConfirmation:false,pairingArgs:[] as unknown[],strictPairing:false,autoRequest:true,revokedDocument:"",failCreate:false };
+const behavior = { renameConflictTitle: "", delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, appendErrorCode: "", mirrorPolls: 0, loseEvidenceAck: false, remoteDocumentId:"", pairingPending:false,epoch:1,setupStep:0,remoteConnected:true,remotePending:0,setupDocumentId:"" as string|null,handoff:"",transferConfirmation:false,pairingArgs:[] as unknown[],strictPairing:false,autoRequest:true,revokedDocument:"",failCreate:false };
 
 mockIPC(async (command, payload) => {
   const args = payload as Record<string, unknown>;
   if(command==="get_ink_lan_mirror") {
+    behavior.mirrorPolls++;
     const document=documents.get(args.documentId as string)!;
     const remote=behavior.remoteDocumentId===document.document_id;
     const session={document_id:document.document_id,session_id:sessions.get(document.document_id)!,writer_id:remote?"inkpad-test":"desktop-local",writer_epoch:behavior.epoch,status:"active",device:{},started_at:document.created_at,last_seen_at:document.created_at};
@@ -108,6 +109,7 @@ mockIPC(async (command, payload) => {
     const request = args.request as { request_id:string;document_id:string;expected_head:number;metadata:InkDocumentMetadata;operation:InkOperation };
     if (behavior.appendDelay) await new Promise(resolve => setTimeout(resolve,behavior.appendDelay));
     if (behavior.failAppend) throw new Error("injected save failure");
+    if (behavior.appendErrorCode) throw structuredError(behavior.appendErrorCode, "injected terminal save failure");
     if (notes.get(request.document_id)?.lifecycle === "trashed") throw structuredError("document_trashed", "手稿已在回收站中，恢复后才能继续编辑。");
     if (operationReceipts.has(request.request_id)) return operationReceipts.get(request.request_id);
     const document = documents.get(request.document_id)!;
