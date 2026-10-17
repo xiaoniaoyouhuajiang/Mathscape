@@ -6,6 +6,7 @@ import { ArtifactReader } from "../src/reader/reader";
 import { InspectorController } from "../src/inspector/inspector-controller";
 import type { DesktopSnapshot } from "../src/artifact/types";
 import { eventBus } from "../src/core/events";
+import { setInkSourceCandidateProvider, type InkNoteLink } from "../src/ink/links";
 import "../src/styles.css";
 
 const a = newDocument("手稿 A");
@@ -26,8 +27,64 @@ const summary = (document: InkDocument) => ({ document_id: document.document_id,
 const structuredError = (code: string, message: string, details?: Record<string, unknown>) => ({ code, message, details });
 const behavior = { renameConflictTitle: "", delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, appendErrorCode: "", mirrorPolls: 0, loseEvidenceAck: false, remoteDocumentId:"", pairingPending:false,epoch:1,setupStep:0,remoteConnected:true,remotePending:0,setupDocumentId:"" as string|null,handoff:"",transferConfirmation:false,pairingArgs:[] as unknown[],strictPairing:false,autoRequest:true,revokedDocument:"",failCreate:false };
 
+// N2 links: a tiny in-memory model of ink_note_links (soft removal, one
+// primary, replaces_link_id, auto titles "角色 · 目标").
+const sourceLabels = new Map([["unit-thm", "定理 3.2"], ["unit-ex", "例 4"]]);
+const links: InkNoteLink[] = [];
+const linkRequests = new Map<string, unknown>();
+const linkCalls: Array<{ command: string; request: Record<string, unknown> }> = [];
+const exports: Array<{ fileName: string; contents: string }> = [];
+const roleNames: Record<string, string> = { attempt: "尝试", alt_proof: "另证", check: "验算", study: "学习笔记", question: "疑问", reference: "参考" };
+const retitle = (id: string) => {
+  const row = notes.get(id)!, document = documents.get(id)!;
+  if (row.title_mode !== "auto") return false;
+  const primary = links.find(link => link.document_id === id && link.state === "active" && link.is_primary);
+  const title = primary ? `${roleNames[primary.role]} · ${primary.target_label}` : "手稿 · 自动";
+  if (title === document.title) return false;
+  document.title = title; row.title_revision++;
+  return true;
+};
+setInkSourceCandidateProvider(() => [...sourceLabels].map(([object_id, label]) => ({ object_id, label, kind: "SourceSemanticUnit" })));
+
 mockIPC(async (command, payload) => {
   const args = payload as Record<string, unknown>;
+  if (command === "list_ink_note_links") return links.filter(link => link.document_id === args.documentId).map(link => structuredClone(link));
+  if (command === "export_ink_unsaved_writing") { exports.push({ fileName: args.fileName as string, contents: args.contents as string }); return "/tmp/" + (args.fileName as string); }
+  if (["link_ink_note", "unlink_ink_note", "set_ink_note_primary_link"].includes(command)) {
+    const request = args.request as Record<string, unknown> & { request_id: string; document_id: string };
+    linkCalls.push({ command, request: structuredClone(request) });
+    if (linkRequests.has(request.request_id)) return { ...(linkRequests.get(request.request_id) as object), replayed: true };
+    if (notes.get(request.document_id)?.lifecycle === "trashed") throw structuredError("document_trashed", "手稿已在回收站中，恢复后才能继续编辑。");
+    const active = () => links.filter(link => link.document_id === request.document_id && link.state === "active");
+    let link: InkNoteLink | null = null, existing = false;
+    if (command === "link_ink_note") {
+      const target = request.target as { kind: string; object_id?: string; document_id?: string };
+      const key = target.kind === "source_object" ? `src:${target.object_id}` : `ink:${target.document_id}`;
+      const duplicate = active().find(item => item.target_key === key && item.role === request.role);
+      if (duplicate) { link = duplicate; existing = true; }
+      else {
+        const replaced = request.replaces_link_id ? active().find(item => item.link_id === request.replaces_link_id) : undefined;
+        if (replaced) { replaced.state = "removed"; replaced.removed_at = Date.now(); }
+        const primary = Boolean(request.primary) || Boolean(replaced?.is_primary);
+        if (primary) for (const item of active()) item.is_primary = false;
+        if (replaced) replaced.is_primary = false;
+        const id = target.kind === "source_object" ? target.object_id! : target.document_id!;
+        link = { link_id: "link-" + request.request_id, document_id: request.document_id, target_kind: target.kind as "source_object", target_key: key, target_id: id, target: structuredClone(target) as InkNoteLink["target"], target_revision: null, target_label: sourceLabels.get(id) ?? documents.get(id)?.title ?? id, role: request.role as InkNoteLink["role"], is_primary: primary, state: "active", created_at: Date.now() + links.length, removed_at: null, target_status: "active" };
+        links.push(link);
+      }
+    } else if (command === "unlink_ink_note") {
+      link = active().find(item => item.link_id === request.link_id) ?? null;
+      if (!link) throw structuredError("link_not_found", "关联不存在。");
+      Object.assign(link, { state: "removed", removed_at: Date.now(), is_primary: false });
+    } else {
+      for (const item of active()) item.is_primary = item.link_id === request.link_id;
+      link = active().find(item => item.link_id === request.link_id) ?? null;
+    }
+    const titleChanged = retitle(request.document_id);
+    const receipt = { request_id: request.request_id, kind: command === "link_ink_note" ? "link" : command === "unlink_ink_note" ? "unlink" : "set_primary", note: noteState(request.document_id), link: structuredClone(link), existing, title_changed: titleChanged, replayed: false };
+    linkRequests.set(request.request_id, receipt);
+    return receipt;
+  }
   if(command==="get_ink_lan_mirror") {
     behavior.mirrorPolls++;
     const document=documents.get(args.documentId as string)!;
@@ -212,7 +269,7 @@ document.querySelector<HTMLButtonElement>("#ink-map-open-evidence")!.onclick = (
   inspector.selectNodeById("span-render");
 };
 eventBus.on("open-ink-document", ({documentId}) => {reader.close();readerHost.hidden=true;mapHost.hidden=true;workspaceHost.hidden=false;void workspace.openDocumentId(documentId);});
-const harness = { notes, noteCalls, workspace, documents: { a: a.document_id, b: b.document_id }, snapshots, calls, behavior, evidenceRequests, storedDocuments:documents };
+const harness = { links, linkCalls, exports, notes, noteCalls, workspace, documents: { a: a.document_id, b: b.document_id }, snapshots, calls, behavior, evidenceRequests, storedDocuments:documents };
 declare global { interface Window { inkDesktopHarness: typeof harness } }
 window.inkDesktopHarness = harness;
 void workspace.open();

@@ -7,6 +7,8 @@ import type { AnchoredMarkdown, SelectionRequest } from "../src/reader/selection
 import { mountReviewWorkspace } from "../src/review/workspace";
 import { renderAnchorFragment } from "../src/review/anchor-fragment";
 import { DiscoveryLedgerController } from "../src/discovery/discovery-ledger";
+import { setInkContextCreator, overlappingNotes, markdownPreviewLabel, type InkLinkedNote } from "../src/ink/links";
+import { eventBus } from "../src/core/events";
 
 // Tiny reproducible PDF: two pages and one outline entry, no copyrighted assets.
 function samplePdf(): Uint8Array {
@@ -72,6 +74,10 @@ let disposition:any=null;
 let restoreFailure=false, restoreLostResponse=false, restoredRequest:string|null=null;
 const patchDecisions: any[] = [];
 const resumeRequests: unknown[] = [];
+// N2: Markdown note links shown by the reader (markers, menu, patch hint).
+const ink = { links: [] as InkLinkedNote[], originalNoteCount: 0, pageMarkerBlock: -1, creates: [] as unknown[], linkRequests: [] as unknown[], opened: [] as string[] };
+setInkContextCreator(async (target, choice, draft) => { ink.creates.push({ target, choice, requestId: draft.requestId }); });
+eventBus.on("open-ink-document", ({ documentId }) => { ink.opened.push(documentId); });
 const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash" };
 const byteOffset = (text: string): number => new TextEncoder().encode(markdown.slice(0, markdown.indexOf(text))).length;
 function patchReview(status: string): unknown {
@@ -97,13 +103,20 @@ function anchored(conversion: string): AnchoredMarkdown {
   return {
     snapshot: { artifact_id: "md", conversion_id: conversion, content_hash: "test-hash", anchor_scheme: "mathscape-markdown-blocks-1", fingerprint: "test-" + conversion },
     source: markdown,
-    blocks: starts.map((start, i) => ({ id: "test-block-" + i, kind: "text", range: {
+    blocks: starts.map((start, i) => ({ id: "test-block-" + i, kind: i === ink.pageMarkerBlock ? "page_marker" : "text", range: {
       start: new TextEncoder().encode(markdown.slice(0, start)).length,
       end: new TextEncoder().encode(markdown.slice(0, starts[i + 1] ?? markdown.length)).length,
     } })),
   };
 }
 function handle(command: string, payload: any): any {
+  if (command === "get_ink_markdown_links") return { artifact_id: payload.artifactId, links: structuredClone(ink.links), original_note_count: ink.originalNoteCount };
+  if (command === "list_ink_documents") return [{ document_id: "note-old", title: "旧手稿", created_at: "unix:1", head_seq: 0, active_session_id: null, updated_at: "unix:1", lifecycle: "active", last_used_at: 5 }, { document_id: "note-gone", title: "已删手稿", created_at: "unix:1", head_seq: 0, active_session_id: null, updated_at: "unix:1", lifecycle: "trashed", last_used_at: 9 }];
+  if (command === "list_ink_note_links") return [];
+  if (command === "link_ink_note") {
+    ink.linkRequests.push(structuredClone(payload.request));
+    return { request_id: payload.request.request_id, kind: "link", note: { document_id: payload.request.document_id, title: "旧手稿" }, link: null, existing: false, title_changed: false, replayed: false };
+  }
   if(command==="list_discovery_runs")return persistedOutcome?[{
     run_id:persistedOutcome.run.run_id,artifact_id:"md",artifact_name:"数学笔记.md",conversion_id:"conversion",input_fingerprint:"test-input",result_fingerprint:persistedOutcome.review.result_fingerprint,pipeline_version:"test",status:"completed",review_status:disposition?.disposition==="discarded"?"discarded":"reviewable",profile_id:"test",unit_count:2,fact_count:2,pending_task_count:0,unresolved_reference_count:1,relation_count:1,created_at:"test",updated_at:"test",registrations:[],disposition,
   }]:[];
@@ -319,5 +332,5 @@ window.addEventListener("mathscape:open-source", event => {
   });
 });
 Object.assign(window, {
-  harness: { ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ink, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
 });
