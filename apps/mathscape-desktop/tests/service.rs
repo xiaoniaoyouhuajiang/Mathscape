@@ -181,6 +181,24 @@ fn ink_snapshot_keeps_a_fixed_operation_prefix_after_later_editing() {
     directory.cleanup();
 }
 
+/// Polls the mock server until at least `expected` requests have arrived, so tests
+/// observe an in-flight discovery deterministically instead of racing a fixed sleep.
+/// The staged responder delays each response, so the run is still active afterwards.
+async fn wait_for_received_requests(server: &MockServer, expected: usize) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let received = server.received_requests().await.unwrap().len();
+        if received >= expected {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {expected} mock requests; received {received}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
 #[derive(Clone, Debug)]
 struct StagedDiscoveryResponder;
 
@@ -535,7 +553,7 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
         let request = request.clone();
         tokio::spawn(async move { service.run_discovery(request).await })
     };
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    wait_for_received_requests(&server, 1).await;
     let active = service.active_discovery().unwrap();
     assert_eq!(active.artifact_id(), markdown_id);
     assert_eq!(
@@ -916,7 +934,8 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
         let request = RunDiscoveryRequest::new(selection, None);
         tokio::spawn(async move { service.run_discovery(request).await })
     };
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    // Two earlier runs issued 4 requests; wait for the cancelled run's first one.
+    wait_for_received_requests(&server, 5).await;
     assert!(service.cancel_discovery());
     assert_eq!(
         serde_json::to_value(service.active_discovery().unwrap()).unwrap()["phase"],
