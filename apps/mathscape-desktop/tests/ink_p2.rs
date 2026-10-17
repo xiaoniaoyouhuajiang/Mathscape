@@ -49,6 +49,8 @@ impl Fixture {
                 session_id: "p2-session".into(),
                 writer_id: "desktop-local".into(),
                 device: serde_json::json!({}),
+                request_id: None,
+                title_mode: None,
             })
             .unwrap();
         Self {
@@ -489,4 +491,58 @@ fn partial_erase_fragments_are_stable_evidence_even_after_undo() {
             .unwrap(),
         0
     );
+}
+
+#[test]
+fn trashed_documents_keep_snapshots_readable_but_refuse_new_evidence() {
+    let mut f = Fixture::new("ink-evidence-trashed");
+    f.append(f.trace[0].clone());
+    f.append(f.trace[1].clone());
+    let snapshot = f.snapshot("snapshot-trash");
+    f.service
+        .register_ink_evidence(Fixture::request(&snapshot, "evidence-before"))
+        .unwrap();
+    let document_id = f.document.document_id.clone();
+    let impact = f.service.ink_trash_impact(document_id.clone()).unwrap();
+    assert_eq!(impact.impact.snapshot_count, 1);
+    assert_eq!(impact.impact.evidence_count, 1);
+    assert!(!impact.connected);
+    let lifecycle = |request: &str, expected| mathscape_store_sqlite::InkLifecycleRequest {
+        request_id: request.into(),
+        document_id: document_id.clone(),
+        expected_lifecycle_revision: expected,
+    };
+    tauri::async_runtime::block_on(f.service.trash_ink_note(lifecycle("trash", 0))).unwrap();
+
+    let reopened = f
+        .service
+        .open_ink_snapshot(snapshot.snapshot_id.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened.content_hash, snapshot.content_hash);
+    assert_eq!(
+        f.service
+            .list_ink_evidence(snapshot.snapshot_id.clone())
+            .unwrap()
+            .len(),
+        1
+    );
+    let later = Fixture::request(&snapshot, "evidence-after");
+    let error = f.service.register_ink_evidence(later.clone()).unwrap_err();
+    assert_eq!(error.code, "document_trashed");
+    let error = f
+        .service
+        .create_ink_snapshot(CreateInkSnapshotRequest {
+            request_id: "snapshot-after-trash".into(),
+            document_id: document_id.clone(),
+            expected_head: 2,
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "document_trashed");
+    let trashed = f.service.list_trashed_ink_documents().unwrap();
+    assert_eq!(trashed.len(), 1);
+    assert!(f.service.list_ink_documents().unwrap().is_empty());
+
+    f.service.restore_ink_note(lifecycle("restore", 1)).unwrap();
+    f.service.register_ink_evidence(later).unwrap();
 }

@@ -14,7 +14,8 @@ use mathscape_domain::{
     InkLanOperation, validate_ink_preview,
 };
 use mathscape_store_sqlite::{
-    InkLanSettings, InkMirrorDelta, InkPairingOffer, SqliteArtifactStore,
+    InkLanSettings, InkLifecycle, InkMirrorDelta, InkNoteState, InkPairingOffer,
+    SqliteArtifactStore, SqliteStoreError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -205,6 +206,18 @@ enum Control {
     Stop(bool),
     Revoke(String),
     Replace(String),
+    /// The document moved to the trash; its tablet connection must close.
+    Trashed(String),
+    /// Title metadata changed; connected tablets refresh their header.
+    Note(InkNoteState),
+}
+/// Old pads only fence on known codes. Trash therefore reuses
+/// `writer_revoked` and adds a `reason` that new pads show specifically (D7).
+const TRASHED_REASON: &str = "document_trashed";
+const TRASHED_MESSAGE: &str =
+    "这份手稿已在电脑上移到回收站，平板不能继续写入。恢复后需要在电脑重新配对；本机未同步内容会保留，可导出恢复草稿。";
+fn trashed_closed() -> Value {
+    json!({"type":"session_closed","code":"writer_revoked","reason":TRASHED_REASON,"message":TRASHED_MESSAGE})
 }
 struct Live {
     slots: Mutex<HashMap<String, Slot>>,
@@ -283,7 +296,9 @@ fn error(code: &str, message: &str) -> Value {
     json!({"type":"operation_conflict","code":code,"message":message})
 }
 fn error_code(message: &str) -> &'static str {
-    if message.contains("writer_revoked")
+    if message.contains(TRASHED_REASON) {
+        "writer_revoked"
+    } else if message.contains("writer_revoked")
         || message.contains("writer epoch")
         || message.contains("writer_epoch_conflict")
     {
@@ -310,6 +325,11 @@ fn error_code(message: &str) -> &'static str {
     }
 }
 fn public_error(message: &str) -> Value {
+    if message.contains(TRASHED_REASON) {
+        let mut reply = error("writer_revoked", TRASHED_MESSAGE);
+        reply["reason"] = TRASHED_REASON.into();
+        return reply;
+    }
     let code = error_code(message);
     let text = match code {
         "writer_revoked" | "credential_expired" | "authentication_failed" => {
@@ -433,6 +453,7 @@ async fn pair(
             }
             secure_response(Json(json!({"protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease})).into_response())
         }
+        Ok(Err(message)) if message.contains(TRASHED_REASON)=>secure_response((StatusCode::CONFLICT,Json(json!({"code":"writer_revoked","reason":TRASHED_REASON,"message":"这份手稿已在电脑上移到回收站，无法配对。"}))).into_response()),
         Ok(Err(message))=>secure_response((StatusCode::CONFLICT,Json(json!({"code":error_code(&message),"message":"配对无效、已使用或书写状态已变化，请在电脑重新配对。"}))).into_response()),
         Err(_)=>StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
@@ -482,7 +503,33 @@ enum ClientMessage {
         request_id: String,
         expected_head: u64,
     },
+    /// Tablet rename (N1). Old pads never send it; the reply is either
+    /// `rename_receipt` or an `operation_conflict` with a title code.
+    RenameRequest {
+        request_id: String,
+        title: String,
+        expected_title_revision: u64,
+    },
     Ping,
+}
+/// Remote rename outcome mapped to a wire reply.
+fn rename_reply(request_id: &str, result: Result<mathscape_store_sqlite::InkNoteReceipt, SqliteStoreError>) -> Value {
+    match result {
+        Ok(receipt) => json!({"type":"rename_receipt","request_id":request_id,"note":receipt.note,"replayed":receipt.replayed}),
+        Err(SqliteStoreError::InkTitleConflict { current_title, current_title_mode, current_revision, .. }) => json!({
+            "type":"operation_conflict","code":"title_conflict","request_id":request_id,
+            "current_title":current_title,"current_title_mode":current_title_mode,
+            "current_title_revision":current_revision,
+            "message":"标题已在电脑上修改，请选择保留哪一个。"
+        }),
+        Err(SqliteStoreError::InkTitleInvalid(message)) => json!({"type":"operation_conflict","code":"title_invalid","request_id":request_id,"message":message}),
+        Err(SqliteStoreError::InkRequestConflict(_)) => json!({"type":"operation_conflict","code":"rename_request_conflict","request_id":request_id,"message":"同一改名请求包含不同内容，已忽略。"}),
+        Err(error) => {
+            let mut reply = public_error(&error.to_string());
+            reply["request_id"] = request_id.into();
+            reply
+        }
+    }
 }
 async fn send(socket: &mut WebSocket, value: Value) -> bool {
     socket
@@ -535,6 +582,10 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
     .await;
     let (lease, document) = match context {
         Ok(Ok(value)) => value,
+        Ok(Err(message)) if message.contains(TRASHED_REASON) => {
+            send(&mut socket, public_error(&message)).await;
+            return;
+        }
         Ok(Err(message)) => {
             send(
                 &mut socket,
@@ -595,7 +646,7 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
         .await;
         return;
     }
-    let full = json!({"type":"session_context","protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease,"document":document.document,"head_seq":document.head_seq,"limits":{"operation_bytes":INK_LAN_OPERATION_BYTES,"document_bytes":INK_LAN_DOCUMENT_BYTES,"queue_bytes":INK_LAN_DOCUMENT_BYTES}});
+    let full = json!({"type":"session_context","protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease,"note":document.note,"document":document.document,"head_seq":document.head_seq,"limits":{"operation_bytes":INK_LAN_OPERATION_BYTES,"document_bytes":INK_LAN_DOCUMENT_BYTES,"queue_bytes":INK_LAN_DOCUMENT_BYTES}});
     if full.to_string().len() > INK_LAN_DOCUMENT_BYTES {
         send(
             &mut socket,
@@ -617,6 +668,14 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
     loop {
         tokio::select! {
             event=control.recv()=>{
+                if let Ok(Control::Trashed(doc))=&event {
+                    if *doc==lease.document_id {send(&mut socket,trashed_closed()).await;break;}
+                    continue;
+                }
+                if let Ok(Control::Note(note))=&event {
+                    if note.document_id==lease.document_id && !send(&mut socket,json!({"type":"note_metadata","note":note})).await {break;}
+                    continue;
+                }
                 let code=match event {Ok(Control::Stop(revoke))=>Some(if revoke{"writer_revoked"}else{"server_restart"}),Ok(Control::Revoke(doc)) if doc==lease.document_id=>Some("writer_revoked"),Ok(Control::Replace(old)) if old==instance=>Some("connection_replaced"),Err(broadcast::error::RecvError::Lagged(_))=>Some("reconnect_required"),_=>None};
                 if let Some(code)=code {send(&mut socket,json!({"type":"session_closed","code":code})).await;break;}
             }
@@ -646,8 +705,23 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
                             let service=state.service.clone();let credential=credential_hash.clone();let id=request_id.clone();
                             match tokio::task::spawn_blocking(move||{
                                 let reservation=store(&service)?.reserve_remote_ink_snapshot(&credential,&id,expected_head,now()).map_err(|e|e.to_string())?;
-                                service.create_ink_snapshot(CreateInkSnapshotRequest{request_id:id,document_id:reservation.document_id,expected_head})
+                                service.create_ink_snapshot(CreateInkSnapshotRequest{request_id:id,document_id:reservation.document_id,expected_head}).map_err(|e|e.message)
                             }).await {Ok(Ok(snapshot))=>Some(json!({"type":"snapshot_receipt","request_id":request_id,"snapshot_id":snapshot.snapshot_id,"through_seq":snapshot.through_seq})),Ok(Err(message))=>{let mut reply=public_error(&message);reply["request_id"]=request_id.into();Some(reply)},Err(_)=>Some(error("service_unavailable","快照服务暂时不可用。"))}
+                        }
+                        ClientMessage::RenameRequest{request_id,title,expected_title_revision}=>{
+                            let service=state.service.clone();let credential=credential_hash.clone();let id=request_id.clone();
+                            let outcome=tokio::task::spawn_blocking(move||{
+                                let mut database=SqliteArtifactStore::open(&service.workspace_root().join("mathscape.sqlite3"))?;
+                                database.rename_remote_ink_note(&credential,&id,&title,expected_title_revision,now())
+                            }).await;
+                            match outcome {
+                                Ok(result)=>{
+                                    // A replay carries the note as it was then; never re-broadcast it.
+                                    if let Ok(receipt)=&result && !receipt.replayed {note_changed(&state.live,&receipt.note);}
+                                    Some(rename_reply(&request_id,result))
+                                }
+                                Err(_)=>Some(error("service_unavailable","电脑暂时无法改名，请稍后重试。")),
+                            }
                         }
                         ClientMessage::Ping=>Some(json!({"type":"pong"})),
                         ClientMessage::Hello{..}=>Some(error("invalid_message","连接已经认证。")),
@@ -659,6 +733,15 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
     }
     release(&state, &credential_hash, &instance);
     let _ = socket.send(Message::Close(None)).await;
+}
+/// Keeps the setup hand-off title current and pushes the note to tablets.
+fn note_changed(live: &Live, note: &InkNoteState) {
+    if let Some(setup) = live.setup.lock().unwrap().as_mut()
+        && setup.document_id.as_deref() == Some(note.document_id.as_str())
+    {
+        setup.title = Some(note.title.clone());
+    }
+    let _ = live.control.send(Control::Note(note.clone()));
 }
 fn release(state: &HttpState, credential: &str, instance: &str) {
     let mut slots = state.live.slots.lock().unwrap();
@@ -964,16 +1047,14 @@ impl DesktopService {
         let title = match &document {
             Some(id) => {
                 let database = store(self)?;
-                let view = database
-                    .ink_writer_view(id, now())
-                    .map_err(|_| "手稿不存在或已被移除。".to_string())?;
-                Some(
-                    database
-                        .ink_mirror_delta(id, view.head_seq, now())
-                        .map_err(|e| e.to_string())?
-                        .metadata
-                        .title,
-                )
+                let note = database
+                    .ink_note(id)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| "手稿不存在或已被移除。".to_string())?;
+                if note.lifecycle == InkLifecycle::Trashed {
+                    return Err("这份手稿在回收站中，恢复后才能连接平板。".into());
+                }
+                Some(note.title)
             }
             None => None,
         };
@@ -1162,6 +1243,40 @@ impl DesktopService {
 }
 
 impl DesktopService {
+    /// Called after a desktop rename so tablets and the setup page follow it.
+    pub(crate) fn ink_note_renamed(&self, note: &InkNoteState) {
+        note_changed(&self.ink_lan.live, note);
+    }
+    /// Called after documents move to the trash: closes their tablet
+    /// connections, drops live previews and ends a setup bound to them.
+    pub(crate) async fn ink_notes_trashed(&self, documents: &[String]) {
+        let live = &self.ink_lan.live;
+        for document in documents {
+            let _ = live.control.send(Control::Trashed(document.clone()));
+            live.previews.lock().unwrap().remove(document);
+            live.reports.lock().unwrap().remove(document);
+        }
+        let bound = live
+            .setup
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|setup| setup.document_id.clone())
+            .is_some_and(|bound| documents.contains(&bound));
+        if bound {
+            self.cancel_ink_setup().await;
+        }
+    }
+    /// Whether a tablet connection is currently open for the document.
+    pub(crate) fn ink_note_connected(&self, document: &str) -> bool {
+        self.ink_lan
+            .live
+            .slots
+            .lock()
+            .unwrap()
+            .values()
+            .any(|slot| slot.document_id == document)
+    }
     pub fn import_ink_recovery(
         &self,
         document: mathscape_domain::InkLabDocument,

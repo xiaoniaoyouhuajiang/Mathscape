@@ -57,6 +57,8 @@ async fn main() {
                                     session_id: format!("browser-native-{id}"),
                                     writer_id: "desktop-local".into(),
                                     device: json!({"source":"test"}),
+                                    request_id: None,
+                                    title_mode: None,
                                 })
                                 .unwrap();
                             let pair = service
@@ -145,6 +147,38 @@ async fn main() {
                                 .clone()
                                 .into();
                         }
+                        "trash" | "restore" => {
+                            let note = service
+                                .ink_note(document_id.clone())
+                                .unwrap()
+                                .unwrap();
+                            let request = mathscape_store_sqlite::InkLifecycleRequest {
+                                request_id: format!("browser-lifecycle-{id}"),
+                                document_id: document_id.clone(),
+                                expected_lifecycle_revision: note.lifecycle_revision,
+                            };
+                            let receipt = if command["action"] == "trash" {
+                                service.trash_ink_note(request).await.unwrap()
+                            } else {
+                                service.restore_ink_note(request).unwrap()
+                            };
+                            ready["lifecycle_receipt"] = serde_json::to_value(receipt).unwrap();
+                        }
+                        "rename" => {
+                            let note = service
+                                .ink_note(document_id.clone())
+                                .unwrap()
+                                .unwrap();
+                            let receipt = service
+                                .rename_ink_note(mathscape_store_sqlite::InkRenameRequest {
+                                    request_id: format!("browser-rename-{id}"),
+                                    document_id: document_id.clone(),
+                                    title: command["title"].as_str().unwrap_or("").into(),
+                                    expected_title_revision: note.title_revision,
+                                })
+                                .unwrap();
+                            ready["rename_receipt"] = serde_json::to_value(receipt).unwrap();
+                        }
                         "status" => {}
                         "stop" => {
                             service.shutdown_ink_lan(false).await.unwrap();
@@ -161,6 +195,10 @@ async fn main() {
                                 .open_ink_document(document_id.clone())
                                 .unwrap()
                                 .unwrap(),
+                        )
+                        .unwrap();
+                        ready["note"] = serde_json::to_value(
+                            service.ink_note(document_id.clone()).unwrap(),
                         )
                         .unwrap();
                         ready["snapshots"] = serde_json::to_value(

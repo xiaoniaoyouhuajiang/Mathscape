@@ -50,8 +50,11 @@ fn ink_operations_survive_desktop_reopen_and_duplicate_submission() {
             session_id: "session-p1".into(),
             writer_id: "tablet-p1".into(),
             device: serde_json::json!({"browser":"Chrome","model":"Tab S8+"}),
+            request_id: None,
+            title_mode: None,
         })
-        .unwrap();
+        .unwrap()
+        .session;
     let request = AppendInkOperationRequest {
         request_id: "request-p1".into(),
         document_id: document.document_id.clone(),
@@ -94,8 +97,11 @@ fn ink_snapshot_keeps_a_fixed_operation_prefix_after_later_editing() {
             session_id: "session-p2".into(),
             writer_id: "desktop-local".into(),
             device: serde_json::json!({"source":"desktop"}),
+            request_id: None,
+            title_mode: None,
         })
-        .unwrap();
+        .unwrap()
+        .session;
     let first_request = AppendInkOperationRequest {
         request_id: "request-p2-1".into(),
         document_id: document.document_id.clone(),
@@ -131,6 +137,8 @@ fn ink_snapshot_keeps_a_fixed_operation_prefix_after_later_editing() {
             session_id: "session-p2-other".into(),
             writer_id: "desktop-local".into(),
             device: serde_json::json!({"source":"desktop"}),
+            request_id: None,
+            title_mode: None,
         })
         .unwrap();
     let catalog = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();

@@ -4,7 +4,9 @@ use mathscape_domain::{
     INK_LAN_PROTOCOL_VERSION, InkLabDocument, InkLabOperation, InkLanOperation,
 };
 use mathscape_llm::MemoryCredentialResolver;
-use mathscape_store_sqlite::{InkPairingOffer, SqliteArtifactStore};
+use mathscape_store_sqlite::{
+    InkLifecycleRequest, InkPairingOffer, InkRenameRequest, SqliteArtifactStore,
+};
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -58,6 +60,8 @@ impl Fixture {
                 session_id: "native-session".into(),
                 writer_id: "desktop-local".into(),
                 device: json!({"source":"desktop"}),
+                request_id: None,
+                title_mode: None,
             })
             .unwrap();
         let status = service.start_ink_lan(Some(0)).await.unwrap();
@@ -346,6 +350,8 @@ async fn pairing_is_single_use_origin_checked_and_scoped_to_one_document() {
             session_id: "other-local".into(),
             writer_id: "desktop-local".into(),
             device: json!({}),
+            request_id: None,
+            title_mode: None,
         })
         .unwrap();
     let request = InkLanOperation {
@@ -889,5 +895,217 @@ async fn ending_setup_before_the_tablet_claims_returns_writing_to_the_desktop() 
     f.service.cancel_ink_setup().await;
     assert!(!f.service.ink_lan_mirror(&document, 0).unwrap().delta.writer.pairing_pending);
     assert_eq!(f.claim(pairing.as_str().unwrap(), &"8".repeat(64)).await.status(), 409);
+    f.cleanup().await;
+}
+
+async fn send_json(socket: &mut Socket, value: Value) {
+    socket
+        .send(Message::Text(value.to_string().into()))
+        .await
+        .unwrap();
+}
+
+fn lifecycle(document: &str, request: &str, expected: u64) -> InkLifecycleRequest {
+    InkLifecycleRequest {
+        request_id: request.into(),
+        document_id: document.into(),
+        expected_lifecycle_revision: expected,
+    }
+}
+
+#[tokio::test]
+async fn trashing_closes_the_tablet_with_an_old_pad_compatible_code_and_restore_needs_repairing() {
+    let f = Fixture::new("trash").await;
+    let document = f.document.document_id.clone();
+    let lease = f.pair().await;
+    let mut socket = f.socket("client-trash").await;
+    let context = next(&mut socket).await;
+    assert_eq!(context["type"], "session_context");
+    assert_eq!(context["note"]["lifecycle"], "active");
+    assert_eq!(context["note"]["title_revision"], 0);
+    let impact = f.service.ink_trash_impact(document.clone()).unwrap();
+    assert!(impact.connected);
+    assert!(impact.impact.remote_session);
+    assert_eq!(impact.impact.device_credentials, 1);
+
+    let receipt = f
+        .service
+        .trash_ink_note(lifecycle(&document, "trash-1", 0))
+        .await
+        .unwrap();
+    assert_eq!(receipt.revoked_devices, 1);
+    let closed = next(&mut socket).await;
+    // Old pads fence on `writer_revoked`; new pads also read the reason.
+    assert_eq!(closed["type"], "session_closed");
+    assert_eq!(closed["code"], "writer_revoked");
+    assert_eq!(closed["reason"], "document_trashed");
+
+    // Reconnecting (old or new pad) gets the same fencing code.
+    let mut again = f.socket("client-trash").await;
+    let refused = next(&mut again).await;
+    assert_eq!(refused["type"], "operation_conflict");
+    assert_eq!(refused["code"], "writer_revoked");
+    assert_eq!(refused["reason"], "document_trashed");
+    let Err(error) = f.service.create_ink_pairing(document.clone(), 0).await else {
+        panic!("pairing a trashed document must fail");
+    };
+    assert!(error.contains("document_trashed"), "{error}");
+    assert!(
+        f.service
+            .start_ink_setup_for(Some(document.clone()))
+            .await
+            .is_err()
+    );
+    // Snapshots and reading stay available while trashed.
+    assert!(f.service.list_ink_snapshots(document.clone()).is_ok());
+    assert!(
+        f.service
+            .open_ink_document(document.clone())
+            .unwrap()
+            .is_some()
+    );
+    let structured = f
+        .service
+        .start_ink_session(mathscape_desktop::StartInkSessionRequest {
+            document_id: document.clone(),
+            session_id: "native-session".into(),
+            writer_id: "desktop-local".into(),
+            device: json!({}),
+        })
+        .unwrap_err();
+    assert_eq!(structured.code, "document_trashed");
+
+    let restored = f
+        .service
+        .restore_ink_note(lifecycle(&document, "restore-1", 1))
+        .unwrap();
+    assert!(restored.requires_repairing);
+    // The revoked credential stays dead after restore.
+    let mut stale = f.socket("client-trash").await;
+    let refused = next(&mut stale).await;
+    assert_eq!(refused["code"], "writer_revoked");
+    assert!(refused.get("reason").is_none());
+    // The old desktop session cannot be resurrected either (D13).
+    let resumed = f
+        .service
+        .start_ink_session(mathscape_desktop::StartInkSessionRequest {
+            document_id: document.clone(),
+            session_id: "native-session".into(),
+            writer_id: "desktop-local".into(),
+            device: json!({}),
+        })
+        .unwrap_err();
+    assert_eq!(resumed.code, "writer_epoch_conflict");
+    assert!(lease["writer_epoch"].as_u64().unwrap() >= 1);
+    // A fresh pairing works again.
+    let view = f.service.ink_lan_mirror(&document, 0).unwrap();
+    let pairing = f
+        .service
+        .create_ink_pairing(document.clone(), view.delta.head_seq)
+        .await
+        .unwrap();
+    assert_eq!(f.claim(&pairing.urls[0], &"3".repeat(64)).await.status(), 200);
+    let mut fresh = f.socket_as("client-new", &"3".repeat(64)).await;
+    assert_eq!(next(&mut fresh).await["type"], "session_context");
+    f.cleanup().await;
+}
+
+#[tokio::test]
+async fn tablet_and_desktop_renames_use_revisions_and_reach_each_other() {
+    let f = Fixture::new("rename").await;
+    let document = f.document.document_id.clone();
+    let setup = f
+        .service
+        .start_ink_setup_for(Some(document.clone()))
+        .await
+        .unwrap();
+    f.pair().await;
+    let mut socket = f.socket("client-rename").await;
+    assert_eq!(next(&mut socket).await["type"], "session_context");
+
+    send_json(
+        &mut socket,
+        json!({"type":"rename_request","request_id":"pad-rename-1","title":"  平板命名  ","expected_title_revision":0}),
+    )
+    .await;
+    let receipt = next(&mut socket).await;
+    assert_eq!(receipt["type"], "rename_receipt");
+    assert_eq!(receipt["note"]["title"], "平板命名");
+    assert_eq!(receipt["note"]["title_revision"], 1);
+    // The tablet also receives the broadcast of its own rename.
+    let pushed = next(&mut socket).await;
+    assert_eq!(pushed["type"], "note_metadata", "{pushed}");
+    let mirror = f.service.ink_lan_mirror(&document, 0).unwrap();
+    assert_eq!(mirror.delta.note.title, "平板命名");
+
+    // Desktop rename reaches the tablet.
+    let desktop = f
+        .service
+        .rename_ink_note(InkRenameRequest {
+            request_id: "desk-rename-1".into(),
+            document_id: document.clone(),
+            title: "电脑命名".into(),
+            expected_title_revision: 1,
+        })
+        .unwrap();
+    assert_eq!(desktop.note.title_revision, 2);
+    let pushed = next(&mut socket).await;
+    assert_eq!(pushed["type"], "note_metadata");
+    assert_eq!(pushed["note"]["title"], "电脑命名", "{pushed}");
+
+    // A stale tablet rename reports the current title instead of overwriting.
+    send_json(
+        &mut socket,
+        json!({"type":"rename_request","request_id":"pad-rename-2","title":"离线命名","expected_title_revision":1}),
+    )
+    .await;
+    let conflict = next(&mut socket).await;
+    assert_eq!(conflict["type"], "operation_conflict");
+    assert_eq!(conflict["code"], "title_conflict");
+    assert_eq!(conflict["request_id"], "pad-rename-2");
+    assert_eq!(conflict["current_title"], "电脑命名");
+    assert_eq!(conflict["current_title_revision"], 2);
+    send_json(
+        &mut socket,
+        json!({"type":"rename_request","request_id":"pad-rename-3","title":"x".repeat(101),"expected_title_revision":2}),
+    )
+    .await;
+    assert_eq!(next(&mut socket).await["code"], "title_invalid");
+    // Replay of an accepted rename is idempotent.
+    send_json(
+        &mut socket,
+        json!({"type":"rename_request","request_id":"pad-rename-1","title":"  平板命名  ","expected_title_revision":0}),
+    )
+    .await;
+    let replay = next(&mut socket).await;
+    assert_eq!(replay["type"], "rename_receipt");
+    assert_eq!(replay["replayed"], true);
+
+    // The setup hand-off page follows the rename.
+    let url = setup.urls.iter().find(|url| url.contains("127.0.0.1")).unwrap();
+    let fragment = url.split('#').nth(1).unwrap();
+    let token = fragment.split("setup=").nth(1).unwrap().split('&').next().unwrap().to_owned();
+    let grant = fragment.split("grant=").nth(1).unwrap().to_owned();
+    f.complete_setup(&token).await;
+    let body = json!({"token":token,"grant":grant,"credentials":["2".repeat(64)]});
+    let handoff = f.handoff(&body).await.json::<Value>().await.unwrap();
+    assert_eq!(handoff["title"], "电脑命名");
+
+    // Trashing the bound document ends the setup.
+    f.service
+        .trash_ink_note(lifecycle(&document, "trash-rename", 0))
+        .await
+        .unwrap();
+    assert!(!f.service.ink_setup_status().active);
+    let rename_trashed = f
+        .service
+        .rename_ink_note(InkRenameRequest {
+            request_id: "desk-rename-2".into(),
+            document_id: document.clone(),
+            title: "回收站里".into(),
+            expected_title_revision: 2,
+        })
+        .unwrap_err();
+    assert_eq!(rename_trashed.code, "document_trashed");
     f.cleanup().await;
 }
