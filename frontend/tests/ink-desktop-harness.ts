@@ -17,7 +17,14 @@ const evidence = new Map<string, InkEvidenceReceipt>();
 const evidenceRequests: InkEvidenceRequest[] = [];
 const operationReceipts = new Map<string, unknown>();
 const calls: Array<{ command: string; documentId?: string }> = [];
-const behavior = { delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, loseEvidenceAck: false, remoteDocumentId:"", pairingPending:false,epoch:1,setupStep:0,remoteConnected:true,remotePending:0,setupDocumentId:"" as string|null,handoff:"",transferConfirmation:false,pairingArgs:[] as unknown[],strictPairing:false,autoRequest:true };
+type NoteRow = { title_mode: "auto" | "manual"; title_revision: number; lifecycle: "active" | "trashed"; lifecycle_revision: number; trashed_at: number | null; last_used_at: number };
+const notes = new Map<string, NoteRow>([[a.document_id, { title_mode: "manual", title_revision: 0, lifecycle: "active", lifecycle_revision: 0, trashed_at: null, last_used_at: 2 }], [b.document_id, { title_mode: "manual", title_revision: 0, lifecycle: "active", lifecycle_revision: 0, trashed_at: null, last_used_at: 1 }]]);
+const noteRequests = new Map<string, unknown>();
+const noteCalls: Array<{ command: string; request: Record<string, unknown> }> = [];
+const noteState = (id: string) => { const document = documents.get(id)!; return { document_id: id, title: document.title, created_at: document.created_at, ...notes.get(id)! }; };
+const summary = (document: InkDocument) => ({ document_id: document.document_id, title: document.title, created_at: document.created_at, head_seq: document.operations.length, session_count: 1, active_session_id: sessions.get(document.document_id), updated_at: document.created_at, page_count: document.pages.length, snapshot_count: snapshots.get(document.document_id)?.length ?? 0, remote_active: behavior.remoteDocumentId === document.document_id, ...notes.get(document.document_id)! });
+const structuredError = (code: string, message: string, details?: Record<string, unknown>) => ({ code, message, details });
+const behavior = { renameConflictTitle: "", delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, loseEvidenceAck: false, remoteDocumentId:"", pairingPending:false,epoch:1,setupStep:0,remoteConnected:true,remotePending:0,setupDocumentId:"" as string|null,handoff:"",transferConfirmation:false,pairingArgs:[] as unknown[],strictPairing:false,autoRequest:true,revokedDocument:"",failCreate:false };
 
 mockIPC(async (command, payload) => {
   const args = payload as Record<string, unknown>;
@@ -37,34 +44,84 @@ mockIPC(async (command, payload) => {
   if(command==="cancel_ink_pairing"){behavior.pairingPending=false;return;}
   if(command==="reclaim_ink_writer"){behavior.remoteDocumentId="";behavior.pairingPending=false;behavior.epoch++;return{document_id:args.documentId,writer_epoch:behavior.epoch,writer_id:"desktop-local",session_id:sessions.get(args.documentId as string)};}
   if (command === "list_ink_documents") {
-    return [...documents.values()].map(document => ({
-      document_id: document.document_id,
-      title: document.title,
-      head_seq: document.operations.length,
-      active_session_id: sessions.get(document.document_id),
-      updated_at: document.created_at,
-    }));
+    return [...documents.values()].filter(document => notes.get(document.document_id)!.lifecycle === "active").sort((x, y) => notes.get(y.document_id)!.last_used_at - notes.get(x.document_id)!.last_used_at).map(summary);
+  }
+  if (command === "list_trashed_ink_documents") {
+    return [...documents.values()].filter(document => notes.get(document.document_id)!.lifecycle === "trashed").map(summary);
+  }
+  if (command === "get_ink_note") return documents.has(args.documentId as string) ? noteState(args.documentId as string) : null;
+  if (command === "get_ink_trash_impact") {
+    const id = args.documentId as string, document = documents.get(id)!;
+    return { note: noteState(id), head_seq: document.operations.length, page_count: document.pages.length, snapshot_count: snapshots.get(id)!.length, evidence_count: [...evidence.values()].filter(receipt => snapshots.get(id)!.some(snapshot => snapshot.snapshot_id === receipt.snapshot_id)).length, remote_session: behavior.remoteDocumentId === id, device_credentials: behavior.remoteDocumentId === id ? 1 : 0, pairing_pending: false, blank: false, connected: behavior.remoteDocumentId === id && behavior.remoteConnected };
+  }
+  if (["rename_ink_note", "trash_ink_note", "restore_ink_note", "clean_blank_ink_notes"].includes(command)) {
+    const request = args.request as Record<string, unknown> & { request_id: string; document_id: string };
+    noteCalls.push({ command, request: structuredClone(request) });
+    if (noteRequests.has(request.request_id)) return { ...(noteRequests.get(request.request_id) as object), replayed: true };
+    let receipt: unknown;
+    if (command === "clean_blank_ink_notes") {
+      const trashed = [], skipped = [];
+      for (const id of request.document_ids as string[]) {
+        const row = notes.get(id), document = documents.get(id);
+        if (!row || !document) { skipped.push({ document_id: id, reason: "not_found" }); continue; }
+        if (document.operations.length || row.title_mode === "manual" || row.lifecycle === "trashed") { skipped.push({ document_id: id, reason: "has_ink" }); continue; }
+        Object.assign(row, { lifecycle: "trashed", lifecycle_revision: row.lifecycle_revision + 1, trashed_at: Date.now() });
+        trashed.push(noteState(id));
+      }
+      receipt = { request_id: request.request_id, trashed, skipped, replayed: false };
+    } else {
+      const row = notes.get(request.document_id)!, document = documents.get(request.document_id)!;
+      let requiresRepairing = false;
+      if (command === "rename_ink_note") {
+        if (row.lifecycle === "trashed") throw structuredError("document_trashed", "手稿已在回收站中，恢复后才能继续编辑。");
+        if (behavior.renameConflictTitle) { document.title = behavior.renameConflictTitle; row.title_mode = "manual"; row.title_revision++; behavior.renameConflictTitle = ""; }
+        if (row.title_revision !== request.expected_title_revision) throw structuredError("title_conflict", "标题已在别处修改，请选择保留哪一个。", { document_id: request.document_id, current_title: document.title, current_title_mode: row.title_mode, current_title_revision: row.title_revision });
+        const title = String(request.title).trim();
+        document.title = title || "手稿 · 自动"; row.title_mode = title ? "manual" : "auto"; row.title_revision++;
+      } else {
+        const target = command === "trash_ink_note" ? "trashed" : "active";
+        if (row.lifecycle !== target) {
+          if (row.lifecycle_revision !== request.expected_lifecycle_revision) throw structuredError("lifecycle_conflict", "手稿状态已在别处变化，请刷新后重试。");
+          Object.assign(row, { lifecycle: target, lifecycle_revision: row.lifecycle_revision + 1, trashed_at: target === "trashed" ? Date.now() : null });
+          if (target === "trashed" && behavior.remoteDocumentId === request.document_id) { behavior.remoteDocumentId = ""; behavior.epoch++; behavior.revokedDocument = request.document_id; }
+        }
+        requiresRepairing = target === "active" && behavior.revokedDocument === request.document_id;
+      }
+      receipt = { request_id: request.request_id, kind: command.split("_")[0], note: noteState(request.document_id), replayed: false, closed_sessions: 0, revoked_devices: 0, requires_repairing: requiresRepairing };
+    }
+    noteRequests.set(request.request_id, receipt);
+    return receipt;
   }
   if (command === "create_ink_document") {
-    const request = args.request as { document: InkDocument; session_id: string; writer_id: string };
+    const request = args.request as { document: InkDocument; session_id: string; writer_id: string; request_id?: string; title_mode?: "auto" | "manual" };
+    noteCalls.push({ command, request: structuredClone(request) as unknown as Record<string, unknown> });
+    if (behavior.failCreate) { behavior.failCreate = false; throw structuredError("storage_failed", "injected create failure"); }
+    if (request.request_id && noteRequests.has(request.request_id)) return { ...(noteRequests.get(request.request_id) as object), replayed: true };
     const document = structuredClone(request.document);
     documents.set(document.document_id,document); sessions.set(document.document_id,request.session_id); snapshots.set(document.document_id,[]);
-    return { ...request, document_id: document.document_id, writer_epoch:1,status:"active" };
+    notes.set(document.document_id, { title_mode: request.title_mode ?? "manual", title_revision: 0, lifecycle: "active", lifecycle_revision: 0, trashed_at: null, last_used_at: Date.now() });
+    const receipt = { ...request, document_id: document.document_id, writer_epoch:1,status:"active", note: noteState(document.document_id), replayed: false };
+    if (request.request_id) noteRequests.set(request.request_id, receipt);
+    return receipt;
   }
   if (command === "append_ink_operation") {
     const request = args.request as { request_id:string;document_id:string;expected_head:number;metadata:InkDocumentMetadata;operation:InkOperation };
     if (behavior.appendDelay) await new Promise(resolve => setTimeout(resolve,behavior.appendDelay));
     if (behavior.failAppend) throw new Error("injected save failure");
+    if (notes.get(request.document_id)?.lifecycle === "trashed") throw structuredError("document_trashed", "手稿已在回收站中，恢复后才能继续编辑。");
     if (operationReceipts.has(request.request_id)) return operationReceipts.get(request.request_id);
     const document = documents.get(request.document_id)!;
     if (document.operations.length !== request.expected_head) throw new Error("head conflict");
-    Object.assign(document,structuredClone(request.metadata)); document.operations.push(structuredClone(request.operation));
+    // Like the store, queued metadata never changes the title (H1).
+    const title = document.title;
+    Object.assign(document,structuredClone(request.metadata)); document.title = title; document.operations.push(structuredClone(request.operation));
+    notes.get(request.document_id)!.last_used_at = Date.now();
     const receipt = {request_id:request.request_id,document_id:request.document_id,command_id:request.operation.command_id,seq:request.operation.seq,durable:true};
     operationReceipts.set(request.request_id,receipt); return receipt;
   }
   if (command === "get_ink_document") {
     const document = documents.get(args.documentId as string);
-    return document ? { document: structuredClone(document), head_seq: document.operations.length, updated_at: document.created_at } : null;
+    return document ? { document: structuredClone(document), head_seq: document.operations.length, updated_at: document.created_at, note: noteState(document.document_id) } : null;
   }
   if (command === "start_ink_session") {
     const request = args.request as { document_id: string; session_id: string; writer_id: string };
@@ -153,7 +210,7 @@ document.querySelector<HTMLButtonElement>("#ink-map-open-evidence")!.onclick = (
   inspector.selectNodeById("span-render");
 };
 eventBus.on("open-ink-document", ({documentId}) => {reader.close();readerHost.hidden=true;mapHost.hidden=true;workspaceHost.hidden=false;void workspace.openDocumentId(documentId);});
-const harness = { workspace, documents: { a: a.document_id, b: b.document_id }, snapshots, calls, behavior, evidenceRequests, storedDocuments:documents };
+const harness = { notes, noteCalls, workspace, documents: { a: a.document_id, b: b.document_id }, snapshots, calls, behavior, evidenceRequests, storedDocuments:documents };
 declare global { interface Window { inkDesktopHarness: typeof harness } }
 window.inkDesktopHarness = harness;
 void workspace.open();

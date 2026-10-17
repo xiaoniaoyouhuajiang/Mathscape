@@ -74,6 +74,30 @@ export function inkId(): string {
   // getRandomValues is available on LAN HTTP, unlike randomUUID.
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("");
 }
+/** User titles are limited to 100 characters after trimming (D5). */
+export const INK_TITLE_MAX = 100;
+
+/** Local-time automatic title, matching the desktop store format (D3). The
+ * store materializes the authoritative value; this is only a placeholder. */
+export function autoInkTitle(createdAt: string, now = new Date()): string {
+  const unix = /^unix:(\d+)(?:\.(\d+))?$/.exec(createdAt);
+  const date = unix ? new Date(Number(unix[1]) * 1000) : new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return "数学手稿";
+  const time = String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
+  const day = `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+  return date.getFullYear() === now.getFullYear() ? `手稿 · ${day}` : `手稿 · ${date.getFullYear()}年${day}`;
+}
+
+/** Trimmed title, or `undefined` when empty (empty restores the auto title).
+ * Throws for control characters or more than {@link INK_TITLE_MAX} characters. */
+export function normalizeInkTitle(value: string): string | undefined {
+  const title = value.trim();
+  if (!title) return undefined;
+  if (/[\x00-\x1f\x7f]/.test(title)) throw new Error("标题不能包含控制字符。");
+  if ([...title].length > INK_TITLE_MAX) throw new Error(`标题最多 ${INK_TITLE_MAX} 个字符。`);
+  return title;
+}
+
 export function newDocument(title = "数学手稿"): InkDocument {
   const now = new Date().toISOString();
   return { version: INK_LAB_VERSION, document_id: inkId(), title, created_at: now,
