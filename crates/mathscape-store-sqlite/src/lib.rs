@@ -7,6 +7,7 @@ mod discovery;
 mod ink;
 mod ink_evidence;
 mod ink_lan;
+mod ink_link;
 mod ink_note;
 mod map_edit;
 mod markdown_patch;
@@ -40,6 +41,13 @@ pub use ink::{
 };
 pub use ink_evidence::InkEvidenceReceipt;
 pub use ink_lan::{InkLanSettings, InkMirrorDelta, InkPairingOffer, InkRemoteLease, InkWriterView};
+pub use ink_link::{
+    INK_LINK_LABEL_MAX_CHARS, InkContextCreateReceipt, InkContextCreateRequest, InkLinkOverlay,
+    InkLinkReceipt, InkLinkRequest, InkLinkRole, InkLinkTarget, InkLinkTargetStatus,
+    InkLinkedNote, InkMarkdownTarget, InkNoteLink, InkOverlayCount, InkOverlayLink,
+    InkSetPrimaryRequest, InkUnlinkRequest, format_link_title, markdown_excerpt,
+    markdown_short_label, normalize_markdown_text, source_object_short_label,
+};
 pub use ink_note::{
     INK_NOTE_TITLE_MAX_CHARS, InkCleanBlankReceipt, InkCleanBlankRequest, InkCleanSkip,
     InkCreateReceipt, InkLifecycle, InkLifecycleRequest, InkNoteReceipt, InkNoteState,
@@ -69,7 +77,7 @@ const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
     include_str!("../../../migrations/0010_discovery_run_recovery.sql");
 const INK_MIGRATION: &str = include_str!("../../../migrations/0013_ink_p1.sql");
 const INK_SNAPSHOT_MIGRATION: &str = include_str!("../../../migrations/0014_ink_snapshots_p2.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 17;
+const SUPPORTED_SCHEMA_VERSION: i64 = 18;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -154,6 +162,14 @@ pub enum SqliteStoreError {
     },
     #[error("ink title_invalid: {0}")]
     InkTitleInvalid(String),
+    /// The link target does not exist, is not linkable or no longer matches.
+    #[error("ink link_target_invalid: {0}")]
+    InkLinkTargetInvalid(String),
+    /// The source object or note has been retired or trashed.
+    #[error("ink link_target_retired: {0}")]
+    InkLinkTargetRetired(String),
+    #[error("ink link_not_found: {0}")]
+    InkLinkNotFound(String),
 }
 
 impl SqliteStoreError {
@@ -165,6 +181,9 @@ impl SqliteStoreError {
             Self::InkTitleConflict { .. } => "title_conflict",
             Self::InkLifecycleConflict { .. } => "lifecycle_conflict",
             Self::InkTitleInvalid(_) => "title_invalid",
+            Self::InkLinkTargetInvalid(_) => "link_target_invalid",
+            Self::InkLinkTargetRetired(_) => "link_target_retired",
+            Self::InkLinkNotFound(_) => "link_not_found",
             Self::InkRequestConflict(_) => "idempotency_conflict",
             Self::InkHeadConflict { .. } => "head_conflict",
             Self::InkSequenceConflict { .. } => "sequence_conflict",
@@ -571,7 +590,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=17 => {
+            6..=18 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -686,6 +705,20 @@ impl SqliteArtifactStore {
                 connection.pragma_update(None, "user_version", 17)?;
             }
         }
+        if version < 18 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version=18",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                ink_link::migrate_v18(&connection)?;
+            } else {
+                connection.pragma_update(None, "user_version", 18)?;
+            }
+        }
         validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -698,6 +731,7 @@ impl SqliteArtifactStore {
         ink_evidence::validate_schema(&connection)?;
         ink_lan::validate_schema(&connection)?;
         ink_note::validate_schema(&connection)?;
+        ink_link::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 

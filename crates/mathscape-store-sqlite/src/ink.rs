@@ -529,12 +529,12 @@ pub(crate) fn create_document(
 }
 
 #[derive(Serialize)]
-struct CreateFingerprint<'a> {
-    document: &'a InkLabDocument,
-    session_id: &'a str,
-    writer_id: &'a str,
-    device: &'a Value,
-    title_mode: InkTitleMode,
+pub(crate) struct CreateFingerprint<'a> {
+    pub(crate) document: &'a InkLabDocument,
+    pub(crate) session_id: &'a str,
+    pub(crate) writer_id: &'a str,
+    pub(crate) device: &'a Value,
+    pub(crate) title_mode: InkTitleMode,
 }
 
 /// Creates a document with explicit note metadata. With `title_mode = auto`
@@ -549,20 +549,10 @@ pub(crate) fn create_note(
     title_mode: InkTitleMode,
     request_id: Option<&str>,
 ) -> Result<InkCreateReceipt, SqliteStoreError> {
-    validate_identifier(document.document_id.as_str(), "document_id")?;
-    validate_identifier(session_id, "session_id")?;
-    validate_identifier(writer_id, "writer_id")?;
     if let Some(request_id) = request_id {
         validate_identifier(request_id, "request_id")?;
     }
-    document
-        .validate()
-        .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
-    if !document.operations.is_empty() {
-        return Err(SqliteStoreError::InkInvariant(
-            "a new P1 document must not already contain operations".to_owned(),
-        ));
-    }
+    validate_new_note(document, session_id, writer_id)?;
     let fingerprint = ink_note::create_fingerprint(&CreateFingerprint {
         document,
         session_id,
@@ -577,9 +567,6 @@ pub(crate) fn create_note(
         },
         InkTitleMode::Manual => (document.title.clone(), InkTitleMode::Manual),
     };
-    let pages = serde_json::to_string(&document.pages)?;
-    let segments = serde_json::to_string(&document.capture_segments)?;
-    let device_json = serde_json::to_string(device)?;
     let now = now_ms();
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -589,6 +576,62 @@ pub(crate) fn create_note(
         transaction.commit()?;
         return Ok(receipt);
     }
+    let (session, note) = insert_note_in(
+        &transaction,
+        document,
+        session_id,
+        writer_id,
+        device,
+        &title,
+        title_mode,
+        now,
+    )?;
+    let receipt = InkCreateReceipt {
+        session,
+        note,
+        request_id: request_id.map(str::to_owned),
+        replayed: false,
+    };
+    if request_id.is_some() {
+        ink_note::record_create(&transaction, &receipt, &fingerprint, now)?;
+    }
+    transaction.commit()?;
+    Ok(receipt)
+}
+
+/// Shape checks shared by every way of creating a note.
+pub(crate) fn validate_new_note(
+    document: &InkLabDocument,
+    session_id: &str,
+    writer_id: &str,
+) -> Result<(), SqliteStoreError> {
+    validate_identifier(document.document_id.as_str(), "document_id")?;
+    validate_identifier(session_id, "session_id")?;
+    validate_identifier(writer_id, "writer_id")?;
+    document
+        .validate()
+        .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
+    if !document.operations.is_empty() {
+        return Err(SqliteStoreError::InkInvariant(
+            "a new P1 document must not already contain operations".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Inserts the document, its first local session and writer state inside an
+/// open transaction. Every note column is written explicitly (D1).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn insert_note_in(
+    transaction: &Transaction<'_>,
+    document: &InkLabDocument,
+    session_id: &str,
+    writer_id: &str,
+    device: &Value,
+    title: &str,
+    title_mode: InkTitleMode,
+    now: i64,
+) -> Result<(StoredInkSession, ink_note::InkNoteState), SqliteStoreError> {
     if transaction
         .query_row(
             "SELECT 1 FROM ink_documents WHERE document_id = ?1",
@@ -602,8 +645,10 @@ pub(crate) fn create_note(
             "document_id is already registered".to_owned(),
         ));
     }
+    let pages = serde_json::to_string(&document.pages)?;
+    let segments = serde_json::to_string(&document.capture_segments)?;
+    let device_json = serde_json::to_string(device)?;
     let created = document.created_at.clone();
-    // Every note column is written explicitly (D1); defaults are never relied on.
     transaction.execute(
         "INSERT INTO ink_documents
          (document_id, version, title, created_at, exported_at, pages_json,
@@ -641,19 +686,11 @@ pub(crate) fn create_note(
          VALUES (?1, 1, ?2, ?3, 0, ?4)",
         params![document.document_id, session_id, writer_id, created],
     )?;
-    let receipt = InkCreateReceipt {
-        session: read_session(&transaction, session_id)?
-            .ok_or_else(|| SqliteStoreError::InkInvariant("new session disappeared".to_owned()))?,
-        note: ink_note::read_note(&transaction, &document.document_id)?
-            .ok_or_else(|| SqliteStoreError::InkInvariant("new document disappeared".to_owned()))?,
-        request_id: request_id.map(str::to_owned),
-        replayed: false,
-    };
-    if request_id.is_some() {
-        ink_note::record_create(&transaction, &receipt, &fingerprint, now)?;
-    }
-    transaction.commit()?;
-    Ok(receipt)
+    let session = read_session(transaction, session_id)?
+        .ok_or_else(|| SqliteStoreError::InkInvariant("new session disappeared".to_owned()))?;
+    let note = ink_note::read_note(transaction, &document.document_id)?
+        .ok_or_else(|| SqliteStoreError::InkInvariant("new document disappeared".to_owned()))?;
+    Ok((session, note))
 }
 
 fn title_mode_text(mode: InkTitleMode) -> &'static str {
