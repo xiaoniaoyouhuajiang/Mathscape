@@ -382,6 +382,17 @@ impl DesktopService {
         Ok(document)
     }
 
+    /// Markdown for NoteLink resolution (§14.3): the conversion origin is not
+    /// part of the target, so any valid context of the artifact is used.
+    pub(crate) fn markdown_for_link(&self, artifact_id: &str) -> Result<AnchoredMarkdown, String> {
+        let info = self.content_info(artifact_id)?;
+        let conversion = info
+            .contexts
+            .first()
+            .map(|context| context.conversion_id.clone());
+        self.markdown_document(artifact_id, conversion.as_deref())
+    }
+
     pub fn resolve_markdown_selection(
         &self,
         request: DiscoverySelectionRequest,

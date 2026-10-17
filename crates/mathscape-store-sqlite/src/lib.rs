@@ -43,10 +43,10 @@ pub use ink_evidence::InkEvidenceReceipt;
 pub use ink_lan::{InkLanSettings, InkMirrorDelta, InkPairingOffer, InkRemoteLease, InkWriterView};
 pub use ink_link::{
     INK_LINK_LABEL_MAX_CHARS, InkContextCreateReceipt, InkContextCreateRequest, InkLinkOverlay,
-    InkLinkReceipt, InkLinkRequest, InkLinkRole, InkLinkTarget, InkLinkTargetStatus,
-    InkLinkedNote, InkMarkdownTarget, InkNoteLink, InkOverlayCount, InkOverlayLink,
-    InkSetPrimaryRequest, InkUnlinkRequest, format_link_title, markdown_excerpt,
-    markdown_short_label, normalize_markdown_text, source_object_short_label,
+    InkLinkReceipt, InkLinkRequest, InkLinkRole, InkLinkTarget, InkLinkTargetStatus, InkLinkedNote,
+    InkMarkdownTarget, InkNoteLink, InkOverlayCount, InkOverlayLink, InkSetPrimaryRequest,
+    InkUnlinkRequest, format_link_title, markdown_excerpt, markdown_short_label,
+    normalize_markdown_text, source_object_short_label,
 };
 pub use ink_note::{
     INK_NOTE_TITLE_MAX_CHARS, InkCleanBlankReceipt, InkCleanBlankRequest, InkCleanSkip,
