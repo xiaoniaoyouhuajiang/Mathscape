@@ -10,6 +10,24 @@ export interface InkOutboxItem {
   queued_at: string;
   metadata: InkDocumentMetadata;
   operation: InkOperation;
+  /** Set when the server refused the document for good (for example it was
+   * moved to the trash). The item stays stored for recovery export but is no
+   * longer submitted, so it cannot block other documents. */
+  quarantined?: InkOutboxQuarantine;
+}
+
+export interface InkOutboxQuarantine {
+  code: string;
+  message: string;
+  at: string;
+}
+
+/** Server codes after which a document's queued writes can never succeed. */
+export const TERMINAL_INK_CODES = new Set(["document_trashed", "writer_epoch_conflict", "idempotency_conflict", "document_not_found"]);
+
+function errorCodeOf(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : undefined;
 }
 
 export interface InkOperationAck {
@@ -39,12 +57,20 @@ export class InkOutboxConflict extends Error {
   }
 }
 
+export interface InkOutboxDocumentFailure {
+  document_id: string;
+  error: unknown;
+  /** The document's items were quarantined after a terminal server code. */
+  quarantined: boolean;
+}
+
 export class InkOutboxFlushError extends Error {
   constructor(
     message: string,
     readonly sent: number,
     readonly remaining: number,
     readonly cause?: unknown,
+    readonly failures: InkOutboxDocumentFailure[] = [],
   ) {
     super(message);
     this.name = "InkOutboxFlushError";
@@ -162,14 +188,23 @@ export class InkOutbox {
   async enqueue(item: InkOutboxItem): Promise<void> {
     const existing = await this.store.get(item.request_id);
     if (existing) {
-      if (JSON.stringify(existing) !== JSON.stringify(item)) throw new InkOutboxConflict(item.request_id);
+      // A quarantine marker is local bookkeeping, not part of the request.
+      const { quarantined: _marker, ...stored } = existing;
+      const { quarantined: _ignored, ...incoming } = item;
+      if (JSON.stringify(stored) !== JSON.stringify(incoming)) throw new InkOutboxConflict(item.request_id);
       return;
     }
     await this.store.put(item);
   }
 
-  async pending(): Promise<InkOutboxItem[]> {
-    return this.ordered(await this.store.list());
+  /** Items that will still be submitted, in client order. */
+  async pending(documentId?: string): Promise<InkOutboxItem[]> {
+    return this.ordered((await this.store.list()).filter(item => !item.quarantined && (!documentId || item.document_id === documentId)));
+  }
+
+  /** Items kept only for recovery after a terminal server refusal. */
+  async quarantined(documentId?: string): Promise<InkOutboxItem[]> {
+    return this.ordered((await this.store.list()).filter(item => !!item.quarantined && (!documentId || item.document_id === documentId)));
   }
 
   async flush(transport: InkOperationTransport): Promise<InkOutboxFlushResult> {
@@ -183,26 +218,50 @@ export class InkOutbox {
     }
   }
 
+  /** Submits each document's queue in order. A failure only stops the
+   * document it belongs to; other documents keep syncing. */
   private async flushSerial(transport: InkOperationTransport): Promise<InkOutboxFlushResult> {
     const acknowledgements: InkOperationAck[] = [];
+    const failures: InkOutboxDocumentFailure[] = [];
     let sent = 0;
-    const pending = this.ordered(await this.store.list());
-    for (const item of pending) {
-      try {
-        const acknowledgement = await transport.submit(item);
-        if (!acknowledgement.durable || acknowledgement.request_id !== item.request_id
-            || acknowledgement.document_id !== item.document_id || acknowledgement.command_id !== item.operation.command_id || acknowledgement.seq !== item.operation.seq) {
-          throw new Error("server response is not a durable ACK for this request");
+    const groups = new Map<string, InkOutboxItem[]>();
+    for (const item of await this.pending()) {
+      const group = groups.get(item.document_id);
+      if (group) group.push(item);
+      else groups.set(item.document_id, [item]);
+    }
+    for (const [documentId, items] of groups) {
+      for (const item of items) {
+        try {
+          const acknowledgement = await transport.submit(item);
+          if (!acknowledgement.durable || acknowledgement.request_id !== item.request_id
+              || acknowledgement.document_id !== item.document_id || acknowledgement.command_id !== item.operation.command_id || acknowledgement.seq !== item.operation.seq) {
+            throw new Error("server response is not a durable ACK for this request");
+          }
+          await this.store.remove(item.request_id);
+          acknowledgements.push(acknowledgement);
+          sent++;
+        } catch (error) {
+          const code = errorCodeOf(error);
+          const terminal = !!code && TERMINAL_INK_CODES.has(code);
+          if (terminal) await this.quarantine(documentId, code!, error instanceof Error ? error.message : String(error));
+          failures.push({ document_id: documentId, error, quarantined: terminal });
+          break;
         }
-        await this.store.remove(item.request_id);
-        acknowledgements.push(acknowledgement);
-        sent++;
-      } catch (error) {
-        const remaining = (await this.store.list()).length;
-        throw new InkOutboxFlushError("Ink outbox flush stopped; pending items were retained", sent, remaining, error);
       }
     }
+    if (failures.length) {
+      const remaining = (await this.pending()).length;
+      throw new InkOutboxFlushError("Ink outbox flush stopped; pending items were retained", sent, remaining, failures[0].error, failures);
+    }
     return { sent, remaining: 0, acknowledgements };
+  }
+
+  private async quarantine(documentId: string, code: string, message: string): Promise<void> {
+    const at = new Date().toISOString();
+    for (const item of await this.store.list()) {
+      if (item.document_id === documentId && !item.quarantined) await this.store.put({ ...item, quarantined: { code, message, at } });
+    }
   }
 
   private ordered(items: InkOutboxItem[]): InkOutboxItem[] {

@@ -3210,6 +3210,7 @@ dependencies = [
 name = "mathscape-store-sqlite"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "mathscape-domain",
  "mathscape-llm",
  "rusqlite",

@@ -1,9 +1,12 @@
 import { InkCanvas, type CanvasMetrics, type InkTool } from "./canvas";
 import {
+  INK_TITLE_MAX,
   appendInk,
+  autoInkTitle,
   encodeInk,
   inkId,
   newDocument,
+  normalizeInkTitle,
   parseInkDocument,
   parseInkSnapshotManifest,
   projectInk,
@@ -15,31 +18,51 @@ import {
 } from "./model";
 import {
   InkDesktopTransport,
+  cleanBlankInkNotes,
   createInkSnapshot,
   createInkDocument,
+  getInkNote,
+  getInkTrashImpact,
   inkOutboxItem,
   listInkDocuments,
   listInkSessions,
   listInkSnapshots,
+  listTrashedInkDocuments,
   openInkDocument,
+  renameInkNote,
+  restoreInkNote,
   startInkSession,
   openInkSnapshot,
+  trashInkNote,
+  type InkNoteReceipt,
+  type InkNoteState,
+  type StoredInkDocumentSummary,
   type StoredInkSnapshot,
 } from "./persistence";
-import { InkOutbox, type InkOutboxItem } from "./outbox";
+import { InkOutbox, InkOutboxFlushError, type InkOutboxItem } from "./outbox";
 import { InkEvidencePanel } from "./evidence-panel";
 import { eventBus } from "../core/events";
 import type { InkSelection } from "./persistence";
-import { safeInvoke } from "../core/ipc";
+import { errorCode, safeInvoke } from "../core/ipc";
 import { InkLanPanel,inkLanMirror,type InkWriterPresence,type InkWriterView } from "./lan";
 
-interface SessionSummary {
-  document_id: string;
-  title: string;
-  head_seq: number;
-  active_session_id: string | null;
-  updated_at: string;
+/** Older hosts return only the first fields; N1 adds the note columns. */
+type SessionSummary = Pick<StoredInkDocumentSummary, "document_id" | "title" | "head_seq" | "active_session_id" | "updated_at"> & Partial<StoredInkDocumentSummary>;
+
+interface SessionListRow {
+  element: HTMLDivElement;
+  button: HTMLButtonElement;
+  action: HTMLButtonElement;
+  title: HTMLElement;
+  detail: HTMLElement;
+  summary: SessionSummary;
+  trashed: boolean;
 }
+
+interface DialogChoice { id: string; label: string; primary?: boolean }
+
+/** How long the "撤销" bar stays after moving a document to the trash. */
+const UNDO_TRASH_MS = 10_000;
 
 interface SessionRecord {
   session_id: string;
@@ -55,6 +78,10 @@ function element<T extends HTMLElement>(root: HTMLElement, selector: string): T 
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function displayMillis(value: number | null | undefined): string {
+  return value ? new Date(value).toLocaleString() : "";
 }
 
 function displayTimestamp(value: string): string {
@@ -89,8 +116,10 @@ export class DesktopInkWorkspace {
   private readonly writerId = "desktop-local";
   private tool: InkTool = "pen";
   private logicalHead = 0;
-  private loading = false;
+  private listReload: Promise<void> | undefined;
+  private listReloadAgain = false;
   private sessionSummaries: SessionSummary[] = [];
+  private readonly sessionRows = new Map<string, SessionListRow>();
   private snapshotListRevision = 0;
   private persistenceState: PersistenceState = "loading";
   private pendingCount = 0;
@@ -116,6 +145,22 @@ export class DesktopInkWorkspace {
   private mirrorPolling=false;
   private snapshotCount=-1;
   private followPadPage=true;
+  /** Authoritative title and lifecycle of the open document. */
+  private note: InkNoteState | undefined;
+  private trashedSummaries: SessionSummary[] = [];
+  private listView: "active" | "trash" = "active";
+  /** A specific document was requested; do not auto-open the first one. */
+  private targetDocumentId: string | undefined;
+  /** Read-only view of a trashed document. */
+  private trashedView = false;
+  /** Reused on retry so a lost reply never creates a second document (D12). */
+  private pendingCreate: { requestId: string; sessionId: string; document: InkDocument } | undefined;
+  private renameRequest: { requestId: string; documentId: string; title: string; expected: number } | undefined;
+  private titleOriginal = "";
+  private titleCancelled = false;
+  private titleBusy = false;
+  private undoTimer: ReturnType<typeof setTimeout> | undefined;
+  private dialogResolve: ((value: string | null) => void) | undefined;
 
   constructor(
     private readonly host: HTMLElement,
@@ -131,7 +176,7 @@ export class DesktopInkWorkspace {
       this.outbox = await InkOutbox.openDefault();
       if (!this.outbox.persistent) this.status("本地恢复队列不可用；当前窗口关闭前请保持应用运行。", true);
     }
-    await this.refreshDocuments();
+    await this.refreshDocuments(true);
     if(!this.mirrorTimer)this.mirrorTimer=setInterval(()=>void this.refreshMirror(),300);
   }
 
@@ -144,22 +189,25 @@ export class DesktopInkWorkspace {
   }
 
   async openDocumentId(documentId: string): Promise<void> {
-    await this.open();
+    this.targetDocumentId = documentId;
+    try { await this.open(); } finally { this.targetDocumentId = undefined; }
     const summary = this.sessionSummaries.find(item => item.document_id === documentId);
-    if (summary) await this.openDocument(summary);
-    else this.status("手稿不存在或已被移除。", true);
+    if (summary) { await this.openDocument(summary); return; }
+    const trashed = this.trashedSummaries.find(item => item.document_id === documentId);
+    if (trashed) { await this.openTrashed(trashed); return; }
+    this.status("手稿不存在或已被移除。", true);
   }
 
   private render(): void {
     this.host.innerHTML = [
       '<div class="ink-desktop-shell">',
       '<header class="ink-desktop-header"><div class="ink-document-heading"><span class="eyebrow">INK DOCUMENT</span><h2 id="ink-document-heading">数学手稿</h2><div class="ink-state-row"><span id="ink-mode-badge" class="ink-state-badge">未打开</span><span id="ink-editability-badge" class="ink-state-badge">—</span><span id="ink-save-badge" class="ink-state-badge">正在加载</span></div></div>',
-      '<div class="ink-desktop-actions"><span id="ink-persistence-status" class="ink-persistence-status">正在加载本地手稿…</span><button id="ink-lan" class="secondary-button" type="button">平板书写</button><button id="ink-continue-current" class="secondary-button" type="button" hidden>继续编辑当前手稿</button><button id="ink-save-now" class="secondary-button" type="button">立即保存</button><button id="ink-snapshot" class="secondary-button" type="button">保存快照</button><button id="ink-close" class="secondary-button" type="button">返回地图</button></div></header>',
-      '<div class="ink-desktop-body"><aside class="ink-session-panel"><div class="ink-session-heading"><strong>手稿会话</strong><button id="ink-new-document" class="secondary-button" type="button">新建</button></div><button id="ink-import-recovery" class="secondary-button" type="button">导入恢复草稿</button><div id="ink-session-list" class="ink-session-list"><p>正在读取…</p></div><div class="ink-snapshot-heading"><strong>历史快照</strong></div><div id="ink-snapshot-list" class="ink-session-list"><p>请选择手稿。</p></div></aside>',
+      '<div id="ink-undo-bar" class="ink-undo-bar" role="status" hidden><span id="ink-undo-text"></span><button id="ink-undo-trash" class="secondary-button" type="button">撤销</button></div><div class="ink-desktop-actions"><span id="ink-persistence-status" class="ink-persistence-status">正在加载本地手稿…</span><button id="ink-lan" class="secondary-button" type="button">平板书写</button><button id="ink-continue-current" class="secondary-button" type="button" hidden>继续编辑当前手稿</button><button id="ink-save-now" class="secondary-button" type="button">立即保存</button><button id="ink-snapshot" class="secondary-button" type="button">保存快照</button><button id="ink-close" class="secondary-button" type="button">返回地图</button></div></header>',
+      '<div class="ink-desktop-body"><aside class="ink-session-panel"><div class="ink-session-heading"><strong>手稿</strong><button id="ink-new-document" class="secondary-button" type="button">新建</button></div><div class="ink-session-tabs" role="tablist" aria-label="手稿列表"><button id="ink-tab-active" role="tab" type="button" aria-selected="true">最近手稿</button><button id="ink-tab-trash" role="tab" type="button" aria-selected="false">回收站</button></div><div class="ink-session-tools"><button id="ink-import-recovery" class="secondary-button" type="button">导入恢复草稿</button><button id="ink-clean-blank" class="secondary-button" type="button">清理空白稿</button></div><div id="ink-session-list" class="ink-session-list"><p>正在读取…</p></div><div class="ink-snapshot-heading"><strong>历史快照</strong></div><div id="ink-snapshot-list" class="ink-session-list"><p>请选择手稿。</p></div></aside>',
       '<main class="ink-desktop-main"><nav class="ink-desktop-toolbar" aria-label="手稿工具"><div class="ink-tool-buttons">',
       '<button id="desktop-ink-pen" class="is-active" type="button">笔</button><button id="desktop-ink-erase" type="button">整笔擦除</button><button id="desktop-ink-partial_erase" type="button">局部擦除</button><button id="desktop-ink-select" type="button">套索选择</button><button id="desktop-ink-undo" type="button" disabled>撤销</button><button id="desktop-ink-redo" type="button" disabled>重做</button>',
       '</div><div class="ink-brush-controls"><label title="之后创建的笔迹使用此颜色">颜色<input id="desktop-ink-color" type="color" value="#b9e3d8" aria-label="笔迹颜色"></label><label title="之后创建的笔迹使用此笔宽">笔宽<input id="desktop-ink-width" type="range" min="1" max="16" step="0.5" value="4" aria-label="笔迹宽度"><output id="desktop-ink-width-value">4</output></label><label class="ink-check-control"><input id="desktop-ink-finger" type="checkbox">手指书写</label></div><div class="ink-page-controls"><label id="desktop-ink-follow-label" hidden><input id="desktop-ink-follow-pad" type="checkbox" checked>跟随平板页</label><select id="desktop-ink-page" aria-label="手稿页面"></select><button id="desktop-ink-add-page" class="secondary-button" type="button">新增页面</button><button id="desktop-ink-zoom-out" class="secondary-button" type="button" aria-label="缩小">−</button><button id="desktop-ink-fit" class="secondary-button" type="button">整页</button><button id="desktop-ink-zoom-in" class="secondary-button" type="button" aria-label="放大">＋</button></div></nav>',
-      '<div id="desktop-ink-evidence" hidden></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="数学手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="200" value="数学手稿" aria-label="手稿标题" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div><section id="ink-lan-panel" hidden></section></div>',
+      '<div id="ink-trash-banner" class="ink-trash-banner" role="status" hidden><span>这份手稿在回收站中，只能查看和导出。</span><button id="ink-trash-restore" class="secondary-button" type="button">恢复手稿</button></div><div id="desktop-ink-evidence" hidden></div><div id="ink-empty-state" class="ink-empty-state" hidden><p>还没有打开的手稿。</p><button id="ink-empty-create" class="secondary-button" type="button">新建手稿</button></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="数学手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="'+INK_TITLE_MAX+'" value="" placeholder="留空恢复自动标题" aria-label="手稿标题" title="点击改名；回车保存，Esc 取消" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div><section id="ink-lan-panel" hidden></section><div id="ink-dialog" class="ink-dialog" role="dialog" aria-modal="true" aria-labelledby="ink-dialog-text" hidden><div class="ink-dialog-box"><p id="ink-dialog-text"></p><div id="ink-dialog-actions" class="ink-dialog-actions"></div></div></div></div>',
     ].join("");
     element<HTMLButtonElement>(this.host, "#ink-close").addEventListener("click", () => this.close());
     element<HTMLButtonElement>(this.host, "#ink-save-now").addEventListener("click", () => void this.flush("手动保存完成。"));
@@ -168,6 +216,19 @@ export class DesktopInkWorkspace {
     element<HTMLButtonElement>(this.host,"#ink-lan").onclick=()=>{if(this.documentState)void this.lanPanel!.open(this.documentState.document_id).catch(error=>this.status(errorText(error),true));};
     element<HTMLButtonElement>(this.host, "#ink-continue-current").addEventListener("click", () => void this.continueCurrentDocument());
     element<HTMLButtonElement>(this.host, "#ink-new-document").addEventListener("click", () => void this.createDocument());
+    element<HTMLButtonElement>(this.host, "#ink-empty-create").addEventListener("click", () => void this.createDocument());
+    element<HTMLButtonElement>(this.host, "#ink-tab-active").addEventListener("click", () => this.showList("active"));
+    element<HTMLButtonElement>(this.host, "#ink-tab-trash").addEventListener("click", () => this.showList("trash"));
+    element<HTMLButtonElement>(this.host, "#ink-clean-blank").addEventListener("click", () => void this.cleanBlank());
+    element<HTMLButtonElement>(this.host, "#ink-trash-restore").addEventListener("click", () => { if (this.note) void this.restoreDocument(this.note.document_id, this.note.lifecycle_revision); });
+    const title = element<HTMLInputElement>(this.host, "#desktop-ink-title");
+    title.addEventListener("focus", () => { this.titleOriginal = title.value; this.titleCancelled = false; });
+    title.addEventListener("keydown", event => {
+      if (event.key === "Enter") { event.preventDefault(); title.blur(); }
+      else if (event.key === "Escape") { event.preventDefault(); this.titleCancelled = true; title.value = this.titleOriginal; title.blur(); }
+    });
+    title.addEventListener("blur", () => { if (this.titleCancelled) { this.titleCancelled = false; return; } void this.commitTitle(); });
+    this.host.addEventListener("keydown", event => { if (event.key === "Escape" && this.dialogResolve) { event.preventDefault(); this.closeDialog(null); } });
     element<HTMLButtonElement>(this.host,"#ink-import-recovery").onclick=()=>void this.importRecovery();
     element<HTMLButtonElement>(this.host, "#desktop-ink-add-page").addEventListener("click", () => this.addPage());
     element<HTMLSelectElement>(this.host, "#desktop-ink-page").addEventListener("change", event => {
@@ -207,47 +268,392 @@ export class DesktopInkWorkspace {
     }
   }
 
-  private async refreshDocuments(): Promise<void> {
-    if (this.loading) return;
-    this.loading = true;
-    try {
-      const documents = await listInkDocuments();
-      this.sessionSummaries = documents;
-      this.renderSessionList(documents);
-      if (!this.documentState) {
-        const first = documents[0];
-        if (first) await this.openDocument(first);
-        else await this.createDocument();
-      }
-    } catch (error) {
-      this.status("读取手稿失败：" + errorText(error), true);
-    } finally {
-      this.loading = false;
-    }
+  /**
+   * Reloads both lists. Overlapping calls coalesce into one more reload rather
+   * than being dropped, so a list never stays stale after trash or restore.
+   * Only opening the panel picks a document automatically; after the open
+   * document is trashed the empty state stays until the user chooses (§6).
+   */
+  private async refreshDocuments(autoOpen = false): Promise<void> {
+    await this.reloadLists();
+    if (this.documentState) return;
+    const first = this.sessionSummaries[0];
+    if (autoOpen && first && !this.targetDocumentId) await this.openDocument(first);
+    else if (!this.targetDocumentId) this.renderEmpty();
+  }
+
+  private reloadLists(): Promise<void> {
+    if (this.listReload) { this.listReloadAgain = true; return this.listReload; }
+    const task = (async () => {
+      do {
+        this.listReloadAgain = false;
+        try {
+          const [documents, trashed] = await Promise.all([
+            listInkDocuments(),
+            listTrashedInkDocuments().catch(() => [] as SessionSummary[]),
+          ]);
+          // The store lists active documents only; older hosts may still mix them.
+          this.sessionSummaries = documents.filter(item => item.lifecycle !== "trashed");
+          this.trashedSummaries = trashed;
+          this.renderSessionList(this.sessionSummaries);
+        } catch (error) {
+          this.status("读取手稿失败：" + errorText(error), true);
+        }
+      } while (this.listReloadAgain);
+    })();
+    this.listReload = task.finally(() => { this.listReload = undefined; });
+    return this.listReload;
+  }
+
+
+  private showList(view: "active" | "trash"): void {
+    this.listView = view;
+    this.renderSessionList(this.sessionSummaries);
   }
 
   private renderSessionList(documents: SessionSummary[]): void {
     const list = element(this.host, "#ink-session-list");
-    list.replaceChildren();
-    if (!documents.length) {
-      const empty = document.createElement("p");
-      empty.textContent = "还没有本地手稿。";
-      list.append(empty);
+    const trashView = this.listView === "trash";
+    element(this.host, "#ink-tab-active").setAttribute("aria-selected", String(!trashView));
+    element(this.host, "#ink-tab-trash").setAttribute("aria-selected", String(trashView));
+    element(this.host, "#ink-tab-active").classList.toggle("is-active", !trashView);
+    element(this.host, "#ink-tab-trash").classList.toggle("is-active", trashView);
+    element<HTMLButtonElement>(this.host, "#ink-clean-blank").hidden = trashView;
+    const items = trashView ? this.trashedSummaries : documents;
+    const visible = new Set(items.map(summary => summary.document_id));
+    for (const [id, row] of this.sessionRows) {
+      if (visible.has(id)) continue;
+      row.element.remove();
+      this.sessionRows.delete(id);
+    }
+    if (!items.length) {
+      const empty = list.querySelector("p") ?? document.createElement("p");
+      empty.textContent = trashView ? "回收站是空的。" : "还没有手稿。点击“新建”开始书写。";
+      if (!empty.isConnected) list.append(empty);
       return;
     }
-    for (const summary of documents) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "ink-session-item";
+    list.querySelector("p")?.remove();
+    for (const [index, summary] of items.entries()) {
+      let row = this.sessionRows.get(summary.document_id);
+      if (!row) {
+        row = this.createSessionRow(summary, trashView);
+        this.sessionRows.set(summary.document_id, row);
+      }
+      row.summary = summary;
+      row.trashed = trashView;
+      const { button, action } = row;
       const isCurrentDocument = summary.document_id === this.documentState?.document_id;
       button.classList.toggle("is-active", isCurrentDocument && !this.readOnly);
       button.classList.toggle("is-context", isCurrentDocument && this.readOnly);
       if (isCurrentDocument) button.setAttribute("aria-current", this.readOnly ? "location" : "true");
-      button.innerHTML = '<strong></strong><span></span>';
-      button.querySelector("strong")!.textContent = summary.title;
-      button.querySelector("span")!.textContent = summary.head_seq + " 个已保存操作 · " + displayTimestamp(summary.updated_at);
-      button.addEventListener("click", () => void this.openDocument(summary));
-      list.append(button);
+      else button.removeAttribute("aria-current");
+      if (row.title.textContent !== summary.title) row.title.textContent = summary.title;
+      const detail = trashView
+        ? "移到回收站于 " + displayMillis(summary.trashed_at)
+        : summary.head_seq + " 个已保存操作 · " + (summary.last_used_at ? displayMillis(summary.last_used_at) : displayTimestamp(summary.updated_at));
+      if (row.detail.textContent !== detail) row.detail.textContent = detail;
+      if (trashView) {
+        action.textContent = "恢复";
+        action.setAttribute("aria-label", "恢复");
+        action.title = "恢复「" + summary.title + "」";
+      } else {
+        action.textContent = "🗑";
+        action.setAttribute("aria-label", "移到回收站");
+        action.title = "将「" + summary.title + "」移到回收站";
+      }
+      // Reuse buttons across mirror polls so pointer-down and pointer-up reach
+      // the same element, even when counts, titles or selection have changed.
+      if (list.children[index] !== row.element) list.insertBefore(row.element, list.children[index] ?? null);
+    }
+  }
+
+  private createSessionRow(summary: SessionSummary, trashed: boolean): SessionListRow {
+    const container = document.createElement("div");
+    container.className = "ink-session-row";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ink-session-item";
+    const title = document.createElement("strong");
+    const detail = document.createElement("span");
+    button.append(title, detail);
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "ink-session-action";
+    const row = { element: container, button, action, title, detail, summary, trashed };
+    button.addEventListener("click", () => void (row.trashed ? this.openTrashed(row.summary) : this.openDocument(row.summary)));
+    action.addEventListener("click", () => void (row.trashed
+      ? this.restoreDocument(row.summary.document_id, row.summary.lifecycle_revision ?? 0)
+      : this.trashDocument(row.summary)));
+    container.append(button, action);
+    return row;
+  }
+
+  private renderEmpty(): void {
+    const empty = !this.documentState;
+    element(this.host, "#ink-empty-state").hidden = !empty;
+    element(this.host, "#desktop-ink-board").hidden = empty;
+    if (!empty) return;
+    element(this.host, "#ink-document-heading").textContent = "数学手稿";
+    element(this.host, "#ink-mode-badge").textContent = "未打开";
+    element(this.host, "#ink-editability-badge").textContent = "—";
+    element(this.host, "#ink-save-badge").textContent = "—";
+    const title = element<HTMLInputElement>(this.host, "#desktop-ink-title");
+    title.value = ""; title.readOnly = true;
+    for (const selector of ["#ink-lan", "#ink-save-now", "#ink-snapshot", "#desktop-ink-export-json", "#desktop-ink-export-png"]) element<HTMLButtonElement>(this.host, selector).disabled = true;
+    element(this.host, "#ink-trash-banner").hidden = true;
+    element(this.host, "#ink-snapshot-list").replaceChildren();
+    element(this.host, "#desktop-ink-status").textContent = this.sessionSummaries.length ? "请选择一个手稿，或新建手稿。" : "还没有手稿。点击“新建手稿”开始。";
+  }
+
+  /** Clears the open document, e.g. after it moved to the trash. */
+  private unmountDocument(): void {
+    this.navigationRevision++;
+    this.board?.finish();
+    this.board?.dispose();
+    this.board = undefined;
+    this.evidencePanel?.dispose();
+    this.evidencePanel = undefined;
+    element(this.host, "#desktop-ink-evidence").hidden = true;
+    this.documentState = undefined;
+    this.currentSession = undefined;
+    this.currentSnapshot = undefined;
+    this.note = undefined;
+    this.trashedView = false;
+    this.readOnly = false;
+    this.mirrorMode = false;
+    this.writerView = undefined;
+    this.renderEmpty();
+  }
+
+  /** Small in-page dialog; resolves to the chosen id or `null` (Esc). */
+  private choose(text: string, choices: DialogChoice[]): Promise<string | null> {
+    this.closeDialog(null);
+    const dialog = element(this.host, "#ink-dialog");
+    element(this.host, "#ink-dialog-text").textContent = text;
+    const actions = element(this.host, "#ink-dialog-actions");
+    actions.replaceChildren();
+    for (const choice of choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = choice.primary ? "primary-button" : "secondary-button";
+      button.textContent = choice.label;
+      button.dataset.choice = choice.id;
+      button.addEventListener("click", () => this.closeDialog(choice.id));
+      actions.append(button);
+    }
+    dialog.hidden = false;
+    actions.querySelector<HTMLButtonElement>("button")?.focus();
+    return new Promise(resolve => { this.dialogResolve = resolve; });
+  }
+
+  private closeDialog(value: string | null): void {
+    const resolve = this.dialogResolve;
+    this.dialogResolve = undefined;
+    element(this.host, "#ink-dialog").hidden = true;
+    resolve?.(value);
+  }
+
+  /** Applies the server note to the open document, list and header. */
+  private applyNote(note: InkNoteState): void {
+    for (const summary of [...this.sessionSummaries, ...this.trashedSummaries]) {
+      if (summary.document_id !== note.document_id) continue;
+      summary.title = note.title; summary.title_mode = note.title_mode; summary.title_revision = note.title_revision;
+      summary.lifecycle = note.lifecycle; summary.lifecycle_revision = note.lifecycle_revision; summary.trashed_at = note.trashed_at;
+    }
+    if (this.documentState?.document_id === note.document_id) {
+      this.note = note;
+      this.documentState.title = note.title;
+      const title = element<HTMLInputElement>(this.host, "#desktop-ink-title");
+      if (document.activeElement !== title) title.value = note.title;
+      this.renderViewState();
+    }
+    this.renderSessionList(this.sessionSummaries);
+  }
+
+  private async commitTitle(): Promise<void> {
+    const input = element<HTMLInputElement>(this.host, "#desktop-ink-title");
+    const note = this.note;
+    if (!note || input.readOnly || this.titleBusy || this.documentState?.document_id !== note.document_id) return;
+    let requested: string;
+    try { requested = normalizeInkTitle(input.value) ?? ""; }
+    catch (error) { input.value = note.title; this.status(errorText(error), true); return; }
+    if (requested === note.title || (!requested && note.title_mode === "auto")) { input.value = note.title; return; }
+    await this.submitRename(note.document_id, requested, note.title_revision);
+  }
+
+  private async submitRename(documentId: string, title: string, expected: number): Promise<void> {
+    const previous = this.renameRequest;
+    const request = previous && previous.documentId === documentId && previous.title === title && previous.expected === expected
+      ? previous : { requestId: inkId(), documentId, title, expected };
+    this.renameRequest = request;
+    this.titleBusy = true;
+    try {
+      const receipt = await renameInkNote(request.requestId, documentId, title, expected);
+      this.renameRequest = undefined;
+      this.applyNote(receipt.note);
+      this.status(title ? "标题已更新。" : "已恢复自动标题。", false);
+    } catch (error) {
+      if (errorCode(error) === "title_conflict") {
+        this.renameRequest = undefined;
+        const details = (error as { details?: Record<string, unknown> }).details ?? {};
+        const current = String(details.current_title ?? "");
+        const revision = Number(details.current_title_revision ?? expected);
+        const choice = await this.choose(`标题已在别处改为「${current}」。要保留哪一个？`, [
+          { id: "theirs", label: `保留「${current}」` },
+          { id: "mine", label: `使用「${title || "自动标题"}」`, primary: true },
+        ]);
+        if (choice === "mine") { this.titleBusy = false; await this.submitRename(documentId, title, revision); return; }
+        const latest = await getInkNote(documentId).catch(() => null);
+        if (latest) this.applyNote(latest);
+      } else {
+        if (this.note) element<HTMLInputElement>(this.host, "#desktop-ink-title").value = this.note.title;
+        this.status("改名失败：" + errorText(error), true);
+      }
+    } finally {
+      this.titleBusy = false;
+    }
+  }
+
+  /** Quarantined writes are still unconfirmed and must also block cleanup. */
+  private async unsavedFor(documentId: string): Promise<number> {
+    const stored = this.outbox
+      ? (await this.outbox.pending(documentId)).length + (await this.outbox.quarantined(documentId)).length
+      : 0;
+    const buffered = [...this.bufferedOperations.values()].filter(item => item.document_id === documentId).length;
+    return stored + buffered;
+  }
+
+  /** D6: sync first, report what is affected, then trash and offer undo. */
+  private async trashDocument(summary: SessionSummary): Promise<void> {
+    const documentId = summary.document_id;
+    if (this.documentState?.document_id === documentId) this.board?.finish();
+    for (;;) {
+      await this.flush(undefined, true);
+      const pending = await this.unsavedFor(documentId);
+      if (!pending) break;
+      const choice = await this.choose(`这份手稿还有 ${pending} 个操作尚未确认保存，暂时不能移到回收站。请先完成保存；未同步的笔迹会继续保留在本机。`, [
+        { id: "retry", label: "重试保存", primary: true },
+        { id: "cancel", label: "取消" },
+      ]);
+      if (choice === "retry") continue;
+      return;
+    }
+    let impact;
+    try { impact = await getInkTrashImpact(documentId); }
+    catch (error) { this.status("读取手稿状态失败：" + errorText(error), true); return; }
+    const lines = [`将「${impact.note.title}」移到回收站？`, `${impact.page_count} 页 · ${impact.head_seq} 个已保存操作 · ${impact.snapshot_count} 个快照 · ${impact.evidence_count} 条来源证据。快照和证据仍可查看。`];
+    const tablet = impact.remote_session || impact.connected || impact.device_credentials > 0 || impact.pairing_pending;
+    if (impact.remote_session || impact.connected) {
+      let padPending: number | null = null;
+      try { padPending = (await inkLanMirror(documentId, impact.head_seq)).client?.pending_count ?? null; } catch { /* Presence is advisory. */ }
+      if (padPending) {
+        const choice = await this.choose(`平板上还有 ${padPending} 个操作没有同步到电脑。建议先在平板上点“立即同步”。`, [
+          { id: "cancel", label: "先去平板同步", primary: true },
+          { id: "force", label: "仍移到回收站（平板保留未同步内容，可导出恢复草稿）" },
+        ]);
+        if (choice !== "force") return;
+      } else if (!impact.connected) {
+        lines.push("平板当前离线，可能还有未同步的内容留在平板上。");
+      }
+    }
+    if (tablet) lines.push("平板连接会被关闭；恢复后需要在电脑重新配对才能继续书写。");
+    const confirmed = await this.choose(lines.join("\n"), [
+      { id: "trash", label: "移到回收站", primary: true },
+      { id: "cancel", label: "取消" },
+    ]);
+    if (confirmed !== "trash") return;
+    try {
+      if (this.documentState?.document_id === documentId) this.board?.finish();
+      await this.enqueueTail;
+      if (await this.unsavedFor(documentId)) {
+        this.status("确认期间又有笔迹尚未保存，手稿没有移到回收站。请保存后重试。", true);
+        return;
+      }
+      const receipt = await trashInkNote(inkId(), documentId, impact.note.lifecycle_revision);
+      if (this.documentState?.document_id === documentId) this.unmountDocument();
+      await this.refreshDocuments();
+      this.showUndo(receipt);
+      const quarantined = this.outbox ? (await this.outbox.quarantined(documentId)).length + (await this.outbox.pending(documentId)).length : 0;
+      this.status(`已将「${receipt.note.title}」移到回收站。` + (quarantined ? `${quarantined} 个未保存操作保留在本机恢复队列。` : ""), false);
+    } catch (error) {
+      this.status("移到回收站失败：" + errorText(error), true);
+      await this.refreshDocuments();
+    }
+  }
+
+  private showUndo(receipt: InkNoteReceipt): void {
+    const bar = element(this.host, "#ink-undo-bar");
+    element(this.host, "#ink-undo-text").textContent = `「${receipt.note.title}」已移到回收站。`;
+    bar.hidden = false;
+    if (this.undoTimer) clearTimeout(this.undoTimer);
+    const hide = () => { bar.hidden = true; this.undoTimer = undefined; };
+    this.undoTimer = setTimeout(hide, UNDO_TRASH_MS);
+    element<HTMLButtonElement>(this.host, "#ink-undo-trash").onclick = () => {
+      hide();
+      if (this.undoTimer) clearTimeout(this.undoTimer);
+      // Undo is a normal restore (§13.5): sessions and credentials stay closed.
+      void this.restoreDocument(receipt.note.document_id, receipt.note.lifecycle_revision, true);
+    };
+  }
+
+  private async restoreDocument(documentId: string, expectedRevision: number, reopen = false): Promise<void> {
+    try {
+      const receipt = await restoreInkNote(inkId(), documentId, expectedRevision);
+      const viewing = this.trashedView && this.documentState?.document_id === documentId;
+      if (viewing) this.unmountDocument();
+      await this.refreshDocuments();
+      const summary = this.sessionSummaries.find(item => item.document_id === documentId);
+      if (summary && (viewing || reopen || !this.documentState)) { this.listView = "active"; await this.openDocument(summary); }
+      this.status(`「${receipt.note.title}」已恢复。` + (receipt.requires_repairing ? "之前连接的平板需要在电脑重新配对后才能继续书写。" : ""), false);
+    } catch (error) {
+      this.status("恢复手稿失败：" + errorText(error), true);
+      await this.refreshDocuments();
+    }
+  }
+
+  /** D10: never touches the open document, local pending writes or devices. */
+  private async cleanBlank(): Promise<void> {
+    const candidates: string[] = [];
+    for (const summary of this.sessionSummaries) {
+      if (summary.document_id === this.documentState?.document_id) continue;
+      if (summary.title_mode !== "auto" || summary.head_seq !== 0 || (summary.snapshot_count ?? 0) > 0 || summary.remote_active) continue;
+      if (await this.unsavedFor(summary.document_id)) continue;
+      candidates.push(summary.document_id);
+    }
+    if (!candidates.length) { this.status("没有可清理的空白稿。当前打开的手稿、写过内容或改过名的手稿不会被清理。", false); return; }
+    const choice = await this.choose(`将 ${candidates.length} 份空白稿移到回收站？当前打开的手稿、有平板连接的手稿不会被清理。`, [
+      { id: "clean", label: "移到回收站", primary: true },
+      { id: "cancel", label: "取消" },
+    ]);
+    if (choice !== "clean") return;
+    try {
+      const receipt = await cleanBlankInkNotes(inkId(), candidates);
+      await this.refreshDocuments();
+      this.status(`已将 ${receipt.trashed.length} 份空白稿移到回收站。` + (receipt.skipped.length ? `${receipt.skipped.length} 份因状态变化被跳过。` : ""), false);
+    } catch (error) {
+      this.status("清理空白稿失败：" + errorText(error), true);
+    }
+  }
+
+  private async openTrashed(summary: SessionSummary): Promise<void> {
+    const revision = ++this.navigationRevision;
+    this.board?.finish();
+    try {
+      await this.flush();
+      const stored = await openInkDocument(summary.document_id);
+      if (revision !== this.navigationRevision) return;
+      if (!stored) throw new Error("手稿不存在或已被移除");
+      this.note = stored.note;
+      if (stored.note && stored.note.lifecycle !== "trashed") {
+        await this.refreshDocuments();
+        const active = this.sessionSummaries.find(item => item.document_id === summary.document_id);
+        if (active) { await this.openDocument(active); return; }
+      }
+      this.listView = "trash";
+      await this.mountDocument(stored.document, undefined, stored.head_seq, true, undefined, revision, true);
+      this.status("这份手稿在回收站中，只能查看；恢复后才能继续书写。", false);
+    } catch (error) {
+      this.status("打开手稿失败：" + errorText(error), true);
     }
   }
 
@@ -256,15 +662,26 @@ export class DesktopInkWorkspace {
     this.board?.finish();
     await this.flush();
     this.status("正在创建本地手稿…", false);
-    const documentState = newDocument();
+    if (!this.pendingCreate) {
+      const draft = newDocument();
+      draft.title = autoInkTitle(draft.created_at);
+      this.pendingCreate = { requestId: inkId(), sessionId: inkId(), document: draft };
+    }
+    const pending = this.pendingCreate;
     try {
-      const session = await createInkDocument(documentState, inkId(), this.writerId, { source: "desktop" });
+      const receipt = await createInkDocument(structuredClone(pending.document), pending.sessionId, this.writerId, { source: "desktop" }, { requestId: pending.requestId, titleMode: "auto" });
+      if (this.pendingCreate === pending) this.pendingCreate = undefined;
       if (revision !== this.navigationRevision) return;
-      await this.mountDocument(documentState, session, 0, false, undefined, revision);
+      const documentState = structuredClone(pending.document);
+      if (receipt.note) documentState.title = receipt.note.title;
+      this.note = receipt.note;
+      this.listView = "active";
+      await this.mountDocument(documentState, receipt, 0, false, undefined, revision);
       this.status("手稿已创建，书写后会自动保存。", false);
       await this.refreshDocuments();
     } catch (error) {
-      this.status("创建手稿失败：" + errorText(error), true);
+      // The same request id is reused on the next attempt.
+      this.status("创建手稿失败，可重试：" + errorText(error), true);
     }
   }
 
@@ -277,6 +694,8 @@ export class DesktopInkWorkspace {
       const stored = await openInkDocument(summary.document_id);
       if (revision !== this.navigationRevision) return;
       if (!stored) throw new Error("手稿不存在或已被移除");
+      if (stored.note?.lifecycle === "trashed") { await this.openTrashed(summary); return; }
+      this.note = stored.note ?? this.summaryNote(summary, stored.document);
       const mirror=await inkLanMirror(summary.document_id,stored.head_seq);
       if(revision!==this.navigationRevision)return;
       this.writerView=mirror.delta.writer;this.writerPresence={connected:mirror.connected,pending:mirror.client?.pending_count??null};
@@ -295,6 +714,11 @@ export class DesktopInkWorkspace {
     }
   }
 
+  /** Fallback note for hosts that predate N1. */
+  private summaryNote(summary: SessionSummary, document: InkDocument): InkNoteState {
+    return { document_id: summary.document_id, title: document.title, title_mode: summary.title_mode ?? "manual", title_revision: summary.title_revision ?? 0, lifecycle: "active", lifecycle_revision: summary.lifecycle_revision ?? 0, trashed_at: null, last_used_at: summary.last_used_at ?? 0, created_at: document.created_at };
+  }
+
   private async openSnapshot(snapshotId: string): Promise<void> {
     const revision = ++this.navigationRevision;
     try {
@@ -311,7 +735,7 @@ export class DesktopInkWorkspace {
     }
   }
 
-  private async mountDocument(documentState: InkDocument, session: SessionRecord | undefined, head: number, readOnly = false, snapshot?: StoredInkSnapshot, revision = this.navigationRevision): Promise<void> {
+  private async mountDocument(documentState: InkDocument, session: SessionRecord | undefined, head: number, readOnly = false, snapshot?: StoredInkSnapshot, revision = this.navigationRevision, trashed = false): Promise<void> {
     const localHead = !readOnly && session ? await this.replayPending(documentState, session.session_id, head) : head;
     if (revision !== this.navigationRevision) return;
     this.board?.finish();
@@ -325,7 +749,13 @@ export class DesktopInkWorkspace {
     if(this.writerView?.document_id!==documentState.document_id)this.writerView=undefined;
     this.currentSnapshot = snapshot;
     this.readOnly = readOnly;
-    this.mirrorMode=readOnly&&!snapshot;
+    this.trashedView = trashed;
+    this.mirrorMode=readOnly&&!snapshot&&!trashed;
+    if (this.note?.document_id !== documentState.document_id) this.note = undefined;
+    element(this.host, "#ink-empty-state").hidden = true;
+    element(this.host, "#desktop-ink-board").hidden = false;
+    element(this.host, "#ink-trash-banner").hidden = !trashed;
+    for (const selector of ["#desktop-ink-export-json", "#desktop-ink-export-png"]) element<HTMLButtonElement>(this.host, selector).disabled = false;
     element(this.host,"#desktop-ink-follow-label").hidden=!this.mirrorMode;
     this.remotePreview=undefined;
     this.snapshotCount=-1;
@@ -385,8 +815,11 @@ export class DesktopInkWorkspace {
       element<HTMLInputElement>(this.host, selector).disabled = readOnly;
     }
     element<HTMLButtonElement>(this.host, "#ink-continue-current").hidden = !this.currentSnapshot;
-    element<HTMLButtonElement>(this.host,"#ink-lan").disabled=!!this.currentSnapshot;
-    element<HTMLButtonElement>(this.host,"#ink-snapshot").disabled=!!this.currentSnapshot;
+    element<HTMLButtonElement>(this.host,"#ink-lan").disabled=!!this.currentSnapshot||this.trashedView;
+    element<HTMLButtonElement>(this.host,"#ink-snapshot").disabled=!!this.currentSnapshot||this.trashedView;
+    element<HTMLButtonElement>(this.host,"#ink-save-now").disabled=readOnly;
+    // Renaming is note metadata, so it also works while a tablet holds the lease.
+    element<HTMLInputElement>(this.host,"#desktop-ink-title").readOnly=!this.note||!!this.currentSnapshot||this.trashedView;
     element<HTMLButtonElement>(this.host,"#ink-snapshot").textContent=this.mirrorMode?"保存已同步快照":"保存快照";
   }
 
@@ -435,8 +868,8 @@ export class DesktopInkWorkspace {
       .sort((a, b) => a.client_seq - b.client_seq);
     for (const item of pending) {
       if (item.operation.seq <= head || item.operation.seq !== logicalHead + 1) continue;
+      // The queued title is a stale copy; the store's note owns the title (H1).
       documentState.version = item.metadata.version;
-      documentState.title = item.metadata.title;
       documentState.exported_at = item.metadata.exported_at;
       documentState.pages = structuredClone(item.metadata.pages);
       documentState.capture_segments = structuredClone(item.metadata.capture_segments);
@@ -494,9 +927,9 @@ export class DesktopInkWorkspace {
     }
   }
 
-  private async flush(message?: string): Promise<boolean> {
+  private async flush(message?: string, retryBuffered = false): Promise<boolean> {
     if (!this.outbox) return false;
-    if (message && this.bufferedOperations.size) {
+    if ((message || retryBuffered) && this.bufferedOperations.size) {
       for (const item of this.bufferedOperations.values()) {
         this.enqueueTail = this.enqueueTail.then(async () => {
           try { await this.outbox!.enqueue(item); this.bufferedOperations.delete(item.request_id); }
@@ -538,8 +971,20 @@ export class DesktopInkWorkspace {
       if (!this.readOnly && this.documentState?.document_id === documentId && (sent || message)) this.status(message ?? "桌面已保存所有已完成操作。", false);
       return true;
     } catch (error) {
+      // Each document syncs on its own; a failure elsewhere does not mark the
+      // open document as failed (§13.7).
+      const failures = error instanceof InkOutboxFlushError ? error.failures : [];
+      const own = failures.find(failure => failure.document_id === documentId);
+      if (failures.length && !own && documentId && !(await this.outbox.pending(documentId)).length && ![...this.bufferedOperations.values()].some(item => item.document_id === documentId)) {
+        await this.updatePendingState("saved");
+        this.renderSessionList(this.sessionSummaries);
+        return true;
+      }
       await this.updatePendingState("error");
-      if (!this.readOnly && this.documentState?.document_id === documentId) this.status("保存暂时失败，待处理操作已保留；可稍后重试。" + errorText(error), true);
+      if (!this.readOnly && this.documentState?.document_id === documentId) {
+        if (own?.quarantined || errorCode(own?.error) === "document_trashed") this.status("这份手稿已移到回收站，未保存的操作保留在本机恢复队列。", true);
+        else this.status("保存暂时失败，待处理操作已保留；可稍后重试。" + errorText(own?.error ?? error), true);
+      }
       return false;
     }
   }
@@ -563,8 +1008,11 @@ export class DesktopInkWorkspace {
 
   private async continueCurrentDocument(): Promise<void> {
     if (!this.documentState) return;
-    const summary = this.sessionSummaries.find(item => item.document_id === this.documentState!.document_id);
-    if (summary) await this.openDocument(summary);
+    const id = this.documentState.document_id;
+    const summary = this.sessionSummaries.find(item => item.document_id === id);
+    if (summary) { await this.openDocument(summary); return; }
+    const trashed = this.trashedSummaries.find(item => item.document_id === id);
+    if (trashed) await this.openTrashed(trashed);
     else this.status("当前手稿列表尚未加载完成。", true);
   }
 
@@ -669,11 +1117,14 @@ export class DesktopInkWorkspace {
     const mode = element(this.host, "#ink-mode-badge");
     const editable = element(this.host, "#ink-editability-badge");
     const saved = element(this.host, "#ink-save-badge");
-    mode.textContent = this.currentSnapshot ? "历史快照" : this.mirrorMode?"平板镜像":"当前手稿";
+    mode.textContent = this.currentSnapshot ? "历史快照" : this.trashedView ? "回收站" : this.mirrorMode?"平板镜像":"当前手稿";
     mode.className = "ink-state-badge " + (this.currentSnapshot ? "is-snapshot" : "is-current");
     editable.textContent = this.mirrorMode?"电脑只读":this.readOnly ? "只读" : "可编辑";
     editable.className = "ink-state-badge " + (this.readOnly ? "is-readonly" : "is-editable");
-    if (this.readOnly && this.currentSnapshot) {
+    if (this.trashedView) {
+      saved.textContent = "已保存 · head " + this.logicalHead;
+      saved.className = "ink-state-badge is-snapshot";
+    } else if (this.readOnly && this.currentSnapshot) {
       saved.textContent = "截止 head " + this.currentSnapshot.through_seq + " · " + displayTimestamp(this.currentSnapshot.created_at);
       saved.className = "ink-state-badge is-snapshot";
     } else if(this.mirrorMode){
@@ -709,18 +1160,20 @@ export class DesktopInkWorkspace {
       const session=await safeInvoke<SessionRecord|null>("choose_ink_recovery",{requestId:inkId()});
       if(!session)return;
       const stored=await openInkDocument(session.document_id);if(!stored)throw new Error("恢复草稿不存在。");
-      this.navigationRevision++;await this.mountDocument(stored.document,session,stored.head_seq);
+      this.note=stored.note;this.listView="active";this.navigationRevision++;await this.mountDocument(stored.document,session,stored.head_seq);
       await this.refreshDocuments();this.status("恢复文件已导入为独立草稿，原手稿与旧会话保持原有记录。",false);
     }catch(error){this.status("导入恢复草稿失败："+errorText(error),true);}
   }
   private async refreshMirror(force=false):Promise<void> {
-    if(!this.documentState||this.currentSnapshot||this.mirrorPolling)return;
+    if(!this.documentState||this.currentSnapshot||this.trashedView||this.mirrorPolling)return;
     this.mirrorPolling=true;const id=this.documentState.document_id,revision=this.navigationRevision;
     try {
       const after=Math.min(this.logicalHead,this.confirmedHeads.get(id)??this.logicalHead);
       const mirror=await inkLanMirror(id,after);
       if(this.documentState?.document_id!==id||revision!==this.navigationRevision||this.currentSnapshot)return;
       this.writerView=mirror.delta.writer;this.writerPresence={connected:mirror.connected,pending:mirror.client?.pending_count??null};
+      const note=mirror.delta.note;
+      if(note&&note.document_id===id&&this.note&&note.title_revision>this.note.title_revision)this.applyNote(note);
       if(mirror.delta.snapshot_count!==this.snapshotCount){this.snapshotCount=mirror.delta.snapshot_count;void this.refreshSnapshots();}
       const observe=mirror.delta.writer.remote||mirror.delta.writer.pairing_pending;
       if(!observe){
@@ -732,6 +1185,7 @@ export class DesktopInkWorkspace {
       }else{
         for(const operation of mirror.delta.operations){if(operation.seq>this.documentState!.operations.length){if(operation.seq!==this.documentState!.operations.length+1)throw new Error("镜像历史出现序号缺口，请重新打开手稿。");this.documentState!.operations.push(operation);}}
         Object.assign(this.documentState!,mirror.delta.metadata);
+        if(this.note)this.documentState!.title=this.note.title;
         this.logicalHead=this.documentState!.operations.length;this.confirmedHeads.set(id,this.logicalHead);
         if(!this.documentState!.pages.some(page=>page.id===this.currentPage))this.currentPage=this.documentState!.pages[0].id;
         const oldPage=this.currentPage;

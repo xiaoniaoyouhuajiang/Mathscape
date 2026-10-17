@@ -83,6 +83,9 @@ impl SqliteArtifactStore {
         }
         let snapshot = ink::read_snapshot(&tx, &request.snapshot_id)?
             .ok_or_else(|| invalid("evidence snapshot does not exist"))?;
+        // Snapshots of a trashed document stay readable, but they do not take
+        // new evidence until the document is restored (D8).
+        crate::ink_note::require_active(&tx, &snapshot.document_id)?;
         if snapshot.artifact_id != request.expected_artifact_id.as_str()
             || snapshot.content_hash != request.expected_content_hash.as_str()
         {

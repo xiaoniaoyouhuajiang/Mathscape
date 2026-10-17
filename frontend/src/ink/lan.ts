@@ -1,11 +1,11 @@
 import QRCode from "qrcode";
 import { safeInvoke } from "../core/ipc";
 import { inkId,type InkDocumentMetadata,type InkOperation,type InkStroke } from "./model";
-import type { StoredInkSession } from "./persistence";
+import type { InkNoteState, StoredInkSession } from "./persistence";
 
 export interface InkLanStatus {enabled:boolean;running:boolean;port:number;urls:string[];certificate_file_sha256:string|null;assets_ready:boolean;error:string|null}
 export interface InkWriterView {document_id:string;head_seq:number;writer_epoch:number;session:StoredInkSession|null;remote:boolean;pairing_pending:boolean}
-export interface InkLanMirror {delta:{metadata:InkDocumentMetadata;operations:InkOperation[];head_seq:number;server_head:number;writer:InkWriterView;snapshot_count:number};connected:boolean;preview:InkStroke|null;client:{pending_count:number;locally_durable:boolean;secure_context:boolean;page_id:string}|null}
+export interface InkLanMirror {delta:{metadata:InkDocumentMetadata;operations:InkOperation[];head_seq:number;server_head:number;writer:InkWriterView;snapshot_count:number;note?:InkNoteState};connected:boolean;preview:InkStroke|null;client:{pending_count:number;locally_durable:boolean;secure_context:boolean;page_id:string}|null}
 export type InkSetupHandoff = "unbound"|"idle"|"requested"|"ready"|"resumed"|"claimed";
 export interface InkSetupStatus {active:boolean;expires_at:number|null;urls:string[];opened:boolean;certificate_downloaded:boolean;https_trusted:boolean;check:{secure_context:boolean;indexed_db:boolean;service_worker:boolean;user_agent:string}|null;complete:boolean;document_id?:string|null;handoff?:InkSetupHandoff|"";transfer_confirmation?:boolean}
 /** What the desktop mirror last learned about the tablet holding the lease. */

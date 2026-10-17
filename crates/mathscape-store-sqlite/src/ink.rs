@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::ink_note::{self, InkCreateReceipt, InkLifecycle, InkNoteState, InkTitleMode, now_ms};
 use crate::{SqliteStoreError, table_has_column};
 
 pub const INK_STORAGE_VERSION: &str = "mathscape-ink-storage-1";
@@ -13,6 +14,8 @@ pub struct StoredInkDocument {
     pub document: InkLabDocument,
     pub head_seq: u64,
     pub updated_at: String,
+    /// Authoritative title and lifecycle; `document.title` mirrors `note.title`.
+    pub note: InkNoteState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -24,6 +27,16 @@ pub struct StoredInkDocumentSummary {
     pub head_seq: u64,
     pub session_count: u64,
     pub active_session_id: Option<String>,
+    pub title_mode: InkTitleMode,
+    pub title_revision: u64,
+    pub lifecycle: InkLifecycle,
+    pub lifecycle_revision: u64,
+    pub trashed_at: Option<i64>,
+    pub last_used_at: i64,
+    pub page_count: u64,
+    pub snapshot_count: u64,
+    /// An active session held by a device other than this desktop.
+    pub remote_active: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -262,10 +275,14 @@ pub(crate) fn reserve_snapshot_in(
         if existing.document_id != document_id || existing.through_seq != expected_head {
             return Err(SqliteStoreError::InkRequestConflict(request_id.into()));
         }
+        // A reservation accepted before the document was trashed may finish.
         return Ok(existing);
     }
     let stored = load_document(tx, document_id)?
         .ok_or_else(|| SqliteStoreError::InkDocumentNotFound(document_id.into()))?;
+    if stored.note.lifecycle == InkLifecycle::Trashed {
+        return Err(SqliteStoreError::InkDocumentTrashed(document_id.into()));
+    }
     if stored.head_seq != expected_head {
         return Err(SqliteStoreError::InkHeadConflict {
             expected: expected_head,
@@ -499,9 +516,45 @@ pub(crate) fn create_document(
     writer_id: &str,
     device: &Value,
 ) -> Result<StoredInkSession, SqliteStoreError> {
+    create_note(
+        connection,
+        document,
+        session_id,
+        writer_id,
+        device,
+        InkTitleMode::Manual,
+        None,
+    )
+    .map(|receipt| receipt.session)
+}
+
+#[derive(Serialize)]
+struct CreateFingerprint<'a> {
+    document: &'a InkLabDocument,
+    session_id: &'a str,
+    writer_id: &'a str,
+    device: &'a Value,
+    title_mode: InkTitleMode,
+}
+
+/// Creates a document with explicit note metadata. With `title_mode = auto`
+/// the stored title is generated from `created_at` (D3) and the submitted
+/// title is only a placeholder. `request_id` makes the call idempotent (D12).
+pub(crate) fn create_note(
+    connection: &mut Connection,
+    document: &InkLabDocument,
+    session_id: &str,
+    writer_id: &str,
+    device: &Value,
+    title_mode: InkTitleMode,
+    request_id: Option<&str>,
+) -> Result<InkCreateReceipt, SqliteStoreError> {
     validate_identifier(document.document_id.as_str(), "document_id")?;
     validate_identifier(session_id, "session_id")?;
     validate_identifier(writer_id, "writer_id")?;
+    if let Some(request_id) = request_id {
+        validate_identifier(request_id, "request_id")?;
+    }
     document
         .validate()
         .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
@@ -510,11 +563,32 @@ pub(crate) fn create_document(
             "a new P1 document must not already contain operations".to_owned(),
         ));
     }
+    let fingerprint = ink_note::create_fingerprint(&CreateFingerprint {
+        document,
+        session_id,
+        writer_id,
+        device,
+        title_mode,
+    })?;
+    let (title, title_mode) = match title_mode {
+        InkTitleMode::Auto => match ink_note::ink_auto_title(&document.created_at) {
+            Some(title) => (title, InkTitleMode::Auto),
+            None => (document.title.clone(), InkTitleMode::Manual),
+        },
+        InkTitleMode::Manual => (document.title.clone(), InkTitleMode::Manual),
+    };
     let pages = serde_json::to_string(&document.pages)?;
     let segments = serde_json::to_string(&document.capture_segments)?;
     let device_json = serde_json::to_string(device)?;
+    let now = now_ms();
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    if let Some(request_id) = request_id
+        && let Some(receipt) = ink_note::replay_create(&transaction, request_id, &fingerprint)?
+    {
+        transaction.commit()?;
+        return Ok(receipt);
+    }
     if transaction
         .query_row(
             "SELECT 1 FROM ink_documents WHERE document_id = ?1",
@@ -528,20 +602,24 @@ pub(crate) fn create_document(
             "document_id is already registered".to_owned(),
         ));
     }
-    let now = document.created_at.clone();
+    let created = document.created_at.clone();
+    // Every note column is written explicitly (D1); defaults are never relied on.
     transaction.execute(
         "INSERT INTO ink_documents
          (document_id, version, title, created_at, exported_at, pages_json,
-          capture_segments_json, head_seq, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?4)",
+          capture_segments_json, head_seq, updated_at, title_mode, title_revision,
+          lifecycle, lifecycle_revision, trashed_at, last_used_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?4, ?8, 0, 'active', 0, NULL, ?9)",
         params![
             document.document_id,
             document.version,
-            document.title,
-            document.created_at,
+            title,
+            created,
             document.exported_at,
             pages,
             segments,
+            title_mode_text(title_mode),
+            now,
         ],
     )?;
     transaction.execute(
@@ -561,12 +639,28 @@ pub(crate) fn create_document(
         "INSERT INTO ink_writer_state
          (document_id, writer_epoch, active_session_id, writer_id, head_seq, updated_at)
          VALUES (?1, 1, ?2, ?3, 0, ?4)",
-        params![document.document_id, session_id, writer_id, now],
+        params![document.document_id, session_id, writer_id, created],
     )?;
+    let receipt = InkCreateReceipt {
+        session: read_session(&transaction, session_id)?
+            .ok_or_else(|| SqliteStoreError::InkInvariant("new session disappeared".to_owned()))?,
+        note: ink_note::read_note(&transaction, &document.document_id)?
+            .ok_or_else(|| SqliteStoreError::InkInvariant("new document disappeared".to_owned()))?,
+        request_id: request_id.map(str::to_owned),
+        replayed: false,
+    };
+    if request_id.is_some() {
+        ink_note::record_create(&transaction, &receipt, &fingerprint, now)?;
+    }
     transaction.commit()?;
-    read_session(connection, session_id)?.ok_or_else(|| {
-        SqliteStoreError::InkInvariant("new session disappeared after commit".to_owned())
-    })
+    Ok(receipt)
+}
+
+fn title_mode_text(mode: InkTitleMode) -> &'static str {
+    match mode {
+        InkTitleMode::Auto => "auto",
+        InkTitleMode::Manual => "manual",
+    }
 }
 
 pub(crate) fn start_session(
@@ -582,14 +676,12 @@ pub(crate) fn start_session(
     let device_json = serde_json::to_string(device)?;
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    transaction
-        .query_row(
-            "SELECT 1 FROM ink_documents WHERE document_id = ?1",
-            [document_id],
-            |_| Ok(()),
-        )
-        .optional()?
-        .ok_or_else(|| SqliteStoreError::InkDocumentNotFound(document_id.to_owned()))?;
+    ink_note::require_active(&transaction, document_id)?;
+    let (current_epoch, current_active): (i64, Option<String>) = transaction.query_row(
+        "SELECT writer_epoch, active_session_id FROM ink_writer_state WHERE document_id = ?1",
+        [document_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
     if let Some(existing) = transaction
         .query_row(
             "SELECT session_id, document_id, writer_id, writer_epoch, status, device_json,
@@ -601,14 +693,48 @@ pub(crate) fn start_session(
         .optional()?
     {
         if existing.document_id == document_id && existing.writer_id == writer_id {
+            // A session only resumes inside its own epoch. Trash, takeover and
+            // explicit stop advance the epoch, so an old session can never be
+            // revived and let an old outbox write again (D13).
+            let existing_epoch = sqlite_u64(existing.writer_epoch, "writer_epoch")?;
+            if existing_epoch != current_epoch {
+                return Err(SqliteStoreError::InkWriterEpochConflict {
+                    document_id: document_id.to_owned(),
+                    expected: existing.writer_epoch,
+                    actual: rust_u64(current_epoch, "writer_epoch")?,
+                });
+            }
             if existing.status == "active" {
+                if current_active.as_deref() != Some(session_id) {
+                    return Err(SqliteStoreError::InkWriterEpochConflict {
+                        document_id: document_id.to_owned(),
+                        expected: existing.writer_epoch,
+                        actual: rust_u64(current_epoch, "writer_epoch")?,
+                    });
+                }
                 transaction.commit()?;
                 return Ok(existing);
             }
-            let (epoch, head_seq): (i64, i64) = transaction.query_row(
-                "SELECT writer_epoch, head_seq FROM ink_writer_state WHERE document_id = ?1",
+            if let Some(active) = current_active.as_deref() {
+                let writer: Option<String> = transaction
+                    .query_row(
+                        "SELECT writer_id FROM ink_sessions WHERE session_id=?1 AND status='active'",
+                        [active],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if let Some(active_writer) = writer {
+                    return Err(SqliteStoreError::InkWriterConflict {
+                        document_id: document_id.to_owned(),
+                        session_id: active.to_owned(),
+                        writer_id: active_writer,
+                    });
+                }
+            }
+            let head_seq: i64 = transaction.query_row(
+                "SELECT head_seq FROM ink_writer_state WHERE document_id = ?1",
                 [document_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )?;
             let now = sqlite_now(&transaction)?;
             transaction.execute(
@@ -628,13 +754,20 @@ pub(crate) fn start_session(
                     "resumed session disappeared after commit".to_owned(),
                 )
             })?;
-            debug_assert_eq!(resumed.writer_epoch as i64, epoch);
             return Ok(resumed);
         }
         return Err(SqliteStoreError::InkInvariant(
             "session_id is already registered for a different writer or document".to_owned(),
         ));
     }
+    // Sessions left active by an older epoch can never write again; close them
+    // instead of letting them block a new writer.
+    let stale_time = sqlite_now(&transaction)?;
+    transaction.execute(
+        "UPDATE ink_sessions SET status='closed', last_seen_at=?3
+         WHERE document_id=?1 AND status='active' AND writer_epoch<>?2",
+        params![document_id, current_epoch, stale_time],
+    )?;
     let active: Option<(String, String)> = transaction
         .query_row(
             "SELECT session_id, writer_id FROM ink_sessions
@@ -774,6 +907,8 @@ pub(crate) fn append_operation_in(
         receipt.replayed = true;
         return Ok(receipt);
     }
+    // Replays above still succeed for requests accepted before the trash.
+    ink_note::require_active(transaction, document_id)?;
 
     let (actual_head, actual_epoch, active_session): (i64, i64, Option<String>) = transaction
         .query_row(
@@ -835,8 +970,12 @@ pub(crate) fn append_operation_in(
             "document version and created_at are immutable".to_owned(),
         ));
     }
+    // The submitted title is validated for compatibility but no longer has
+    // authority (H1): the stored title stays, so old metadata replays and stale
+    // tablet titles cannot overwrite a rename. The request fingerprint above
+    // still covers the original metadata, title included.
+    let stored_title = std::mem::replace(&mut document.document.title, metadata.title.clone());
     document.document.version = metadata.version.clone();
-    document.document.title = metadata.title.clone();
     document.document.created_at = metadata.created_at.clone();
     document.document.exported_at = metadata.exported_at.clone();
     document.document.pages = metadata.pages.clone();
@@ -846,6 +985,7 @@ pub(crate) fn append_operation_in(
         .document
         .validate()
         .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
+    document.document.title = stored_title;
     let pages_json = serde_json::to_string(&metadata.pages)?;
     let segments_json = serde_json::to_string(&metadata.capture_segments)?;
 
@@ -864,19 +1004,19 @@ pub(crate) fn append_operation_in(
         ],
     )?;
     transaction.execute(
-        "UPDATE ink_documents SET version = ?2, title = ?3, created_at = ?4,
-         exported_at = ?5, pages_json = ?6, capture_segments_json = ?7,
-         head_seq = ?8, updated_at = ?9 WHERE document_id = ?1",
+        "UPDATE ink_documents SET version = ?2, created_at = ?3,
+         exported_at = ?4, pages_json = ?5, capture_segments_json = ?6,
+         head_seq = ?7, updated_at = ?8, last_used_at = ?9 WHERE document_id = ?1",
         params![
             document_id,
             metadata.version,
-            metadata.title,
             metadata.created_at,
             metadata.exported_at,
             pages_json,
             segments_json,
             sqlite_u64(expected_seq, "ink sequence")?,
             now,
+            now_ms(),
         ],
     )?;
     transaction.execute(
@@ -921,39 +1061,77 @@ pub(crate) fn open_document(
 
 pub(crate) fn list_documents(
     connection: &Connection,
+    lifecycle: InkLifecycle,
 ) -> Result<Vec<StoredInkDocumentSummary>, SqliteStoreError> {
-    let mut statement = connection.prepare(
+    let order = match lifecycle {
+        InkLifecycle::Active => "d.last_used_at DESC, d.document_id DESC",
+        InkLifecycle::Trashed => "d.trashed_at DESC, d.document_id DESC",
+    };
+    let mut statement = connection.prepare(&format!(
         "SELECT d.document_id, d.title, d.created_at, d.updated_at, d.head_seq,
                 (SELECT COUNT(*) FROM ink_sessions s WHERE s.document_id = d.document_id),
                 (SELECT s.session_id FROM ink_sessions s
                  WHERE s.document_id = d.document_id AND s.status = 'active'
-                 ORDER BY s.last_seen_at DESC, s.session_id DESC LIMIT 1)
-         FROM ink_documents d
-         ORDER BY d.updated_at DESC, d.document_id DESC",
-    )?;
+                 ORDER BY s.last_seen_at DESC, s.session_id DESC LIMIT 1),
+                d.title_mode, d.title_revision, d.lifecycle, d.lifecycle_revision,
+                d.trashed_at, d.last_used_at, json_array_length(d.pages_json),
+                (SELECT COUNT(*) FROM ink_snapshots p WHERE p.document_id = d.document_id),
+                EXISTS(SELECT 1 FROM ink_sessions s WHERE s.document_id = d.document_id
+                       AND s.status = 'active' AND s.writer_id <> 'desktop-local')
+         FROM ink_documents d WHERE d.lifecycle = ?1
+         ORDER BY {order}"
+    ))?;
+    let lifecycle_text = match lifecycle {
+        InkLifecycle::Active => "active",
+        InkLifecycle::Trashed => "trashed",
+    };
     let rows = statement
-        .query_map([], |row| {
+        .query_map([lifecycle_text], |row| {
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, Option<String>>(6)?,
+                (
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ),
+                (
+                    row.get::<_, String>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, i64>(14)?,
+                    row.get::<_, bool>(15)?,
+                ),
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     rows.into_iter()
         .map(
             |(
-                document_id,
-                title,
-                created_at,
-                updated_at,
-                head_seq,
-                session_count,
-                active_session_id,
+                (
+                    document_id,
+                    title,
+                    created_at,
+                    updated_at,
+                    head_seq,
+                    session_count,
+                    active_session_id,
+                ),
+                (
+                    title_mode,
+                    title_revision,
+                    lifecycle_revision,
+                    trashed_at,
+                    last_used_at,
+                    page_count,
+                    snapshot_count,
+                    remote_active,
+                ),
             )| {
                 Ok(StoredInkDocumentSummary {
                     document_id,
@@ -963,6 +1141,19 @@ pub(crate) fn list_documents(
                     head_seq: rust_u64(head_seq, "ink head")?,
                     session_count: rust_u64(session_count, "ink session count")?,
                     active_session_id,
+                    title_mode: if title_mode == "auto" {
+                        InkTitleMode::Auto
+                    } else {
+                        InkTitleMode::Manual
+                    },
+                    title_revision: rust_u64(title_revision, "title_revision")?,
+                    lifecycle,
+                    lifecycle_revision: rust_u64(lifecycle_revision, "lifecycle_revision")?,
+                    trashed_at,
+                    last_used_at,
+                    page_count: rust_u64(page_count, "page_count")?,
+                    snapshot_count: rust_u64(snapshot_count, "snapshot_count")?,
+                    remote_active,
                 })
             },
         )
@@ -1062,10 +1253,13 @@ fn load_document<C: InkQueryConnection>(
     document
         .validate()
         .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
+    let note = ink_note::read_note(connection, document_id)?
+        .ok_or_else(|| SqliteStoreError::InkDocumentNotFound(document_id.to_owned()))?;
     Ok(Some(StoredInkDocument {
         document,
         head_seq: rust_u64(head_seq, "ink head")?,
         updated_at,
+        note,
     }))
 }
 

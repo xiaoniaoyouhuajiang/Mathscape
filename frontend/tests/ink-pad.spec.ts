@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const output=fileURLToPath(new URL("../../.test-runs/ink-lan-browser/",import.meta.url));
 let serial=Date.now();
-async function control(action:string){const id=++serial;await writeFile(output+"control.json",JSON.stringify({id,action}));await expect.poll(async()=>{try{return JSON.parse(await readFile(output+"ready.json","utf8")).action_id;}catch{return 0;}}).toBe(id);return JSON.parse(await readFile(output+"ready.json","utf8"));}
+async function control(action:string,extra:Record<string,unknown>={}){const id=++serial;await writeFile(output+"control.json",JSON.stringify({...extra,id,action}));await expect.poll(async()=>{try{return JSON.parse(await readFile(output+"ready.json","utf8")).action_id;}catch{return 0;}}).toBe(id);return JSON.parse(await readFile(output+"ready.json","utf8"));}
 async function writeLine(page:Page,dy=0){const canvas=page.locator("#pad-board .ink-input");await expect(canvas).toBeVisible();const box=(await canvas.boundingBox())!,x=box.x+box.width/2,y=box.y+box.height/2+dy;await page.mouse.move(x-60,y);await page.mouse.down();await page.mouse.move(x+60,y,{steps:10});await page.mouse.up();}
 test.beforeEach(async({page})=>{const fixture=await control("fresh");await page.goto(fixture.url);await expect(page.locator("#pad-connection")).toContainText("电脑已连接");});
 test.afterEach(async()=>{await control("resume");});
@@ -146,4 +146,53 @@ test("a resume link reopens the stored session and a transfer QR moves writing t
   await tablet.goto(offer.transfer_url);await expect(tablet.locator("#pad-connection")).toContainText("电脑已连接");await expect(tablet.locator("#pad-desktop-status")).toContainText("head 2");
   await expect(page.locator("#pad-connection")).toContainText("写入权已转移");
   await tablet.context().close();
+});
+
+async function renameOnPad(page:Page,title:string){await page.getByRole("button",{name:"改名",exact:true}).click();await page.locator("#pad-rename-input").fill(title);await page.getByRole("button",{name:"保存标题",exact:true}).click();}
+
+test("N1 a desktop rename reaches the tablet and a tablet rename reaches the desktop",async({page})=>{
+  await control("rename",{title:"电脑上的标题"});await expect(page.locator("#pad-title")).toHaveText("电脑上的标题");
+  await writeLine(page);await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  expect((await control("status")).note.title).toBe("电脑上的标题");
+  await renameOnPad(page,"  平板上的标题 ");await expect(page.locator("#pad-status")).toContainText("标题已同步");
+  await expect(page.locator("#pad-title")).toHaveText("平板上的标题");
+  expect((await control("status")).note).toMatchObject({title:"平板上的标题",title_mode:"manual",title_revision:2});
+  await page.reload();await expect(page.locator("#pad-connection")).toContainText("电脑已连接");await expect(page.locator("#pad-title")).toHaveText("平板上的标题");
+});
+
+test("N1 an offline tablet rename is kept locally and a conflicting desktop rename asks first",async({page,context})=>{
+  await writeLine(page);await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  await control("pause");await context.setOffline(true);await expect(page.locator("#pad-connection")).not.toContainText("电脑已连接");
+  await renameOnPad(page,"平板离线标题");await expect(page.locator("#pad-status")).toContainText("连接电脑后自动同步");
+  await writeLine(page,40);await expect(page.locator("#pad-local-status")).toContainText("待同步 1");
+  await control("rename",{title:"电脑同时改的"});
+  await context.setOffline(false);await control("resume");await expect(page.locator("#pad-connection")).toContainText("电脑已连接");
+  await expect(page.locator("#pad-title-choice")).toBeVisible();await expect(page.locator("#pad-title-choice-text")).toContainText("电脑同时改的");
+  // Replayed queued metadata must not overwrite the server's title.
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 2");expect((await control("status")).note.title).toBe("电脑同时改的");
+  await page.getByRole("button",{name:"使用「平板离线标题」"}).click();await expect(page.locator("#pad-title")).toHaveText("平板离线标题");
+  expect((await control("status")).note.title).toBe("平板离线标题");
+});
+
+test("N1 trashing a connected note fences the tablet and restoring it requires re-pairing",async({page,context})=>{
+  await writeLine(page,-30);await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  await control("pause");await context.setOffline(true);await writeLine(page,30);await expect(page.locator("#pad-local-status")).toContainText("待同步 1");
+  await control("resume");await context.setOffline(false);await expect(page.locator("#pad-connection")).toContainText("电脑已连接");
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 2");
+  await control("trash");await expect(page.locator("#pad-status")).toContainText("回收站");
+  await expect(page.getByRole("button",{name:"笔",exact:true})).toBeDisabled();await expect(page.getByRole("button",{name:"改名",exact:true})).toBeDisabled();
+  expect((await control("status")).note.lifecycle).toBe("trashed");
+  const receipt=(await control("restore")).lifecycle_receipt;expect(receipt.requires_repairing).toBe(true);
+  await page.reload();await expect(page.getByRole("button",{name:"笔",exact:true})).toBeDisabled();
+  expect((await control("status")).document.document.operations).toHaveLength(2);
+});
+
+test("N1 a tablet that was offline when the note was trashed keeps its pending writing and can export it",async({page,context})=>{
+  await writeLine(page,-30);await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  await control("pause");await context.setOffline(true);await writeLine(page,30);await expect(page.locator("#pad-local-status")).toContainText("待同步 1");
+  await control("trash");await context.setOffline(false);await control("resume");
+  await expect(page.locator("#pad-status")).toContainText("回收站");await expect(page.getByRole("button",{name:"笔",exact:true})).toBeDisabled();
+  await expect(page.locator("#pad-local-status")).toContainText("待同步 1");expect((await control("status")).document.document.operations).toHaveLength(1);
+  const downloaded=page.waitForEvent("download");await page.getByRole("button",{name:"导出恢复草稿"}).click();
+  expect(JSON.parse(await readFile((await (await downloaded).path())!,"utf8")).operations).toHaveLength(2);
 });

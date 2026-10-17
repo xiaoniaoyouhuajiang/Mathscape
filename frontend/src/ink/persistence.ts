@@ -13,6 +13,24 @@ export interface StoredInkSession {
   last_seen_at: string;
 }
 
+export type InkTitleMode = "auto" | "manual";
+export type InkLifecycle = "active" | "trashed";
+
+/** Authoritative title and lifecycle of a document (N1). */
+export interface InkNoteState {
+  document_id: string;
+  title: string;
+  title_mode: InkTitleMode;
+  title_revision: number;
+  lifecycle: InkLifecycle;
+  lifecycle_revision: number;
+  /** Unix milliseconds. */
+  trashed_at: number | null;
+  /** Unix milliseconds of the last ink edit. */
+  last_used_at: number;
+  created_at: string;
+}
+
 export interface StoredInkDocumentSummary {
   document_id: string;
   title: string;
@@ -21,12 +39,92 @@ export interface StoredInkDocumentSummary {
   head_seq: number;
   session_count: number;
   active_session_id: string | null;
+  title_mode: InkTitleMode;
+  title_revision: number;
+  lifecycle: InkLifecycle;
+  lifecycle_revision: number;
+  trashed_at: number | null;
+  last_used_at: number;
+  page_count: number;
+  snapshot_count: number;
+  remote_active: boolean;
 }
 
 export interface StoredInkDocument {
   document: InkDocument;
   head_seq: number;
   updated_at: string;
+  note: InkNoteState;
+}
+
+export interface InkCreateReceipt extends StoredInkSession {
+  note: InkNoteState;
+  request_id: string | null;
+  replayed: boolean;
+}
+
+export interface InkNoteReceipt {
+  request_id: string;
+  kind: "rename" | "trash" | "restore";
+  note: InkNoteState;
+  replayed: boolean;
+  closed_sessions: number;
+  revoked_devices: number;
+  requires_repairing: boolean;
+}
+
+export interface InkTrashImpact {
+  note: InkNoteState;
+  head_seq: number;
+  page_count: number;
+  snapshot_count: number;
+  evidence_count: number;
+  remote_session: boolean;
+  device_credentials: number;
+  pairing_pending: boolean;
+  blank: boolean;
+  connected: boolean;
+}
+
+export interface InkCleanBlankReceipt {
+  request_id: string;
+  trashed: InkNoteState[];
+  skipped: Array<{ document_id: string; reason: string }>;
+  replayed: boolean;
+}
+
+export function getInkNote(documentId: string): Promise<InkNoteState | null> {
+  return safeInvoke("get_ink_note", { documentId });
+}
+
+export function getInkTrashImpact(documentId: string): Promise<InkTrashImpact> {
+  return safeInvoke("get_ink_trash_impact", { documentId });
+}
+
+export function listTrashedInkDocuments(): Promise<StoredInkDocumentSummary[]> {
+  return safeInvoke("list_trashed_ink_documents");
+}
+
+export function renameInkNote(requestId: string, documentId: string, title: string, expectedTitleRevision: number): Promise<InkNoteReceipt> {
+  return safeInvoke("rename_ink_note", {
+    request: { request_id: requestId, document_id: documentId, title, expected_title_revision: expectedTitleRevision },
+  });
+}
+
+export function trashInkNote(requestId: string, documentId: string, expectedLifecycleRevision: number): Promise<InkNoteReceipt> {
+  return safeInvoke("trash_ink_note", {
+    request: { request_id: requestId, document_id: documentId, expected_lifecycle_revision: expectedLifecycleRevision },
+  });
+}
+
+export function restoreInkNote(requestId: string, documentId: string, expectedLifecycleRevision: number): Promise<InkNoteReceipt> {
+  return safeInvoke("restore_ink_note", {
+    request: { request_id: requestId, document_id: documentId, expected_lifecycle_revision: expectedLifecycleRevision },
+  });
+}
+
+export function cleanBlankInkNotes(requestId: string, documentIds: string[]): Promise<InkCleanBlankReceipt> {
+  return safeInvoke("clean_blank_ink_notes", { request: { request_id: requestId, document_ids: documentIds } });
 }
 
 export interface StoredInkSnapshot {
@@ -80,9 +178,10 @@ export async function createInkDocument(
   sessionId: string,
   writerId: string,
   device: unknown,
-): Promise<StoredInkSession> {
-  return await safeInvoke<StoredInkSession>("create_ink_document", {
-    request: { document, session_id: sessionId, writer_id: writerId, device },
+  options: { requestId?: string; titleMode?: InkTitleMode } = {},
+): Promise<InkCreateReceipt> {
+  return await safeInvoke<InkCreateReceipt>("create_ink_document", {
+    request: { document, session_id: sessionId, writer_id: writerId, device, request_id: options.requestId, title_mode: options.titleMode },
   });
 }
 

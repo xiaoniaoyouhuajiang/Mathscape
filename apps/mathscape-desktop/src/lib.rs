@@ -25,7 +25,7 @@ pub use discovery::{
 pub use discovery_view::{DESKTOP_DISCOVERY_VIEW_VERSION, DesktopDiscoveryView};
 pub use ink::{
     AppendInkOperationRequest, CreateInkDocumentRequest, CreateInkSnapshotRequest,
-    StartInkSessionRequest,
+    InkCommandError, InkTrashImpactView, StartInkSessionRequest,
 };
 pub use llm_settings::{
     LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,
@@ -832,6 +832,13 @@ pub fn run() {
             ink::list_ink_documents,
             ink::list_ink_sessions,
             ink::close_ink_session,
+            ink::get_ink_note,
+            ink::get_ink_trash_impact,
+            ink::list_trashed_ink_documents,
+            ink::rename_ink_note,
+            ink::trash_ink_note,
+            ink::restore_ink_note,
+            ink::clean_blank_ink_notes,
             ink_lan::start_ink_lan,
             ink_lan::stop_ink_lan,
             ink_lan::get_ink_lan_status,

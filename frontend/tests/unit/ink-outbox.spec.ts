@@ -98,3 +98,54 @@ describe("P1 Ink outbox", () => {
     expect((await outbox.pending()).map(value => value.request_id)).toEqual(["r1"]);
   });
 });
+
+describe("N1 per-document outbox isolation", () => {
+  const ack = (value: InkOutboxItem) => ({ request_id: value.request_id, document_id: value.document_id, command_id: value.operation.command_id, seq: value.client_seq, durable: true as const });
+  const other = (requestId: string, clientSeq: number): InkOutboxItem => ({ ...item(requestId, clientSeq), document_id: "other-document", metadata: { ...item(requestId, clientSeq).metadata, document_id: "other-document" } });
+
+  it("keeps syncing other documents when one document fails", async () => {
+    const outbox = new InkOutbox(new MemoryInkOutboxStore());
+    await outbox.enqueue(item("a1", 1));
+    await outbox.enqueue(item("a2", 2));
+    await outbox.enqueue(other("b1", 1));
+    await outbox.enqueue(other("b2", 2));
+    const sent: string[] = [];
+    const failure = await outbox.flush({
+      submit: async value => {
+        if (value.request_id === "a1") throw new Error("offline");
+        sent.push(value.request_id);
+        return ack(value);
+      },
+    }).catch(error => error);
+    expect(failure).toBeInstanceOf(InkOutboxFlushError);
+    expect(failure.sent).toBe(2);
+    expect(failure.failures.map((value: { document_id: string }) => value.document_id)).toEqual([document.document_id]);
+    expect(sent).toEqual(["b1", "b2"]);
+    expect((await outbox.pending()).map(value => value.request_id)).toEqual(["a1", "a2"]);
+  });
+
+  it("quarantines a trashed document so it never blocks later flushes", async () => {
+    const outbox = new InkOutbox(new MemoryInkOutboxStore());
+    await outbox.enqueue(item("a1", 1));
+    await outbox.enqueue(item("a2", 2));
+    await outbox.enqueue(other("b1", 1));
+    const trashed = Object.assign(new Error("手稿已在回收站中"), { code: "document_trashed" });
+    const failure = await outbox.flush({
+      submit: async value => {
+        if (value.document_id === document.document_id) throw trashed;
+        return ack(value);
+      },
+    }).catch(error => error);
+    expect(failure.failures[0].quarantined).toBe(true);
+    expect((await outbox.pending()).map(value => value.request_id)).toEqual([]);
+    expect((await outbox.quarantined(document.document_id)).map(value => value.request_id)).toEqual(["a1", "a2"]);
+    expect((await outbox.quarantined())[0].quarantined?.code).toBe("document_trashed");
+    // A later flush with new work for another document is unaffected.
+    await outbox.enqueue(other("b2", 2));
+    const result = await outbox.flush({ submit: async value => ack(value) });
+    expect(result.sent).toBe(1);
+    // Re-enqueueing a quarantined request with the same content is not a conflict.
+    await outbox.enqueue(item("a1", 1));
+    expect((await outbox.pending()).length).toBe(0);
+  });
+});

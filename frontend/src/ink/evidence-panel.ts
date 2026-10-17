@@ -1,6 +1,6 @@
 import { eventBus } from "../core/events";
 import { inkId, parseInkSnapshotManifest, projectInk } from "./model";
-import { listInkEvidence, registerInkEvidence, type InkEvidenceRequest, type InkSelection, type StoredInkSnapshot } from "./persistence";
+import { getInkNote, listInkEvidence, registerInkEvidence, restoreInkNote, type InkEvidenceRequest, type InkNoteState, type InkSelection, type StoredInkSnapshot } from "./persistence";
 
 /** Shared controls for immutable snapshot evidence in the workspace and reader. */
 export class InkEvidencePanel {
@@ -8,6 +8,9 @@ export class InkEvidencePanel {
   private readonly register = document.createElement("button");
   private readonly list = document.createElement("div");
   private readonly message = document.createElement("span");
+  private readonly source = document.createElement("div");
+  /** Snapshots of a trashed document stay readable but take no new evidence (D8). */
+  private sourceNote: InkNoteState | undefined;
   private request: InkEvidenceRequest | undefined;
   private submitting = false;
   private disposed = false;
@@ -42,23 +45,72 @@ export class InkEvidencePanel {
     const label = document.createElement("summary");
     label.textContent = "此快照已登记的来源证据";
     history.append(label, this.list);
-    host.replaceChildren(controls, history);
+    this.source.className = "ink-evidence-source";
+    this.source.hidden = true;
+    host.replaceChildren(this.source, controls, history);
     this.update();
     void this.refresh();
+    void this.refreshSource();
+  }
+
+  private trashed(): boolean { return this.sourceNote?.lifecycle === "trashed"; }
+
+  private async refreshSource(): Promise<void> {
+    try {
+      const note = await getInkNote(this.snapshot.document_id);
+      if (this.disposed) return;
+      this.sourceNote = note ?? undefined;
+    } catch {
+      // Older hosts may not know the note command; keep registration enabled.
+      return;
+    }
+    this.renderSource();
+    this.update();
+  }
+
+  private renderSource(): void {
+    this.source.replaceChildren();
+    this.source.hidden = !this.trashed();
+    if (!this.trashed()) return;
+    const text = document.createElement("span");
+    text.textContent = "来源手稿已移到回收站，快照仍可查看；恢复手稿后才能登记新的来源证据。";
+    const restore = document.createElement("button");
+    restore.type = "button"; restore.textContent = "恢复手稿";
+    restore.onclick = () => void this.restoreSource(restore);
+    this.source.append(text, restore);
+  }
+
+  private async restoreSource(button: HTMLButtonElement): Promise<void> {
+    const note = this.sourceNote;
+    if (!note) return;
+    button.disabled = true;
+    try {
+      const receipt = await restoreInkNote(inkId(), note.document_id, note.lifecycle_revision);
+      if (this.disposed) return;
+      this.sourceNote = receipt.note;
+      this.message.textContent = receipt.requires_repairing ? "手稿已恢复。之前连接的平板需要在电脑重新配对。" : "手稿已恢复。";
+      eventBus.emit("source-map-changed", { reason: "ink-note-restored" });
+    } catch (error) {
+      if (!this.disposed) this.message.textContent = "恢复失败：" + (error instanceof Error ? error.message : String(error));
+    } finally {
+      button.disabled = false;
+      if (!this.disposed) { this.renderSource(); this.update(); }
+    }
   }
 
   update(): void {
     const selected = this.selection();
     this.summary.textContent = `已选 ${selected.stroke_ids.length} 笔 · 只读选区`;
     this.host.dataset.selectedStrokes = selected.stroke_ids.join(",");
-    this.register.disabled = this.submitting || !selected.stroke_ids.length;
+    this.register.disabled = this.submitting || !selected.stroke_ids.length || this.trashed();
+    this.register.title = this.trashed() ? "来源手稿在回收站中" : "";
   }
 
   dispose(): void { this.disposed = true; this.generation++; }
 
   private async submit(): Promise<void> {
     const selected = this.selection();
-    if (this.submitting || !selected.stroke_ids.length) return;
+    if (this.submitting || !selected.stroke_ids.length || this.trashed()) return;
     const next = { ...selected, stroke_ids: [...new Set(selected.stroke_ids)].sort(), snapshot_id: this.snapshot.snapshot_id, expected_artifact_id: this.snapshot.artifact_id, expected_content_hash: this.snapshot.content_hash };
     // Keep the same request after an unknown outcome; changing the selection
     // explicitly begins a new authorized registration request.

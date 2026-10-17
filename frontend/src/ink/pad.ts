@@ -1,7 +1,7 @@
 import { InkCanvas,type CanvasMetrics,type InkTool } from "./canvas";
-import { appendInk,encodeInk,inkId,inkMetadata,parseInkDocument,projectInk,type InkDocument,type InkStroke,type InkBrush,type CaptureSegment,type InkPage,type InkProjection } from "./model";
+import { appendInk,encodeInk,inkId,inkMetadata,normalizeInkTitle,INK_TITLE_MAX,parseInkDocument,projectInk,type InkDocument,type InkStroke,type InkBrush,type CaptureSegment,type InkPage,type InkProjection } from "./model";
 import { InkPadStore,type PadBinding,type PadDraft } from "./pad-store";
-import { InkPadTransport,PadTransportError,type PadContext } from "./pad-transport";
+import { InkPadTransport,PadTransportError,type PadContext,type PadNote } from "./pad-transport";
 import type { InkOutboxItem } from "./outbox";
 import "./lab.css";
 import "./pad.css";
@@ -10,6 +10,8 @@ const root=document.querySelector<HTMLElement>("#inkpad-root")!;
 function element<T extends HTMLElement>(selector:string):T{return root.querySelector<T>(selector)!;}
 function download(blob:Blob,name:string):void{const url=URL.createObjectURL(blob),anchor=document.createElement("a");anchor.href=url;anchor.download=name;document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function credential():string{return Array.from(crypto.getRandomValues(new Uint8Array(32)),value=>value.toString(16).padStart(2,"0")).join("");}
+/** Offline rename intent, kept in the meta store under `rename:<binding key>`. */
+interface RenameIntent { request_id:string;document_id:string;title:string;expected:number }
 function canonical(value:unknown):string {function ordered(value:unknown):unknown {if(Array.isArray(value))return value.map(ordered);if(value!==null&&typeof value==="object")return Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,value])=>[key,ordered(value)]));return value;}return JSON.stringify(ordered(value));}
 
 class InkPad {
@@ -35,9 +37,13 @@ class InkPad {
   private projection:{document:InkDocument;count:number;value:InkProjection}|undefined;
   private lastMetricsSummary=0;
   private navigationRevision=0;
+  private note:PadNote|undefined;
+  private renaming:Promise<void>|undefined;
 
   async start():Promise<void> {
-    root.innerHTML=`<main class="lab-pad"><header class="pad-header"><div class="pad-title"><span class="lab-mark">M</span><strong id="pad-title">Mathscape InkPad</strong><span class="lab-badge">P3</span></div><span id="pad-connection" role="status">正在准备本机存储…</span></header>
+    root.innerHTML=`<main class="lab-pad"><header class="pad-header"><div class="pad-title"><span class="lab-mark">M</span><strong id="pad-title">Mathscape InkPad</strong><button id="pad-rename" type="button" class="pad-rename-button" title="修改手稿标题">改名</button><span class="lab-badge">P3</span></div><span id="pad-connection" role="status">正在准备本机存储…</span></header>
+      <form id="pad-rename-form" class="pad-rename" hidden><input id="pad-rename-input" maxlength="${INK_TITLE_MAX}" aria-label="手稿标题" placeholder="留空恢复自动标题" autocomplete="off"><button id="pad-rename-save" type="submit">保存标题</button><button id="pad-rename-cancel" type="button">取消</button></form>
+      <div id="pad-title-choice" class="pad-rename" role="group" aria-label="标题冲突" hidden><span id="pad-title-choice-text"></span><button id="pad-title-theirs" type="button"></button><button id="pad-title-mine" type="button"></button></div>
       <nav class="ink-toolbar" aria-label="书写工具"><div class="ink-tool-group"><button id="pad-pen" class="is-active">笔</button><button id="pad-select">套索选择</button><button id="pad-erase">整笔擦除</button><button id="pad-partial_erase">局部擦除</button><button id="pad-undo">撤销</button><button id="pad-redo">重做</button></div>
       <div class="ink-tool-group"><label class="ink-control">颜色<input id="pad-color" type="color" value="#193a66"></label><label class="ink-control">笔宽<input id="pad-width" type="range" min="1" max="16" step="0.5" value="4"></label><label class="ink-control"><input id="pad-finger" type="checkbox">手指书写</label></div>
       <div class="ink-tool-group"><select id="pad-page" aria-label="页面"></select><button id="pad-add-page">新增页面</button><button id="pad-zoom-out" aria-label="缩小">−</button><button id="pad-fit">整页</button><button id="pad-zoom-in" aria-label="放大">＋</button></div></nav>
@@ -78,6 +84,11 @@ class InkPad {
     }catch(error){this.message(error instanceof Error?error.message:String(error));element("#pad-connection").textContent="配对或本机恢复存储不可用";}
   }
   private events():void {
+    const form=element<HTMLFormElement>("#pad-rename-form"),input=element<HTMLInputElement>("#pad-rename-input");
+    element<HTMLButtonElement>("#pad-rename").onclick=()=>{if(!this.document||this.fenced)return;element("#pad-title-choice").hidden=true;form.hidden=false;input.value=this.document.title;input.focus();input.select();};
+    element<HTMLButtonElement>("#pad-rename-cancel").onclick=()=>{form.hidden=true;};
+    input.onkeydown=event=>{if(event.key==="Escape"){event.preventDefault();form.hidden=true;}};
+    form.onsubmit=event=>{event.preventDefault();void this.requestRename(input.value);};
     for(const tool of ["pen","select","erase","partial_erase"] as const)element<HTMLButtonElement>("#pad-"+tool).onclick=()=>{this.board?.resetTransientInteraction();this.tool=tool;for(const value of ["pen","select","erase","partial_erase"])element("#pad-"+value).classList.toggle("is-active",value===tool);this.board?.refresh();};
     for(const kind of ["undo","redo"] as const)element<HTMLButtonElement>("#pad-"+kind).onclick=()=>{if(!this.document||this.fenced)return;this.board?.resetTransientInteraction();const target=projectInk(this.document)[kind].at(-1);if(target)this.commit({kind,target_command_id:target});};
     element<HTMLButtonElement>("#pad-add-page").onclick=()=>{if(!this.document||this.fenced)return;this.board?.resetTransientInteraction();const page:InkPage={id:inkId(),width:1200,height:1600};this.document.pages.push(page);this.commit({kind:"page_add",page});this.page=page.id;this.pages();this.board?.setSelection([]);this.board?.fit();};
@@ -135,7 +146,7 @@ class InkPad {
       this.state=state;element("#pad-connection").textContent=message;
       if(state==="conflict"){this.board?.finish();this.fenced=true;this.fenceCode=code;if(this.document)this.mount(this.document,this.page);this.message(message);}
       this.controls();this.summary();
-    },()=>{void (this.flushing??Promise.resolve()).then(()=>{if(current())void this.flush();});});this.transport=transport;transport.connect();
+    },()=>{void this.sendRename();void (this.flushing??Promise.resolve()).then(()=>{if(current())void this.flush();});},note=>{if(current())void this.applyNote(note);});this.transport=transport;transport.connect();
   }
   private async restore(context:PadContext,binding:PadBinding,current:()=>boolean):Promise<void> {
     if(!current())return;
@@ -148,11 +159,63 @@ class InkPad {
       if(item.operation.seq<=context.head_seq){if(canonical(document.operations[item.operation.seq-1])!==canonical(item.operation))throw new PadTransportError("sequence_conflict","本机队列与电脑历史不一致，请导出恢复草稿。");}
       else {if(item.operation.seq!==document.operations.length+1)throw new PadTransportError("sequence_conflict","恢复队列有序号缺口，原内容将保持不变。");Object.assign(document,structuredClone(item.metadata));document.operations.push(structuredClone(item.operation));}
     }
+    // Queued metadata carries the title from when it was written; the server's note wins (H1).
+    document.title=context.note?.title??context.document.title;this.note=context.note;
     parseInkDocument(document);if(!current())return;
     await this.database!.cache({...this.draft(document,binding),confirmed_head:context.head_seq});
     if(!current())return;
     this.confirmed=context.head_seq;this.pending=pending.length;this.fenced=false;this.fenceCode=undefined;
     this.mount(document,this.page);await this.refreshDrafts();
+  }
+  private async requestRename(raw:string):Promise<void> {
+    const binding=this.binding,document=this.document;if(!binding||!document||!this.database||this.fenced)return;
+    let title:string;try{title=normalizeInkTitle(raw)??"";}catch(error){this.message(error instanceof Error?error.message:String(error));return;}
+    element("#pad-rename-form").hidden=true;
+    if(!this.note){this.message("电脑上的 Mathscape 版本不支持从平板改名，请在电脑上修改标题。");return;}
+    if(title===document.title||(!title&&this.note.title_mode==="auto"))return;
+    const intent:RenameIntent={request_id:inkId(),document_id:binding.lease.document_id,title,expected:this.note.title_revision};
+    await this.database.metaPut("rename:"+binding.key,intent);
+    this.message(this.transport?.isReady()?"正在同步标题…":"新标题已保存在本机，连接电脑后自动同步。");
+    await this.sendRename();
+  }
+  /** Sends the stored rename intent once; retries reuse its request id. */
+  private async sendRename():Promise<void> {
+    if(this.renaming)return this.renaming;
+    const task=this.sendRenameOnce();this.renaming=task;try{await task;}finally{if(this.renaming===task)this.renaming=undefined;}
+  }
+  private async sendRenameOnce():Promise<void> {
+    const binding=this.binding,transport=this.transport,database=this.database;
+    if(!binding||!database||!transport?.isReady()||this.fenced)return;
+    const key="rename:"+binding.key,intent=await database.metaGet<RenameIntent>(key);if(!intent)return;
+    try{
+      const note=await transport.rename(intent.request_id,intent.title,intent.expected);
+      await database.metaDelete(key);await this.applyNote(note);
+      this.message(intent.title?"标题已同步到电脑。":"已恢复自动标题。");
+    }catch(error){
+      const code=error instanceof PadTransportError?error.code:"";
+      if(code==="offline"||code==="ack_timeout"){this.message("标题尚未同步，重新连接后会自动重试。");return;}
+      await database.metaDelete(key);
+      if(code==="title_conflict"&&error instanceof PadTransportError){this.titleConflict(binding,intent,String(error.details.current_title??""),Number(error.details.current_title_revision??intent.expected));return;}
+      this.message("改名失败："+(error instanceof Error?error.message:String(error)));
+    }
+  }
+  private titleConflict(binding:PadBinding,intent:RenameIntent,current:string,revision:number):void {
+    const box=element("#pad-title-choice");
+    element("#pad-title-choice-text").textContent=`标题已在电脑上改为「${current}」。`;
+    const theirs=element<HTMLButtonElement>("#pad-title-theirs"),mine=element<HTMLButtonElement>("#pad-title-mine");
+    theirs.textContent=`保留「${current}」`;mine.textContent=`使用「${intent.title||"自动标题"}」`;
+    theirs.onclick=()=>{box.hidden=true;this.message("已保留电脑上的标题。");};
+    mine.onclick=()=>{box.hidden=true;if(this.binding?.key!==binding.key||!this.database)return;
+      void this.database.metaPut("rename:"+binding.key,{...intent,request_id:inkId(),expected:revision}).then(()=>this.sendRename());};
+    box.hidden=false;
+  }
+  private async applyNote(note:PadNote):Promise<void> {
+    const binding=this.binding;if(!binding||note.document_id!==binding.lease.document_id)return;
+    if(this.note&&this.note.title_revision>note.title_revision)return;
+    this.note=note;
+    if(!this.document)return;
+    this.document.title=note.title;element("#pad-title").textContent=note.title;
+    try{await this.database?.cache(this.draft());await this.refreshDrafts();}catch{/* The draft title refreshes on the next save. */}
   }
   private async flush():Promise<boolean> {
     if(this.flushing)return this.flushing;
@@ -190,7 +253,7 @@ class InkPad {
     const draft=await this.database.draft(key);if(!draft||revision!==this.navigationRevision)return;await this.database.activate(draft.binding);const pending=await this.database.pending(draft.binding);if(revision!==this.navigationRevision)return;this.binding=draft.binding;this.snapshotRequest=undefined;this.confirmed=draft.confirmed_head;this.pending=pending.length;this.fenced=false;this.fenceCode=undefined;this.persisted=true;this.mount(parseInkDocument(draft.document),draft.page_id);this.connect();
   }
   private pages():void {const select=element<HTMLSelectElement>("#pad-page");select.replaceChildren();this.document?.pages.forEach((page,index)=>select.add(new Option(`第 ${index+1} 页`,page.id)));select.value=this.page;}
-  private controls():void {const disabled=!this.document||this.fenced;for(const name of ["pen","erase","partial_erase","undo","redo","add-page"])element<HTMLButtonElement>("#pad-"+name).disabled=disabled;for(const name of ["export","png"])element<HTMLButtonElement>("#pad-"+name).disabled=!this.document;element<HTMLButtonElement>("#pad-snapshot").disabled=!this.transport?.isReady()||this.fenced;}
+  private controls():void {const disabled=!this.document||this.fenced;element<HTMLButtonElement>("#pad-rename").disabled=disabled;if(disabled)element("#pad-rename-form").hidden=true;for(const name of ["pen","erase","partial_erase","undo","redo","add-page"])element<HTMLButtonElement>("#pad-"+name).disabled=disabled;for(const name of ["export","png"])element<HTMLButtonElement>("#pad-"+name).disabled=!this.document;element<HTMLButtonElement>("#pad-snapshot").disabled=!this.transport?.isReady()||this.fenced;}
   private summary():void {
     if(!this.document)return;
     if(this.projection?.document!==this.document||this.projection.count!==this.document.operations.length)this.projection={document:this.document,count:this.document.operations.length,value:projectInk(this.document)};
