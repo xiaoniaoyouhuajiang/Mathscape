@@ -2,7 +2,7 @@
 
 状态：P0/P0.1、P1、P2、P3 及 P3.1（含 P3.1.1 设置后书写衔接与写入权状态处理）已实现并经用户回归确认。P3.2 免证书便捷连接暂缓，后续优先推进系统级删除语义与 Mathscape 核心工作流。未落地的类型、表名和接口名仍是候选契约。
 
-手稿在 Mathscape 笔记体系中的命名、关联、地图位置和回收站方案见 [手写笔记融入 Mathscape 笔记体系提案 v1](ink-notebook-integration-v1.md)。
+手稿在 Mathscape 笔记体系中的命名、关联、地图位置和回收站方案见 [手稿融入 Mathscape 笔记本提案 v1](ink-notebook-integration-v1.md)。
 
 ## 1. 目标与首个验收场景
 
