@@ -28,6 +28,8 @@ import { sourceNodeDetail } from "../reader/content";
 import { markdownRenderer } from "../reader/markdown";
 import type { ReaderFocus } from "../reader/reader";
 import type { InkReaderFocus } from "../ink/snapshot-reader";
+import { eventBus } from "../core/events";
+import { listInkLinksToTarget, roleLabel, startInkCreateFromTarget } from "../ink/links";
 
 export interface InspectorControllerDelegate {
   getSnapshot: () => DesktopSnapshot | undefined;
@@ -148,6 +150,13 @@ export class InspectorController {
       this.nodeDetail.append(this.delegate.createParseForm(pdf, marker));
     }
 
+    if (node.domain_id !== null && (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceArtifact")) {
+      const inkSlot = textElement("section", "detail-ink-notes", "");
+      inkSlot.setAttribute("aria-label", "相关手稿");
+      this.nodeDetail.insertBefore(inkSlot, editSlot.nextSibling);
+      void this.renderInkNotes(node, inkSlot, actions);
+    }
+
     if (
       node.domain_id !== null &&
       (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceUnitRelation" || node.domain_kind === "SourceSpan")
@@ -183,6 +192,51 @@ export class InspectorController {
         textElement("div", "detail-symbol", "⌁"),
         textElement("p", "", "点击图中的节点以查看它在来源层中的身份和状态。"),
       );
+    }
+  }
+
+  /** "相关手稿" (§6.3): notes linked to this object (or, for a Markdown file,
+   * to its blocks), plus "新建手稿" for source units. Trashed notes are never
+   * listed. */
+  private async renderInkNotes(node: IncidenceNode, host: HTMLElement, actions: HTMLElement): Promise<void> {
+    const objectId = node.domain_id!;
+    const unit = node.domain_kind === "SourceSemanticUnit";
+    if (unit && !isRetired(node.lifecycle)) {
+      const create = textElement("button", "parse-button", "新建手稿");
+      create.type = "button";
+      create.onclick = () => {
+        const bounds = create.getBoundingClientRect();
+        startInkCreateFromTarget({
+          x: bounds.left,
+          y: bounds.bottom + 4,
+          target: { kind: "source_object", object_id: objectId },
+          targetLabel: node.label,
+          excerpt: node.summary ?? undefined,
+        });
+      };
+      actions.append(create);
+    }
+    try {
+      const notes = await listInkLinksToTarget(unit ? "source_object" : "markdown", objectId);
+      if (this.selectedNode?.domain_id !== objectId || !host.isConnected) return;
+      if (!notes.length && !unit) { host.remove(); return; }
+      const list = document.createElement("ul");
+      const seen = new Set<string>();
+      for (const { note, link } of notes) {
+        if (seen.has(note.document_id)) continue;
+        seen.add(note.document_id);
+        const item = document.createElement("li");
+        const open = textElement("button", "link-button", note.title);
+        open.type = "button";
+        open.onclick = () => eventBus.emit("open-ink-document", { documentId: note.document_id });
+        item.append(open, textElement("span", "ink-related-meta", roleLabel(link.role) + (link.is_primary ? " · 主关联" : "")));
+        list.append(item);
+      }
+      host.replaceChildren(textElement("h4", "", `相关手稿（${seen.size}）`));
+      if (seen.size) host.append(list);
+      else host.append(textElement("p", "detail-muted", "还没有相关手稿。"));
+    } catch (error) {
+      host.replaceChildren(textElement("p", "detail-error", `相关手稿读取失败：${errorMessage(error)}`));
     }
   }
 

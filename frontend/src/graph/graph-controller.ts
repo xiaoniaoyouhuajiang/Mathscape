@@ -13,6 +13,8 @@ import {
   type RenderMode,
 } from "./cytoscape";
 import { focusSubgraph, type FocusDepth, type FocusResult } from "./focus";
+import { applyInkOverlay, clearInkOverlay, INK_NOTE_NODE_CLASS, type InkOverlayResult } from "./ink-overlay";
+import type { InkLinkOverlay } from "../ink/links";
 import type { IncidenceGraph, IncidenceNode } from "./projection";
 import { activityGraph } from "./lifecycle";
 import {
@@ -54,6 +56,8 @@ export interface GraphControllerDelegate {
   onGraphRendered?: () => void;
   showToast: (message: string, kind: "success" | "error") => void;
   getSnapshot: () => DesktopSnapshot | undefined;
+  /** N2: a synthesized "我的手稿" node was clicked. */
+  onOpenInkNote?: (documentId: string) => void;
 }
 
 export class GraphController {
@@ -67,6 +71,10 @@ export class GraphController {
   private visibleNodeKinds = new Set<string>(PRESET_NODE_KINDS.source);
   private activePreset: PresetName | "custom" = "source";
   private showRetired = false;
+  private inkOverlay: InkLinkOverlay | undefined;
+  private showInkNotes = false;
+  private inkOverlayResult: InkOverlayResult = { drawn: 0, hidden: 0 };
+  private inkToggleLabel: HTMLElement | undefined;
 
   constructor(
     private readonly elements: GraphControllerElements,
@@ -148,6 +156,20 @@ export class GraphController {
     retired.onchange=()=>{this.showRetired=retired.checked;this.renderCurrentGraph();};
     retiredLabel.append(retired,document.createTextNode(" 显示退役对象（当前状态）"));
     this.elements.renderModeToggle.parentElement?.after(retiredLabel);
+    try { this.showInkNotes = localStorage.getItem("mathscape:show-ink-notes") === "1"; } catch { /* Optional preference. */ }
+    const inkLabel = document.createElement("label"); inkLabel.className = "graph-evidence-toggle";
+    const ink = document.createElement("input"); ink.type = "checkbox"; ink.checked = this.showInkNotes;
+    ink.setAttribute("aria-label", "我的手稿");
+    ink.onchange = () => {
+      this.showInkNotes = ink.checked;
+      try { localStorage.setItem("mathscape:show-ink-notes", ink.checked ? "1" : "0"); } catch { /* Optional preference. */ }
+      this.refreshInkOverlay();
+    };
+    const inkText = document.createElement("span");
+    inkLabel.append(ink, inkText);
+    this.inkToggleLabel = inkText;
+    this.renderInkToggle();
+    retiredLabel.after(inkLabel);
     document.querySelectorAll<HTMLButtonElement>(".preset-button").forEach((button) => {
       button.onclick = () => {
         const preset = button.dataset.preset as PresetName;
@@ -246,6 +268,25 @@ export class GraphController {
     }
   }
 
+  /** N2: counts and note nodes from `get_ink_link_overlay` (§14.7). */
+  setInkOverlay(overlay: InkLinkOverlay | undefined): void {
+    this.inkOverlay = overlay;
+    this.refreshInkOverlay();
+  }
+
+  private refreshInkOverlay(): void {
+    if (this.graphCore === null) { this.renderInkToggle(); return; }
+    this.inkOverlayResult = applyInkOverlay(this.graphCore, this.inkOverlay, this.showInkNotes);
+    this.renderInkToggle();
+    this.renderLegend(this.graphCore);
+  }
+
+  private renderInkToggle(): void {
+    if (!this.inkToggleLabel) return;
+    const hidden = this.showInkNotes && this.inkOverlayResult.hidden ? `（另有 ${this.inkOverlayResult.hidden} 份未显示）` : "";
+    this.inkToggleLabel.textContent = ` 我的手稿${hidden}`;
+  }
+
   renderCurrentGraph(snapshot = this.delegate.getSnapshot()): void {
     if (snapshot === undefined) return;
     this.delegate.onBeforeRenderGraph?.();
@@ -293,6 +334,7 @@ export class GraphController {
         : "导入第一份 PDF 后，节点会出现在这里。";
     }
 
+    if (this.graphCore !== null) clearInkOverlay(this.graphCore);
     if (this.graphCore === null) {
       this.graphCore = mountCytoscapeGraph(
         this.elements.graphContainer,
@@ -305,6 +347,8 @@ export class GraphController {
     }
 
     applyFocusScope(this.graphCore, focusScope);
+    this.inkOverlayResult = applyInkOverlay(this.graphCore, this.inkOverlay, this.showInkNotes);
+    this.renderInkToggle();
     this.renderLegend(this.graphCore);
     this.elements.emptyState.classList.toggle(
       "is-hidden",
@@ -357,7 +401,12 @@ export class GraphController {
 
   private bindGraphInteractions(core: Core): void {
     core.on("tap", "node", (event) => {
-      const id = (event.target as NodeSingular).id();
+      const tapped = event.target as NodeSingular;
+      if (tapped.hasClass(INK_NOTE_NODE_CLASS)) {
+        this.delegate.onOpenInkNote?.(String(tapped.data("documentId")));
+        return;
+      }
+      const id = tapped.id();
       if (this.pendingRelationSourceId !== null) {
         const target = this.displayedGraph?.nodes.find((node) => node.id === id);
         if (
@@ -388,6 +437,7 @@ export class GraphController {
 
     core.on("cxttap", "node", (event) => {
       const node = event.target as NodeSingular;
+      if (node.hasClass(INK_NOTE_NODE_CLASS)) return;
       this.delegate.onSelectNode(node.id());
       const position = event.renderedPosition ?? { x: 0, y: 0 };
       const bounds = this.elements.graphContainer.getBoundingClientRect();
@@ -469,6 +519,7 @@ export class GraphController {
     });
     const edgeKeys = new Set<EdgeTypeKey>();
     core.edges().forEach((edge) => {
+      if (edge.hasClass("ink-note-edge")) return;
       if (edge.hasClass("contracted-edge")) edgeKeys.add("contracted");
       else if (edge.hasClass("evidence-edge")) edgeKeys.add("evidence");
       else if (edge.hasClass("semantic-edge")) edgeKeys.add("relation");
@@ -485,6 +536,9 @@ export class GraphController {
       if (edgeKeys.has(key)) {
         items.push(this.legendItem(this.edgeSwatch(EDGE_TYPES[key]), EDGE_TYPES[key].label));
       }
+    }
+    if (core.nodes(`.${INK_NOTE_NODE_CLASS}`).nonempty()) {
+      items.push(this.legendItem(this.nodeSwatch({ shape: "round-rectangle", background: "#3d3157", border: "#b79be0", borderStyle: "solid" } as NodeTypeVisual), "我的手稿"));
     }
     this.elements.graphLegend.replaceChildren(...items);
   }

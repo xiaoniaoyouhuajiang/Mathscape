@@ -497,6 +497,41 @@ const styles: StylesheetJson = [
       label: "",
     },
   },
+  // N2 "我的手稿" overlay (ink-overlay.ts): synthesized, never projected.
+  {
+    selector: "node.has-ink-notes",
+    style: { "border-color": "#b79be0", "border-width": 2.5 },
+  },
+  {
+    selector: "node.ink-note-node",
+    style: {
+      shape: "round-rectangle",
+      width: "26px",
+      height: "18px",
+      "background-color": "#3d3157",
+      "border-color": "#b79be0",
+      "border-width": 1.5,
+      "border-style": "solid",
+      color: "#e7dcf7",
+      "font-size": "10px",
+    },
+  },
+  {
+    selector: "edge.ink-note-edge",
+    style: {
+      width: 1.2,
+      "line-color": "#9a7fc4",
+      "line-style": "dashed",
+      "target-arrow-shape": "none",
+      "curve-style": "straight",
+      label: "",
+      opacity: 0.8,
+    },
+  },
+  {
+    selector: "edge.ink-note-edge.is-primary",
+    style: { width: 2 },
+  },
 ];
 
 export const OUT_OF_FOCUS_CLASS = "is-out-of-focus";
