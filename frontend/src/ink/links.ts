@@ -75,7 +75,11 @@ export interface InkLinkReceipt {
   kind: "link" | "unlink" | "set_primary";
   note: InkNoteState;
   link: InkNoteLink | null;
+  /** The (target, role) link already existed; `link` is that link. */
   existing: boolean;
+  /** D12 merge: the replaced link was folded into the existing one. */
+  merged?: boolean;
+  primary_changed?: boolean;
   title_changed: boolean;
   replayed: boolean;
 }
@@ -389,11 +393,11 @@ export function openLinkExistingPopover(options: {
       const receipt = await linkInkNote(request.id, selected, options.target, role.value as InkLinkRole, primary.checked);
       request = undefined;
       const documentId = selected;
-      message.replaceChildren(document.createTextNode(receipt.existing ? "已关联 · " : `已关联到「${receipt.note.title}」 · `));
+      message.replaceChildren(document.createTextNode(!receipt.existing ? `已关联到「${receipt.note.title}」 · ` : receipt.primary_changed ? "已关联，已设为主关联 · " : "已关联 · "));
       const open = node("button", "打开手稿", "link-button"); open.type = "button";
       open.onclick = () => { closeInkPopover(); eventBus.emit("open-ink-document", { documentId }); };
       message.append(open);
-      if (!receipt.existing) eventBus.emit("ink-links-changed");
+      if (!receipt.existing || receipt.primary_changed) eventBus.emit("ink-links-changed");
     } catch (error) {
       message.textContent = "关联失败：" + errorMessage(error);
       submit.disabled = false;

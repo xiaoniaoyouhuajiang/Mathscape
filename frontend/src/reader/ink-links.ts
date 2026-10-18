@@ -34,7 +34,9 @@ export class ReaderInkLinks {
     this.hint.className = "ink-patch-hint";
     this.hint.hidden = true;
     this.article.addEventListener("contextmenu", this.onContextMenu);
-    this.unsubscribe = eventBus.on("ink-links-changed", () => void this.reload());
+    const offLinks = eventBus.on("ink-links-changed", () => void this.reload());
+    const offNotes = eventBus.on("ink-notes-changed", () => void this.reload());
+    this.unsubscribe = () => { offLinks(); offNotes(); };
     void this.reload();
   }
 
