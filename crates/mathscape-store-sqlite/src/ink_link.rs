@@ -182,9 +182,17 @@ pub struct InkLinkReceipt {
     pub kind: String,
     pub note: InkNoteState,
     pub link: Option<InkNoteLink>,
-    /// The same link was already active; nothing changed.
+    /// The (target, role) link was already active and `link` is that link.
+    /// Alone this means nothing changed; see `merged` and `primary_changed`.
     #[serde(default)]
     pub existing: bool,
+    /// D12 merge: the replaced link was removed and folded into the existing
+    /// link with the requested role.
+    #[serde(default)]
+    pub merged: bool,
+    /// The note's primary link changed in this request.
+    #[serde(default)]
+    pub primary_changed: bool,
     #[serde(default)]
     pub title_changed: bool,
     #[serde(default)]
@@ -965,22 +973,46 @@ fn link_in(
         note: current_note(tx, &request.document_id)?,
         link: None,
         existing: false,
+        merged: false,
+        primary_changed: false,
         title_changed: false,
         replayed: false,
     };
     let duplicate = find_active(tx, &request.document_id, &target.key, request.role)?;
     match duplicate {
         Some(existing) => {
-            // Duplicate (D12): report the existing link and change nothing.
-            receipt.link = read_link(tx, &existing)?;
+            // D12: the (target, role) link already exists. A plain duplicate
+            // changes nothing; a role change onto it merges (the replaced link
+            // is removed and hands over its primary flag); an explicit
+            // "设为主关联" promotes the existing link. All in this transaction.
             receipt.existing = true;
+            let existing_link = read_link(tx, &existing)?
+                .ok_or_else(|| SqliteStoreError::InkLinkNotFound(existing.clone()))?;
+            let mut promote = request.primary && !existing_link.is_primary;
+            if let Some(old) = replaced.as_ref().filter(|old| old.link_id != existing) {
+                promote |= old.is_primary && !existing_link.is_primary;
+                remove_link(tx, &old.link_id, now)?;
+                receipt.merged = true;
+                receipt.primary_changed |= old.is_primary;
+            }
+            if promote {
+                clear_primary(tx, &request.document_id)?;
+                tx.execute(
+                    "UPDATE ink_note_links SET is_primary=1 WHERE link_id=?1",
+                    [&existing],
+                )?;
+                receipt.primary_changed = true;
+            }
+            if receipt.primary_changed {
+                receipt.title_changed = retitle_in(tx, &request.document_id)?;
+            }
+            receipt.link = read_link(tx, &existing)?;
+            receipt.note = current_note(tx, &request.document_id)?;
         }
         None => {
             let mut primary = request.primary;
-            let mut primary_changed = request.primary;
             if let Some(old) = &replaced {
                 primary |= old.is_primary;
-                primary_changed |= old.is_primary;
                 remove_link(tx, &old.link_id, now)?;
             }
             let link_id = link_id_for(&request.request_id);
@@ -993,7 +1025,8 @@ fn link_in(
                 primary,
                 now,
             )?;
-            if primary_changed {
+            receipt.primary_changed = primary;
+            if primary {
                 receipt.title_changed = retitle_in(tx, &request.document_id)?;
             }
             receipt.link = read_link(tx, &link_id)?;
@@ -1029,6 +1062,7 @@ fn unlink_in(
         .filter(|link| link.document_id == request.document_id)
         .ok_or_else(|| SqliteStoreError::InkLinkNotFound(request.link_id.clone()))?;
     let mut title_changed = false;
+    let primary_changed = link.state == "active" && link.is_primary;
     if link.state == "active" {
         remove_link(tx, &link.link_id, now)?;
         if link.is_primary {
@@ -1041,6 +1075,8 @@ fn unlink_in(
         note: current_note(tx, &request.document_id)?,
         link: read_link(tx, &link.link_id)?,
         existing: false,
+        merged: false,
+        primary_changed,
         title_changed,
         replayed: false,
     };
@@ -1081,7 +1117,8 @@ fn set_primary_in(
         )
         .optional()?;
     let mut title_changed = false;
-    if current.as_deref() != request.link_id.as_deref() {
+    let primary_changed = current.as_deref() != request.link_id.as_deref();
+    if primary_changed {
         clear_primary(tx, &request.document_id)?;
         if let Some(link) = &target {
             tx.execute(
@@ -1100,6 +1137,8 @@ fn set_primary_in(
             None => None,
         },
         existing: false,
+        merged: false,
+        primary_changed,
         title_changed,
         replayed: false,
     };
