@@ -9,6 +9,7 @@ mod ink_evidence;
 mod ink_lan;
 mod ink_link;
 mod ink_note;
+mod ink_recovery;
 mod map_edit;
 mod markdown_patch;
 mod read;
@@ -53,6 +54,9 @@ pub use ink_note::{
     InkCreateReceipt, InkLifecycle, InkLifecycleRequest, InkNoteReceipt, InkNoteState,
     InkRenameRequest, InkTitleMode, InkTrashImpact, format_ink_auto_title, ink_auto_title,
     parse_ink_timestamp_ms,
+};
+pub use ink_recovery::{
+    INK_UNSAVED_OPERATIONS_FORMAT, InkUnsavedOperation, InkUnsavedOperationsExport,
 };
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};

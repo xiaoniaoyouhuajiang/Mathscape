@@ -10,7 +10,9 @@ pub use ink_link::{
     InkMarkdownTargetRequest, LinkInkNoteRequest,
 };
 mod ink_tls;
-pub use ink_lan::{InkLanMirror, InkLanStatus, InkPairingLink, InkSetupCheck, InkSetupStatus};
+pub use ink_lan::{
+    InkLanMirror, InkLanStatus, InkPairingLink, InkRecoveryImport, InkSetupCheck, InkSetupStatus,
+};
 mod llm_settings;
 mod map_edit;
 mod markdown_patch;
@@ -29,8 +31,8 @@ pub use discovery::{
 };
 pub use discovery_view::{DESKTOP_DISCOVERY_VIEW_VERSION, DesktopDiscoveryView};
 pub use ink::{
-    AppendInkOperationRequest, CreateInkDocumentRequest, CreateInkSnapshotRequest,
-    InkCommandError, InkTrashImpactView, StartInkSessionRequest,
+    AppendInkOperationRequest, CreateInkDocumentRequest, CreateInkSnapshotRequest, InkCommandError,
+    InkTrashImpactView, StartInkSessionRequest,
 };
 pub use llm_settings::{
     LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,

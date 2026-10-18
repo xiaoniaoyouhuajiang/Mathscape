@@ -1,0 +1,163 @@
+{
+  "format": "mathscape-ink-unsaved-operations",
+  "version": 1,
+  "document_id": "e302ff89992d21d046b7b4fc2667e26c",
+  "exported_at": "2026-10-18T09:36:06.229Z",
+  "items": [
+    {
+      "request_id": "4d2648848e198e1773f09be6b90a68ee",
+      "document_id": "e302ff89992d21d046b7b4fc2667e26c",
+      "session_id": "session-a",
+      "writer_epoch": 1,
+      "expected_head": 0,
+      "client_seq": 1,
+      "queued_at": "2026-10-18T09:36:06.081Z",
+      "metadata": {
+        "version": "mathscape-ink-lab-1",
+        "document_id": "e302ff89992d21d046b7b4fc2667e26c",
+        "title": "手稿 A",
+        "created_at": "2026-10-18T09:36:05.848Z",
+        "exported_at": "2026-10-18T09:36:05.848Z",
+        "pages": [
+          {
+            "id": "7a1eca8624d22acc517bac65b6068774",
+            "width": 1200,
+            "height": 1600
+          }
+        ],
+        "capture_segments": [
+          {
+            "id": "f9903d72e5a6cbb8718661029b5cae2f",
+            "started_at": "2026-10-18T09:36:05.951Z",
+            "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+            "secure_context": true,
+            "coalesced_events": true,
+            "pointer_raw_update": true,
+            "device_pixel_ratio": 1,
+            "time_origin_ms": 1792316165722.4,
+            "pressure_capability": "unknown",
+            "tilt_capability": "unknown"
+          }
+        ]
+      },
+      "operation": {
+        "kind": "stroke",
+        "stroke": {
+          "id": "b4275be2967ef1ffa5c36436d95d618b",
+          "page_id": "7a1eca8624d22acc517bac65b6068774",
+          "capture_segment_id": "f9903d72e5a6cbb8718661029b5cae2f",
+          "pointer_type": "mouse",
+          "status": "completed",
+          "brush": {
+            "renderer": "perfect-freehand@1.2.3",
+            "color": "#b9e3d8",
+            "width": 4,
+            "smoothing": 0.35,
+            "streamline": 0.15,
+            "thinning": 0.4,
+            "simulate_pressure": false
+          },
+          "points": [
+            {
+              "x": 392.2077922077922,
+              "y": 800,
+              "t_us": 190600,
+              "pressure": null,
+              "tilt_x_deg": null,
+              "tilt_y_deg": null,
+              "buttons": 1
+            },
+            {
+              "x": 444.15584415584414,
+              "y": 800,
+              "t_us": 230500,
+              "pressure": null,
+              "tilt_x_deg": null,
+              "tilt_y_deg": null,
+              "buttons": 1
+            },
+            {
+              "x": 496.1038961038961,
+              "y": 800,
+              "t_us": 242800,
+              "pressure": null,
+              "tilt_x_deg": null,
+              "tilt_y_deg": null,
+              "buttons": 1
+            },
+            {
+              "x": 548.051948051948,
+              "y": 800,
+              "t_us": 258300,
+              "pressure": null,
+              "tilt_x_deg": null,
+              "tilt_y_deg": null,
+              "buttons": 1
+            },
+            {
+              "x": 600,
+              "y": 800,
+              "t_us": 274300,
+              "pressure": null,
+              "tilt_x_deg": null,
+              "tilt_y_deg": null,
+              "buttons": 1
+            },
+            {
+              "x": 651.9480519480519,
+              "y": 800,
+              "t_us": 290600,
+              "pressure": null,
+              "tilt_x_deg": null,
+              "tilt_y_deg": null,
+              "buttons": 1
+            },
+            {
+              "x": 703.8961038961039,
+              "y": 800,
+              "t_us": 307900,
+              "pressure": null,
+              "tilt_x_deg": null,
+              "tilt_y_deg": null,
+              "buttons": 1
+            },
+            {
+              "x": 755.8441558441558,
+              "y": 800,
+              "t_us": 324000,
+              "pressure": null,
+              "tilt_x_deg": null,
+              "tilt_y_deg": null,
+              "buttons": 1
+            },
+            {
+              "x": 807.7922077922078,
+              "y": 800,
+              "t_us": 341500,
+              "pressure": null,
+              "tilt_x_deg": null,
+              "tilt_y_deg": null,
+              "buttons": 1
+            },
+            {
+              "x": 807.7922077922078,
+              "y": 800,
+              "t_us": 358500,
+              "pressure": null,
+              "tilt_x_deg": null,
+              "tilt_y_deg": null,
+              "buttons": 0
+            }
+          ]
+        },
+        "seq": 1,
+        "command_id": "7d67b30b0d20cccc9fd14f33f4770643"
+      },
+      "quarantined": {
+        "code": "writer_epoch_conflict",
+        "message": "injected terminal save failure",
+        "at": "2026-10-18T09:36:06.101Z"
+      }
+    }
+  ]
+}
