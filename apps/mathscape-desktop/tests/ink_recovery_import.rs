@@ -166,13 +166,10 @@ fn the_reported_epoch_conflict_export_imports_as_a_recovery_draft() {
     assert_eq!(retry.sessions[0].session_id, draft.session_id);
 }
 
-#[test]
-fn overlapping_queues_are_rebuilt_on_their_own_history_prefix() {
-    let f = Fixture::new("overlap");
-    let trace: InkLabDocument = serde_json::from_str(TRACE).unwrap();
-    // Stored: trace seq 1 (shared), then a newer writer's stroke at seq 2.
-    let newer = other_writer_stroke(&trace, 2);
-    f.store(&trace, &[trace.operations[0].clone(), newer.clone()]);
+/// Two writer queues: queue A was written on seq 1 and overlaps the newer
+/// seq 2; queue B was written on an empty note. Items are listed out of order
+/// on purpose.
+fn two_queue_export(trace: &InkLabDocument) -> Vec<u8> {
     let metadata = serde_json::to_value(trace.metadata()).unwrap();
     let item = |request: u32,
                 session: &str,
@@ -187,8 +184,6 @@ fn overlapping_queues_are_rebuilt_on_their_own_history_prefix() {
             "quarantined": { "code": "writer_epoch_conflict", "message": "", "at": "2026-10-18T09:36:06.101Z" }
         })
     };
-    // Queue A was written on seq 1 and overlaps the newer seq 2; queue B was
-    // written on an empty note. Items are listed out of order on purpose.
     let export = json!({
         "format": "mathscape-ink-unsaved-operations", "version": 1,
         "document_id": trace.document_id, "exported_at": "2026-10-18T09:36:06.229Z",
@@ -198,7 +193,17 @@ fn overlapping_queues_are_rebuilt_on_their_own_history_prefix() {
             item(20, "session-other", 0, 1, &trace.operations[7]),
         ]
     });
-    let bytes = serde_json::to_vec(&export).unwrap();
+    serde_json::to_vec(&export).unwrap()
+}
+
+#[test]
+fn overlapping_queues_are_rebuilt_on_their_own_history_prefix() {
+    let f = Fixture::new("overlap");
+    let trace: InkLabDocument = serde_json::from_str(TRACE).unwrap();
+    // Stored: trace seq 1 (shared), then a newer writer's stroke at seq 2.
+    let newer = other_writer_stroke(&trace, 2);
+    f.store(&trace, &[trace.operations[0].clone(), newer.clone()]);
+    let bytes = two_queue_export(&trace);
     let imported = f.import(&bytes, &"2".repeat(32)).unwrap();
     assert_eq!(imported.sessions.len(), 2);
     let drafts: Vec<_> = imported
@@ -272,4 +277,61 @@ fn a_queue_whose_history_prefix_is_gone_is_refused_and_documents_still_import() 
         .import(br#"{"format":"other"}"#, &"5".repeat(32))
         .unwrap_err();
     assert!(error.contains("Ink 恢复文件无效"), "{error}");
+}
+
+/// PR #4 review (P2): all drafts of a multi-queue import and their request
+/// receipts commit in one transaction. A failure writing the second draft
+/// must leave no draft and no receipt behind.
+#[test]
+fn a_failure_writing_the_second_draft_persists_no_draft_and_no_receipt() {
+    let f = Fixture::new("atomic");
+    let trace: InkLabDocument = serde_json::from_str(TRACE).unwrap();
+    f.store(
+        &trace,
+        &[trace.operations[0].clone(), other_writer_stroke(&trace, 2)],
+    );
+    let bytes = two_queue_export(&trace);
+    let database = f.root.join("workspace").join("mathscape.sqlite3");
+    let counts = || -> (i64, i64) {
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let drafts = connection
+            .query_row(
+                "SELECT count(*) FROM ink_documents WHERE document_id LIKE 'recovery-%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let receipts = connection
+            .query_row("SELECT count(*) FROM ink_recovery_imports", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        (drafts, receipts)
+    };
+    // Fail the second draft: once the first draft's receipt exists in the
+    // (still open) transaction, the next draft insert aborts.
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER fail_second_recovery_draft BEFORE INSERT ON ink_documents
+             WHEN NEW.document_id LIKE 'recovery-%'
+              AND (SELECT count(*) FROM ink_recovery_imports) >= 1
+             BEGIN SELECT RAISE(ABORT, 'injected second draft failure'); END;",
+        )
+        .unwrap();
+
+    let request = "6".repeat(32);
+    let error = f.import(&bytes, &request).unwrap_err();
+    assert!(error.contains("injected second draft failure"), "{error}");
+    assert_eq!(counts(), (0, 0), "no draft and no receipt may be persisted");
+    assert_eq!(f.operations(&trace.document_id).len(), 2);
+
+    // Once the failure is gone, the same request imports both drafts.
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute_batch("DROP TRIGGER fail_second_recovery_draft;")
+        .unwrap();
+    let imported = f.import(&bytes, &request).unwrap();
+    assert_eq!(imported.sessions.len(), 2);
+    assert_eq!(counts(), (2, 2));
 }

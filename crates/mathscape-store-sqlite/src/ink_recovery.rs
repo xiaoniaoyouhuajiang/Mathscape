@@ -6,8 +6,10 @@
 //! a prefix of the stored history (`expected_head`), so it is rebuilt on that
 //! exact prefix as a self-contained recovery draft: nothing is merged into the
 //! original note and nothing is dropped because the head moved on.
+use crate::ink_lan::import_recovery_in;
 use crate::{SqliteArtifactStore, SqliteStoreError, StoredInkSession, ink};
 use mathscape_domain::{InkLabDocument, InkLabDocumentMetadata, InkLabOperation};
+use rusqlite::TransactionBehavior;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -140,22 +142,25 @@ pub(crate) fn rebuild_documents(
 
 impl SqliteArtifactStore {
     /// Imports an A1 unsaved-operations export as recovery drafts, one per
-    /// writer queue. Idempotent per `request` (each draft derives its own
-    /// recovery request id from it).
+    /// writer queue. All drafts and their request receipts are written in one
+    /// transaction: either every draft is persisted or none is. Idempotent per
+    /// `request` (each draft derives its own recovery request id from it).
     pub fn import_ink_unsaved_operations(
         &mut self,
         export: &InkUnsavedOperationsExport,
         request: &str,
         now: i64,
     ) -> Result<Vec<StoredInkSession>, SqliteStoreError> {
-        let stored = ink::open_document(&self.connection, &export.document_id)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let stored = ink::open_document(&tx, &export.document_id)?;
         let documents = rebuild_documents(
             export,
             stored.as_ref().map(|stored| &stored.document),
             stored.as_ref().map(|stored| stored.note.title.as_str()),
         )?;
-        // Validate every draft before writing any, so a bad queue cannot
-        // leave a partial import behind.
+        // Validate every draft before writing any.
         for document in &documents {
             document
                 .validate()
@@ -168,8 +173,10 @@ impl SqliteArtifactStore {
             } else {
                 format!("{:x}", Sha256::digest(format!("{request}:{index}")))[..32].to_owned()
             };
-            sessions.push(self.import_ink_recovery(document, &derived, now)?);
+            // Dropping `tx` on error rolls back every draft written so far.
+            sessions.push(import_recovery_in(&tx, document, &derived, now)?);
         }
+        tx.commit()?;
         Ok(sessions)
     }
 }
