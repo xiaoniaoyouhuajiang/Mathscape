@@ -211,6 +211,22 @@ export class InkCanvas {
     this.options.onSelection([...this.selected]);
     this.schedule();
   }
+  /** Number of selected strokes still visible on the current page. */
+  selectionCount(): number { return this.selectedStrokes().length; }
+  /**
+   * N3.0: erase every selected stroke with one multi-stroke `erase` command,
+   * so a single undo restores them. Returns false when nothing was erased.
+   */
+  deleteSelection(): boolean {
+    if (this.options.readOnly || this.activePointer !== undefined) return false;
+    const ids = this.selectedStrokes().map(stroke => stroke.id);
+    if (!ids.length) return false;
+    this.selected.clear();
+    this.options.onSelection([]);
+    this.options.onErase(ids);
+    this.refresh();
+    return true;
+  }
   /** Clear only transient gesture state; the selected ids remain available when re-entering lasso mode. */
   resetTransientInteraction(): void {
     if (this.active) this.finish("interrupted");

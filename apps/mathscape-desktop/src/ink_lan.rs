@@ -1,3 +1,4 @@
+pub use crate::ink_tls::AddressKind;
 use crate::{CreateInkSnapshotRequest, DesktopService, DesktopState, ink_tls};
 use axum::{
     Json, Router,
@@ -67,6 +68,8 @@ pub struct InkLanStatus {
     pub running: bool,
     pub port: u16,
     pub urls: Vec<String>,
+    /// N3.0: kind of each entry in `urls` (same order); LAN entries come first.
+    pub url_kinds: Vec<AddressKind>,
     pub certificate_file_sha256: Option<String>,
     pub assets_ready: bool,
     pub error: Option<String>,
@@ -74,6 +77,8 @@ pub struct InkLanStatus {
 #[derive(Serialize)]
 pub struct InkPairingLink {
     pub urls: Vec<String>,
+    /// N3.0: kind of each entry in `urls` (same order).
+    pub url_kinds: Vec<AddressKind>,
     pub expires_at: i64,
     pub document_id: String,
 }
@@ -105,6 +110,8 @@ pub struct InkSetupStatus {
     pub expires_at: Option<i64>,
     /// Only returned when the link is created; the server keeps a token digest.
     pub urls: Vec<String>,
+    /// N3.0: kind of each entry in `urls` (same order).
+    pub url_kinds: Vec<AddressKind>,
     pub opened: bool,
     pub certificate_downloaded: bool,
     pub https_trusted: bool,
@@ -170,6 +177,7 @@ impl SetupState {
             active,
             expires_at: Some(self.expires_at),
             urls: vec![],
+            url_kinds: vec![],
             opened: self.opened,
             certificate_downloaded: self.downloaded,
             https_trusted: self.trusted,
@@ -1087,7 +1095,11 @@ impl DesktopService {
             return Err("InkPad 页面尚未构建，无法开始平板设置。".into());
         }
         let https_port = status.port;
-        let hosts = ink_tls::addresses();
+        let addresses = ink_tls::host_addresses();
+        let hosts = addresses
+            .iter()
+            .map(|address| address.host.clone())
+            .collect::<Vec<_>>();
         let mut server = self.ink_lan.setup_server.lock().await;
         if server
             .as_ref()
@@ -1174,6 +1186,7 @@ impl DesktopService {
             .iter()
             .map(|host| format!("http://{host}:{http_port}/setup/#setup={token}&grant={grant}"))
             .collect();
+        result.url_kinds = addresses.iter().map(|address| address.kind).collect();
         Ok(result)
     }
     /// Called by the desktop panel after the tablet reaches "start writing".
@@ -1208,7 +1221,7 @@ impl DesktopService {
             setup.confirm_needed = true;
             return Ok(setup.status());
         }
-        let (token, expires_at, _) = self
+        let (token, expires_at, _, _) = self
             .issue_pairing(
                 &document,
                 expected_head.unwrap_or(view.head_seq),
@@ -1360,7 +1373,11 @@ impl DesktopService {
         .map_err(|e| format!("无法开启 InkPad 端口：{e}"))?;
         let actual_port = listener.local_addr().map_err(|e| e.to_string())?.port();
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-        let hosts = ink_tls::addresses();
+        let addresses = ink_tls::host_addresses();
+        let hosts = addresses
+            .iter()
+            .map(|address| address.host.clone())
+            .collect::<Vec<_>>();
         let config = ink_tls::config(self.workspace_root(), hosts.clone()).await?;
         let (_, fingerprint) = ink_tls::certificate(self.workspace_root())?;
         let status = InkLanStatus {
@@ -1371,6 +1388,7 @@ impl DesktopService {
                 .iter()
                 .map(|host| format!("https://{host}:{actual_port}/pad/"))
                 .collect(),
+            url_kinds: addresses.iter().map(|address| address.kind).collect(),
             certificate_file_sha256: Some(fingerprint),
             assets_ready: !INKPAD_ASSETS.is_empty(),
             error: None,
@@ -1443,6 +1461,7 @@ impl DesktopService {
             running: false,
             port: settings.port,
             urls: vec![],
+            url_kinds: vec![],
             certificate_file_sha256: None,
             assets_ready: !INKPAD_ASSETS.is_empty(),
             error: None,
@@ -1482,10 +1501,11 @@ impl DesktopService {
         head: u64,
         allow_transfer: bool,
     ) -> Result<InkPairingLink, String> {
-        let (token, expires_at, urls) = self
+        let (token, expires_at, urls, url_kinds) = self
             .issue_pairing(&document, head, allow_transfer, 120)
             .await?;
         Ok(InkPairingLink {
+            url_kinds,
             urls: urls
                 .into_iter()
                 .map(|url| format!("{url}#pair={token}"))
@@ -1500,7 +1520,7 @@ impl DesktopService {
         head: u64,
         allow_transfer: bool,
         seconds: i64,
-    ) -> Result<(String, i64, Vec<String>), String> {
+    ) -> Result<(String, i64, Vec<String>, Vec<AddressKind>), String> {
         let status = self.ink_lan_status().await?;
         if !status.running {
             return Err("请先开启平板书写服务。".into());
@@ -1526,7 +1546,7 @@ impl DesktopService {
                 now(),
             )
             .map_err(|e| e.to_string())?;
-        Ok((token, expiry, status.urls))
+        Ok((token, expiry, status.urls, status.url_kinds))
     }
     pub fn ink_lan_mirror(&self, document: &str, head: u64) -> Result<InkLanMirror, String> {
         let delta = store(self)?

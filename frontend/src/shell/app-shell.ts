@@ -1,3 +1,4 @@
+import { mountDetailResizer } from "./panel-resizer";
 import { requiredElement } from "../core/dom";
 
 export interface AppElements {
@@ -55,6 +56,8 @@ export class AppShell {
     this.isParseActive = options.isParseActive ?? (() => false);
     this.elements = this.mount(root);
     this.initSidebarToggle();
+    const detailPanel = this.elements.workspaceGrid.querySelector<HTMLElement>(".detail-panel");
+    if (detailPanel) mountDetailResizer(this.elements.workspaceGrid, detailPanel);
   }
 
   private mount(root: HTMLElement): AppElements {

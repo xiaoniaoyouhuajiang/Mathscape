@@ -11,7 +11,8 @@ pub use ink_link::{
 };
 mod ink_tls;
 pub use ink_lan::{
-    InkLanMirror, InkLanStatus, InkPairingLink, InkRecoveryImport, InkSetupCheck, InkSetupStatus,
+    AddressKind, InkLanMirror, InkLanStatus, InkPairingLink, InkRecoveryImport, InkSetupCheck,
+    InkSetupStatus,
 };
 mod llm_settings;
 mod map_edit;
