@@ -71,14 +71,9 @@ class InkPad {
       await this.refreshDrafts();
       const token=new URLSearchParams(location.hash.slice(1)).get("pair");
       if(token){
-        this.board?.finish();await this.enqueueTail;this.board?.dispose();this.board=undefined;this.document=undefined;this.page="";this.controls();
-        if(!/^[0-9a-f]{64}$/.test(token))throw new Error("二维码凭据不完整，请重新扫码。");
-        const pair=await this.database.pairing(token,credential());
+        await this.enqueueTail;this.clearSurface();
         this.message("正在配对当前手稿…");
-        const response=await fetch("/api/pair",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pairing_token:pair.token,resume_secret:pair.credential,device:{user_agent:navigator.userAgent,secure_context:window.isSecureContext,storage_recovery:true}})});
-        const result=await response.json();if(!response.ok)throw new Error(result.message??"配对失败，请在电脑重新生成二维码。");
-        const binding:PadBinding={key:`${result.lease.session_id}:${result.lease.writer_epoch}`,credential:pair.credential,lease:result.lease};
-        await this.database.activate(binding);this.binding=binding;
+        await this.acceptPairing(token,"qr");
         history.replaceState(null,"",location.pathname);
       }
       if(this.binding)this.connect();else element("#pad-connection").textContent="尚未配对";
@@ -129,6 +124,38 @@ class InkPad {
     this.board=new InkCanvas(element("#pad-board"),{document:()=>this.document!,page:()=>this.document!.pages.find(page=>page.id===this.page)!,segmentId:()=>this.segmentId(),brush:()=>this.brush(),tool:()=>this.tool,fingerWriting:()=>element<HTMLInputElement>("#pad-finger").checked,readOnly:this.fenced,refitOnResize:true,
       onStroke:stroke=>this.commit({kind:"stroke",stroke}),onErase:stroke_ids=>this.commit({kind:"erase",stroke_ids}),onPartialErase:(source_stroke_id,fragments)=>this.commit(fragments.length?{kind:"partial_erase",source_stroke_id,fragments}:{kind:"erase",stroke_ids:[source_stroke_id]}),onTransform:(stroke_ids,matrix)=>this.commit({kind:"transform",stroke_ids,matrix}),onSelection:()=>this.summary(),onMetrics:metrics=>{this.metrics=metrics;if(performance.now()-this.lastMetricsSummary>=100){this.lastMetricsSummary=performance.now();this.summary();}},onMessage:message=>this.message(message),onPreview:stroke=>this.transport?.preview(stroke)});
     element("#pad-title").textContent=document.title;this.pages();this.controls();this.board.refresh();
+  }
+  /** Tear down the canvas before clearing the document so callbacks cannot read `.pages` on undefined. */
+  private clearSurface():void {
+    this.board?.finish();
+    this.board?.dispose();
+    this.board=undefined;
+    this.document=undefined;
+    this.page="";
+    this.segment=undefined;
+    this.projection=undefined;
+    this.note=undefined;
+    this.snapshotRequest=undefined;
+    this.fenced=false;
+    this.fenceCode=undefined;
+    this.confirmed=0;
+    this.pending=0;
+    element("#pad-title").textContent="Mathscape InkPad";
+    this.controls();
+  }
+  /** Shared with the #pair= bootstrap path: activate the lease then reconnect for session_context → mount. */
+  private async acceptPairing(pairingToken:string,via:"qr"|"desktop_push"):Promise<void> {
+    if(!this.database)throw new Error("本机存储尚未就绪。");
+    if(!/^[0-9a-f]{64}$/.test(pairingToken))throw new Error(via==="desktop_push"?"切换令牌无效。":"二维码凭据不完整，请重新扫码。");
+    const pair=await this.database.pairing(pairingToken,credential());
+    const response=await fetch("/api/pair",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pairing_token:pair.token,resume_secret:pair.credential,device:{user_agent:navigator.userAgent,secure_context:window.isSecureContext,storage_recovery:true,via}})});
+    const result=await response.json();
+    if(!response.ok)throw new Error(result.message??(via==="desktop_push"?"切换失败，请在电脑重新推送或扫码。":"配对失败，请在电脑重新生成二维码。"));
+    const binding:PadBinding={key:`${result.lease.session_id}:${result.lease.writer_epoch}`,credential:pair.credential,lease:result.lease};
+    await this.database.activate(binding);
+    this.binding=binding;
+    this.buffered.clear();
+    this.persisted=true;
   }
   private draft(document=this.document!,binding=this.binding!):PadDraft {return {key:binding.key,binding,document:{...inkMetadata(document),operations:document.operations},confirmed_head:this.confirmed,page_id:this.page,updated_at:new Date().toISOString()};}
   private commit(command:Parameters<typeof appendInk>[1]):void {
@@ -275,18 +302,33 @@ class InkPad {
       if(this.transport?.isReady())await this.flush();
     }catch{/* Keep going; local draft is durable. */}
     this.transport?.close();
+    // Same teardown as the #pair= bootstrap: dispose the old canvas before clearing the document.
+    this.clearSurface();
     try{
-      if(!/^[0-9a-f]{64}$/.test(offer.pairing_token))throw new Error("切换令牌无效。");
-      const pair=await this.database.pairing(offer.pairing_token,credential());
       this.message(`正在切换到「${offer.title}」…`);
-      const response=await fetch("/api/pair",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pairing_token:pair.token,resume_secret:pair.credential,device:{user_agent:navigator.userAgent,secure_context:window.isSecureContext,storage_recovery:true,via:"desktop_push"}})});
-      const result=await response.json();
-      if(!response.ok)throw new Error(result.message??"切换失败，请在电脑重新推送或扫码。");
-      const binding:PadBinding={key:`${result.lease.session_id}:${result.lease.writer_epoch}`,credential:pair.credential,lease:result.lease};
-      await this.database.activate(binding);this.binding=binding;this.snapshotRequest=undefined;this.fenced=false;this.fenceCode=undefined;this.document=undefined;this.page="";
-      this.connect();await this.refreshDrafts();
-      this.message(`已切换到「${offer.title}」。`);
-    }catch(error){this.message("切换未完成："+(error instanceof Error?error.message:String(error)));if(this.binding)this.connect();}
+      await this.acceptPairing(offer.pairing_token,"desktop_push");
+      this.connect();
+      await this.refreshDrafts();
+      // Title/canvas come from session_context → restore → mount; wait until then before claiming success.
+    }catch(error){
+      this.message("切换未完成："+(error instanceof Error?error.message:String(error)));
+      if(this.binding)this.connect();
+      return;
+    }
+    // restore() mounts asynchronously via the transport; surface the intent immediately,
+    // then refreshDrafts again once ready so the new title is selected.
+    this.message(`正在打开「${offer.title}」…`);
+    const title=offer.title;
+    const waitReady=async()=>{
+      for(let i=0;i<50;i++){
+        if(this.document&&this.document.title===title&&this.state==="ready")return true;
+        await new Promise(resolve=>setTimeout(resolve,100));
+      }
+      return !!(this.document&&this.document.title===title);
+    };
+    if(await waitReady())this.message(`已切换到「${title}」。`);
+    else this.message(`已配对「${title}」，正在等待电脑会话…`);
+    await this.refreshDrafts();
   }
 
   private async refreshDrafts():Promise<void> {

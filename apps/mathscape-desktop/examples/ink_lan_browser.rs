@@ -179,6 +179,45 @@ async fn main() {
                                 .unwrap();
                             ready["rename_receipt"] = serde_json::to_value(receipt).unwrap();
                         }
+                        "push" => {
+                            // Create a second note and push it to every online tablet slot.
+                            let mut document: InkLabDocument = serde_json::from_str(include_str!(
+                                "../../../testdata/ink/p0/trace.json"
+                            ))
+                            .unwrap();
+                            document.operations.clear();
+                            document.document_id = format!("browser-push-{id}");
+                            document.title = format!("推送手稿 {id}");
+                            let target_id = document.document_id.clone();
+                            service
+                                .create_ink_document(CreateInkDocumentRequest {
+                                    document,
+                                    session_id: format!("browser-push-session-{id}"),
+                                    writer_id: "desktop-local".into(),
+                                    device: json!({"source": "test"}),
+                                    request_id: Some(format!("browser-push-req-{id}")),
+                                    title_mode: None,
+                                })
+                                .unwrap();
+                            let allow = command["allow_transfer"].as_bool().unwrap_or(false);
+                            let result = service
+                                .push_ink_to_tablet(&target_id, allow)
+                                .await
+                                .unwrap();
+                            ready["push"] = serde_json::to_value(&result).unwrap();
+                            ready["push_document_id"] = target_id.clone().into();
+                            ready["push_title"] = format!("推送手稿 {id}").into();
+                            // Keep document_id pointing at the original A for status/reclaim.
+                        }
+                        "push_current" => {
+                            let allow = command["allow_transfer"].as_bool().unwrap_or(false);
+                            let result = service
+                                .push_ink_to_tablet(&document_id, allow)
+                                .await
+                                .unwrap();
+                            ready["push"] = serde_json::to_value(&result).unwrap();
+                            ready["push_document_id"] = document_id.clone().into();
+                        }
                         "status" => {}
                         "stop" => {
                             service.shutdown_ink_lan(false).await.unwrap();

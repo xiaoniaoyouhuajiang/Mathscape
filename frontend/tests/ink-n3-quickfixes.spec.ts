@@ -183,3 +183,21 @@ test("N3a push asks before taking over a remote writer", async ({ page }) => {
   expect(args[0].allowTransfer).toBeFalsy();
   expect(args[1].allowTransfer).toBe(true);
 });
+
+test("N3a mirror mode still allows push to tablet", async ({ page }) => {
+  // Enter mirror the same way pairing does.
+  await page.getByRole("button", { name: "平板书写", exact: true }).click();
+  await page.getByRole("button", { name: "生成配对二维码", exact: true }).click();
+  await expect(page.locator("#ink-mode-badge")).toHaveText("平板镜像");
+  await expect(page.locator("#ink-editability-badge")).toHaveText("电脑只读");
+  const push = page.getByRole("button", { name: "推送到平板", exact: true });
+  await expect(push).toBeEnabled();
+  await expect(push).toHaveAttribute("title", /平板/);
+
+  // Offline tablet → QR fallback still works from mirror (P2 regression).
+  await page.evaluate(() => { (window.inkDesktopHarness.behavior as { pushOffline: boolean }).pushOffline = true; });
+  await push.click();
+  await expect(page.locator("#ink-lan-panel")).toBeVisible();
+  await expect(page.locator("[data-qr]")).toBeVisible();
+  await expect(page.locator("[data-link]")).toHaveValue(/#pair=/);
+});

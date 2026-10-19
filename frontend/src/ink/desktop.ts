@@ -1396,8 +1396,16 @@ export class DesktopInkWorkspace {
     element<HTMLButtonElement>(this.host, "#desktop-ink-delete-selection").disabled = !this.canDeleteSelection();
     element<HTMLButtonElement>(this.host, "#desktop-ink-restyle").disabled = !this.canDeleteSelection();
     const push = element<HTMLButtonElement>(this.host, "#ink-push-tablet");
-    push.disabled = this.readOnly || this.trashedView || !this.documentState;
-    push.title = this.trashedView ? "回收站中的手稿不能推送到平板" : "把这份手稿推送到已连接的平板";
+    // Mirror/read-only still allows push (may need takeover confirm). Trashed and
+    // historical snapshots stay blocked.
+    push.disabled = this.trashedView || !!this.currentSnapshot || !this.documentState;
+    push.title = this.trashedView
+      ? "回收站中的手稿不能推送到平板"
+      : this.currentSnapshot
+        ? "历史快照不能推送到平板"
+        : this.mirrorMode
+          ? "把这份手稿推送到已连接的平板（若平板正在书写，需确认转交）"
+          : "把这份手稿推送到已连接的平板";
     element(this.host, "#desktop-ink-summary").textContent = projection.visible.length + " 笔 · " + (projection.pointCount + this.metrics.activePoints) + " 点 · head " + this.logicalHead;
     this.renderViewState();
   }
