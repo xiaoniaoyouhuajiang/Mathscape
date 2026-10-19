@@ -27,6 +27,9 @@ export interface MathscapeEventMap {
   "open-ink-document": { documentId: string };
   /** N2: a note link changed; overlays and reader markers reload. */
   "ink-links-changed": void;
+  /** N2: a note's lifecycle or title changed (trash, restore, undo, clean
+   * blank, rename, tablet rename); link views drop or relabel it. */
+  "ink-notes-changed": void;
   /** N2: open the target of a note link from the note page. */
   "open-ink-link-target": { link: InkNoteLink };
   "open-review": OpenReviewDetail;
@@ -66,6 +69,7 @@ export class MathscapeEventBus {
       "open-source",
       "open-ink-document",
       "ink-links-changed",
+      "ink-notes-changed",
       "open-ink-link-target",
       "open-review",
       "reader-opened",

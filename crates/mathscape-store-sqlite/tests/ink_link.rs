@@ -861,3 +861,158 @@ fn upgrading_v17_rebuilds_requests_and_keeps_them_replayable() {
     assert_eq!(version, 18);
     fs::remove_dir_all(directory).ok();
 }
+
+/// PR #4 regression (D12): a role change onto a (target, role) link that
+/// already exists merges into it atomically, and "设为主关联" on a duplicate
+/// promotes it; neither may report success while changing nothing.
+#[test]
+fn role_change_onto_an_existing_role_merges_and_transfers_the_primary() {
+    let (directory, database, mut store) = open("merge");
+    let before = source_graph_fingerprint(&database);
+    create(&mut store, "note");
+    create(&mut store, "other");
+    let attempt = store
+        .link_ink_note(&link(
+            "m1",
+            "note",
+            source(THEOREM),
+            InkLinkRole::Attempt,
+            true,
+        ))
+        .unwrap()
+        .link
+        .unwrap();
+    let question = store
+        .link_ink_note(&link(
+            "m2",
+            "note",
+            source(THEOREM),
+            InkLinkRole::Question,
+            false,
+        ))
+        .unwrap()
+        .link
+        .unwrap();
+    assert_eq!(
+        store.ink_note("note").unwrap().unwrap().title,
+        "尝试 · 定理 3.2"
+    );
+
+    // 尝试 (primary) → 疑问, while a 疑问 link to the same target exists.
+    let mut change = link("m3", "note", source(THEOREM), InkLinkRole::Question, true);
+    change.replaces_link_id = Some(attempt.link_id.clone());
+    let merged = store.link_ink_note(&change).unwrap();
+    assert!(merged.existing && merged.merged && merged.primary_changed && merged.title_changed);
+    let kept = merged.link.clone().unwrap();
+    assert_eq!(kept.link_id, question.link_id);
+    assert!(kept.is_primary);
+    assert_eq!(merged.note.title, "疑问 · 定理 3.2");
+    let links = store.ink_note_links("note").unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(
+        (links[0].role, links[0].is_primary),
+        (InkLinkRole::Question, true)
+    );
+    let state: String = Connection::open(&database)
+        .unwrap()
+        .query_row(
+            "SELECT state FROM ink_note_links WHERE link_id=?1",
+            [&attempt.link_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "removed");
+    // The replay returns the same merge receipt and changes nothing more.
+    let replay = store.link_ink_note(&change).unwrap();
+    assert!(replay.replayed && replay.merged);
+    assert_eq!(store.ink_note_links("note").unwrap().len(), 1);
+
+    // A non-primary role change onto an existing link merges without
+    // touching the primary.
+    let check = store
+        .link_ink_note(&link(
+            "m4",
+            "note",
+            source(LEMMA),
+            InkLinkRole::Check,
+            false,
+        ))
+        .unwrap()
+        .link
+        .unwrap();
+    let reference = store
+        .link_ink_note(&link(
+            "m5",
+            "note",
+            source(LEMMA),
+            InkLinkRole::Reference,
+            false,
+        ))
+        .unwrap()
+        .link
+        .unwrap();
+    let mut change = link("m6", "note", source(LEMMA), InkLinkRole::Reference, false);
+    change.replaces_link_id = Some(check.link_id.clone());
+    let merged = store.link_ink_note(&change).unwrap();
+    assert!(merged.merged && !merged.primary_changed && !merged.title_changed);
+    assert_eq!(merged.link.unwrap().link_id, reference.link_id);
+    assert_eq!(store.ink_note_links("note").unwrap().len(), 2);
+
+    // "设为主关联" on an existing duplicate promotes it.
+    let promoted = store
+        .link_ink_note(&link(
+            "m7",
+            "note",
+            source(LEMMA),
+            InkLinkRole::Reference,
+            true,
+        ))
+        .unwrap();
+    assert!(promoted.existing && !promoted.merged && promoted.primary_changed);
+    assert!(promoted.link.unwrap().is_primary);
+    assert_eq!(promoted.note.title, "参考 · 引理 1");
+    let primaries: Vec<_> = store
+        .ink_note_links("note")
+        .unwrap()
+        .into_iter()
+        .filter(|link| link.is_primary)
+        .collect();
+    assert_eq!(primaries.len(), 1);
+    // A plain duplicate still reports "existing" and changes nothing.
+    let plain = store
+        .link_ink_note(&link(
+            "m8",
+            "note",
+            source(LEMMA),
+            InkLinkRole::Reference,
+            false,
+        ))
+        .unwrap();
+    assert!(plain.existing && !plain.merged && !plain.primary_changed && !plain.title_changed);
+    assert!(plain.link.unwrap().is_primary);
+
+    // A role change onto a role whose link was removed earlier creates a new
+    // active link (removed links never block).
+    let mut back = link("m9", "note", source(THEOREM), InkLinkRole::Attempt, false);
+    back.replaces_link_id = Some(question.link_id.clone());
+    let recreated = store.link_ink_note(&back).unwrap();
+    assert!(!recreated.existing && !recreated.merged);
+    let recreated = recreated.link.unwrap();
+    assert_ne!(recreated.link_id, attempt.link_id);
+    assert_eq!(recreated.role, InkLinkRole::Attempt);
+
+    // Another note may hold the same target and role.
+    let other = store
+        .link_ink_note(&link(
+            "m10",
+            "other",
+            source(LEMMA),
+            InkLinkRole::Reference,
+            true,
+        ))
+        .unwrap();
+    assert!(!other.existing);
+    assert_eq!(source_graph_fingerprint(&database), before);
+    drop(store);
+    let _ = std::fs::remove_dir_all(directory);
+}

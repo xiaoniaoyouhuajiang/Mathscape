@@ -191,6 +191,8 @@ export class DesktopInkWorkspace {
       this.rendered = true;
       this.render();
       eventBus.on("ink-links-changed", () => void this.refreshLinks());
+      // Links to a note that was trashed or renamed change their status/label.
+      eventBus.on("ink-notes-changed", () => void this.refreshLinks());
       this.outbox = await InkOutbox.openDefault();
       if (!this.outbox.persistent) this.status("本地恢复队列不可用；当前窗口关闭前请保持应用运行。", true);
     }
@@ -506,7 +508,8 @@ export class DesktopInkWorkspace {
       for (const option of INK_LINK_ROLES) role.add(new Option(option.label, option.role));
       role.value = link.role;
       role.onchange = () => void this.linkAction(documentId, () =>
-        linkInkNote(inkId(), documentId, this.linkTargetRef(link), role.value as InkLinkRole, link.is_primary, link.link_id), "改用途");
+        linkInkNote(inkId(), documentId, this.linkTargetRef(link), role.value as InkLinkRole, link.is_primary, link.link_id), "改用途",
+        receipt => receipt.merged ? `已合并到已有的「${roleLabel(receipt.link?.role ?? (role.value as InkLinkRole))}」关联${receipt.primary_changed ? "，并设为主关联" : ""}。` : undefined);
       item.append(open, role, meta);
       if (!link.is_primary) {
         const primary = document.createElement("button");
@@ -538,7 +541,7 @@ export class DesktopInkWorkspace {
         openAddLinkPopover({
           x: bounds.left, y: bounds.bottom + 4, documentId,
           hasPrimary: this.noteLinks.some(link => link.is_primary),
-          onLinked: receipt => this.afterLink(documentId, receipt, receipt.existing ? "这条关联已存在。" : "已添加关联。"),
+          onLinked: receipt => this.afterLink(documentId, receipt, !receipt.existing ? "已添加关联。" : receipt.primary_changed ? "这条关联已存在，已设为主关联。" : "这条关联已存在。"),
         });
       };
       bar.append(add);
@@ -554,9 +557,10 @@ export class DesktopInkWorkspace {
     return target;
   }
 
-  private async linkAction(documentId: string, action: () => Promise<InkLinkReceipt>, label: string): Promise<void> {
+  private async linkAction(documentId: string, action: () => Promise<InkLinkReceipt>, label: string, describe?: (receipt: InkLinkReceipt) => string | undefined): Promise<void> {
     try {
-      this.afterLink(documentId, await action(), `已${label}。`);
+      const receipt = await action();
+      this.afterLink(documentId, receipt, describe?.(receipt) ?? `已${label}。`);
     } catch (error) {
       this.status(`${label}失败：` + errorText(error), true);
       void this.refreshLinks();
@@ -599,8 +603,10 @@ export class DesktopInkWorkspace {
 
   /** Applies the server note to the open document, list and header. */
   private applyNote(note: InkNoteState): void {
+    let changed = false;
     for (const summary of [...this.sessionSummaries, ...this.trashedSummaries]) {
       if (summary.document_id !== note.document_id) continue;
+      changed ||= summary.title !== note.title || summary.lifecycle !== note.lifecycle;
       summary.title = note.title; summary.title_mode = note.title_mode; summary.title_revision = note.title_revision;
       summary.lifecycle = note.lifecycle; summary.lifecycle_revision = note.lifecycle_revision; summary.trashed_at = note.trashed_at;
     }
@@ -612,6 +618,13 @@ export class DesktopInkWorkspace {
       this.renderViewState();
     }
     this.renderSessionList(this.sessionSummaries);
+    if (changed) this.notesChanged();
+  }
+
+  /** Map overlay, inspector lists and reader markers filter by lifecycle and
+   * show titles, so every successful lifecycle or title write tells them. */
+  private notesChanged(): void {
+    eventBus.emit("ink-notes-changed");
   }
 
   private async commitTitle(): Promise<void> {
@@ -635,6 +648,9 @@ export class DesktopInkWorkspace {
       const receipt = await renameInkNote(request.requestId, documentId, title, expected);
       this.renameRequest = undefined;
       this.applyNote(receipt.note);
+      // The summary may already show the typed title, so do not rely on
+      // applyNote's diff: a committed rename always refreshes the views.
+      this.notesChanged();
       this.status(title ? "标题已更新。" : "已恢复自动标题。", false);
     } catch (error) {
       if (errorCode(error) === "title_conflict") {
@@ -648,7 +664,7 @@ export class DesktopInkWorkspace {
         ]);
         if (choice === "mine") { this.titleBusy = false; await this.submitRename(documentId, title, revision); return; }
         const latest = await getInkNote(documentId).catch(() => null);
-        if (latest) this.applyNote(latest);
+        if (latest) { this.applyNote(latest); this.notesChanged(); }
       } else {
         if (this.note) element<HTMLInputElement>(this.host, "#desktop-ink-title").value = this.note.title;
         this.status("改名失败：" + errorText(error), true);
@@ -789,6 +805,7 @@ export class DesktopInkWorkspace {
         return;
       }
       const receipt = await trashInkNote(inkId(), documentId, impact.note.lifecycle_revision);
+      this.notesChanged();
       if (this.documentState?.document_id === documentId) this.unmountDocument();
       await this.refreshDocuments();
       this.showUndo(receipt);
@@ -823,6 +840,7 @@ export class DesktopInkWorkspace {
   private async restoreDocument(documentId: string, expectedRevision: number, reopen = false): Promise<void> {
     try {
       const receipt = await restoreInkNote(inkId(), documentId, expectedRevision);
+      this.notesChanged();
       const viewing = this.trashedView && this.documentState?.document_id === documentId;
       if (viewing) this.unmountDocument();
       await this.refreshDocuments();
@@ -852,6 +870,7 @@ export class DesktopInkWorkspace {
     if (choice !== "clean") return;
     try {
       const receipt = await cleanBlankInkNotes(inkId(), candidates);
+      if (receipt.trashed.length) this.notesChanged();
       await this.refreshDocuments();
       this.status(`已将 ${receipt.trashed.length} 份空白稿移到回收站。` + (receipt.skipped.length ? `${receipt.skipped.length} 份因状态变化被跳过。` : ""), false);
     } catch (error) {
@@ -1382,11 +1401,18 @@ export class DesktopInkWorkspace {
   private async importRecovery():Promise<void> {
     try{
       this.board?.finish();await this.flush();
-      const session=await safeInvoke<SessionRecord|null>("choose_ink_recovery",{requestId:inkId()});
+      // An Ink JSON document or the A1 unsaved-operations export; the latter
+      // yields one recovery draft per writer queue (rebuilt on its own prefix).
+      const result=await safeInvoke<{source:string;sessions:SessionRecord[]}|null>("choose_ink_recovery",{requestId:inkId()});
+      const session=result?.sessions[0];
       if(!session)return;
       const stored=await openInkDocument(session.document_id);if(!stored)throw new Error("恢复草稿不存在。");
       this.note=stored.note;this.listView="active";this.navigationRevision++;await this.mountDocument(stored.document,session,stored.head_seq);
-      await this.refreshDocuments();this.status("恢复文件已导入为独立草稿，原手稿与旧会话保持原有记录。",false);
+      await this.refreshDocuments();
+      const count=result.sessions.length;
+      this.status(result.source==="unsaved_operations"
+        ?`未保存的笔迹已恢复为${count>1?` ${count} 份`:""}独立草稿（按它们写入时的原历史重建），原手稿保持不变。`
+        :"恢复文件已导入为独立草稿，原手稿与旧会话保持原有记录。",false);
     }catch(error){this.status("导入恢复草稿失败："+errorText(error),true);}
   }
   private async refreshMirror(force=false):Promise<void> {

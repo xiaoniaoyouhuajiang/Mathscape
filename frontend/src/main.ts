@@ -9,9 +9,9 @@ import { GraphController } from "./graph/graph-controller";
 import { InspectorController } from "./inspector/inspector-controller";
 import { LlmSettingsController } from "./llm/settings";
 import { DesktopInkWorkspace } from "./ink/desktop";
+import { connectInkViews, type InkViewSync } from "./ink/views";
 import {
   createInkNoteFromContext,
-  getInkLinkOverlay,
   setInkContextCreator,
   setInkSourceCandidateProvider,
 } from "./ink/links";
@@ -38,6 +38,8 @@ const closeInkWorkspace = () => {
   el.inkHost.hidden = true;
   el.workspaceGrid.hidden = false;
   el.inkButton.textContent = "手写";
+  // Safety net for changes made from the tablet while the map was hidden.
+  loadInkOverlay();
 };
 inkWorkspace = new DesktopInkWorkspace(el.inkHost, closeInkWorkspace, (message, kind) => shell.showToast(message, kind));
 el.inkButton.addEventListener("click", () => {
@@ -153,19 +155,14 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
   artifactController.renderMarkerStatus(snapshot.marker);
   graphController.renderCurrentGraph(snapshot);
   inspectorController.refreshIfUnlocked();
-  void loadInkOverlay();
+  loadInkOverlay();
 }
 
-// N2: map count markers and "我的手稿" come from a separate overlay query.
-let inkOverlayRevision = 0;
-async function loadInkOverlay(): Promise<void> {
-  const revision = ++inkOverlayRevision;
-  try {
-    const overlay = await getInkLinkOverlay();
-    if (revision === inkOverlayRevision) graphController.setInkOverlay(overlay);
-  } catch {
-    // Older hosts have no overlay; the map stays as projected.
-  }
+// N2: map count markers and "我的手稿" come from a separate overlay query that
+// is re-read after link writes and note lifecycle/title writes.
+let inkViews: InkViewSync | undefined;
+function loadInkOverlay(): void {
+  void inkViews?.reloadOverlay();
 }
 
 async function loadSnapshot(): Promise<void> {
@@ -212,9 +209,9 @@ setInkSourceCandidateProvider(() => {
     .filter((node) => !["superseded", "rejected", "deprecated"].includes(node.lifecycle ?? ""))
     .map((node) => ({ object_id: node.domain_id!, label: node.label, kind: node.domain_kind! }));
 });
-eventBus.on("ink-links-changed", () => {
-  void loadInkOverlay();
-  inspectorController.refreshIfUnlocked();
+inkViews = connectInkViews({
+  applyOverlay: (overlay) => graphController.setInkOverlay(overlay),
+  refreshInspector: () => inspectorController.refreshIfUnlocked(),
 });
 eventBus.on("open-ink-link-target", ({ link }) => {
   const target = link.target;
