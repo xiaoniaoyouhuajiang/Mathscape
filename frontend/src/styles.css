@@ -133,14 +133,14 @@ code {
   opacity: 0.65;
 }
 
-.workspace-grid.sources-collapsed { grid-template-columns: 48px minmax(0, 1fr) 280px; }
+.workspace-grid.sources-collapsed { grid-template-columns: 48px minmax(0, 1fr) var(--detail-width, 280px); }
 .sources-collapsed .source-panel { padding: 8px; }
 .sources-collapsed .source-panel > :not(#toggle-sources) { display: none; }
 #toggle-sources { cursor: pointer; border: 0; border-radius: 8px; padding: 6px 12px; background: #1e3239; color: #c4e5da; }
 .workspace-grid {
   display: grid;
   min-height: 0;
-  grid-template-columns: 260px minmax(460px, 1fr) 280px;
+  grid-template-columns: 260px minmax(360px, 1fr) var(--detail-width, 280px);
 }
 
 .panel,
@@ -161,7 +161,11 @@ code {
 
 .detail-panel {
   border-left: 1px solid #26303a;
+  position: relative;
 }
+/* N3.0: drag the inspector edge to resize the centre (map / reader) pane. */
+.panel-resizer { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 5; touch-action: none; }
+.panel-resizer:hover, .panel-resizer:focus-visible, .panel-resizer.is-dragging { background: linear-gradient(90deg, transparent 3px, #5fa89a 3px, #5fa89a 5px, transparent 5px); outline: none; }
 
 .panel-heading h1,
 .panel-heading h2,
@@ -1013,7 +1017,7 @@ code {
 
 @media (max-width: 1080px) {
   .workspace-grid {
-    grid-template-columns: 220px minmax(430px, 1fr) 240px;
+    grid-template-columns: 220px minmax(360px, 1fr) var(--detail-width, 240px);
   }
 }
 
