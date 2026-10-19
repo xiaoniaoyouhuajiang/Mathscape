@@ -18,7 +18,7 @@ async function lassoAll(page: Page): Promise<void> {
 }
 
 /** Operations of the document that received writing in this test. */
-async function operations(page: Page): Promise<Array<{ kind: string; stroke?: { brush: { color: string } }; stroke_ids?: string[] }>> {
+async function operations(page: Page): Promise<Array<{ kind: string; stroke?: { brush: { color: string } }; stroke_ids?: string[]; color?: string }>> {
   return page.evaluate(() => [...window.inkDesktopHarness.storedDocuments.values()].flatMap(document => document.operations).map(operation => structuredClone(operation)) as never);
 }
 
@@ -157,8 +157,8 @@ test("N3a restyle recolours a lasso selection in one undoable command", async ({
   const ops = await operations(page);
   const last = ops.at(-1)!;
   expect(last.kind).toBe("restyle");
-  expect((last as { stroke_ids: string[]; color: string }).stroke_ids).toHaveLength(2);
-  expect((last as { color: string }).color).toBe("#c62828");
+  expect(last.stroke_ids).toHaveLength(2);
+  expect(last.color).toBe("#c62828");
   await page.getByRole("button", { name: "撤销", exact: true }).click();
   await expect(page.locator("#ink-save-badge")).toContainText("head 4");
   expect((await operations(page)).at(-1)!.kind).toBe("undo");
@@ -167,8 +167,9 @@ test("N3a restyle recolours a lasso selection in one undoable command", async ({
 test("N3a push to tablet falls back to the QR when the tablet is offline", async ({ page }) => {
   await page.evaluate(() => { (window.inkDesktopHarness.behavior as { pushOffline: boolean }).pushOffline = true; });
   await page.getByRole("button", { name: "推送到平板", exact: true }).click();
-  await expect(page.locator("#ink-persistence-status")).toContainText("未连接");
+  await expect(page.locator("#ink-lan-panel")).toBeVisible();
   await expect(page.locator("[data-qr]")).toBeVisible();
+  await expect(page.locator("[data-link]")).toHaveValue(/#pair=/);
 });
 
 test("N3a push asks before taking over a remote writer", async ({ page }) => {

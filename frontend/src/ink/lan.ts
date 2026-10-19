@@ -108,6 +108,14 @@ export class InkLanPanel {
     const status=await safeInvoke<InkLanStatus>("get_ink_lan_status");this.seedPreferredHost(status);this.renderStatus(status);
     this.renderWriter();this.stopWriterPolling();this.writerTimer=setInterval(()=>this.renderWriter(),1000);
   }
+  /** N3a: offline push fallback — open the panel and issue a QR in one step. */
+  async openWithPairing(documentId:string,head:number|null):Promise<void>{
+    await this.open(documentId);
+    if(this.remoteWriter()){this.status(explainInkLanError("takeover_required"));return;}
+    const link=await safeInvoke<PairingLink>("create_ink_pairing",{documentId,expectedHead:head});
+    await this.showLink(link,"pair");await this.changed();
+    this.status("平板未连接；请扫码配对。二维码两分钟有效。");
+  }
   private remoteWriter():InkWriterView|undefined {const view=this.view();return view&&view.document_id===this.documentId&&view.remote?view:undefined;}
   private async issueTransfer():Promise<void> {
     const view=this.remoteWriter();if(!view)throw new Error("书写权已经不在平板，请直接生成配对二维码。");

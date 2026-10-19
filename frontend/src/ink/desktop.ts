@@ -1353,7 +1353,7 @@ export class DesktopInkWorkspace {
     }
     if (!result.pushed) {
       this.status(result.message + " 正在打开配对二维码。", false);
-      await this.lanPanel?.open(documentId);
+      await this.lanPanel?.openWithPairing(documentId, this.documentState?.operations.length ?? 0);
       return;
     }
     this.status(result.message, false);
