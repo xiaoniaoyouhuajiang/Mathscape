@@ -196,3 +196,31 @@ test("N1 a tablet that was offline when the note was trashed keeps its pending w
   const downloaded=page.waitForEvent("download");await page.getByRole("button",{name:"导出恢复草稿"}).click();
   expect(JSON.parse(await readFile((await (await downloaded).path())!,"utf8")).operations).toHaveLength(2);
 });
+
+async function lassoAll(page:Page){const box=(await page.locator("#pad-board .ink-input").boundingBox())!,x=box.x+box.width/2,y=box.y+box.height/2;await page.mouse.move(x-110,y-90);await page.mouse.down();for(const [px,py] of [[x+110,y-90],[x+110,y+90],[x-110,y+90],[x-110,y-85]])await page.mouse.move(px,py,{steps:6});await page.mouse.up();}
+test("N3.0 the tablet palette offers six presets, defaults to #193a66 and remembers its own choice",async({page})=>{
+  const palette=page.getByRole("group",{name:"笔迹颜色"});
+  await expect(palette.locator(".ink-swatch")).toHaveCount(6);await expect(palette).toHaveAttribute("data-color","#193a66");
+  await writeLine(page,-45);await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  await palette.getByRole("button",{name:"绿"}).click();await expect(palette.getByRole("button",{name:"绿"})).toHaveAttribute("aria-pressed","true");
+  await writeLine(page,45);await expect(page.locator("#pad-desktop-status")).toContainText("head 2");
+  const colors=(await control("status")).document.document.operations.map((operation:{stroke:{brush:{color:string}}})=>operation.stroke.brush.color);
+  expect(colors).toEqual(["#193a66","#2e7d32"]);
+  await page.reload();await expect(page.locator("#pad-connection")).toContainText("电脑已连接");
+  await expect(page.getByRole("group",{name:"笔迹颜色"})).toHaveAttribute("data-color","#2e7d32");
+  expect(await page.evaluate(()=>localStorage.getItem("mathscape:ink-pad-color"))).toBe("#2e7d32");
+  await expect(page.getByRole("combobox",{name:"最近手稿"})).toBeVisible();
+  await expect(page.locator("#pad-drafts option").first()).toContainText("最近手稿");
+});
+test("N3.0 the tablet deletes a lasso selection with one erase that a single undo restores",async({page})=>{
+  const remove=page.getByRole("button",{name:"删除所选",exact:true});
+  await writeLine(page,-45);await writeLine(page,45);await expect(page.locator("#pad-desktop-status")).toContainText("head 2");
+  await expect(remove).toBeDisabled();
+  await page.getByRole("button",{name:"套索选择",exact:true}).click();await lassoAll(page);
+  await expect(remove).toBeEnabled();await remove.click();await expect(remove).toBeDisabled();
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 3");
+  const erase=(await control("status")).document.document.operations.at(-1);
+  expect(erase.kind).toBe("erase");expect(erase.stroke_ids).toHaveLength(2);
+  await page.getByRole("button",{name:"撤销",exact:true}).click();await expect(page.locator("#pad-desktop-status")).toContainText("head 4");
+  const projection=(await control("status")).document.document.operations.at(-1);expect(projection.kind).toBe("undo");
+});

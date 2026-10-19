@@ -1199,3 +1199,10 @@ code {
 .ink-link-chip select { padding: 1px 4px; border: 1px solid #3c5560; border-radius: 4px; color: inherit; background: #0b141a; font-size: 11px; }
 .ink-link-chip .secondary-button { padding: 2px 8px; font-size: 11px; }
 .ink-link-bar[hidden] { display: none; }
+/* N3.0 shared ink palette (desktop). */
+.ink-palette { display: inline-flex; align-items: center; gap: 4px; }
+.ink-palette .ink-swatch { width: 20px; height: 20px; min-height: 0; padding: 0; border-radius: 50%; border: 2px solid #405863; background: var(--swatch); cursor: pointer; }
+.ink-palette .ink-swatch[aria-pressed="true"] { border-color: #e8f4ef; box-shadow: 0 0 0 2px #5fa89a; }
+.ink-palette .ink-swatch:disabled { opacity: .4; cursor: default; }
+.ink-palette .ink-swatch-custom { width: 25px; height: 25px; padding: 2px; border: 1px solid #405863; border-radius: 5px; background: #17272e; }
+.ink-palette .ink-swatch-custom.is-active { box-shadow: 0 0 0 2px #5fa89a; }

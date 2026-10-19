@@ -3,6 +3,8 @@ import { appendInk,encodeInk,inkId,inkMetadata,normalizeInkTitle,INK_TITLE_MAX,p
 import { InkPadStore,type PadBinding,type PadDraft } from "./pad-store";
 import { InkPadTransport,PadTransportError,type PadContext,type PadNote } from "./pad-transport";
 import type { InkOutboxItem } from "./outbox";
+import { isDeleteKey,isTypingTarget } from "./keys";
+import { createInkPalette,INK_DEFAULT_COLOR,PAD_COLOR_KEY,type InkPalette } from "./palette";
 import "./lab.css";
 import "./pad.css";
 
@@ -22,6 +24,7 @@ class InkPad {
   private segment:CaptureSegment|undefined;
   private tool:InkTool="pen";
   private board:InkCanvas|undefined;
+  private palette:InkPalette|undefined;
   private transport:InkPadTransport|undefined;
   private confirmed=0;
   private pending=0;
@@ -44,11 +47,13 @@ class InkPad {
     root.innerHTML=`<main class="lab-pad"><header class="pad-header"><div class="pad-title"><span class="lab-mark">M</span><strong id="pad-title">Mathscape InkPad</strong><button id="pad-rename" type="button" class="pad-rename-button" title="修改手稿标题">改名</button><span class="lab-badge">P3</span></div><span id="pad-connection" role="status">正在准备本机存储…</span></header>
       <form id="pad-rename-form" class="pad-rename" hidden><input id="pad-rename-input" maxlength="${INK_TITLE_MAX}" aria-label="手稿标题" placeholder="留空恢复自动标题" autocomplete="off"><button id="pad-rename-save" type="submit">保存标题</button><button id="pad-rename-cancel" type="button">取消</button></form>
       <div id="pad-title-choice" class="pad-rename" role="group" aria-label="标题冲突" hidden><span id="pad-title-choice-text"></span><button id="pad-title-theirs" type="button"></button><button id="pad-title-mine" type="button"></button></div>
-      <nav class="ink-toolbar" aria-label="书写工具"><div class="ink-tool-group"><button id="pad-pen" class="is-active">笔</button><button id="pad-select">套索选择</button><button id="pad-erase">整笔擦除</button><button id="pad-partial_erase">局部擦除</button><button id="pad-undo">撤销</button><button id="pad-redo">重做</button></div>
-      <div class="ink-tool-group"><label class="ink-control">颜色<input id="pad-color" type="color" value="#193a66"></label><label class="ink-control">笔宽<input id="pad-width" type="range" min="1" max="16" step="0.5" value="4"></label><label class="ink-control"><input id="pad-finger" type="checkbox">手指书写</label></div>
+      <nav class="ink-toolbar" aria-label="书写工具"><div class="ink-tool-group"><button id="pad-pen" class="is-active">笔</button><button id="pad-select">套索选择</button><button id="pad-erase">整笔擦除</button><button id="pad-partial_erase">局部擦除</button><button id="pad-undo">撤销</button><button id="pad-redo">重做</button><button id="pad-delete-selection" disabled title="删除套索选中的笔迹，可撤销">删除所选</button></div>
+      <div class="ink-tool-group"><span id="pad-palette-host"></span><label class="ink-control">笔宽<input id="pad-width" type="range" min="1" max="16" step="0.5" value="4"></label><label class="ink-control"><input id="pad-finger" type="checkbox">手指书写</label></div>
       <div class="ink-tool-group"><select id="pad-page" aria-label="页面"></select><button id="pad-add-page">新增页面</button><button id="pad-zoom-out" aria-label="缩小">−</button><button id="pad-fit">整页</button><button id="pad-zoom-in" aria-label="放大">＋</button></div></nav>
       <section id="pad-board" class="ink-board" aria-label="平板画板"></section>
-      <footer class="pad-footer"><div class="pad-save-state"><span id="pad-local-status">尚未打开手稿</span><span id="pad-desktop-status">尚未连接电脑</span></div><div class="ink-file-actions"><button id="pad-sync">立即同步</button><button id="pad-snapshot">保存快照</button><button id="pad-export">导出恢复草稿</button><button id="pad-png">导出 PNG</button><button id="pad-retry">重试连接</button><select id="pad-drafts" aria-label="本机恢复记录"></select></div><p id="pad-status" class="lab-status" role="status">请使用 Mathscape 中展示的二维码配对。</p><details class="ink-diagnostics"><summary>输入与恢复诊断</summary><div id="pad-diagnostics"></div></details></footer></main>`;
+      <footer class="pad-footer"><div class="pad-save-state"><span id="pad-local-status">尚未打开手稿</span><span id="pad-desktop-status">尚未连接电脑</span></div><div class="ink-file-actions"><button id="pad-sync">立即同步</button><button id="pad-snapshot">保存快照</button><button id="pad-export">导出恢复草稿</button><button id="pad-png">导出 PNG</button><button id="pad-retry">重试连接</button><select id="pad-drafts" aria-label="最近手稿"></select></div><p id="pad-status" class="lab-status" role="status">请使用 Mathscape 中展示的二维码配对。</p><details class="ink-diagnostics"><summary>输入与恢复诊断</summary><div id="pad-diagnostics"></div></details></footer></main>`;
+    // N3.0: shared presets + custom colour; the tablet remembers its own choice.
+    this.palette=createInkPalette({storageKey:PAD_COLOR_KEY,idPrefix:"pad"});element("#pad-palette-host").replaceWith(this.palette.element);
     this.events();this.controls();
     try{
       this.database=await InkPadStore.open();
@@ -89,7 +94,10 @@ class InkPad {
     element<HTMLButtonElement>("#pad-rename-cancel").onclick=()=>{form.hidden=true;};
     input.onkeydown=event=>{if(event.key==="Escape"){event.preventDefault();form.hidden=true;}};
     form.onsubmit=event=>{event.preventDefault();void this.requestRename(input.value);};
-    for(const tool of ["pen","select","erase","partial_erase"] as const)element<HTMLButtonElement>("#pad-"+tool).onclick=()=>{this.board?.resetTransientInteraction();this.tool=tool;for(const value of ["pen","select","erase","partial_erase"])element("#pad-"+value).classList.toggle("is-active",value===tool);this.board?.refresh();};
+    for(const tool of ["pen","select","erase","partial_erase"] as const)element<HTMLButtonElement>("#pad-"+tool).onclick=()=>{this.board?.resetTransientInteraction();this.tool=tool;for(const value of ["pen","select","erase","partial_erase"])element("#pad-"+value).classList.toggle("is-active",value===tool);this.board?.refresh();this.summary();};
+    // N3.0: delete the lasso selection with one multi-stroke erase (one undo restores it).
+    element<HTMLButtonElement>("#pad-delete-selection").onclick=()=>{if(!this.document||this.fenced||this.tool!=="select")return;this.board?.deleteSelection();this.summary();};
+    window.addEventListener("keydown",event=>{if(!isDeleteKey(event)||isTypingTarget(event.target)||!this.document||this.fenced||this.tool!=="select"||!this.board?.selectionCount())return;event.preventDefault();this.board.deleteSelection();this.summary();});
     for(const kind of ["undo","redo"] as const)element<HTMLButtonElement>("#pad-"+kind).onclick=()=>{if(!this.document||this.fenced)return;this.board?.resetTransientInteraction();const target=projectInk(this.document)[kind].at(-1);if(target)this.commit({kind,target_command_id:target});};
     element<HTMLButtonElement>("#pad-add-page").onclick=()=>{if(!this.document||this.fenced)return;this.board?.resetTransientInteraction();const page:InkPage={id:inkId(),width:1200,height:1600};this.document.pages.push(page);this.commit({kind:"page_add",page});this.page=page.id;this.pages();this.board?.setSelection([]);this.board?.fit();};
     element<HTMLSelectElement>("#pad-page").onchange=()=>{this.board?.resetTransientInteraction();this.page=element<HTMLSelectElement>("#pad-page").value;this.board?.setSelection([]);this.board?.fit();this.summary();};
@@ -110,7 +118,7 @@ class InkPad {
     });
     window.addEventListener("beforeunload",event=>{if(this.buffered.size){event.preventDefault();event.returnValue="";}});
   }
-  private brush():InkBrush{return {renderer:"perfect-freehand@1.2.3",color:element<HTMLInputElement>("#pad-color").value,width:Number(element<HTMLInputElement>("#pad-width").value),smoothing:0.35,streamline:0.15,thinning:0.4,simulate_pressure:false};}
+  private brush():InkBrush{return {renderer:"perfect-freehand@1.2.3",color:this.palette?.value()??INK_DEFAULT_COLOR,width:Number(element<HTMLInputElement>("#pad-width").value),smoothing:0.35,streamline:0.15,thinning:0.4,simulate_pressure:false};}
   private segmentId():string {
     if(!this.segment){this.segment={id:inkId(),started_at:new Date().toISOString(),user_agent:navigator.userAgent,secure_context:window.isSecureContext,coalesced_events:typeof PointerEvent.prototype.getCoalescedEvents==="function",pointer_raw_update:"onpointerrawupdate" in window,device_pixel_ratio:window.devicePixelRatio||1,time_origin_ms:performance.timeOrigin,pressure_capability:"unknown",tilt_capability:"unknown"};this.document!.capture_segments.push(this.segment);}return this.segment.id;
   }
@@ -245,7 +253,7 @@ class InkPad {
     catch(error){if(this.binding===binding)this.message("快照尚未确认，重试将沿用原请求。"+String(error));}
   }
   private async refreshDrafts():Promise<void> {
-    const select=element<HTMLSelectElement>("#pad-drafts");select.replaceChildren();for(const draft of await this.database!.drafts())select.add(new Option(draft.document.title+" · 本机恢复记录",draft.key));if(this.binding)select.value=this.binding.key;
+    const select=element<HTMLSelectElement>("#pad-drafts");select.replaceChildren();for(const draft of await this.database!.drafts())select.add(new Option(draft.document.title+" · 最近手稿",draft.key));if(this.binding)select.value=this.binding.key;
   }
   private async openDraft(key:string):Promise<void> {
     if(!this.database||(key===this.binding?.key&&this.document))return;const revision=++this.navigationRevision;this.board?.finish();await this.enqueueTail;if(revision!==this.navigationRevision)return;this.transport?.close();
@@ -257,7 +265,7 @@ class InkPad {
   private summary():void {
     if(!this.document)return;
     if(this.projection?.document!==this.document||this.projection.count!==this.document.operations.length)this.projection={document:this.document,count:this.document.operations.length,value:projectInk(this.document)};
-    const projection=this.projection.value;element<HTMLButtonElement>("#pad-undo").disabled=this.fenced||!projection.undo.length;element<HTMLButtonElement>("#pad-redo").disabled=this.fenced||!projection.redo.length;
+    const projection=this.projection.value;element<HTMLButtonElement>("#pad-undo").disabled=this.fenced||!projection.undo.length;element<HTMLButtonElement>("#pad-delete-selection").disabled=this.fenced||this.tool!=="select"||!this.board?.selectionCount();element<HTMLButtonElement>("#pad-redo").disabled=this.fenced||!projection.redo.length;
     element("#pad-local-status").textContent=this.persisted?`本机已保存 · 待同步 ${this.pending} 个操作`:`本机尚有 ${this.buffered.size} 个操作未保存`;
     element("#pad-desktop-status").textContent=`电脑已保存至 head ${this.confirmed}`;
     element("#pad-diagnostics").textContent=`安全上下文：${window.isSecureContext} · IndexedDB 恢复队列：${!!this.database}\n${projection.visible.length} 笔 · ${projection.pointCount+this.metrics.activePoints} 点 · 本机 head ${this.document.operations.length}\n输入：${this.metrics.lastPointer} · 合并采样 ${this.metrics.coalescedSamples} · 前景绘制 ${this.metrics.frameMs.toFixed(2)} ms\n连接：${this.state} · 写入 epoch ${this.binding?.lease.writer_epoch??"—"}`;
