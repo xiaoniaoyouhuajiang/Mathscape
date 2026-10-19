@@ -442,6 +442,7 @@ async fn expiry_predecessor_and_conflicting_replay_never_change_committed_histor
                 writer_id: "expired-peer".into(),
                 expires_at: now - 1,
                 allow_transfer: false,
+                claim_reason: "tablet_pairing".into(),
             },
             now - 120,
         )
@@ -1222,5 +1223,135 @@ async fn tablet_and_desktop_renames_use_revisions_and_reach_each_other() {
         })
         .unwrap_err();
     assert_eq!(rename_trashed.code, "document_trashed");
+    f.cleanup().await;
+}
+
+
+#[tokio::test]
+async fn n3a_push_to_an_offline_tablet_falls_back_without_issuing_a_token() {
+    let f = Fixture::new("push-offline").await;
+    let result = f
+        .service
+        .push_ink_to_tablet(&f.document.document_id, false)
+        .await
+        .unwrap();
+    assert!(!result.pushed);
+    assert_eq!(result.online, 0);
+    assert!(result.message.contains("未连接"), "{}", result.message);
+    f.cleanup().await;
+}
+
+#[tokio::test]
+async fn n3a_push_to_a_connected_tablet_sends_switch_offer_and_audits_desktop_push() {
+    let f = Fixture::new("push-online").await;
+    let credential = "c".repeat(64);
+    let pairing = f
+        .service
+        .create_ink_pairing(f.document.document_id.clone(), 0)
+        .await
+        .unwrap();
+    let claim = f.claim(&pairing.urls[0], &credential).await;
+    assert_eq!(claim.status(), 200);
+
+    let mut socket = f.socket_as("tablet-push", &credential).await;
+    // Authenticated hello yields session_context before any control frame.
+    let hello = next(&mut socket).await;
+    assert_eq!(hello["type"], "session_context");
+
+    // Create a second note as the push target.
+    let mut target_doc = f.document.clone();
+    target_doc.document_id = "doc-push-target".into();
+    target_doc.title = "推送目标".into();
+    f.service
+        .create_ink_document(CreateInkDocumentRequest {
+            document: target_doc.clone(),
+            session_id: "native-session-2".into(),
+            writer_id: "desktop-local".into(),
+            device: json!({"source": "desktop"}),
+            request_id: Some("push-target".into()),
+            title_mode: None,
+        })
+        .unwrap();
+
+    let result = f
+        .service
+        .push_ink_to_tablet(&target_doc.document_id, false)
+        .await
+        .unwrap();
+    assert!(result.pushed, "{result:?}");
+    assert_eq!(result.online, 1);
+
+    let offer = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let value = next(&mut socket).await;
+            if value["type"] == "switch_offer" {
+                break value;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for switch_offer");
+    assert_eq!(offer["document_id"], target_doc.document_id);
+    assert_eq!(offer["title"], "推送目标");
+    let token = offer["pairing_token"].as_str().unwrap();
+    assert_eq!(token.len(), 64);
+
+    // Claim with the one-time token; reason on the offer path is desktop_push.
+    let claimed = f
+        .client
+        .post(format!("{}/api/pair", f.base))
+        .header("Origin", &f.base)
+        .json(&json!({
+            "pairing_token": token,
+            "resume_secret": "d".repeat(64),
+            "device": {"model": "pushed"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(claimed.status(), 200, "{}", claimed.text().await.unwrap_or_default());
+
+    // Replay of the same token must fail.
+    let replay = f
+        .client
+        .post(format!("{}/api/pair", f.base))
+        .header("Origin", &f.base)
+        .json(&json!({
+            "pairing_token": token,
+            "resume_secret": "e".repeat(64),
+            "device": {"model": "replay"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(replay.status(), 200);
+
+    let _ = socket.close(None).await;
+    f.cleanup().await;
+}
+
+#[tokio::test]
+async fn n3a_preferred_host_persists_and_reorders_pairing_urls() {
+    let f = Fixture::new("prefer-host").await;
+    let saved = f
+        .service
+        .set_ink_lan_preferred_host(Some("127.0.0.1".into()))
+        .unwrap();
+    assert_eq!(saved.preferred_host.as_deref(), Some("127.0.0.1"));
+    let status = f.service.ink_lan_status().await.unwrap();
+    assert_eq!(status.preferred_host.as_deref(), Some("127.0.0.1"));
+    let pairing = f
+        .service
+        .create_ink_pairing(f.document.document_id.clone(), 0)
+        .await
+        .unwrap();
+    assert!(
+        pairing.urls[0].contains("127.0.0.1"),
+        "preferred host should lead pairing urls: {:?}",
+        pairing.urls
+    );
+    f.service.set_ink_lan_preferred_host(None).unwrap();
+    let status = f.service.ink_lan_status().await.unwrap();
+    assert!(status.preferred_host.is_none());
     f.cleanup().await;
 }

@@ -30,6 +30,8 @@ export type InkOperation = Command & (
   { kind: "erase"; stroke_ids: string[] } |
   { kind: "partial_erase"; source_stroke_id: string; fragments: InkStroke[] } |
   { kind: "transform"; stroke_ids: string[]; matrix: InkTransform } |
+  /** N3a: colour only; `width` is reserved and rejected when present. */
+  { kind: "restyle"; stroke_ids: string[]; color: string; width?: number | null } |
   { kind: "page_add"; page: InkPage } |
   { kind: "undo" | "redo"; target_command_id: string }
 );
@@ -38,6 +40,7 @@ export type InkAppendCommand =
   | { kind: "erase"; stroke_ids: string[] }
   | { kind: "partial_erase"; source_stroke_id: string; fragments: InkStroke[] }
   | { kind: "transform"; stroke_ids: string[]; matrix: InkTransform }
+  | { kind: "restyle"; stroke_ids: string[]; color: string; width?: number | null }
   | { kind: "page_add"; page: InkPage }
   | { kind: "undo" | "redo"; target_command_id: string };
 export interface InkDocument {
@@ -182,8 +185,9 @@ export function parseInkDocument(input: unknown): InkDocument {
   for (const [index, value] of d.operations.entries()) {
     if (value === null || typeof value !== "object") fail("operation 必须是对象");
     const kind = (value as Record<string, unknown>).kind;
-    if (typeof kind !== "string" || !["stroke", "erase", "partial_erase", "transform", "page_add", "undo", "redo"].includes(kind)) fail("未知 operation kind");
-    const operationKeys = kind === "stroke" ? ["kind", "seq", "command_id", "stroke"] : kind === "erase" ? ["kind", "seq", "command_id", "stroke_ids"] : kind === "partial_erase" ? ["kind", "seq", "command_id", "source_stroke_id", "fragments"] : kind === "transform" ? ["kind", "seq", "command_id", "stroke_ids", "matrix"] : kind === "page_add" ? ["kind", "seq", "command_id", "page"] : ["kind", "seq", "command_id", "target_command_id"];
+    if (typeof kind !== "string" || !["stroke", "erase", "partial_erase", "transform", "restyle", "page_add", "undo", "redo"].includes(kind)) fail("未知 operation kind");
+    const restyleKeys = "width" in (value as object) ? ["kind", "seq", "command_id", "stroke_ids", "color", "width"] : ["kind", "seq", "command_id", "stroke_ids", "color"];
+    const operationKeys = kind === "stroke" ? ["kind", "seq", "command_id", "stroke"] : kind === "erase" ? ["kind", "seq", "command_id", "stroke_ids"] : kind === "partial_erase" ? ["kind", "seq", "command_id", "source_stroke_id", "fragments"] : kind === "transform" ? ["kind", "seq", "command_id", "stroke_ids", "matrix"] : kind === "restyle" ? restyleKeys : kind === "page_add" ? ["kind", "seq", "command_id", "page"] : ["kind", "seq", "command_id", "target_command_id"];
     const op = object(value, operationKeys, "operation");
     integer(op.seq, index + 1, index + 1, "operation.seq"); uniqueId(op.command_id, commands, "command_id");
     if (kind === "page_add") {
@@ -208,6 +212,19 @@ export function parseInkDocument(input: unknown): InkDocument {
       array(op.stroke_ids, 1, MAX_INK_OPERATIONS, "transform.stroke_ids");
       for (const id of op.stroke_ids) { text(id, "transform.stroke_ids[]"); if (!strokes.has(id)) fail("transform 来源笔迹不存在"); }
       validateTransform(op.matrix, "transform.matrix");
+      continue;
+    }
+    if (kind === "restyle") {
+      array(op.stroke_ids, 1, MAX_INK_OPERATIONS, "restyle.stroke_ids");
+      const seen = new Set<string>();
+      for (const id of op.stroke_ids) {
+        text(id, "restyle.stroke_ids[]");
+        if (!strokes.has(id) || seen.has(id)) fail("restyle 引用不存在或重复的笔迹");
+        seen.add(id);
+      }
+      if (typeof op.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(op.color)) fail("restyle.color 无效");
+      // Width is reserved; reject so N3a never silently drops an unsupported style.
+      if ("width" in op && op.width !== null && op.width !== undefined) fail("restyle.width 尚未支持");
       continue;
     }
     if (kind === "undo" || kind === "redo") { text(op.target_command_id, "target_command_id"); continue; }
@@ -238,7 +255,7 @@ export function projectInk(document: InkDocument): InkProjection {
   const knownStrokes = new Set<string>();
   let pointCount = 0;
   for (const op of document.operations) {
-    if (op.kind === "stroke" || op.kind === "erase" || op.kind === "partial_erase" || op.kind === "transform" || op.kind === "page_add") {
+    if (op.kind === "stroke" || op.kind === "erase" || op.kind === "partial_erase" || op.kind === "transform" || op.kind === "restyle" || op.kind === "page_add") {
       if (op.kind === "page_add") { base.push(op); active.set(op.command_id, true); continue; }
       if (op.kind === "stroke") { knownStrokes.add(op.stroke.id); pointCount += op.stroke.points.length; }
       else if (op.kind === "erase") {
@@ -248,6 +265,10 @@ export function projectInk(document: InkDocument): InkProjection {
         for (const fragment of op.fragments) { knownStrokes.add(fragment.id); pointCount += fragment.points.length; }
       } else if (op.kind === "transform") {
         if (op.stroke_ids.some(id => !knownStrokes.has(id))) fail("变换引用不存在的笔迹");
+      } else if (op.kind === "restyle") {
+        if (!op.stroke_ids.length || new Set(op.stroke_ids).size !== op.stroke_ids.length || op.stroke_ids.some(id => !knownStrokes.has(id))) fail("restyle 引用不存在或重复的笔迹");
+        if (typeof op.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(op.color)) fail("restyle.color 无效");
+        if (op.width !== undefined && op.width !== null) fail("restyle.width 尚未支持");
       }
       base.push(op); active.set(op.command_id, true); undo.push(op.command_id); redo.length = 0;
     } else {
@@ -267,6 +288,11 @@ export function projectInk(document: InkDocument): InkProjection {
     else if (op.kind === "transform") {
       const m = op.matrix;
       for (const id of op.stroke_ids) { const stroke = visible.get(id); if (!stroke) continue; visible.set(id, { ...stroke, points: stroke.points.map(p => ({ ...p, x: m.a * p.x + m.c * p.y + m.e, y: m.b * p.x + m.d * p.y + m.f })) }); }
+    } else if (op.kind === "restyle") {
+      for (const id of op.stroke_ids) {
+        const stroke = visible.get(id); if (!stroke) continue;
+        visible.set(id, { ...stroke, brush: { ...stroke.brush, color: op.color } });
+      }
     }
   }
   return { strokes, visible: [...visible.values()], undo, redo, pointCount };

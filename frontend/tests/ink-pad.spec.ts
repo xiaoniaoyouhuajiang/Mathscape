@@ -224,3 +224,49 @@ test("N3.0 the tablet deletes a lasso selection with one erase that a single und
   await page.getByRole("button",{name:"撤销",exact:true}).click();await expect(page.locator("#pad-desktop-status")).toContainText("head 4");
   const projection=(await control("status")).document.document.operations.at(-1);expect(projection.kind).toBe("undo");
 });
+
+test("N3a the tablet restyles a lasso selection with one undoable command",async({page})=>{
+  const restyle=page.getByRole("button",{name:"改颜色",exact:true});
+  const palette=page.getByRole("group",{name:"笔迹颜色"});
+  await writeLine(page,-45);await writeLine(page,45);await expect(page.locator("#pad-desktop-status")).toContainText("head 2");
+  await expect(restyle).toBeDisabled();
+  await page.getByRole("button",{name:"套索选择",exact:true}).click();await lassoAll(page);
+  await expect(restyle).toBeEnabled();
+  await palette.getByRole("button",{name:"红"}).click();
+  await restyle.click();
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 3");
+  const restyleOp=(await control("status")).document.document.operations.at(-1);
+  expect(restyleOp.kind).toBe("restyle");expect(restyleOp.stroke_ids).toHaveLength(2);expect(restyleOp.color).toBe("#c62828");
+  await page.getByRole("button",{name:"撤销",exact:true}).click();await expect(page.locator("#pad-desktop-status")).toContainText("head 4");
+  expect((await control("status")).document.document.operations.at(-1).kind).toBe("undo");
+});
+
+test("N3a push-switch enters the new note without a pages error and keeps A switchable",async({page})=>{
+  await writeLine(page,-30);await writeLine(page,30);
+  await expect(page.locator("#pad-local-status")).toContainText("待同步 0");
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 2");
+  const titleA=await page.locator("#pad-title").textContent();
+  expect(titleA).toBeTruthy();
+  const draftA=await page.locator("#pad-drafts").inputValue();
+
+  page.once("dialog",dialog=>dialog.accept());
+  const pushed=await control("push");
+  expect(pushed.push.pushed).toBe(true);
+  const titleB=pushed.push_title as string;
+
+  await expect(page.locator("#pad-title")).toHaveText(titleB,{timeout:15000});
+  await expect(page.locator("#pad-connection")).toContainText("电脑已连接");
+  await expect(page.locator("#pad-connection")).not.toContainText("Cannot read properties");
+  await expect(page.locator("#pad-status")).not.toContainText("Cannot read properties");
+  await expect(page.locator("#pad-status")).toContainText(titleB);
+  // Fresh note B starts empty (or at least not showing A's two strokes as the only content).
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 0");
+
+  // A's strokes remain and are reachable via 最近手稿.
+  await page.locator("#pad-drafts").selectOption(draftA);
+  await expect(page.locator("#pad-title")).toHaveText(titleA!);
+  await expect(page.locator("#pad-connection")).toContainText("电脑已连接");
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 2");
+  const stateA=await control("status");
+  expect(stateA.document.document.operations.filter((op:{kind:string})=>op.kind==="stroke")).toHaveLength(2);
+});

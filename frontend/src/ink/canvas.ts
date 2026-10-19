@@ -213,6 +213,8 @@ export class InkCanvas {
   }
   /** Number of selected strokes still visible on the current page. */
   selectionCount(): number { return this.selectedStrokes().length; }
+  /** Ids of the current page selection, in selection order. */
+  selectedIds(): string[] { return this.selectedStrokes().map(stroke => stroke.id); }
   /**
    * N3.0: erase every selected stroke with one multi-stroke `erase` command,
    * so a single undo restores them. Returns false when nothing was erased.

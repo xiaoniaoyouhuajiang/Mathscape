@@ -531,7 +531,7 @@ N2 合入后根据实际使用重新梳理了 N3。平板上最常见的问题�
 10. **题目卡片内容**：首版用纯文本加 LaTeX 源码（等宽字体），使用后再决定是否在平板引入 KaTeX。
 11. **题目卡片范围**：只显示当前授权手稿的主关联。没有主关联时不显示卡片。
 12. **并排阅读**：列为应做（should-have）。
-13. **手稿状态和命名快照**：合并为一次迁移（v19）。
+13. **手稿状态和命名快照**：合并为一次迁移。原计划为 v19；N3a 已占用 v19（`preferred_host` / `claim_reason`），因此 N3d 改为 **v20**。
 
 ### 15.2 范围
 
@@ -564,7 +564,7 @@ N2 合入后根据实际使用重新梳理了 N3。平板上最常见的问题�
   - 首选地址写入 `ink_lan_settings`。
 - **N3b 题目卡片**：服务端生成主关联摘要，通过会话上下文和推送下发；平板显示卡片。
 - **N3c 桌面并排阅读**：阅读器和手稿分栏，并可双向跳转。
-- **N3d 管理补充**：手稿状态和命名快照，在迁移 v19 中一起完成。
+- **N3d 管理补充**：手稿状态和命名快照，在迁移 **v20** 中一起完成（v19 已由 N3a 使用）。
 - **N3e 手感与评审遗留**：H1、H5、M1、M4，可以穿插进行。
 
 ### 15.4 N3.0 实施说明
@@ -577,10 +577,34 @@ N2 合入后根据实际使用重新梳理了 N3。平板上最常见的问题�
   - 状态、配对和设置的返回值增加与 `urls` 一一对应的 `url_kinds`。这些是桌面界面的 Tauri 返回值，不属于局域网协议。
   - 证书 SAN 和 Host 白名单仍包含全部地址，监听地址不变。
   - 界面只显示局域网地址，其他地址在“显示其他地址”后面。没有局域网地址时，不会默认使用其他地址生成二维码。
-  - 手动选择的地址记在本机（`mathscape:ink-lan-preferred-host`），服务端持久化留到 N3a。
+  - 手动选择的地址记在本机（`mathscape:ink-lan-preferred-host`）；N3a 起同时写入服务端 `ink_lan_settings.preferred_host`（见 §15.5）。
 - **PDF 阅读器**：
   - “调整尺寸”按两层理解。
     - 页面缩放：支持缩小 / 放大按钮、比例下拉框、Ctrl/⌘ + / − / 0、Ctrl + 滚轮和触控板捏合。默认适合宽度，也可以选适合页面。页面按设备像素比清晰重绘，缩放时以光标或视口中心为锚点。缩放按文档记住。
     - 阅读区宽度：检查器左边缘可以拖动（也可用键盘方向键），中间的阅读区和地图随之变宽或变窄，中间至少保留 360px。双击恢复默认宽度。
   - 目录可以收起，PDF 视口填满阅读面板。
 - **暂缓**：H5 关闭前提示需要处理 Tauri 窗口关闭事件，不属于快修，放在 N3e。
+
+### 15.5 N3a 实施说明
+
+- **协议 `mathscape-ink-lan-2`**（一次 bump，覆盖本阶段与 N3b 扩展点）：
+  | 方向 | `type` | 说明 |
+  |---|---|---|
+  | C→S | `hello` | `protocol_version` 必须为 `mathscape-ink-lan-2`；旧页收到 `protocol_mismatch` 并提示刷新 |
+  | S→C | `session_context` | 增加可选 `problem_card`（对象或 `null`）；N3a 不下发，N3b 填入 |
+  | S→C | `switch_offer` | `{ offer_id, document_id, title, pairing_token, expires_at, requires_takeover, message }`；推给所有在线平板槽，先 claim 者胜 |
+  | S→C | `problem_card` / `problem_card_clear` | 预留给 N3b；旧实现可忽略未知类型，但 v2 客户端应识别并暂存 |
+  | C→S | 操作帧 | `operation.kind` 新增 `restyle`；其余 kind 不变 |
+- **`restyle`**：`{ stroke_ids, color, width? }`。只改颜色；`width` 若出现且非 `null` 则校验拒绝（向前兼容字段）。一次 restyle = 一条可撤销命令。局部擦除从投影后的笔迹取片段，因此继承新色。快照字节格式不变；证据路径不引用颜色。
+- **电脑推送（方案 A）**：
+  - 桌面「推送到平板」：目标在回收站或历史快照时按钮禁用；**平板镜像 / 只读**状态下仍可用（否则已交出去的手稿无法再推回同一台平板）。无在线平板时提示未连接并回退二维码。
+  - 目标正被**另一台平板**书写时返回 `requires_takeover`，需用户再次确认（`allow_transfer`）后才发 `switch_offer`；提示对方未同步内容会被隔离。电脑自己持有写入权时，用户点击推送即视为确认。若目标平板已持有该手稿的有效凭据，仍走同一 `switch_offer` + `/api/pair` 路径（可能触发写入权转交确认）。
+  - 服务端签发一次性 pairing，`claim_reason=desktop_push`，写入 `ink_writer_transfers.reason`。旧手稿的凭据保持有效，平板可经「最近手稿」切回。
+  - 平板收到 offer 后确认 → 先排空当前手稿到本机（复用 hashchange 保护：未同步则提示保存/导出，不丢弃）→ `/api/pair`。
+- **最近手稿（方案 C）**：列表标出凭据仍有效的条目；hello/auth 失败记为「需要电脑重新授权」，作为切换入口。
+- **迁移 v19**（`0019_ink_lan_preferred_host_n3a.sql`）：
+  - `ink_lan_settings.preferred_host TEXT`（可空）
+  - `ink_pairings.claim_reason`，取值 `tablet_pairing` | `desktop_push`
+  - 本机 `localStorage` 偏好：若服务端尚无值则一次性写入服务端；之后以服务端为准，并继续镜像到本机以便离线展示。
+- **N3d 迁移编号**：见决定 13 修订 → **v20**。
+

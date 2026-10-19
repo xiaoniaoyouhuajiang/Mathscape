@@ -2,11 +2,11 @@ import QRCode from "qrcode";
 import { safeInvoke } from "../core/ipc";
 import { inkId,type InkDocumentMetadata,type InkOperation,type InkStroke } from "./model";
 import type { InkNoteState, StoredInkSession } from "./persistence";
-import { addressOptions,fillAddressSelect,savePreferredHost,type AddressOption } from "./lan-addresses";
+import { addressOptions,fillAddressSelect,loadPreferredHost,savePreferredHost,type AddressOption } from "./lan-addresses";
 
 type PairingLink={urls:string[];url_kinds?:string[];expires_at:number;document_id:string};
 
-export interface InkLanStatus {enabled:boolean;running:boolean;port:number;urls:string[];url_kinds?:string[];certificate_file_sha256:string|null;assets_ready:boolean;error:string|null}
+export interface InkLanStatus {enabled:boolean;running:boolean;port:number;urls:string[];url_kinds?:string[];preferred_host?:string|null;certificate_file_sha256:string|null;assets_ready:boolean;error:string|null}
 export interface InkWriterView {document_id:string;head_seq:number;writer_epoch:number;session:StoredInkSession|null;remote:boolean;pairing_pending:boolean}
 export interface InkLanMirror {delta:{metadata:InkDocumentMetadata;operations:InkOperation[];head_seq:number;server_head:number;writer:InkWriterView;snapshot_count:number;note?:InkNoteState};connected:boolean;preview:InkStroke|null;client:{pending_count:number;locally_durable:boolean;secure_context:boolean;page_id:string}|null}
 export type InkSetupHandoff = "unbound"|"idle"|"requested"|"ready"|"resumed"|"claimed";
@@ -61,7 +61,7 @@ export class InkLanPanel {
       const setup=await safeInvoke<InkSetupStatus>("start_ink_setup",{documentId:this.documentId||null});
       this.setupOptions=addressOptions(setup.urls,setup.url_kinds).filter(option=>option.host!=="localhost");this.fillAddresses("setup",true);
       host.querySelector<HTMLElement>(".ink-lan-setup")!.hidden=false;await this.renderSetupQr();this.renderSetup(setup);
-      this.renderStatus(await safeInvoke<InkLanStatus>("get_ink_lan_status"));
+      const status=await safeInvoke<InkLanStatus>("get_ink_lan_status");this.seedPreferredHost(status);this.renderStatus(status);
       // Polling continues while the panel is collapsed: the desktop must answer the tablet's hand-off.
       this.stopSetupPolling();this.setupTimer=setInterval(()=>void safeInvoke<InkSetupStatus>("get_ink_setup_status").then(status=>this.renderSetup(status)).catch(()=>undefined),1000);
     });
@@ -70,7 +70,7 @@ export class InkLanPanel {
     button("setup-transfer").onclick=()=>run(()=>this.prepareHandoff(true));
     host.querySelector<HTMLSelectElement>("[data-setup-address]")!.onchange=event=>run(()=>{this.rememberAddress(event.target as HTMLSelectElement);return this.renderSetupQr();});
     for(const toggle of host.querySelectorAll<HTMLInputElement>("[data-show-other]"))toggle.onchange=()=>run(async()=>{const which=toggle.dataset.showOther as "pair"|"setup";this.fillAddresses(which);await(which==="pair"?this.renderQr():this.renderSetupQr());});
-    button("start").onclick=()=>run(async()=>{const port=Number(host.querySelector<HTMLInputElement>("[data-port]")!.value);const status=await safeInvoke<InkLanStatus>("start_ink_lan",{port});this.renderStatus(status);await this.changed();});
+    button("start").onclick=()=>run(async()=>{const port=Number(host.querySelector<HTMLInputElement>("[data-port]")!.value);const status=await safeInvoke<InkLanStatus>("start_ink_lan",{port});this.seedPreferredHost(status);this.renderStatus(status);await this.changed();});
     button("certificate").onclick=()=>run(async()=>{const path=await safeInvoke<string|null>("export_ink_trust_certificate");if(path)this.status("证书已保存，请传到平板并安装为 CA 证书。完成后再扫码。");});
     button("pair").onclick=()=>run(async()=>{
       const context=await prepare();this.documentId=context.documentId;
@@ -99,14 +99,22 @@ export class InkLanPanel {
       try{await safeInvoke("reclaim_ink_writer",this.takeoverRequest);}catch(error){if(String(error).includes("head conflict")||String(error).includes("writer epoch conflict"))this.takeoverRequest=undefined;throw error;}
       this.takeoverRequest=undefined;this.clearQr();await this.changed();this.status("电脑已收回书写权。旧端未同步操作不会自动合入新会话，请在平板导出恢复草稿。");
     });
-    button("stop").onclick=()=>run(async()=>{await safeInvoke("stop_ink_lan");this.clearQr();this.clearSetup();this.renderStatus(await safeInvoke<InkLanStatus>("get_ink_lan_status"));await this.changed();this.status("平板服务已停止，连接凭据已撤销；电脑中的已确认笔迹保留。");});
+    button("stop").onclick=()=>run(async()=>{await safeInvoke("stop_ink_lan");this.clearQr();this.clearSetup();const status=await safeInvoke<InkLanStatus>("get_ink_lan_status");this.seedPreferredHost(status);this.renderStatus(status);await this.changed();this.status("平板服务已停止，连接凭据已撤销；电脑中的已确认笔迹保留。");});
     button("copy").onclick=()=>run(async()=>{const value=host.querySelector<HTMLInputElement>("[data-link]")!.value;await navigator.clipboard.writeText(value);this.status("链接已复制。");});
     host.querySelector<HTMLSelectElement>("[data-address]")!.onchange=event=>run(()=>{this.rememberAddress(event.target as HTMLSelectElement);return this.renderQr();});
   }
   async open(documentId:string):Promise<void>{
     this.host.hidden=false;if(this.documentId!==documentId)this.clearQr();this.documentId=documentId;
-    this.renderStatus(await safeInvoke<InkLanStatus>("get_ink_lan_status"));
+    const status=await safeInvoke<InkLanStatus>("get_ink_lan_status");this.seedPreferredHost(status);this.renderStatus(status);
     this.renderWriter();this.stopWriterPolling();this.writerTimer=setInterval(()=>this.renderWriter(),1000);
+  }
+  /** N3a: offline push fallback — open the panel and issue a QR in one step. */
+  async openWithPairing(documentId:string,head:number|null):Promise<void>{
+    await this.open(documentId);
+    if(this.remoteWriter()){this.status(explainInkLanError("takeover_required"));return;}
+    const link=await safeInvoke<PairingLink>("create_ink_pairing",{documentId,expectedHead:head});
+    await this.showLink(link,"pair");await this.changed();
+    this.status("平板未连接；请扫码配对。二维码两分钟有效。");
   }
   private remoteWriter():InkWriterView|undefined {const view=this.view();return view&&view.document_id===this.documentId&&view.remote?view:undefined;}
   private async issueTransfer():Promise<void> {
@@ -135,6 +143,13 @@ export class InkLanPanel {
     this.host.querySelector<HTMLElement>(".ink-lan-pairing")!.hidden=false;await this.renderQr();
   }
   /** N3.0: LAN addresses first; other kinds only behind the "其他地址" toggle; no default outside the LAN. */
+
+  private seedPreferredHost(status:{preferred_host?:string|null}):void{
+    if(status.preferred_host){savePreferredHost(status.preferred_host);return;}
+    const local=loadPreferredHost();
+    if(local)void safeInvoke("set_ink_lan_preferred_host",{host:local}).catch(()=>undefined);
+  }
+
   private fillAddresses(which:"pair"|"setup",reset=false):void{
     const select=this.host.querySelector<HTMLSelectElement>(which==="pair"?"[data-address]":"[data-setup-address]")!;
     const toggle=this.host.querySelector<HTMLInputElement>(`[data-show-other="${which}"]`)!,hint=this.host.querySelector<HTMLElement>(`[data-address-hint="${which}"]`)!;
@@ -144,7 +159,12 @@ export class InkLanPanel {
     toggle.parentElement!.hidden=!result.hasOther;
     hint.hidden=result.hasLan;hint.textContent=result.hasLan?"":"未发现局域网地址。平板需与电脑连接同一 Wi-Fi；也可勾选“显示其他地址”手动选择。";
   }
-  private rememberAddress(select:HTMLSelectElement):void{if(select.value)savePreferredHost(new URL(select.value).hostname);}
+  private rememberAddress(select:HTMLSelectElement):void{
+    if(!select.value)return;
+    const host=new URL(select.value).hostname;
+    savePreferredHost(host);
+    void safeInvoke("set_ink_lan_preferred_host",{host}).catch(()=>undefined);
+  }
   private clearCanvas(selector:string):void{const canvas=this.host.querySelector<HTMLCanvasElement>(selector);canvas?.getContext("2d")?.clearRect(0,0,canvas.width,canvas.height);}
   private async renderQr():Promise<void>{const url=this.host.querySelector<HTMLSelectElement>("[data-address]")!.value;if(!url){this.host.querySelector<HTMLInputElement>("[data-link]")!.value="";this.clearCanvas("[data-qr]");return;}this.host.querySelector<HTMLInputElement>("[data-link]")!.value=url;await QRCode.toCanvas(this.host.querySelector<HTMLCanvasElement>("[data-qr]")!,url,{width:190,margin:2});}
   private async renderSetupQr():Promise<void>{const url=this.host.querySelector<HTMLSelectElement>("[data-setup-address]")!.value;if(!url){this.host.querySelector<HTMLInputElement>("[data-setup-link]")!.value="";this.clearCanvas("[data-setup-qr]");return;}this.host.querySelector<HTMLInputElement>("[data-setup-link]")!.value=url;await QRCode.toCanvas(this.host.querySelector<HTMLCanvasElement>("[data-setup-qr]")!,url,{width:190,margin:2});}

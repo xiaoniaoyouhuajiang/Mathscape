@@ -58,6 +58,11 @@ export class InkPadStore {
     draft.document.operations=rows.map(row=>row.operation);return draft;
   }
   async drafts():Promise<PadDraft[]> {return (await this.all<PadDraft>("drafts")).sort((a,b)=>b.updated_at.localeCompare(a.updated_at));}
+  /** N3a: drafts whose hello/auth failed need a fresh desktop push or QR. */
+  authStatusKey(key:string):string {return "auth:"+key;}
+  async markNeedsReauth(key:string):Promise<void> {await this.metaPut(this.authStatusKey(key),"needs_reauth");}
+  async clearNeedsReauth(key:string):Promise<void> {await this.metaDelete(this.authStatusKey(key));}
+  async needsReauth(key:string):Promise<boolean> {return (await this.metaGet<string>(this.authStatusKey(key)))==="needs_reauth";}
   async pending(binding:PadBinding):Promise<InkOutboxItem[]> {
     return (await this.all<InkOutboxItem>("operations")).filter(item=>item.session_id===binding.lease.session_id && item.writer_epoch===binding.lease.writer_epoch && item.document_id===binding.lease.document_id).sort((a,b)=>a.operation.seq-b.operation.seq);
   }

@@ -81,7 +81,7 @@ const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
     include_str!("../../../migrations/0010_discovery_run_recovery.sql");
 const INK_MIGRATION: &str = include_str!("../../../migrations/0013_ink_p1.sql");
 const INK_SNAPSHOT_MIGRATION: &str = include_str!("../../../migrations/0014_ink_snapshots_p2.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 18;
+const SUPPORTED_SCHEMA_VERSION: i64 = 19;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -594,7 +594,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=18 => {
+            6..=19 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -721,6 +721,20 @@ impl SqliteArtifactStore {
                 ink_link::migrate_v18(&connection)?;
             } else {
                 connection.pragma_update(None, "user_version", 18)?;
+            }
+        }
+        if version < 19 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version=19",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                ink_lan::migrate_v19(&connection)?;
+            } else {
+                connection.pragma_update(None, "user_version", 19)?;
             }
         }
         validate_registration_schema(&connection)?;

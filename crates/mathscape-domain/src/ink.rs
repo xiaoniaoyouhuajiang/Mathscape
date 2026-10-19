@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub const INK_LAB_VERSION: &str = "mathscape-ink-lab-1";
 pub const INK_SNAPSHOT_VERSION: &str = "mathscape-ink-snapshot-2";
 pub const INK_LEGACY_SNAPSHOT_VERSION: &str = "mathscape-ink-snapshot-1";
-pub const INK_LAN_PROTOCOL_VERSION: &str = "mathscape-ink-lan-1";
+pub const INK_LAN_PROTOCOL_VERSION: &str = "mathscape-ink-lan-2";
 pub const INK_LAN_OPERATION_BYTES: usize = 16 * 1024 * 1024;
 pub const INK_LAN_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
 pub const INK_LAB_MAX_POINTS: usize = 500_000;
@@ -394,6 +394,17 @@ pub enum InkLabOperation {
         stroke_ids: Vec<String>,
         matrix: InkTransform,
     },
+    /// N3a: change the colour of existing strokes. Width is reserved for a
+    /// later phase; sending it is rejected so clients stay forward-compatible
+    /// without applying an unsupported style.
+    Restyle {
+        seq: u32,
+        command_id: String,
+        stroke_ids: Vec<String>,
+        color: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f64>,
+    },
     PageAdd {
         seq: u32,
         command_id: String,
@@ -432,6 +443,9 @@ impl InkLabOperation {
                 seq, command_id, ..
             }
             | Self::Transform {
+                seq, command_id, ..
+            }
+            | Self::Restyle {
                 seq, command_id, ..
             }
             | Self::PageAdd {
@@ -652,6 +666,37 @@ impl InkLabDocument {
                     for value in [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f] {
                         numeric(value, -1_000_000.0, 1_000_000.0, "transform.matrix")?;
                     }
+                    active.insert(command_id, true);
+                    undo.push(command_id.to_owned());
+                    redo.clear();
+                }
+                InkLabOperation::Restyle {
+                    stroke_ids,
+                    color,
+                    width,
+                    ..
+                } => {
+                    require(
+                        !stroke_ids.is_empty() && stroke_ids.len() <= INK_LAB_MAX_OPERATIONS,
+                        "restyle.stroke_ids",
+                    )?;
+                    let mut seen = BTreeSet::new();
+                    for id in stroke_ids {
+                        text(id, 200, "restyle.stroke_id")?;
+                        require(
+                            strokes.contains(id.as_str()) && seen.insert(id),
+                            "restyle.reference",
+                        )?;
+                    }
+                    require(
+                        color.len() == 7
+                            && color.starts_with('#')
+                            && color[1..].bytes().all(|b| b.is_ascii_hexdigit()),
+                        "restyle.color",
+                    )?;
+                    // Width is reserved; reject so N3a clients never silently
+                    // drop an unsupported style change.
+                    require(width.is_none(), "restyle.width")?;
                     active.insert(command_id, true);
                     undo.push(command_id.to_owned());
                     redo.clear();

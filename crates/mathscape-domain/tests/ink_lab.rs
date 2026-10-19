@@ -118,3 +118,84 @@ fn schema_is_generated_from_the_rust_contract() {
         );
     }
 }
+
+#[test]
+fn restyle_changes_colour_and_is_undone_as_one_command() {
+    let mut document: InkLabDocument = serde_json::from_str(TRACE).unwrap();
+    // The fixture ends at head 2 with stroke-a and stroke-b visible.
+    let next = document.operations.len() as u32 + 1;
+    document.operations.push(InkLabOperation::Restyle {
+        seq: next,
+        command_id: "restyle-1".into(),
+        stroke_ids: vec!["stroke-a".into()],
+        color: "#c62828".into(),
+        width: None,
+    });
+    document.validate().unwrap();
+    document.operations.push(InkLabOperation::Undo {
+        seq: next + 1,
+        command_id: "undo-restyle".into(),
+        target_command_id: "restyle-1".into(),
+    });
+    assert!(document.validate().is_ok());
+    document.operations.push(InkLabOperation::Redo {
+        seq: next + 2,
+        command_id: "redo-restyle".into(),
+        target_command_id: "restyle-1".into(),
+    });
+    assert!(document.validate().is_ok());
+}
+
+#[test]
+fn restyle_rejects_bad_colour_width_duplicates_and_unknown_strokes() {
+    let base: InkLabDocument = serde_json::from_str(TRACE).unwrap();
+    let bad = |op: InkLabOperation| {
+        let mut document = base.clone();
+        document.operations.push(op);
+        assert!(document.validate().is_err());
+    };
+    let seq = base.operations.len() as u32 + 1;
+    bad(InkLabOperation::Restyle {
+        seq,
+        command_id: "r".into(),
+        stroke_ids: vec!["stroke-a".into()],
+        color: "red".into(),
+        width: None,
+    });
+    bad(InkLabOperation::Restyle {
+        seq,
+        command_id: "r".into(),
+        stroke_ids: vec!["stroke-a".into()],
+        color: "#c62828".into(),
+        width: Some(4.0),
+    });
+    bad(InkLabOperation::Restyle {
+        seq,
+        command_id: "r".into(),
+        stroke_ids: vec!["stroke-a".into(), "stroke-a".into()],
+        color: "#c62828".into(),
+        width: None,
+    });
+    bad(InkLabOperation::Restyle {
+        seq,
+        command_id: "r".into(),
+        stroke_ids: vec!["missing".into()],
+        color: "#c62828".into(),
+        width: None,
+    });
+    bad(InkLabOperation::Restyle {
+        seq,
+        command_id: "r".into(),
+        stroke_ids: vec![],
+        color: "#c62828".into(),
+        width: None,
+    });
+}
+
+#[test]
+fn lan_protocol_version_is_v2() {
+    assert_eq!(
+        mathscape_domain::INK_LAN_PROTOCOL_VERSION,
+        "mathscape-ink-lan-2"
+    );
+}

@@ -14,6 +14,9 @@ use sha2::{Digest, Sha256};
 pub struct InkLanSettings {
     pub enabled: bool,
     pub port: u16,
+    /// N3a: host the user last picked for the QR / default URL. `None` means
+    /// fall back to the first LAN address.
+    pub preferred_host: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InkRemoteLease {
@@ -56,6 +59,8 @@ pub struct InkPairingOffer {
     /// Required when another device holds the lease. The holder keeps writing
     /// until the new device claims the offer; claim checks the epoch again.
     pub allow_transfer: bool,
+    /// Audited into `ink_writer_transfers.reason` on claim (`tablet_pairing` or `desktop_push`).
+    pub claim_reason: String,
 }
 
 pub(crate) fn validate_schema(c: &Connection) -> Result<(), SqliteStoreError> {
@@ -71,8 +76,20 @@ pub(crate) fn validate_schema(c: &Connection) -> Result<(), SqliteStoreError> {
             "migration 16 is absent or has an unexpected name",
         ));
     }
-    c.prepare("SELECT enabled,port FROM ink_lan_settings LIMIT 0")?;
-    c.prepare("SELECT token_hash,document_id,expected_head,expected_epoch,session_id,writer_id,expires_at,credential_hash FROM ink_pairings LIMIT 0")?;
+    let preferred: Option<String> = c
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version=19",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if preferred.as_deref() != Some("ink_lan_preferred_host_n3a") {
+        return Err(SqliteStoreError::InvalidSchema(
+            "migration 19 is absent or has an unexpected name",
+        ));
+    }
+    c.prepare("SELECT enabled,port,preferred_host FROM ink_lan_settings LIMIT 0")?;
+    c.prepare("SELECT token_hash,document_id,expected_head,expected_epoch,session_id,writer_id,expires_at,credential_hash,claim_reason FROM ink_pairings LIMIT 0")?;
     c.prepare("SELECT credential_hash,document_id,session_id,writer_id,writer_epoch,device_json,expires_at,revoked_at FROM ink_lan_devices LIMIT 0")?;
     c.prepare("SELECT request_id,request_fingerprint,document_id,from_epoch,through_seq,session_id,to_epoch,reason,created_at FROM ink_writer_transfers LIMIT 0")?;
     c.prepare("SELECT request_id,request_fingerprint,document_id,original_document_id,imported_at FROM ink_recovery_imports LIMIT 0")?;
@@ -307,12 +324,13 @@ impl SqliteArtifactStore {
         Ok(self
             .connection
             .query_row(
-                "SELECT enabled,port FROM ink_lan_settings WHERE singleton=1",
+                "SELECT enabled,port,preferred_host FROM ink_lan_settings WHERE singleton=1",
                 [],
                 |r| {
                     Ok(InkLanSettings {
                         enabled: r.get(0)?,
                         port: r.get(1)?,
+                        preferred_host: r.get(2)?,
                     })
                 },
             )
@@ -320,13 +338,23 @@ impl SqliteArtifactStore {
             .unwrap_or(InkLanSettings {
                 enabled: false,
                 port: 1443,
+                preferred_host: None,
             }))
     }
     pub fn save_ink_lan_settings(
         &mut self,
         settings: &InkLanSettings,
     ) -> Result<(), SqliteStoreError> {
-        self.connection.execute("INSERT INTO ink_lan_settings(singleton,enabled,port) VALUES(1,?1,?2) ON CONFLICT(singleton) DO UPDATE SET enabled=excluded.enabled,port=excluded.port",params![settings.enabled,settings.port])?;
+        if let Some(host) = &settings.preferred_host
+            && (host.is_empty() || host.len() > 200 || host.chars().any(char::is_control))
+        {
+            return Err(invalid("invalid preferred_host"));
+        }
+        self.connection.execute(
+            "INSERT INTO ink_lan_settings(singleton,enabled,port,preferred_host) VALUES(1,?1,?2,?3)
+             ON CONFLICT(singleton) DO UPDATE SET enabled=excluded.enabled,port=excluded.port,preferred_host=excluded.preferred_host",
+            params![settings.enabled, settings.port, settings.preferred_host],
+        )?;
         Ok(())
     }
     pub fn ink_writer_view(
@@ -344,6 +372,9 @@ impl SqliteArtifactStore {
         digest(&offer.token_hash)?;
         if offer.expires_at <= now || offer.expires_at > now + 300 {
             return Err(invalid("invalid pairing expiry"));
+        }
+        if offer.claim_reason != "tablet_pairing" && offer.claim_reason != "desktop_push" {
+            return Err(invalid("invalid claim_reason"));
         }
         let tx = self
             .connection
@@ -363,7 +394,7 @@ impl SqliteArtifactStore {
             return Err(invalid("writer_epoch_conflict"));
         }
         tx.execute("UPDATE ink_pairings SET expires_at=?2 WHERE document_id=?1 AND credential_hash IS NULL",params![offer.document_id,now])?;
-        tx.execute("INSERT INTO ink_pairings(token_hash,document_id,expected_head,expected_epoch,session_id,writer_id,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![offer.token_hash,offer.document_id,number(offer.expected_head)?,number(offer.expected_epoch)?,offer.session_id,offer.writer_id,offer.expires_at])?;
+        tx.execute("INSERT INTO ink_pairings(token_hash,document_id,expected_head,expected_epoch,session_id,writer_id,expires_at,claim_reason) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![offer.token_hash,offer.document_id,number(offer.expected_head)?,number(offer.expected_epoch)?,offer.session_id,offer.writer_id,offer.expires_at,offer.claim_reason])?;
         tx.commit()?;
         Ok(())
     }
@@ -398,8 +429,9 @@ impl SqliteArtifactStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let offer:Option<(String,i64,i64,String,String,i64,Option<String>)>=tx.query_row("SELECT document_id,expected_head,expected_epoch,session_id,writer_id,expires_at,credential_hash FROM ink_pairings WHERE token_hash=?1",[token],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
-        let Some((document, head, epoch, session, writer, expires, claimed)) = offer else {
+        let offer:Option<(String,i64,i64,String,String,i64,Option<String>,String)>=tx.query_row("SELECT document_id,expected_head,expected_epoch,session_id,writer_id,expires_at,credential_hash,claim_reason FROM ink_pairings WHERE token_hash=?1",[token],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
+        let Some((document, head, epoch, session, writer, expires, claimed, claim_reason)) = offer
+        else {
             return Err(invalid("pairing_invalid"));
         };
         // Trash already expires unclaimed pairings; this keeps the rule explicit.
@@ -430,7 +462,7 @@ impl SqliteArtifactStore {
             &session,
             &writer,
             device,
-            "tablet_pairing",
+            &claim_reason,
             &format!("pair:{token}"),
             now,
         )?;
@@ -685,4 +717,15 @@ impl SqliteArtifactStore {
         tx.commit()?;
         Ok(delta)
     }
+}
+
+const PREFERRED_HOST_MIGRATION: &str =
+    include_str!("../../../migrations/0019_ink_lan_preferred_host_n3a.sql");
+
+/// v18 → v19: preferred LAN host column on ink_lan_settings.
+pub(crate) fn migrate_v19(connection: &Connection) -> Result<(), SqliteStoreError> {
+    let tx = connection.unchecked_transaction()?;
+    tx.execute_batch(PREFERRED_HOST_MIGRATION)?;
+    tx.commit()?;
+    Ok(())
 }
