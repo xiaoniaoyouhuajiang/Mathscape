@@ -608,3 +608,18 @@ N2 合入后根据实际使用重新梳理了 N3。平板上最常见的问题�
   - 本机 `localStorage` 偏好：若服务端尚无值则一次性写入服务端；之后以服务端为准，并继续镜像到本机以便离线展示。
 - **N3d 迁移编号**：见决定 13 修订 → **v20**。
 
+### 15.6 N3b / N3c 实施说明
+
+- **N3b 题目卡片**（决定 10、11、4；无协议 bump）：
+  - 复用 N3a 预留：`session_context.problem_card`（对象或 `null`）、推送 `problem_card` / `problem_card_clear`。卡片字段：`link_id, role, target_kind, target_id, target_label, body, body_truncated, status (ok|stale|missing|unsupported), content_hash?`。
+  - 只渲染**当前授权手稿的主关联**；无主关联则不下发 / 推 clear。WebSocket 按 `lease.document_id` 过滤，符合 §10。
+  - 正文：Markdown 块取源码并规范化（公式保留 LaTeX 源码，平板不做 KaTeX）；来源对象用标题/标签摘要；关联手稿为「关联手稿：{title}」。正文上限 4000 个 Unicode 标量，截断加「…」与 `body_truncated`。
+  - 推送时机：主关联增删/角色变更/主关联转移（`InkLinkReceipt` 非回放）；手稿切换后的新 `session_context`。Markdown `content_hash` 漂移时标 `stale`，块无法解析标 `missing`。本阶段**不**挂钩全局 Markdown/来源保存管道；重连或关联变更会刷新到最新渲染。
+  - 平板：可折叠卡片，不挡书写；折叠状态记在 `mathscape:ink-pad-problem-card-collapsed`；等宽字体展示正文。
+- **N3c 桌面并排阅读**（决定 12，should-have）：
+  - `#ink-workspace` 分栏：左阅读器、右 `#ink-desktop-host` 手稿；可拖分隔条（键盘、双击重置、窗口/容器变化再夹紧），偏好键 `mathscape:ink-split-reader-width`。阅读器 DOM 在进入并排时移入左栏，退出时归位。
+  - 「并排阅读 / 退出并排」切换；窗口宽 < 960px 时自动退出并提示。画板 `fit()` 与 PDF 适合宽度随 `resize` / ResizeObserver 回流。
+  - 联动：并排时关联「打开目标」在左栏打开；阅读器「✎ N」经 `open-ink-document` 只切换右栏手稿。非并排保持原互斥行为。
+  - Delete / Backspace 按最近指针所在栏聚焦：阅读器内不擦除手稿笔迹。
+
+
