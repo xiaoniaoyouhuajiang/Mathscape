@@ -54,6 +54,7 @@ fn set_seq(operation: &mut InkLabOperation, value: u32) {
         | InkLabOperation::Erase { seq, .. }
         | InkLabOperation::PartialErase { seq, .. }
         | InkLabOperation::Transform { seq, .. }
+        | InkLabOperation::Restyle { seq, .. }
         | InkLabOperation::PageAdd { seq, .. }
         | InkLabOperation::Undo { seq, .. }
         | InkLabOperation::Redo { seq, .. } => *seq = value,

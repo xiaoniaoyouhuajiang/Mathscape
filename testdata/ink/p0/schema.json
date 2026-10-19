@@ -273,6 +273,48 @@
           ]
         },
         {
+          "description": "N3a: change the colour of existing strokes. Width is reserved for a\nlater phase; sending it is rejected so clients stay forward-compatible\nwithout applying an unsupported style.",
+          "type": "object",
+          "properties": {
+            "color": {
+              "type": "string"
+            },
+            "command_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "restyle"
+            },
+            "seq": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "stroke_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "width": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "seq",
+            "command_id",
+            "stroke_ids",
+            "color"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "command_id": {

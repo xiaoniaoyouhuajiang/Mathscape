@@ -62,3 +62,42 @@ describe("P0 ink interchange", () => {
     expect(projection.visible.map(stroke => stroke.id)).not.toContain(source!.id);
   });
 });
+
+describe("N3a restyle", () => {
+  it("changes the colour of selected strokes and one undo restores it", () => {
+    const document = parseInkDocument(structuredClone(trace));
+    const before = projectInk(document).visible.find(stroke => stroke.id === "stroke-a")!.brush.color;
+    appendInk(document, { kind: "restyle", stroke_ids: ["stroke-a", "stroke-c"], color: "#c62828" });
+    const after = projectInk(document);
+    expect(after.visible.map(stroke => stroke.brush.color)).toEqual(["#c62828", "#c62828"]);
+    appendInk(document, { kind: "undo", target_command_id: document.operations.at(-1)!.command_id });
+    expect(projectInk(document).visible.find(stroke => stroke.id === "stroke-a")!.brush.color).toBe(before);
+  });
+
+  it("lets a later partial erase inherit the restyled colour", () => {
+    const document = parseInkDocument(structuredClone(trace));
+    appendInk(document, { kind: "restyle", stroke_ids: ["stroke-a"], color: "#2e7d32" });
+    const source = projectInk(document).visible.find(stroke => stroke.id === "stroke-a")!;
+    const fragment = { ...structuredClone(source), id: "fragment-restyle", brush: { ...source.brush }, points: source.points.slice(0, Math.max(1, source.points.length - 1)) };
+    appendInk(document, { kind: "partial_erase", source_stroke_id: "stroke-a", fragments: [fragment] });
+    const visible = projectInk(document).visible;
+    expect(visible.some(stroke => stroke.id === "stroke-a")).toBe(false);
+    expect(visible.find(stroke => stroke.id === "fragment-restyle")!.brush.color).toBe("#2e7d32");
+  });
+
+  it("rejects width, bad colour, duplicates and unknown strokes", () => {
+    const document = parseInkDocument(structuredClone(trace));
+    expect(() => appendInk(document, { kind: "restyle", stroke_ids: ["stroke-a"], color: "#c62828", width: 4 } as never)).not.toThrow();
+    // appendInk does not validate; projectInk / parseInkDocument do.
+    expect(() => projectInk(document)).toThrow(/restyle\.width/);
+    const again = parseInkDocument(structuredClone(trace));
+    appendInk(again, { kind: "restyle", stroke_ids: ["stroke-a"], color: "red" });
+    expect(() => projectInk(again)).toThrow(/restyle\.color/);
+    const third = parseInkDocument(structuredClone(trace));
+    appendInk(third, { kind: "restyle", stroke_ids: ["stroke-a", "stroke-a"], color: "#c62828" });
+    expect(() => projectInk(third)).toThrow(/restyle/);
+    const fourth = parseInkDocument(structuredClone(trace));
+    appendInk(fourth, { kind: "restyle", stroke_ids: ["missing"], color: "#c62828" });
+    expect(() => projectInk(fourth)).toThrow(/restyle/);
+  });
+});
