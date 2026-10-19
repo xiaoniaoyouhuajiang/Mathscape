@@ -112,4 +112,81 @@ test.describe("N3c side-by-side reading", () => {
     expect(layout.ink).toBeGreaterThanOrEqual(359);
     expect(layout.reader).toBeGreaterThanOrEqual(279);
   });
+
+  test("返回地图 after split restores the map; re-enter split still works", async ({ page }) => {
+    await expect(page.locator("#graph")).toBeVisible();
+    const before = await page.locator("#graph").boundingBox();
+    expect(before!.width).toBeGreaterThan(100);
+    expect(before!.height).toBeGreaterThan(100);
+
+    await page.locator("#ink-button").click();
+    await page.locator("#ink-split-toggle").click();
+    await expect(page.locator("#ink-workspace")).toHaveClass(/is-split/);
+    // Left pane must not be blank (picker or document).
+    const leftHasContent = page.locator("#ink-split-empty, #ink-split-reader #reader:not([hidden])").first();
+    await expect(leftHasContent).toBeVisible();
+    await page.locator("#ink-split-empty").getByRole("button", { name: "正确表述.md" }).click();
+    await expect(page.locator("#ink-split-empty")).toBeHidden({ timeout: 10000 });
+
+    // Header 返回地图 (same control as 手写), not only 退出并排.
+    await page.locator("#ink-button").click();
+    await expect(page.locator("#ink-button")).toHaveText("手写");
+    await expect(page.locator("#ink-workspace")).toBeHidden();
+    await expect(page.locator(".workspace-grid")).toBeVisible();
+
+    const graph = page.locator("#graph");
+    await expect(graph).toBeVisible();
+    await expect.poll(async () => {
+      const box = await graph.boundingBox();
+      return box ? Math.round(box.width * box.height) : 0;
+    }).toBeGreaterThan(100 * 100);
+    // Cytoscape / SVG content should be present (nonzero canvas or nodes).
+    await expect.poll(async () => page.evaluate(() => {
+      const host = document.querySelector("#graph");
+      if (!host) return 0;
+      const canvas = host.querySelector("canvas");
+      if (canvas && canvas.width > 0 && canvas.height > 0) return canvas.width * canvas.height;
+      return host.querySelectorAll(".graph-node, [id], canvas, svg").length;
+    })).toBeGreaterThan(0);
+
+    const layout = await page.evaluate(() => {
+      const reader = document.querySelector("#reader") as HTMLElement;
+      const ink = document.querySelector("#ink-workspace") as HTMLElement;
+      const grid = document.querySelector(".workspace-grid") as HTMLElement;
+      return {
+        readerParentIsHome: !reader.parentElement?.id?.includes("ink-split"),
+        readerHidden: reader.hidden,
+        inkHidden: ink.hidden,
+        inkHasSplit: ink.classList.contains("is-split"),
+        gridHidden: grid.hidden,
+      };
+    });
+    expect(layout.readerHidden).toBe(true);
+    expect(layout.inkHidden).toBe(true);
+    expect(layout.inkHasSplit).toBe(false);
+    expect(layout.gridHidden).toBe(false);
+    expect(layout.readerParentIsHome).toBe(true);
+
+    // Re-enter split: last-open document should fill the left pane.
+    await page.locator("#ink-button").click();
+    await page.locator("#ink-split-toggle").click();
+    await expect(page.locator("#ink-workspace")).toHaveClass(/is-split/);
+    await expect(page.locator("#ink-split-empty")).toBeHidden();
+    await expect(page.locator("#ink-split-reader")).toContainText("正确表述");
+  });
+
+  test("退出并排 then 返回地图 also restores the map", async ({ page }) => {
+    await page.locator("#ink-button").click();
+    await page.locator("#ink-split-toggle").click();
+    await expect(page.locator("#ink-workspace")).toHaveClass(/is-split/);
+    await page.locator("#ink-split-toggle").click();
+    await expect(page.locator("#ink-workspace")).not.toHaveClass(/is-split/);
+    await page.locator("#ink-button").click();
+    await expect(page.locator(".workspace-grid")).toBeVisible();
+    await expect(page.locator("#graph")).toBeVisible();
+    const box = await page.locator("#graph").boundingBox();
+    expect(box!.width).toBeGreaterThan(100);
+    expect(box!.height).toBeGreaterThan(100);
+  });
+
 });

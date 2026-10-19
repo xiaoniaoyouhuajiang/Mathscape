@@ -50,19 +50,31 @@ let inkSplit = false;
 let inkPaneFocused = true;
 const readerHome = el.readerHost.parentElement!;
 let inkSplitHandle: InkSplitHandle | undefined;
+/** Bumped on every exit from split/ink so in-flight left-pane loads cannot resurrect the overlay. */
+let splitGeneration = 0;
 
 function placeReaderInSplit(inSplit: boolean): void {
   if (inSplit) {
+    // Never move #reader into the overlay after an exit (in-flight ensure/open).
+    if (!inkSplit || !inkOpen) return;
     if (el.readerHost.parentElement !== el.inkSplitReader) {
       el.inkSplitReader.append(el.readerHost);
     }
     el.readerHost.classList.add("reader-panel");
     // Keep host visible only when it has a document; empty state covers the blank case.
     el.readerHost.hidden = !reader.hasContent();
-  } else if (el.readerHost.parentElement === el.inkSplitReader) {
-    readerHome.append(el.readerHost);
-    hideSplitEmpty(el.inkSplitReader.querySelector("#ink-split-empty"));
+  } else {
+    restoreReaderHome({ hide: false });
   }
+}
+
+/** Put #reader back under the map canvas and clear the split empty state. */
+function restoreReaderHome(opts: { hide: boolean }): void {
+  if (el.readerHost.parentElement !== readerHome) {
+    readerHome.append(el.readerHost);
+  }
+  hideSplitEmpty(el.inkSplitReader.querySelector("#ink-split-empty"));
+  if (opts.hide) el.readerHost.hidden = true;
 }
 
 function splitSourceItems(): SplitSourceItem[] {
@@ -89,13 +101,28 @@ function primaryIsOpenable(link: InkNoteLink | undefined): boolean {
 }
 
 function openSplitReader(artifactId: string, title: string, focus?: { start: number; end: number; blockIds?: string[] }): void {
+  if (!inkSplit || !inkOpen) return;
+  const generation = splitGeneration;
+  const stillSplit = () => generation === splitGeneration && inkSplit && inkOpen;
   placeReaderInSplit(true);
+  if (!stillSplit()) {
+    restoreReaderHome({ hide: true });
+    return;
+  }
   hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
   el.readerHost.hidden = false;
   inkPaneFocused = false;
   void reader.open(artifactId, title, focus ? { focus } : {}).then(() => {
+    if (!stillSplit()) {
+      restoreReaderHome({ hide: true });
+      return;
+    }
     window.dispatchEvent(new Event("resize"));
   }).catch((error: unknown) => {
+    if (!stillSplit()) {
+      restoreReaderHome({ hide: true });
+      return;
+    }
     shell.showToast(errorMessage(error), "error");
     void ensureSplitLeftPane();
   });
@@ -120,6 +147,7 @@ function openPrimaryInSplit(link: InkNoteLink): void {
 }
 
 function renderSplitEmpty(primary: InkNoteLink | undefined): void {
+  if (!inkSplit || !inkOpen) return;
   const host = ensureSplitEmptyHost(el.inkSplitReader);
   el.readerHost.hidden = true;
   showSplitEmpty(host, {
@@ -137,7 +165,10 @@ function renderSplitEmpty(primary: InkNoteLink | undefined): void {
 /** Fill the left pane: keep / restore reader, auto-open primary markdown, or show a picker. */
 async function ensureSplitLeftPane(): Promise<void> {
   if (!inkSplit || !inkOpen) return;
+  const generation = splitGeneration;
+  const stillSplit = () => generation === splitGeneration && inkSplit && inkOpen;
   placeReaderInSplit(true);
+  if (!stillSplit()) return;
   if (reader.hasContent()) {
     hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
     el.readerHost.hidden = false;
@@ -147,6 +178,7 @@ async function ensureSplitLeftPane(): Promise<void> {
   // Restore the last reader document if we only hid it when opening 手稿.
   const last = reader.lastOpened();
   if (last) {
+    if (!stillSplit()) return;
     openSplitReader(last.id, last.title, last.options.focus);
     return;
   }
@@ -155,10 +187,11 @@ async function ensureSplitLeftPane(): Promise<void> {
   if (!primary && documentId) {
     try {
       const links = await listInkNoteLinks(documentId);
-      if (inkWorkspace.currentDocumentId() !== documentId) return;
+      if (!stillSplit() || inkWorkspace.currentDocumentId() !== documentId) return;
       primary = links.find((link) => link.is_primary && link.state === "active");
     } catch { /* picker still works */ }
   }
+  if (!stillSplit()) return;
   if (primary?.target.kind === "markdown") {
     openPrimaryInSplit(primary);
     return;
@@ -178,6 +211,7 @@ function setInkSplit(enabled: boolean, opts: { hint?: boolean } = {}): void {
     }
     return;
   }
+  if (!enabled) splitGeneration += 1;
   inkSplit = enabled;
   el.inkWorkspace.classList.toggle("is-split", enabled);
   el.inkSplitReader.hidden = !enabled;
@@ -190,7 +224,10 @@ function setInkSplit(enabled: boolean, opts: { hint?: boolean } = {}): void {
     toggle.textContent = enabled ? "退出并排" : "并排阅读";
   }
   if (enabled) void ensureSplitLeftPane();
-  else hideSplitEmpty(el.inkSplitReader.querySelector("#ink-split-empty"));
+  else {
+    restoreReaderHome({ hide: true });
+    hideSplitEmpty(el.inkSplitReader.querySelector("#ink-split-empty"));
+  }
   window.dispatchEvent(new Event("resize"));
   if (!enabled && opts.hint) {
     shell.showToast("窗口过窄，已退出并排阅读。", "error");
@@ -198,14 +235,19 @@ function setInkSplit(enabled: boolean, opts: { hint?: boolean } = {}): void {
 }
 
 const closeInkWorkspace = () => {
+  // Drop split first (bumps splitGeneration via setInkSplit) so in-flight left-pane
+  // loads cannot move #reader back into the overlay or unhide it over the map.
   setInkSplit(false);
   inkOpen = false;
   el.inkWorkspace.hidden = true;
   el.workspaceGrid.hidden = false;
   el.inkButton.textContent = "手写";
-  // Returning to the map: keep lastOpen for a later 并排, but hide the reader overlay.
-  el.readerHost.hidden = true;
-  // Safety net for changes made from the tablet while the map was hidden.
+  restoreReaderHome({ hide: true });
+  // Graph lived under display:none while 手写 was open — reflow after layout.
+  requestAnimationFrame(() => {
+    graphController.resize();
+    window.dispatchEvent(new Event("resize"));
+  });
   loadInkOverlay();
 };
 inkWorkspace = new DesktopInkWorkspace(el.inkHost, closeInkWorkspace, (message, kind) => shell.showToast(message, kind));
@@ -300,6 +342,8 @@ inspectorController = new InspectorController(el.nodeDetail, {
     if (inkSplit && inkOpen) {
       placeReaderInSplit(true);
       hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
+    } else if (el.readerHost.parentElement !== readerHome) {
+      restoreReaderHome({ hide: false });
     }
     el.readerHost.hidden = false;
     void reader.open(artifactId, label, { inkFocus });
@@ -308,6 +352,8 @@ inspectorController = new InspectorController(el.nodeDetail, {
     if (inkSplit && inkOpen) {
       placeReaderInSplit(true);
       hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
+    } else if (el.readerHost.parentElement !== readerHome) {
+      restoreReaderHome({ hide: false });
     }
     el.readerHost.hidden = false;
     void reader.open(artifactId, title, { focus });
@@ -453,6 +499,8 @@ eventBus.on("open-source", (detail) => {
     if (inkSplit && inkOpen) {
       placeReaderInSplit(true);
       hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
+    } else if (el.readerHost.parentElement !== readerHome) {
+      restoreReaderHome({ hide: false });
     }
     el.readerHost.hidden = false;
     await reader.open(detail.artifactId, detail.title, {
