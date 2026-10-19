@@ -32,6 +32,8 @@ export interface MathscapeEventMap {
   "ink-notes-changed": void;
   /** N2: open the target of a note link from the note page. */
   "open-ink-link-target": { link: InkNoteLink };
+  /** N3c: toggle or set side-by-side reading (reader | 手稿). */
+  "ink-split-toggle": { enabled?: boolean } | void;
   "open-review": OpenReviewDetail;
   "reader-opened": void;
   "open-settings": void;
@@ -71,6 +73,7 @@ export class MathscapeEventBus {
       "ink-links-changed",
       "ink-notes-changed",
       "open-ink-link-target",
+      "ink-split-toggle",
       "open-review",
       "reader-opened",
       "open-settings",

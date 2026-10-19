@@ -18,6 +18,11 @@ import {
 import { ArtifactReader } from "./reader/reader";
 import { mountReviewWorkspace } from "./review/workspace";
 import { AppShell } from "./shell/app-shell";
+import {
+  INK_SPLIT_WINDOW_MIN,
+  mountInkSplitResizer,
+  type InkSplitHandle,
+} from "./shell/ink-split";
 import "./styles.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -33,25 +38,86 @@ const el = shell.elements;
 
 let inkWorkspace!: DesktopInkWorkspace;
 let inkOpen = false;
+let inkSplit = false;
+/** Last pane that received a pointer: used so Delete in the reader never erases ink. */
+let inkPaneFocused = true;
+const readerHome = el.readerHost.parentElement!;
+let inkSplitHandle: InkSplitHandle | undefined;
+
+function placeReaderInSplit(inSplit: boolean): void {
+  if (inSplit) {
+    if (el.readerHost.parentElement !== el.inkSplitReader) {
+      el.inkSplitReader.append(el.readerHost);
+    }
+    el.readerHost.hidden = false;
+    el.readerHost.classList.add("reader-panel");
+  } else if (el.readerHost.parentElement === el.inkSplitReader) {
+    readerHome.append(el.readerHost);
+  }
+}
+
+function setInkSplit(enabled: boolean, opts: { hint?: boolean } = {}): void {
+  if (enabled && window.innerWidth < INK_SPLIT_WINDOW_MIN) {
+    shell.showToast(`窗口窄于 ${INK_SPLIT_WINDOW_MIN}px，暂无法并排阅读。`, "error");
+    enabled = false;
+  }
+  if (enabled === inkSplit) {
+    if (enabled) inkSplitHandle?.setEnabled(true);
+    return;
+  }
+  inkSplit = enabled;
+  el.inkWorkspace.classList.toggle("is-split", enabled);
+  el.inkSplitReader.hidden = !enabled;
+  el.inkSplitResizer.hidden = !enabled;
+  placeReaderInSplit(enabled);
+  inkSplitHandle?.setEnabled(enabled);
+  const toggle = el.inkHost.querySelector<HTMLButtonElement>("#ink-split-toggle");
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", String(enabled));
+    toggle.textContent = enabled ? "退出并排" : "并排阅读";
+  }
+  window.dispatchEvent(new Event("resize"));
+  if (!enabled && opts.hint) {
+    shell.showToast("窗口过窄，已退出并排阅读。", "error");
+  }
+}
+
 const closeInkWorkspace = () => {
+  setInkSplit(false);
   inkOpen = false;
-  el.inkHost.hidden = true;
+  el.inkWorkspace.hidden = true;
   el.workspaceGrid.hidden = false;
   el.inkButton.textContent = "手写";
   // Safety net for changes made from the tablet while the map was hidden.
   loadInkOverlay();
 };
 inkWorkspace = new DesktopInkWorkspace(el.inkHost, closeInkWorkspace, (message, kind) => shell.showToast(message, kind));
+inkSplitHandle = mountInkSplitResizer(el.inkWorkspace, el.inkSplitReader, el.inkSplitResizer);
+el.inkHost.addEventListener("pointerdown", () => { inkPaneFocused = true; }, true);
+el.inkSplitReader.addEventListener("pointerdown", () => { inkPaneFocused = false; }, true);
+// Expose focus probe for the desktop Delete handler.
+(window as unknown as { __mathscapeInkPaneFocused?: () => boolean }).__mathscapeInkPaneFocused = () => inkPaneFocused;
+
 el.inkButton.addEventListener("click", () => {
   inkOpen = !inkOpen;
   if (inkOpen) {
     el.workspaceGrid.hidden = true;
-    el.inkHost.hidden = false;
+    el.inkWorkspace.hidden = false;
     el.inkButton.textContent = "返回地图";
     void inkWorkspace.open();
   } else {
     inkWorkspace.close();
   }
+});
+window.addEventListener("resize", () => {
+  if (inkSplit && window.innerWidth < INK_SPLIT_WINDOW_MIN) setInkSplit(false, { hint: true });
+});
+eventBus.on("ink-split-toggle", (detail) => {
+  if (!inkOpen) return;
+  const next = detail && typeof detail === "object" && detail !== null && "enabled" in detail && detail.enabled !== undefined
+    ? !!detail.enabled
+    : !inkSplit;
+  setInkSplit(next);
 });
 
 mountDiscoveryTask();
@@ -97,6 +163,7 @@ const graphController = new GraphController(
       void inspectorController.enterCreateRelationMode(sourceId, targetId),
     onBeforeRenderGraph: () => {
       if (reader.isInkOpen()) return;
+      if (inkSplit && inkOpen) return;
       reader.close();
       el.readerHost.hidden = true;
     },
@@ -113,10 +180,12 @@ inspectorController = new InspectorController(el.nodeDetail, {
   copyIdentifier: (id) => shell.copyIdentifier(id),
   onFocusNode: (nodeId) => graphController.setFocus(nodeId, "all"),
   onOpenReader: (artifactId, label, inkFocus) => {
+    if (inkSplit && inkOpen) placeReaderInSplit(true);
     el.readerHost.hidden = false;
     void reader.open(artifactId, label, { inkFocus });
   },
   onOpenReaderWithFocus: (artifactId, title, focus) => {
+    if (inkSplit && inkOpen) placeReaderInSplit(true);
     el.readerHost.hidden = false;
     void reader.open(artifactId, title, { focus });
   },
@@ -184,11 +253,16 @@ el.importButton.addEventListener("click", () => void artifactController.importPd
 
 eventBus.on("source-map-changed", () => void loadSnapshot());
 function showInkWorkspace(): void {
-  reader.close(); el.readerHost.hidden = true;
-  inkOpen = true; el.workspaceGrid.hidden = true; el.inkHost.hidden = false;
+  if (!inkSplit) { reader.close(); el.readerHost.hidden = true; }
+  inkOpen = true; el.workspaceGrid.hidden = true; el.inkWorkspace.hidden = false;
   el.inkButton.textContent = "返回地图";
 }
 eventBus.on("open-ink-document", ({ documentId }) => {
+  if (inkSplit && inkOpen) {
+    inkPaneFocused = true;
+    void inkWorkspace.openDocumentId(documentId);
+    return;
+  }
   showInkWorkspace();
   void inkWorkspace.openDocumentId(documentId);
 });
@@ -216,16 +290,28 @@ inkViews = connectInkViews({
 eventBus.on("open-ink-link-target", ({ link }) => {
   const target = link.target;
   if (target.kind === "ink_note") {
+    if (inkSplit && inkOpen) {
+      void inkWorkspace.openDocumentId(target.document_id);
+      inkPaneFocused = true;
+      return;
+    }
     eventBus.emit("open-ink-document", { documentId: target.document_id });
     return;
   }
-  inkWorkspace.close();
   const nodes = currentSnapshot?.landscape_graph.nodes ?? [];
   if (target.kind === "source_object") {
+    if (!inkSplit) inkWorkspace.close();
     const node = nodes.find((item) => item.domain_id === target.object_id && item.element_kind === "entity");
     if (node === undefined) { shell.showToast("关联的来源对象不在当前地图中。", "error"); return; }
     inspectorController.selectNodeById(node.id);
     return;
+  }
+  // Open the linked Markdown / artifact in the reader (left pane when split).
+  if (inkSplit && inkOpen) {
+    placeReaderInSplit(true);
+    inkPaneFocused = false;
+  } else {
+    inkWorkspace.close();
   }
   const artifact = nodes.find((item) => item.domain_kind === "SourceArtifact" && item.domain_id === target.artifact_id);
   el.readerHost.hidden = false;
@@ -236,6 +322,7 @@ eventBus.on("open-ink-link-target", ({ link }) => {
 eventBus.on("open-source", (detail) => {
   void (async () => {
     if (detail.refreshMap) await loadSnapshot();
+    if (inkSplit && inkOpen) placeReaderInSplit(true);
     el.readerHost.hidden = false;
     await reader.open(detail.artifactId, detail.title, {
       focus: detail.focus,

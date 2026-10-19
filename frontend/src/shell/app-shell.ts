@@ -39,6 +39,11 @@ export interface AppElements {
   llmSettingsButton: HTMLButtonElement;
   llmSettingsLabel: HTMLElement;
   inkButton: HTMLButtonElement;
+  /** Outer overlay that may host the N3c split layout. */
+  inkWorkspace: HTMLElement;
+  inkSplitReader: HTMLElement;
+  inkSplitResizer: HTMLElement;
+  /** DesktopInkWorkspace mounts here (right pane in split mode). */
   inkHost: HTMLElement;
 }
 
@@ -194,7 +199,11 @@ export class AppShell {
       </aside>
     </main>
 
-    <section id="ink-workspace" class="ink-workspace" hidden aria-label="手稿工作区"></section>
+    <section id="ink-workspace" class="ink-workspace" hidden aria-label="手稿工作区">
+      <div id="ink-split-reader" class="ink-split-reader" hidden aria-label="并排阅读原文"></div>
+      <div id="ink-split-resizer" class="ink-split-resizer" hidden></div>
+      <div id="ink-desktop-host" class="ink-desktop-host" aria-label="手稿"></div>
+    </section>
 
     <div id="llm-settings-host"></div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -239,7 +248,10 @@ export class AppShell {
       llmSettingsButton: requiredElement<HTMLButtonElement>("#llm-settings-button", root),
       llmSettingsLabel: requiredElement<HTMLElement>("#llm-settings-label", root),
       inkButton: requiredElement<HTMLButtonElement>("#ink-button", root),
-      inkHost: requiredElement<HTMLElement>("#ink-workspace", root),
+      inkWorkspace: requiredElement<HTMLElement>("#ink-workspace", root),
+      inkSplitReader: requiredElement<HTMLElement>("#ink-split-reader", root),
+      inkSplitResizer: requiredElement<HTMLElement>("#ink-split-resizer", root),
+      inkHost: requiredElement<HTMLElement>("#ink-desktop-host", root),
     };
   }
 

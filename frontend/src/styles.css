@@ -1032,7 +1032,17 @@ code {
 }
 .secondary-button:hover:not(:disabled) { border-color: #78aa9e; background: #203a42; }
 .secondary-button:disabled { cursor: default; opacity: .5; }
-.ink-workspace { position: absolute; inset: 72px 0 0; z-index: 8; min-height: 0; background: #0d151b; }
+.ink-workspace { position: absolute; inset: 72px 0 0; z-index: 8; min-height: 0; background: #0d151b; display: flex; flex-direction: row; }
+.ink-workspace[hidden] { display: none !important; }
+.ink-workspace.is-split { /* reader | resizer | 手稿 */ }
+.ink-split-reader { flex: 0 0 var(--ink-split-reader-width, 42%); min-width: 280px; max-width: 900px; min-height: 0; overflow: hidden; background: #101820; border-right: 1px solid #1e2a33; position: relative; }
+.ink-split-reader[hidden] { display: none !important; }
+.ink-split-reader > .reader-panel { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.ink-split-resizer { flex: 0 0 6px; cursor: col-resize; background: #1a2830; position: relative; z-index: 2; }
+.ink-split-resizer[hidden] { display: none !important; }
+.ink-split-resizer.is-dragging, .ink-split-resizer:focus-visible { background: #3d8f7a; }
+.ink-desktop-host { flex: 1 1 auto; min-width: 360px; min-height: 0; position: relative; overflow: hidden; }
+.ink-desktop-host > .ink-desktop-shell { position: absolute; inset: 0; }
 .ink-desktop-shell { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; color: #dce8e5; }
 .ink-desktop-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; padding: 10px 22px; border-bottom: 1px solid #2a3b43; background: #111c23; }
 .ink-document-heading { min-width: 0; }
