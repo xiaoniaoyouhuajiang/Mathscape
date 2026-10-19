@@ -182,6 +182,9 @@ export class ArtifactReader {
       ? Math.min(Math.max((requestedPageIndex as number) + 1, 1), pdf.numPages)
       : 1;
     let renderVersion = 0;
+    // Navigation has its own version: a zoom while the next page loads must
+    // not discard that page (the zoom only bumps renderVersion).
+    let navigationVersion = 0, navigating = false;
     let renderTask: ReturnType<PDFPageProxy["render"]> | undefined;
     let current: PDFPageProxy | undefined;
     let pageSize = { width: 1, height: 1 };
@@ -239,6 +242,11 @@ export class ArtifactReader {
       if (persist) saveZoom(info.artifact_id, mode);
       if (!current) { renderZoomControl(); return; }
       const nextScale = resolveZoom(mode, pageSize, available());
+      if (navigating) {
+        // The page being loaded is drawn at the latest mode once it arrives.
+        scale = nextScale; renderZoomControl();
+        return;
+      }
       if (Math.abs(nextScale - scale) < 1e-4) { renderZoomControl(); return; }
       const x = anchor?.x ?? viewport.clientWidth / 2, y = anchor?.y ?? viewport.clientHeight / 2;
       const before = { width: pageSize.width * scale, height: pageSize.height * scale };
@@ -256,27 +264,31 @@ export class ArtifactReader {
     };
     const oldDispose = this.disposeDocument;
     const cleanups: Array<() => void> = [];
-    this.disposeDocument = () => { renderVersion++; if (renderTimer) clearTimeout(renderTimer); renderTask?.cancel(); cleanups.forEach(cleanup => cleanup()); oldDispose?.(); };
+    this.disposeDocument = () => { renderVersion++; navigationVersion++; if (renderTimer) clearTimeout(renderTimer); renderTask?.cancel(); cleanups.forEach(cleanup => cleanup()); oldDispose?.(); };
     const show = async (number: number): Promise<void> => {
       if (transport.stopped) return;
       if (!Number.isInteger(number) || number < 1 || number > pdf.numPages) { pageInput.value = String(pageNumber); return; }
       pageNumber = number; pageInput.value = String(number);
       previous.disabled = number === 1; next.disabled = number === pdf.numPages;
-      const version = ++renderVersion;
+      const navigation = ++navigationVersion;
+      navigating = true;
+      renderVersion++;
       if (renderTimer) { clearTimeout(renderTimer); renderTimer = undefined; }
       renderTask?.cancel();
       try {
         const page = await pdf.getPage(number);
-        if (transport.stopped || generation !== this.generation || version !== renderVersion) return;
+        if (transport.stopped || generation !== this.generation || navigation !== navigationVersion) return;
+        navigating = false;
         current = page;
         const base = page.getViewport({ scale: 1 });
         pageSize = { width: base.width, height: base.height };
         scale = resolveZoom(mode, pageSize, available());
         renderZoomControl();
         viewport.scrollTop = 0;
-        await draw(version);
+        await draw(++renderVersion);
       } catch (error) {
-        if (!firstFailure && !transport.stopped && version === renderVersion && generation === this.generation) failure.textContent = String(error);
+        if (navigation === navigationVersion) navigating = false;
+        if (!firstFailure && !transport.stopped && navigation === navigationVersion && generation === this.generation) failure.textContent = String(error);
       }
     };
     previous.onclick = () => void show(pageNumber - 1);
