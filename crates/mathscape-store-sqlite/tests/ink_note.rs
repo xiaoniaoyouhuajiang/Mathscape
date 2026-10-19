@@ -512,7 +512,9 @@ fn downgrade_to_v16(path: &std::path::Path) {
     connection
         .execute_batch(
             "DROP TABLE ink_note_links;
-             DELETE FROM schema_migrations WHERE version=18;
+             DELETE FROM schema_migrations WHERE version IN (18,19);
+             ALTER TABLE ink_lan_settings DROP COLUMN preferred_host;
+             ALTER TABLE ink_pairings DROP COLUMN claim_reason;
              DROP INDEX ink_documents_by_last_used;
              DROP INDEX ink_documents_by_trashed;
              DROP TABLE ink_note_requests;
@@ -620,7 +622,7 @@ fn upgrading_v16_backfills_titles_and_keeps_old_requests_replayable() {
         .unwrap()
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 18);
+    assert_eq!(version, 19);
     fs::remove_dir_all(directory).ok();
 }
 

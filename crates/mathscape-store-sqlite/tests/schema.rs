@@ -146,7 +146,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 18);
+    assert_eq!(version, 19);
     assert_eq!(
         connection
             .query_row(
@@ -382,7 +382,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::prepare(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 18
+            supported: 19
         })
     ));
     cleanup(&directory);
@@ -403,7 +403,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 18);
+    assert_eq!(version, 19);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -441,7 +441,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 18);
+    assert_eq!(version, 19);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 3",
@@ -477,7 +477,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        18
+        19
     );
     assert_eq!(
         connection
@@ -530,7 +530,7 @@ fn repairs_a_v5_discovery_schema_missing_result_fingerprint() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        18
+        19
     );
     let has_result_fingerprint = connection
         .prepare("PRAGMA table_info(discovery_runs)")
@@ -1108,7 +1108,7 @@ fn upgrading_to_v10_preserves_discovery_runs_and_their_children() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        18
+        19
     );
     let violations = connection
         .prepare("PRAGMA foreign_key_check")

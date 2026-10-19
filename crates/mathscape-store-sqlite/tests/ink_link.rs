@@ -812,7 +812,9 @@ fn upgrading_v17_rebuilds_requests_and_keeps_them_replayable() {
              DROP TABLE ink_note_requests;
              ALTER TABLE ink_note_requests_v17 RENAME TO ink_note_requests;
              CREATE INDEX ink_note_requests_by_document ON ink_note_requests(document_id, created_at);
-             DELETE FROM schema_migrations WHERE version=18;
+             DELETE FROM schema_migrations WHERE version IN (18,19);
+             ALTER TABLE ink_lan_settings DROP COLUMN preferred_host;
+             ALTER TABLE ink_pairings DROP COLUMN claim_reason;
              PRAGMA user_version=17;",
         )
         .unwrap();
@@ -858,7 +860,7 @@ fn upgrading_v17_rebuilds_requests_and_keeps_them_replayable() {
         .unwrap()
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 18);
+    assert_eq!(version, 19);
     fs::remove_dir_all(directory).ok();
 }
 
