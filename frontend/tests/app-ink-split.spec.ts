@@ -37,7 +37,6 @@ test.describe("N3c side-by-side reading", () => {
     await handle.dblclick();
     await expect.poll(async () => page.evaluate(() => localStorage.getItem("mathscape:ink-split-reader-width"))).toBeNull();
 
-    // Narrow window auto-exits split.
     await expect(page.locator("#ink-workspace")).toHaveClass(/is-split/);
     await page.setViewportSize({ width: 800, height: 860 });
     await expect(page.locator("#ink-workspace")).not.toHaveClass(/is-split/);
@@ -50,6 +49,29 @@ test.describe("N3c side-by-side reading", () => {
     await expect(page.locator("#ink-workspace")).not.toHaveClass(/is-split/);
   });
 
+  test("entering split with no reader shows a picker; picking opens left and keeps the note", async ({ page }) => {
+    // User path: map → 手写 → open a note → 并排阅读 (no reader was open).
+    await page.locator("#ink-button").click();
+    await page.getByRole("button", { name: /手稿 A/ }).click();
+    await expect(page.locator("#ink-document-heading")).toContainText("手稿 A");
+    await page.locator("#ink-split-toggle").click();
+    await expect(page.locator("#ink-workspace")).toHaveClass(/is-split/);
+
+    const empty = page.locator("#ink-split-empty");
+    await expect(empty).toBeVisible();
+    await expect(empty.getByRole("heading", { name: "并排阅读" })).toBeVisible();
+    await expect(empty.getByRole("button", { name: "正确表述.md" })).toBeVisible();
+    await expect(empty.getByRole("button", { name: "导入 PDF" })).toBeVisible();
+
+    await empty.getByRole("button", { name: "正确表述.md" }).click();
+    await expect(empty).toBeHidden({ timeout: 10000 });
+    await expect(page.locator("#ink-split-reader #reader, #ink-split-reader .reader-panel").first()).toBeVisible();
+    await expect(page.locator("#ink-split-reader")).toContainText("正确表述");
+    // Note stays on the right.
+    await expect(page.locator("#ink-document-heading")).toContainText("手稿 A");
+    await expect(page.locator("#ink-workspace")).toHaveClass(/is-split/);
+  });
+
   test("bidirectional navigation: open target left, ✎ opens note right", async ({ page }) => {
     const ids = await page.evaluate(() => {
       const h = (window as unknown as { appHarness: { documents: { a: string; b: string } } }).appHarness;
@@ -59,6 +81,9 @@ test.describe("N3c side-by-side reading", () => {
     await page.getByRole("button", { name: /手稿 A/ }).click();
     await page.locator("#ink-split-toggle").click();
     await expect(page.locator("#ink-workspace")).toHaveClass(/is-split/);
+    // Dismiss empty picker by opening a source so the left pane has a document.
+    await page.locator("#ink-split-empty").getByRole("button", { name: "正确表述.md" }).click();
+    await expect(page.locator("#ink-split-empty")).toBeHidden({ timeout: 10000 });
 
     await page.evaluate((docB) => {
       window.dispatchEvent(new CustomEvent("mathscape:open-ink-document", { detail: { documentId: docB } }));
@@ -66,6 +91,8 @@ test.describe("N3c side-by-side reading", () => {
     await expect(page.locator("#ink-session-list .ink-session-item.is-active")).toContainText("手稿 B");
     await expect(page.locator("#ink-workspace")).toHaveClass(/is-split/);
     await expect(page.locator("#ink-split-reader")).toBeVisible();
+    // Left still has the reader document.
+    await expect(page.locator("#ink-split-empty")).toBeHidden();
   });
 
   test("canvas host keeps a usable width after divider drag", async ({ page }) => {

@@ -211,6 +211,14 @@ export class DesktopInkWorkspace {
     this.onClose();
   }
 
+  /** N3c: document currently shown in the 手稿 pane (if any). */
+  currentDocumentId(): string | undefined { return this.documentState?.document_id; }
+
+  /** N3c: active primary link of the open note, if any. */
+  primaryLink(): InkNoteLink | undefined {
+    return this.noteLinks.find(link => link.is_primary && link.state === "active");
+  }
+
   async openDocumentId(documentId: string): Promise<void> {
     this.targetDocumentId = documentId;
     try { await this.open(); } finally { this.targetDocumentId = undefined; }

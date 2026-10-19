@@ -36,6 +36,8 @@ export class ArtifactReader {
   private disposeDocument: (() => void) | undefined;
   private urls: string[] = [];
   private inkOpen = false;
+  /** Last successfully opened artifact — kept across close() for 并排阅读 restore. */
+  private lastOpen: { id: string; title: string; options: ReaderOpenOptions } | undefined;
   constructor(private host: HTMLElement) {}
 
   private revokeImages(): void {
@@ -54,8 +56,16 @@ export class ArtifactReader {
 
   isInkOpen(): boolean { return this.inkOpen; }
 
+  /** True when the host currently shows a document (not an empty shell). */
+  hasContent(): boolean { return this.host.childElementCount > 0; }
+
+  lastOpened(): { id: string; title: string; options: ReaderOpenOptions } | undefined {
+    return this.lastOpen ? { ...this.lastOpen, options: { ...this.lastOpen.options } } : undefined;
+  }
+
   async open(id: string, title: string, options: ReaderOpenOptions = {}): Promise<void> {
     this.close();
+    this.lastOpen = { id, title, options: { ...options } };
     eventBus.emit("reader-opened");
     const { focus, patch, conversionId, pdfPageIndex } = options;
     const generation = this.generation;
