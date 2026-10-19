@@ -860,6 +860,8 @@ pub fn run() {
             ink_lan::stop_ink_lan,
             ink_lan::get_ink_lan_status,
             ink_lan::create_ink_pairing,
+            ink_lan::push_ink_to_tablet,
+            ink_lan::set_ink_lan_preferred_host,
             ink_lan::cancel_ink_pairing,
             ink_lan::get_ink_lan_mirror,
             ink_lan::reclaim_ink_writer,

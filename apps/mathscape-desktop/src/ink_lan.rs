@@ -70,6 +70,8 @@ pub struct InkLanStatus {
     pub urls: Vec<String>,
     /// N3.0: kind of each entry in `urls` (same order); LAN entries come first.
     pub url_kinds: Vec<AddressKind>,
+    /// N3a: host the user last preferred for the QR / default URL.
+    pub preferred_host: Option<String>,
     pub certificate_file_sha256: Option<String>,
     pub assets_ready: bool,
     pub error: Option<String>,
@@ -81,6 +83,16 @@ pub struct InkPairingLink {
     pub url_kinds: Vec<AddressKind>,
     pub expires_at: i64,
     pub document_id: String,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct InkPushResult {
+    pub pushed: bool,
+    pub online: usize,
+    pub requires_takeover: bool,
+    pub expires_at: Option<i64>,
+    pub document_id: String,
+    pub title: Option<String>,
+    pub message: String,
 }
 #[derive(Clone, Serialize)]
 pub struct InkClientReport {
@@ -218,11 +230,28 @@ enum Control {
     Trashed(String),
     /// Title metadata changed; connected tablets refresh their header.
     Note(InkNoteState),
+    /// N3a: push a one-time switch_offer to every connected tablet.
+    SwitchOffer(Value),
 }
 /// Old pads only fence on known codes. Trash therefore reuses
 /// `writer_revoked` and adds a `reason` that new pads show specifically (D7).
 const TRASHED_REASON: &str = "document_trashed";
 const TRASHED_MESSAGE: &str = "这份手稿已在电脑上移到回收站，平板不能继续写入。恢复后需要在电脑重新配对；本机未同步内容会保留，可导出恢复草稿。";
+
+/// Put the preferred host first when it is still among the candidates.
+fn prefer_host(
+    mut addresses: Vec<ink_tls::HostAddress>,
+    preferred: Option<&str>,
+) -> Vec<ink_tls::HostAddress> {
+    if let Some(host) = preferred {
+        if let Some(index) = addresses.iter().position(|address| address.host == host) {
+            let chosen = addresses.remove(index);
+            addresses.insert(0, chosen);
+        }
+    }
+    addresses
+}
+
 fn trashed_closed() -> Value {
     json!({"type":"session_closed","code":"writer_revoked","reason":TRASHED_REASON,"message":TRASHED_MESSAGE})
 }
@@ -697,6 +726,11 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
                     if note.document_id==lease.document_id && !send(&mut socket,json!({"type":"note_metadata","note":note})).await {break;}
                     continue;
                 }
+                if let Ok(Control::SwitchOffer(payload))=&event {
+                    // Every connected tablet receives the offer; the first to claim wins.
+                    if !send(&mut socket, payload.clone()).await {break;}
+                    continue;
+                }
                 let code=match event {Ok(Control::Stop(revoke))=>Some(if revoke{"writer_revoked"}else{"server_restart"}),Ok(Control::Revoke(doc)) if doc==lease.document_id=>Some("writer_revoked"),Ok(Control::Replace(old)) if old==instance=>Some("connection_replaced"),Err(broadcast::error::RecvError::Lagged(_))=>Some("reconnect_required"),_=>None};
                 if let Some(code)=code {send(&mut socket,json!({"type":"session_closed","code":code})).await;break;}
             }
@@ -1095,7 +1129,11 @@ impl DesktopService {
             return Err("InkPad 页面尚未构建，无法开始平板设置。".into());
         }
         let https_port = status.port;
-        let addresses = ink_tls::host_addresses();
+        let preferred = store(self)?
+            .ink_lan_settings()
+            .map_err(|e| e.to_string())?
+            .preferred_host;
+        let addresses = prefer_host(ink_tls::host_addresses(), preferred.as_deref());
         let hosts = addresses
             .iter()
             .map(|address| address.host.clone())
@@ -1227,6 +1265,7 @@ impl DesktopService {
                 expected_head.unwrap_or(view.head_seq),
                 view.remote,
                 HANDOFF_PAIRING_SECONDS,
+                "tablet_pairing",
             )
             .await?;
         let mut guard = self.ink_lan.live.setup.lock().unwrap();
@@ -1373,7 +1412,11 @@ impl DesktopService {
         .map_err(|e| format!("无法开启 InkPad 端口：{e}"))?;
         let actual_port = listener.local_addr().map_err(|e| e.to_string())?.port();
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-        let addresses = ink_tls::host_addresses();
+        let settings_now = store(self)?.ink_lan_settings().map_err(|e| e.to_string())?;
+        let addresses = prefer_host(
+            ink_tls::host_addresses(),
+            settings_now.preferred_host.as_deref(),
+        );
         let hosts = addresses
             .iter()
             .map(|address| address.host.clone())
@@ -1389,6 +1432,7 @@ impl DesktopService {
                 .map(|host| format!("https://{host}:{actual_port}/pad/"))
                 .collect(),
             url_kinds: addresses.iter().map(|address| address.kind).collect(),
+            preferred_host: settings_now.preferred_host.clone(),
             certificate_file_sha256: Some(fingerprint),
             assets_ready: !INKPAD_ASSETS.is_empty(),
             error: None,
@@ -1426,10 +1470,15 @@ impl DesktopService {
         let handle = axum_server::Handle::new();
         let shutdown = handle.clone();
         let server = axum_server::from_tcp_rustls(listener, config).map_err(|e| e.to_string())?;
+        let preferred_host = store(self)?
+            .ink_lan_settings()
+            .map_err(|e| e.to_string())?
+            .preferred_host;
         store(self)?
             .save_ink_lan_settings(&InkLanSettings {
                 enabled: true,
                 port: actual_port,
+                preferred_host,
             })
             .map_err(|e| e.to_string())?;
         let task = tokio::spawn(async move {
@@ -1446,22 +1495,25 @@ impl DesktopService {
         Ok(status)
     }
     pub async fn ink_lan_status(&self) -> Result<InkLanStatus, String> {
+        let settings = store(self)?.ink_lan_settings().map_err(|e| e.to_string())?;
         let running = self.ink_lan.running.lock().await;
         if let Some(active) = running.as_ref() {
             let mut status = active.status.clone();
+            // Keep preferred_host live after set_ink_lan_preferred_host without restart.
+            status.preferred_host = settings.preferred_host.clone();
             if active.task.is_finished() {
                 status.running = false;
                 status.error = Some("InkPad 服务已停止，请重新开启服务。".into());
             }
             return Ok(status);
         }
-        let settings = store(self)?.ink_lan_settings().map_err(|e| e.to_string())?;
         Ok(InkLanStatus {
             enabled: settings.enabled,
             running: false,
             port: settings.port,
             urls: vec![],
             url_kinds: vec![],
+            preferred_host: settings.preferred_host,
             certificate_file_sha256: None,
             assets_ready: !INKPAD_ASSETS.is_empty(),
             error: None,
@@ -1502,7 +1554,7 @@ impl DesktopService {
         allow_transfer: bool,
     ) -> Result<InkPairingLink, String> {
         let (token, expires_at, urls, url_kinds) = self
-            .issue_pairing(&document, head, allow_transfer, 120)
+            .issue_pairing(&document, head, allow_transfer, 120, "tablet_pairing")
             .await?;
         Ok(InkPairingLink {
             url_kinds,
@@ -1520,6 +1572,7 @@ impl DesktopService {
         head: u64,
         allow_transfer: bool,
         seconds: i64,
+        claim_reason: &str,
     ) -> Result<(String, i64, Vec<String>, Vec<AddressKind>), String> {
         let status = self.ink_lan_status().await?;
         if !status.running {
@@ -1542,11 +1595,23 @@ impl DesktopService {
                     writer_id: format!("inkpad-{}", &secret()?[..32]),
                     expires_at: expiry,
                     allow_transfer,
+                    claim_reason: claim_reason.into(),
                 },
                 now(),
             )
             .map_err(|e| e.to_string())?;
-        Ok((token, expiry, status.urls, status.url_kinds))
+        // Reorder QR URLs with the latest preferred_host without restarting LAN.
+        let preferred = database
+            .ink_lan_settings()
+            .map_err(|e| e.to_string())?
+            .preferred_host;
+        let addresses = prefer_host(ink_tls::host_addresses(), preferred.as_deref());
+        let urls = addresses
+            .iter()
+            .map(|address| format!("https://{}:{}/pad/", address.host, status.port))
+            .collect::<Vec<_>>();
+        let url_kinds = addresses.iter().map(|address| address.kind).collect();
+        Ok((token, expiry, urls, url_kinds))
     }
     pub fn ink_lan_mirror(&self, document: &str, head: u64) -> Result<InkLanMirror, String> {
         let delta = store(self)?
@@ -1593,6 +1658,108 @@ impl DesktopService {
             client,
         })
     }
+
+    /// N3a: push a one-time `switch_offer` to every connected tablet. When no
+    /// tablet is online the caller falls back to the QR flow. `allow_transfer`
+    /// must be true when the target note already has a remote writer, matching
+    /// the existing pairing takeover confirm.
+    pub async fn push_ink_to_tablet(
+        &self,
+        document: &str,
+        allow_transfer: bool,
+    ) -> Result<InkPushResult, String> {
+        let online = {
+            let slots = self.ink_lan.live.slots.lock().unwrap();
+            slots.len()
+        };
+        if online == 0 {
+            return Ok(InkPushResult {
+                pushed: false,
+                online: 0,
+                requires_takeover: false,
+                expires_at: None,
+                document_id: document.into(),
+                title: None,
+                message: "平板未连接。请用二维码配对，或确认平板已打开这份电脑上的手稿。".into(),
+            });
+        }
+        let note = store(self)?
+            .open_ink_document(document)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "找不到这份手稿。".to_string())?;
+        if note.note.lifecycle != InkLifecycle::Active {
+            return Err("回收站中的手稿不能推送到平板。".into());
+        }
+        let view = store(self)?
+            .ink_writer_view(document, now())
+            .map_err(|e| e.to_string())?;
+        // Desktop holds the writer when there is no remote session.
+        let requires_takeover = view.remote;
+        if requires_takeover && !allow_transfer {
+            return Ok(InkPushResult {
+                pushed: false,
+                online,
+                requires_takeover: true,
+                expires_at: None,
+                document_id: document.into(),
+                title: Some(note.note.title.clone()),
+                message: if view.remote {
+                    "这份手稿正在由平板书写。推送会转交写入权，对方未同步的内容会被隔离，可以导出恢复草稿。".into()
+                } else {
+                    "这份手稿正在由电脑书写。".into()
+                },
+            });
+        }
+        let (token, expires_at, _, _) = self
+            .issue_pairing(
+                document,
+                view.head_seq,
+                allow_transfer || !view.remote,
+                120,
+                "desktop_push",
+            )
+            .await?;
+        let payload = json!({
+            "type": "switch_offer",
+            "offer_id": token.get(..16).unwrap_or(&token),
+            "document_id": document,
+            "title": note.note.title,
+            "pairing_token": token,
+            "expires_at": expires_at,
+            "requires_takeover": requires_takeover,
+            "message": format!("电脑请求将平板切换到「{}」。", note.note.title),
+        });
+        let _ = self
+            .ink_lan
+            .live
+            .control
+            .send(Control::SwitchOffer(payload));
+        Ok(InkPushResult {
+            pushed: true,
+            online,
+            requires_takeover: false,
+            expires_at: Some(expires_at),
+            document_id: document.into(),
+            title: Some(note.note.title),
+            message: format!("已向 {online} 台在线平板发送切换请求。"),
+        })
+    }
+
+    pub fn set_ink_lan_preferred_host(
+        &self,
+        host: Option<String>,
+    ) -> Result<InkLanSettings, String> {
+        let mut settings = store(self)?.ink_lan_settings().map_err(|e| e.to_string())?;
+        settings.preferred_host = match host {
+            Some(value) if value.trim().is_empty() => None,
+            other => other,
+        };
+        store(self)?
+            .save_ink_lan_settings(&settings)
+            .map_err(|e| e.to_string())?;
+        Ok(settings)
+    }
+
     pub fn reclaim_ink_writer(
         &self,
         document: &str,
@@ -1635,6 +1802,24 @@ pub(crate) async fn get_ink_lan_status(
 #[tauri::command]
 pub(crate) async fn stop_ink_lan(state: TauriState<'_, DesktopState>) -> Result<(), String> {
     state.service.shutdown_ink_lan(true).await
+}
+#[tauri::command]
+pub(crate) async fn push_ink_to_tablet(
+    state: TauriState<'_, DesktopState>,
+    document_id: String,
+    allow_transfer: Option<bool>,
+) -> Result<InkPushResult, String> {
+    state
+        .service
+        .push_ink_to_tablet(&document_id, allow_transfer.unwrap_or(false))
+        .await
+}
+#[tauri::command]
+pub(crate) fn set_ink_lan_preferred_host(
+    state: TauriState<'_, DesktopState>,
+    host: Option<String>,
+) -> Result<InkLanSettings, String> {
+    state.service.set_ink_lan_preferred_host(host)
 }
 #[tauri::command]
 pub(crate) async fn create_ink_pairing(
