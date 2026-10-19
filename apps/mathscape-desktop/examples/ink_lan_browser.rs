@@ -1,5 +1,5 @@
 //! Local test fixture control is filesystem-only and never part of the LAN API.
-use mathscape_desktop::{CreateInkDocumentRequest, DesktopService};
+use mathscape_desktop::{CreateInkDocumentRequest, DesktopService, InkLinkTargetRequest, LinkInkNoteRequest};
 use mathscape_domain::InkLabDocument;
 use mathscape_llm::MemoryCredentialResolver;
 use serde_json::{Value, json};
@@ -217,6 +217,70 @@ async fn main() {
                                 .unwrap();
                             ready["push"] = serde_json::to_value(&result).unwrap();
                             ready["push_document_id"] = document_id.clone().into();
+                        }
+                                                "link_primary" => {
+                            // Create a target note and set it as the current note's primary link.
+                            let mut target: InkLabDocument = serde_json::from_str(include_str!(
+                                "../../../testdata/ink/p0/trace.json"
+                            ))
+                            .unwrap();
+                            target.operations.clear();
+                            target.document_id = format!("browser-card-target-{id}");
+                            target.title = command["target_title"]
+                                .as_str()
+                                .unwrap_or("卡片目标题")
+                                .into();
+                            let target_id = target.document_id.clone();
+                            service
+                                .create_ink_document(CreateInkDocumentRequest {
+                                    document: target,
+                                    session_id: format!("browser-card-session-{id}"),
+                                    writer_id: "desktop-local".into(),
+                                    device: json!({"source": "test"}),
+                                    request_id: Some(format!("browser-card-create-{id}")),
+                                    title_mode: None,
+                                })
+                                .unwrap();
+                            let receipt = service
+                                .link_ink_note(LinkInkNoteRequest {
+                                    request_id: format!("browser-card-link-{id}"),
+                                    document_id: document_id.clone(),
+                                    target: InkLinkTargetRequest::InkNote {
+                                        document_id: target_id.clone(),
+                                    },
+                                    role: mathscape_store_sqlite::InkLinkRole::Attempt,
+                                    primary: true,
+                                    replaces_link_id: None,
+                                })
+                                .unwrap();
+                            ready["link"] = serde_json::to_value(&receipt).unwrap();
+                            ready["card_target_id"] = target_id.into();
+                            ready["problem_card"] = serde_json::to_value(
+                                service.ink_problem_card(&document_id).unwrap(),
+                            )
+                            .unwrap();
+                        }
+                        "clear_primary" => {
+                            let receipt = service
+                                .set_ink_note_primary_link(
+                                    mathscape_store_sqlite::InkSetPrimaryRequest {
+                                        request_id: format!("browser-card-clear-{id}"),
+                                        document_id: document_id.clone(),
+                                        link_id: None,
+                                    },
+                                )
+                                .unwrap();
+                            ready["link"] = serde_json::to_value(&receipt).unwrap();
+                            ready["problem_card"] = serde_json::to_value(
+                                service.ink_problem_card(&document_id).unwrap(),
+                            )
+                            .unwrap();
+                        }
+                        "problem_card" => {
+                            ready["problem_card"] = serde_json::to_value(
+                                service.ink_problem_card(&document_id).unwrap(),
+                            )
+                            .unwrap();
                         }
                         "status" => {}
                         "stop" => {

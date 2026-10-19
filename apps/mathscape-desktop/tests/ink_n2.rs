@@ -272,3 +272,72 @@ fn context_creation_links_the_block_and_lists_it_for_the_reader() {
         "link_target_invalid"
     );
 }
+
+#[test]
+fn n3b_problem_card_renders_primary_markdown_and_stays_note_scoped() {
+    let fixture = Fixture::new("problem-card");
+    let (_, blocks) = fixture.blocks();
+    let body_index = blocks
+        .iter()
+        .position(|(_, kind)| kind != "page_marker")
+        .unwrap();
+    let request = CreateInkNoteFromContextRequest {
+        request_id: "card-create".into(),
+        document: {
+            let mut document: InkLabDocument =
+                serde_json::from_str(include_str!("../../../testdata/ink/p0/trace.json")).unwrap();
+            document.operations.clear();
+            document.document_id = "card-note-a".into();
+            document
+        },
+        session_id: "card-session-a".into(),
+        writer_id: "desktop-local".into(),
+        device: serde_json::json!({}),
+        target: InkLinkTargetRequest::Markdown(fixture.target(body_index, body_index)),
+        role: InkLinkRole::Attempt,
+        title: Some("卡片手稿".into()),
+    };
+    fixture.service.create_ink_note_from_context(request).unwrap();
+
+    let card = fixture
+        .service
+        .ink_problem_card("card-note-a")
+        .unwrap()
+        .expect("primary card");
+    assert_eq!(card.status, mathscape_desktop::ProblemCardStatus::Ok);
+    assert!(!card.body.is_empty(), "expected rendered primary body");
+    assert!(card.body.contains("极限") || card.body.contains("连续") || card.body.contains("sin"), "body={}", card.body);
+
+    // Note without a primary link must not expose a card (§10 / decision 11).
+    fixture
+        .service
+        .create_ink_document(CreateInkDocumentRequest {
+            document: {
+                let mut document: InkLabDocument =
+                    serde_json::from_str(include_str!("../../../testdata/ink/p0/trace.json"))
+                        .unwrap();
+                document.operations.clear();
+                document.document_id = "card-note-b".into();
+                document
+            },
+            session_id: "card-session-b".into(),
+            writer_id: "desktop-local".into(),
+            device: serde_json::json!({}),
+            request_id: Some("card-b".into()),
+            title_mode: Some(InkTitleMode::Auto),
+        })
+        .unwrap();
+    assert!(fixture.service.ink_problem_card("card-note-b").unwrap().is_none());
+
+    // Clearing primary clears the card for A; B still has none (§10).
+    fixture
+        .service
+        .set_ink_note_primary_link(mathscape_store_sqlite::InkSetPrimaryRequest {
+            request_id: "card-clear".into(),
+            document_id: "card-note-a".into(),
+            link_id: None,
+        })
+        .unwrap();
+    assert!(fixture.service.ink_problem_card("card-note-a").unwrap().is_none());
+    assert!(fixture.service.ink_problem_card("card-note-b").unwrap().is_none());
+}

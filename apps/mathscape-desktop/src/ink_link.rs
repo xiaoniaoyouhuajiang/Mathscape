@@ -3,9 +3,10 @@
 
 use mathscape_domain::InkLabDocument;
 use mathscape_orchestrator::PAGE_MARKER_STRUCTURAL_KIND;
+use crate::ink_problem_card::{self, InkProblemCard, ProblemCardStatus};
 use mathscape_store_sqlite::{
     InkContextCreateReceipt, InkContextCreateRequest, InkLinkOverlay, InkLinkReceipt,
-    InkLinkRequest, InkLinkRole, InkLinkTarget, InkLinkedNote, InkMarkdownTarget, InkNoteLink,
+    InkLifecycle, InkLinkRequest, InkLinkRole, InkLinkTarget, InkLinkTargetStatus, InkLinkedNote, InkMarkdownTarget, InkNoteLink,
     InkSetPrimaryRequest, InkUnlinkRequest, markdown_excerpt, markdown_short_label,
 };
 use serde::{Deserialize, Serialize};
@@ -160,6 +161,10 @@ impl DesktopService {
         if receipt.title_changed && !receipt.replayed {
             self.ink_note_renamed(&receipt.note);
         }
+        if !receipt.replayed {
+            // Primary add/remove/transfer or any link change that may affect the card.
+            self.ink_problem_card_changed(&receipt.note.document_id);
+        }
     }
 
     /// Creates a note with its primary link and title in one transaction.
@@ -168,7 +173,8 @@ impl DesktopService {
         request: CreateInkNoteFromContextRequest,
     ) -> Result<InkContextCreateReceipt, InkCommandError> {
         let target = self.resolve_ink_target(&request.target)?;
-        self.link_store()?
+        let receipt = self
+            .link_store()?
             .create_ink_note_from_context(&InkContextCreateRequest {
                 request_id: request.request_id,
                 document: request.document,
@@ -179,7 +185,10 @@ impl DesktopService {
                 role: request.role,
                 title: request.title,
             })
-            .map_err(fail)
+            .map_err(fail)?;
+        // New notes from context always have a primary link.
+        self.ink_problem_card_changed(&receipt.note.document_id);
+        Ok(receipt)
     }
 
     pub fn link_ink_note(
@@ -221,6 +230,146 @@ impl DesktopService {
             .map_err(fail)?;
         self.broadcast_title(&receipt);
         Ok(receipt)
+    }
+
+
+    /// N3b: primary-link summary for the pad problem card (§10 / decision 10–11).
+    pub fn ink_problem_card(
+        &self,
+        document_id: &str,
+    ) -> Result<Option<InkProblemCard>, InkCommandError> {
+        let links = self
+            .link_store()?
+            .ink_note_links(document_id)
+            .map_err(fail)?;
+        let Some(link) = links.into_iter().find(|link| link.is_primary) else {
+            return Ok(None);
+        };
+        Ok(Some(self.render_problem_card(&link)?))
+    }
+
+    fn render_problem_card(
+        &self,
+        link: &InkNoteLink,
+    ) -> Result<InkProblemCard, InkCommandError> {
+        use mathscape_store_sqlite::InkLinkTarget;
+        match &link.target {
+            InkLinkTarget::Markdown(markdown) => {
+                match self.markdown_for_link(&markdown.artifact_id) {
+                    Ok(document) => {
+                        let live_hash = document.snapshot.content_hash.to_string();
+                        if live_hash != markdown.content_hash {
+                            return Ok(ink_problem_card::finalize_card(
+                                link,
+                                markdown.excerpt.clone(),
+                                ProblemCardStatus::Stale,
+                                Some(live_hash),
+                            ));
+                        }
+                        let find = |id: &str| {
+                            document.blocks.iter().position(|block| block.id == id)
+                        };
+                        let (Some(first), Some(last)) =
+                            (find(&markdown.first_block), find(&markdown.last_block))
+                        else {
+                            return Ok(ink_problem_card::finalize_card(
+                                link,
+                                markdown.excerpt.clone(),
+                                ProblemCardStatus::Missing,
+                                Some(live_hash),
+                            ));
+                        };
+                        if first > last {
+                            return Ok(ink_problem_card::finalize_card(
+                                link,
+                                markdown.excerpt.clone(),
+                                ProblemCardStatus::Missing,
+                                Some(live_hash),
+                            ));
+                        }
+                        let start = document.blocks[first].range.start as usize;
+                        let end = document.blocks[last].range.end as usize;
+                        let text = document.source.get(start..end).unwrap_or("");
+                        let body = if text.is_empty() {
+                            markdown.excerpt.clone()
+                        } else {
+                            ink_problem_card::markdown_body_from_source(text)
+                        };
+                        Ok(ink_problem_card::finalize_card(
+                            link,
+                            body,
+                            ProblemCardStatus::Ok,
+                            Some(live_hash),
+                        ))
+                    }
+                    Err(_) => Ok(ink_problem_card::finalize_card(
+                        link,
+                        markdown.excerpt.clone(),
+                        ProblemCardStatus::Missing,
+                        Some(markdown.content_hash.clone()),
+                    )),
+                }
+            }
+            InkLinkTarget::SourceObject { object_id } => {
+                let store = self.link_store().map_err(fail)?;
+                // Reuse link list target_status; also peek payload via open path.
+                match link.target_status {
+                    InkLinkTargetStatus::Missing
+                    | InkLinkTargetStatus::Trashed
+                    | InkLinkTargetStatus::Retired => {
+                        return Ok(ink_problem_card::finalize_card(
+                            link,
+                            link.target_label.clone(),
+                            ProblemCardStatus::Missing,
+                            link.target_revision.clone(),
+                        ));
+                    }
+                    _ => {}
+                }
+                drop(store);
+                let payload = self.source_object_payload(object_id)?;
+                let body = ink_problem_card::source_object_body(&payload);
+                Ok(ink_problem_card::finalize_card(
+                    link,
+                    body,
+                    ProblemCardStatus::Ok,
+                    link.target_revision.clone(),
+                ))
+            }
+            InkLinkTarget::InkNote { document_id } => {
+                let note = self
+                    .link_store()?
+                    .ink_note(document_id)
+                    .map_err(fail)?;
+                match note {
+                    Some(note) if note.lifecycle != InkLifecycle::Trashed => {
+                        Ok(ink_problem_card::finalize_card(
+                            link,
+                            format!("关联手稿：{}", note.title),
+                            ProblemCardStatus::Ok,
+                            None,
+                        ))
+                    }
+                    _ => Ok(ink_problem_card::finalize_card(
+                        link,
+                        link.target_label.clone(),
+                        ProblemCardStatus::Missing,
+                        None,
+                    )),
+                }
+            }
+        }
+    }
+
+    fn source_object_payload(&self, object_id: &str) -> Result<serde_json::Value, InkCommandError> {
+        let path = self.workspace_root().join("mathscape.sqlite3");
+        let store = mathscape_store_sqlite::SqliteArtifactStore::open(&path).map_err(fail)?;
+        // Read via a lightweight SQL helper on the connection through list links build.
+        // Fall back: open map object from store API if exposed.
+        store
+            .map_object_payload(object_id)
+            .map_err(fail)?
+            .ok_or_else(|| fail("来源对象不存在。"))
     }
 
     pub fn list_ink_note_links(

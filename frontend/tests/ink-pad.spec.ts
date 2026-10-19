@@ -270,3 +270,43 @@ test("N3a push-switch enters the new note without a pages error and keeps A swit
   const stateA=await control("status");
   expect(stateA.document.document.operations.filter((op:{kind:string})=>op.kind==="stroke")).toHaveLength(2);
 });
+
+test("N3b problem card shows from session_context, updates, clears, and follows a switch",async({page})=>{
+  await expect(page.locator("#pad-problem-card")).toBeHidden();
+  const linked=await control("link_primary",{target_title:"极限习题"});
+  expect(linked.problem_card).toMatchObject({
+    status:"ok",
+    target_label:expect.any(String),
+    body:expect.stringContaining("关联手稿"),
+  });
+  await expect(page.locator("#pad-problem-card")).toBeVisible({timeout:10000});
+  await expect(page.locator("#pad-problem-card-body")).toContainText("关联手稿");
+  await expect(page.locator("#pad-problem-card-meta")).toContainText("主关联");
+
+  // Collapsed state persists across toggle.
+  const details=page.locator("#pad-problem-card");
+  await details.evaluate((el:HTMLDetailsElement)=>{el.open=false;el.dispatchEvent(new Event("toggle"));});
+  expect(await page.evaluate(()=>localStorage.getItem("mathscape:ink-pad-problem-card-collapsed"))).toBe("1");
+
+  await control("clear_primary");
+  await expect(page.locator("#pad-problem-card")).toBeHidden({timeout:10000});
+
+  await control("link_primary",{target_title:"再关联"});
+  await expect(page.locator("#pad-problem-card")).toBeVisible({timeout:10000});
+  await expect(page.locator("#pad-problem-card-body")).toContainText("再关联");
+
+  const draftA=await page.locator("#pad-drafts").inputValue();
+  const titleA=await page.locator("#pad-title").textContent();
+  page.once("dialog",dialog=>dialog.accept());
+  const pushed=await control("push");
+  expect(pushed.push.pushed).toBe(true);
+  await expect(page.locator("#pad-title")).toHaveText(pushed.push_title as string,{timeout:15000});
+  // Fresh push note has no primary link → card clears.
+  await expect(page.locator("#pad-problem-card")).toBeHidden({timeout:10000});
+
+  await page.locator("#pad-drafts").selectOption(draftA);
+  await expect(page.locator("#pad-title")).toHaveText(titleA!);
+  await expect(page.locator("#pad-connection")).toContainText("电脑已连接");
+  await expect(page.locator("#pad-problem-card")).toBeVisible({timeout:10000});
+  await expect(page.locator("#pad-problem-card-body")).toContainText("再关联");
+});

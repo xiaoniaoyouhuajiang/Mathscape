@@ -7,9 +7,17 @@ export class PadTransportError extends Error { constructor(readonly code:string,
 /** N1 note metadata; older desktops omit it and the document title is used. */
 export interface PadNote { document_id:string;title:string;title_mode:"auto"|"manual";title_revision:number;lifecycle:"active"|"trashed";lifecycle_revision:number }
 export const TRASHED_REASON="document_trashed";
-export interface PadContext { type:"session_context";protocol_version:string;lease:PadLease;note?:PadNote;document:InkDocument;head_seq:number;limits:{operation_bytes:number;document_bytes:number;queue_bytes:number};problem_card?:unknown|null }
-/** N3a: desktop push-switch offer. N3b may also send problem_card messages. */
+export interface PadContext { type:"session_context";protocol_version:string;lease:PadLease;note?:PadNote;document:InkDocument;head_seq:number;limits:{operation_bytes:number;document_bytes:number;queue_bytes:number};problem_card?:PadProblemCard|null }
+/** N3a: desktop push-switch offer. */
 export interface PadSwitchOffer { type:"switch_offer";offer_id:string;document_id:string;title:string;pairing_token:string;expires_at:number;requires_takeover:boolean;message:string }
+/** N3b: primary-link problem card (§10 / decisions 10–11). LaTeX stays as source text. */
+export type PadProblemCardStatus = "ok"|"stale"|"missing"|"unsupported"
+export interface PadProblemCard {
+  link_id:string;role:string;target_kind:string;target_id:string;target_label:string;
+  body:string;body_truncated:boolean;status:PadProblemCardStatus;content_hash?:string|null
+}
+export interface PadProblemCardMessage { type:"problem_card";document_id:string;card:PadProblemCard }
+export interface PadProblemCardClear { type:"problem_card_clear";document_id:string }
 interface Pending {resolve:(value:Record<string,unknown>)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}
 function tabClientId():string {
   // Survives refresh in this tab, so a half-open old socket can be replaced.
@@ -34,6 +42,7 @@ export class InkPadTransport {
     private readonly onReady:()=>void,
     private readonly onNote:(note:PadNote)=>void=()=>{},
     private readonly onSwitchOffer:(offer:PadSwitchOffer)=>void=()=>{},
+    private readonly onProblemCard:(card:PadProblemCard|null,documentId:string)=>void=()=>{},
   ) {}
   isReady():boolean{return this.ready;}
   connect():void {
@@ -74,8 +83,16 @@ export class InkPadTransport {
     }
     if(message.type==="note_metadata") {if(message.note&&typeof message.note==="object")this.onNote(message.note as PadNote);return;}
     if(message.type==="switch_offer") {this.onSwitchOffer(message as unknown as PadSwitchOffer);return;}
-    // N3b reserved: problem_card / problem_card_clear are ignored until cards ship.
-    if(message.type==="problem_card"||message.type==="problem_card_clear")return;
+    if(message.type==="problem_card") {
+      const payload=message as unknown as PadProblemCardMessage;
+      if(payload.card&&typeof payload.card==="object")this.onProblemCard(payload.card,String(payload.document_id??""));
+      return;
+    }
+    if(message.type==="problem_card_clear") {
+      const payload=message as unknown as PadProblemCardClear;
+      this.onProblemCard(null,String(payload.document_id??""));
+      return;
+    }
     if(message.type==="snapshot_receipt"||message.type==="rename_receipt") {
       const id=message.request_id as string,task=this.pending.get(id);
       if(task){clearTimeout(task.timer);this.pending.delete(id);task.resolve(message);}return;
