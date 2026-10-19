@@ -23,7 +23,9 @@ test("saved snapshots follow their document across session switches", async ({ p
   await page.getByRole("button", { name: /手稿 A/ }).click();
   await expect(page.locator("#ink-session-list .ink-session-item.is-active")).toContainText("手稿 A");
   await expect(page.locator("#ink-snapshot-list .ink-session-item")).toHaveCount(1);
-  await expect(page.locator("#ink-snapshot-list")).toContainText("head 0");
+  await expect(page.locator("#ink-snapshot-list")).toContainText("第 0 步");
+  await expect(page.locator("#ink-snapshot-list .ink-session-item")).toHaveAttribute("title", "快照截止 head 0");
+  await expect(page.locator("#ink-snapshot-list")).not.toContainText("head 0");
 });
 
 test("an older snapshot query cannot overwrite the current document list", async ({ page }) => {
@@ -92,7 +94,7 @@ test("snapshot waits for operations added during an in-flight save", async ({ pa
   await page.evaluate(() => {window.inkDesktopHarness.behavior.appendDelay = 180;});
   await writeLine(page,-25); await writeLine(page,25);
   await page.getByRole("button",{name:"保存快照",exact:true}).click();
-  await expect(page.locator("#ink-snapshot-list")).toContainText("head 2");
+  await expect(page.locator("#ink-snapshot-list")).toContainText("第 2 步");
   const saved = await page.evaluate(() => {
     const h = window.inkDesktopHarness;
     return { operations: h.storedDocuments.get(h.documents.a)!.operations.length, snapshot: JSON.parse(h.snapshots.get(h.documents.a)![0].manifest_json).document.operations.length };

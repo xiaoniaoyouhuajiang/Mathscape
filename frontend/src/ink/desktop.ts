@@ -1105,7 +1105,9 @@ export class DesktopInkWorkspace {
         button.className = "ink-session-item";
         button.classList.toggle("is-active", snapshot.snapshot_id === this.currentSnapshot?.snapshot_id);
         button.innerHTML = "<strong></strong><span></span>";
-        button.querySelector("strong")!.textContent = "head " + snapshot.through_seq;
+        // N3.0 (M10): a friendly label; the raw head stays in the tooltip.
+        button.querySelector("strong")!.textContent = "第 " + snapshot.through_seq + " 步";
+        button.title = "快照截止 head " + snapshot.through_seq;
         button.querySelector("span")!.textContent = (snapshot.snapshot_id === this.currentSnapshot?.snapshot_id ? "正在查看 · " : "") + displayTimestamp(snapshot.created_at);
         button.addEventListener("click", () => void this.openSnapshot(snapshot.snapshot_id));
         list.append(button);
@@ -1256,7 +1258,7 @@ export class DesktopInkWorkspace {
     try {
       const snapshot = await createInkSnapshot(inkId(), documentId, expectedHead);
       eventBus.emit("source-map-changed", { reason: "ink-snapshot" });
-      this.status("快照已保存，截止 head " + snapshot.through_seq + "。", false);
+      this.status("快照已保存：第 " + snapshot.through_seq + " 步。", false);
       await this.refreshSnapshots();
     } catch (error) {
       this.status("保存快照失败：" + errorText(error), true);
