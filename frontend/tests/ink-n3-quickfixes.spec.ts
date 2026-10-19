@@ -99,3 +99,45 @@ test("N3.0 Delete/Backspace remove the selection but never while typing in a fie
   await page.getByRole("button", { name: "撤销", exact: true }).click();
   await expect(page.locator("#desktop-ink-summary")).toContainText("2 笔");
 });
+
+test("N3.0 pairing offers LAN addresses by default, keeps others behind a toggle and remembers a manual pick", async ({ page }) => {
+  const address = page.locator("[data-address]"), link = page.locator("[data-link]");
+  const toggle = page.getByRole("checkbox", { name: /显示其他地址/ }).first();
+  await page.getByRole("button", { name: "平板书写", exact: true }).click();
+  await page.getByRole("button", { name: "生成配对二维码", exact: true }).click();
+  await expect(page.locator("[data-qr]")).toBeVisible();
+  await expect(address.locator("option")).toHaveCount(1);
+  await expect(link).toHaveValue(/^https:\/\/192\.168\.31\.20:1443\/pad\/#pair=/);
+  await expect(page.locator("[data-address-hint='pair']")).toBeHidden();
+
+  await toggle.check();
+  await expect(address.locator("option")).toHaveCount(3);
+  await expect(address.locator("optgroup[label='其他地址'] option")).toHaveText(["100.90.0.2（VPN / Tailscale）", "127.0.0.1（本机测试）"]);
+  await expect(link).toHaveValue(/192\.168\.31\.20/);
+  await address.selectOption({ label: "100.90.0.2（VPN / Tailscale）" });
+  await expect(link).toHaveValue(/^https:\/\/100\.90\.0\.2:1443\//);
+  expect(await page.evaluate(() => localStorage.getItem("mathscape:ink-lan-preferred-host"))).toBe("100.90.0.2");
+
+  await page.getByRole("button", { name: "取消待配对", exact: true }).click();
+  await expect(page.locator("#ink-mode-badge")).toHaveText("当前手稿");
+  await page.reload();
+  await expect(page.locator("#ink-session-list .ink-session-item")).toHaveCount(2);
+  await page.getByRole("button", { name: "平板书写", exact: true }).click();
+  await page.getByRole("button", { name: "生成配对二维码", exact: true }).click();
+  await expect(link).toHaveValue(/^https:\/\/100\.90\.0\.2:1443\//);
+  await expect(page.getByRole("checkbox", { name: /显示其他地址/ }).first()).toBeChecked();
+});
+
+test("N3.0 without a LAN address no QR is drawn until an address is picked by hand", async ({ page }) => {
+  await page.evaluate(() => { (window.inkDesktopHarness.behavior as { noLanAddress: boolean }).noLanAddress = true; });
+  const address = page.locator("[data-address]"), link = page.locator("[data-link]");
+  await page.getByRole("button", { name: "平板书写", exact: true }).click();
+  await page.getByRole("button", { name: "生成配对二维码", exact: true }).click();
+  await expect(page.locator("[data-address-hint='pair']")).toContainText("未发现局域网地址");
+  await expect(link).toHaveValue("");
+  await expect(address).toHaveValue("");
+  await page.getByRole("checkbox", { name: /显示其他地址/ }).first().check();
+  await expect(address).toHaveValue("");
+  await address.selectOption({ label: "192.168.31.20（VPN / Tailscale）" });
+  await expect(link).toHaveValue(/^https:\/\/192\.168\.31\.20:1443\/pad\/#pair=/);
+});

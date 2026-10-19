@@ -1122,6 +1122,10 @@ code {
 .ink-lan-setup-intro p {margin:4px 0 0;}.ink-lan-panel button.is-primary {background:#b9e3d8;color:#15282e;border-color:#b9e3d8;font-weight:600;white-space:nowrap;}
 .ink-lan-setup {display:grid;grid-template-columns:210px 1fr;gap:15px;margin:0 0 14px;padding-bottom:14px;border-bottom:1px solid #2f5149;}.ink-lan-setup[hidden]{display:none;}
 .ink-lan-setup canvas {display:block;margin-top:10px;background:#fff;border-radius:8px;}.ink-lan-setup input {width:100%;margin:8px 0;}
+/* N3.0: non-LAN addresses stay behind an explicit toggle. */
+.ink-lan-panel .ink-lan-other {display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;color:#9fbab3;cursor:pointer;}.ink-lan-panel .ink-lan-other[hidden]{display:none;}
+.ink-lan-panel .ink-lan-other input {width:auto;margin:0;}
+.ink-lan-panel .ink-lan-address-hint {display:block;margin-top:8px;font-size:11px;line-height:1.5;color:#f0c27a;}.ink-lan-panel .ink-lan-address-hint[hidden]{display:none;}
 .ink-lan-setup-progress {list-style:none;padding:0;margin:10px 0;display:grid;gap:7px;}.ink-lan-setup-progress li {display:flex;gap:9px;align-items:center;color:#8fb0a3;}
 .ink-lan-setup-progress li::before {content:"";width:14px;height:14px;border:1px solid #6b998a;border-radius:50%;flex:none;}
 .ink-lan-setup-progress li.is-done {color:#d6eee1;}.ink-lan-setup-progress li.is-done::before {content:"✓";display:grid;place-items:center;background:#b9e3d8;color:#15282e;font-size:10px;}

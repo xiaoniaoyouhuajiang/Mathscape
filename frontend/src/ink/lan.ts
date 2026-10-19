@@ -2,12 +2,15 @@ import QRCode from "qrcode";
 import { safeInvoke } from "../core/ipc";
 import { inkId,type InkDocumentMetadata,type InkOperation,type InkStroke } from "./model";
 import type { InkNoteState, StoredInkSession } from "./persistence";
+import { addressOptions,fillAddressSelect,savePreferredHost,type AddressOption } from "./lan-addresses";
 
-export interface InkLanStatus {enabled:boolean;running:boolean;port:number;urls:string[];certificate_file_sha256:string|null;assets_ready:boolean;error:string|null}
+type PairingLink={urls:string[];url_kinds?:string[];expires_at:number;document_id:string};
+
+export interface InkLanStatus {enabled:boolean;running:boolean;port:number;urls:string[];url_kinds?:string[];certificate_file_sha256:string|null;assets_ready:boolean;error:string|null}
 export interface InkWriterView {document_id:string;head_seq:number;writer_epoch:number;session:StoredInkSession|null;remote:boolean;pairing_pending:boolean}
 export interface InkLanMirror {delta:{metadata:InkDocumentMetadata;operations:InkOperation[];head_seq:number;server_head:number;writer:InkWriterView;snapshot_count:number;note?:InkNoteState};connected:boolean;preview:InkStroke|null;client:{pending_count:number;locally_durable:boolean;secure_context:boolean;page_id:string}|null}
 export type InkSetupHandoff = "unbound"|"idle"|"requested"|"ready"|"resumed"|"claimed";
-export interface InkSetupStatus {active:boolean;expires_at:number|null;urls:string[];opened:boolean;certificate_downloaded:boolean;https_trusted:boolean;check:{secure_context:boolean;indexed_db:boolean;service_worker:boolean;user_agent:string}|null;complete:boolean;document_id?:string|null;handoff?:InkSetupHandoff|"";transfer_confirmation?:boolean}
+export interface InkSetupStatus {active:boolean;expires_at:number|null;urls:string[];url_kinds?:string[];opened:boolean;certificate_downloaded:boolean;https_trusted:boolean;check:{secure_context:boolean;indexed_db:boolean;service_worker:boolean;user_agent:string}|null;complete:boolean;document_id?:string|null;handoff?:InkSetupHandoff|"";transfer_confirmation?:boolean}
 /** What the desktop mirror last learned about the tablet holding the lease. */
 export interface InkWriterPresence {connected:boolean;pending:number|null}
 export function inkLanMirror(documentId:string,afterSeq:number):Promise<InkLanMirror>{return safeInvoke("get_ink_lan_mirror",{documentId,afterSeq});}
@@ -35,7 +38,9 @@ const LINK_NOTES:Record<LinkKind,string>={
 };
 
 export class InkLanPanel {
-  private link:{urls:string[];expires_at:number;document_id:string}|undefined;
+  private link:PairingLink|undefined;
+  private pairOptions:AddressOption[]=[];
+  private setupOptions:AddressOption[]=[];
   private linkKind:LinkKind|undefined;
   private linkShownAt=0;
   private documentId="";
@@ -47,15 +52,14 @@ export class InkLanPanel {
   private setupFinished=false;
   constructor(private readonly host:HTMLElement,private readonly prepare:(documentId?:string)=>Promise<{documentId:string;head:number|null}>,private readonly view:()=>InkWriterView|undefined,private readonly changed:()=>Promise<void>,private readonly presence:()=>InkWriterPresence|undefined=()=>undefined) {
     host.className="ink-lan-panel";
-    host.innerHTML=`<div class="ink-lan-heading"><strong>平板书写</strong><button data-action="close" type="button">收起</button></div><div class="ink-lan-setup-intro"><div><strong>第一次在这台平板上使用？</strong><p>扫码后按平板上的步骤安装信任证书，只需一次；完成后在平板上点击“开始书写”即可进入当前手稿。设备与电脑需要在同一局域网。</p></div><button data-action="setup" type="button" class="is-primary">首次设置平板</button></div><div class="ink-lan-setup" hidden><div><label>电脑地址<select data-setup-address aria-label="设置地址"></select></label><canvas data-setup-qr aria-label="平板设置二维码"></canvas></div><div><strong>用平板扫描设置二维码</strong><ol class="ink-lan-setup-progress"><li data-setup-step="opened">平板已打开设置页</li><li data-setup-step="certificate_downloaded">已下载信任证书</li><li data-setup-step="https_trusted">平板已信任这台电脑</li><li data-setup-step="complete">存储与离线能力检测完成</li><li data-setup-step="writing">平板已进入手稿</li></ol><p data-setup-status></p><div class="ink-lan-warning" data-setup-transfer hidden><p data-setup-transfer-text></p><div class="ink-lan-actions"><button data-action="setup-transfer" type="button" class="is-primary">转交给这台平板</button></div></div><input data-setup-link readonly aria-label="设置链接"><div class="ink-lan-actions"><button data-action="setup-copy" type="button">复制设置链接</button><button data-action="setup-cancel" type="button">结束设置</button></div></div></div><div class="ink-lan-writer" hidden><div><strong>这份手稿正在由平板书写</strong><p data-writer-detail></p></div><div class="ink-lan-actions"><button data-action="resume" type="button" class="is-primary">在这台平板继续</button><button data-action="transfer" type="button">换一台设备书写</button><button data-action="reclaim" type="button">收回书写权</button></div><div class="ink-lan-warning" data-transfer-warning hidden><p data-transfer-text></p><div class="ink-lan-actions"><button data-action="transfer-confirm" type="button">仍然转交</button><button data-action="transfer-cancel" type="button">先去原平板同步</button></div></div></div><div class="ink-lan-actions"><label>端口<input data-port type="number" min="1024" max="65535" value="1443"></label><button data-action="start" type="button">开启服务</button><button data-action="certificate" type="button">手动导出证书</button><button data-action="pair" type="button">生成配对二维码</button><button data-action="cancel" type="button">取消待配对</button><button data-action="stop" type="button">停止平板服务</button></div><div class="ink-lan-pairing" hidden><div><label>电脑地址<select data-address aria-label="配对地址"></select></label><canvas data-qr aria-label="平板二维码"></canvas></div><div><strong data-link-title></strong><input data-link readonly aria-label="平板链接"><button data-action="copy" type="button">复制链接</button><p data-link-note></p></div></div><p data-status role="status"></p><details><summary>设备信任与恢复说明</summary><p>推荐使用“首次设置平板”。也可以手动导出 .crt 文件传到平板，在系统安全设置中安装为 CA 证书。同一 Workspace 重启服务不需要重新安装。平板的书写权在电脑重启后保留；关闭服务、收回书写权或转交给新设备会使旧设备凭据失效；旧端未同步内容保留在设备上，可以导出恢复草稿后在电脑导入。</p><code data-fingerprint></code></details>`;
+    host.innerHTML=`<div class="ink-lan-heading"><strong>平板书写</strong><button data-action="close" type="button">收起</button></div><div class="ink-lan-setup-intro"><div><strong>第一次在这台平板上使用？</strong><p>扫码后按平板上的步骤安装信任证书，只需一次；完成后在平板上点击“开始书写”即可进入当前手稿。设备与电脑需要在同一局域网。</p></div><button data-action="setup" type="button" class="is-primary">首次设置平板</button></div><div class="ink-lan-setup" hidden><div><label>电脑地址<select data-setup-address aria-label="设置地址"></select></label><label class="ink-lan-other" hidden><input type="checkbox" data-show-other="setup">显示其他地址（VPN、虚拟网卡等）</label><small class="ink-lan-address-hint" data-address-hint="setup" hidden></small><canvas data-setup-qr aria-label="平板设置二维码"></canvas></div><div><strong>用平板扫描设置二维码</strong><ol class="ink-lan-setup-progress"><li data-setup-step="opened">平板已打开设置页</li><li data-setup-step="certificate_downloaded">已下载信任证书</li><li data-setup-step="https_trusted">平板已信任这台电脑</li><li data-setup-step="complete">存储与离线能力检测完成</li><li data-setup-step="writing">平板已进入手稿</li></ol><p data-setup-status></p><div class="ink-lan-warning" data-setup-transfer hidden><p data-setup-transfer-text></p><div class="ink-lan-actions"><button data-action="setup-transfer" type="button" class="is-primary">转交给这台平板</button></div></div><input data-setup-link readonly aria-label="设置链接"><div class="ink-lan-actions"><button data-action="setup-copy" type="button">复制设置链接</button><button data-action="setup-cancel" type="button">结束设置</button></div></div></div><div class="ink-lan-writer" hidden><div><strong>这份手稿正在由平板书写</strong><p data-writer-detail></p></div><div class="ink-lan-actions"><button data-action="resume" type="button" class="is-primary">在这台平板继续</button><button data-action="transfer" type="button">换一台设备书写</button><button data-action="reclaim" type="button">收回书写权</button></div><div class="ink-lan-warning" data-transfer-warning hidden><p data-transfer-text></p><div class="ink-lan-actions"><button data-action="transfer-confirm" type="button">仍然转交</button><button data-action="transfer-cancel" type="button">先去原平板同步</button></div></div></div><div class="ink-lan-actions"><label>端口<input data-port type="number" min="1024" max="65535" value="1443"></label><button data-action="start" type="button">开启服务</button><button data-action="certificate" type="button">手动导出证书</button><button data-action="pair" type="button">生成配对二维码</button><button data-action="cancel" type="button">取消待配对</button><button data-action="stop" type="button">停止平板服务</button></div><div class="ink-lan-pairing" hidden><div><label>电脑地址<select data-address aria-label="配对地址"></select></label><label class="ink-lan-other" hidden><input type="checkbox" data-show-other="pair">显示其他地址（VPN、虚拟网卡等）</label><small class="ink-lan-address-hint" data-address-hint="pair" hidden></small><canvas data-qr aria-label="平板二维码"></canvas></div><div><strong data-link-title></strong><input data-link readonly aria-label="平板链接"><button data-action="copy" type="button">复制链接</button><p data-link-note></p></div></div><p data-status role="status"></p><details><summary>设备信任与恢复说明</summary><p>推荐使用“首次设置平板”。也可以手动导出 .crt 文件传到平板，在系统安全设置中安装为 CA 证书。同一 Workspace 重启服务不需要重新安装。平板的书写权在电脑重启后保留；关闭服务、收回书写权或转交给新设备会使旧设备凭据失效；旧端未同步内容保留在设备上，可以导出恢复草稿后在电脑导入。</p><code data-fingerprint></code></details>`;
     const button=(action:string)=>host.querySelector<HTMLButtonElement>(`[data-action="${action}"]`)!;
     const run=(action:()=>Promise<void>)=>void action().catch(error=>this.status(explainInkLanError(error))).finally(()=>this.renderWriter());
     button("close").onclick=()=>{host.hidden=true;this.stopWriterPolling();};
     button("setup").onclick=()=>run(async()=>{
       this.setupFinished=false;
       const setup=await safeInvoke<InkSetupStatus>("start_ink_setup",{documentId:this.documentId||null});
-      const select=host.querySelector<HTMLSelectElement>("[data-setup-address]")!;select.replaceChildren();
-      for(const url of setup.urls){const location=new URL(url);if(location.hostname==="localhost")continue;select.add(new Option(location.hostname+(location.hostname==="127.0.0.1"?"（本机测试）":""),url));}
+      this.setupOptions=addressOptions(setup.urls,setup.url_kinds).filter(option=>option.host!=="localhost");this.fillAddresses("setup",true);
       host.querySelector<HTMLElement>(".ink-lan-setup")!.hidden=false;await this.renderSetupQr();this.renderSetup(setup);
       this.renderStatus(await safeInvoke<InkLanStatus>("get_ink_lan_status"));
       // Polling continues while the panel is collapsed: the desktop must answer the tablet's hand-off.
@@ -64,20 +68,21 @@ export class InkLanPanel {
     button("setup-cancel").onclick=()=>run(async()=>{await safeInvoke("cancel_ink_setup");this.clearSetup();await this.changed();this.status("平板设置已结束，设置链接已失效。");});
     button("setup-copy").onclick=()=>run(async()=>{await navigator.clipboard.writeText(host.querySelector<HTMLInputElement>("[data-setup-link]")!.value);this.status("设置链接已复制。");});
     button("setup-transfer").onclick=()=>run(()=>this.prepareHandoff(true));
-    host.querySelector<HTMLSelectElement>("[data-setup-address]")!.onchange=()=>run(()=>this.renderSetupQr());
+    host.querySelector<HTMLSelectElement>("[data-setup-address]")!.onchange=event=>run(()=>{this.rememberAddress(event.target as HTMLSelectElement);return this.renderSetupQr();});
+    for(const toggle of host.querySelectorAll<HTMLInputElement>("[data-show-other]"))toggle.onchange=()=>run(async()=>{const which=toggle.dataset.showOther as "pair"|"setup";this.fillAddresses(which);await(which==="pair"?this.renderQr():this.renderSetupQr());});
     button("start").onclick=()=>run(async()=>{const port=Number(host.querySelector<HTMLInputElement>("[data-port]")!.value);const status=await safeInvoke<InkLanStatus>("start_ink_lan",{port});this.renderStatus(status);await this.changed();});
     button("certificate").onclick=()=>run(async()=>{const path=await safeInvoke<string|null>("export_ink_trust_certificate");if(path)this.status("证书已保存，请传到平板并安装为 CA 证书。完成后再扫码。");});
     button("pair").onclick=()=>run(async()=>{
       const context=await prepare();this.documentId=context.documentId;
       if(this.remoteWriter()){this.status(explainInkLanError("takeover_required"));return;}
-      const link=await safeInvoke<{urls:string[];expires_at:number;document_id:string}>("create_ink_pairing",{documentId:context.documentId,expectedHead:context.head});
+      const link=await safeInvoke<PairingLink>("create_ink_pairing",{documentId:context.documentId,expectedHead:context.head});
       await this.showLink(link,"pair");await this.changed();this.status("等待平板扫码；电脑暂时作为只读镜像。二维码过期后可以重新生成。");
     });
     button("cancel").onclick=()=>run(async()=>{const context=await prepare();await safeInvoke("cancel_ink_pairing",{documentId:context.documentId});this.clearQr();await this.changed();this.status("待配对二维码已取消。");});
     button("resume").onclick=()=>run(async()=>{
       const status=this.lanStatus??await safeInvoke<InkLanStatus>("get_ink_lan_status");
       if(!status.running)throw new Error("请先开启平板书写服务。");
-      await this.showLink({urls:status.urls.map(url=>`${url}#doc=${encodeURIComponent(this.documentId)}`),expires_at:0,document_id:this.documentId},"resume");
+      await this.showLink({urls:status.urls.map(url=>`${url}#doc=${encodeURIComponent(this.documentId)}`),url_kinds:status.url_kinds,expires_at:0,document_id:this.documentId},"resume");
       this.status("在正在书写的平板上打开这个地址即可继续；也可以直接在平板画板上点击“重试连接”。");
     });
     button("transfer").onclick=()=>run(async()=>{
@@ -96,7 +101,7 @@ export class InkLanPanel {
     });
     button("stop").onclick=()=>run(async()=>{await safeInvoke("stop_ink_lan");this.clearQr();this.clearSetup();this.renderStatus(await safeInvoke<InkLanStatus>("get_ink_lan_status"));await this.changed();this.status("平板服务已停止，连接凭据已撤销；电脑中的已确认笔迹保留。");});
     button("copy").onclick=()=>run(async()=>{const value=host.querySelector<HTMLInputElement>("[data-link]")!.value;await navigator.clipboard.writeText(value);this.status("链接已复制。");});
-    host.querySelector<HTMLSelectElement>("[data-address]")!.onchange=()=>run(()=>this.renderQr());
+    host.querySelector<HTMLSelectElement>("[data-address]")!.onchange=event=>run(()=>{this.rememberAddress(event.target as HTMLSelectElement);return this.renderQr();});
   }
   async open(documentId:string):Promise<void>{
     this.host.hidden=false;if(this.documentId!==documentId)this.clearQr();this.documentId=documentId;
@@ -106,7 +111,7 @@ export class InkLanPanel {
   private remoteWriter():InkWriterView|undefined {const view=this.view();return view&&view.document_id===this.documentId&&view.remote?view:undefined;}
   private async issueTransfer():Promise<void> {
     const view=this.remoteWriter();if(!view)throw new Error("书写权已经不在平板，请直接生成配对二维码。");
-    const link=await safeInvoke<{urls:string[];expires_at:number;document_id:string}>("create_ink_pairing",{documentId:view.document_id,expectedHead:view.head_seq,allowTransfer:true});
+    const link=await safeInvoke<PairingLink>("create_ink_pairing",{documentId:view.document_id,expectedHead:view.head_seq,allowTransfer:true});
     this.host.querySelector<HTMLElement>("[data-transfer-warning]")!.hidden=true;
     await this.showLink(link,"transfer");await this.changed();this.status("用新设备扫描转交二维码。新设备领取后，原平板会停止写入。");
   }
@@ -122,16 +127,27 @@ export class InkLanPanel {
       this.renderSetup(next);await this.changed();
     }finally{this.handoffBusy=false;}
   }
-  private async showLink(link:{urls:string[];expires_at:number;document_id:string},kind:LinkKind):Promise<void> {
+  private async showLink(link:PairingLink,kind:LinkKind):Promise<void> {
     this.link=link;this.linkKind=kind;this.linkShownAt=Date.now();
-    const select=this.host.querySelector<HTMLSelectElement>("[data-address]")!;select.replaceChildren();
-    for(const url of link.urls){const location=new URL(url);select.add(new Option(location.hostname+(location.hostname==="127.0.0.1"||location.hostname==="localhost"?"（本机测试）":""),url));}
+    this.pairOptions=addressOptions(link.urls,link.url_kinds);this.fillAddresses("pair",true);
     this.host.querySelector<HTMLElement>("[data-link-title]")!.textContent=kind==="resume"?"在原平板继续书写":kind==="transfer"?"用新设备扫码接手书写":"用平板扫码开始书写";
     this.host.querySelector<HTMLElement>("[data-link-note]")!.textContent=LINK_NOTES[kind];
     this.host.querySelector<HTMLElement>(".ink-lan-pairing")!.hidden=false;await this.renderQr();
   }
-  private async renderQr():Promise<void>{const url=this.host.querySelector<HTMLSelectElement>("[data-address]")!.value;if(!url)return;this.host.querySelector<HTMLInputElement>("[data-link]")!.value=url;await QRCode.toCanvas(this.host.querySelector<HTMLCanvasElement>("[data-qr]")!,url,{width:190,margin:2});}
-  private async renderSetupQr():Promise<void>{const url=this.host.querySelector<HTMLSelectElement>("[data-setup-address]")!.value;if(!url)return;this.host.querySelector<HTMLInputElement>("[data-setup-link]")!.value=url;await QRCode.toCanvas(this.host.querySelector<HTMLCanvasElement>("[data-setup-qr]")!,url,{width:190,margin:2});}
+  /** N3.0: LAN addresses first; other kinds only behind the "其他地址" toggle; no default outside the LAN. */
+  private fillAddresses(which:"pair"|"setup",reset=false):void{
+    const select=this.host.querySelector<HTMLSelectElement>(which==="pair"?"[data-address]":"[data-setup-address]")!;
+    const toggle=this.host.querySelector<HTMLInputElement>(`[data-show-other="${which}"]`)!,hint=this.host.querySelector<HTMLElement>(`[data-address-hint="${which}"]`)!;
+    if(reset)select.value="";
+    const result=fillAddressSelect(select,which==="pair"?this.pairOptions:this.setupOptions,toggle.checked);
+    if(result.selected&&result.selected.kind!=="lan")toggle.checked=true;
+    toggle.parentElement!.hidden=!result.hasOther;
+    hint.hidden=result.hasLan;hint.textContent=result.hasLan?"":"未发现局域网地址。平板需与电脑连接同一 Wi-Fi；也可勾选“显示其他地址”手动选择。";
+  }
+  private rememberAddress(select:HTMLSelectElement):void{if(select.value)savePreferredHost(new URL(select.value).hostname);}
+  private clearCanvas(selector:string):void{const canvas=this.host.querySelector<HTMLCanvasElement>(selector);canvas?.getContext("2d")?.clearRect(0,0,canvas.width,canvas.height);}
+  private async renderQr():Promise<void>{const url=this.host.querySelector<HTMLSelectElement>("[data-address]")!.value;if(!url){this.host.querySelector<HTMLInputElement>("[data-link]")!.value="";this.clearCanvas("[data-qr]");return;}this.host.querySelector<HTMLInputElement>("[data-link]")!.value=url;await QRCode.toCanvas(this.host.querySelector<HTMLCanvasElement>("[data-qr]")!,url,{width:190,margin:2});}
+  private async renderSetupQr():Promise<void>{const url=this.host.querySelector<HTMLSelectElement>("[data-setup-address]")!.value;if(!url){this.host.querySelector<HTMLInputElement>("[data-setup-link]")!.value="";this.clearCanvas("[data-setup-qr]");return;}this.host.querySelector<HTMLInputElement>("[data-setup-link]")!.value=url;await QRCode.toCanvas(this.host.querySelector<HTMLCanvasElement>("[data-setup-qr]")!,url,{width:190,margin:2});}
   private renderSetup(setup:InkSetupStatus):void {
     if(this.setupFinished)return;
     for(const step of ["opened","certificate_downloaded","https_trusted","complete"] as const){

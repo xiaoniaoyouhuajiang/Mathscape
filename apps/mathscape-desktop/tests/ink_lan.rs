@@ -567,6 +567,34 @@ async fn explicit_stop_fences_old_authentication_and_recovery_import_is_an_indep
 }
 
 #[tokio::test]
+async fn n3_addresses_are_labelled_lan_first_with_loopback_last() {
+    let f = Fixture::new("address-kinds").await;
+    let status = f.service.ink_lan_status().await.unwrap();
+    assert_eq!(status.urls.len(), status.url_kinds.len());
+    assert!(status.url_kinds.is_sorted());
+    assert_eq!(
+        status.url_kinds.last(),
+        Some(&mathscape_desktop::AddressKind::Loopback)
+    );
+    assert!(status.urls.last().unwrap().contains("//localhost:"));
+    let pairing = f
+        .service
+        .create_ink_pairing(f.document.document_id.clone(), 0)
+        .await
+        .unwrap();
+    assert_eq!(pairing.url_kinds, status.url_kinds);
+    let setup = f.service.start_ink_setup().await.unwrap();
+    assert_eq!(setup.urls.len(), setup.url_kinds.len());
+    assert_eq!(setup.url_kinds, status.url_kinds);
+    let json = serde_json::to_value(&status).unwrap();
+    assert_eq!(
+        json["url_kinds"].as_array().unwrap().last().unwrap(),
+        "loopback"
+    );
+    f.cleanup().await;
+}
+
+#[tokio::test]
 async fn setup_guide_only_exposes_the_public_ca_and_reports_trust_progress() {
     let f = Fixture::new("setup").await;
     let setup = f.service.start_ink_setup().await.unwrap();
@@ -800,13 +828,28 @@ async fn setup_handoff_needs_the_fragment_grant_and_then_pairs_or_resumes() {
         .start_ink_setup_for(Some(document.clone()))
         .await
         .unwrap();
-    let url = setup.urls.iter().find(|url| url.contains("127.0.0.1")).unwrap();
+    let url = setup
+        .urls
+        .iter()
+        .find(|url| url.contains("127.0.0.1"))
+        .unwrap();
     let fragment = url.split('#').nth(1).unwrap();
-    let token = fragment.split("setup=").nth(1).unwrap().split('&').next().unwrap().to_owned();
+    let token = fragment
+        .split("setup=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_owned();
     let grant = fragment.split("grant=").nth(1).unwrap().to_owned();
     assert_eq!(f.service.ink_setup_status().handoff, "idle");
     let body = json!({"token":token,"grant":grant,"credentials":[]});
-    assert_eq!(f.handoff(&body).await.status(), 403, "check must finish first");
+    assert_eq!(
+        f.handoff(&body).await.status(),
+        403,
+        "check must finish first"
+    );
     f.complete_setup(&token).await;
     let without_origin = f
         .client
@@ -856,17 +899,38 @@ async fn setup_handoff_needs_the_fragment_grant_and_then_pairs_or_resumes() {
         .start_ink_setup_for(Some(document.clone()))
         .await
         .unwrap();
-    let url = setup.urls.iter().find(|url| url.contains("127.0.0.1")).unwrap();
+    let url = setup
+        .urls
+        .iter()
+        .find(|url| url.contains("127.0.0.1"))
+        .unwrap();
     let fragment = url.split('#').nth(1).unwrap();
-    let token = fragment.split("setup=").nth(1).unwrap().split('&').next().unwrap().to_owned();
+    let token = fragment
+        .split("setup=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_owned();
     let grant = fragment.split("grant=").nth(1).unwrap().to_owned();
     f.complete_setup(&token).await;
     let other = json!({"token":token,"grant":grant,"credentials":["7".repeat(64)]});
-    assert_eq!(f.handoff(&other).await.json::<Value>().await.unwrap()["state"], "waiting");
-    let pending = f.service.prepare_ink_setup_handoff(None, false).await.unwrap();
+    assert_eq!(
+        f.handoff(&other).await.json::<Value>().await.unwrap()["state"],
+        "waiting"
+    );
+    let pending = f
+        .service
+        .prepare_ink_setup_handoff(None, false)
+        .await
+        .unwrap();
     assert!(pending.transfer_confirmation);
     assert_eq!(pending.handoff, "requested");
-    assert_eq!(f.handoff(&other).await.json::<Value>().await.unwrap()["reason"], "confirm");
+    assert_eq!(
+        f.handoff(&other).await.json::<Value>().await.unwrap()["reason"],
+        "confirm"
+    );
     let holder = json!({"token":token,"grant":grant,"credentials":["5".repeat(64)]});
     let resume: Value = f.handoff(&holder).await.json().await.unwrap();
     assert_eq!(resume["state"], "resume");
@@ -882,19 +946,56 @@ async fn setup_handoff_needs_the_fragment_grant_and_then_pairs_or_resumes() {
 async fn ending_setup_before_the_tablet_claims_returns_writing_to_the_desktop() {
     let f = Fixture::new("handoff-cancel").await;
     let document = f.document.document_id.clone();
-    let setup = f.service.start_ink_setup_for(Some(document.clone())).await.unwrap();
-    let url = setup.urls.iter().find(|url| url.contains("127.0.0.1")).unwrap();
+    let setup = f
+        .service
+        .start_ink_setup_for(Some(document.clone()))
+        .await
+        .unwrap();
+    let url = setup
+        .urls
+        .iter()
+        .find(|url| url.contains("127.0.0.1"))
+        .unwrap();
     let fragment = url.split('#').nth(1).unwrap();
-    let token = fragment.split("setup=").nth(1).unwrap().split('&').next().unwrap().to_owned();
+    let token = fragment
+        .split("setup=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_owned();
     let grant = fragment.split("grant=").nth(1).unwrap().to_owned();
     f.complete_setup(&token).await;
     let body = json!({"token":token,"grant":grant,"credentials":[]});
-    assert_eq!(f.handoff(&body).await.json::<Value>().await.unwrap()["state"], "waiting");
-    assert_eq!(f.service.prepare_ink_setup_handoff(Some(0), false).await.unwrap().handoff, "ready");
+    assert_eq!(
+        f.handoff(&body).await.json::<Value>().await.unwrap()["state"],
+        "waiting"
+    );
+    assert_eq!(
+        f.service
+            .prepare_ink_setup_handoff(Some(0), false)
+            .await
+            .unwrap()
+            .handoff,
+        "ready"
+    );
     let pairing = f.handoff(&body).await.json::<Value>().await.unwrap()["pairing_token"].clone();
     f.service.cancel_ink_setup().await;
-    assert!(!f.service.ink_lan_mirror(&document, 0).unwrap().delta.writer.pairing_pending);
-    assert_eq!(f.claim(pairing.as_str().unwrap(), &"8".repeat(64)).await.status(), 409);
+    assert!(
+        !f.service
+            .ink_lan_mirror(&document, 0)
+            .unwrap()
+            .delta
+            .writer
+            .pairing_pending
+    );
+    assert_eq!(
+        f.claim(pairing.as_str().unwrap(), &"8".repeat(64))
+            .await
+            .status(),
+        409
+    );
     f.cleanup().await;
 }
 
@@ -1004,7 +1105,10 @@ async fn trashing_closes_the_tablet_with_an_old_pad_compatible_code_and_restore_
         .create_ink_pairing(document.clone(), view.delta.head_seq)
         .await
         .unwrap();
-    assert_eq!(f.claim(&pairing.urls[0], &"3".repeat(64)).await.status(), 200);
+    assert_eq!(
+        f.claim(&pairing.urls[0], &"3".repeat(64)).await.status(),
+        200
+    );
     let mut fresh = f.socket_as("client-new", &"3".repeat(64)).await;
     assert_eq!(next(&mut fresh).await["type"], "session_context");
     f.cleanup().await;
@@ -1082,9 +1186,20 @@ async fn tablet_and_desktop_renames_use_revisions_and_reach_each_other() {
     assert_eq!(replay["replayed"], true);
 
     // The setup hand-off page follows the rename.
-    let url = setup.urls.iter().find(|url| url.contains("127.0.0.1")).unwrap();
+    let url = setup
+        .urls
+        .iter()
+        .find(|url| url.contains("127.0.0.1"))
+        .unwrap();
     let fragment = url.split('#').nth(1).unwrap();
-    let token = fragment.split("setup=").nth(1).unwrap().split('&').next().unwrap().to_owned();
+    let token = fragment
+        .split("setup=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_owned();
     let grant = fragment.split("grant=").nth(1).unwrap().to_owned();
     f.complete_setup(&token).await;
     let body = json!({"token":token,"grant":grant,"credentials":["2".repeat(64)]});
