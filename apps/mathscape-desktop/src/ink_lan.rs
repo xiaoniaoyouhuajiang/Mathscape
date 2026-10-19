@@ -243,11 +243,11 @@ fn prefer_host(
     mut addresses: Vec<ink_tls::HostAddress>,
     preferred: Option<&str>,
 ) -> Vec<ink_tls::HostAddress> {
-    if let Some(host) = preferred {
-        if let Some(index) = addresses.iter().position(|address| address.host == host) {
-            let chosen = addresses.remove(index);
-            addresses.insert(0, chosen);
-        }
+    if let Some(host) = preferred
+        && let Some(index) = addresses.iter().position(|address| address.host == host)
+    {
+        let chosen = addresses.remove(index);
+        addresses.insert(0, chosen);
     }
     addresses
 }

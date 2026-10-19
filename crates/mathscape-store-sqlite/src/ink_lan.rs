@@ -345,10 +345,10 @@ impl SqliteArtifactStore {
         &mut self,
         settings: &InkLanSettings,
     ) -> Result<(), SqliteStoreError> {
-        if let Some(host) = &settings.preferred_host {
-            if host.is_empty() || host.len() > 200 || host.chars().any(char::is_control) {
-                return Err(invalid("invalid preferred_host"));
-            }
+        if let Some(host) = &settings.preferred_host
+            && (host.is_empty() || host.len() > 200 || host.chars().any(char::is_control))
+        {
+            return Err(invalid("invalid preferred_host"));
         }
         self.connection.execute(
             "INSERT INTO ink_lan_settings(singleton,enabled,port,preferred_host) VALUES(1,?1,?2,?3)
