@@ -359,6 +359,7 @@ fn trash_fences_writers_and_restore_requires_a_new_session() {
         writer_id: "pad".into(),
         expires_at: 1_000 + 60,
         allow_transfer: false,
+        claim_reason: "tablet_pairing".into(),
     };
     assert!(matches!(
         store.issue_ink_pairing(&offer, 1_000),
