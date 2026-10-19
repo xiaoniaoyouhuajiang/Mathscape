@@ -162,6 +162,9 @@ pub struct InkTrashImpact {
     pub remote_session: bool,
     pub device_credentials: u64,
     pub pairing_pending: bool,
+    /// Active links from or to this note (N2).
+    #[serde(default)]
+    pub active_link_count: u64,
     /// Matches the §13.6 blank definition, ignoring local client state.
     pub blank: bool,
 }
@@ -505,7 +508,8 @@ pub(crate) fn rename_in(
     }
     let (title, mode) = match normalize_title(&request.title)? {
         Some(title) => (title, InkTitleMode::Manual),
-        None => match ink_auto_title(&note.created_at) {
+        // Restoring the automatic title follows the primary link (N2).
+        None => match crate::ink_link::auto_title_for(tx, &note)? {
             Some(title) => (title, InkTitleMode::Auto),
             None => {
                 return Err(SqliteStoreError::InkTitleInvalid(
@@ -705,8 +709,10 @@ fn impact(
             ))
         },
     )?;
+    let links = crate::ink_link::active_link_count(connection, document_id)?;
     let blank = note.lifecycle == InkLifecycle::Active
         && head == 0
+        && links == 0
         && note.title_mode == InkTitleMode::Auto
         && snapshots == 0
         && reservations == 0
@@ -722,6 +728,7 @@ fn impact(
         remote_session: remote,
         device_credentials: unsigned(devices, "device_credentials")?,
         pairing_pending: pairing,
+        active_link_count: links,
         blank,
     }))
 }
@@ -739,6 +746,8 @@ fn blank_skip_reason(impact: &InkTrashImpact) -> Option<&'static str> {
         Some("device_session")
     } else if impact.pairing_pending {
         Some("pairing_pending")
+    } else if impact.active_link_count > 0 {
+        Some("has_links")
     } else {
         None
     }

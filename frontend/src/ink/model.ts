@@ -82,7 +82,7 @@ export const INK_TITLE_MAX = 100;
 export function autoInkTitle(createdAt: string, now = new Date()): string {
   const unix = /^unix:(\d+)(?:\.(\d+))?$/.exec(createdAt);
   const date = unix ? new Date(Number(unix[1]) * 1000) : new Date(createdAt);
-  if (Number.isNaN(date.getTime())) return "数学手稿";
+  if (Number.isNaN(date.getTime())) return "手稿";
   const time = String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
   const day = `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
   return date.getFullYear() === now.getFullYear() ? `手稿 · ${day}` : `手稿 · ${date.getFullYear()}年${day}`;

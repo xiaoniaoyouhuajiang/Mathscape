@@ -191,7 +191,7 @@ export class AppShell {
       </aside>
     </main>
 
-    <section id="ink-workspace" class="ink-workspace" hidden aria-label="数学手稿工作区"></section>
+    <section id="ink-workspace" class="ink-workspace" hidden aria-label="手稿工作区"></section>
 
     <div id="llm-settings-host"></div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

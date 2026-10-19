@@ -4,8 +4,15 @@ mod discovery;
 mod discovery_view;
 mod ink;
 mod ink_lan;
+mod ink_link;
+pub use ink_link::{
+    CreateInkNoteFromContextRequest, InkLinkTargetRequest, InkMarkdownLinks,
+    InkMarkdownTargetRequest, LinkInkNoteRequest,
+};
 mod ink_tls;
-pub use ink_lan::{InkLanMirror, InkLanStatus, InkPairingLink, InkSetupCheck, InkSetupStatus};
+pub use ink_lan::{
+    InkLanMirror, InkLanStatus, InkPairingLink, InkRecoveryImport, InkSetupCheck, InkSetupStatus,
+};
 mod llm_settings;
 mod map_edit;
 mod markdown_patch;
@@ -24,8 +31,8 @@ pub use discovery::{
 };
 pub use discovery_view::{DESKTOP_DISCOVERY_VIEW_VERSION, DesktopDiscoveryView};
 pub use ink::{
-    AppendInkOperationRequest, CreateInkDocumentRequest, CreateInkSnapshotRequest,
-    InkCommandError, InkTrashImpactView, StartInkSessionRequest,
+    AppendInkOperationRequest, CreateInkDocumentRequest, CreateInkSnapshotRequest, InkCommandError,
+    InkTrashImpactView, StartInkSessionRequest,
 };
 pub use llm_settings::{
     LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,
@@ -839,6 +846,15 @@ pub fn run() {
             ink::trash_ink_note,
             ink::restore_ink_note,
             ink::clean_blank_ink_notes,
+            ink_link::create_ink_note_from_context,
+            ink_link::link_ink_note,
+            ink_link::unlink_ink_note,
+            ink_link::set_ink_note_primary_link,
+            ink_link::list_ink_note_links,
+            ink_link::list_ink_links_to_target,
+            ink_link::get_ink_markdown_links,
+            ink_link::get_ink_link_overlay,
+            ink_link::export_ink_unsaved_writing,
             ink_lan::start_ink_lan,
             ink_lan::stop_ink_lan,
             ink_lan::get_ink_lan_status,

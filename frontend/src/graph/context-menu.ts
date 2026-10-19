@@ -13,6 +13,7 @@ export interface ContextMenuItem {
 }
 
 let host: HTMLElement | null = null;
+let closeCallback: (() => void) | undefined;
 
 export function isContextMenuOpen(): boolean {
   return host !== null;
@@ -21,14 +22,18 @@ export function isContextMenuOpen(): boolean {
 export function hideContextMenu(): void {
   host?.remove();
   host = null;
+  const callback = closeCallback;
+  closeCallback = undefined;
+  callback?.();
   document.removeEventListener("pointerdown", onOutsidePointerDown, true);
   window.removeEventListener("resize", hideContextMenu);
   window.removeEventListener("blur", hideContextMenu);
 }
 
-export function showContextMenu(x: number, y: number, items: ContextMenuItem[]): void {
+export function showContextMenu(x: number, y: number, items: ContextMenuItem[], onClose?: () => void): void {
   hideContextMenu();
-  if (items.length === 0) return;
+  if (items.length === 0) { onClose?.(); return; }
+  closeCallback = onClose;
 
   const menu = document.createElement("div");
   menu.className = "graph-context-menu";

@@ -149,3 +149,24 @@ describe("N1 per-document outbox isolation", () => {
     expect((await outbox.pending()).length).toBe(0);
   });
 });
+
+describe("N2 A1 discarding unsaved writing", () => {
+  it("removes only the snapshotted requests, after any running flush", async () => {
+    const outbox = new InkOutbox(new MemoryInkOutboxStore());
+    await outbox.enqueue(item("a1", 1));
+    await outbox.enqueue(item("a2", 2));
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const flushing = outbox.flush({ submit: async () => { await gate; throw Object.assign(new Error("trashed"), { code: "writer_epoch_conflict" }); } }).catch(() => undefined);
+    const discarding = outbox.discard(["a1", "a2", "missing"]);
+    release();
+    await flushing;
+    expect(await discarding).toBe(2);
+    expect(await outbox.pending()).toEqual([]);
+    expect(await outbox.quarantined()).toEqual([]);
+    // Writing queued after the snapshot is not part of the discard.
+    await outbox.enqueue(item("a3", 3));
+    expect(await outbox.discard(["a1"])).toBe(0);
+    expect((await outbox.pending()).map(value => value.request_id)).toEqual(["a3"]);
+  });
+});

@@ -1144,3 +1144,54 @@ code {
 .ink-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .ink-desktop-title:not([readonly]) { cursor: text; border-color: #4d6c74; }
 .ink-desktop-title:not([readonly]):focus { outline: 1px solid #77afa2; }
+
+/* N2 note links (§6): popovers shared by the reader, inspector and note page. */
+.ink-link-popover {
+  position: fixed;
+  z-index: 30;
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100vw - 16px));
+  max-height: min(520px, calc(100vh - 16px));
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid #45606c;
+  border-radius: 10px;
+  color: #dce8e5;
+  background: rgb(15 24 31 / 98%);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 45%);
+  font-size: 12px;
+}
+.ink-link-popover h3 { margin: 0; font-size: 14px; }
+.ink-link-popover label { display: grid; gap: 4px; }
+.ink-link-popover label.ink-check { display: flex; align-items: center; gap: 6px; }
+.ink-link-popover input[type="text"], .ink-link-popover input[type="search"], .ink-link-popover select {
+  padding: 6px 8px; border: 1px solid #3c5560; border-radius: 6px; color: inherit; background: #0b141a;
+}
+.ink-link-target { margin: 0; color: #a9c5c0; }
+.ink-link-excerpt { margin: 0; padding: 6px 8px; border-left: 3px solid #4b8f83; color: #c3d3d1; background: #13212a; }
+.ink-link-fields { display: grid; gap: 8px; }
+.ink-link-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ink-link-message, .ink-link-hint { min-height: 1em; margin: 0; color: #e6c98a; }
+.ink-link-candidates { display: grid; gap: 2px; max-height: 190px; overflow: auto; }
+.ink-link-candidate { padding: 6px 8px; border: 1px solid transparent; border-radius: 5px; color: inherit; background: #13212a; text-align: left; cursor: pointer; }
+.ink-link-candidate[aria-selected="true"] { border-color: #5fb3a3; background: #1d3a40; }
+.ink-related-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.ink-related-meta { color: #8fa9a5; }
+.link-button { padding: 0; border: 0; color: #8fd3c3; background: none; text-decoration: underline; cursor: pointer; font: inherit; }
+
+/* Inspector "相关手稿" (§6.3). */
+.detail-ink-notes { display: grid; gap: 6px; margin-top: 12px; }
+.detail-ink-notes h4 { margin: 0; font-size: 13px; }
+.detail-ink-notes ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.detail-ink-notes .ink-related-meta { margin-left: 6px; }
+
+/* Note-page links (§6.2). */
+.ink-link-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #263b44; font-size: 12px; }
+.ink-link-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ink-link-chip { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid #3c5560; border-radius: 14px; background: #13212a; }
+.ink-link-chip.is-primary { border-color: #b79be0; }
+.ink-link-chip.is-stale { opacity: 0.7; }
+.ink-link-chip select { padding: 1px 4px; border: 1px solid #3c5560; border-radius: 4px; color: inherit; background: #0b141a; font-size: 11px; }
+.ink-link-chip .secondary-button { padding: 2px 8px; font-size: 11px; }
+.ink-link-bar[hidden] { display: none; }

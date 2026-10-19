@@ -207,6 +207,20 @@ export class InkOutbox {
     return this.ordered((await this.store.list()).filter(item => !!item.quarantined && (!documentId || item.document_id === documentId)));
   }
 
+  /** A1 (§7.2): removes items the user explicitly chose to discard, whether
+   * pending or quarantined. Waits for a running flush so an item is never
+   * removed while it is being submitted. Returns how many were removed. */
+  async discard(requestIds: Iterable<string>): Promise<number> {
+    if (this.activeFlush) await this.activeFlush.catch(() => undefined);
+    let removed = 0;
+    for (const requestId of requestIds) {
+      if (!(await this.store.get(requestId))) continue;
+      await this.store.remove(requestId);
+      removed++;
+    }
+    return removed;
+  }
+
   async flush(transport: InkOperationTransport): Promise<InkOutboxFlushResult> {
     if (this.activeFlush) return await this.activeFlush;
     const task = this.flushSerial(transport);

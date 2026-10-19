@@ -214,8 +214,7 @@ enum Control {
 /// Old pads only fence on known codes. Trash therefore reuses
 /// `writer_revoked` and adds a `reason` that new pads show specifically (D7).
 const TRASHED_REASON: &str = "document_trashed";
-const TRASHED_MESSAGE: &str =
-    "这份手稿已在电脑上移到回收站，平板不能继续写入。恢复后需要在电脑重新配对；本机未同步内容会保留，可导出恢复草稿。";
+const TRASHED_MESSAGE: &str = "这份手稿已在电脑上移到回收站，平板不能继续写入。恢复后需要在电脑重新配对；本机未同步内容会保留，可导出恢复草稿。";
 fn trashed_closed() -> Value {
     json!({"type":"session_closed","code":"writer_revoked","reason":TRASHED_REASON,"message":TRASHED_MESSAGE})
 }
@@ -518,15 +517,26 @@ fn rename_reply(
     result: Result<mathscape_store_sqlite::InkNoteReceipt, SqliteStoreError>,
 ) -> Value {
     match result {
-        Ok(receipt) => json!({"type":"rename_receipt","request_id":request_id,"note":receipt.note,"replayed":receipt.replayed}),
-        Err(SqliteStoreError::InkTitleConflict { current_title, current_title_mode, current_revision, .. }) => json!({
+        Ok(receipt) => {
+            json!({"type":"rename_receipt","request_id":request_id,"note":receipt.note,"replayed":receipt.replayed})
+        }
+        Err(SqliteStoreError::InkTitleConflict {
+            current_title,
+            current_title_mode,
+            current_revision,
+            ..
+        }) => json!({
             "type":"operation_conflict","code":"title_conflict","request_id":request_id,
             "current_title":current_title,"current_title_mode":current_title_mode,
             "current_title_revision":current_revision,
             "message":"标题已在电脑上修改，请选择保留哪一个。"
         }),
-        Err(SqliteStoreError::InkTitleInvalid(message)) => json!({"type":"operation_conflict","code":"title_invalid","request_id":request_id,"message":message}),
-        Err(SqliteStoreError::InkRequestConflict(_)) => json!({"type":"operation_conflict","code":"rename_request_conflict","request_id":request_id,"message":"同一改名请求包含不同内容，已忽略。"}),
+        Err(SqliteStoreError::InkTitleInvalid(message)) => {
+            json!({"type":"operation_conflict","code":"title_invalid","request_id":request_id,"message":message})
+        }
+        Err(SqliteStoreError::InkRequestConflict(_)) => {
+            json!({"type":"operation_conflict","code":"rename_request_conflict","request_id":request_id,"message":"同一改名请求包含不同内容，已忽略。"})
+        }
         Err(error) => {
             let mut reply = public_error(&error.to_string());
             reply["request_id"] = request_id.into();
@@ -940,7 +950,11 @@ async fn setup_check(
     match with_setup(&state.live, &request.token, |setup| {
         setup.trusted = true;
         setup.check = Some(check);
-        (setup.complete(), setup.document_id.clone(), setup.title.clone())
+        (
+            setup.complete(),
+            setup.document_id.clone(),
+            setup.title.clone(),
+        )
     }) {
         Ok((complete, document_id, title)) => secure_response(
             Json(json!({"complete":complete,"document_id":document_id,"title":title}))
@@ -1029,7 +1043,11 @@ async fn setup_handoff(
         json!({"state":"claimed","document_id":document,"title":title})
     } else {
         setup.requested = true;
-        let reason = if setup.confirm_needed { "confirm" } else { "desktop" };
+        let reason = if setup.confirm_needed {
+            "confirm"
+        } else {
+            "desktop"
+        };
         json!({"state":"waiting","reason":reason,"document_id":document,"title":title})
     };
     drop(guard);
@@ -1229,9 +1247,11 @@ impl DesktopService {
         let previous = self.ink_lan.live.setup.lock().unwrap().take();
         // An unclaimed hand-off pairing would otherwise keep the desktop read-only.
         if let Some(setup) = previous {
-            if let (Some(document), Some(_), None) =
-                (setup.document_id.as_ref(), setup.live_pairing(), setup.outcome)
-            {
+            if let (Some(document), Some(_), None) = (
+                setup.document_id.as_ref(),
+                setup.live_pairing(),
+                setup.outcome,
+            ) {
                 if let Ok(mut database) = store(self) {
                     let _ = database.cancel_ink_pairing(document, now());
                 }
@@ -1288,6 +1308,41 @@ impl DesktopService {
         store(self)?
             .import_ink_recovery(&document, request, now())
             .map_err(|error| error.to_string())
+    }
+    /// "导入恢复草稿": accepts an Ink JSON document or the A1 unsaved-operations
+    /// export (`mathscape-ink-unsaved-operations`), which is rebuilt on the
+    /// history prefix each queue was written against.
+    pub fn import_ink_recovery_file(
+        &self,
+        bytes: &[u8],
+        request: &str,
+    ) -> Result<InkRecoveryImport, String> {
+        let value: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|error| format!("Ink 恢复文件无效：{error}"))?;
+        if value.get("format").and_then(serde_json::Value::as_str)
+            == Some(mathscape_store_sqlite::INK_UNSAVED_OPERATIONS_FORMAT)
+        {
+            let export: mathscape_store_sqlite::InkUnsavedOperationsExport =
+                serde_json::from_value(value)
+                    .map_err(|error| format!("未保存笔迹导出文件无效：{error}"))?;
+            let sessions = store(self)?
+                .import_ink_unsaved_operations(&export, request, now())
+                .map_err(|error| error.to_string())?;
+            return Ok(InkRecoveryImport {
+                source: "unsaved_operations".into(),
+                original_document_id: Some(export.document_id),
+                sessions,
+            });
+        }
+        let document: mathscape_domain::InkLabDocument =
+            serde_json::from_value(value).map_err(|error| format!("Ink 恢复文件无效：{error}"))?;
+        let original = document.document_id.clone();
+        let session = self.import_ink_recovery(document, request)?;
+        Ok(InkRecoveryImport {
+            source: "document".into(),
+            original_document_id: Some(original),
+            sessions: vec![session],
+        })
     }
     pub async fn start_ink_lan(&self, port: Option<u16>) -> Result<InkLanStatus, String> {
         let mut running = self.ink_lan.running.lock().await;
@@ -1633,7 +1688,7 @@ pub(crate) async fn choose_ink_recovery(
     app: AppHandle,
     state: TauriState<'_, DesktopState>,
     request_id: String,
-) -> Result<Option<mathscape_store_sqlite::StoredInkSession>, String> {
+) -> Result<Option<InkRecoveryImport>, String> {
     let selected = app
         .dialog()
         .file()
@@ -1653,9 +1708,9 @@ pub(crate) async fn choose_ink_recovery(
             return Err("恢复文件超过读取上限。".into());
         }
         let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
-        let document =
-            serde_json::from_slice(&bytes).map_err(|error| format!("Ink 恢复文件无效：{error}"))?;
-        service.import_ink_recovery(document, &request_id).map(Some)
+        service
+            .import_ink_recovery_file(&bytes, &request_id)
+            .map(Some)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -1689,4 +1744,12 @@ pub(crate) async fn get_ink_setup_status(
 pub(crate) async fn cancel_ink_setup(state: TauriState<'_, DesktopState>) -> Result<(), String> {
     state.service.cancel_ink_setup().await;
     Ok(())
+}
+
+/// Result of "导入恢复草稿": one recovery draft per rebuilt writer queue.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct InkRecoveryImport {
+    pub source: String,
+    pub original_document_id: Option<String>,
+    pub sessions: Vec<mathscape_store_sqlite::StoredInkSession>,
 }

@@ -233,6 +233,62 @@ fn transfer(
     ink::read_session(tx, session)?.ok_or_else(|| invalid("new writer is missing"))
 }
 
+/// Writes one recovery draft and its request receipt inside `tx` without
+/// committing, so a caller can batch several drafts atomically. A completed
+/// request with the same fingerprint replays its session.
+pub(crate) fn import_recovery_in(
+    tx: &Transaction<'_>,
+    original: &mathscape_domain::InkLabDocument,
+    request: &str,
+    now: i64,
+) -> Result<StoredInkSession, SqliteStoreError> {
+    original
+        .validate()
+        .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
+    if request.len() != 32 || !request.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(invalid("invalid recovery request"));
+    }
+    let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(original)?));
+    let session = format!("recovery-session-{request}");
+    if let Some(old) = tx
+        .query_row(
+            "SELECT request_fingerprint FROM ink_recovery_imports WHERE request_id=?1",
+            [request],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        if old != fingerprint {
+            return Err(SqliteStoreError::InkRequestConflict(request.into()));
+        }
+        return ink::read_session(tx, &session)?.ok_or_else(|| invalid("recovery session missing"));
+    }
+    let mut document = original.clone();
+    document.document_id = format!("recovery-{request}");
+    while document.title.encode_utf16().count() > 180 {
+        document.title.pop();
+    }
+    document.title.push_str(" · 恢复草稿");
+    let date = format!("unix:{now}");
+    document.created_at = date.clone();
+    document
+        .validate()
+        .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
+    let head = document.operations.len() as i64;
+    // Recovery drafts carry a meaningful manual title (D4) and start active.
+    tx.execute("INSERT INTO ink_documents(document_id,version,title,created_at,exported_at,pages_json,capture_segments_json,head_seq,updated_at,title_mode,title_revision,lifecycle,lifecycle_revision,trashed_at,last_used_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?4,'manual',0,'active',0,NULL,?9)",params![document.document_id,document.version,document.title,date,document.exported_at,serde_json::to_string(&document.pages)?,serde_json::to_string(&document.capture_segments)?,head,now.saturating_mul(1000)])?;
+    let device = serde_json::json!({"source":"recovery_import","original_document_id":original.document_id,"original_created_at":original.created_at});
+    tx.execute("INSERT INTO ink_sessions(session_id,document_id,writer_id,writer_epoch,status,device_json,started_at,last_seen_at) VALUES(?1,?2,'desktop-local',1,'active',?3,?4,?4)",params![session,document.document_id,serde_json::to_string(&device)?,date])?;
+    tx.execute("INSERT INTO ink_writer_state(document_id,writer_epoch,active_session_id,writer_id,head_seq,updated_at) VALUES(?1,1,?2,'desktop-local',?3,?4)",params![document.document_id,session,head,date])?;
+    for operation in &document.operations {
+        let json = serde_json::to_string(operation)?;
+        let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+        tx.execute("INSERT INTO ink_operations(document_id,seq,command_id,operation_json,operation_fingerprint,recorded_at) VALUES(?1,?2,?3,?4,?5,?6)",params![document.document_id,operation.seq(),operation.command_id(),json,hash,date])?;
+    }
+    tx.execute("INSERT INTO ink_recovery_imports(request_id,request_fingerprint,document_id,original_document_id,imported_at) VALUES(?1,?2,?3,?4,?5)",params![request,fingerprint,document.document_id,original.document_id,date])?;
+    ink::read_session(tx, &session)?.ok_or_else(|| invalid("recovery session missing"))
+}
+
 impl SqliteArtifactStore {
     pub fn import_ink_recovery(
         &mut self,
@@ -240,58 +296,10 @@ impl SqliteArtifactStore {
         request: &str,
         now: i64,
     ) -> Result<StoredInkSession, SqliteStoreError> {
-        original
-            .validate()
-            .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
-        if request.len() != 32 || !request.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(invalid("invalid recovery request"));
-        }
-        let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(original)?));
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let session = format!("recovery-session-{request}");
-        if let Some(old) = tx
-            .query_row(
-                "SELECT request_fingerprint FROM ink_recovery_imports WHERE request_id=?1",
-                [request],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?
-        {
-            if old != fingerprint {
-                return Err(SqliteStoreError::InkRequestConflict(request.into()));
-            }
-            let receipt = ink::read_session(&tx, &session)?
-                .ok_or_else(|| invalid("recovery session missing"))?;
-            tx.commit()?;
-            return Ok(receipt);
-        }
-        let mut document = original.clone();
-        document.document_id = format!("recovery-{request}");
-        while document.title.encode_utf16().count() > 180 {
-            document.title.pop();
-        }
-        document.title.push_str(" · 恢复草稿");
-        let date = format!("unix:{now}");
-        document.created_at = date.clone();
-        document
-            .validate()
-            .map_err(|error| SqliteStoreError::InkValidation(error.to_string()))?;
-        let head = document.operations.len() as i64;
-        // Recovery drafts carry a meaningful manual title (D4) and start active.
-        tx.execute("INSERT INTO ink_documents(document_id,version,title,created_at,exported_at,pages_json,capture_segments_json,head_seq,updated_at,title_mode,title_revision,lifecycle,lifecycle_revision,trashed_at,last_used_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?4,'manual',0,'active',0,NULL,?9)",params![document.document_id,document.version,document.title,date,document.exported_at,serde_json::to_string(&document.pages)?,serde_json::to_string(&document.capture_segments)?,head,now.saturating_mul(1000)])?;
-        let device = serde_json::json!({"source":"recovery_import","original_document_id":original.document_id,"original_created_at":original.created_at});
-        tx.execute("INSERT INTO ink_sessions(session_id,document_id,writer_id,writer_epoch,status,device_json,started_at,last_seen_at) VALUES(?1,?2,'desktop-local',1,'active',?3,?4,?4)",params![session,document.document_id,serde_json::to_string(&device)?,date])?;
-        tx.execute("INSERT INTO ink_writer_state(document_id,writer_epoch,active_session_id,writer_id,head_seq,updated_at) VALUES(?1,1,?2,'desktop-local',?3,?4)",params![document.document_id,session,head,date])?;
-        for operation in &document.operations {
-            let json = serde_json::to_string(operation)?;
-            let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
-            tx.execute("INSERT INTO ink_operations(document_id,seq,command_id,operation_json,operation_fingerprint,recorded_at) VALUES(?1,?2,?3,?4,?5,?6)",params![document.document_id,operation.seq(),operation.command_id(),json,hash,date])?;
-        }
-        tx.execute("INSERT INTO ink_recovery_imports(request_id,request_fingerprint,document_id,original_document_id,imported_at) VALUES(?1,?2,?3,?4,?5)",params![request,fingerprint,document.document_id,original.document_id,date])?;
-        let result =
-            ink::read_session(&tx, &session)?.ok_or_else(|| invalid("recovery session missing"))?;
+        let result = import_recovery_in(&tx, original, request, now)?;
         tx.commit()?;
         Ok(result)
     }

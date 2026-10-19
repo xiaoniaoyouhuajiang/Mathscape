@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>N2 map and inspector harness</title>
+<style>#graph { width: 900px; height: 600px; position: relative; } #detail { width: 360px; }</style>
+<div><label><input id="render-mode" type="checkbox"> 语义</label></div>
+<div id="filters"></div>
+<div id="focus-bar" hidden><span id="focus-root"></span><span id="focus-summary"></span></div>
+<div id="graph"></div><div id="legend"></div>
+<div id="empty" hidden><h3 id="empty-title"></h3><p id="empty-message"></p></div>
+<aside id="detail"></aside>
+<script type="module" src="/tests/ink-map-harness.ts"></script>
+</html>

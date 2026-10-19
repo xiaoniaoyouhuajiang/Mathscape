@@ -96,7 +96,13 @@ impl From<SqliteStoreError> for InkCommandError {
                     "current_lifecycle_revision": current_revision,
                 });
             }
-            SqliteStoreError::InkTitleInvalid(message) => result.message = message.clone(),
+            SqliteStoreError::InkTitleInvalid(message)
+            | SqliteStoreError::InkLinkTargetInvalid(message)
+            | SqliteStoreError::InkLinkTargetRetired(message) => result.message = message.clone(),
+            SqliteStoreError::InkLinkNotFound(link_id) => {
+                result.message = "关联已不存在，请刷新后重试。".into();
+                result.details = serde_json::json!({ "link_id": link_id });
+            }
             SqliteStoreError::InkWriterEpochConflict {
                 document_id,
                 expected,
