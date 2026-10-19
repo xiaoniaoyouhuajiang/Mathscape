@@ -18,6 +18,13 @@ export function clampDetailWidth(requested: number, gridWidth: number, leftWidth
   return Math.round(Math.min(max, Math.max(DETAIL_WIDTH_MIN, requested)));
 }
 
+/**
+ * The user's preferred width is kept (and persisted) as chosen; the applied
+ * width is that preference clamped to the room actually available now. The
+ * clamp is re-evaluated whenever the window, the outer container or the left
+ * column changes size, so shrinking the window never pushes the inspector
+ * off-screen and growing it back restores the preferred width.
+ */
 export function mountDetailResizer(grid: HTMLElement, panel: HTMLElement): HTMLElement {
   const handle = document.createElement("div");
   handle.className = "panel-resizer";
@@ -27,26 +34,66 @@ export function mountDetailResizer(grid: HTMLElement, panel: HTMLElement): HTMLE
   handle.title = "拖动调整宽度；双击恢复默认";
   handle.tabIndex = 0;
   panel.prepend(handle);
-  const left = () => (grid.firstElementChild as HTMLElement | null)?.getBoundingClientRect().width ?? 0;
-  const apply = (width: number | undefined, persist: boolean): void => {
-    if (width === undefined) {
+  const leftColumn = () => grid.firstElementChild as HTMLElement | null;
+  const left = () => leftColumn()?.getBoundingClientRect().width ?? 0;
+  /** Width the grid may use: its outer container, not the (possibly overflowing) tracks. */
+  const room = () => {
+    const own = grid.getBoundingClientRect().width;
+    const outer = grid.parentElement?.clientWidth ?? own;
+    return outer > 0 ? Math.min(own || outer, outer) : own;
+  };
+  let preferred: number | undefined;
+  let applied: string | undefined;
+  const persist = (): void => {
+    try {
+      if (preferred === undefined) localStorage.removeItem(DETAIL_WIDTH_KEY);
+      else localStorage.setItem(DETAIL_WIDTH_KEY, String(preferred));
+    } catch { /* Optional preference. */ }
+  };
+  /** Apply the effective width; announce a layout change only when it moved. */
+  const update = (): void => {
+    let next: string | undefined;
+    if (preferred === undefined) {
       grid.style.removeProperty("--detail-width");
       handle.removeAttribute("aria-valuenow");
-      if (persist) try { localStorage.removeItem(DETAIL_WIDTH_KEY); } catch { /* Optional preference. */ }
     } else {
-      const value = clampDetailWidth(width, grid.getBoundingClientRect().width, left());
-      grid.style.setProperty("--detail-width", value + "px");
+      const value = clampDetailWidth(preferred, room(), left());
+      next = value + "px";
+      grid.style.setProperty("--detail-width", next);
       handle.setAttribute("aria-valuenow", String(value));
-      if (persist) try { localStorage.setItem(DETAIL_WIDTH_KEY, String(value)); } catch { /* Optional preference. */ }
     }
-    window.dispatchEvent(new Event("resize"));
+    if (next !== applied) {
+      applied = next;
+      // Lets width-dependent views (graph, PDF fit modes) refit.
+      window.dispatchEvent(new Event("resize"));
+    }
+  };
+  /** A manual choice: clamp to the current room, then keep it as the preference. */
+  const choose = (width: number | undefined, save: boolean): void => {
+    preferred = width === undefined ? undefined : clampDetailWidth(width, room(), left());
+    update();
+    if (save) persist();
   };
   try {
     const stored = Number(localStorage.getItem(DETAIL_WIDTH_KEY));
-    if (stored > 0) apply(stored, false);
+    if (stored > 0) { preferred = Math.round(Math.min(DETAIL_WIDTH_MAX, Math.max(DETAIL_WIDTH_MIN, stored))); update(); }
   } catch { /* Optional preference. */ }
   handle.setAttribute("aria-valuemin", String(DETAIL_WIDTH_MIN));
   handle.setAttribute("aria-valuemax", String(DETAIL_WIDTH_MAX));
+  // Re-clamp on window resize and on container / left-column (sidebar toggle) changes.
+  let frame = 0;
+  const schedule = (): void => {
+    if (frame || preferred === undefined) return;
+    frame = requestAnimationFrame(() => { frame = 0; update(); });
+  };
+  window.addEventListener("resize", () => { if (preferred !== undefined) update(); });
+  if (typeof ResizeObserver !== "undefined") {
+    const observer = new ResizeObserver(schedule);
+    if (grid.parentElement) observer.observe(grid.parentElement);
+    observer.observe(grid);
+    const column = leftColumn();
+    if (column && column !== panel) observer.observe(column);
+  }
   let dragging: number | undefined;
   handle.addEventListener("pointerdown", event => {
     if (event.button !== 0) return;
@@ -57,22 +104,22 @@ export function mountDetailResizer(grid: HTMLElement, panel: HTMLElement): HTMLE
   });
   handle.addEventListener("pointermove", event => {
     if (event.pointerId !== dragging) return;
-    apply(grid.getBoundingClientRect().right - event.clientX, false);
+    choose(grid.getBoundingClientRect().left + room() - event.clientX, false);
   });
   const finish = (event: PointerEvent) => {
     if (event.pointerId !== dragging) return;
     dragging = undefined;
     handle.classList.remove("is-dragging");
-    apply(panel.getBoundingClientRect().width, true);
+    choose(panel.getBoundingClientRect().width, true);
   };
   handle.addEventListener("pointerup", finish);
   handle.addEventListener("pointercancel", finish);
-  handle.addEventListener("dblclick", () => apply(undefined, true));
+  handle.addEventListener("dblclick", () => choose(undefined, true));
   handle.addEventListener("keydown", event => {
     const current = panel.getBoundingClientRect().width;
-    if (event.key === "ArrowLeft") apply(current + 24, true);
-    else if (event.key === "ArrowRight") apply(current - 24, true);
-    else if (event.key === "Home") apply(undefined, true);
+    if (event.key === "ArrowLeft") choose(current + 24, true);
+    else if (event.key === "ArrowRight") choose(current - 24, true);
+    else if (event.key === "Home") choose(undefined, true);
     else return;
     event.preventDefault();
   });
