@@ -2,12 +2,14 @@ import { inkId, type InkDocument, type InkStroke } from "./model";
 import type { InkOperationAck, InkOutboxItem } from "./outbox";
 import type { PadBinding, PadLease } from "./pad-store";
 
-export const INK_LAN_PROTOCOL="mathscape-ink-lan-1";
+export const INK_LAN_PROTOCOL="mathscape-ink-lan-2";
 export class PadTransportError extends Error { constructor(readonly code:string,message:string,readonly details:Record<string,unknown>={}){super(message);} }
 /** N1 note metadata; older desktops omit it and the document title is used. */
 export interface PadNote { document_id:string;title:string;title_mode:"auto"|"manual";title_revision:number;lifecycle:"active"|"trashed";lifecycle_revision:number }
 export const TRASHED_REASON="document_trashed";
-export interface PadContext { type:"session_context";protocol_version:string;lease:PadLease;note?:PadNote;document:InkDocument;head_seq:number;limits:{operation_bytes:number;document_bytes:number;queue_bytes:number} }
+export interface PadContext { type:"session_context";protocol_version:string;lease:PadLease;note?:PadNote;document:InkDocument;head_seq:number;limits:{operation_bytes:number;document_bytes:number;queue_bytes:number};problem_card?:unknown|null }
+/** N3a: desktop push-switch offer. N3b may also send problem_card messages. */
+export interface PadSwitchOffer { type:"switch_offer";offer_id:string;document_id:string;title:string;pairing_token:string;expires_at:number;requires_takeover:boolean;message:string }
 interface Pending {resolve:(value:Record<string,unknown>)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}
 function tabClientId():string {
   // Survives refresh in this tab, so a half-open old socket can be replaced.
@@ -31,6 +33,7 @@ export class InkPadTransport {
     private readonly status:(state:"connecting"|"ready"|"offline"|"conflict",message:string,code?:string)=>void,
     private readonly onReady:()=>void,
     private readonly onNote:(note:PadNote)=>void=()=>{},
+    private readonly onSwitchOffer:(offer:PadSwitchOffer)=>void=()=>{},
   ) {}
   isReady():boolean{return this.ready;}
   connect():void {
@@ -56,7 +59,7 @@ export class InkPadTransport {
     if(message.type==="session_context") {
       try {
         const context=message as unknown as PadContext;
-        if(context.protocol_version!==INK_LAN_PROTOCOL)throw new PadTransportError("protocol_mismatch","InkPad 版本不兼容。");
+        if(context.protocol_version!==INK_LAN_PROTOCOL)throw new PadTransportError("protocol_mismatch","InkPad 版本已更新，请刷新页面后重新连接。");
         await this.context(context);
         if(this.socket!==socket||this.closed)return;
         this.ready=true;this.attempts=0;this.status("ready","电脑已连接 · 自动同步");this.onReady();
@@ -70,6 +73,9 @@ export class InkPadTransport {
       if(task){clearTimeout(task.timer);this.pending.delete(receipt.request_id);task.resolve(message);}return;
     }
     if(message.type==="note_metadata") {if(message.note&&typeof message.note==="object")this.onNote(message.note as PadNote);return;}
+    if(message.type==="switch_offer") {this.onSwitchOffer(message as unknown as PadSwitchOffer);return;}
+    // N3b reserved: problem_card / problem_card_clear are ignored until cards ship.
+    if(message.type==="problem_card"||message.type==="problem_card_clear")return;
     if(message.type==="snapshot_receipt"||message.type==="rename_receipt") {
       const id=message.request_id as string,task=this.pending.get(id);
       if(task){clearTimeout(task.timer);this.pending.delete(id);task.resolve(message);}return;

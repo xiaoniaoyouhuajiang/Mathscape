@@ -231,10 +231,10 @@ export class DesktopInkWorkspace {
     this.host.innerHTML = [
       '<div class="ink-desktop-shell">',
       '<header class="ink-desktop-header"><div class="ink-document-heading"><span class="eyebrow">手写</span><h2 id="ink-document-heading">未打开手稿</h2><div class="ink-state-row"><span id="ink-mode-badge" class="ink-state-badge">未打开</span><span id="ink-editability-badge" class="ink-state-badge">—</span><span id="ink-save-badge" class="ink-state-badge">正在加载</span></div></div>',
-      '<div id="ink-undo-bar" class="ink-undo-bar" role="status" hidden><span id="ink-undo-text"></span><button id="ink-undo-trash" class="secondary-button" type="button">撤销</button></div><div class="ink-desktop-actions"><span id="ink-persistence-status" class="ink-persistence-status">正在加载本地手稿…</span><button id="ink-lan" class="secondary-button" type="button">平板书写</button><button id="ink-continue-current" class="secondary-button" type="button" hidden>继续编辑当前手稿</button><button id="ink-save-now" class="secondary-button" type="button">立即保存</button><button id="ink-snapshot" class="secondary-button" type="button">保存快照</button><button id="ink-close" class="secondary-button" type="button">返回地图</button></div></header>',
+      '<div id="ink-undo-bar" class="ink-undo-bar" role="status" hidden><span id="ink-undo-text"></span><button id="ink-undo-trash" class="secondary-button" type="button">撤销</button></div><div class="ink-desktop-actions"><span id="ink-persistence-status" class="ink-persistence-status">正在加载本地手稿…</span><button id="ink-lan" class="secondary-button" type="button">平板书写</button><button id="ink-push-tablet" class="secondary-button" type="button" title="把这份手稿推送到已连接的平板">推送到平板</button><button id="ink-continue-current" class="secondary-button" type="button" hidden>继续编辑当前手稿</button><button id="ink-save-now" class="secondary-button" type="button">立即保存</button><button id="ink-snapshot" class="secondary-button" type="button">保存快照</button><button id="ink-close" class="secondary-button" type="button">返回地图</button></div></header>',
       '<div class="ink-desktop-body"><aside class="ink-session-panel"><div class="ink-session-heading"><strong>手稿</strong><button id="ink-new-document" class="secondary-button" type="button">新建</button></div><div class="ink-session-tabs" role="tablist" aria-label="手稿列表"><button id="ink-tab-active" role="tab" type="button" aria-selected="true">最近手稿</button><button id="ink-tab-trash" role="tab" type="button" aria-selected="false">回收站</button></div><div class="ink-session-tools"><button id="ink-import-recovery" class="secondary-button" type="button">导入恢复草稿</button><button id="ink-clean-blank" class="secondary-button" type="button">清理空白稿</button></div><div id="ink-session-list" class="ink-session-list"><p>正在读取…</p></div><div class="ink-snapshot-heading"><strong>历史快照</strong></div><div id="ink-snapshot-list" class="ink-session-list"><p>请选择手稿。</p></div></aside>',
       '<main class="ink-desktop-main"><nav class="ink-desktop-toolbar" aria-label="手稿工具"><div class="ink-tool-buttons">',
-      '<button id="desktop-ink-pen" class="is-active" type="button">笔</button><button id="desktop-ink-erase" type="button">整笔擦除</button><button id="desktop-ink-partial_erase" type="button">局部擦除</button><button id="desktop-ink-select" type="button">套索选择</button><button id="desktop-ink-delete-selection" type="button" disabled title="删除套索选中的笔迹（Delete / Backspace），可撤销">删除所选</button><button id="desktop-ink-undo" type="button" disabled>撤销</button><button id="desktop-ink-redo" type="button" disabled>重做</button>',
+      '<button id="desktop-ink-pen" class="is-active" type="button">笔</button><button id="desktop-ink-erase" type="button">整笔擦除</button><button id="desktop-ink-partial_erase" type="button">局部擦除</button><button id="desktop-ink-select" type="button">套索选择</button><button id="desktop-ink-delete-selection" type="button" disabled title="删除套索选中的笔迹（Delete / Backspace），可撤销">删除所选</button><button id="desktop-ink-restyle" type="button" disabled title="把选中笔迹改成当前颜色，可撤销">改颜色</button><button id="desktop-ink-undo" type="button" disabled>撤销</button><button id="desktop-ink-redo" type="button" disabled>重做</button>',
       '</div><div class="ink-brush-controls"><span id="desktop-ink-palette-host"></span><label title="之后创建的笔迹使用此笔宽">笔宽<input id="desktop-ink-width" type="range" min="1" max="16" step="0.5" value="4" aria-label="笔迹宽度"><output id="desktop-ink-width-value">4</output></label><label class="ink-check-control"><input id="desktop-ink-finger" type="checkbox">手指书写</label></div><div class="ink-page-controls"><label id="desktop-ink-follow-label" hidden><input id="desktop-ink-follow-pad" type="checkbox" checked>跟随平板页</label><select id="desktop-ink-page" aria-label="手稿页面"></select><button id="desktop-ink-add-page" class="secondary-button" type="button">新增页面</button><button id="desktop-ink-zoom-out" class="secondary-button" type="button" aria-label="缩小">−</button><button id="desktop-ink-fit" class="secondary-button" type="button">整页</button><button id="desktop-ink-zoom-in" class="secondary-button" type="button" aria-label="放大">＋</button></div></nav>',
       '<div id="ink-trash-banner" class="ink-trash-banner" role="status" hidden><span>这份手稿在回收站中，只能查看和导出。</span><button id="ink-trash-restore" class="secondary-button" type="button">恢复手稿</button></div><div id="ink-link-bar" class="ink-link-bar" aria-label="手稿关联" hidden></div><div id="desktop-ink-evidence" hidden></div><div id="ink-empty-state" class="ink-empty-state" hidden><p>还没有打开的手稿。</p><button id="ink-empty-create" class="secondary-button" type="button">新建手稿</button></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="'+INK_TITLE_MAX+'" value="" placeholder="留空恢复自动标题" aria-label="手稿标题" title="点击改名；回车保存，Esc 取消" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div><section id="ink-lan-panel" hidden></section><div id="ink-dialog" class="ink-dialog" role="dialog" aria-modal="true" aria-labelledby="ink-dialog-text" hidden><div class="ink-dialog-box"><p id="ink-dialog-text"></p><div id="ink-dialog-actions" class="ink-dialog-actions"></div></div></div></div>',
     ].join("");
@@ -243,6 +243,7 @@ export class DesktopInkWorkspace {
     element<HTMLButtonElement>(this.host, "#ink-snapshot").addEventListener("click", () => void this.createSnapshot());
     this.lanPanel=new InkLanPanel(element(this.host,"#ink-lan-panel"),documentId=>this.preparePad(documentId),()=>this.writerView,()=>this.refreshMirror(true),()=>this.writerView?.remote?this.writerPresence:undefined);
     element<HTMLButtonElement>(this.host,"#ink-lan").onclick=()=>{if(this.documentState)void this.lanPanel!.open(this.documentState.document_id).catch(error=>this.status(errorText(error),true));};
+    element<HTMLButtonElement>(this.host,"#ink-push-tablet").onclick=()=>{if(this.documentState)void this.pushToTablet(this.documentState.document_id).catch(error=>this.status(errorText(error),true));};
     element<HTMLButtonElement>(this.host, "#ink-continue-current").addEventListener("click", () => void this.continueCurrentDocument());
     element<HTMLButtonElement>(this.host, "#ink-new-document").addEventListener("click", () => void this.createDocument());
     element<HTMLButtonElement>(this.host, "#ink-empty-create").addEventListener("click", () => void this.createDocument());
@@ -295,6 +296,7 @@ export class DesktopInkWorkspace {
     }
     // N3.0: delete the lasso selection with one multi-stroke erase (one undo restores it).
     element<HTMLButtonElement>(this.host, "#desktop-ink-delete-selection").addEventListener("click", () => this.deleteSelection());
+    element<HTMLButtonElement>(this.host, "#desktop-ink-restyle").addEventListener("click", () => this.restyleSelection());
     window.addEventListener("keydown", event => {
       if (!isDeleteKey(event) || isTypingTarget(event.target) || this.dialogResolve || !this.canDeleteSelection()) return;
       if (!this.host.isConnected || !this.host.getClientRects().length) return;
@@ -1321,6 +1323,42 @@ export class DesktopInkWorkspace {
     this.renderSummary();
   }
 
+  private restyleSelection(): void {
+    if (!this.canDeleteSelection() || !this.documentState) return;
+    const ids = this.board?.selectedIds() ?? this.selectedStrokeIds;
+    if (!ids.length) return;
+    this.commit({ kind: "restyle", stroke_ids: ids, color: this.brushColor });
+    this.board?.setSelection(ids);
+    this.renderSummary();
+  }
+
+  /** N3a: push the note to every connected tablet; fall back to the QR when offline. */
+  private async pushToTablet(documentId: string, allowTransfer = false): Promise<void> {
+    if (this.trashedView || this.note?.lifecycle === "trashed") {
+      this.status("回收站中的手稿不能推送到平板。", true);
+      return;
+    }
+    this.board?.finish();
+    if (!await this.flush()) throw new Error("请先完成本机保存，再推送到平板。");
+    const result = await safeInvoke<{
+      pushed: boolean; online: number; requires_takeover: boolean; message: string; title?: string;
+    }>("push_ink_to_tablet", { documentId, allowTransfer });
+    if (result.requires_takeover && !allowTransfer) {
+      const choice = await this.choose(result.message, [
+        { id: "cancel", label: "取消", primary: true },
+        { id: "force", label: "仍然推送（对方未同步内容会被隔离）" },
+      ]);
+      if (choice !== "force") return;
+      return this.pushToTablet(documentId, true);
+    }
+    if (!result.pushed) {
+      this.status(result.message + " 正在打开配对二维码。", false);
+      await this.lanPanel?.open(documentId);
+      return;
+    }
+    this.status(result.message, false);
+  }
+
   private setTool(tool: InkTool): void {
     this.tool = tool;
     for (const value of ["pen", "erase", "partial_erase", "select"] as const) {
@@ -1356,6 +1394,10 @@ export class DesktopInkWorkspace {
     element<HTMLButtonElement>(this.host, "#desktop-ink-undo").disabled = this.readOnly || !projection.undo.length;
     element<HTMLButtonElement>(this.host, "#desktop-ink-redo").disabled = this.readOnly || !projection.redo.length;
     element<HTMLButtonElement>(this.host, "#desktop-ink-delete-selection").disabled = !this.canDeleteSelection();
+    element<HTMLButtonElement>(this.host, "#desktop-ink-restyle").disabled = !this.canDeleteSelection();
+    const push = element<HTMLButtonElement>(this.host, "#ink-push-tablet");
+    push.disabled = this.readOnly || this.trashedView || !this.documentState;
+    push.title = this.trashedView ? "回收站中的手稿不能推送到平板" : "把这份手稿推送到已连接的平板";
     element(this.host, "#desktop-ink-summary").textContent = projection.visible.length + " 笔 · " + (projection.pointCount + this.metrics.activePoints) + " 点 · head " + this.logicalHead;
     this.renderViewState();
   }

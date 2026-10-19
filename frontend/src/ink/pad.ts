@@ -1,7 +1,7 @@
 import { InkCanvas,type CanvasMetrics,type InkTool } from "./canvas";
 import { appendInk,encodeInk,inkId,inkMetadata,normalizeInkTitle,INK_TITLE_MAX,parseInkDocument,projectInk,type InkDocument,type InkStroke,type InkBrush,type CaptureSegment,type InkPage,type InkProjection } from "./model";
 import { InkPadStore,type PadBinding,type PadDraft } from "./pad-store";
-import { InkPadTransport,PadTransportError,type PadContext,type PadNote } from "./pad-transport";
+import { InkPadTransport,PadTransportError,type PadContext,type PadNote,type PadSwitchOffer } from "./pad-transport";
 import type { InkOutboxItem } from "./outbox";
 import { isDeleteKey,isTypingTarget } from "./keys";
 import { createInkPalette,INK_DEFAULT_COLOR,PAD_COLOR_KEY,type InkPalette } from "./palette";
@@ -47,7 +47,7 @@ class InkPad {
     root.innerHTML=`<main class="lab-pad"><header class="pad-header"><div class="pad-title"><span class="lab-mark">M</span><strong id="pad-title">Mathscape InkPad</strong><button id="pad-rename" type="button" class="pad-rename-button" title="修改手稿标题">改名</button><span class="lab-badge">P3</span></div><span id="pad-connection" role="status">正在准备本机存储…</span></header>
       <form id="pad-rename-form" class="pad-rename" hidden><input id="pad-rename-input" maxlength="${INK_TITLE_MAX}" aria-label="手稿标题" placeholder="留空恢复自动标题" autocomplete="off"><button id="pad-rename-save" type="submit">保存标题</button><button id="pad-rename-cancel" type="button">取消</button></form>
       <div id="pad-title-choice" class="pad-rename" role="group" aria-label="标题冲突" hidden><span id="pad-title-choice-text"></span><button id="pad-title-theirs" type="button"></button><button id="pad-title-mine" type="button"></button></div>
-      <nav class="ink-toolbar" aria-label="书写工具"><div class="ink-tool-group"><button id="pad-pen" class="is-active">笔</button><button id="pad-select">套索选择</button><button id="pad-erase">整笔擦除</button><button id="pad-partial_erase">局部擦除</button><button id="pad-undo">撤销</button><button id="pad-redo">重做</button><button id="pad-delete-selection" disabled title="删除套索选中的笔迹，可撤销">删除所选</button></div>
+      <nav class="ink-toolbar" aria-label="书写工具"><div class="ink-tool-group"><button id="pad-pen" class="is-active">笔</button><button id="pad-select">套索选择</button><button id="pad-erase">整笔擦除</button><button id="pad-partial_erase">局部擦除</button><button id="pad-undo">撤销</button><button id="pad-redo">重做</button><button id="pad-delete-selection" disabled title="删除套索选中的笔迹，可撤销">删除所选</button><button id="pad-restyle" disabled title="把选中笔迹改成当前颜色，可撤销">改颜色</button></div>
       <div class="ink-tool-group"><span id="pad-palette-host"></span><label class="ink-control">笔宽<input id="pad-width" type="range" min="1" max="16" step="0.5" value="4"></label><label class="ink-control"><input id="pad-finger" type="checkbox">手指书写</label></div>
       <div class="ink-tool-group"><select id="pad-page" aria-label="页面"></select><button id="pad-add-page">新增页面</button><button id="pad-zoom-out" aria-label="缩小">−</button><button id="pad-fit">整页</button><button id="pad-zoom-in" aria-label="放大">＋</button></div></nav>
       <section id="pad-board" class="ink-board" aria-label="平板画板"></section>
@@ -97,6 +97,8 @@ class InkPad {
     for(const tool of ["pen","select","erase","partial_erase"] as const)element<HTMLButtonElement>("#pad-"+tool).onclick=()=>{this.board?.resetTransientInteraction();this.tool=tool;for(const value of ["pen","select","erase","partial_erase"])element("#pad-"+value).classList.toggle("is-active",value===tool);this.board?.refresh();this.summary();};
     // N3.0: delete the lasso selection with one multi-stroke erase (one undo restores it).
     element<HTMLButtonElement>("#pad-delete-selection").onclick=()=>{if(!this.document||this.fenced||this.tool!=="select")return;this.board?.deleteSelection();this.summary();};
+    // N3a: one restyle command for the whole selection (one undo restores).
+    element<HTMLButtonElement>("#pad-restyle").onclick=()=>{if(!this.document||this.fenced||this.tool!=="select"||!this.board?.selectionCount())return;const ids=this.board.selectedIds();const color=this.palette?.value()??INK_DEFAULT_COLOR;this.commit({kind:"restyle",stroke_ids:ids,color});this.board.setSelection(ids);this.summary();};
     window.addEventListener("keydown",event=>{if(!isDeleteKey(event)||isTypingTarget(event.target)||!this.document||this.fenced||this.tool!=="select"||!this.board?.selectionCount())return;event.preventDefault();this.board.deleteSelection();this.summary();});
     for(const kind of ["undo","redo"] as const)element<HTMLButtonElement>("#pad-"+kind).onclick=()=>{if(!this.document||this.fenced)return;this.board?.resetTransientInteraction();const target=projectInk(this.document)[kind].at(-1);if(target)this.commit({kind,target_command_id:target});};
     element<HTMLButtonElement>("#pad-add-page").onclick=()=>{if(!this.document||this.fenced)return;this.board?.resetTransientInteraction();const page:InkPage={id:inkId(),width:1200,height:1600};this.document.pages.push(page);this.commit({kind:"page_add",page});this.page=page.id;this.pages();this.board?.setSelection([]);this.board?.fit();};
@@ -152,9 +154,14 @@ class InkPad {
     const transport=new InkPadTransport(()=>binding,context=>this.restore(context,binding,current),(state,message,code)=>{
       if(!current())return;
       this.state=state;element("#pad-connection").textContent=message;
-      if(state==="conflict"){this.board?.finish();this.fenced=true;this.fenceCode=code;if(this.document)this.mount(this.document,this.page);this.message(message);}
+      if(state==="conflict"){
+        this.board?.finish();this.fenced=true;this.fenceCode=code;if(this.document)this.mount(this.document,this.page);this.message(message);
+        if(code==="protocol_mismatch"){const status=element("#pad-status");if(!status.querySelector("[data-reload]")){const button=document.createElement("button");button.type="button";button.dataset.reload="";button.textContent="刷新页面";button.onclick=()=>location.reload();status.append(" ",button);}}
+        if(["writer_revoked","credential_expired","authentication_failed"].includes(code??""))void this.database?.markNeedsReauth(binding.key).then(()=>this.refreshDrafts());
+      }
+      if(state==="ready")void this.database?.clearNeedsReauth(binding.key).then(()=>this.refreshDrafts());
       this.controls();this.summary();
-    },()=>{void this.sendRename();void (this.flushing??Promise.resolve()).then(()=>{if(current())void this.flush();});},note=>{if(current())void this.applyNote(note);});this.transport=transport;transport.connect();
+    },()=>{void this.sendRename();void (this.flushing??Promise.resolve()).then(()=>{if(current())void this.flush();});},note=>{if(current())void this.applyNote(note);},offer=>{if(current())void this.handleSwitchOffer(offer);});this.transport=transport;transport.connect();
   }
   private async restore(context:PadContext,binding:PadBinding,current:()=>boolean):Promise<void> {
     if(!current())return;
@@ -252,8 +259,43 @@ class InkPad {
     try{const result=await this.transport!.snapshot(request.id,request.head);if(this.binding===binding&&this.snapshotRequest===request){this.message(`电脑已保存快照，截止 head ${result.through_seq}。可以在 Mathscape 的历史快照中查看。`);this.snapshotRequest=undefined;}}
     catch(error){if(this.binding===binding)this.message("快照尚未确认，重试将沿用原请求。"+String(error));}
   }
+
+  /** N3a: desktop push-switch. Drain the current note first; never discard strokes. */
+  private async handleSwitchOffer(offer:PadSwitchOffer):Promise<void> {
+    if(!this.database)return;
+    if(offer.document_id===this.binding?.lease.document_id){this.message(`电脑推送的是当前手稿「${offer.title}」，无需切换。`);return;}
+    const takeover=offer.requires_takeover
+      ? "\n\n注意：目标手稿正被其他设备书写。接手后对方未同步的内容会被隔离，对方可以导出恢复草稿。"
+      : "";
+    const choice=window.confirm(`${offer.message}\n\n切换前会先把当前手稿保存到本机。未同步的内容会保留在「最近手稿」里。${takeover}\n\n要切换到「${offer.title}」吗？`);
+    if(!choice){this.message("已取消切换。");return;}
+    this.board?.finish();await this.enqueueTail;
+    if(this.buffered.size){this.message("当前笔迹尚未保存到本机，请先导出恢复草稿或点“立即同步”，再接受切换。");return;}
+    try{
+      if(this.transport?.isReady())await this.flush();
+    }catch{/* Keep going; local draft is durable. */}
+    this.transport?.close();
+    try{
+      if(!/^[0-9a-f]{64}$/.test(offer.pairing_token))throw new Error("切换令牌无效。");
+      const pair=await this.database.pairing(offer.pairing_token,credential());
+      this.message(`正在切换到「${offer.title}」…`);
+      const response=await fetch("/api/pair",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pairing_token:pair.token,resume_secret:pair.credential,device:{user_agent:navigator.userAgent,secure_context:window.isSecureContext,storage_recovery:true,via:"desktop_push"}})});
+      const result=await response.json();
+      if(!response.ok)throw new Error(result.message??"切换失败，请在电脑重新推送或扫码。");
+      const binding:PadBinding={key:`${result.lease.session_id}:${result.lease.writer_epoch}`,credential:pair.credential,lease:result.lease};
+      await this.database.activate(binding);this.binding=binding;this.snapshotRequest=undefined;this.fenced=false;this.fenceCode=undefined;this.document=undefined;this.page="";
+      this.connect();await this.refreshDrafts();
+      this.message(`已切换到「${offer.title}」。`);
+    }catch(error){this.message("切换未完成："+(error instanceof Error?error.message:String(error)));if(this.binding)this.connect();}
+  }
+
   private async refreshDrafts():Promise<void> {
-    const select=element<HTMLSelectElement>("#pad-drafts");select.replaceChildren();for(const draft of await this.database!.drafts())select.add(new Option(draft.document.title+" · 最近手稿",draft.key));if(this.binding)select.value=this.binding.key;
+    const select=element<HTMLSelectElement>("#pad-drafts");select.replaceChildren();
+    for(const draft of await this.database!.drafts()){
+      const needs=await this.database!.needsReauth(draft.key);
+      select.add(new Option(needs?`${draft.document.title} · 需要电脑重新授权`:`${draft.document.title} · 最近手稿`,draft.key));
+    }
+    if(this.binding)select.value=this.binding.key;
   }
   private async openDraft(key:string):Promise<void> {
     if(!this.database||(key===this.binding?.key&&this.document))return;const revision=++this.navigationRevision;this.board?.finish();await this.enqueueTail;if(revision!==this.navigationRevision)return;this.transport?.close();
@@ -265,7 +307,7 @@ class InkPad {
   private summary():void {
     if(!this.document)return;
     if(this.projection?.document!==this.document||this.projection.count!==this.document.operations.length)this.projection={document:this.document,count:this.document.operations.length,value:projectInk(this.document)};
-    const projection=this.projection.value;element<HTMLButtonElement>("#pad-undo").disabled=this.fenced||!projection.undo.length;element<HTMLButtonElement>("#pad-delete-selection").disabled=this.fenced||this.tool!=="select"||!this.board?.selectionCount();element<HTMLButtonElement>("#pad-redo").disabled=this.fenced||!projection.redo.length;
+    const projection=this.projection.value;element<HTMLButtonElement>("#pad-undo").disabled=this.fenced||!projection.undo.length;element<HTMLButtonElement>("#pad-delete-selection").disabled=this.fenced||this.tool!=="select"||!this.board?.selectionCount();element<HTMLButtonElement>("#pad-restyle").disabled=this.fenced||this.tool!=="select"||!this.board?.selectionCount();element<HTMLButtonElement>("#pad-redo").disabled=this.fenced||!projection.redo.length;
     element("#pad-local-status").textContent=this.persisted?`本机已保存 · 待同步 ${this.pending} 个操作`:`本机尚有 ${this.buffered.size} 个操作未保存`;
     element("#pad-desktop-status").textContent=`电脑已保存至 head ${this.confirmed}`;
     element("#pad-diagnostics").textContent=`安全上下文：${window.isSecureContext} · IndexedDB 恢复队列：${!!this.database}\n${projection.visible.length} 笔 · ${projection.pointCount+this.metrics.activePoints} 点 · 本机 head ${this.document.operations.length}\n输入：${this.metrics.lastPointer} · 合并采样 ${this.metrics.coalescedSamples} · 前景绘制 ${this.metrics.frameMs.toFixed(2)} ms\n连接：${this.state} · 写入 epoch ${this.binding?.lease.writer_epoch??"—"}`;

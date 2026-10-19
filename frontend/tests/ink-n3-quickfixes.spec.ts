@@ -141,3 +141,44 @@ test("N3.0 without a LAN address no QR is drawn until an address is picked by ha
   await address.selectOption({ label: "192.168.31.20（VPN / Tailscale）" });
   await expect(link).toHaveValue(/^https:\/\/192\.168\.31\.20:1443\/pad\/#pair=/);
 });
+
+test("N3a restyle recolours a lasso selection in one undoable command", async ({ page }) => {
+  const restyle = page.getByRole("button", { name: "改颜色", exact: true });
+  const palette = page.getByRole("group", { name: "笔迹颜色" });
+  await writeLine(page, -45); await writeLine(page, 45);
+  await expect(page.locator("#ink-save-badge")).toContainText("head 2");
+  await expect(restyle).toBeDisabled();
+  await page.getByRole("button", { name: "套索选择", exact: true }).click();
+  await lassoAll(page);
+  await expect(restyle).toBeEnabled();
+  await palette.getByRole("button", { name: "红" }).click();
+  await restyle.click();
+  await expect(page.locator("#ink-save-badge")).toContainText("head 3");
+  const ops = await operations(page);
+  const last = ops.at(-1)!;
+  expect(last.kind).toBe("restyle");
+  expect((last as { stroke_ids: string[]; color: string }).stroke_ids).toHaveLength(2);
+  expect((last as { color: string }).color).toBe("#c62828");
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect(page.locator("#ink-save-badge")).toContainText("head 4");
+  expect((await operations(page)).at(-1)!.kind).toBe("undo");
+});
+
+test("N3a push to tablet falls back to the QR when the tablet is offline", async ({ page }) => {
+  await page.evaluate(() => { (window.inkDesktopHarness.behavior as { pushOffline: boolean }).pushOffline = true; });
+  await page.getByRole("button", { name: "推送到平板", exact: true }).click();
+  await expect(page.locator("#ink-persistence-status")).toContainText("未连接");
+  await expect(page.locator("[data-qr]")).toBeVisible();
+});
+
+test("N3a push asks before taking over a remote writer", async ({ page }) => {
+  await page.evaluate(() => { (window.inkDesktopHarness.behavior as { pushNeedsTakeover: boolean }).pushNeedsTakeover = true; });
+  const push = page.getByRole("button", { name: "推送到平板", exact: true });
+  await push.click();
+  await expect(page.getByRole("button", { name: /仍然推送/ })).toBeVisible();
+  await page.getByRole("button", { name: /仍然推送/ }).click();
+  await expect.poll(() => page.evaluate(() => (window.inkDesktopHarness.behavior as { pushArgs: unknown[] }).pushArgs.length)).toBe(2);
+  const args = await page.evaluate(() => (window.inkDesktopHarness.behavior as { pushArgs: Array<{ allowTransfer?: boolean }> }).pushArgs);
+  expect(args[0].allowTransfer).toBeFalsy();
+  expect(args[1].allowTransfer).toBe(true);
+});

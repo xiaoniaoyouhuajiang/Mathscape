@@ -224,3 +224,19 @@ test("N3.0 the tablet deletes a lasso selection with one erase that a single und
   await page.getByRole("button",{name:"撤销",exact:true}).click();await expect(page.locator("#pad-desktop-status")).toContainText("head 4");
   const projection=(await control("status")).document.document.operations.at(-1);expect(projection.kind).toBe("undo");
 });
+
+test("N3a the tablet restyles a lasso selection with one undoable command",async({page})=>{
+  const restyle=page.getByRole("button",{name:"改颜色",exact:true});
+  const palette=page.getByRole("group",{name:"笔迹颜色"});
+  await writeLine(page,-45);await writeLine(page,45);await expect(page.locator("#pad-desktop-status")).toContainText("head 2");
+  await expect(restyle).toBeDisabled();
+  await page.getByRole("button",{name:"套索选择",exact:true}).click();await lassoAll(page);
+  await expect(restyle).toBeEnabled();
+  await palette.getByRole("button",{name:"红"}).click();
+  await restyle.click();
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 3");
+  const restyleOp=(await control("status")).document.document.operations.at(-1);
+  expect(restyleOp.kind).toBe("restyle");expect(restyleOp.stroke_ids).toHaveLength(2);expect(restyleOp.color).toBe("#c62828");
+  await page.getByRole("button",{name:"撤销",exact:true}).click();await expect(page.locator("#pad-desktop-status")).toContainText("head 4");
+  expect((await control("status")).document.document.operations.at(-1).kind).toBe("undo");
+});
