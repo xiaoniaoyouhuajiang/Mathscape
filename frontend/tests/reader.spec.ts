@@ -119,6 +119,24 @@ test("virtual path boundary, read errors, JSON and switching during a load", asy
   await expect(page.locator("#reader")).toContainText("Artifact 不存在");
 });
 
+test("failed reads are not content and never replace the last successful document", async ({ page }) => {
+  const first = await page.evaluate(async () => {
+    const reader = (window as any).harness.reader;
+    const opened = await reader.open("missing", "Missing");
+    return { opened, hasContent: reader.hasContent(), last: reader.lastOpened() };
+  });
+  expect(first).toEqual({ opened: false, hasContent: false, last: undefined });
+  const retry = await page.evaluate(async () => {
+    const reader = (window as any).harness.reader;
+    await reader.open("md", "Valid", { conversionId: "conversion", focus: { start: 0, end: 10, blockIds: ["test-block-0"] } });
+    const opened = await reader.open("missing", "Missing again");
+    return { opened, hasContent: reader.hasContent(), last: reader.lastOpened() };
+  });
+  expect(retry.opened).toBe(false);
+  expect(retry.hasContent).toBe(false);
+  expect(retry.last).toEqual({ id: "md", title: "Valid", options: { conversionId: "conversion", focus: { start: 0, end: 10, blockIds: ["test-block-0"] } } });
+});
+
 test("Markdown block endpoints, raw source, full selection and review policy", async ({ page }) => {
   await page.evaluate(async () => (window as any).harness.reader.open("md", "选择测试"));
   await expect(page.getByRole("button", { name: "设置起点" })).toBeDisabled();

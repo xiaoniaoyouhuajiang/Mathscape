@@ -1406,7 +1406,19 @@ impl SqliteArtifactStore {
         Ok(receipt)
     }
 
-    /// Active links of one note, primary first.
+    /// Payload JSON of a map entity (for N3b problem-card rendering).
+    pub fn map_object_payload(
+        &self,
+        object_id: &str,
+    ) -> Result<Option<serde_json::Value>, SqliteStoreError> {
+        let row = source_object_state(&self.connection, object_id)?;
+        Ok(match row {
+            Some((_kind, _rev, _life, payload)) => Some(serde_json::from_str(&payload)?),
+            None => None,
+        })
+    }
+
+        /// Active links of one note, primary first.
     pub fn ink_note_links(&self, document_id: &str) -> Result<Vec<InkNoteLink>, SqliteStoreError> {
         links_of_note(&self.connection, document_id)
     }

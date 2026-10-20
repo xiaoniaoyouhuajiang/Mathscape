@@ -15,9 +15,22 @@ import {
   setInkContextCreator,
   setInkSourceCandidateProvider,
 } from "./ink/links";
-import { ArtifactReader } from "./reader/reader";
+import { ArtifactReader, type ReaderOpenOptions } from "./reader/reader";
+import { sourceNodeDetail } from "./reader/content";
 import { mountReviewWorkspace } from "./review/workspace";
 import { AppShell } from "./shell/app-shell";
+import {
+  INK_SPLIT_WINDOW_MIN,
+  mountInkSplitResizer,
+  type InkSplitHandle,
+} from "./shell/ink-split";
+import {
+  ensureSplitEmptyHost,
+  hideSplitEmpty,
+  showSplitEmpty,
+  type SplitSourceItem,
+} from "./shell/ink-split-empty";
+import { listInkNoteLinks, type InkNoteLink } from "./ink/links";
 import "./styles.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -33,25 +46,275 @@ const el = shell.elements;
 
 let inkWorkspace!: DesktopInkWorkspace;
 let inkOpen = false;
+let inkSplit = false;
+/** Last pane that received a pointer: used so Delete in the reader never erases ink. */
+let inkPaneFocused = true;
+const readerHome = el.readerHost.parentElement!;
+let inkSplitHandle: InkSplitHandle | undefined;
+/** Bumped on every exit from split/ink so in-flight left-pane loads cannot resurrect the overlay. */
+let splitGeneration = 0;
+let splitReaderRequest = 0;
+let splitReaderError: string | undefined;
+
+function placeReaderInSplit(inSplit: boolean): void {
+  if (inSplit) {
+    // Never move #reader into the overlay after an exit (in-flight ensure/open).
+    if (!inkSplit || !inkOpen) return;
+    if (el.readerHost.parentElement !== el.inkSplitReader) {
+      el.inkSplitReader.append(el.readerHost);
+    }
+    el.readerHost.classList.add("reader-panel");
+    // Keep host visible only when it has a document; empty state covers the blank case.
+    el.readerHost.hidden = !reader.hasContent() && !reader.isLoading();
+  } else {
+    restoreReaderHome({ hide: false });
+  }
+}
+
+/** Put #reader back under the map canvas and clear the split empty state. */
+function restoreReaderHome(opts: { hide: boolean }): void {
+  if (el.readerHost.parentElement !== readerHome) {
+    readerHome.append(el.readerHost);
+  }
+  hideSplitEmpty(el.inkSplitReader.querySelector("#ink-split-empty"));
+  if (opts.hide) el.readerHost.hidden = true;
+}
+
+function splitSourceItems(): SplitSourceItem[] {
+  const items: SplitSourceItem[] = [];
+  const seen = new Set<string>();
+  for (const pdf of currentSnapshot?.pdf_artifacts ?? []) {
+    if (seen.has(pdf.artifact_id)) continue;
+    seen.add(pdf.artifact_id);
+    items.push({ artifactId: pdf.artifact_id, label: pdf.filename || pdf.artifact_id });
+  }
+  for (const node of currentSnapshot?.landscape_graph.nodes ?? []) {
+    if (node.domain_kind !== "SourceArtifact" || !node.domain_id || seen.has(node.domain_id)) continue;
+    seen.add(node.domain_id);
+    items.push({ artifactId: node.domain_id, label: node.label || node.domain_id });
+  }
+  return items;
+}
+
+function primaryIsOpenable(link: InkNoteLink | undefined): boolean {
+  if (!link) return false;
+  // 并排左侧只用于原文；不并排打开另一份手稿。
+  if (link.target.kind === "ink_note") return false;
+  return link.target.kind === "markdown" || link.target.kind === "source_object";
+}
+
+type SplitReaderTarget =
+  | { kind: "artifact"; id: string; title: string; options?: ReaderOpenOptions }
+  | { kind: "source_object"; id: string; title: string };
+
+async function splitPrimaryLink(): Promise<InkNoteLink | undefined> {
+  const primary = inkWorkspace.primaryLink();
+  if (primary) return primary;
+  const documentId = inkWorkspace.currentDocumentId();
+  if (!documentId) return;
+  try {
+    const links = await listInkNoteLinks(documentId);
+    if (inkWorkspace.currentDocumentId() === documentId) {
+      return links.find(link => link.is_primary && link.state === "active");
+    }
+  } catch { /* The source picker remains available. */ }
+}
+
+async function openSplitReader(target: SplitReaderTarget): Promise<void> {
+  if (!inkSplit || !inkOpen) return;
+  const generation = splitGeneration;
+  const request = ++splitReaderRequest;
+  const stillSplit = () => generation === splitGeneration && request === splitReaderRequest && inkSplit && inkOpen;
+  splitReaderError = undefined;
+  placeReaderInSplit(true);
+  hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
+  el.readerHost.hidden = false;
+  inkPaneFocused = false;
+  try {
+    let artifactId = target.id;
+    let options: ReaderOpenOptions = target.kind === "artifact" ? target.options ?? {} : {};
+    if (target.kind === "source_object") {
+      const node = currentSnapshot?.landscape_graph.nodes.find(item => item.domain_id === target.id);
+      if (node?.domain_kind !== "SourceArtifact") {
+        // Units/spans/relations are anchors, not files. Reuse the inspector's locator.
+        const detail = await sourceNodeDetail(target.id);
+        if (!stillSplit()) return;
+        if (!detail.artifact_id) throw new Error("关联的来源对象没有可打开的原文");
+        artifactId = detail.artifact_id;
+        options = {
+          focus: detail.byte_range ? { ...detail.byte_range, blockIds: detail.markdown_block_ids } : undefined,
+          inkFocus: detail.ink,
+        };
+      }
+    }
+    if (!stillSplit()) return;
+    const opened = await reader.open(artifactId, target.title, options);
+    if (!stillSplit()) return;
+    if (!opened) {
+      if (reader.isLoading() || reader.hasContent()) return; // A different reader action took over.
+      throw new Error(reader.lastError() ?? "原文未能打开");
+    }
+    window.dispatchEvent(new Event("resize"));
+  } catch (error: unknown) {
+    if (!stillSplit()) return;
+    splitReaderError = errorMessage(error);
+    reader.close();
+    const primary = await splitPrimaryLink();
+    if (stillSplit()) renderSplitEmpty(primary);
+  }
+}
+
+function openPrimaryInSplit(link: InkNoteLink): void {
+  const target = link.target;
+  if (target.kind === "ink_note") {
+    shell.showToast("并排阅读左侧用于原文，不能并排打开另一份手稿。", "error");
+    return;
+  }
+  if (target.kind === "markdown") {
+    void openSplitReader({
+      kind: "artifact", id: target.artifact_id, title: link.target_label,
+      options: { focus: { start: target.start, end: target.end, blockIds: target.block_ids } },
+    });
+    return;
+  }
+  void openSplitReader({ kind: "source_object", id: target.object_id, title: link.target_label });
+}
+
+function renderSplitEmpty(primary: InkNoteLink | undefined): void {
+  if (!inkSplit || !inkOpen) return;
+  const host = ensureSplitEmptyHost(el.inkSplitReader);
+  el.readerHost.hidden = true;
+  showSplitEmpty(host, {
+    primaryLabel: primary?.target_label,
+    error: splitReaderError,
+    primaryOpenable: primaryIsOpenable(primary),
+    sources: splitSourceItems(),
+    onOpenPrimary: () => { if (primary) openPrimaryInSplit(primary); },
+    onOpenSource: (item) => void openSplitReader({ kind: "artifact", id: item.artifactId, title: item.label }),
+    onImportPdf: () => void artifactController.importPdf(),
+    onBackToMap: () => inkWorkspace.close(),
+  });
+  inkPaneFocused = false;
+}
+
+/** Fill the left pane: keep / restore reader, auto-open primary markdown, or show a picker. */
+async function ensureSplitLeftPane(): Promise<void> {
+  if (!inkSplit || !inkOpen) return;
+  const generation = splitGeneration;
+  const request = splitReaderRequest;
+  const stillSplit = () => generation === splitGeneration && request === splitReaderRequest && inkSplit && inkOpen;
+  placeReaderInSplit(true);
+  if (!stillSplit()) return;
+  if (reader.hasContent()) {
+    splitReaderError = undefined;
+    hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
+    el.readerHost.hidden = false;
+    window.dispatchEvent(new Event("resize"));
+    return;
+  }
+  if (reader.isLoading()) { el.readerHost.hidden = false; return; }
+  // A failure must return to a recoverable picker, not retry a remembered target in a loop.
+  if (splitReaderError) {
+    const primary = await splitPrimaryLink();
+    if (stillSplit()) renderSplitEmpty(primary);
+    return;
+  }
+  // Restore the last reader document if we only hid it when opening 手稿.
+  const last = reader.lastOpened();
+  if (last) {
+    if (!stillSplit()) return;
+    void openSplitReader({ kind: "artifact", id: last.id, title: last.title, options: last.options });
+    return;
+  }
+  const primary = await splitPrimaryLink();
+  if (!stillSplit()) return;
+  if (primary?.target.kind === "markdown") {
+    openPrimaryInSplit(primary);
+    return;
+  }
+  renderSplitEmpty(primary);
+}
+
+function setInkSplit(enabled: boolean, opts: { hint?: boolean } = {}): void {
+  if (enabled && window.innerWidth < INK_SPLIT_WINDOW_MIN) {
+    shell.showToast(`窗口窄于 ${INK_SPLIT_WINDOW_MIN}px，暂无法并排阅读。`, "error");
+    enabled = false;
+  }
+  if (enabled === inkSplit) {
+    if (enabled) {
+      inkSplitHandle?.setEnabled(true);
+      void ensureSplitLeftPane();
+    }
+    return;
+  }
+  if (!enabled) splitGeneration += 1;
+  inkSplit = enabled;
+  el.inkWorkspace.classList.toggle("is-split", enabled);
+  el.inkSplitReader.hidden = !enabled;
+  el.inkSplitResizer.hidden = !enabled;
+  placeReaderInSplit(enabled);
+  inkSplitHandle?.setEnabled(enabled);
+  // Per-layout notes-list preference, and fit the page once on entering 并排.
+  inkWorkspace.setSplitMode(enabled);
+  const toggle = el.inkHost.querySelector<HTMLButtonElement>("#ink-split-toggle");
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", String(enabled));
+    toggle.textContent = enabled ? "退出并排" : "并排阅读";
+  }
+  if (enabled) void ensureSplitLeftPane();
+  else {
+    restoreReaderHome({ hide: true });
+    hideSplitEmpty(el.inkSplitReader.querySelector("#ink-split-empty"));
+  }
+  window.dispatchEvent(new Event("resize"));
+  if (!enabled && opts.hint) {
+    shell.showToast("窗口过窄，已退出并排阅读。", "error");
+  }
+}
+
 const closeInkWorkspace = () => {
+  // Drop split first (bumps splitGeneration via setInkSplit) so in-flight left-pane
+  // loads cannot move #reader back into the overlay or unhide it over the map.
+  setInkSplit(false);
   inkOpen = false;
-  el.inkHost.hidden = true;
+  el.inkWorkspace.hidden = true;
   el.workspaceGrid.hidden = false;
   el.inkButton.textContent = "手写";
-  // Safety net for changes made from the tablet while the map was hidden.
+  restoreReaderHome({ hide: true });
+  // Graph lived under display:none while 手写 was open — reflow after layout.
+  requestAnimationFrame(() => {
+    graphController.resize();
+    window.dispatchEvent(new Event("resize"));
+  });
   loadInkOverlay();
 };
 inkWorkspace = new DesktopInkWorkspace(el.inkHost, closeInkWorkspace, (message, kind) => shell.showToast(message, kind));
+inkSplitHandle = mountInkSplitResizer(el.inkWorkspace, el.inkSplitReader, el.inkSplitResizer);
+el.inkHost.addEventListener("pointerdown", () => { inkPaneFocused = true; }, true);
+el.inkSplitReader.addEventListener("pointerdown", () => { inkPaneFocused = false; }, true);
+// Expose focus probe for the desktop Delete handler.
+(window as unknown as { __mathscapeInkPaneFocused?: () => boolean }).__mathscapeInkPaneFocused = () => inkPaneFocused;
+
 el.inkButton.addEventListener("click", () => {
   inkOpen = !inkOpen;
   if (inkOpen) {
     el.workspaceGrid.hidden = true;
-    el.inkHost.hidden = false;
+    el.inkWorkspace.hidden = false;
     el.inkButton.textContent = "返回地图";
     void inkWorkspace.open();
   } else {
     inkWorkspace.close();
   }
+});
+window.addEventListener("resize", () => {
+  if (inkSplit && window.innerWidth < INK_SPLIT_WINDOW_MIN) setInkSplit(false, { hint: true });
+});
+eventBus.on("ink-split-toggle", (detail) => {
+  if (!inkOpen) return;
+  const next = detail && typeof detail === "object" && detail !== null && "enabled" in detail && detail.enabled !== undefined
+    ? !!detail.enabled
+    : !inkSplit;
+  setInkSplit(next);
 });
 
 mountDiscoveryTask();
@@ -97,6 +360,7 @@ const graphController = new GraphController(
       void inspectorController.enterCreateRelationMode(sourceId, targetId),
     onBeforeRenderGraph: () => {
       if (reader.isInkOpen()) return;
+      if (inkSplit && inkOpen) return;
       reader.close();
       el.readerHost.hidden = true;
     },
@@ -113,10 +377,22 @@ inspectorController = new InspectorController(el.nodeDetail, {
   copyIdentifier: (id) => shell.copyIdentifier(id),
   onFocusNode: (nodeId) => graphController.setFocus(nodeId, "all"),
   onOpenReader: (artifactId, label, inkFocus) => {
+    if (inkSplit && inkOpen) {
+      placeReaderInSplit(true);
+      hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
+    } else if (el.readerHost.parentElement !== readerHome) {
+      restoreReaderHome({ hide: false });
+    }
     el.readerHost.hidden = false;
     void reader.open(artifactId, label, { inkFocus });
   },
   onOpenReaderWithFocus: (artifactId, title, focus) => {
+    if (inkSplit && inkOpen) {
+      placeReaderInSplit(true);
+      hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
+    } else if (el.readerHost.parentElement !== readerHome) {
+      restoreReaderHome({ hide: false });
+    }
     el.readerHost.hidden = false;
     void reader.open(artifactId, title, { focus });
   },
@@ -184,11 +460,20 @@ el.importButton.addEventListener("click", () => void artifactController.importPd
 
 eventBus.on("source-map-changed", () => void loadSnapshot());
 function showInkWorkspace(): void {
-  reader.close(); el.readerHost.hidden = true;
-  inkOpen = true; el.workspaceGrid.hidden = true; el.inkHost.hidden = false;
+  // Keep the last reader document for a later 并排阅读; only hide the host.
+  if (!inkSplit) el.readerHost.hidden = true;
+  inkOpen = true; el.workspaceGrid.hidden = true; el.inkWorkspace.hidden = false;
   el.inkButton.textContent = "返回地图";
 }
 eventBus.on("open-ink-document", ({ documentId }) => {
+  if (inkSplit && inkOpen) {
+    inkPaneFocused = true;
+    void inkWorkspace.openDocumentId(documentId).then(() => {
+      // Left pane keeps its document; if it was empty, refresh primary / picker for the new note.
+      if (!reader.hasContent()) void ensureSplitLeftPane();
+    });
+    return;
+  }
   showInkWorkspace();
   void inkWorkspace.openDocumentId(documentId);
 });
@@ -216,17 +501,30 @@ inkViews = connectInkViews({
 eventBus.on("open-ink-link-target", ({ link }) => {
   const target = link.target;
   if (target.kind === "ink_note") {
+    if (inkSplit && inkOpen) {
+      // Right pane only — never two notes side by side.
+      void inkWorkspace.openDocumentId(target.document_id).then(() => {
+        if (!reader.hasContent()) void ensureSplitLeftPane();
+      });
+      inkPaneFocused = true;
+      return;
+    }
     eventBus.emit("open-ink-document", { documentId: target.document_id });
     return;
   }
-  inkWorkspace.close();
+  if (inkSplit && inkOpen) {
+    openPrimaryInSplit(link);
+    return;
+  }
   const nodes = currentSnapshot?.landscape_graph.nodes ?? [];
   if (target.kind === "source_object") {
+    inkWorkspace.close();
     const node = nodes.find((item) => item.domain_id === target.object_id && item.element_kind === "entity");
     if (node === undefined) { shell.showToast("关联的来源对象不在当前地图中。", "error"); return; }
     inspectorController.selectNodeById(node.id);
     return;
   }
+  inkWorkspace.close();
   const artifact = nodes.find((item) => item.domain_kind === "SourceArtifact" && item.domain_id === target.artifact_id);
   el.readerHost.hidden = false;
   void reader.open(target.artifact_id, artifact?.label ?? link.target_label, {
@@ -236,6 +534,12 @@ eventBus.on("open-ink-link-target", ({ link }) => {
 eventBus.on("open-source", (detail) => {
   void (async () => {
     if (detail.refreshMap) await loadSnapshot();
+    if (inkSplit && inkOpen) {
+      placeReaderInSplit(true);
+      hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
+    } else if (el.readerHost.parentElement !== readerHome) {
+      restoreReaderHome({ hide: false });
+    }
     el.readerHost.hidden = false;
     await reader.open(detail.artifactId, detail.title, {
       focus: detail.focus,

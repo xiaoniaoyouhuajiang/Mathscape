@@ -12,6 +12,8 @@ export interface InkCanvasOptions {
   fingerWriting: () => boolean;
   readOnly?: boolean;
   refitOnResize?: boolean;
+  /** Hand tool (button or held Space): primary drag pans the view and never edits strokes. */
+  pan?: () => boolean;
   externalPreview?: () => InkStroke | undefined;
   onPreview?: (stroke: InkStroke | undefined) => void;
   onStroke: (stroke: InkStroke) => void;
@@ -121,6 +123,9 @@ export class InkCanvas {
   private partialPreview = new Map<string, InkStroke[]>();
   private touches = new Map<number, Point>();
   private navigation: { id: number; x: number; y: number } | undefined;
+  /** True until the user pans/zooms after a fit; a fitted view refits on resize. */
+  private fitted = false;
+  private sized = false;
   private hoverTarget: InteractionTarget = "canvas";
   private activeTarget: InteractionTarget = "canvas";
   private frame = 0;
@@ -158,31 +163,65 @@ export class InkCanvas {
         else this.cancelTransientInteraction();
       }
       this.touches.delete(e.pointerId);
-      if (this.navigation?.id === e.pointerId) this.navigation = undefined;
+      if (this.navigation?.id === e.pointerId) { this.navigation = undefined; this.setCursor(this.hoverTarget); }
     });
     this.input.addEventListener("contextmenu", e => e.preventDefault());
     this.input.addEventListener("wheel", e => {
       e.preventDefault();
-      if (this.activePointer === undefined) this.zoom(Math.exp(-e.deltaY * 0.002), this.local(e.clientX, e.clientY));
+      if (this.activePointer !== undefined) return;
+      // Ctrl/Cmd+wheel (and trackpad pinch, which reports ctrlKey) zooms; a plain
+      // wheel or two-finger trackpad scroll pans, matching the PDF reader.
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.height : 1;
+      if (e.ctrlKey || e.metaKey) { this.zoom(Math.exp(-Math.max(-100, Math.min(100, e.deltaY * unit)) * 0.004), this.local(e.clientX, e.clientY)); return; }
+      const dx = e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX, dy = e.shiftKey && !e.deltaX ? 0 : e.deltaY;
+      this.panBy(-dx * unit, -dy * unit);
     }, { passive: false });
     window.addEventListener("blur", this.blur);
     document.addEventListener("visibilitychange", this.visibility);
-    let first = true;
-    this.observer = new ResizeObserver(() => {
-      const changed=this.width!==Math.max(1,host.clientWidth)||this.height!==Math.max(1,host.clientHeight);
-      if (!first && changed && this.options.refitOnResize) this.resetTransientInteraction();
-      this.width = Math.max(1, host.clientWidth);
-      this.height = Math.max(1, host.clientHeight);
-      this.dpr = Math.min(window.devicePixelRatio || 1, 2);
-      for (const canvas of [this.settledCanvas, this.previewCanvas, this.input]) {
-        canvas.width = Math.round(this.width * this.dpr);
-        canvas.height = Math.round(this.height * this.dpr);
-      }
-      if (first || (changed && this.options.refitOnResize)) { first = false; this.fit(); } else this.refresh();
-    });
+    this.observer = new ResizeObserver(() => this.resized());
     this.observer.observe(host);
   }
 
+  /**
+   * Host size changed. A hidden host (0×0) keeps the last viewport. The first
+   * real size fits the page; after that a still-fitted view refits, otherwise
+   * the world point at the centre of the view stays at the centre (the old
+   * code kept the pixel offset, so a shrinking host pushed the paper aside).
+   */
+  private resized(): void {
+    const width = this.host.clientWidth, height = this.host.clientHeight;
+    if (width <= 0 || height <= 0) return;
+    const changed = this.width !== width || this.height !== height;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (!changed && dpr === this.dpr && this.sized) return;
+    if (this.sized && changed && this.options.refitOnResize) this.resetTransientInteraction();
+    const center = this.world({ x: this.width / 2, y: this.height / 2 });
+    this.width = width;
+    this.height = height;
+    this.dpr = dpr;
+    for (const canvas of [this.settledCanvas, this.previewCanvas, this.input]) {
+      canvas.width = Math.round(this.width * this.dpr);
+      canvas.height = Math.round(this.height * this.dpr);
+    }
+    if (!this.sized || this.options.refitOnResize || (this.fitted && this.activePointer === undefined)) { this.sized = true; this.fit(); return; }
+    // Never shift the mapping under a stroke in progress.
+    if (this.activePointer !== undefined) { this.refresh(); return; }
+    this.offset = { x: this.width / 2 - center.x * this.scale, y: this.height / 2 - center.y * this.scale };
+    this.refresh();
+  }
+  /** Current view: scale and pixel offset of page coordinates inside the host. */
+  viewport(): { scale: number; offsetX: number; offsetY: number; width: number; height: number; fitted: boolean } {
+    return { scale: this.scale, offsetX: this.offset.x, offsetY: this.offset.y, width: this.width, height: this.height, fitted: this.fitted };
+  }
+  /** Pan the view only; never touches strokes or emits operations. */
+  panBy(dx: number, dy: number): void {
+    if (!dx && !dy) return;
+    this.offset = { x: this.offset.x + dx, y: this.offset.y + dy };
+    this.fitted = false;
+    this.refresh();
+  }
+  /** Re-evaluate the cursor after a hand-tool change (e.g. Space pressed). */
+  refreshCursor(): void { this.setCursor(this.hoverTarget); }
   private local(x: number, y: number): Point {
     const rect = this.input.getBoundingClientRect();
     return { x: x - rect.left, y: y - rect.top };
@@ -239,6 +278,8 @@ export class InkCanvas {
     const page = this.options.page();
     this.scale = Math.max(0.05, Math.min((this.width - 32) / page.width, (this.height - 32) / page.height));
     this.offset = { x: (this.width - page.width * this.scale) / 2, y: (this.height - page.height * this.scale) / 2 };
+    // Before the first real size the fit is provisional; resized() will fit again.
+    this.fitted = true;
     this.refresh();
   }
   zoom(factor: number, center = { x: this.width / 2, y: this.height / 2 }): void {
@@ -246,6 +287,7 @@ export class InkCanvas {
     const world = this.world(center), next = Math.max(0.05, Math.min(8, this.scale * factor));
     this.offset = { x: center.x - world.x * next, y: center.y - world.y * next };
     this.scale = next;
+    this.fitted = false;
     this.refresh();
   }
   private setup(canvas: HTMLCanvasElement, clear: boolean): CanvasRenderingContext2D {
@@ -370,6 +412,8 @@ export class InkCanvas {
     ctx.beginPath(); ctx.arc(center.x, center.y, 8 / this.scale, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   }
   private cursorFor(target: InteractionTarget): string {
+    if (this.navigation) return "grabbing";
+    if (this.options.pan?.()) return "grab";
     if (this.options.tool() === "partial_erase" || this.options.tool() === "erase") return "crosshair";
     if (target === "move") return this.activePointer === undefined ? "grab" : "grabbing";
     if (target === "rotate") return "crosshair";
@@ -401,7 +445,9 @@ export class InkCanvas {
     if (this.activePointer !== undefined) return;
     const position = this.local(e.clientX, e.clientY), world = this.world(position);
     if (e.pointerType === "touch" && !this.options.fingerWriting()) { this.touches.set(e.pointerId, position); return; }
-    if (e.pointerType === "mouse" && e.button !== 0) { if (e.button === 1) this.navigation = { id: e.pointerId, ...position }; return; }
+    if (e.pointerType === "mouse" && e.button !== 0) { if (e.button === 1) this.beginNavigation(e, position); return; }
+    // Hand tool: works anywhere (also outside the page) and in read-only views.
+    if (this.options.pan?.()) { this.beginNavigation(e, position); return; }
     if (this.options.readOnly && this.options.tool() !== "select") return;
     const page = this.options.page();
     if (world.x < 0 || world.y < 0 || world.x > page.width || world.y > page.height) return;
@@ -430,6 +476,17 @@ export class InkCanvas {
     this.active = { id: inkId(), page_id: page.id, capture_segment_id: segmentId, pointer_type: pointerType, status: "completed", brush: { ...this.options.brush() }, points: [] };
     this.samples(e);
     this.schedule();
+  }
+  private beginNavigation(e: PointerEvent, position: Point): void {
+    this.navigation = { id: e.pointerId, ...position };
+    try { this.input.setPointerCapture(e.pointerId); } catch { /* synthetic pointers */ }
+    this.setCursor(this.hoverTarget);
+  }
+  private endNavigation(pointerId: number): void {
+    if (this.navigation?.id !== pointerId) return;
+    this.navigation = undefined;
+    try { this.input.releasePointerCapture(pointerId); } catch { /* already released */ }
+    this.setCursor(this.hoverTarget);
   }
   private beginSelect(point: Point): void {
     const bounds = this.boundsForSelection();
@@ -462,10 +519,9 @@ export class InkCanvas {
       return;
     }
     if (this.navigation?.id === e.pointerId) {
-      this.offset.x += position.x - this.navigation.x;
-      this.offset.y += position.y - this.navigation.y;
+      const dx = position.x - this.navigation.x, dy = position.y - this.navigation.y;
       this.navigation = { id: e.pointerId, ...position };
-      this.refresh();
+      this.panBy(dx, dy);
       return;
     }
     if (this.activePointer !== undefined || !this.touches.has(e.pointerId)) {
@@ -489,6 +545,7 @@ export class InkCanvas {
       this.scale = Math.max(0.05, Math.min(8, this.scale * length(after) / Math.max(1, length(before))));
       this.offset = { x: next.x - world.x * this.scale, y: next.y - world.y * this.scale };
     }
+    this.fitted = false;
     this.refresh();
   }
   private updateTransform(point: Point): void {
@@ -616,7 +673,7 @@ export class InkCanvas {
       } else this.completeGesture(status);
     }
     this.touches.delete(e.pointerId);
-    if (this.navigation?.id === e.pointerId) this.navigation = undefined;
+    this.endNavigation(e.pointerId);
   }
   private clearTransient(): void {
     if (this.activePointer !== undefined) {

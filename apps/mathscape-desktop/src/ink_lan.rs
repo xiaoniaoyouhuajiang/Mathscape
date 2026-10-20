@@ -232,6 +232,8 @@ enum Control {
     Note(InkNoteState),
     /// N3a: push a one-time switch_offer to every connected tablet.
     SwitchOffer(Value),
+    /// N3b: primary-link problem card for one document (or clear).
+    ProblemCard { document_id: String, payload: Value },
 }
 /// Old pads only fence on known codes. Trash therefore reuses
 /// `writer_revoked` and adds a `reason` that new pads show specifically (D7).
@@ -419,6 +421,12 @@ fn asset_response_with(name: &str, csp: &'static str) -> Response {
         "text/css; charset=utf-8"
     } else if name.ends_with(".html") {
         "text/html; charset=utf-8"
+    } else if name.ends_with(".woff2") {
+        "font/woff2"
+    } else if name.ends_with(".woff") {
+        "font/woff"
+    } else if name.ends_with(".ttf") {
+        "font/ttf"
     } else {
         "application/octet-stream"
     };
@@ -696,7 +704,12 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
         .await;
         return;
     }
-    let full = json!({"type":"session_context","protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease,"note":document.note,"document":document.document,"head_seq":document.head_seq,"limits":{"operation_bytes":INK_LAN_OPERATION_BYTES,"document_bytes":INK_LAN_DOCUMENT_BYTES,"queue_bytes":INK_LAN_DOCUMENT_BYTES}});
+    let mut full = json!({"type":"session_context","protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease,"note":document.note,"document":document.document,"head_seq":document.head_seq,"limits":{"operation_bytes":INK_LAN_OPERATION_BYTES,"document_bytes":INK_LAN_DOCUMENT_BYTES,"queue_bytes":INK_LAN_DOCUMENT_BYTES}});
+    // N3b: primary-link card for this authorized note only (§10).
+    match state.service.ink_problem_card(&lease.document_id) {
+        Ok(card) => { full.as_object_mut().unwrap().insert("problem_card".into(), serde_json::to_value(card).unwrap_or(Value::Null)); }
+        Err(_) => { full.as_object_mut().unwrap().insert("problem_card".into(), Value::Null); }
+    }
     if full.to_string().len() > INK_LAN_DOCUMENT_BYTES {
         send(
             &mut socket,
@@ -729,6 +742,11 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
                 if let Ok(Control::SwitchOffer(payload))=&event {
                     // Every connected tablet receives the offer; the first to claim wins.
                     if !send(&mut socket, payload.clone()).await {break;}
+                    continue;
+                }
+                if let Ok(Control::ProblemCard{document_id,payload})=&event {
+                    // §10: only the tablet writing this note sees its card.
+                    if document_id==&lease.document_id && !send(&mut socket, payload.clone()).await {break;}
                     continue;
                 }
                 let code=match event {Ok(Control::Stop(revoke))=>Some(if revoke{"writer_revoked"}else{"server_restart"}),Ok(Control::Revoke(doc)) if doc==lease.document_id=>Some("writer_revoked"),Ok(Control::Replace(old)) if old==instance=>Some("connection_replaced"),Err(broadcast::error::RecvError::Lagged(_))=>Some("reconnect_required"),_=>None};
@@ -1321,6 +1339,18 @@ impl DesktopService {
     /// Called after a desktop rename so tablets and the setup page follow it.
     pub(crate) fn ink_note_renamed(&self, note: &InkNoteState) {
         note_changed(&self.ink_lan.live, note);
+    }
+    /// N3b: push the current primary-link card (or clear) to tablets on this note.
+    pub(crate) fn ink_problem_card_changed(&self, document_id: &str) {
+        let payload = match self.ink_problem_card(document_id) {
+            Ok(Some(card)) => crate::ink_problem_card::InkProblemCard::wire_push(document_id, &card),
+            Ok(None) => crate::ink_problem_card::InkProblemCard::wire_clear(document_id),
+            Err(_) => crate::ink_problem_card::InkProblemCard::wire_clear(document_id),
+        };
+        let _ = self.ink_lan.live.control.send(Control::ProblemCard {
+            document_id: document_id.into(),
+            payload,
+        });
     }
     /// Called after documents move to the trash: closes their tablet
     /// connections, drops live previews and ends a setup bound to them.

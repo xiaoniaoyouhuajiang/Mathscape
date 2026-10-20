@@ -276,14 +276,19 @@ mockIPC(async (command, payload) => {
     return receipt;
   }
   if (command === "get_source_node_detail") {
+    const extraDetail = extraCommands.get(command);
+    if (extraDetail) return extraDetail(args);
     const receipt = [...evidence.values()].find(receipt => receipt.span_id === args.nodeId)!;
     const snapshot = [...snapshots.values()].flat().find(snapshot => snapshot.snapshot_id === receipt.snapshot_id)!;
     return {node_id:receipt.span_id,kind:"SourceSpan",display_title:"手稿证据",artifact_id:receipt.artifact_id,byte_range:null,excerpt:null,markdown_block_ids:[],payload:{},ink:{snapshot_id:snapshot.snapshot_id,document_id:snapshot.document_id,page_id:receipt.page_id,stroke_ids:receipt.stroke_ids}};
   }
   if (command === "get_map_object_edit_context") throw new Error("对象不存在");
   if (command === "get_artifact_content_info") {
-    const snapshot = [...snapshots.values()].flat().find(snapshot => snapshot.artifact_id === args.artifactId)!;
-    return {artifact_id:snapshot.artifact_id,media_type:"application/json",byte_size:snapshot.byte_size,contexts:[],ink_snapshot_id:snapshot.snapshot_id};
+    const snapshot = [...snapshots.values()].flat().find(snapshot => snapshot.artifact_id === args.artifactId);
+    if (snapshot) return {artifact_id:snapshot.artifact_id,media_type:"application/json",byte_size:snapshot.byte_size,contexts:[],ink_snapshot_id:snapshot.snapshot_id};
+    const extraInfo = extraCommands.get("get_artifact_content_info");
+    if (extraInfo) return extraInfo(args);
+    throw new Error("artifact not found: " + String(args.artifactId));
   }
   if (command === "create_ink_snapshot") {
     const request = args.request as { request_id: string; document_id: string; expected_head: number };

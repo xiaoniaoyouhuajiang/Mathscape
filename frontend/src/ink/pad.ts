@@ -1,10 +1,14 @@
 import { InkCanvas,type CanvasMetrics,type InkTool } from "./canvas";
 import { appendInk,encodeInk,inkId,inkMetadata,normalizeInkTitle,INK_TITLE_MAX,parseInkDocument,projectInk,type InkDocument,type InkStroke,type InkBrush,type CaptureSegment,type InkPage,type InkProjection } from "./model";
 import { InkPadStore,type PadBinding,type PadDraft } from "./pad-store";
-import { InkPadTransport,PadTransportError,type PadContext,type PadNote,type PadSwitchOffer } from "./pad-transport";
+import { InkPadTransport,PadTransportError,type PadContext,type PadNote,type PadProblemCard,type PadSwitchOffer } from "./pad-transport";
+/** Keep role labels here so the pad bundle does not pull Tauri IPC via links.ts. */
+const PAD_ROLE_LABELS:Record<string,string>={attempt:"尝试",alt_proof:"另证",check:"验算",study:"学习笔记",question:"疑问",reference:"参考"};
+function padRoleLabel(role:string):string{return PAD_ROLE_LABELS[role]??role;}
 import type { InkOutboxItem } from "./outbox";
 import { isDeleteKey,isTypingTarget } from "./keys";
 import { createInkPalette,INK_DEFAULT_COLOR,PAD_COLOR_KEY,type InkPalette } from "./palette";
+import { problemCardMarkdown } from "./problem-card";
 import "./lab.css";
 import "./pad.css";
 
@@ -41,6 +45,7 @@ class InkPad {
   private lastMetricsSummary=0;
   private navigationRevision=0;
   private note:PadNote|undefined;
+  private problemCard:PadProblemCard|null|undefined;
   private renaming:Promise<void>|undefined;
 
   async start():Promise<void> {
@@ -50,11 +55,18 @@ class InkPad {
       <nav class="ink-toolbar" aria-label="书写工具"><div class="ink-tool-group"><button id="pad-pen" class="is-active">笔</button><button id="pad-select">套索选择</button><button id="pad-erase">整笔擦除</button><button id="pad-partial_erase">局部擦除</button><button id="pad-undo">撤销</button><button id="pad-redo">重做</button><button id="pad-delete-selection" disabled title="删除套索选中的笔迹，可撤销">删除所选</button><button id="pad-restyle" disabled title="把选中笔迹改成当前颜色，可撤销">改颜色</button></div>
       <div class="ink-tool-group"><span id="pad-palette-host"></span><label class="ink-control">笔宽<input id="pad-width" type="range" min="1" max="16" step="0.5" value="4"></label><label class="ink-control"><input id="pad-finger" type="checkbox">手指书写</label></div>
       <div class="ink-tool-group"><select id="pad-page" aria-label="页面"></select><button id="pad-add-page">新增页面</button><button id="pad-zoom-out" aria-label="缩小">−</button><button id="pad-fit">整页</button><button id="pad-zoom-in" aria-label="放大">＋</button></div></nav>
+      <details id="pad-problem-card" class="pad-problem-card" hidden>
+        <summary class="pad-problem-card-summary"><span id="pad-problem-card-title">题目卡片</span><span id="pad-problem-card-meta" class="pad-problem-card-meta"></span></summary>
+        <div id="pad-problem-card-status" class="pad-problem-card-status" hidden></div>
+        <div id="pad-problem-card-body" class="pad-problem-card-body"></div>
+        <p id="pad-problem-card-truncated" class="pad-problem-card-truncated" hidden>正文已截断</p>
+        <button id="pad-problem-card-retry" class="pad-problem-card-retry" type="button" hidden>重新读取原文</button>
+      </details>
       <section id="pad-board" class="ink-board" aria-label="平板画板"></section>
       <footer class="pad-footer"><div class="pad-save-state"><span id="pad-local-status">尚未打开手稿</span><span id="pad-desktop-status">尚未连接电脑</span></div><div class="ink-file-actions"><button id="pad-sync">立即同步</button><button id="pad-snapshot">保存快照</button><button id="pad-export">导出恢复草稿</button><button id="pad-png">导出 PNG</button><button id="pad-retry">重试连接</button><select id="pad-drafts" aria-label="最近手稿"></select></div><p id="pad-status" class="lab-status" role="status">请使用 Mathscape 中展示的二维码配对。</p><details class="ink-diagnostics"><summary>输入与恢复诊断</summary><div id="pad-diagnostics"></div></details></footer></main>`;
     // N3.0: shared presets + custom colour; the tablet remembers its own choice.
     this.palette=createInkPalette({storageKey:PAD_COLOR_KEY,idPrefix:"pad"});element("#pad-palette-host").replaceWith(this.palette.element);
-    this.events();this.controls();
+    this.events();this.controls();this.initProblemCard();
     try{
       this.database=await InkPadStore.open();
       const target=new URLSearchParams(location.hash.slice(1));
@@ -135,6 +147,8 @@ class InkPad {
     this.segment=undefined;
     this.projection=undefined;
     this.note=undefined;
+    this.problemCard=undefined;
+    this.renderProblemCard();
     this.snapshotRequest=undefined;
     this.fenced=false;
     this.fenceCode=undefined;
@@ -188,7 +202,7 @@ class InkPad {
       }
       if(state==="ready")void this.database?.clearNeedsReauth(binding.key).then(()=>this.refreshDrafts());
       this.controls();this.summary();
-    },()=>{void this.sendRename();void (this.flushing??Promise.resolve()).then(()=>{if(current())void this.flush();});},note=>{if(current())void this.applyNote(note);},offer=>{if(current())void this.handleSwitchOffer(offer);});this.transport=transport;transport.connect();
+    },()=>{void this.sendRename();void (this.flushing??Promise.resolve()).then(()=>{if(current())void this.flush();});},note=>{if(current())void this.applyNote(note);},offer=>{if(current())void this.handleSwitchOffer(offer);},(card,documentId)=>{if(current())this.applyProblemCard(card,documentId);});this.transport=transport;transport.connect();
   }
   private async restore(context:PadContext,binding:PadBinding,current:()=>boolean):Promise<void> {
     if(!current())return;
@@ -208,6 +222,9 @@ class InkPad {
     if(!current())return;
     this.confirmed=context.head_seq;this.pending=pending.length;this.fenced=false;this.fenceCode=undefined;
     this.mount(document,this.page);await this.refreshDrafts();
+    if(!current())return;
+    // N3b: session_context may carry the primary-link card (or null / omitted).
+    if("problem_card" in context)this.applyProblemCard(context.problem_card??null,binding.lease.document_id);
   }
   private async requestRename(raw:string):Promise<void> {
     const binding=this.binding,document=this.document;if(!binding||!document||!this.database||this.fenced)return;
@@ -288,6 +305,47 @@ class InkPad {
   }
 
   /** N3a: desktop push-switch. Drain the current note first; never discard strokes. */
+
+  private static readonly PROBLEM_CARD_COLLAPSED_KEY="mathscape:ink-pad-problem-card-collapsed";
+  private initProblemCard():void {
+    const card=element<HTMLDetailsElement>("#pad-problem-card");
+    try{if(localStorage.getItem(InkPad.PROBLEM_CARD_COLLAPSED_KEY)==="1")card.open=false;else card.open=true;}catch{card.open=true;}
+    card.addEventListener("toggle",()=>{
+      try{localStorage.setItem(InkPad.PROBLEM_CARD_COLLAPSED_KEY,card.open?"0":"1");}catch{/* optional */}
+    });
+    element<HTMLButtonElement>("#pad-problem-card-retry").onclick=()=>{
+      // Reconnect with the same note credential; session_context refreshes only its primary card.
+      element<HTMLButtonElement>("#pad-retry").click();
+    };
+  }
+  private applyProblemCard(card:PadProblemCard|null,documentId:string):void {
+    if(this.binding&&documentId&&documentId!==this.binding.lease.document_id)return;
+    this.problemCard=card;
+    this.renderProblemCard();
+  }
+  private renderProblemCard():void {
+    const host=element<HTMLDetailsElement>("#pad-problem-card");
+    const card=this.problemCard;
+    if(!card){host.hidden=true;element("#pad-problem-card-body").textContent="";element("#pad-problem-card-status").hidden=true;element("#pad-problem-card-truncated").hidden=true;element("#pad-problem-card-retry").hidden=true;return;}
+    host.hidden=false;
+    const role=padRoleLabel(card.role);
+    element("#pad-problem-card-title").textContent=card.target_label||"题目卡片";
+    element("#pad-problem-card-meta").textContent=`${role} · 主关联`;
+    const status=element("#pad-problem-card-status");
+    if(card.status==="ok"){status.hidden=true;status.textContent="";}
+    else{
+      status.hidden=false;
+      status.textContent=card.status==="stale"?"原文已更新，以下为关联时的摘要。可在电脑中打开主关联重新定位。":card.status==="missing"?"原文暂时无法读取。可重试，或在电脑中打开主关联检查。":"这类关联暂时没有可显示的文字原文。可在电脑中打开主关联查看。";
+      status.dataset.status=card.status;
+    }
+    const body=element("#pad-problem-card-body");
+    body.hidden=!card.body.trim();
+    body.classList.toggle("is-plain",card.body_format!=="markdown");
+    if(card.body_format==="markdown")body.innerHTML=problemCardMarkdown(card.body);
+    else body.textContent=card.body;
+    element("#pad-problem-card-retry").hidden=card.status==="ok";
+    element("#pad-problem-card-truncated").hidden=!card.body_truncated;
+  }
   private async handleSwitchOffer(offer:PadSwitchOffer):Promise<void> {
     if(!this.database)return;
     if(offer.document_id===this.binding?.lease.document_id){this.message(`电脑推送的是当前手稿「${offer.title}」，无需切换。`);return;}
