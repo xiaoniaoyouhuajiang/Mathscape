@@ -1094,6 +1094,7 @@ code {
 .ink-brush-controls output { min-width: 22px; color: #c7dbd6; }
 .ink-check-control input { accent-color: #78aa9e; }
 .ink-page-controls select { min-height: 30px; max-width: 100px; border: 1px solid #405863; border-radius: 6px; color: #c7dbd6; background: #17272e; font-size: 11px; }
+.ink-desktop-board[data-pan="tool"] .ink-input, .ink-desktop-board[data-pan="space"] .ink-input { cursor: grab; }
 .ink-desktop-board { position: relative; min-height: 0; overflow: hidden; background: #e7ebe9; touch-action: none; }
 .ink-desktop-board .ink-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
 .ink-desktop-board .ink-settled { z-index: 1; pointer-events: none; }
@@ -1234,3 +1235,9 @@ code {
 .ink-palette .ink-swatch:disabled { opacity: .4; cursor: default; }
 .ink-palette .ink-swatch-custom { width: 25px; height: 25px; padding: 2px; border: 1px solid #405863; border-radius: 5px; background: #17272e; }
 .ink-palette .ink-swatch-custom.is-active { box-shadow: 0 0 0 2px #5fa89a; }
+
+/* N3c: collapsible notes list — the canvas takes the freed width. */
+.ink-desktop-body.is-list-collapsed { grid-template-columns: minmax(0, 1fr); }
+.ink-desktop-body.is-list-collapsed > .ink-session-panel, .ink-session-panel[hidden] { display: none; }
+#ink-list-toggle[aria-expanded="true"] { border-color: #3d8f7a; }
+#desktop-ink-pan[aria-pressed="true"] { background: #2c5f53; border-color: #3d8f7a; }

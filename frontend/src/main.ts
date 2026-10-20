@@ -254,6 +254,8 @@ function setInkSplit(enabled: boolean, opts: { hint?: boolean } = {}): void {
   el.inkSplitResizer.hidden = !enabled;
   placeReaderInSplit(enabled);
   inkSplitHandle?.setEnabled(enabled);
+  // Per-layout notes-list preference, and fit the page once on entering 并排.
+  inkWorkspace.setSplitMode(enabled);
   const toggle = el.inkHost.querySelector<HTMLButtonElement>("#ink-split-toggle");
   if (toggle) {
     toggle.setAttribute("aria-pressed", String(enabled));
