@@ -10,11 +10,13 @@ mod ink_lan;
 mod ink_link;
 mod ink_note;
 mod ink_recovery;
+mod ink_snapshot_label;
 mod map_edit;
 mod markdown_patch;
 mod read;
 mod registration;
 mod run_disposition;
+mod search;
 mod source_map;
 
 use std::path::Path;
@@ -47,7 +49,7 @@ pub use ink_link::{
     InkLinkReceipt, InkLinkRequest, InkLinkRole, InkLinkTarget, InkLinkTargetStatus, InkLinkedNote,
     InkMarkdownTarget, InkNoteLink, InkOverlayCount, InkOverlayLink, InkSetPrimaryRequest,
     InkUnlinkRequest, format_link_title, markdown_excerpt, markdown_short_label,
-    normalize_markdown_text, source_object_short_label,
+    normalize_markdown_text, source_object_short_label, source_unit_kind_name,
 };
 pub use ink_note::{
     INK_NOTE_TITLE_MAX_CHARS, InkCleanBlankReceipt, InkCleanBlankRequest, InkCleanSkip,
@@ -58,8 +60,15 @@ pub use ink_note::{
 pub use ink_recovery::{
     INK_UNSAVED_OPERATIONS_FORMAT, InkUnsavedOperation, InkUnsavedOperationsExport,
 };
+pub use ink_snapshot_label::{
+    INK_SNAPSHOT_LABEL_MAX_CHARS, InkSnapshotLabelReceipt, InkSnapshotLabelRequest,
+    normalize_snapshot_label,
+};
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
+pub use search::{
+    SearchArtifactRow, SearchCorpus, SearchNoteRow, SearchSnapshotRow, SearchSourceUnitRow,
+};
 pub use source_map::{
     MapObjectOutcome, SOURCE_REGISTRATION_RECEIPT_VERSION, SourceMapSnapshot,
     SourceRegistrationReceipt, StoredMapEndpoint, StoredMapObject,
@@ -81,7 +90,7 @@ const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
     include_str!("../../../migrations/0010_discovery_run_recovery.sql");
 const INK_MIGRATION: &str = include_str!("../../../migrations/0013_ink_p1.sql");
 const INK_SNAPSHOT_MIGRATION: &str = include_str!("../../../migrations/0014_ink_snapshots_p2.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 19;
+const SUPPORTED_SCHEMA_VERSION: i64 = 20;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -174,6 +183,18 @@ pub enum SqliteStoreError {
     InkLinkTargetRetired(String),
     #[error("ink link_not_found: {0}")]
     InkLinkNotFound(String),
+    #[error("ink snapshot_not_found: {0}")]
+    InkSnapshotNotFound(String),
+    #[error(
+        "ink snapshot_label_conflict for snapshot {snapshot_id}: current label revision {current_revision}"
+    )]
+    InkSnapshotLabelConflict {
+        snapshot_id: String,
+        current_label: Option<String>,
+        current_revision: u64,
+    },
+    #[error("ink snapshot_label_invalid: {0}")]
+    InkSnapshotLabelInvalid(String),
 }
 
 impl SqliteStoreError {
@@ -188,6 +209,9 @@ impl SqliteStoreError {
             Self::InkLinkTargetInvalid(_) => "link_target_invalid",
             Self::InkLinkTargetRetired(_) => "link_target_retired",
             Self::InkLinkNotFound(_) => "link_not_found",
+            Self::InkSnapshotNotFound(_) => "snapshot_not_found",
+            Self::InkSnapshotLabelConflict { .. } => "snapshot_label_conflict",
+            Self::InkSnapshotLabelInvalid(_) => "snapshot_label_invalid",
             Self::InkRequestConflict(_) => "idempotency_conflict",
             Self::InkHeadConflict { .. } => "head_conflict",
             Self::InkSequenceConflict { .. } => "sequence_conflict",
@@ -298,6 +322,8 @@ pub struct StoredLlmProfile {
 pub struct LandscapeSnapshot {
     artifacts: ArtifactCatalogSnapshot,
     sources: SourceMapSnapshot,
+    /// N3d: snapshot Artifact id → snapshot name, for map labels.
+    ink_snapshot_labels: std::collections::BTreeMap<String, String>,
 }
 
 impl LandscapeSnapshot {
@@ -307,6 +333,10 @@ impl LandscapeSnapshot {
 
     pub fn sources(&self) -> &SourceMapSnapshot {
         &self.sources
+    }
+
+    pub fn ink_snapshot_labels(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.ink_snapshot_labels
     }
 }
 
@@ -594,7 +624,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=19 => {
+            6..=20 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -737,6 +767,20 @@ impl SqliteArtifactStore {
                 connection.pragma_update(None, "user_version", 19)?;
             }
         }
+        if version < 20 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version=20",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                ink_snapshot_label::migrate_v20(&connection)?;
+            } else {
+                connection.pragma_update(None, "user_version", 20)?;
+            }
+        }
         validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -750,6 +794,7 @@ impl SqliteArtifactStore {
         ink_lan::validate_schema(&connection)?;
         ink_note::validate_schema(&connection)?;
         ink_link::validate_schema(&connection)?;
+        ink_snapshot_label::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -1086,6 +1131,7 @@ impl SqliteArtifactStore {
         let snapshot = LandscapeSnapshot {
             artifacts: read::catalog_snapshot_from(&transaction)?,
             sources: source_map::source_map_snapshot(&transaction)?,
+            ink_snapshot_labels: ink::snapshot_labels_by_artifact(&transaction)?,
         };
         transaction.commit()?;
         Ok(snapshot)

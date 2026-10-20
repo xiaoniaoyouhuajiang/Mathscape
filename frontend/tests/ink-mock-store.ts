@@ -21,7 +21,9 @@ const noteCalls: Array<{ command: string; request: Record<string, unknown> }> = 
 const noteState = (id: string) => { const document = documents.get(id)!; return { document_id: id, title: document.title, created_at: document.created_at, ...notes.get(id)! }; };
 const summary = (document: InkDocument) => ({ document_id: document.document_id, title: document.title, created_at: document.created_at, head_seq: document.operations.length, session_count: 1, active_session_id: sessions.get(document.document_id), updated_at: document.created_at, page_count: document.pages.length, snapshot_count: snapshots.get(document.document_id)?.length ?? 0, remote_active: behavior.remoteDocumentId === document.document_id, ...notes.get(document.document_id)! });
 const structuredError = (code: string, message: string, details?: Record<string, unknown>) => ({ code, message, details });
-const behavior = { preferredHost: null as string|null, pushOffline:false, pushNeedsTakeover:false, pushArgs:[] as unknown[], noLanAddress: false, renameConflictTitle: "", delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, appendErrorCode: "", mirrorPolls: 0, loseEvidenceAck: false, remoteDocumentId:"", pairingPending:false,epoch:1,setupStep:0,remoteConnected:true,remotePending:0,setupDocumentId:"" as string|null,handoff:"",transferConfirmation:false,pairingArgs:[] as unknown[],strictPairing:false,autoRequest:true,revokedDocument:"",failCreate:false,recoveryFile:"" };
+const behavior = { preferredHost: null as string|null, pushOffline:false, pushNeedsTakeover:false, pushArgs:[] as unknown[], noLanAddress: false, renameConflictTitle: "", delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, appendErrorCode: "", mirrorPolls: 0, loseEvidenceAck: false, remoteDocumentId:"", pairingPending:false,epoch:1,setupStep:0,remoteConnected:true,remotePending:0,setupDocumentId:"" as string|null,handoff:"",transferConfirmation:false,pairingArgs:[] as unknown[],strictPairing:false,autoRequest:true,revokedDocument:"",failCreate:false,recoveryFile:"", snapshotLabelConflict: null as string|null, snapshotLabelDelay: 0 };
+const snapshotLabelRequests = new Map<string, unknown>();
+const snapshotLabelCalls: Array<Record<string, unknown>> = [];
 
 // N2 links: a tiny in-memory model of ink_note_links (soft removal, one
 // primary, replaces_link_id, auto titles "角色 · 目标").
@@ -290,6 +292,27 @@ mockIPC(async (command, payload) => {
     if (extraInfo) return extraInfo(args);
     throw new Error("artifact not found: " + String(args.artifactId));
   }
+  if (command === "rename_ink_snapshot") {
+    // Mirrors ink_snapshot_label.rs: trimmed, ≤ 40 chars, optimistic
+    // label_revision, idempotent request ids; bytes/hash never change.
+    const request = args.request as { request_id: string; snapshot_id: string; label: string; expected_label_revision: number };
+    snapshotLabelCalls.push(structuredClone(request));
+    if (behavior.snapshotLabelDelay) await new Promise(resolve => setTimeout(resolve, behavior.snapshotLabelDelay));
+    if (snapshotLabelRequests.has(request.request_id)) return { ...(snapshotLabelRequests.get(request.request_id) as object), replayed: true };
+    const snapshot = [...snapshots.values()].flat().find(item => item.snapshot_id === request.snapshot_id);
+    if (!snapshot) throw structuredError("snapshot_not_found", "快照不存在或已被移除。");
+    if (notes.get(snapshot.document_id)?.lifecycle === "trashed") throw structuredError("document_trashed", "手稿已在回收站中，恢复后才能继续编辑。");
+    if (behavior.snapshotLabelConflict !== null) { snapshot.label = behavior.snapshotLabelConflict || null; snapshot.label_revision = (snapshot.label_revision ?? 0) + 1; behavior.snapshotLabelConflict = null; }
+    if ((snapshot.label_revision ?? 0) !== request.expected_label_revision) throw structuredError("snapshot_label_conflict", "快照名称已在别处修改，请选择保留哪一个。", { snapshot_id: snapshot.snapshot_id, current_label: snapshot.label ?? null, current_label_revision: snapshot.label_revision ?? 0 });
+    const label = request.label.trim();
+    if ([...label].length > 40) throw structuredError("snapshot_label_invalid", "快照名称最多 40 个字符");
+    if ((label || null) !== (snapshot.label ?? null)) { snapshot.label = label || null; snapshot.label_revision = (snapshot.label_revision ?? 0) + 1; }
+    const { manifest_json: _manifest, ...summary } = snapshot;
+    void _manifest;
+    const receipt = { request_id: request.request_id, snapshot: structuredClone(summary), replayed: false };
+    snapshotLabelRequests.set(request.request_id, receipt);
+    return receipt;
+  }
   if (command === "create_ink_snapshot") {
     const request = args.request as { request_id: string; document_id: string; expected_head: number };
     const document = documents.get(request.document_id)!;
@@ -311,6 +334,8 @@ mockIPC(async (command, payload) => {
         point_count: projection.pointCount,
       }),
       created_at: "unix:1791676800",
+      label: null,
+      label_revision: 0,
     };
     const previous = snapshots.get(request.document_id)!.find(stored => stored.snapshot_id === snapshot.snapshot_id);
     if (previous) return previous;
@@ -325,4 +350,5 @@ mockIPC(async (command, payload) => {
 
 /** Extra commands a harness adds (e.g. the app shell's snapshot). */
 export const extraCommands = new Map<string, (args: Record<string, unknown>) => unknown>();
+export { snapshotLabelCalls };
 export { a, b, documents, sessions, snapshots, evidence, evidenceRequests, calls, notes, noteCalls, noteState, behavior, links, linkCalls, exports, sourceLabels, overlayCalls };

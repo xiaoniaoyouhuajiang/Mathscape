@@ -27,6 +27,16 @@ pub fn project_artifact_catalog(
     catalog: &ArtifactCatalogSnapshot,
     lens: ProjectionLens,
 ) -> Result<GraphProjection, ArtifactGraphProjectionError> {
+    project_artifact_catalog_labeled(catalog, lens, None)
+}
+
+/// Like [`project_artifact_catalog`], with N3d snapshot names (snapshot
+/// Artifact id → name) prefixed to the snapshot material labels.
+pub(crate) fn project_artifact_catalog_labeled(
+    catalog: &ArtifactCatalogSnapshot,
+    lens: ProjectionLens,
+    snapshot_labels: Option<&BTreeMap<String, String>>,
+) -> Result<GraphProjection, ArtifactGraphProjectionError> {
     if !matches!(lens, ProjectionLens::Source | ProjectionLens::Provenance) {
         return Err(ArtifactGraphProjectionError::UnsupportedLens(lens));
     }
@@ -83,6 +93,11 @@ pub fn project_artifact_catalog(
             }
             Some(contexts) => format!("共享{kind} · {} 个来源", contexts.len()),
             None => names[header.stable_id()].clone(),
+        };
+        let label = match snapshot_labels.and_then(|labels| labels.get(header.stable_id().as_str()))
+        {
+            Some(name) => format!("「{name}」 · {label}"),
+            None => label,
         };
         let location_status = record
             .locations()
@@ -185,7 +200,7 @@ fn page_label(run: &ConversionRun) -> String {
     }
 }
 
-fn product_label(media: &str) -> &'static str {
+pub(crate) fn product_label(media: &str) -> &'static str {
     match media {
         "text/markdown" => "解析正文",
         "application/json" => "解析元数据",
@@ -196,7 +211,7 @@ fn product_label(media: &str) -> &'static str {
     }
 }
 
-fn readable_filename(filename: Option<&str>, media: &str) -> String {
+pub(crate) fn readable_filename(filename: Option<&str>, media: &str) -> String {
     let Some(filename) = filename else {
         return product_label(media).to_owned();
     };

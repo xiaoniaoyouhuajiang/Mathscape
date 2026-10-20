@@ -74,6 +74,11 @@ pub struct StoredInkSnapshot {
     pub byte_size: u64,
     pub manifest_json: String,
     pub created_at: String,
+    /// N3d display name; outside the hashed manifest (v20).
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub label_revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -86,6 +91,10 @@ pub struct StoredInkSnapshotSummary {
     pub content_hash: String,
     pub byte_size: u64,
     pub created_at: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub label_revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -373,7 +382,7 @@ pub(crate) fn record_snapshot(
     if let Some(existing) = transaction
         .query_row(
             "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
-                    content_hash, byte_size, manifest_json, created_at
+                    content_hash, byte_size, manifest_json, created_at, label, label_revision
              FROM ink_snapshots WHERE request_id = ?1",
             [request_id],
             snapshot_from_row,
@@ -392,7 +401,7 @@ pub(crate) fn record_snapshot(
     if let Some(mut existing) = transaction
         .query_row(
             "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
-                    content_hash, byte_size, manifest_json, created_at
+                    content_hash, byte_size, manifest_json, created_at, label, label_revision
              FROM ink_snapshots
              WHERE document_id = ?1 AND through_seq = ?2 AND artifact_id = ?3",
             params![
@@ -446,7 +455,7 @@ pub(crate) fn read_snapshot(
     connection
         .query_row(
             "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
-                    content_hash, byte_size, manifest_json, created_at
+                    content_hash, byte_size, manifest_json, created_at, label, label_revision
              FROM ink_snapshots WHERE snapshot_id = ?1",
             [snapshot_id],
             snapshot_from_row,
@@ -462,7 +471,7 @@ pub(crate) fn snapshot_for_request(
     connection
         .query_row(
             "SELECT s.snapshot_id, r.request_id, s.document_id, s.through_seq, s.artifact_id,
-                    s.content_hash, s.byte_size, s.manifest_json, s.created_at
+                    s.content_hash, s.byte_size, s.manifest_json, s.created_at, s.label, s.label_revision
              FROM ink_snapshot_requests r JOIN ink_snapshots s ON r.snapshot_id=s.snapshot_id
              WHERE r.request_id = ?1",
             [request_id],
@@ -476,7 +485,17 @@ pub(crate) fn snapshot_for_artifact(
     connection: &Connection,
     artifact_id: &str,
 ) -> Result<Option<StoredInkSnapshot>, SqliteStoreError> {
-    connection.query_row("SELECT snapshot_id,request_id,document_id,through_seq,artifact_id,content_hash,byte_size,manifest_json,created_at FROM ink_snapshots WHERE artifact_id=?1", [artifact_id], snapshot_from_row).optional().map_err(Into::into)
+    connection.query_row("SELECT snapshot_id,request_id,document_id,through_seq,artifact_id,content_hash,byte_size,manifest_json,created_at,label,label_revision FROM ink_snapshots WHERE artifact_id=?1", [artifact_id], snapshot_from_row).optional().map_err(Into::into)
+}
+
+/// Snapshot Artifact id → name, for named snapshots only (N3d map labels).
+pub(crate) fn snapshot_labels_by_artifact(
+    connection: &Connection,
+) -> Result<std::collections::BTreeMap<String, String>, SqliteStoreError> {
+    let mut statement = connection
+        .prepare("SELECT artifact_id,label FROM ink_snapshots WHERE label IS NOT NULL")?;
+    let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    rows.collect::<Result<_, _>>().map_err(Into::into)
 }
 
 pub(crate) fn list_snapshots(
@@ -485,7 +504,7 @@ pub(crate) fn list_snapshots(
 ) -> Result<Vec<StoredInkSnapshotSummary>, SqliteStoreError> {
     let mut statement = connection.prepare(
         "SELECT snapshot_id, request_id, document_id, through_seq, artifact_id,
-                content_hash, byte_size, created_at
+                content_hash, byte_size, created_at, label, label_revision
          FROM ink_snapshots WHERE document_id = ?1
          ORDER BY through_seq DESC, created_at DESC, snapshot_id DESC",
     )?;
@@ -503,6 +522,8 @@ pub(crate) fn list_snapshots(
                     .try_into()
                     .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(6, -1))?,
                 created_at: row.get(7)?,
+                label: row.get(8)?,
+                label_revision: non_negative(row.get(9)?, 9)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()
@@ -1349,7 +1370,13 @@ fn snapshot_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredInkSnaps
         })?,
         manifest_json: row.get(7)?,
         created_at: row.get(8)?,
+        label: row.get(9)?,
+        label_revision: non_negative(row.get(10)?, 10)?,
     })
+}
+
+pub(crate) fn non_negative(value: i64, column: usize) -> rusqlite::Result<u64> {
+    u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(column, value))
 }
 
 fn request_fingerprint(

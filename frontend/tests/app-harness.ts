@@ -2,7 +2,7 @@
 // workspace switching, the shared overlay cache and the inspector run exactly
 // as in the desktop app; only the Tauri commands are mocked.
 import type { Core } from "cytoscape";
-import { a, b, behavior, documents, extraCommands, links, noteCalls, notes, sourceLabels } from "./ink-mock-store";
+import { a, b, behavior, documents, extraCommands, links, noteCalls, notes, snapshots, snapshotLabelCalls, sourceLabels } from "./ink-mock-store";
 
 const mdSource = "# 正确表述\n\n设 $a_n$ 为数列。\n";
 const snapshot = {
@@ -25,11 +25,12 @@ const mdBytes = new TextEncoder().encode(mdSource);
 const contentFailures = new Set<string>();
 const contentRequests: string[] = [];
 const detailRequests: string[] = [];
-const sourceDetailBehavior = { delayMs: 0 };
+const sourceDetailBehavior = { delayMs: 0, failIds: [] as string[] };
 extraCommands.set("get_source_node_detail", async (args) => {
   const id = String(args.nodeId);
   detailRequests.push(id);
   if (sourceDetailBehavior.delayMs) await new Promise(resolve => setTimeout(resolve, sourceDetailBehavior.delayMs));
+  if (sourceDetailBehavior.failIds.includes(id)) throw new Error("来源对象读取失败");
   return {
     node_id: id, kind: "SourceSemanticUnit", display_title: "定理 3.2", unit_kind: "statement", parent: null,
     artifact_id: "md-1", byte_range: { start: 0, end: mdBytes.length }, excerpt: mdSource,
@@ -60,16 +61,51 @@ extraCommands.set("get_markdown_document", () => ({
   snapshot: { content_hash: "sha256:test", byte_size: mdBytes.length },
 }));
 
+// N3d: a stand-in for search_workspace. Ranking is covered by the Rust
+// tests; this returns real target shapes so navigation runs end to end.
+const searchBehavior = { delayMs: 0, delays: {} as Record<string, number>, failNext: "", calls: [] as Array<{ text: string; include_trashed?: boolean }> };
+const materials = [{ id: "pdf-notes", title: "notes" }, { id: "md-1", title: "正确表述.md" }];
+extraCommands.set("search_workspace", async (args) => {
+  const query = args.query as { text: string; include_trashed?: boolean };
+  searchBehavior.calls.push(structuredClone(query));
+  const delay = searchBehavior.delays[query.text] ?? searchBehavior.delayMs;
+  if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+  if (searchBehavior.failNext) { const message = searchBehavior.failNext; searchBehavior.failNext = ""; throw new Error(message); }
+  const needle = query.text.trim().toLowerCase();
+  const hit = (kind: string, id: string, title: string, subtitle: string, target: unknown, trashed = false) => {
+    const at = title.toLowerCase().indexOf(needle);
+    return at < 0 ? [] : [{ kind, id, title, subtitle, matched_alias: null, score: 50, highlights: [[at, at + needle.length]], trashed, target }];
+  };
+  const groups = [
+    { kind: "note", label: "手稿", hits: [...documents.values()].filter(d => query.include_trashed || notes.get(d.document_id)?.lifecycle !== "trashed")
+      .flatMap(d => hit("note", d.document_id, d.title, notes.get(d.document_id)?.lifecycle === "trashed" ? "手稿 · 回收站" : "手稿", { kind: "ink_note", document_id: d.document_id }, notes.get(d.document_id)?.lifecycle === "trashed")) },
+    { kind: "source_unit", label: "来源单元", hits: [...sourceLabels, ["unit-ghost", "定理 9.9（不在地图）"]].flatMap(([id, label]) => hit("source_unit", id, label, "命题", { kind: "source_object", object_id: id })) },
+    { kind: "material", label: "材料", hits: materials.flatMap(m => hit("material", m.id, m.title, "材料", { kind: "artifact", artifact_id: m.id })) },
+    { kind: "snapshot", label: "命名快照", hits: [...snapshots.values()].flat().filter(sn => sn.label && (query.include_trashed || notes.get(sn.document_id)?.lifecycle !== "trashed"))
+      .flatMap(sn => hit("snapshot", sn.snapshot_id, sn.label!, `${documents.get(sn.document_id)!.title} · 第 ${sn.through_seq} 步`, { kind: "ink_snapshot", snapshot_id: sn.snapshot_id, artifact_id: sn.artifact_id, document_id: sn.document_id })) },
+  ].filter(group => needle && group.hits.length).map(group => ({ ...group, total: group.hits.length }));
+  return { query: query.text, total: groups.reduce((sum, group) => sum + group.total, 0), groups };
+});
+
 await import("../src/main");
 
 const core = (): Core => (document.querySelector("#graph") as unknown as { _cyreg: { cy: Core } } | null)?._cyreg?.cy
   ?? ([...document.querySelectorAll<HTMLElement>("div")].find(div => (div as unknown as { _cyreg?: unknown })._cyreg) as unknown as { _cyreg: { cy: Core } })._cyreg.cy;
 const appHarness = {
   documents: { a: a.document_id, b: b.document_id }, notes, links, behavior, storedDocuments: documents, noteCalls, unexpected,
-  contentFailures, contentRequests, detailRequests, sourceDetailBehavior,
+  contentFailures, contentRequests, detailRequests, sourceDetailBehavior, searchBehavior, snapshots, snapshotLabelCalls,
+  /** Cytoscape state of a node: selected flag and distance from the canvas centre. */
+  nodeView: (id: string) => {
+    const cy = core(), node = cy.getElementById(id);
+    if (node.empty()) return null;
+    // cy.center() centres the bounding box (node + label), so compare that.
+    const box = node.renderedBoundingBox({});
+    return { selected: node.selected(), dx: (box.x1 + box.x2) / 2 - cy.width() / 2, dy: (box.y1 + box.y2) / 2 - cy.height() / 2, width: cy.width(), height: cy.height() };
+  },
   labels: () => Object.fromEntries(core().nodes().map(node => [node.id(), String(node.data("label"))])),
   inkNodes: () => core().nodes(".ink-note-node").map(node => `${node.id()}=${String(node.data("label"))}`),
   selectNode: (id: string) => { core().getElementById(id).emit("tap"); },
+  panTo: (x: number, y: number) => { core().pan({ x, y }); },
 };
 declare global { interface Window { appHarness: typeof appHarness } }
 window.appHarness = appHarness;

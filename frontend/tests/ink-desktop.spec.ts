@@ -12,7 +12,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("saved snapshots follow their document across session switches", async ({ page }) => {
-  await page.getByRole("button", { name: "保存快照" }).click();
+  await page.getByRole("button", { name: "保存快照" }).click(); await page.locator("#ink-dialog [data-choice=ok]").click();
   await expect(page.locator("#ink-snapshot-list .ink-session-item")).toHaveCount(1);
   await expect(page.locator("#ink-snapshot-list")).not.toContainText("Invalid Date");
 
@@ -29,7 +29,7 @@ test("saved snapshots follow their document across session switches", async ({ p
 });
 
 test("an older snapshot query cannot overwrite the current document list", async ({ page }) => {
-  await page.getByRole("button", { name: "保存快照" }).click();
+  await page.getByRole("button", { name: "保存快照" }).click(); await page.locator("#ink-dialog [data-choice=ok]").click();
   await page.evaluate(() => {
     const harness = (window as unknown as { inkDesktopHarness: { documents: { a: string }; behavior: { delayedDocumentId: string; delayMs: number } } }).inkDesktopHarness;
     harness.behavior.delayedDocumentId = harness.documents.a;
@@ -46,7 +46,7 @@ test("an older snapshot query cannot overwrite the current document list", async
 test("the reader makes snapshot mode and persistence state explicit", async ({ page }) => {
   await expect(page.locator("#ink-mode-badge")).toHaveText("当前手稿");
   await expect(page.locator("#ink-editability-badge")).toHaveText("可编辑");
-  await page.getByRole("button", { name: "保存快照" }).click();
+  await page.getByRole("button", { name: "保存快照" }).click(); await page.locator("#ink-dialog [data-choice=ok]").click();
   const snapshot = page.locator("#ink-snapshot-list .ink-session-item");
   await expect(snapshot).toHaveCount(1);
   await snapshot.click();
@@ -63,7 +63,7 @@ test("the reader makes snapshot mode and persistence state explicit", async ({ p
 test("snapshot selection registers evidence and reopens it from the map after later erasing", async ({ page }) => {
   await writeLine(page,-45); await writeLine(page,45);
   await expect(page.locator("#ink-save-badge")).toContainText("桌面已保存 · head 2");
-  await page.getByRole("button",{name:"保存快照",exact:true}).click();
+  await page.getByRole("button",{name:"保存快照",exact:true}).click(); await page.locator("#ink-dialog [data-choice=ok]").click();
   await page.locator("#ink-snapshot-list .ink-session-item").click();
   await page.getByRole("button",{name:"选择本页全部笔迹"}).click();
   await expect(page.locator("#desktop-ink-evidence .ink-selection-summary")).toContainText("已选 2 笔");
@@ -93,7 +93,7 @@ test("snapshot selection registers evidence and reopens it from the map after la
 test("snapshot waits for operations added during an in-flight save", async ({ page }) => {
   await page.evaluate(() => {window.inkDesktopHarness.behavior.appendDelay = 180;});
   await writeLine(page,-25); await writeLine(page,25);
-  await page.getByRole("button",{name:"保存快照",exact:true}).click();
+  await page.getByRole("button",{name:"保存快照",exact:true}).click(); await page.locator("#ink-dialog [data-choice=ok]").click();
   await expect(page.locator("#ink-snapshot-list")).toContainText("第 2 步");
   const saved = await page.evaluate(() => {
     const h = window.inkDesktopHarness;
@@ -103,7 +103,7 @@ test("snapshot waits for operations added during an in-flight save", async ({ pa
 });
 
 test("a delayed snapshot open cannot override a newer document selection", async ({ page }) => {
-  await page.getByRole("button",{name:"保存快照",exact:true}).click();
+  await page.getByRole("button",{name:"保存快照",exact:true}).click(); await page.locator("#ink-dialog [data-choice=ok]").click();
   await page.evaluate(() => {window.inkDesktopHarness.behavior.snapshotDelay = 250;});
   await page.locator("#ink-snapshot-list .ink-session-item").click();
   await page.getByRole("button",{name:/手稿 B/}).click();

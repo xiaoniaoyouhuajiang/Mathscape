@@ -20,6 +20,7 @@ mod llm_settings;
 mod map_edit;
 mod markdown_patch;
 mod registration;
+mod search;
 pub use registration::RegistrationSourceContext;
 mod workspace_settings;
 pub use backlink::{SourceBacklink, SourceBacklinkRequest};
@@ -846,6 +847,8 @@ pub fn run() {
             ink::get_ink_trash_impact,
             ink::list_trashed_ink_documents,
             ink::rename_ink_note,
+            ink::rename_ink_snapshot,
+            search::search_workspace,
             ink::trash_ink_note,
             ink::restore_ink_note,
             ink::clean_blank_ink_notes,

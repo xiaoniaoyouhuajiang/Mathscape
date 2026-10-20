@@ -39,6 +39,7 @@ export interface AppElements {
   llmSettingsButton: HTMLButtonElement;
   llmSettingsLabel: HTMLElement;
   inkButton: HTMLButtonElement;
+  searchButton: HTMLButtonElement;
   /** Outer overlay that may host the N3c split layout. */
   inkWorkspace: HTMLElement;
   inkSplitReader: HTMLElement;
@@ -82,6 +83,7 @@ export class AppShell {
           <span aria-hidden="true">⚙</span>
           <span id="llm-settings-label">设置</span>
         </button>
+        <button id="workspace-search-button" class="secondary-button workspace-search-button" type="button" title="搜索手稿、材料、来源单元和命名快照（⌘K / Ctrl+K）" aria-keyshortcuts="Meta+K Control+K">搜索</button>
         <button id="ink-button" class="secondary-button" type="button">手写</button>
         <button id="import-pdf" class="primary-button" type="button">
           <span aria-hidden="true">＋</span> 导入 PDF
@@ -248,6 +250,7 @@ export class AppShell {
       llmSettingsButton: requiredElement<HTMLButtonElement>("#llm-settings-button", root),
       llmSettingsLabel: requiredElement<HTMLElement>("#llm-settings-label", root),
       inkButton: requiredElement<HTMLButtonElement>("#ink-button", root),
+      searchButton: requiredElement<HTMLButtonElement>("#workspace-search-button", root),
       inkWorkspace: requiredElement<HTMLElement>("#ink-workspace", root),
       inkSplitReader: requiredElement<HTMLElement>("#ink-split-reader", root),
       inkSplitResizer: requiredElement<HTMLElement>("#ink-split-resizer", root),

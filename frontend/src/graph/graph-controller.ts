@@ -115,6 +115,25 @@ export class GraphController {
     this.renderCurrentGraph();
   }
 
+  /** N3d search: select and center a node. "hidden" means the current
+   * type filter hides it (focus mode is left so a hidden-by-focus node shows). */
+  revealNode(nodeId: string): "shown" | "hidden" | "missing" {
+    const snapshot = this.delegate.getSnapshot();
+    if (!snapshot?.landscape_graph.nodes.some((node) => node.id === nodeId)) return "missing";
+    let element = this.graphCore?.getElementById(nodeId);
+    if ((!element || element.empty()) && this.focusRootId !== null) {
+      this.exitFocus();
+      element = this.graphCore?.getElementById(nodeId);
+    }
+    const core = this.graphCore;
+    if (!core || !element || element.empty()) return "hidden";
+    core.resize();
+    core.elements().unselect();
+    element.select();
+    core.center(element);
+    return "shown";
+  }
+
   canFocus(node: IncidenceNode): boolean {
     return (
       node.element_kind === "entity" &&

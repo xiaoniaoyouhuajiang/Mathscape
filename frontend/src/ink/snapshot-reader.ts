@@ -15,7 +15,12 @@ export function mountInkSnapshotReader(host: HTMLElement, snapshot: StoredInkSna
   const visible = projectInk(manifest.document).visible;
   if (ids.some(id => !visible.some(stroke => stroke.id === id && stroke.page_id === pageId))) throw new Error("来源选区包含快照中不可见或不属于该页的笔迹");
   const controls = document.createElement("div"); controls.className = "reader-controls ink-reader-controls";
-  const label = document.createElement("span"); label.textContent = `历史快照 · 只读 · 截止 head ${snapshot.through_seq}`;
+  const label = document.createElement("span"); label.className = "ink-reader-snapshot-label";
+  // N3d: a named snapshot leads with its name; the step stays visible.
+  label.textContent = snapshot.label
+    ? `「${snapshot.label}」 · 历史快照 · 只读 · 第 ${snapshot.through_seq} 步`
+    : `历史快照 · 只读 · 截止 head ${snapshot.through_seq}`;
+  if (snapshot.label) label.title = `快照名称：${snapshot.label}`;
   const select = document.createElement("select"); select.setAttribute("aria-label", "快照页面");
   manifest.document.pages.forEach((page,index) => select.add(new Option(`第 ${index + 1} 页`, page.id)));
   select.value = pageId;

@@ -6,8 +6,9 @@ use mathscape_domain::{
 use mathscape_store_sqlite::{
     InkCleanBlankReceipt, InkCleanBlankRequest, InkCreateReceipt, InkEvidenceReceipt,
     InkLifecycleRequest, InkNoteReceipt, InkNoteState, InkOperationReceipt, InkRenameRequest,
-    InkTitleMode, InkTrashImpact, SqliteStoreError, StoredInkDocument, StoredInkDocumentSummary,
-    StoredInkSession, StoredInkSnapshot, StoredInkSnapshotSummary,
+    InkSnapshotLabelReceipt, InkSnapshotLabelRequest, InkTitleMode, InkTrashImpact,
+    SqliteStoreError, StoredInkDocument, StoredInkDocumentSummary, StoredInkSession,
+    StoredInkSnapshot, StoredInkSnapshotSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -96,7 +97,24 @@ impl From<SqliteStoreError> for InkCommandError {
                     "current_lifecycle_revision": current_revision,
                 });
             }
+            SqliteStoreError::InkSnapshotLabelConflict {
+                snapshot_id,
+                current_label,
+                current_revision,
+            } => {
+                result.message = "快照名称已在别处修改，请选择保留哪一个。".into();
+                result.details = serde_json::json!({
+                    "snapshot_id": snapshot_id,
+                    "current_label": current_label,
+                    "current_label_revision": current_revision,
+                });
+            }
+            SqliteStoreError::InkSnapshotNotFound(snapshot_id) => {
+                result.message = "快照不存在或已被移除。".into();
+                result.details = serde_json::json!({ "snapshot_id": snapshot_id });
+            }
             SqliteStoreError::InkTitleInvalid(message)
+            | SqliteStoreError::InkSnapshotLabelInvalid(message)
             | SqliteStoreError::InkLinkTargetInvalid(message)
             | SqliteStoreError::InkLinkTargetRetired(message) => result.message = message.clone(),
             SqliteStoreError::InkLinkNotFound(link_id) => {
@@ -359,6 +377,17 @@ impl DesktopService {
                 &manifest_json,
                 &reservation.created_at,
             )
+            .map_err(fail)
+    }
+
+    /// Sets or clears a snapshot name (N3d). Snapshot bytes, manifest and
+    /// hash are untouched; only `label` / `label_revision` change.
+    pub fn rename_ink_snapshot(
+        &self,
+        request: InkSnapshotLabelRequest,
+    ) -> Result<InkSnapshotLabelReceipt, InkCommandError> {
+        self.ink_store()?
+            .rename_ink_snapshot(&request)
             .map_err(fail)
     }
 
@@ -648,6 +677,17 @@ pub async fn create_ink_snapshot(
     tauri::async_runtime::spawn_blocking(move || service.create_ink_snapshot(request))
         .await
         .map_err(|error| worker(format!("Ink snapshot worker failed: {error}")))?
+}
+
+#[tauri::command]
+pub async fn rename_ink_snapshot(
+    state: State<'_, DesktopState>,
+    request: InkSnapshotLabelRequest,
+) -> Result<InkSnapshotLabelReceipt, InkCommandError> {
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.rename_ink_snapshot(request))
+        .await
+        .map_err(|error| worker(format!("Ink snapshot rename worker failed: {error}")))?
 }
 
 #[tauri::command]

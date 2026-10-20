@@ -82,7 +82,7 @@ test("N3c Space while typing the title is a normal space, not a pan", async ({ p
 });
 
 test("N3c panning works on a read-only historical snapshot and the trash view", async ({ page }) => {
-  await page.getByRole("button", { name: "保存快照" }).click();
+  await page.getByRole("button", { name: "保存快照" }).click(); await page.locator("#ink-dialog [data-choice=ok]").click();
   await page.locator("#ink-snapshot-list .ink-session-item").click();
   await expect(page.locator("#ink-mode-badge")).toHaveText("历史快照");
   const ops = await opCount(page);

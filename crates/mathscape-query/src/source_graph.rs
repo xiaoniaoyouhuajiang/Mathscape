@@ -29,6 +29,7 @@ impl SourceGraphProjector {
 pub struct LandscapeProjectionInput<'a> {
     catalog: &'a ArtifactCatalogSnapshot,
     source_map: &'a SourceMapSnapshot,
+    ink_snapshot_labels: Option<&'a BTreeMap<String, String>>,
 }
 
 impl<'a> LandscapeProjectionInput<'a> {
@@ -36,11 +37,20 @@ impl<'a> LandscapeProjectionInput<'a> {
         Self {
             catalog,
             source_map,
+            ink_snapshot_labels: None,
         }
+    }
+
+    /// N3d: snapshot Artifact id → snapshot name, shown on the snapshot
+    /// material node and in ink evidence summaries.
+    pub fn with_ink_snapshot_labels(mut self, labels: &'a BTreeMap<String, String>) -> Self {
+        self.ink_snapshot_labels = Some(labels);
+        self
     }
 
     pub fn from_snapshot(snapshot: &'a LandscapeSnapshot) -> Self {
         Self::new(snapshot.artifacts(), snapshot.sources())
+            .with_ink_snapshot_labels(snapshot.ink_snapshot_labels())
     }
 }
 
@@ -286,9 +296,30 @@ fn project_source_map_internal(
 pub fn project_landscape(
     input: LandscapeProjectionInput<'_>,
 ) -> Result<GraphProjection, SourceGraphProjectionError> {
-    let material =
-        super::artifact_graph::project_artifact_catalog(input.catalog, ProjectionLens::Source)
-            .map_err(|error| SourceGraphProjectionError::Material(error.to_string()))?;
+    let material = super::artifact_graph::project_artifact_catalog_labeled(
+        input.catalog,
+        ProjectionLens::Source,
+        input.ink_snapshot_labels,
+    )
+    .map_err(|error| SourceGraphProjectionError::Material(error.to_string()))?;
+    // Ink evidence spans → their snapshot's name, if the snapshot is named.
+    let evidence_snapshot_names: BTreeMap<StableId, &str> = input
+        .ink_snapshot_labels
+        .map(|labels| {
+            input
+                .source_map
+                .objects
+                .iter()
+                .filter(|object| object.kind == EntityKind::SourceSpan)
+                .filter_map(|object| {
+                    let artifact = object_payload(object)
+                        .pointer("/ink/snapshot_artifact")?
+                        .as_str()?;
+                    Some((object.stable_id.clone(), labels.get(artifact)?.as_str()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let source = project_source_map_internal(input.source_map, ProjectionLens::Source, true)?;
     let mut groups = material.groups().to_vec();
     groups.extend(source.groups().iter().map(|group| {
@@ -316,6 +347,12 @@ pub fn project_landscape(
         .group(source_group.clone())
         .boundary(node.is_boundary());
         if let Some(summary) = node.summary_ref() {
+            let summary = match evidence_snapshot_names.get(node.entity_id()) {
+                Some(name) => {
+                    summary.replacen("手稿快照选区", &format!("手稿快照「{name}」选区"), 1)
+                }
+                None => summary.to_owned(),
+            };
             rebuilt = rebuilt.summary(summary).expect("summary is already valid");
         }
         if let Some(lifecycle) = node.lifecycle_status() {
