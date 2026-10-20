@@ -16,7 +16,15 @@
 .pad-problem-card-meta{font-size:12px;font-weight:500;color:#4a7268;white-space:nowrap}
 .pad-problem-card-status{margin:0 12px 6px;padding:6px 8px;border-radius:6px;font-size:12px;background:#fff4e5;color:#8a5a00}
 .pad-problem-card-status[data-status="missing"],.pad-problem-card-status[data-status="unsupported"]{background:#fdecea;color:#8a1f11}
-.pad-problem-card-body{margin:0 12px 10px;padding:10px;border-radius:8px;background:#fff;border:1px solid #e0ebe6;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:#1c2b33;max-height:28vh;overflow:auto;-webkit-overflow-scrolling:touch}
+.pad-problem-card-body{margin:0 12px 10px;padding:10px;border-radius:8px;background:#fff;border:1px solid #e0ebe6;font-size:14px;line-height:1.65;overflow-wrap:anywhere;color:#1c2b33;max-height:28vh;overflow:auto;-webkit-overflow-scrolling:touch}
+.pad-problem-card-body[hidden]{display:none}
+.pad-problem-card-body.is-plain,.pad-problem-card-body pre{white-space:pre-wrap}
+.pad-problem-card-body p{margin:0 0 .7em}
+.pad-problem-card-body h1,.pad-problem-card-body h2,.pad-problem-card-body h3{font-size:1.1em;margin:.4em 0 .6em}
+.pad-problem-card-body>:last-child{margin-bottom:0}
+.pad-problem-card-body .katex-display{max-width:100%;overflow-x:auto;overflow-y:hidden}
+.pad-problem-card-retry{margin:0 12px 10px;padding:7px 10px;border:1px solid #b6ccc2;border-radius:6px;background:#fff;color:#245f55}
+.pad-problem-card-retry[hidden]{display:none}
 .pad-problem-card-truncated{margin:0 12px 10px;font-size:11px;color:#6a7f78}
 @media(max-width:720px){
   .pad-problem-card{margin:0 6px 6px;max-height:36vh}

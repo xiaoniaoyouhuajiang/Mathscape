@@ -8,6 +8,7 @@ function padRoleLabel(role:string):string{return PAD_ROLE_LABELS[role]??role;}
 import type { InkOutboxItem } from "./outbox";
 import { isDeleteKey,isTypingTarget } from "./keys";
 import { createInkPalette,INK_DEFAULT_COLOR,PAD_COLOR_KEY,type InkPalette } from "./palette";
+import { problemCardMarkdown } from "./problem-card";
 import "./lab.css";
 import "./pad.css";
 
@@ -57,8 +58,9 @@ class InkPad {
       <details id="pad-problem-card" class="pad-problem-card" hidden>
         <summary class="pad-problem-card-summary"><span id="pad-problem-card-title">题目卡片</span><span id="pad-problem-card-meta" class="pad-problem-card-meta"></span></summary>
         <div id="pad-problem-card-status" class="pad-problem-card-status" hidden></div>
-        <pre id="pad-problem-card-body" class="pad-problem-card-body"></pre>
+        <div id="pad-problem-card-body" class="pad-problem-card-body"></div>
         <p id="pad-problem-card-truncated" class="pad-problem-card-truncated" hidden>正文已截断</p>
+        <button id="pad-problem-card-retry" class="pad-problem-card-retry" type="button" hidden>重新读取原文</button>
       </details>
       <section id="pad-board" class="ink-board" aria-label="平板画板"></section>
       <footer class="pad-footer"><div class="pad-save-state"><span id="pad-local-status">尚未打开手稿</span><span id="pad-desktop-status">尚未连接电脑</span></div><div class="ink-file-actions"><button id="pad-sync">立即同步</button><button id="pad-snapshot">保存快照</button><button id="pad-export">导出恢复草稿</button><button id="pad-png">导出 PNG</button><button id="pad-retry">重试连接</button><select id="pad-drafts" aria-label="最近手稿"></select></div><p id="pad-status" class="lab-status" role="status">请使用 Mathscape 中展示的二维码配对。</p><details class="ink-diagnostics"><summary>输入与恢复诊断</summary><div id="pad-diagnostics"></div></details></footer></main>`;
@@ -311,6 +313,10 @@ class InkPad {
     card.addEventListener("toggle",()=>{
       try{localStorage.setItem(InkPad.PROBLEM_CARD_COLLAPSED_KEY,card.open?"0":"1");}catch{/* optional */}
     });
+    element<HTMLButtonElement>("#pad-problem-card-retry").onclick=()=>{
+      // Reconnect with the same note credential; session_context refreshes only its primary card.
+      element<HTMLButtonElement>("#pad-retry").click();
+    };
   }
   private applyProblemCard(card:PadProblemCard|null,documentId:string):void {
     if(this.binding&&documentId&&documentId!==this.binding.lease.document_id)return;
@@ -320,7 +326,7 @@ class InkPad {
   private renderProblemCard():void {
     const host=element<HTMLDetailsElement>("#pad-problem-card");
     const card=this.problemCard;
-    if(!card){host.hidden=true;element("#pad-problem-card-body").textContent="";element("#pad-problem-card-status").hidden=true;element("#pad-problem-card-truncated").hidden=true;return;}
+    if(!card){host.hidden=true;element("#pad-problem-card-body").textContent="";element("#pad-problem-card-status").hidden=true;element("#pad-problem-card-truncated").hidden=true;element("#pad-problem-card-retry").hidden=true;return;}
     host.hidden=false;
     const role=padRoleLabel(card.role);
     element("#pad-problem-card-title").textContent=card.target_label||"题目卡片";
@@ -329,10 +335,15 @@ class InkPad {
     if(card.status==="ok"){status.hidden=true;status.textContent="";}
     else{
       status.hidden=false;
-      status.textContent=card.status==="stale"?"原文已更新，以下为关联时的摘要。":card.status==="missing"?"关联目标暂时无法解析。":"暂不支持这类关联目标。";
+      status.textContent=card.status==="stale"?"原文已更新，以下为关联时的摘要。可在电脑中打开主关联重新定位。":card.status==="missing"?"原文暂时无法读取。可重试，或在电脑中打开主关联检查。":"这类关联暂时没有可显示的文字原文。可在电脑中打开主关联查看。";
       status.dataset.status=card.status;
     }
-    element("#pad-problem-card-body").textContent=card.body||"（无正文）";
+    const body=element("#pad-problem-card-body");
+    body.hidden=!card.body.trim();
+    body.classList.toggle("is-plain",card.body_format!=="markdown");
+    if(card.body_format==="markdown")body.innerHTML=problemCardMarkdown(card.body);
+    else body.textContent=card.body;
+    element("#pad-problem-card-retry").hidden=card.status==="ok";
     element("#pad-problem-card-truncated").hidden=!card.body_truncated;
   }
   private async handleSwitchOffer(offer:PadSwitchOffer):Promise<void> {

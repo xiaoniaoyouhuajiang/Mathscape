@@ -275,7 +275,7 @@ test("N3b problem card shows from session_context, updates, clears, and follows 
   await expect(page.locator("#pad-problem-card")).toBeHidden();
   const linked=await control("link_primary",{target_title:"极限习题"});
   expect(linked.problem_card).toMatchObject({
-    status:"ok",
+    status:"unsupported",
     target_label:expect.any(String),
     body:expect.stringContaining("关联手稿"),
   });
@@ -309,4 +309,57 @@ test("N3b problem card shows from session_context, updates, clears, and follows 
   await expect(page.locator("#pad-connection")).toContainText("电脑已连接");
   await expect(page.locator("#pad-problem-card")).toBeVisible({timeout:10000});
   await expect(page.locator("#pad-problem-card-body")).toContainText("再关联");
+});
+
+for(const target_kind of ["source_object","markdown"]){
+  test(`problem card renders original text and math for ${target_kind}`,async({page,context})=>{
+    const external:string[]=[];
+    page.on("request",request=>{if(request.url().startsWith("https://example.com/"))external.push(request.url());});
+    const linked=await control("link_primary_content",{target_kind});
+    expect(linked.problem_card).toMatchObject({status:"ok",body_format:"markdown"});
+    const card=page.locator("#pad-problem-card"),body=page.locator("#pad-problem-card-body");
+    await expect(card).toBeVisible();
+    await expect(page.locator("#pad-problem-card-title")).toHaveText(linked.problem_card.target_label);
+    await expect(page.locator("#pad-problem-card-meta")).toContainText("尝试 · 主关联");
+    await expect(body.locator("h2")).toHaveText("求极限");
+    await expect(body.locator("strong")).toHaveText("数列");
+    await expect(body.locator(".katex")).toHaveCount(2);
+    await expect(body.locator(".katex-display")).toHaveCount(1);
+    await expect(body.locator(".katex-error")).toHaveCount(0);
+    await expect(body).not.toContainText("不属于主关联");
+    expect(external).toEqual([]);
+    await page.evaluate(()=>document.fonts.ready);
+    expect(await page.evaluate(()=>document.fonts.check("16px KaTeX_Main"))).toBe(true);
+    await writeLine(page);
+    await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+
+    // Formula fonts are bundled and recoverable through the pad's service worker.
+    await expect.poll(()=>page.evaluate(()=>!!navigator.serviceWorker.controller)).toBe(true);
+    const font=await page.evaluate(async()=>{
+      const name=(await caches.keys()).find(name=>name.startsWith("mathscape-inkpad-static-"))!;
+      const cache=await caches.open(name);
+      return (await cache.keys()).find(request=>request.url.endsWith(".woff2"))?.url;
+    });
+    expect(font).toBeTruthy();
+    await context.setOffline(true);
+    expect(await page.evaluate(async url=>(await fetch(url!)).ok,font)).toBe(true);
+    await context.setOffline(false);
+  });
+}
+
+test("problem card missing text can be retried without losing writing",async({page})=>{
+  await control("link_primary_content",{target_kind:"source_object",missing:true});
+  await expect(page.locator("#pad-problem-card-status")).toContainText("原文暂时无法读取");
+  await expect(page.locator("#pad-problem-card-body")).toBeHidden();
+  const retry=page.getByRole("button",{name:"重新读取原文",exact:true});
+  await expect(retry).toBeVisible();
+  await writeLine(page);
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  await control("repair_card_source");
+  await retry.click();
+  await expect(page.locator("#pad-problem-card-body .katex")).toHaveCount(2);
+  await expect(page.locator("#pad-problem-card-status")).toBeHidden();
+  await expect(retry).toBeHidden();
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  await expect(page.locator("#pad-local-status")).toContainText("待同步 0");
 });

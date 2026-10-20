@@ -528,7 +528,7 @@ N2 合入后根据实际使用重新梳理了 N3。平板上最常见的问题�
 7. **套索判定（M4）**：改为“多数点在套索内”并加预选高亮，放在 N3e 单独回归。
 8. **地址过滤**：先做“默认隐藏非局域网地址 + 手动选择 + 记住首选地址”。“只监听所选网卡”作为可选开关放到以后。
 9. **IPv6**：暂不提供。
-10. **题目卡片内容**：首版用纯文本加 LaTeX 源码（等宽字体），使用后再决定是否在平板引入 KaTeX。
+10. **题目卡片内容**：显示主关联对应的原文，使用 Markdown + KaTeX 渲染段落和数学公式。来源节点名称与用途用于标题；正文沿来源范围读取。工程范围限制在摘要长度、图片和交互能力上，保留数学原文的可读性（2026-10-20 修订，替代早期纯文本/标题摘要约定）。
 11. **题目卡片范围**：只显示当前授权手稿的主关联。没有主关联时不显示卡片。
 12. **并排阅读**：列为应做（should-have）。
 13. **手稿状态和命名快照**：合并为一次迁移。原计划为 v19；N3a 已占用 v19（`preferred_host` / `claim_reason`），因此 N3d 改为 **v20**。
@@ -611,11 +611,13 @@ N2 合入后根据实际使用重新梳理了 N3。平板上最常见的问题�
 ### 15.6 N3b / N3c 实施说明
 
 - **N3b 题目卡片**（决定 10、11、4；无协议 bump）：
-  - 复用 N3a 预留：`session_context.problem_card`（对象或 `null`）、推送 `problem_card` / `problem_card_clear`。卡片字段：`link_id, role, target_kind, target_id, target_label, body, body_truncated, status (ok|stale|missing|unsupported), content_hash?`。
+  - 复用 N3a 预留：`session_context.problem_card`（对象或 `null`）、推送 `problem_card` / `problem_card_clear`。卡片字段：`link_id, role, target_kind, target_id, target_label, body, body_format (markdown|text), body_truncated, status (ok|stale|missing|unsupported), content_hash?`。`body_format` 是协议 v2 的可选扩展；旧服务端未提供时按纯文本处理。
   - 只渲染**当前授权手稿的主关联**；无主关联则不下发 / 推 clear。WebSocket 按 `lease.document_id` 过滤，符合 §10。
-  - 正文：Markdown 块取源码并规范化（公式保留 LaTeX 源码，平板不做 KaTeX）；来源对象用标题/标签摘要；关联手稿为「关联手稿：{title}」。正文上限 4000 个 Unicode 标量，截断加「…」与 `body_truncated`。
+  - 标题：节点/片段短名与关联用途。正文：Markdown 关联读取选中范围的原始 Markdown；来源单元沿 `source_spans` 读取其授权原文范围，来源范围直接读取自身定位，按来源顺序合并并去重。保留段落、强调和公式分隔符，平板复用 Markdown + KaTeX 渲染。同一原文通过这两种关联方式访问时具有一致的可读性。
+  - 范围：最多 4000 个 Unicode 标量，截断加「…」与 `body_truncated`；来源范围读取也受字节上限约束。不扩展到所在文件的其他正文。图片显示占位提示，卡片不提供外部链接导航；完整阅读使用电脑原文阅读器。
+  - 缺失/不支持：无法读取原文时使用 `missing`，没有可显示的文字来源时使用 `unsupported`，展示状态说明及「重新读取原文」按钮，也提示在电脑打开主关联定位。关联手稿保留明确的手稿引用提示并标记 `unsupported`（当前没有文字原文渲染）。标题始终用于辨认目标，不作为原文的替代正文。
   - 推送时机：主关联增删/角色变更/主关联转移（`InkLinkReceipt` 非回放）；手稿切换后的新 `session_context`。Markdown `content_hash` 漂移时标 `stale`，块无法解析标 `missing`。本阶段**不**挂钩全局 Markdown/来源保存管道；重连或关联变更会刷新到最新渲染。
-  - 平板：可折叠卡片，不挡书写；折叠状态记在 `mathscape:ink-pad-problem-card-collapsed`；等宽字体展示正文。
+  - 平板：可折叠卡片，不挡书写；折叠状态记在 `mathscape:ink-pad-problem-card-collapsed`。正文按正常阅读排版，长公式可横向滚动；渲染器与公式字体随画板打包并由 Service Worker 缓存。重试沿当前手稿的已有凭据重新连接、获取卡片，不扩大设备授权范围，保留已有笔迹和恢复队列。
 - **N3c 桌面并排阅读**（决定 12，should-have）：
   - `#ink-workspace` 分栏：左阅读器、右 `#ink-desktop-host` 手稿；可拖分隔条（键盘、双击重置、窗口/容器变化再夹紧），偏好键 `mathscape:ink-split-reader-width`。阅读器 DOM 在进入并排时移入左栏，退出时归位。
   - 「并排阅读 / 退出并排」切换；窗口宽 < 960px 时自动退出并提示。画板 `fit()` 与 PDF 适合宽度随 `resize` / ResizeObserver 回流。

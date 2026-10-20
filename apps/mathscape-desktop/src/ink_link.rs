@@ -1,13 +1,14 @@
 //! N2 desktop commands for NoteLinks (proposal §6, §14): Markdown block-range
 //! resolution, context creation, link management and read-only overlays.
 
+use crate::ink_problem_card::{self, InkProblemCard, ProblemCardStatus};
 use mathscape_domain::InkLabDocument;
 use mathscape_orchestrator::PAGE_MARKER_STRUCTURAL_KIND;
-use crate::ink_problem_card::{self, InkProblemCard, ProblemCardStatus};
 use mathscape_store_sqlite::{
-    InkContextCreateReceipt, InkContextCreateRequest, InkLinkOverlay, InkLinkReceipt,
-    InkLifecycle, InkLinkRequest, InkLinkRole, InkLinkTarget, InkLinkTargetStatus, InkLinkedNote, InkMarkdownTarget, InkNoteLink,
-    InkSetPrimaryRequest, InkUnlinkRequest, markdown_excerpt, markdown_short_label,
+    InkContextCreateReceipt, InkContextCreateRequest, InkLifecycle, InkLinkOverlay, InkLinkReceipt,
+    InkLinkRequest, InkLinkRole, InkLinkTarget, InkLinkTargetStatus, InkLinkedNote,
+    InkMarkdownTarget, InkNoteLink, InkSetPrimaryRequest, InkUnlinkRequest, markdown_excerpt,
+    markdown_short_label,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -232,8 +233,7 @@ impl DesktopService {
         Ok(receipt)
     }
 
-
-    /// N3b: primary-link summary for the pad problem card (§10 / decision 10–11).
+    /// N3b: primary-link excerpt for the pad problem card (§10 / decision 10–11).
     pub fn ink_problem_card(
         &self,
         document_id: &str,
@@ -248,10 +248,7 @@ impl DesktopService {
         Ok(Some(self.render_problem_card(&link)?))
     }
 
-    fn render_problem_card(
-        &self,
-        link: &InkNoteLink,
-    ) -> Result<InkProblemCard, InkCommandError> {
+    fn render_problem_card(&self, link: &InkNoteLink) -> Result<InkProblemCard, InkCommandError> {
         use mathscape_store_sqlite::InkLinkTarget;
         match &link.target {
             InkLinkTarget::Markdown(markdown) => {
@@ -266,9 +263,8 @@ impl DesktopService {
                                 Some(live_hash),
                             ));
                         }
-                        let find = |id: &str| {
-                            document.blocks.iter().position(|block| block.id == id)
-                        };
+                        let find =
+                            |id: &str| document.blocks.iter().position(|block| block.id == id);
                         let (Some(first), Some(last)) =
                             (find(&markdown.first_block), find(&markdown.last_block))
                         else {
@@ -311,48 +307,22 @@ impl DesktopService {
                 }
             }
             InkLinkTarget::SourceObject { object_id } => {
-                let store = self.link_store().map_err(fail)?;
-                // Reuse link list target_status; also peek payload via open path.
-                match link.target_status {
-                    InkLinkTargetStatus::Missing
-                    | InkLinkTargetStatus::Trashed
-                    | InkLinkTargetStatus::Retired => {
-                        return Ok(ink_problem_card::finalize_card(
-                            link,
-                            link.target_label.clone(),
-                            ProblemCardStatus::Missing,
-                            link.target_revision.clone(),
-                        ));
-                    }
-                    _ => {}
-                }
-                drop(store);
-                let payload = self.source_object_payload(object_id)?;
-                let body = ink_problem_card::source_object_body(&payload);
-                Ok(ink_problem_card::finalize_card(
-                    link,
-                    body,
-                    ProblemCardStatus::Ok,
-                    link.target_revision.clone(),
-                ))
+                self.source_object_problem_card(link, object_id)
             }
             InkLinkTarget::InkNote { document_id } => {
-                let note = self
-                    .link_store()?
-                    .ink_note(document_id)
-                    .map_err(fail)?;
+                let note = self.link_store()?.ink_note(document_id).map_err(fail)?;
                 match note {
                     Some(note) if note.lifecycle != InkLifecycle::Trashed => {
                         Ok(ink_problem_card::finalize_card(
                             link,
                             format!("关联手稿：{}", note.title),
-                            ProblemCardStatus::Ok,
+                            ProblemCardStatus::Unsupported,
                             None,
                         ))
                     }
                     _ => Ok(ink_problem_card::finalize_card(
                         link,
-                        link.target_label.clone(),
+                        String::new(),
                         ProblemCardStatus::Missing,
                         None,
                     )),
@@ -361,15 +331,129 @@ impl DesktopService {
         }
     }
 
-    fn source_object_payload(&self, object_id: &str) -> Result<serde_json::Value, InkCommandError> {
-        let path = self.workspace_root().join("mathscape.sqlite3");
-        let store = mathscape_store_sqlite::SqliteArtifactStore::open(&path).map_err(fail)?;
-        // Read via a lightweight SQL helper on the connection through list links build.
-        // Fall back: open map object from store API if exposed.
-        store
-            .map_object_payload(object_id)
-            .map_err(fail)?
-            .ok_or_else(|| fail("来源对象不存在。"))
+    fn source_object_problem_card(
+        &self,
+        link: &InkNoteLink,
+        object_id: &str,
+    ) -> Result<InkProblemCard, InkCommandError> {
+        use mathscape_artifact::ArtifactPool;
+        use mathscape_domain::StableId;
+        use std::collections::BTreeSet;
+
+        let unavailable = |status| {
+            Ok(ink_problem_card::finalize_card(
+                link,
+                String::new(),
+                status,
+                None,
+            ))
+        };
+        if link.target_status != InkLinkTargetStatus::Active {
+            return unavailable(ProblemCardStatus::Missing);
+        }
+        let store = self.link_store()?;
+        let Some(payload) = store.map_object_payload(object_id).map_err(fail)? else {
+            return unavailable(ProblemCardStatus::Missing);
+        };
+        let body = payload.get("payload").unwrap_or(&payload);
+        // A unit authorizes its source spans, not the entire containing artifact.
+        let spans: Vec<String> = match body.get("source_spans").and_then(Value::as_array) {
+            Some(spans) => spans
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            None => vec![object_id.to_owned()],
+        };
+        if spans.is_empty() {
+            return unavailable(ProblemCardStatus::Unsupported);
+        }
+        let catalog = store.read_catalog_snapshot().map_err(fail)?;
+        let Ok(pool) = ArtifactPool::open(self.workspace_root()) else {
+            return unavailable(ProblemCardStatus::Missing);
+        };
+        let mut parts = Vec::new();
+        let mut chars = 0;
+        let mut seen = BTreeSet::new();
+        let mut hashes = BTreeSet::new();
+        for span in spans {
+            if chars > ink_problem_card::PROBLEM_CARD_BODY_MAX {
+                break;
+            }
+            let Some(payload) = store.map_object_payload(&span).map_err(fail)? else {
+                return unavailable(ProblemCardStatus::Missing);
+            };
+            let body = payload.get("payload").unwrap_or(&payload);
+            let Some(markdown) = body.get("markdown").filter(|value| !value.is_null()) else {
+                return unavailable(ProblemCardStatus::Unsupported);
+            };
+            let (Some(artifact), Some(start), Some(end)) = (
+                markdown.get("artifact").and_then(Value::as_str),
+                markdown
+                    .pointer("/byte_range/start")
+                    .and_then(Value::as_u64),
+                markdown.pointer("/byte_range/end").and_then(Value::as_u64),
+            ) else {
+                return unavailable(ProblemCardStatus::Missing);
+            };
+            if !seen.insert((artifact.to_owned(), start, end)) {
+                continue;
+            }
+            let Ok(id) = StableId::parse(artifact) else {
+                return unavailable(ProblemCardStatus::Missing);
+            };
+            let Some(artifact) = catalog
+                .artifacts()
+                .iter()
+                .find(|a| a.entity().header().stable_id() == &id)
+            else {
+                return unavailable(ProblemCardStatus::Missing);
+            };
+            let artifact = artifact.entity().payload();
+            if artifact.media_type().as_str() != "text/markdown" {
+                return unavailable(ProblemCardStatus::Unsupported);
+            }
+            if start >= end || end > artifact.byte_size() {
+                return unavailable(ProblemCardStatus::Missing);
+            }
+            // At most 4001 Unicode characters are needed to establish truncation.
+            let length = (end - start)
+                .min(((ink_problem_card::PROBLEM_CARD_BODY_MAX + 1) * 4) as u64)
+                as u32;
+            let Ok(bytes) = pool.read_bytes(&id, start, length) else {
+                return unavailable(ProblemCardStatus::Missing);
+            };
+            if bytes.len() != length as usize {
+                return unavailable(ProblemCardStatus::Missing);
+            }
+            let source = match std::str::from_utf8(&bytes) {
+                Ok(source) => source,
+                Err(error) if error.error_len().is_none() && u64::from(length) < end - start => {
+                    std::str::from_utf8(&bytes[..error.valid_up_to()]).map_err(fail)?
+                }
+                Err(_) => return unavailable(ProblemCardStatus::Missing),
+            };
+            let text = ink_problem_card::markdown_body_from_source(source);
+            if !text.is_empty() {
+                chars += text.chars().count() + if parts.is_empty() { 0 } else { 2 };
+                parts.push(text);
+                hashes.insert(artifact.content_hash().to_string());
+            }
+        }
+        if parts.is_empty() {
+            return unavailable(ProblemCardStatus::Missing);
+        }
+        let hash = if hashes.len() == 1 {
+            hashes.into_iter().next()
+        } else {
+            None
+        };
+        Ok(ink_problem_card::finalize_card(
+            link,
+            parts.join("\n\n"),
+            ProblemCardStatus::Ok,
+            hash,
+        ))
     }
 
     pub fn list_ink_note_links(

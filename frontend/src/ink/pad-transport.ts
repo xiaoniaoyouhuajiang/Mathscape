@@ -10,11 +10,12 @@ export const TRASHED_REASON="document_trashed";
 export interface PadContext { type:"session_context";protocol_version:string;lease:PadLease;note?:PadNote;document:InkDocument;head_seq:number;limits:{operation_bytes:number;document_bytes:number;queue_bytes:number};problem_card?:PadProblemCard|null }
 /** N3a: desktop push-switch offer. */
 export interface PadSwitchOffer { type:"switch_offer";offer_id:string;document_id:string;title:string;pairing_token:string;expires_at:number;requires_takeover:boolean;message:string }
-/** N3b: primary-link problem card (§10 / decisions 10–11). LaTeX stays as source text. */
+/** N3b: primary-link excerpt. Markdown is rendered locally with the shared math renderer. */
 export type PadProblemCardStatus = "ok"|"stale"|"missing"|"unsupported"
 export interface PadProblemCard {
   link_id:string;role:string;target_kind:string;target_id:string;target_label:string;
   body:string;body_truncated:boolean;status:PadProblemCardStatus;content_hash?:string|null
+  body_format?:"markdown"|"text"
 }
 export interface PadProblemCardMessage { type:"problem_card";document_id:string;card:PadProblemCard }
 export interface PadProblemCardClear { type:"problem_card_clear";document_id:string }

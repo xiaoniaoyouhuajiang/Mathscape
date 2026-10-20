@@ -36,6 +36,8 @@ export class ArtifactReader {
   private disposeDocument: (() => void) | undefined;
   private urls: string[] = [];
   private inkOpen = false;
+  private state: "empty" | "loading" | "ready" | "error" = "empty";
+  private error: string | undefined;
   /** Last successfully opened artifact — kept across close() for 并排阅读 restore. */
   private lastOpen: { id: string; title: string; options: ReaderOpenOptions } | undefined;
   constructor(private host: HTMLElement) {}
@@ -52,20 +54,25 @@ export class ArtifactReader {
     this.revokeImages();
     this.host.replaceChildren();
     this.inkOpen = false;
+    this.state = "empty";
+    this.error = undefined;
   }
 
   isInkOpen(): boolean { return this.inkOpen; }
 
-  /** True when the host currently shows a document (not an empty shell). */
-  hasContent(): boolean { return this.host.childElementCount > 0; }
+  /** Loading headings and error messages are not successfully opened content. */
+  hasContent(): boolean { return this.state === "ready"; }
+  isLoading(): boolean { return this.state === "loading"; }
+  lastError(): string | undefined { return this.error; }
 
   lastOpened(): { id: string; title: string; options: ReaderOpenOptions } | undefined {
     return this.lastOpen ? { ...this.lastOpen, options: { ...this.lastOpen.options } } : undefined;
   }
 
-  async open(id: string, title: string, options: ReaderOpenOptions = {}): Promise<void> {
+  /** False means the read failed or was superseded by another open/close. */
+  async open(id: string, title: string, options: ReaderOpenOptions = {}): Promise<boolean> {
     this.close();
-    this.lastOpen = { id, title, options: { ...options } };
+    this.state = "loading";
     eventBus.emit("reader-opened");
     const { focus, patch, conversionId, pdfPageIndex } = options;
     const generation = this.generation;
@@ -74,10 +81,10 @@ export class ArtifactReader {
     this.host.append(heading, status);
     try {
       const info = await contentInfo(id);
-      if (generation !== this.generation) return;
+      if (generation !== this.generation) return false;
       if (info.ink_snapshot_id) {
         const snapshot = await openInkSnapshot(info.ink_snapshot_id);
-        if (generation !== this.generation) return;
+        if (generation !== this.generation) return false;
         if (!snapshot || snapshot.artifact_id !== id) throw new Error("Ink 快照与所选 Artifact 不一致");
         this.disposeDocument = mountInkSnapshotReader(this.host,snapshot,options.inkFocus);
         this.inkOpen = true;
@@ -87,14 +94,14 @@ export class ArtifactReader {
         await this.markdown(info, generation, focus, patch, conversionId);
       } else if (info.media_type === "application/json" || info.media_type.startsWith("text/")) {
         const bytes = await readSmallFile(info);
-        if (generation !== this.generation) return;
+        if (generation !== this.generation) return false;
         const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
         const pre = element("pre", info.media_type === "application/json" ? JSON.stringify(JSON.parse(text), null, 2) : text);
         pre.className = "reader-text";
         this.host.append(pre);
       } else if (["image/png", "image/jpeg", "image/webp", "image/gif"].includes(info.media_type)) {
         const bytes = await readSmallFile(info);
-        if (generation !== this.generation) return;
+        if (generation !== this.generation) return false;
         const img = element("img");
         img.src = this.blobUrl(bytes, info.media_type);
         img.alt = title;
@@ -102,9 +109,19 @@ export class ArtifactReader {
       } else {
         throw new Error("当前不支持此文件类型：" + info.media_type);
       }
+      if (generation !== this.generation) return false;
+      if (this.error) throw new Error(this.error);
       status.remove();
+      this.state = "ready";
+      this.lastOpen = { id, title, options: { ...options } };
+      return true;
     } catch (error) {
-      if (generation === this.generation) status.textContent = error instanceof Error ? error.message : String(error);
+      if (generation === this.generation) {
+        this.state = "error";
+        this.error = error instanceof Error ? error.message : String(error);
+        status.textContent = this.error;
+      }
+      return false;
     }
   }
 
@@ -128,6 +145,8 @@ export class ArtifactReader {
       error => {
         if (generation !== this.generation || firstFailure) return;
         firstFailure = error;
+        this.state = "error";
+        this.error = error.message;
         failure.textContent = error.message;
         console.error("PDF range read failed", { artifactId: info.artifact_id, error });
         rejectRead(error);
@@ -153,8 +172,8 @@ export class ArtifactReader {
       pdf = await Promise.race([loading.promise, readFailure]);
     } catch (error) {
       dispose();
-      if (!firstFailure) throw error;
-      return; // The detailed first read failure is already displayed.
+      failure.remove();
+      throw firstFailure ?? error;
     }
     if (generation !== this.generation || transport.stopped) return;
     const controls = element("div");

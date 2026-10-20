@@ -276,6 +276,8 @@ mockIPC(async (command, payload) => {
     return receipt;
   }
   if (command === "get_source_node_detail") {
+    const extraDetail = extraCommands.get(command);
+    if (extraDetail) return extraDetail(args);
     const receipt = [...evidence.values()].find(receipt => receipt.span_id === args.nodeId)!;
     const snapshot = [...snapshots.values()].flat().find(snapshot => snapshot.snapshot_id === receipt.snapshot_id)!;
     return {node_id:receipt.span_id,kind:"SourceSpan",display_title:"手稿证据",artifact_id:receipt.artifact_id,byte_range:null,excerpt:null,markdown_block_ids:[],payload:{},ink:{snapshot_id:snapshot.snapshot_id,document_id:snapshot.document_id,page_id:receipt.page_id,stroke_ids:receipt.stroke_ids}};

@@ -1,4 +1,22 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function addSourcePrimary(page: Page, objectId = "unit-thm", label = "定理 3.2"): Promise<void> {
+  await page.evaluate(({ objectId, label }) => {
+    const h = window.appHarness;
+    h.links.push({
+      link_id: "split-primary", document_id: h.documents.a, target_kind: "source_object",
+      target_key: "src:" + objectId, target_id: objectId, target: { kind: "source_object", object_id: objectId },
+      target_revision: null, target_label: label, role: "study", is_primary: true, state: "active",
+      created_at: 1, removed_at: null, target_status: "active",
+    });
+  }, { objectId, label });
+}
+
+async function openNoteInSplit(page: Page): Promise<void> {
+  await page.locator("#ink-button").click();
+  await page.getByRole("button", { name: /手稿 A/ }).click();
+  await page.locator("#ink-split-toggle").click();
+}
 
 test.describe("N3c side-by-side reading", () => {
   test.beforeEach(async ({ page }) => {
@@ -70,6 +88,58 @@ test.describe("N3c side-by-side reading", () => {
     // Note stays on the right.
     await expect(page.locator("#ink-document-heading")).toContainText("手稿 A");
     await expect(page.locator("#ink-workspace")).toHaveClass(/is-split/);
+  });
+
+  test("source-unit primary resolves its artifact and focuses the original block", async ({ page }) => {
+    await addSourcePrimary(page);
+    await openNoteInSplit(page);
+    await page.getByRole("button", { name: "打开主关联「定理 3.2」" }).click();
+    await expect(page.locator("#ink-split-reader .markdown-body")).toContainText("正确表述");
+    await expect(page.locator("#ink-split-reader .source-block-focus")).toHaveAttribute("data-source-block", "b1");
+    expect(await page.evaluate(() => window.appHarness.detailRequests)).toEqual(["unit-thm"]);
+    expect(await page.evaluate(() => window.appHarness.contentRequests)).toEqual(["md-1"]);
+    await expect(page.locator("#ink-document-heading")).toContainText("手稿 A");
+  });
+
+  test("artifact primary can be read directly without a source-unit lookup", async ({ page }) => {
+    await addSourcePrimary(page, "md-1", "正确表述.md");
+    await openNoteInSplit(page);
+    await page.getByRole("button", { name: "打开主关联「正确表述.md」" }).click();
+    await expect(page.locator("#ink-split-reader .markdown-body")).toContainText("正确表述");
+    expect(await page.evaluate(() => window.appHarness.detailRequests)).toEqual([]);
+  });
+
+  test("a failed source stays selectable across reopening and can be retried", async ({ page }) => {
+    await page.evaluate(() => window.appHarness.contentFailures.add("md-1"));
+    await openNoteInSplit(page);
+    const picker = page.locator("#ink-split-empty");
+    await picker.getByRole("button", { name: "正确表述.md" }).click();
+    await expect(picker).toBeVisible();
+    await expect(picker.getByRole("alert")).toContainText("Artifact 不存在");
+    for (let i = 0; i < 2; i++) {
+      await page.locator("#ink-split-toggle").click();
+      await page.locator("#ink-split-toggle").click();
+      await expect(picker).toBeVisible();
+    }
+    expect(await page.evaluate(() => window.appHarness.contentRequests)).toEqual(["md-1"]);
+    await page.evaluate(() => window.appHarness.contentFailures.clear());
+    await picker.getByRole("button", { name: "正确表述.md" }).click();
+    await expect(page.locator("#ink-split-reader .markdown-body")).toContainText("正确表述");
+    await expect(picker).toBeHidden();
+    await expect(page.locator("#ink-document-heading")).toContainText("手稿 A");
+  });
+
+  test("a delayed source lookup cannot reopen the reader after returning to the map", async ({ page }) => {
+    await addSourcePrimary(page);
+    await page.evaluate(() => { window.appHarness.sourceDetailBehavior.delayMs = 250; });
+    await openNoteInSplit(page);
+    await page.getByRole("button", { name: "打开主关联「定理 3.2」" }).click();
+    await page.locator("#ink-close").click();
+    await expect(page.locator(".workspace-grid")).toBeVisible();
+    await page.waitForTimeout(350);
+    await expect(page.locator("#ink-workspace")).toBeHidden();
+    await expect(page.locator("#reader")).toBeHidden();
+    expect(await page.evaluate(() => window.appHarness.contentRequests)).toEqual([]);
   });
 
   test("bidirectional navigation: open target left, ✎ opens note right", async ({ page }) => {

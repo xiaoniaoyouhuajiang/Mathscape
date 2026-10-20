@@ -24,6 +24,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(case: &str) -> Self {
+        Self::with_source(case, SOURCE)
+    }
+
+    fn with_source(case: &str, source: &str) -> Self {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join(".test-runs")
             .join(format!(
@@ -42,7 +46,7 @@ impl Fixture {
         )
         .unwrap();
         let markdown = root.join("notes.md");
-        fs::write(&markdown, SOURCE).unwrap();
+        fs::write(&markdown, source).unwrap();
         let mut pool = ArtifactPool::open(&workspace).unwrap();
         let imported = pool
             .import_file(
@@ -62,6 +66,32 @@ impl Fixture {
             service,
             artifact: imported.stable_id().to_string(),
         }
+    }
+
+    fn source_unit(&self, name: &str, ranges: &[(usize, usize)]) -> String {
+        let connection =
+            rusqlite::Connection::open(self.service.workspace_root().join("mathscape.sqlite3"))
+                .unwrap();
+        let unit = format!("mathscape:source-unit/{name}");
+        let mut spans = Vec::new();
+        for (index, &(start, end)) in ranges.iter().enumerate() {
+            let span = format!("mathscape:source-span/{name}-{index}");
+            let payload = serde_json::json!({"payload": {
+                "markdown": {"artifact": self.artifact, "byte_range": {"start": start, "end": end}}
+            }});
+            seed_object(&connection, &span, "SourceSpan", payload);
+            spans.push(span);
+        }
+        seed_object(
+            &connection,
+            &unit,
+            "SourceSemanticUnit",
+            serde_json::json!({"payload": {
+                "kind": "statement", "display_title": "仅用于辨认的节点名", "source_spans": spans,
+                "surface_content_artifact": self.artifact
+            }}),
+        );
+        unit
     }
 
     /// (content hash, [(block id, kind)]).
@@ -111,6 +141,23 @@ impl Fixture {
             title: None,
         }
     }
+}
+
+fn seed_object(
+    connection: &rusqlite::Connection,
+    id: &str,
+    kind: &str,
+    payload: serde_json::Value,
+) {
+    connection.execute(
+        "INSERT INTO map_objects(object_id,object_shape,entity_kind,current_revision) VALUES(?1,'entity',?2,'card-rev')",
+        rusqlite::params![id, kind],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO map_object_revisions(object_id,revision_id,schema_version,lifecycle,created_at,created_by,generation_run,payload_json)
+         VALUES(?1,'card-rev','1','active','2026-10-20T00:00:00Z','test',NULL,?2)",
+        rusqlite::params![id, payload.to_string()],
+    ).unwrap();
 }
 
 impl Drop for Fixture {
@@ -297,7 +344,10 @@ fn n3b_problem_card_renders_primary_markdown_and_stays_note_scoped() {
         role: InkLinkRole::Attempt,
         title: Some("卡片手稿".into()),
     };
-    fixture.service.create_ink_note_from_context(request).unwrap();
+    fixture
+        .service
+        .create_ink_note_from_context(request)
+        .unwrap();
 
     let card = fixture
         .service
@@ -306,7 +356,11 @@ fn n3b_problem_card_renders_primary_markdown_and_stays_note_scoped() {
         .expect("primary card");
     assert_eq!(card.status, mathscape_desktop::ProblemCardStatus::Ok);
     assert!(!card.body.is_empty(), "expected rendered primary body");
-    assert!(card.body.contains("极限") || card.body.contains("连续") || card.body.contains("sin"), "body={}", card.body);
+    assert!(
+        card.body.contains("极限") || card.body.contains("连续") || card.body.contains("sin"),
+        "body={}",
+        card.body
+    );
 
     // Note without a primary link must not expose a card (§10 / decision 11).
     fixture
@@ -327,7 +381,13 @@ fn n3b_problem_card_renders_primary_markdown_and_stays_note_scoped() {
             title_mode: Some(InkTitleMode::Auto),
         })
         .unwrap();
-    assert!(fixture.service.ink_problem_card("card-note-b").unwrap().is_none());
+    assert!(
+        fixture
+            .service
+            .ink_problem_card("card-note-b")
+            .unwrap()
+            .is_none()
+    );
 
     // Clearing primary clears the card for A; B still has none (§10).
     fixture
@@ -338,6 +398,122 @@ fn n3b_problem_card_renders_primary_markdown_and_stays_note_scoped() {
             link_id: None,
         })
         .unwrap();
-    assert!(fixture.service.ink_problem_card("card-note-a").unwrap().is_none());
-    assert!(fixture.service.ink_problem_card("card-note-b").unwrap().is_none());
+    assert!(
+        fixture
+            .service
+            .ink_problem_card("card-note-a")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        fixture
+            .service
+            .ink_problem_card("card-note-b")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn problem_card_source_unit_reads_its_spans_instead_of_its_title() {
+    let fixture = Fixture::new("card-source-body");
+    let first = SOURCE.find("**定理").unwrap();
+    let first_end = SOURCE[first..].find("\n\n").unwrap() + first;
+    let last = SOURCE.find("例 4.").unwrap();
+    let unit = fixture.source_unit("card-unit", &[(first, first_end), (last, SOURCE.len())]);
+    let mut request = fixture.context("source-card", "source-note", fixture.target(1, 1));
+    request.target = InkLinkTargetRequest::SourceObject { object_id: unit };
+    fixture
+        .service
+        .create_ink_note_from_context(request)
+        .unwrap();
+    let card = fixture
+        .service
+        .ink_problem_card("source-note")
+        .unwrap()
+        .unwrap();
+    assert_eq!(card.status, mathscape_desktop::ProblemCardStatus::Ok);
+    assert!(card.body.contains("**定理 3.2**"), "{}", card.body);
+    assert!(card.body.contains("\\lim_{x\\to0}"));
+    assert!(!card.body.contains("仅用于辨认的节点名"));
+    assert!(!card.body.contains("第一章"));
+    assert!(!card.body.contains("{2}"));
+    assert_eq!(
+        serde_json::to_value(&card).unwrap()["body_format"],
+        "markdown"
+    );
+}
+
+#[test]
+fn problem_card_keeps_markdown_structure_and_math() {
+    let fixture = Fixture::new("card-markdown-body");
+    let request = fixture.context("md-card", "md-note", fixture.target(1, 3));
+    fixture
+        .service
+        .create_ink_note_from_context(request)
+        .unwrap();
+    let card = fixture
+        .service
+        .ink_problem_card("md-note")
+        .unwrap()
+        .unwrap();
+    assert!(card.body.contains("**定理 3.2**"), "{}", card.body);
+    assert!(card.body.contains("\n\n"));
+    assert!(card.body.contains("$\\lim_{x\\to0}\\frac{\\sin x}{x}$"));
+}
+
+#[test]
+fn problem_card_missing_source_is_explicit_and_can_be_read_again() {
+    let fixture = Fixture::new("card-source-retry");
+    let unit = fixture.source_unit("retry-unit", &[(0, SOURCE.len() + 100)]);
+    let mut request = fixture.context("missing-card", "missing-note", fixture.target(1, 1));
+    request.target = InkLinkTargetRequest::SourceObject { object_id: unit };
+    fixture
+        .service
+        .create_ink_note_from_context(request)
+        .unwrap();
+    let card = fixture
+        .service
+        .ink_problem_card("missing-note")
+        .unwrap()
+        .unwrap();
+    assert_eq!(card.status, mathscape_desktop::ProblemCardStatus::Missing);
+    assert!(card.body.is_empty());
+    let connection =
+        rusqlite::Connection::open(fixture.service.workspace_root().join("mathscape.sqlite3"))
+            .unwrap();
+    connection.execute(
+        "UPDATE map_object_revisions SET payload_json=json_set(payload_json,'$.payload.markdown.byte_range.end',?1) WHERE object_id='mathscape:source-span/retry-unit-0'",
+        [SOURCE.len() as i64],
+    ).unwrap();
+    let recovered = fixture
+        .service
+        .ink_problem_card("missing-note")
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.status, mathscape_desktop::ProblemCardStatus::Ok);
+    assert!(recovered.body.contains("\\lim"));
+}
+
+#[test]
+fn problem_card_bounds_long_utf8_source_without_losing_its_body() {
+    let source = format!("# 长题目\n\n{}\n\n结束。", "题😀".repeat(5000));
+    let fixture = Fixture::with_source("card-long-body", &source);
+    let unit = fixture.source_unit("long-unit", &[(0, source.len())]);
+    let mut request = fixture.context("long-card", "long-note", fixture.target(0, 0));
+    request.target = InkLinkTargetRequest::SourceObject { object_id: unit };
+    fixture
+        .service
+        .create_ink_note_from_context(request)
+        .unwrap();
+    let card = fixture
+        .service
+        .ink_problem_card("long-note")
+        .unwrap()
+        .unwrap();
+    assert_eq!(card.status, mathscape_desktop::ProblemCardStatus::Ok);
+    assert!(card.body_truncated);
+    assert!(card.body.chars().count() <= 4000);
+    assert!(card.body.starts_with("# 长题目"));
+    assert!(!card.body.contains('\u{fffd}'));
 }

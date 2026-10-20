@@ -421,6 +421,12 @@ fn asset_response_with(name: &str, csp: &'static str) -> Response {
         "text/css; charset=utf-8"
     } else if name.ends_with(".html") {
         "text/html; charset=utf-8"
+    } else if name.ends_with(".woff2") {
+        "font/woff2"
+    } else if name.ends_with(".woff") {
+        "font/woff"
+    } else if name.ends_with(".ttf") {
+        "font/ttf"
     } else {
         "application/octet-stream"
     };

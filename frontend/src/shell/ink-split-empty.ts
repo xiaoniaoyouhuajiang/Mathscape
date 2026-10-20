@@ -10,6 +10,7 @@ export interface SplitSourceItem {
 
 export interface SplitEmptyOptions {
   primaryLabel?: string;
+  error?: string;
   /** Primary can be opened in the reader (markdown / readable artifact). */
   primaryOpenable: boolean;
   sources: SplitSourceItem[];
@@ -42,6 +43,12 @@ export function showSplitEmpty(host: HTMLElement, options: SplitEmptyOptions): v
   const blurb = document.createElement("p");
   blurb.textContent = "左侧显示原文，右侧继续写手稿。当前还没有打开的阅读文档。";
   card.append(title, blurb);
+  if (options.error) {
+    const error = document.createElement("p");
+    error.setAttribute("role", "alert");
+    error.textContent = `原文打开失败：${options.error}。可以重试或选择其他材料。`;
+    card.append(error);
+  }
 
   if (options.primaryLabel) {
     const primary = document.createElement("button");

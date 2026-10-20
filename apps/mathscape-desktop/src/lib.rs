@@ -6,7 +6,7 @@ mod ink;
 mod ink_lan;
 mod ink_link;
 mod ink_problem_card;
-pub use ink_problem_card::{InkProblemCard, ProblemCardStatus};
+pub use ink_problem_card::{InkProblemCard, ProblemCardBodyFormat, ProblemCardStatus};
 pub use ink_link::{
     CreateInkNoteFromContextRequest, InkLinkTargetRequest, InkMarkdownLinks,
     InkMarkdownTargetRequest, LinkInkNoteRequest,

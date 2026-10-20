@@ -15,7 +15,8 @@ import {
   setInkContextCreator,
   setInkSourceCandidateProvider,
 } from "./ink/links";
-import { ArtifactReader } from "./reader/reader";
+import { ArtifactReader, type ReaderOpenOptions } from "./reader/reader";
+import { sourceNodeDetail } from "./reader/content";
 import { mountReviewWorkspace } from "./review/workspace";
 import { AppShell } from "./shell/app-shell";
 import {
@@ -52,6 +53,8 @@ const readerHome = el.readerHost.parentElement!;
 let inkSplitHandle: InkSplitHandle | undefined;
 /** Bumped on every exit from split/ink so in-flight left-pane loads cannot resurrect the overlay. */
 let splitGeneration = 0;
+let splitReaderRequest = 0;
+let splitReaderError: string | undefined;
 
 function placeReaderInSplit(inSplit: boolean): void {
   if (inSplit) {
@@ -62,7 +65,7 @@ function placeReaderInSplit(inSplit: boolean): void {
     }
     el.readerHost.classList.add("reader-panel");
     // Keep host visible only when it has a document; empty state covers the blank case.
-    el.readerHost.hidden = !reader.hasContent();
+    el.readerHost.hidden = !reader.hasContent() && !reader.isLoading();
   } else {
     restoreReaderHome({ hide: false });
   }
@@ -100,32 +103,65 @@ function primaryIsOpenable(link: InkNoteLink | undefined): boolean {
   return link.target.kind === "markdown" || link.target.kind === "source_object";
 }
 
-function openSplitReader(artifactId: string, title: string, focus?: { start: number; end: number; blockIds?: string[] }): void {
+type SplitReaderTarget =
+  | { kind: "artifact"; id: string; title: string; options?: ReaderOpenOptions }
+  | { kind: "source_object"; id: string; title: string };
+
+async function splitPrimaryLink(): Promise<InkNoteLink | undefined> {
+  const primary = inkWorkspace.primaryLink();
+  if (primary) return primary;
+  const documentId = inkWorkspace.currentDocumentId();
+  if (!documentId) return;
+  try {
+    const links = await listInkNoteLinks(documentId);
+    if (inkWorkspace.currentDocumentId() === documentId) {
+      return links.find(link => link.is_primary && link.state === "active");
+    }
+  } catch { /* The source picker remains available. */ }
+}
+
+async function openSplitReader(target: SplitReaderTarget): Promise<void> {
   if (!inkSplit || !inkOpen) return;
   const generation = splitGeneration;
-  const stillSplit = () => generation === splitGeneration && inkSplit && inkOpen;
+  const request = ++splitReaderRequest;
+  const stillSplit = () => generation === splitGeneration && request === splitReaderRequest && inkSplit && inkOpen;
+  splitReaderError = undefined;
   placeReaderInSplit(true);
-  if (!stillSplit()) {
-    restoreReaderHome({ hide: true });
-    return;
-  }
   hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
   el.readerHost.hidden = false;
   inkPaneFocused = false;
-  void reader.open(artifactId, title, focus ? { focus } : {}).then(() => {
-    if (!stillSplit()) {
-      restoreReaderHome({ hide: true });
-      return;
+  try {
+    let artifactId = target.id;
+    let options: ReaderOpenOptions = target.kind === "artifact" ? target.options ?? {} : {};
+    if (target.kind === "source_object") {
+      const node = currentSnapshot?.landscape_graph.nodes.find(item => item.domain_id === target.id);
+      if (node?.domain_kind !== "SourceArtifact") {
+        // Units/spans/relations are anchors, not files. Reuse the inspector's locator.
+        const detail = await sourceNodeDetail(target.id);
+        if (!stillSplit()) return;
+        if (!detail.artifact_id) throw new Error("关联的来源对象没有可打开的原文");
+        artifactId = detail.artifact_id;
+        options = {
+          focus: detail.byte_range ? { ...detail.byte_range, blockIds: detail.markdown_block_ids } : undefined,
+          inkFocus: detail.ink,
+        };
+      }
+    }
+    if (!stillSplit()) return;
+    const opened = await reader.open(artifactId, target.title, options);
+    if (!stillSplit()) return;
+    if (!opened) {
+      if (reader.isLoading() || reader.hasContent()) return; // A different reader action took over.
+      throw new Error(reader.lastError() ?? "原文未能打开");
     }
     window.dispatchEvent(new Event("resize"));
-  }).catch((error: unknown) => {
-    if (!stillSplit()) {
-      restoreReaderHome({ hide: true });
-      return;
-    }
-    shell.showToast(errorMessage(error), "error");
-    void ensureSplitLeftPane();
-  });
+  } catch (error: unknown) {
+    if (!stillSplit()) return;
+    splitReaderError = errorMessage(error);
+    reader.close();
+    const primary = await splitPrimaryLink();
+    if (stillSplit()) renderSplitEmpty(primary);
+  }
 }
 
 function openPrimaryInSplit(link: InkNoteLink): void {
@@ -135,15 +171,13 @@ function openPrimaryInSplit(link: InkNoteLink): void {
     return;
   }
   if (target.kind === "markdown") {
-    openSplitReader(target.artifact_id, link.target_label, {
-      start: target.start,
-      end: target.end,
-      blockIds: target.block_ids,
+    void openSplitReader({
+      kind: "artifact", id: target.artifact_id, title: link.target_label,
+      options: { focus: { start: target.start, end: target.end, blockIds: target.block_ids } },
     });
     return;
   }
-  // source_object: try the same path the inspector uses (domain id as content id).
-  openSplitReader(target.object_id, link.target_label);
+  void openSplitReader({ kind: "source_object", id: target.object_id, title: link.target_label });
 }
 
 function renderSplitEmpty(primary: InkNoteLink | undefined): void {
@@ -152,10 +186,11 @@ function renderSplitEmpty(primary: InkNoteLink | undefined): void {
   el.readerHost.hidden = true;
   showSplitEmpty(host, {
     primaryLabel: primary?.target_label,
+    error: splitReaderError,
     primaryOpenable: primaryIsOpenable(primary),
     sources: splitSourceItems(),
     onOpenPrimary: () => { if (primary) openPrimaryInSplit(primary); },
-    onOpenSource: (item) => openSplitReader(item.artifactId, item.label),
+    onOpenSource: (item) => void openSplitReader({ kind: "artifact", id: item.artifactId, title: item.label }),
     onImportPdf: () => void artifactController.importPdf(),
     onBackToMap: () => inkWorkspace.close(),
   });
@@ -166,31 +201,32 @@ function renderSplitEmpty(primary: InkNoteLink | undefined): void {
 async function ensureSplitLeftPane(): Promise<void> {
   if (!inkSplit || !inkOpen) return;
   const generation = splitGeneration;
-  const stillSplit = () => generation === splitGeneration && inkSplit && inkOpen;
+  const request = splitReaderRequest;
+  const stillSplit = () => generation === splitGeneration && request === splitReaderRequest && inkSplit && inkOpen;
   placeReaderInSplit(true);
   if (!stillSplit()) return;
   if (reader.hasContent()) {
+    splitReaderError = undefined;
     hideSplitEmpty(ensureSplitEmptyHost(el.inkSplitReader));
     el.readerHost.hidden = false;
     window.dispatchEvent(new Event("resize"));
+    return;
+  }
+  if (reader.isLoading()) { el.readerHost.hidden = false; return; }
+  // A failure must return to a recoverable picker, not retry a remembered target in a loop.
+  if (splitReaderError) {
+    const primary = await splitPrimaryLink();
+    if (stillSplit()) renderSplitEmpty(primary);
     return;
   }
   // Restore the last reader document if we only hid it when opening 手稿.
   const last = reader.lastOpened();
   if (last) {
     if (!stillSplit()) return;
-    openSplitReader(last.id, last.title, last.options.focus);
+    void openSplitReader({ kind: "artifact", id: last.id, title: last.title, options: last.options });
     return;
   }
-  let primary = inkWorkspace.primaryLink();
-  const documentId = inkWorkspace.currentDocumentId();
-  if (!primary && documentId) {
-    try {
-      const links = await listInkNoteLinks(documentId);
-      if (!stillSplit() || inkWorkspace.currentDocumentId() !== documentId) return;
-      primary = links.find((link) => link.is_primary && link.state === "active");
-    } catch { /* picker still works */ }
-  }
+  const primary = await splitPrimaryLink();
   if (!stillSplit()) return;
   if (primary?.target.kind === "markdown") {
     openPrimaryInSplit(primary);

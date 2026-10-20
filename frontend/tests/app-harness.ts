@@ -22,8 +22,24 @@ extraCommands.set("get_desktop_snapshot", () => structuredClone(snapshot));
 for (const command of ["list_discovery_runs", "list_parse_jobs", "list_review_items"]) extraCommands.set(command, () => []);
 extraCommands.set("get_llm_settings_summary", () => ({ configured: false }));
 const mdBytes = new TextEncoder().encode(mdSource);
+const contentFailures = new Set<string>();
+const contentRequests: string[] = [];
+const detailRequests: string[] = [];
+const sourceDetailBehavior = { delayMs: 0 };
+extraCommands.set("get_source_node_detail", async (args) => {
+  const id = String(args.nodeId);
+  detailRequests.push(id);
+  if (sourceDetailBehavior.delayMs) await new Promise(resolve => setTimeout(resolve, sourceDetailBehavior.delayMs));
+  return {
+    node_id: id, kind: "SourceSemanticUnit", display_title: "定理 3.2", unit_kind: "statement", parent: null,
+    artifact_id: "md-1", byte_range: { start: 0, end: mdBytes.length }, excerpt: mdSource,
+    markdown_block_ids: ["b1"], payload: {},
+  };
+});
 extraCommands.set("get_artifact_content_info", (args) => {
   const id = String(args.artifactId);
+  contentRequests.push(id);
+  if (contentFailures.has(id)) throw new Error("Artifact 不存在");
   if (id === "md-1") return { artifact_id: id, media_type: "text/markdown", byte_size: mdBytes.length, contexts: [{ conversion_id: "c1", paths: [{ path: "notes.md", artifact_id: "md-1" }] }] };
   if (id === "pdf-notes") return { artifact_id: id, media_type: "application/pdf", byte_size: 100, contexts: [] };
   throw new Error("artifact not found: " + id);
@@ -50,6 +66,7 @@ const core = (): Core => (document.querySelector("#graph") as unknown as { _cyre
   ?? ([...document.querySelectorAll<HTMLElement>("div")].find(div => (div as unknown as { _cyreg?: unknown })._cyreg) as unknown as { _cyreg: { cy: Core } })._cyreg.cy;
 const appHarness = {
   documents: { a: a.document_id, b: b.document_id }, notes, links, behavior, storedDocuments: documents, noteCalls, unexpected,
+  contentFailures, contentRequests, detailRequests, sourceDetailBehavior,
   labels: () => Object.fromEntries(core().nodes().map(node => [node.id(), String(node.data("label"))])),
   inkNodes: () => core().nodes(".ink-note-node").map(node => `${node.id()}=${String(node.data("label"))}`),
   selectNode: (id: string) => { core().getElementById(id).emit("tap"); },
