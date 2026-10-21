@@ -35,7 +35,12 @@ import {
   restoreInkNote,
   startInkSession,
   openInkSnapshot,
+  renameInkSnapshot,
+  inkSnapshotLabelText,
+  normalizeInkSnapshotLabel,
+  INK_SNAPSHOT_LABEL_PRESETS,
   trashInkNote,
+  type StoredInkSnapshotSummary,
   type InkNoteReceipt,
   type InkNoteState,
   type StoredInkDocumentSummary,
@@ -152,6 +157,10 @@ export class DesktopInkWorkspace {
   private sessionSummaries: SessionSummary[] = [];
   private readonly sessionRows = new Map<string, SessionListRow>();
   private snapshotListRevision = 0;
+  /** Last loaded snapshot list of the open document (N3d naming). */
+  private snapshotSummaries: StoredInkSnapshotSummary[] = [];
+  private snapshotLabelRequest: { requestId: string; snapshotId: string; label: string; expected: number } | undefined;
+  private dialogBeforeClose: ((choice: string) => boolean) | undefined;
   private persistenceState: PersistenceState = "loading";
   private pendingCount = 0;
   private brushColor = loadInkColor(DESKTOP_COLOR_KEY);
@@ -258,7 +267,7 @@ export class DesktopInkWorkspace {
       '<main class="ink-desktop-main"><nav class="ink-desktop-toolbar" aria-label="手稿工具"><div class="ink-tool-buttons">',
       '<button id="desktop-ink-pen" class="is-active" type="button">笔</button><button id="desktop-ink-erase" type="button">整笔擦除</button><button id="desktop-ink-partial_erase" type="button">局部擦除</button><button id="desktop-ink-select" type="button">套索选择</button><button id="desktop-ink-pan" type="button" aria-pressed="false" title="手形工具：拖动平移视图，不改动笔迹（也可按住空格临时平移）">平移</button><button id="desktop-ink-delete-selection" type="button" disabled title="删除套索选中的笔迹（Delete / Backspace），可撤销">删除所选</button><button id="desktop-ink-restyle" type="button" disabled title="把选中笔迹改成当前颜色，可撤销">改颜色</button><button id="desktop-ink-undo" type="button" disabled>撤销</button><button id="desktop-ink-redo" type="button" disabled>重做</button>',
       '</div><div class="ink-brush-controls"><span id="desktop-ink-palette-host"></span><label title="之后创建的笔迹使用此笔宽">笔宽<input id="desktop-ink-width" type="range" min="1" max="16" step="0.5" value="4" aria-label="笔迹宽度"><output id="desktop-ink-width-value">4</output></label><label class="ink-check-control"><input id="desktop-ink-finger" type="checkbox">手指书写</label></div><div class="ink-page-controls"><label id="desktop-ink-follow-label" hidden><input id="desktop-ink-follow-pad" type="checkbox" checked>跟随平板页</label><select id="desktop-ink-page" aria-label="手稿页面"></select><button id="desktop-ink-add-page" class="secondary-button" type="button">新增页面</button><button id="desktop-ink-zoom-out" class="secondary-button" type="button" aria-label="缩小">−</button><button id="desktop-ink-fit" class="secondary-button" type="button">整页</button><button id="desktop-ink-zoom-in" class="secondary-button" type="button" aria-label="放大">＋</button></div></nav>',
-      '<div id="ink-trash-banner" class="ink-trash-banner" role="status" hidden><span>这份手稿在回收站中，只能查看和导出。</span><button id="ink-trash-restore" class="secondary-button" type="button">恢复手稿</button></div><div id="ink-link-bar" class="ink-link-bar" aria-label="手稿关联" hidden></div><div id="desktop-ink-evidence" hidden></div><div id="ink-empty-state" class="ink-empty-state" hidden><p>还没有打开的手稿。</p><button id="ink-empty-create" class="secondary-button" type="button">新建手稿</button></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="'+INK_TITLE_MAX+'" value="" placeholder="留空恢复自动标题" aria-label="手稿标题" title="点击改名；回车保存，Esc 取消" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div><section id="ink-lan-panel" hidden></section><div id="ink-dialog" class="ink-dialog" role="dialog" aria-modal="true" aria-labelledby="ink-dialog-text" hidden><div class="ink-dialog-box"><p id="ink-dialog-text"></p><div id="ink-dialog-actions" class="ink-dialog-actions"></div></div></div></div>',
+      '<div id="ink-trash-banner" class="ink-trash-banner" role="status" hidden><span>这份手稿在回收站中，只能查看和导出。</span><button id="ink-trash-restore" class="secondary-button" type="button">恢复手稿</button></div><div id="ink-link-bar" class="ink-link-bar" aria-label="手稿关联" hidden></div><div id="desktop-ink-evidence" hidden></div><div id="ink-empty-state" class="ink-empty-state" hidden><p>还没有打开的手稿。</p><button id="ink-empty-create" class="secondary-button" type="button">新建手稿</button></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="'+INK_TITLE_MAX+'" value="" placeholder="留空恢复自动标题" aria-label="手稿标题" title="点击改名；回车保存，Esc 取消" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div><section id="ink-lan-panel" hidden></section><div id="ink-dialog" class="ink-dialog" role="dialog" aria-modal="true" aria-labelledby="ink-dialog-text" hidden><div class="ink-dialog-box"><p id="ink-dialog-text"></p><div id="ink-dialog-extra" class="ink-dialog-extra"></div><div id="ink-dialog-actions" class="ink-dialog-actions"></div></div></div></div>',
     ].join("");
     element<HTMLButtonElement>(this.host, "#ink-close").addEventListener("click", () => this.close());
     element<HTMLButtonElement>(this.host, "#ink-split-toggle").addEventListener("click", () => eventBus.emit("ink-split-toggle"));
@@ -642,10 +651,11 @@ export class DesktopInkWorkspace {
   }
 
   /** Small in-page dialog; resolves to the chosen id or `null` (Esc). */
-  private choose(text: string, choices: DialogChoice[]): Promise<string | null> {
+  private choose(text: string, choices: DialogChoice[], extra: HTMLElement[] = [], beforeClose?: (choice: string) => boolean): Promise<string | null> {
     this.closeDialog(null);
     const dialog = element(this.host, "#ink-dialog");
     element(this.host, "#ink-dialog-text").textContent = text;
+    element(this.host, "#ink-dialog-extra").replaceChildren(...extra);
     const actions = element(this.host, "#ink-dialog-actions");
     actions.replaceChildren();
     for (const choice of choices) {
@@ -654,19 +664,117 @@ export class DesktopInkWorkspace {
       button.className = choice.primary ? "primary-button" : "secondary-button";
       button.textContent = choice.label;
       button.dataset.choice = choice.id;
-      button.addEventListener("click", () => this.closeDialog(choice.id));
+      button.addEventListener("click", () => this.requestDialogClose(choice.id));
       actions.append(button);
     }
     dialog.hidden = false;
-    actions.querySelector<HTMLButtonElement>("button")?.focus();
+    this.dialogBeforeClose = beforeClose;
+    const input = extra.length ? dialog.querySelector<HTMLInputElement>("#ink-dialog-extra input") : null;
+    if (input) { input.focus(); input.select(); } else actions.querySelector<HTMLButtonElement>("button")?.focus();
     return new Promise(resolve => { this.dialogResolve = resolve; });
+  }
+
+  /** Lets a dialog veto closing (e.g. an invalid snapshot name). */
+  private requestDialogClose(value: string): void {
+    if (this.dialogBeforeClose && !this.dialogBeforeClose(value)) return;
+    this.closeDialog(value);
   }
 
   private closeDialog(value: string | null): void {
     const resolve = this.dialogResolve;
     this.dialogResolve = undefined;
+    this.dialogBeforeClose = undefined;
     element(this.host, "#ink-dialog").hidden = true;
+    element(this.host, "#ink-dialog-extra").replaceChildren();
     resolve?.(value);
+  }
+
+  /** Name input with optional presets. Resolves to the trimmed name ("" =
+   * none) or `null` when cancelled. Nothing is ever named automatically. */
+  private async askSnapshotLabel(text: string, initial: string, confirm: string): Promise<string | null> {
+    const wrap = document.createElement("div");
+    wrap.className = "ink-snapshot-label-field";
+    const input = document.createElement("input");
+    input.id = "ink-snapshot-label-input";
+    input.className = "ink-snapshot-label-input";
+    input.type = "text";
+    input.value = initial;
+    input.placeholder = "可留空";
+    input.setAttribute("aria-label", "快照名称");
+    input.maxLength = 120;
+    const presets = document.createElement("div");
+    presets.className = "ink-snapshot-label-presets";
+    presets.setAttribute("role", "group");
+    presets.setAttribute("aria-label", "常用名称");
+    for (const preset of INK_SNAPSHOT_LABEL_PRESETS) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "ink-snapshot-label-preset";
+      chip.textContent = preset;
+      chip.addEventListener("click", () => { input.value = preset; error.hidden = true; input.focus(); });
+      presets.append(chip);
+    }
+    const error = document.createElement("p");
+    error.className = "ink-snapshot-label-error";
+    error.setAttribute("role", "alert");
+    error.hidden = true;
+    wrap.append(input, presets, error);
+    const validate = (choice: string): boolean => {
+      if (choice !== "ok") return true;
+      try { normalizeInkSnapshotLabel(input.value); error.hidden = true; return true; }
+      catch (failure) { error.textContent = errorText(failure); error.hidden = false; input.focus(); return false; }
+    };
+    input.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); this.requestDialogClose("ok"); }
+    });
+    input.addEventListener("input", () => { error.hidden = true; });
+    const choice = await this.choose(text, [{ id: "cancel", label: "取消" }, { id: "ok", label: confirm, primary: true }], [wrap], validate);
+    if (choice !== "ok") return null;
+    return normalizeInkSnapshotLabel(input.value);
+  }
+
+  /** Renames a snapshot with optimistic concurrency, like note titles. */
+  private async submitSnapshotLabel(snapshotId: string, label: string, expected: number): Promise<StoredInkSnapshotSummary | null> {
+    const previous = this.snapshotLabelRequest;
+    const request = previous && previous.snapshotId === snapshotId && previous.label === label && previous.expected === expected
+      ? previous : { requestId: inkId(), snapshotId, label, expected };
+    this.snapshotLabelRequest = request;
+    try {
+      const receipt = await renameInkSnapshot(request.requestId, snapshotId, label, expected);
+      this.snapshotLabelRequest = undefined;
+      if (this.currentSnapshot?.snapshot_id === snapshotId) {
+        this.currentSnapshot = { ...this.currentSnapshot, label: receipt.snapshot.label ?? null, label_revision: receipt.snapshot.label_revision };
+      }
+      eventBus.emit("source-map-changed", { reason: "ink-snapshot-label" });
+      this.status(label ? `快照名称已更新为「${label}」。` : "已清除快照名称。", false);
+      await this.refreshSnapshots();
+      return receipt.snapshot;
+    } catch (error) {
+      this.snapshotLabelRequest = undefined;
+      if (errorCode(error) === "snapshot_label_conflict") {
+        const details = (error as { details?: Record<string, unknown> }).details ?? {};
+        const current = typeof details.current_label === "string" ? details.current_label : "";
+        const revision = Number(details.current_label_revision ?? expected);
+        const shown = (value: string) => value ? `「${value}」` : "未命名";
+        const choice = await this.choose(`快照名称已在别处改为${shown(current)}。要保留哪一个？`, [
+          { id: "theirs", label: `保留${shown(current)}` },
+          { id: "mine", label: `使用${shown(label)}`, primary: true },
+        ]);
+        if (choice === "mine") return await this.submitSnapshotLabel(snapshotId, label, revision);
+        await this.refreshSnapshots();
+        return null;
+      }
+      this.status("快照命名失败：" + errorText(error), true);
+      return null;
+    }
+  }
+
+  private async renameSnapshotFromList(snapshot: StoredInkSnapshotSummary): Promise<void> {
+    const label = await this.askSnapshotLabel(
+      `为「第 ${snapshot.through_seq} 步」的快照命名。名称只用于辨认和搜索，不改变快照内容；留空清除名称。`,
+      snapshot.label ?? "", "保存名称");
+    if (label === null || label === (snapshot.label ?? "")) return;
+    await this.submitSnapshotLabel(snapshot.snapshot_id, label, snapshot.label_revision ?? 0);
   }
 
   /** Applies the server note to the open document, list and header. */
@@ -1040,7 +1148,7 @@ export class DesktopInkWorkspace {
       if (!stored) throw new Error("快照不存在或已被移除");
       const manifest = parseInkSnapshotManifest(JSON.parse(stored.manifest_json));
       await this.mountDocument(manifest.document, undefined, manifest.through_document_seq, true, stored, revision);
-      this.status("当前正在查看只读历史快照。", false);
+      this.status(`当前正在查看只读历史快照${inkSnapshotLabelText(stored)}。`, false);
     } catch (error) {
       this.status("打开快照失败：" + errorText(error), true);
     }
@@ -1150,6 +1258,7 @@ export class DesktopInkWorkspace {
     try {
       const snapshots = await listInkSnapshots(documentId);
       if (revision !== this.snapshotListRevision || this.documentState?.document_id !== documentId) return;
+      this.snapshotSummaries = snapshots;
       list.replaceChildren();
       if (!snapshots.length) {
         const empty = document.createElement("p");
@@ -1158,17 +1267,32 @@ export class DesktopInkWorkspace {
         return;
       }
       for (const snapshot of snapshots) {
+        const row = document.createElement("div");
+        row.className = "ink-snapshot-row";
+        row.dataset.snapshotId = snapshot.snapshot_id;
         const button = document.createElement("button");
         button.type = "button";
         button.className = "ink-session-item";
         button.classList.toggle("is-active", snapshot.snapshot_id === this.currentSnapshot?.snapshot_id);
         button.innerHTML = "<strong></strong><span></span>";
         // N3.0 (M10): a friendly label; the raw head stays in the tooltip.
-        button.querySelector("strong")!.textContent = "第 " + snapshot.through_seq + " 步";
-        button.title = "快照截止 head " + snapshot.through_seq;
-        button.querySelector("span")!.textContent = (snapshot.snapshot_id === this.currentSnapshot?.snapshot_id ? "正在查看 · " : "") + displayTimestamp(snapshot.created_at);
+        // N3d: a name replaces it as the heading; step and time stay visible
+        // because names need not be unique.
+        const step = "第 " + snapshot.through_seq + " 步";
+        button.querySelector("strong")!.textContent = snapshot.label || step;
+        button.title = (snapshot.label ? `「${snapshot.label}」 · ` : "") + "快照截止 head " + snapshot.through_seq;
+        button.querySelector("span")!.textContent = (snapshot.snapshot_id === this.currentSnapshot?.snapshot_id ? "正在查看 · " : "") + (snapshot.label ? step + " · " : "") + displayTimestamp(snapshot.created_at);
         button.addEventListener("click", () => void this.openSnapshot(snapshot.snapshot_id));
-        list.append(button);
+        const rename = document.createElement("button");
+        rename.type = "button";
+        rename.className = "ink-snapshot-rename";
+        rename.textContent = "命名";
+        rename.setAttribute("aria-label", `为${snapshot.label ? `「${snapshot.label}」` : step}快照命名`);
+        rename.title = "命名或改名（不改变快照内容）";
+        rename.disabled = this.trashedView;
+        rename.addEventListener("click", () => void this.renameSnapshotFromList(snapshot));
+        row.append(button, rename);
+        list.append(row);
       }
     } catch (error) {
       if (revision !== this.snapshotListRevision || this.documentState?.document_id !== documentId) return;
@@ -1311,13 +1435,26 @@ export class DesktopInkWorkspace {
     this.board?.finish();
     const documentId = this.documentState.document_id;
     const expectedHead = this.logicalHead;
+    // Saving the same head yields the same snapshot, so a name typed here
+    // names (or renames) that existing snapshot. Say so up front.
+    const existing = this.snapshotSummaries.find(item => item.document_id === documentId && item.through_seq === expectedHead);
+    const text = existing
+      ? `当前进度（第 ${expectedHead} 步）已保存为快照${inkSnapshotLabelText(existing)}。再次保存不会新建快照；填写名称会给这个快照${existing.label ? "改名，留空则保留原名" : "命名"}。`
+      : `把当前进度（第 ${expectedHead} 步）保存为只读快照。可以起个名字方便以后辨认和搜索，也可以留空；以后可在“历史快照”里改名。`;
+    const label = await this.askSnapshotLabel(text, existing?.label ?? "", "保存");
+    if (label === null) return;
+    if (this.documentState?.document_id !== documentId || this.currentSnapshot) return;
     const saved = await this.flush();
     if (!saved) return;
     try {
       const snapshot = await createInkSnapshot(inkId(), documentId, expectedHead);
       eventBus.emit("source-map-changed", { reason: "ink-snapshot" });
-      this.status("快照已保存：第 " + snapshot.through_seq + " 步。", false);
+      this.status("快照已保存：第 " + snapshot.through_seq + " 步" + inkSnapshotLabelText(snapshot) + "。", false);
       await this.refreshSnapshots();
+      if (label && label !== (snapshot.label ?? "")) {
+        const named = await this.submitSnapshotLabel(snapshot.snapshot_id, label, snapshot.label_revision ?? 0);
+        if (named) this.status("快照已保存：第 " + snapshot.through_seq + " 步" + inkSnapshotLabelText(named) + "。", false);
+      }
     } catch (error) {
       this.status("保存快照失败：" + errorText(error), true);
     }

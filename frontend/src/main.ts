@@ -31,6 +31,8 @@ import {
   type SplitSourceItem,
 } from "./shell/ink-split-empty";
 import { listInkNoteLinks, type InkNoteLink } from "./ink/links";
+import { searchWorkspace, type SearchHit } from "./search/api";
+import { WorkspaceSearchPanel, installWorkspaceSearch, type SearchAction } from "./search/search-panel";
 import "./styles.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -551,6 +553,91 @@ eventBus.on("open-source", (detail) => {
     });
   })();
 });
+
+// N3d workspace search. The panel renders; navigation lives here because it
+// reuses the reader / split / map plumbing above.
+let searchNavigation = 0;
+const nextFrame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+
+/** Select + center a map node by domain id. Leaves 手稿 first if needed. */
+async function locateOnMap(domainId: string, current: () => boolean): Promise<boolean> {
+  const fromInk = inkOpen;
+  if (inkOpen) inkWorkspace.close();
+  if (reader.hasContent() || reader.isLoading() || !el.readerHost.hidden) { reader.close(); el.readerHost.hidden = true; }
+  if (fromInk) { await nextFrame(); await nextFrame(); }
+  if (!current()) return false;
+  const node = currentSnapshot?.landscape_graph.nodes.find(item => item.domain_id === domainId && item.element_kind === "entity");
+  if (!node) { shell.showToast("该结果不在当前地图中，请刷新后重试。", "error"); return false; }
+  inspectorController.selectNodeById(node.id);
+  if (graphController.revealNode(node.id) === "hidden") shell.showToast("该节点被当前筛选隐藏，详情已显示在右侧检查器。", "success");
+  return true;
+}
+
+/** Open a source result in the map-page reader (non-split). Resolves
+ * source objects to their material + focus first (as in PR #7). */
+async function openMapReader(target: SplitReaderTarget, current: () => boolean): Promise<void> {
+  try {
+    let artifactId = target.id;
+    let options: ReaderOpenOptions = target.kind === "artifact" ? target.options ?? {} : {};
+    if (target.kind === "source_object") {
+      const node = currentSnapshot?.landscape_graph.nodes.find(item => item.domain_id === target.id);
+      if (node?.domain_kind !== "SourceArtifact") {
+        const detail = await sourceNodeDetail(target.id);
+        if (!current() || inkOpen) return;
+        if (!detail.artifact_id) throw new Error("该来源对象没有可打开的原文");
+        artifactId = detail.artifact_id;
+        options = {
+          focus: detail.byte_range ? { ...detail.byte_range, blockIds: detail.markdown_block_ids } : undefined,
+          inkFocus: detail.ink,
+        };
+      }
+    }
+    if (!current() || inkOpen) return;
+    restoreReaderHome({ hide: false });
+    el.readerHost.hidden = false;
+    const opened = await reader.open(artifactId, target.title, options);
+    if (!current() || opened) return;
+    if (reader.isLoading() || reader.hasContent()) return; // Another reader action took over.
+    throw new Error(reader.lastError() ?? "原文未能打开");
+  } catch (error: unknown) {
+    if (!current()) return;
+    shell.showToast("无法打开原文：" + errorMessage(error), "error");
+  }
+}
+
+async function openSearchResult(hit: SearchHit, action: SearchAction): Promise<void> {
+  const request = ++searchNavigation;
+  const current = () => request === searchNavigation;
+  const target = hit.target;
+  if (target.kind === "ink_note") {
+    eventBus.emit("open-ink-document", { documentId: target.document_id });
+    return;
+  }
+  const split = inkSplit && inkOpen;
+  if (target.kind === "ink_snapshot") {
+    const readerTarget: SplitReaderTarget = { kind: "artifact", id: target.artifact_id, title: hit.title };
+    if (split) { await openSplitReader(readerTarget); return; }
+    if (inkOpen) inkWorkspace.close();
+    await openMapReader(readerTarget, current);
+    return;
+  }
+  const domainId = target.kind === "artifact" ? target.artifact_id : target.kind === "source_object" ? target.object_id : target.node_id;
+  const readerTarget: SplitReaderTarget | undefined = target.kind === "artifact"
+    ? { kind: "artifact", id: domainId, title: hit.title }
+    : target.kind === "source_object" ? { kind: "source_object", id: domainId, title: hit.title } : undefined;
+  // 并排阅读: source results open in the left pane, the note stays.
+  if (action === "open" && readerTarget && split) { await openSplitReader(readerTarget); return; }
+  const located = await locateOnMap(domainId, current);
+  if (!located || action === "locate" || !readerTarget || !current()) return;
+  await openMapReader(readerTarget, current);
+}
+
+const workspaceSearch = new WorkspaceSearchPanel({
+  search: (query) => searchWorkspace(query),
+  activate: (hit, action) => openSearchResult(hit, action),
+});
+installWorkspaceSearch(workspaceSearch);
+el.searchButton.addEventListener("click", () => workspaceSearch.open());
 
 artifactController.startPolling(1000);
 

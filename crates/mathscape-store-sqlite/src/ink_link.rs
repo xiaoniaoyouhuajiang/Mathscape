@@ -366,7 +366,7 @@ pub fn markdown_excerpt(source: &str) -> String {
     truncate_chars(&normalize_markdown_text(source), EXCERPT_MAX_CHARS)
 }
 
-fn unit_kind_name(kind: &str) -> Option<&'static str> {
+pub fn source_unit_kind_name(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "section" => "章节",
         "definition" => "定义",
@@ -415,7 +415,7 @@ pub fn source_object_short_label(stored_payload: &Value, entity_kind: &str) -> S
         payload
             .get("kind")
             .and_then(Value::as_str)
-            .and_then(unit_kind_name)
+            .and_then(source_unit_kind_name)
             .map(str::to_owned)
     })
     .unwrap_or_else(|| match entity_kind {
@@ -1418,7 +1418,7 @@ impl SqliteArtifactStore {
         })
     }
 
-        /// Active links of one note, primary first.
+    /// Active links of one note, primary first.
     pub fn ink_note_links(&self, document_id: &str) -> Result<Vec<InkNoteLink>, SqliteStoreError> {
         links_of_note(&self.connection, document_id)
     }

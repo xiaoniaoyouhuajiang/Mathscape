@@ -231,13 +231,13 @@ pub(crate) fn now_ms() -> i64 {
         .unwrap_or_default()
 }
 
-fn digest(value: &impl Serialize) -> Result<String, SqliteStoreError> {
+pub(crate) fn digest(value: &impl Serialize) -> Result<String, SqliteStoreError> {
     Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(value)?)))
 }
 fn unsigned(value: i64, field: &'static str) -> Result<u64, SqliteStoreError> {
     u64::try_from(value).map_err(|_| SqliteStoreError::InkInvariant(format!("{field} is negative")))
 }
-fn identifier(value: &str, field: &'static str) -> Result<(), SqliteStoreError> {
+pub(crate) fn identifier(value: &str, field: &'static str) -> Result<(), SqliteStoreError> {
     if value.trim().is_empty() || value.chars().count() > 200 || value.chars().any(char::is_control)
     {
         return Err(SqliteStoreError::InkInvariant(format!(

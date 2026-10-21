@@ -141,7 +141,7 @@ test("N1 the empty state never auto-creates, and clean blank skips the open and 
 });
 
 test("N1 snapshots of a trashed note stay readable but cannot register evidence", async ({ page }) => {
-  await page.getByRole("button", { name: "保存快照", exact: true }).click();
+  await page.getByRole("button", { name: "保存快照", exact: true }).click(); await page.locator("#ink-dialog [data-choice=ok]").click();
   await expect(page.locator("#ink-snapshot-list .ink-session-item")).toHaveCount(1);
   await page.evaluate(() => { const h = window.inkDesktopHarness; Object.assign(h.notes.get(h.documents.a)!, { lifecycle: "trashed", lifecycle_revision: 1, trashed_at: Date.now() }); });
   await page.locator("#ink-snapshot-list .ink-session-item").click();

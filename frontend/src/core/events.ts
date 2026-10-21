@@ -34,6 +34,8 @@ export interface MathscapeEventMap {
   "open-ink-link-target": { link: InkNoteLink };
   /** N3c: toggle or set side-by-side reading (reader | 手稿). */
   "ink-split-toggle": { enabled?: boolean } | void;
+  /** N3d: open the workspace search panel (⌘K / Ctrl+K, 搜索 buttons). */
+  "open-workspace-search": { query?: string } | void;
   "open-review": OpenReviewDetail;
   "reader-opened": void;
   "open-settings": void;
@@ -74,6 +76,7 @@ export class MathscapeEventBus {
       "ink-notes-changed",
       "open-ink-link-target",
       "ink-split-toggle",
+      "open-workspace-search",
       "open-review",
       "reader-opened",
       "open-settings",

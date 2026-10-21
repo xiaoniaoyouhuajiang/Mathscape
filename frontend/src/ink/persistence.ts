@@ -137,8 +137,42 @@ export interface StoredInkSnapshot {
   byte_size: number;
   manifest_json: string;
   created_at: string;
+  /** N3d display name; outside the hashed manifest. `null` = unnamed. */
+  label?: string | null;
+  label_revision?: number;
 }
 export type StoredInkSnapshotSummary = Omit<StoredInkSnapshot, "manifest_json">;
+
+export const INK_SNAPSHOT_LABEL_MAX_CHARS = 40;
+/** Optional presets offered when saving; never applied automatically. */
+export const INK_SNAPSHOT_LABEL_PRESETS = ["第一次尝试", "整理稿", "卡住了", "换个思路", "最终版"] as const;
+
+/** Mirrors the store rule: trimmed, ≤ 40 chars (not bytes), no control
+ * chars; empty clears. Throws a Chinese message when invalid. */
+export function normalizeInkSnapshotLabel(input: string): string {
+  const label = input.trim();
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(label)) throw new Error("快照名称不能包含控制字符");
+  if ([...label].length > INK_SNAPSHOT_LABEL_MAX_CHARS) throw new Error(`快照名称最多 ${INK_SNAPSHOT_LABEL_MAX_CHARS} 个字符`);
+  return label;
+}
+
+export interface InkSnapshotLabelReceipt {
+  request_id: string;
+  snapshot: StoredInkSnapshotSummary;
+  replayed: boolean;
+}
+
+export function renameInkSnapshot(requestId: string, snapshotId: string, label: string, expectedLabelRevision: number): Promise<InkSnapshotLabelReceipt> {
+  return safeInvoke("rename_ink_snapshot", {
+    request: { request_id: requestId, snapshot_id: snapshotId, label, expected_label_revision: expectedLabelRevision },
+  });
+}
+
+/** "「整理稿」" for named snapshots, else "". */
+export function inkSnapshotLabelText(snapshot: { label?: string | null }): string {
+  return snapshot.label ? `「${snapshot.label}」` : "";
+}
 
 export interface InkSelection {
   page_id: string;
