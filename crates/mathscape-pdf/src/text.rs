@@ -106,6 +106,57 @@ impl TextExtraction {
     pub fn items(&self) -> &[PdfTextItem] {
         &self.items
     }
+
+    /// Plain text for every selected page, in selection order.
+    ///
+    /// Only [`PdfTextItemKind::Text`] items contribute. Items keep extraction
+    /// order; a new line starts when the baseline moves by more than half a
+    /// line height, and a single space is inserted between runs on the same
+    /// line when there is a visible horizontal gap. Pages without any text
+    /// item yield an empty string, so callers can detect a missing text layer.
+    pub fn page_texts(&self) -> Vec<(PdfPageIndex, String)> {
+        self.selection
+            .pages()
+            .iter()
+            .map(|&page| {
+                let mut text = String::new();
+                let mut previous: Option<&PdfTextItem> = None;
+                for item in self
+                    .items
+                    .iter()
+                    .filter(|item| item.page == page && item.kind == PdfTextItemKind::Text)
+                {
+                    if let Some(previous) = previous {
+                        text.push_str(run_separator(previous, item));
+                    }
+                    text.push_str(&item.text);
+                    previous = Some(item);
+                }
+                (page, text)
+            })
+            .collect()
+    }
+}
+
+fn run_separator(previous: &PdfTextItem, current: &PdfTextItem) -> &'static str {
+    let line_height = previous
+        .bounds
+        .height()
+        .max(current.bounds.height())
+        .max(previous.font_size)
+        .max(1.0);
+    if (previous.bounds.bottom() - current.bounds.bottom()).abs() > line_height * 0.5 {
+        return "\n";
+    }
+    let touching_whitespace = previous.text.ends_with(char::is_whitespace)
+        || current.text.starts_with(char::is_whitespace);
+    let gap = current.bounds.left() - previous.bounds.right();
+    let em = previous.font_size.max(current.font_size).max(1.0);
+    if !touching_whitespace && gap > em * 0.15 {
+        " "
+    } else {
+        ""
+    }
 }
 
 impl super::PdfEngine {
