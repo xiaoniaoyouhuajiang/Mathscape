@@ -62,7 +62,7 @@ MCP **不是**桌面实时同步通道；桌面不通过 MCP 订阅进度。两�
 ### 2.3 locator / scope / revision [锁定，字段见草案]
 - **locator**：二选一 `md_byte_range {start,end}`（字节，半开区间）| `pdf_pages {from,to}`（1-based，闭区间）。服务端**回显实际返回范围**。见 MCP 草案 §2.2、§2.3。`expand.before/after` 单位统一为**字节**（草案原为待定，此处锁定）。
 - PDF 内部页索引（`pdf.outline` 的 `pdf_page_index`）为 0-based，与 locator 的 1-based 并存，文档里写清（草案 §2.4）。阅读某条目录时，`material.read` 的 `pdf_pages.from = pdf_page_index + 1`（1-based，闭区间）。
-- `pdf.outline` 无嵌入式书签时返回 `status: ok` 与空 `entries`（附 `outline_empty`），不用 `not_found`（那是 artifact 不存在）也不用 `capability_unavailable`（那是外部能力缺失，如无文本层 PDF）。不发明启发式目录。详见 Phase1 清单。
+- `pdf.outline` 无嵌入式书签时返回 `status: ok` 与空 `entries`（附 `outline_empty`），不用 `not_found`（那是 artifact 不存在）也不用 `capability_unavailable`（那是外部能力缺失，如无文本层 PDF）。不发明启发式目录。书签图成环、超限或内容损坏时同样是 `status: ok` 与空 `entries`，诊断为 `outline_unreadable`；文件打不开仍是调用错误 `internal`。详见 Phase1 清单。
 - search 的 `highlights` 保持现有 UTF-16 `[start,end)`（草案 §2.1 [事实]），不改。
 - **scope**：`accepted | investigation`。Phase1 只实现 `accepted`；收到 `investigation` 时按 `accepted` 返回并附 `diagnostics: [{code:"scope_not_supported"}]`，不报错（草案 §1.2）。
 - **revision**：输出可选字段；没有 revision 来源时**省略**而非填假值（草案 §1.2）。输入里的 `revision`（graph 类）Phase1 不实现。
@@ -164,7 +164,10 @@ AgentExecutor 最小接口（语义，非具体签名）：
    - `entries[].pdf_page_index` 为 **0-based**；`entries[].level` 为 1-based 深度（1 = 顶层书签）。`material.read` 的 `pdf_pages` 仍为 **1-based** 闭区间。
    - 无嵌入式书签：`status: ok`，`entries: []`，`source: "embedded_toc"`，`diagnostics` 含 `outline_empty`。这与 `material.read` 在所请求页均无文本层时返回 `capability_unavailable` 不同：空目录不是外部能力缺失。
    - 不实现草案里的启发式目录（`source: "heuristic"`），也不返回印刷页码 `printed_label`（没有来源就省略）。
-   - `lopdf` 0.42 的 `get_toc` 以标题为键，同名书签会折叠成一条；本切片不另写目录解析器去修复。
+   - `lopdf` 0.42 的 `get_toc` 用 `IndexMap`、以标题字节为键。同名书签折叠成一条：保留**第一次**出现的位置，页码和 `level` 取**最后一次**。本切片不另写目录解析器去修复。
+   - 调用 `get_toc` 之前先走 `/Outlines` 上 `get_toc` 会跟随的引用：`/First`、`/Next`（`/Parent` 只拒绝指向自身的自环；指回祖先是正常书签，不顺着走，否则每棵真书签树都会被当成环）。用 visited 集合、深度上限 64、节点上限 10000。成环或超限则**不**调用 `get_toc`（`/First` 自环是栈溢出 abort，`catch_unwind` 接不住）。`get_toc` 再包一层 `catch_unwind`，把 panic（例如过短的 `/Dest` 数组）收成同一条不可读路径。`get_toc` 还会递归名字树 `/Kids`，那条链用同样的上限，避免另一条栈溢出。`get_toc` 返回的内容/解析错误（不是「没有 `/Outlines`」）同样收成不可读空目录。
+   - 目录不可读（成环、超限、panic，或 `get_toc` 的内容/解析失败）：`status: ok`，`entries: []`，`diagnostics` 含 `outline_unreadable`（不是 `outline_empty`）。文件打不开、加密、结构坏到无法 load，仍是调用错误 `internal`，与 `material.read` 一致。
+   - `entries` 没有单独的响应截断。节点上限 10000 是已知上限：更大的书签图整棵视为不可读，不返回部分条目。可读目录最多 10000 条。
 7. [ ] 之后再排：`graph.get/neighborhood`、`ink.snapshot_image`、`user.ask`
 - 写路径（`propose_changes`）不进 Phase1。
 
@@ -186,7 +189,7 @@ AgentExecutor 最小接口（语义，非具体签名）：
 | 错误码 | `not_found\|invalid_arg\|forbidden\|blocked\|internal` 统一为 error | 业务结果拆为 `status`（5 值）；调用错误保留 `invalid_arg\|forbidden\|internal`；`blocked` 留给 Phase2 |
 | `expand` 单位 | 字节或字符待定 | 锁定字节 |
 | 第三方/hmz 地位 | hmz 用于实验 flow（调研 D5） | hmz 为可选适配器，非必需 |
-| 实现顺序 | search → read → outline → grep | search → read → grep（Phase1b 线性扫描 markdown）→ 接真实后端；outline 仍后移 |
+| 实现顺序 | search → read → outline → grep | search → read → `material.grep`（Phase1b 线性扫描 markdown）、`pdf.outline`（只读嵌入式书签）均已落地；接真实后端仍未做 |
 
 ---
 

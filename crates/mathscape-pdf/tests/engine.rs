@@ -1,4 +1,6 @@
-use lopdf::{Bookmark, Document, Object, Stream, content::Content, content::Operation, dictionary};
+use lopdf::{
+    Bookmark, Document, Object, ObjectId, Stream, content::Content, content::Operation, dictionary,
+};
 use mathscape_pdf::{
     ClassificationMode, PdfContentKind, PdfEngine, PdfError, PdfOpenOptions, PdfPageIndex,
     PdfSelection, ScanCoverage,
@@ -279,6 +281,168 @@ fn pdf_without_bookmarks_has_an_empty_outline() {
     assert_eq!(outline.page_count(), 1);
     assert!(outline.entries().is_empty());
     assert!(outline.warnings().is_empty());
+    assert!(!outline.is_unreadable());
+}
+
+/// `lopdf` 0.42 folds equal titles in an `IndexMap`: the first insertion stays
+/// in place, and the later bookmark overwrites page and level.
+#[test]
+fn duplicate_titles_keep_first_position_and_last_page_and_level() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("duplicate-titles.pdf");
+    write_duplicate_title_pdf(&path);
+
+    let outline = PdfEngine.outline(&path, &PdfOpenOptions::new()).unwrap();
+    assert!(!outline.is_unreadable());
+    assert!(outline.warnings().is_empty(), "{:?}", outline.warnings());
+    let entries: Vec<_> = outline
+        .entries()
+        .iter()
+        .map(|entry| (entry.title(), entry.level(), entry.page().get()))
+        .collect();
+    assert_eq!(entries, vec![("Same", 2, 2), ("Parent", 1, 1)]);
+}
+
+#[test]
+fn short_dest_array_is_unreadable_instead_of_panicking() {
+    let (mut document, page_id) = one_page_document();
+    let item = document.add_object(dictionary! {
+        "Title" => Object::string_literal("Short"),
+        "Dest" => vec![page_id.into()],
+    });
+    attach_outline(&mut document, item);
+    let (_dir, path) = save_document(&mut document);
+    assert_unreadable(&path, "panicked");
+}
+
+#[test]
+fn first_self_cycle_is_unreadable_instead_of_overflowing() {
+    let (mut document, page_id) = one_page_document();
+    let item_id = document.new_object_id();
+    document.set_object(
+        item_id,
+        dictionary! {
+            "Title" => Object::string_literal("Loop"),
+            "Dest" => fit_dest(page_id),
+            "First" => item_id,
+        },
+    );
+    attach_outline(&mut document, item_id);
+    let (_dir, path) = save_document(&mut document);
+    assert_unreadable(&path, "cycle");
+}
+
+#[test]
+fn next_sibling_cycle_is_unreadable_instead_of_looping() {
+    let (mut document, page_id) = one_page_document();
+    let left = document.new_object_id();
+    let right = document.new_object_id();
+    document.set_object(
+        left,
+        dictionary! {
+            "Title" => Object::string_literal("A"),
+            "Dest" => fit_dest(page_id),
+            "Next" => right,
+        },
+    );
+    document.set_object(
+        right,
+        dictionary! {
+            "Title" => Object::string_literal("B"),
+            "Dest" => fit_dest(page_id),
+            "Next" => left,
+        },
+    );
+    attach_outline(&mut document, left);
+    let (_dir, path) = save_document(&mut document);
+    assert_unreadable(&path, "cycle");
+}
+
+#[test]
+fn parent_self_reference_is_unreadable() {
+    let (mut document, page_id) = one_page_document();
+    let item_id = document.new_object_id();
+    document.set_object(
+        item_id,
+        dictionary! {
+            "Title" => Object::string_literal("Self"),
+            "Dest" => fit_dest(page_id),
+            "Parent" => item_id,
+        },
+    );
+    attach_outline(&mut document, item_id);
+    let (_dir, path) = save_document(&mut document);
+    assert_unreadable(&path, "/Parent");
+}
+
+#[test]
+fn named_destination_kids_cycle_is_unreadable() {
+    let (mut document, page_id) = one_page_document();
+    let node_id = document.new_object_id();
+    document.set_object(
+        node_id,
+        dictionary! {
+            "Kids" => vec![Object::Reference(node_id)],
+        },
+    );
+    document
+        .catalog_mut()
+        .expect("catalog")
+        .set("Dests", Object::Reference(node_id));
+    let item = document.add_object(dictionary! {
+        "Title" => Object::string_literal("Chapter"),
+        "Dest" => fit_dest(page_id),
+    });
+    attach_outline(&mut document, item);
+    let (_dir, path) = save_document(&mut document);
+    assert_unreadable(&path, "named destination");
+}
+
+/// `/Dests` `/Kids` is not an array. `get_toc` returns a parse error (it does
+/// not panic); that must stay an empty unreadable outline.
+#[test]
+fn outline_parse_error_is_unreadable_without_a_panic() {
+    let (mut document, page_id) = one_page_document();
+    let dests_id = document.add_object(dictionary! {
+        "Kids" => 1,
+    });
+    document
+        .catalog_mut()
+        .expect("catalog")
+        .set("Dests", Object::Reference(dests_id));
+    let item = document.add_object(dictionary! {
+        "Title" => Object::string_literal("Chapter"),
+        "Dest" => fit_dest(page_id),
+    });
+    attach_outline(&mut document, item);
+    let (_dir, path) = save_document(&mut document);
+    let outline = PdfEngine.outline(&path, &PdfOpenOptions::new()).unwrap();
+    assert!(outline.is_unreadable(), "{outline:?}");
+    assert!(outline.entries().is_empty());
+    let warning = outline.warnings().join("\n");
+    assert!(
+        warning.contains("unreadable") && !warning.contains("panicked"),
+        "{warning}"
+    );
+}
+
+#[test]
+fn outline_depth_cap_allows_64_and_rejects_65() {
+    let (mut allowed, _page) = nested_outline(64);
+    let (_dir, path) = save_document(&mut allowed);
+    let outline = PdfEngine.outline(&path, &PdfOpenOptions::new()).unwrap();
+    assert!(!outline.is_unreadable(), "{:?}", outline.warnings());
+    assert_eq!(outline.entries().len(), 64);
+    assert_eq!(outline.entries()[0].title(), "L1");
+    assert_eq!(outline.entries()[0].level(), 1);
+    assert_eq!(outline.entries()[0].page().get(), 0);
+    assert_eq!(outline.entries()[63].title(), "L64");
+    assert_eq!(outline.entries()[63].level(), 64);
+    assert_eq!(outline.entries()[63].page().get(), 0);
+
+    let (mut rejected, _page) = nested_outline(65);
+    let (_dir, path) = save_document(&mut rejected);
+    assert_unreadable(&path, "nesting");
 }
 
 #[test]
@@ -311,4 +475,139 @@ fn probes_an_external_fixture() {
         classification.ocr_recommendations().len(),
         extraction.items().len()
     );
+}
+
+fn one_page_document() -> (Document, ObjectId) {
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let page_id = document.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+    });
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![page_id.into()],
+            "Count" => 1,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    document.trailer.set("Root", catalog_id);
+    (document, page_id)
+}
+
+fn fit_dest(page_id: ObjectId) -> Object {
+    Object::Array(vec![page_id.into(), Object::Name(b"Fit".to_vec())])
+}
+
+fn attach_outline(document: &mut Document, first: ObjectId) {
+    let outlines_id = document.add_object(dictionary! {
+        "Type" => "Outlines",
+        "First" => first,
+        "Last" => first,
+        "Count" => 1,
+    });
+    document
+        .catalog_mut()
+        .expect("catalog")
+        .set("Outlines", Object::Reference(outlines_id));
+}
+
+fn save_document(document: &mut Document) -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("outline.pdf");
+    document.save(&path).expect("save outline PDF");
+    (directory, path)
+}
+
+fn assert_unreadable(path: &std::path::Path, fragment: &str) {
+    let outline = PdfEngine
+        .outline(path, &PdfOpenOptions::new())
+        .expect("hostile outline must not fail the open");
+    assert!(outline.is_unreadable(), "{outline:?}");
+    assert!(outline.entries().is_empty(), "{outline:?}");
+    assert_eq!(outline.page_count(), 1);
+    let warning = outline.warnings().join("\n");
+    assert!(warning.contains(fragment), "{warning}");
+}
+
+/// Nest `depth` bookmarks with `/Parent` back-edges, the shape a real outline uses.
+fn nested_outline(depth: usize) -> (Document, ObjectId) {
+    let (mut document, page_id) = one_page_document();
+    let mut child: Option<ObjectId> = None;
+    for level in (1..=depth).rev() {
+        let id = document.new_object_id();
+        if let Some(child_id) = child {
+            document
+                .get_object_mut(child_id)
+                .expect("child")
+                .as_dict_mut()
+                .expect("child dict")
+                .set("Parent", id);
+        }
+        let mut item = dictionary! {
+            "Title" => Object::string_literal(format!("L{level}")),
+            "Dest" => fit_dest(page_id),
+        };
+        if let Some(child_id) = child {
+            item.set("First", child_id);
+            item.set("Last", child_id);
+        }
+        document.set_object(id, item);
+        child = Some(id);
+    }
+    attach_outline(&mut document, child.expect("depth >= 1"));
+    (document, page_id)
+}
+
+/// Three pages. Top-level "Same" on page 0, then "Parent" on page 1, whose
+/// child is another "Same" on page 2. Insertion order is the fold position.
+fn write_duplicate_title_pdf(path: &std::path::Path) {
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let mut kids = Vec::new();
+    let mut page_ids = Vec::new();
+    for _ in 0..3 {
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        kids.push(page_id.into());
+        page_ids.push(page_id);
+    }
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => kids,
+            "Count" => 3,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    document.trailer.set("Root", catalog_id);
+    document.add_bookmark(
+        Bookmark::new("Same".into(), [0.0, 0.0, 0.0], 0, page_ids[0]),
+        None,
+    );
+    let parent = document.add_bookmark(
+        Bookmark::new("Parent".into(), [0.0, 0.0, 0.0], 0, page_ids[1]),
+        None,
+    );
+    document.add_bookmark(
+        Bookmark::new("Same".into(), [0.0, 0.0, 0.0], 0, page_ids[2]),
+        Some(parent),
+    );
+    embed_bookmarks(&mut document);
+    document.save(path).expect("save duplicate-title PDF");
 }

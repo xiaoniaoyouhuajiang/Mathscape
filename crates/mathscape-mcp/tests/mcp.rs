@@ -5,7 +5,9 @@ use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 
-use lopdf::{Bookmark, Document, Object, Stream, content::Content, content::Operation, dictionary};
+use lopdf::{
+    Bookmark, Document, Object, ObjectId, Stream, content::Content, content::Operation, dictionary,
+};
 use mathscape_agent::{CommandOutput, CommandRunner};
 use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_domain::{ActorRef, MediaType, RightsRecord, RightsStatus};
@@ -123,6 +125,87 @@ fn finish_pdf(document: &mut Document) -> Vec<u8> {
 
 /// Three text pages and a nested embedded outline.
 /// 第一章 → page index 0, 引理 → 1, Chapter 2 → 2.
+fn save_pdf(document: &mut Document) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn one_page_outline_document() -> (Document, ObjectId) {
+    let document = pdf_document(&[&["Page"]]);
+    let page_id = document.get_pages()[&1];
+    (document, page_id)
+}
+
+fn fit_dest(page_id: ObjectId) -> Object {
+    Object::Array(vec![page_id.into(), Object::Name(b"Fit".to_vec())])
+}
+
+fn attach_outline(document: &mut Document, first: ObjectId) {
+    let outlines_id = document.add_object(dictionary! {
+        "Type" => "Outlines",
+        "First" => first,
+        "Last" => first,
+        "Count" => 1,
+    });
+    document
+        .catalog_mut()
+        .expect("catalog")
+        .set("Outlines", Object::Reference(outlines_id));
+}
+
+/// `/Dest` has one element. `get_toc` indexes `[0]` and `[1]`.
+fn short_dest_pdf() -> Vec<u8> {
+    let (mut document, page_id) = one_page_outline_document();
+    let item = document.add_object(dictionary! {
+        "Title" => Object::string_literal("Short"),
+        "Dest" => vec![page_id.into()],
+    });
+    attach_outline(&mut document, item);
+    save_pdf(&mut document)
+}
+
+/// `/First` points at the item itself.
+fn first_cycle_pdf() -> Vec<u8> {
+    let (mut document, page_id) = one_page_outline_document();
+    let item_id = document.new_object_id();
+    document.set_object(
+        item_id,
+        dictionary! {
+            "Title" => Object::string_literal("Loop"),
+            "Dest" => fit_dest(page_id),
+            "First" => item_id,
+        },
+    );
+    attach_outline(&mut document, item_id);
+    save_pdf(&mut document)
+}
+
+/// `/Next` links A → B → A.
+fn next_cycle_pdf() -> Vec<u8> {
+    let (mut document, page_id) = one_page_outline_document();
+    let left = document.new_object_id();
+    let right = document.new_object_id();
+    document.set_object(
+        left,
+        dictionary! {
+            "Title" => Object::string_literal("A"),
+            "Dest" => fit_dest(page_id),
+            "Next" => right,
+        },
+    );
+    document.set_object(
+        right,
+        dictionary! {
+            "Title" => Object::string_literal("B"),
+            "Dest" => fit_dest(page_id),
+            "Next" => left,
+        },
+    );
+    attach_outline(&mut document, left);
+    save_pdf(&mut document)
+}
+
 fn outlined_pdf_bytes() -> Vec<u8> {
     let mut document = pdf_document(&[&["Chapter page"], &["Section page"], &["Last page"]]);
     let pages = document.get_pages();
@@ -848,6 +931,53 @@ fn outline_without_bookmarks_is_ok_and_empty() {
         .map(|item| item["code"].as_str().unwrap())
         .collect();
     assert_eq!(codes, ["outline_empty"]);
+}
+
+#[test]
+fn outline_hostile_bookmark_graphs_are_ok_and_unreadable() {
+    let f = fixture();
+    let mut pool = ArtifactPool::open(&f.root).unwrap();
+    let samples = [
+        (short_dest_pdf(), "short.pdf", "panicked"),
+        (first_cycle_pdf(), "first-cycle.pdf", "cycle"),
+        (next_cycle_pdf(), "next-cycle.pdf", "cycle"),
+    ];
+    let mut imported = Vec::new();
+    for (bytes, name, fragment) in samples {
+        let id = import(&mut pool, bytes, "application/pdf", name, Some(1));
+        imported.push((id, fragment));
+    }
+    drop(pool);
+
+    for (id, fragment) in imported {
+        let result = outline(&f.server, json!({ "artifact_id": id }));
+        assert_eq!(result["status"], "ok", "{result}");
+        assert_eq!(result["entries"], json!([]), "{result}");
+        assert_eq!(result["source"], "embedded_toc");
+        assert_eq!(result["total_pages"], 1, "{result}");
+        assert!(result.get("revision").is_some());
+        let diagnostics = result["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{result}");
+        assert_eq!(diagnostics[0]["code"], "outline_unreadable", "{result}");
+        let message = diagnostics[0]["message"].as_str().unwrap();
+        assert!(message.contains(fragment), "{message}");
+    }
+}
+
+#[test]
+fn outline_file_that_will_not_open_is_internal() {
+    let f = fixture();
+    let mut pool = ArtifactPool::open(&f.root).unwrap();
+    let id = import(
+        &mut pool,
+        b"this is not a pdf".to_vec(),
+        "application/pdf",
+        "broken.pdf",
+        Some(1),
+    );
+    drop(pool);
+    let error = outline_error(&f.server, json!({ "artifact_id": id }));
+    assert_eq!(error["code"], "internal", "{error}");
 }
 
 #[test]

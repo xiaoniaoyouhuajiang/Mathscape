@@ -12,6 +12,11 @@
 //! `outline_empty` diagnostic. That is not `not_found` (the artifact is
 //! there) and not `capability_unavailable` (no external tool is required to
 //! read an embedded outline; this tool does not invent a heuristic TOC).
+//!
+//! A bookmark graph that is cyclic, over the reader limits, or otherwise
+//! corrupt is also `status: ok` and `entries: []`, with `outline_unreadable`.
+//! Failing to open the file stays a call error (`internal`), the same split
+//! `material.read` uses for a missing text layer versus an unreadable file.
 
 use mathscape_agent::{ToolError, ToolErrorCode, ToolStatus};
 use mathscape_domain::StableId;
@@ -23,7 +28,7 @@ use super::material::{self, PDF_MEDIA_TYPE, find_material, managed_path_failure}
 use super::{PDF_OUTLINE, diagnostic, parse_args, to_object};
 use crate::McpWorkspace;
 
-const DESCRIPTION: &str = "Read the embedded table of contents (bookmarks) of one PDF material. Input is artifact_id. persist_index must be omitted or false: the outline is returned only, never written to the workspace or catalog. Each entry has title, level (1 = top-level), and pdf_page_index (0-based). To read that page with material.read, use locator pdf_pages {from, to} where from = pdf_page_index + 1 (1-based, inclusive). A PDF with no bookmarks returns status ok and entries []. Read-only.";
+const DESCRIPTION: &str = "Read the embedded table of contents (bookmarks) of one PDF material. Input is artifact_id. persist_index must be omitted or false: the outline is returned only, never written to the workspace or catalog. Each entry has title, level (1 = top-level), and pdf_page_index (0-based). To read that page with material.read, use locator pdf_pages {from, to} where from = pdf_page_index + 1 (1-based, inclusive). A PDF with no bookmarks returns status ok and entries []. A cyclic, oversized, or corrupt bookmark tree also returns status ok and entries [] with diagnostic outline_unreadable; a file that cannot be opened is an internal error. Duplicate titles collapse to one entry (first position, last page and level). Graphs deeper than 64 or with more than 10000 nodes are unreadable, not truncated. Read-only.";
 
 const SOURCE_EMBEDDED: &str = "embedded_toc";
 
@@ -132,14 +137,29 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
         })?;
 
     let mut diagnostics = Vec::new();
-    if outline.entries().is_empty() && outline.warnings().is_empty() {
+    if outline.is_unreadable() {
+        // Content and parse failures from the outline reader, including a
+        // panic inside lopdf, stay a successful tool result. Opening the file
+        // failed earlier and is still `internal`.
+        if outline.warnings().is_empty() {
+            diagnostics.push(diagnostic(
+                "outline_unreadable",
+                "embedded outline could not be read",
+            ));
+        } else {
+            for warning in outline.warnings() {
+                diagnostics.push(diagnostic("outline_unreadable", warning.clone()));
+            }
+        }
+    } else if outline.entries().is_empty() && outline.warnings().is_empty() {
         diagnostics.push(diagnostic(
             "outline_empty",
             "PDF has no embedded bookmarks; pdf.outline does not invent a heuristic table of contents",
         ));
-    }
-    for warning in outline.warnings() {
-        diagnostics.push(diagnostic("outline_warning", warning.clone()));
+    } else {
+        for warning in outline.warnings() {
+            diagnostics.push(diagnostic("outline_warning", warning.clone()));
+        }
     }
 
     result(OutlineResult {
