@@ -33,6 +33,7 @@ import {
 import { listInkNoteLinks, type InkNoteLink } from "./ink/links";
 import { searchWorkspace, type SearchHit } from "./search/api";
 import { WorkspaceSearchPanel, installWorkspaceSearch, type SearchAction } from "./search/search-panel";
+import { installInkCloseGuard } from "./ink/close-guard";
 import "./styles.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -194,7 +195,7 @@ function renderSplitEmpty(primary: InkNoteLink | undefined): void {
     onOpenPrimary: () => { if (primary) openPrimaryInSplit(primary); },
     onOpenSource: (item) => void openSplitReader({ kind: "artifact", id: item.artifactId, title: item.label }),
     onImportPdf: () => void artifactController.importPdf(),
-    onBackToMap: () => inkWorkspace.close(),
+    onBackToMap: () => void inkWorkspace.close(),
   });
   inkPaneFocused = false;
 }
@@ -297,16 +298,29 @@ el.inkSplitReader.addEventListener("pointerdown", () => { inkPaneFocused = false
 // Expose focus probe for the desktop Delete handler.
 (window as unknown as { __mathscapeInkPaneFocused?: () => boolean }).__mathscapeInkPaneFocused = () => inkPaneFocused;
 
+function openInkWorkspaceFromButton(): Promise<void> {
+  inkOpen = true;
+  el.workspaceGrid.hidden = true;
+  el.inkWorkspace.hidden = false;
+  el.inkButton.textContent = "返回地图";
+  return inkWorkspace.open();
+}
 el.inkButton.addEventListener("click", () => {
-  inkOpen = !inkOpen;
-  if (inkOpen) {
-    el.workspaceGrid.hidden = true;
-    el.inkWorkspace.hidden = false;
-    el.inkButton.textContent = "返回地图";
-    void inkWorkspace.open();
-  } else {
-    inkWorkspace.close();
-  }
+  // H5: closing may ask first (unsaved operations); it closes itself when allowed.
+  if (inkOpen) void inkWorkspace.close();
+  else void openInkWorkspaceFromButton();
+});
+// H5: the Tauri window close (and a browser unload) waits for the 手稿 save
+// and asks before discarding operations that are still pending.
+installInkCloseGuard({
+  confirm: async () => {
+    if (!inkOpen) {
+      if (!await inkWorkspace.unsavedAfterFlush()) return true;
+      await openInkWorkspaceFromButton(); // The prompt lives in the 手稿 workspace.
+    }
+    return inkWorkspace.confirmLeave("window");
+  },
+  hasUnsavedHint: () => inkWorkspace.hasUnsavedHint(),
 });
 window.addEventListener("resize", () => {
   if (inkSplit && window.innerWidth < INK_SPLIT_WINDOW_MIN) setInkSplit(false, { hint: true });
@@ -519,19 +533,20 @@ eventBus.on("open-ink-link-target", ({ link }) => {
     return;
   }
   const nodes = currentSnapshot?.landscape_graph.nodes ?? [];
-  if (target.kind === "source_object") {
-    inkWorkspace.close();
-    const node = nodes.find((item) => item.domain_id === target.object_id && item.element_kind === "entity");
-    if (node === undefined) { shell.showToast("关联的来源对象不在当前地图中。", "error"); return; }
-    inspectorController.selectNodeById(node.id);
-    return;
-  }
-  inkWorkspace.close();
-  const artifact = nodes.find((item) => item.domain_kind === "SourceArtifact" && item.domain_id === target.artifact_id);
-  el.readerHost.hidden = false;
-  void reader.open(target.artifact_id, artifact?.label ?? link.target_label, {
-    focus: { start: target.start, end: target.end, blockIds: target.block_ids },
-  });
+  void (async () => {
+    if (!await inkWorkspace.close()) return;
+    if (target.kind === "source_object") {
+      const node = nodes.find((item) => item.domain_id === target.object_id && item.element_kind === "entity");
+      if (node === undefined) { shell.showToast("关联的来源对象不在当前地图中。", "error"); return; }
+      inspectorController.selectNodeById(node.id);
+      return;
+    }
+    const artifact = nodes.find((item) => item.domain_kind === "SourceArtifact" && item.domain_id === target.artifact_id);
+    el.readerHost.hidden = false;
+    void reader.open(target.artifact_id, artifact?.label ?? link.target_label, {
+      focus: { start: target.start, end: target.end, blockIds: target.block_ids },
+    });
+  })();
 });
 eventBus.on("open-source", (detail) => {
   void (async () => {
@@ -562,7 +577,7 @@ const nextFrame = () => new Promise<void>(resolve => requestAnimationFrame(() =>
 /** Select + center a map node by domain id. Leaves 手稿 first if needed. */
 async function locateOnMap(domainId: string, current: () => boolean): Promise<boolean> {
   const fromInk = inkOpen;
-  if (inkOpen) inkWorkspace.close();
+  if (inkOpen && !await inkWorkspace.close()) return false;
   if (reader.hasContent() || reader.isLoading() || !el.readerHost.hidden) { reader.close(); el.readerHost.hidden = true; }
   if (fromInk) { await nextFrame(); await nextFrame(); }
   if (!current()) return false;
@@ -617,7 +632,7 @@ async function openSearchResult(hit: SearchHit, action: SearchAction): Promise<v
   if (target.kind === "ink_snapshot") {
     const readerTarget: SplitReaderTarget = { kind: "artifact", id: target.artifact_id, title: hit.title };
     if (split) { await openSplitReader(readerTarget); return; }
-    if (inkOpen) inkWorkspace.close();
+    if (inkOpen && !await inkWorkspace.close()) return;
     await openMapReader(readerTarget, current);
     return;
   }

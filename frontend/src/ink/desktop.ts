@@ -1,4 +1,4 @@
-import { isDeleteKey, isTypingTarget } from "./keys";
+import { EDITING_SHORTCUTS, inkShortcut, isTypingTarget } from "./keys";
 import { createInkPalette, DESKTOP_COLOR_KEY, loadInkColor, type InkPalette } from "./palette";
 import { InkCanvas, type CanvasMetrics, type InkTool } from "./canvas";
 import {
@@ -135,6 +135,9 @@ function download(bytes: Blob, name: string): void {
 
 type PersistenceState = "loading" | "saved" | "pending" | "syncing" | "error";
 
+/** H5: how long closing waits for the save before asking. */
+const CLOSE_FLUSH_TIMEOUT_MS = 4000;
+
 export class DesktopInkWorkspace {
   private documentState: InkDocument | undefined;
   private currentPage = "";
@@ -174,6 +177,8 @@ export class DesktopInkWorkspace {
   private evidencePanel: InkEvidencePanel | undefined;
   private enqueueTail: Promise<void> = Promise.resolve();
   private bufferedOperations = new Map<string, InkOutboxItem>();
+  /** H5: the leave prompt in progress (shared by repeated close requests). */
+  private leaving?: Promise<boolean>;
   private activeFlush: Promise<boolean> | undefined;
   private readonly confirmedHeads = new Map<string, number>();
   private navigationRevision = 0;
@@ -226,12 +231,62 @@ export class DesktopInkWorkspace {
     if(!this.mirrorTimer)this.mirrorTimer=setInterval(()=>void this.refreshMirror(),300);
   }
 
-  close(): void {
+  /**
+   * H5: close the workspace. Finishes the gesture in progress, waits for the
+   * save, and asks before leaving while operations are still unsaved. Resolves
+   * `false` (and keeps the workspace open) when the user keeps editing.
+   */
+  async close(): Promise<boolean> {
+    if (!await this.confirmLeave("close")) return false;
     this.navigationRevision++;
     if(this.mirrorTimer){clearInterval(this.mirrorTimer);this.mirrorTimer=undefined;}
-    this.board?.resetTransientInteraction();
-    void this.flush();
     this.onClose();
+    return true;
+  }
+
+  /**
+   * H5: flush, then — if operations are still not saved to the workspace —
+   * ask whether to keep editing, retry or leave anyway. `window` is the Tauri
+   * window close. Concurrent calls share one prompt.
+   */
+  confirmLeave(reason: "close" | "window"): Promise<boolean> {
+    if (this.leaving) return this.leaving;
+    const task = this.confirmLeaveOnce(reason).finally(() => { if (this.leaving === task) this.leaving = undefined; });
+    this.leaving = task;
+    return task;
+  }
+
+  /** H5: operations not yet acknowledged by the workspace, after one save attempt. */
+  async unsavedAfterFlush(): Promise<number> {
+    this.board?.resetTransientInteraction();
+    if (!this.outbox) return 0;
+    const flushed = this.flush(undefined, true).catch(() => false);
+    await Promise.race([flushed, new Promise(resolve => setTimeout(resolve, CLOSE_FLUSH_TIMEOUT_MS))]);
+    await this.enqueueTail.catch(() => undefined);
+    return (await this.outbox.pending()).length + this.bufferedOperations.size;
+  }
+
+  /** H5: cheap synchronous hint for `beforeunload` (no awaiting possible there). */
+  hasUnsavedHint(): boolean {
+    return this.bufferedOperations.size > 0 || this.pendingCount > 0 || Boolean(this.board?.gestureActive());
+  }
+
+  private async confirmLeaveOnce(reason: "close" | "window"): Promise<boolean> {
+    for (;;) {
+      const unsaved = await this.unsavedAfterFlush();
+      if (!unsaved) return true;
+      const kept = this.outbox?.persistent
+        ? "它们仍保留在本机恢复队列中，下次打开手稿时会继续保存。"
+        : "本机恢复队列不可用，现在离开会丢失这些操作。";
+      const choice = await this.choose(`还有 ${unsaved} 个手稿操作尚未保存到工作区。${kept}`, [
+        { id: "stay", label: "继续编辑", primary: true },
+        { id: "retry", label: "重试保存" },
+        { id: "leave", label: reason === "window" ? "仍然关闭窗口" : "仍然离开" },
+      ]);
+      if (choice === "retry") continue;
+      if (choice !== "leave") this.status("尚未保存的操作仍在等待保存；可点“立即保存”重试。", true);
+      return choice === "leave";
+    }
   }
 
   /** N3c: document currently shown in the 手稿 pane (if any). */
@@ -265,11 +320,11 @@ export class DesktopInkWorkspace {
       '<div id="ink-undo-bar" class="ink-undo-bar" role="status" hidden><span id="ink-undo-text"></span><button id="ink-undo-trash" class="secondary-button" type="button">撤销</button></div><div class="ink-desktop-actions"><button id="ink-list-toggle" class="secondary-button" type="button" aria-expanded="true" aria-controls="ink-session-panel" title="收起或展开手稿列表（最近手稿、回收站、历史快照）">手稿列表</button><button id="ink-new-document-compact" class="secondary-button" type="button" title="新建手稿" hidden>＋ 新建</button><span id="ink-persistence-status" class="ink-persistence-status">正在加载本地手稿…</span><button id="ink-lan" class="secondary-button" type="button">平板书写</button><button id="ink-push-tablet" class="secondary-button" type="button" title="把这份手稿推送到已连接的平板">推送到平板</button><button id="ink-continue-current" class="secondary-button" type="button" hidden>继续编辑当前手稿</button><button id="ink-save-now" class="secondary-button" type="button">立即保存</button><button id="ink-snapshot" class="secondary-button" type="button">保存快照</button><button id="ink-split-toggle" class="secondary-button" type="button" aria-pressed="false" title="左侧阅读原文，右侧手稿">并排阅读</button><button id="ink-close" class="secondary-button" type="button">返回地图</button></div></header>',
       '<div class="ink-desktop-body"><aside id="ink-session-panel" class="ink-session-panel" aria-label="手稿列表"><div class="ink-session-heading"><strong>手稿</strong><button id="ink-new-document" class="secondary-button" type="button">新建</button></div><div class="ink-session-tabs" role="tablist" aria-label="手稿列表"><button id="ink-tab-active" role="tab" type="button" aria-selected="true">最近手稿</button><button id="ink-tab-trash" role="tab" type="button" aria-selected="false">回收站</button></div><div class="ink-session-tools"><button id="ink-import-recovery" class="secondary-button" type="button">导入恢复草稿</button><button id="ink-clean-blank" class="secondary-button" type="button">清理空白稿</button></div><div id="ink-session-list" class="ink-session-list"><p>正在读取…</p></div><div class="ink-snapshot-heading"><strong>历史快照</strong></div><div id="ink-snapshot-list" class="ink-session-list"><p>请选择手稿。</p></div></aside>',
       '<main class="ink-desktop-main"><nav class="ink-desktop-toolbar" aria-label="手稿工具"><div class="ink-tool-buttons">',
-      '<button id="desktop-ink-pen" class="is-active" type="button">笔</button><button id="desktop-ink-erase" type="button">整笔擦除</button><button id="desktop-ink-partial_erase" type="button">局部擦除</button><button id="desktop-ink-select" type="button">套索选择</button><button id="desktop-ink-pan" type="button" aria-pressed="false" title="手形工具：拖动平移视图，不改动笔迹（也可按住空格临时平移）">平移</button><button id="desktop-ink-delete-selection" type="button" disabled title="删除套索选中的笔迹（Delete / Backspace），可撤销">删除所选</button><button id="desktop-ink-restyle" type="button" disabled title="把选中笔迹改成当前颜色，可撤销">改颜色</button><button id="desktop-ink-undo" type="button" disabled>撤销</button><button id="desktop-ink-redo" type="button" disabled>重做</button>',
-      '</div><div class="ink-brush-controls"><span id="desktop-ink-palette-host"></span><label title="之后创建的笔迹使用此笔宽">笔宽<input id="desktop-ink-width" type="range" min="1" max="16" step="0.5" value="4" aria-label="笔迹宽度"><output id="desktop-ink-width-value">4</output></label><label class="ink-check-control"><input id="desktop-ink-finger" type="checkbox">手指书写</label></div><div class="ink-page-controls"><label id="desktop-ink-follow-label" hidden><input id="desktop-ink-follow-pad" type="checkbox" checked>跟随平板页</label><select id="desktop-ink-page" aria-label="手稿页面"></select><button id="desktop-ink-add-page" class="secondary-button" type="button">新增页面</button><button id="desktop-ink-zoom-out" class="secondary-button" type="button" aria-label="缩小">−</button><button id="desktop-ink-fit" class="secondary-button" type="button">整页</button><button id="desktop-ink-zoom-in" class="secondary-button" type="button" aria-label="放大">＋</button></div></nav>',
+      '<button id="desktop-ink-pen" class="is-active" type="button" title="笔（P）">笔</button><button id="desktop-ink-erase" type="button" title="整笔擦除（E）">整笔擦除</button><button id="desktop-ink-partial_erase" type="button" title="局部擦除（Shift+E）">局部擦除</button><button id="desktop-ink-select" type="button" title="套索选择（L）；Esc 取消选择">套索选择</button><button id="desktop-ink-pan" type="button" aria-pressed="false" title="手形工具（H）：拖动平移视图，不改动笔迹（也可按住空格临时平移）">平移</button><button id="desktop-ink-delete-selection" type="button" disabled title="删除套索选中的笔迹（Delete / Backspace），可撤销">删除所选</button><button id="desktop-ink-restyle" type="button" disabled title="把选中笔迹改成当前颜色，可撤销">改颜色</button><button id="desktop-ink-undo" type="button" disabled title="撤销（Ctrl/⌘+Z）">撤销</button><button id="desktop-ink-redo" type="button" disabled title="重做（Ctrl/⌘+Shift+Z 或 Ctrl+Y）">重做</button>',
+      '</div><div class="ink-brush-controls"><span id="desktop-ink-palette-host"></span><label title="之后创建的笔迹使用此笔宽">笔宽<input id="desktop-ink-width" type="range" min="1" max="16" step="0.5" value="4" aria-label="笔迹宽度"><output id="desktop-ink-width-value">4</output></label><label class="ink-check-control"><input id="desktop-ink-finger" type="checkbox">手指书写</label></div><div class="ink-page-controls"><label id="desktop-ink-follow-label" hidden><input id="desktop-ink-follow-pad" type="checkbox" checked>跟随平板页</label><select id="desktop-ink-page" aria-label="手稿页面"></select><button id="desktop-ink-add-page" class="secondary-button" type="button">新增页面</button><button id="desktop-ink-zoom-out" class="secondary-button" type="button" aria-label="缩小" title="缩小（Ctrl/⌘+−）">−</button><button id="desktop-ink-fit" class="secondary-button" type="button" title="整页（Ctrl/⌘+0）">整页</button><button id="desktop-ink-zoom-in" class="secondary-button" type="button" aria-label="放大" title="放大（Ctrl/⌘+＋）">＋</button></div></nav>',
       '<div id="ink-trash-banner" class="ink-trash-banner" role="status" hidden><span>这份手稿在回收站中，只能查看和导出。</span><button id="ink-trash-restore" class="secondary-button" type="button">恢复手稿</button></div><div id="ink-link-bar" class="ink-link-bar" aria-label="手稿关联" hidden></div><div id="desktop-ink-evidence" hidden></div><div id="ink-empty-state" class="ink-empty-state" hidden><p>还没有打开的手稿。</p><button id="ink-empty-create" class="secondary-button" type="button">新建手稿</button></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="'+INK_TITLE_MAX+'" value="" placeholder="留空恢复自动标题" aria-label="手稿标题" title="点击改名；回车保存，Esc 取消" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div><section id="ink-lan-panel" hidden></section><div id="ink-dialog" class="ink-dialog" role="dialog" aria-modal="true" aria-labelledby="ink-dialog-text" hidden><div class="ink-dialog-box"><p id="ink-dialog-text"></p><div id="ink-dialog-extra" class="ink-dialog-extra"></div><div id="ink-dialog-actions" class="ink-dialog-actions"></div></div></div></div>',
     ].join("");
-    element<HTMLButtonElement>(this.host, "#ink-close").addEventListener("click", () => this.close());
+    element<HTMLButtonElement>(this.host, "#ink-close").addEventListener("click", () => void this.close());
     element<HTMLButtonElement>(this.host, "#ink-split-toggle").addEventListener("click", () => eventBus.emit("ink-split-toggle"));
     element<HTMLButtonElement>(this.host, "#ink-save-now").addEventListener("click", () => void this.flush("手动保存完成。"));
     element<HTMLButtonElement>(this.host, "#ink-snapshot").addEventListener("click", () => void this.createSnapshot());
@@ -357,15 +412,9 @@ export class DesktopInkWorkspace {
     // N3.0: delete the lasso selection with one multi-stroke erase (one undo restores it).
     element<HTMLButtonElement>(this.host, "#desktop-ink-delete-selection").addEventListener("click", () => this.deleteSelection());
     element<HTMLButtonElement>(this.host, "#desktop-ink-restyle").addEventListener("click", () => this.restyleSelection());
-    window.addEventListener("keydown", event => {
-      if (!isDeleteKey(event) || isTypingTarget(event.target) || this.dialogResolve || !this.canDeleteSelection()) return;
-      if (!this.host.isConnected || !this.host.getClientRects().length) return;
-      // N3c: when the shell tracks pane focus, Delete in the reader must not erase ink.
-      const inkFocused = (window as unknown as { __mathscapeInkPaneFocused?: () => boolean }).__mathscapeInkPaneFocused;
-      if (typeof inkFocused === "function" && !inkFocused()) return;
-      event.preventDefault();
-      this.deleteSelection();
-    });
+    // M1: canvas shortcuts. Capture phase so the split reader's own Ctrl/⌘ zoom
+    // (which checks defaultPrevented) does not also fire for the ink pane.
+    window.addEventListener("keydown", event => this.onShortcut(event), true);
     for (const kind of ["undo", "redo"] as const) {
       element<HTMLButtonElement>(this.host, "#desktop-ink-" + kind).addEventListener("click", () => this.history(kind));
     }
@@ -1573,6 +1622,68 @@ export class DesktopInkWorkspace {
     const board = this.host.querySelector<HTMLElement>("#desktop-ink-board");
     if (board) board.dataset.pan = this.panning() ? (this.spaceHeld ? "space" : "tool") : "off";
     this.board?.refreshCursor();
+  }
+
+  /**
+   * M1 keyboard shortcuts. Ignored while typing (inputs, selects,
+   * contenteditable), while a dialog is open, when the workspace is hidden and
+   * — in the split view — while the reader pane has focus. Editing shortcuts
+   * are disabled on read-only boards (pad mirror, snapshot, trash).
+   */
+  private onShortcut(event: KeyboardEvent): void {
+    if (event.defaultPrevented) return;
+    const shortcut = inkShortcut(event);
+    if (!shortcut || !this.shortcutsAllowed(event)) return;
+    if (this.readOnly && EDITING_SHORTCUTS.has(shortcut)) return;
+    const board = this.board;
+    if (!board) return;
+    switch (shortcut) {
+      case "undo": case "redo": {
+        const target = this.documentState && projectInk(this.documentState)[shortcut].at(-1);
+        event.preventDefault();
+        if (!target || board.gestureActive()) return;
+        this.history(shortcut);
+        return;
+      }
+      case "delete":
+        if (!this.canDeleteSelection()) return;
+        event.preventDefault();
+        this.deleteSelection();
+        return;
+      case "escape":
+        // Cancel a gesture in progress first, then the selection, then the hand tool.
+        if (board.cancelGesture()) { event.preventDefault(); this.renderSummary(); return; }
+        if (this.tool === "select" && board.selectionCount()) { event.preventDefault(); board.setSelection([]); this.renderSummary(); return; }
+        if (this.panTool) { event.preventDefault(); this.panTool = false; this.setTool(this.tool); }
+        return;
+      case "zoom-in": event.preventDefault(); board.zoom(1.3); return;
+      case "zoom-out": event.preventDefault(); board.zoom(1 / 1.3); return;
+      case "zoom-fit": event.preventDefault(); board.fit(); return;
+      case "tool-pan":
+        event.preventDefault();
+        board.resetTransientInteraction();
+        this.panTool = !this.panTool;
+        this.setTool(this.tool);
+        return;
+      default: {
+        const tool: InkTool = shortcut === "tool-pen" ? "pen" : shortcut === "tool-erase" ? "erase" : shortcut === "tool-partial-erase" ? "partial_erase" : "select";
+        event.preventDefault();
+        board.resetTransientInteraction();
+        this.panTool = false;
+        this.setTool(tool);
+      }
+    }
+  }
+
+  private shortcutsAllowed(event: KeyboardEvent): boolean {
+    if (isTypingTarget(event.target) || this.dialogResolve || !this.board || !this.documentState) return false;
+    if (!this.host.isConnected || !this.host.getClientRects().length) return false;
+    // Another modal (search panel, LAN panel dialogs) or the split reader owns the keys.
+    const target = event.target as Element | null;
+    if (target && typeof target.closest === "function" && target.closest('[role="dialog"], #ink-split-reader, #ink-lan-panel')) return false;
+    if (document.querySelector('#workspace-search:not([hidden])')) return false;
+    const inkFocused = (window as unknown as { __mathscapeInkPaneFocused?: () => boolean }).__mathscapeInkPaneFocused;
+    return typeof inkFocused !== "function" || inkFocused();
   }
 
   private spacePanAllowed(event: KeyboardEvent): boolean {

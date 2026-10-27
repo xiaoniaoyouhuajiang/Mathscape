@@ -332,7 +332,8 @@ export class ArtifactReader {
     zoomOut.onclick = () => stepBy(-1);
     const visible = () => viewport.isConnected && viewport.getClientRects().length > 0;
     const onKey = (event: KeyboardEvent): void => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || !visible()) return;
+      // M1: the split 手稿 pane handles its own Ctrl/⌘ zoom first (capture phase).
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey || !visible()) return;
       if (event.key === "+" || event.key === "=") stepBy(1);
       else if (event.key === "-" || event.key === "_") stepBy(-1);
       else if (event.key === "0") applyZoom(PDF_ZOOM_DEFAULT);

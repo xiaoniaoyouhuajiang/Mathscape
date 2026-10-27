@@ -1,6 +1,7 @@
 import { getStroke } from "perfect-freehand";
 import { inkId, MAX_INK_POINTS, projectInk, type InkBrush, type InkDocument, type InkPage, type InkPoint, type InkProjection, type InkStroke, type InkTransform } from "./model";
-import { handleScale } from "./transform-math";
+import { cornerDirections, cornerScale } from "./transform-math";
+import { lassoSelects } from "./lasso";
 
 export type InkTool = "pen" | "erase" | "partial_erase" | "select";
 export interface InkCanvasOptions {
@@ -33,6 +34,8 @@ export interface CanvasMetrics {
   activePoints: number;
   candidateStrokes?: number;
   previewStrokes?: number;
+  /** M4: strokes the lasso in progress would select on release. */
+  lassoPreview?: number;
 }
 
 const paths = new WeakMap<InkStroke, Path2D>();
@@ -68,6 +71,8 @@ type TransformState = { mode: "drag" | "scale" | "rotate"; handle: TransformHand
 type InteractionTarget = "canvas" | TransformHandle;
 type StrokeIndex = { key: string; strokes: Map<string, InkStroke>; bounds: Map<string, Bounds>; cells: Map<string, Set<string>> };
 
+/** M4 pre-selection halo colour (selection teal, translucent). */
+export const LASSO_HALO = "rgba(44, 137, 118, 0.42)";
 const identity: InkTransform = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 const sameMatrix = (a: InkTransform, b: InkTransform) => a.a === b.a && a.b === b.b && a.c === b.c && a.d === b.d && a.e === b.e && a.f === b.f;
@@ -76,14 +81,6 @@ const pointSegmentDistance = (p: Point, a: Point, b: Point) => {
   const dx = b.x - a.x, dy = b.y - a.y;
   const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
   return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
-};
-const polygonContains = (p: Point, polygon: Point[]) => {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const a = polygon[i], b = polygon[j];
-    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
-  }
-  return inside;
 };
 function boundsFor(strokes: InkStroke[]): Bounds | undefined {
   const points = strokes.flatMap(s => s.points);
@@ -119,6 +116,10 @@ export class InkCanvas {
   private wholeErase = new Set<string>();
   private selected = new Set<string>();
   private lasso: Point[] = [];
+  /** M4: ids the current lasso would select (live pre-selection highlight). */
+  private lassoPreview = new Set<string>();
+  private lassoDirty = false;
+  private readonly halos = new WeakMap<InkStroke, { scale: number; halo: InkStroke }>();
   private transform: TransformState | undefined;
   private partialPreview = new Map<string, InkStroke[]>();
   private touches = new Map<number, Point>();
@@ -135,7 +136,7 @@ export class InkCanvas {
   private cachedPageId = "";
   private cachedProjection: InkProjection | undefined;
   private spatialIndex: StrokeIndex | undefined;
-  private metrics: CanvasMetrics = { pointerEvents: 0, coalescedSamples: 0, cancelled: 0, lastPointer: "—", frameMs: 0, activePoints: 0, candidateStrokes: 0, previewStrokes: 0 };
+  private metrics: CanvasMetrics = { pointerEvents: 0, coalescedSamples: 0, cancelled: 0, lastPointer: "—", frameMs: 0, activePoints: 0, candidateStrokes: 0, previewStrokes: 0, lassoPreview: 0 };
   private readonly settledCanvas = document.createElement("canvas");
   private readonly previewCanvas = document.createElement("canvas");
   private readonly input = document.createElement("canvas");
@@ -348,6 +349,7 @@ export class InkCanvas {
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
       const started = performance.now();
+      if (this.lassoDirty) this.updateLassoPreview();
       const ctx = this.setup(this.input, true), page = this.options.page();
       this.pageClip(ctx, page);
       if (this.active) drawInkStroke(ctx, this.active, false);
@@ -357,6 +359,7 @@ export class InkCanvas {
       ctx.restore();
       this.metrics.activePoints = this.active?.points.length ?? 0;
       this.metrics.previewStrokes = this.partialPreview.size + (this.transform ? this.selected.size : 0);
+      this.metrics.lassoPreview = this.lassoPreview.size;
       this.metrics.frameMs = performance.now() - started;
       this.options.onMetrics({ ...this.metrics });
       this.options.onPreview?.(this.active);
@@ -371,6 +374,7 @@ export class InkCanvas {
         for (const stroke of this.selectedStrokes()) drawInkStroke(ctx, stroke);
         ctx.restore();
       }
+      if (this.lasso.length > 1 && this.lassoPreview.size) this.drawLassoPreview(ctx);
       if (this.lasso.length > 1) {
         ctx.strokeStyle = "#2c8976";
         ctx.lineWidth = 2 / this.scale;
@@ -390,6 +394,19 @@ export class InkCanvas {
       ctx.strokeStyle = this.options.tool() === "partial_erase" ? "#bb6d28" : "#9a5c3f";
       ctx.lineWidth = 1.5 / this.scale;
       ctx.beginPath(); ctx.arc(this.eraserPoint.x, this.eraserPoint.y, radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+  }
+  /** M4: halo around every stroke the lasso would select if released now. */
+  private drawLassoPreview(ctx: CanvasRenderingContext2D): void {
+    for (const stroke of this.visible()) {
+      if (!this.lassoPreview.has(stroke.id)) continue;
+      let cached = this.halos.get(stroke);
+      if (!cached || cached.scale !== this.scale) {
+        cached = { scale: this.scale, halo: { ...stroke, brush: { ...stroke.brush, color: LASSO_HALO, width: stroke.brush.width + 10 / this.scale } } };
+        this.halos.set(stroke, cached);
+      }
+      drawInkStroke(ctx, cached.halo);
+      drawInkStroke(ctx, stroke);
     }
   }
   private drawSelectionOverlay(ctx: CanvasRenderingContext2D, bounds: Bounds): void {
@@ -513,7 +530,11 @@ export class InkCanvas {
         this.eraserPoint = world;
         if (tool === "erase") this.erase(world); else this.updatePartialPreview();
       } else if (tool === "select") {
-        if (this.transform) this.updateTransform(world); else this.lasso.push(world);
+        if (this.transform) this.updateTransform(world);
+        else {
+          const last = this.lasso.at(-1);
+          if (!last || distance(last, world) >= 1.5 / this.scale) { this.lasso.push(world); this.lassoDirty = true; }
+        }
       }
       this.schedule();
       return;
@@ -558,9 +579,12 @@ export class InkCanvas {
       const cos = Math.cos(nextAngle - startAngle), sin = Math.sin(nextAngle - startAngle);
       state.matrix = { a: cos, b: sin, c: -sin, d: cos, e: center.x - cos * center.x + sin * center.y, f: center.y - sin * center.x - cos * center.y };
     } else {
-      const anchor = state.handle === "nw" ? { x: bounds.maxX, y: bounds.maxY } : state.handle === "ne" ? { x: bounds.minX, y: bounds.maxY } : state.handle === "sw" ? { x: bounds.maxX, y: bounds.minY } : { x: bounds.minX, y: bounds.minY };
-      const sx = handleScale(point.x, anchor.x, state.start.x);
-      const sy = handleScale(point.y, anchor.y, state.start.y);
+      // H1: the grabbed edge follows the pointer delta; the opposite edge stays put.
+      const handle = state.handle as "nw" | "ne" | "sw" | "se", direction = cornerDirections(handle);
+      const anchor = { x: direction.x < 0 ? bounds.maxX : bounds.minX, y: direction.y < 0 ? bounds.maxY : bounds.minY };
+      const edge = { x: direction.x < 0 ? bounds.minX : bounds.maxX, y: direction.y < 0 ? bounds.minY : bounds.maxY };
+      const sx = cornerScale(point.x, state.start.x, edge.x, anchor.x, direction.x);
+      const sy = cornerScale(point.y, state.start.y, edge.y, anchor.y, direction.y);
       state.matrix = { a: sx, b: 0, c: 0, d: sy, e: anchor.x - sx * anchor.x, f: anchor.y - sy * anchor.y };
     }
     this.refreshPreviewOnly();
@@ -643,11 +667,32 @@ export class InkCanvas {
       if (fragments.length !== 1 || fragments[0].points.length !== stroke.points.length) this.options.onPartialErase(stroke.id, fragments);
     }
   }
+  /** M4: strokes with most of their samples inside the lasso, in page order. */
+  private lassoHits(): string[] {
+    if (this.lasso.length < 3) return [];
+    const hits = new Set(this.candidates(this.lasso, 0).filter(stroke => lassoSelects(stroke.points, this.lasso)).map(stroke => stroke.id));
+    return this.visible().filter(stroke => hits.has(stroke.id)).map(stroke => stroke.id);
+  }
+  private updateLassoPreview(): void {
+    this.lassoDirty = false;
+    this.lassoPreview = new Set(this.lassoHits());
+  }
   private selectLasso(): void {
     if (this.lasso.length < 3) return;
-    const ids = this.visible().filter(stroke => stroke.points.some(point => polygonContains(point, this.lasso))).map(stroke => stroke.id);
+    const ids = this.lassoHits();
     this.selected = new Set(ids);
     this.options.onSelection(ids);
+  }
+  /** True while a pointer is drawing, erasing, lassoing or transforming. */
+  gestureActive(): boolean { return this.activePointer !== undefined; }
+  /**
+   * M1 Esc: abandon a lasso, transform or eraser drag in progress without
+   * creating an operation. A pen stroke in progress is left alone.
+   */
+  cancelGesture(): boolean {
+    if (this.activePointer === undefined || this.active) return false;
+    this.cancelTransientInteraction();
+    return true;
   }
   private completeGesture(status: InkStroke["status"]): void {
     if (status !== "completed") { this.cancelTransientInteraction(); return; }
@@ -686,6 +731,8 @@ export class InkCanvas {
     this.partialPreview.clear();
     this.transform = undefined;
     this.lasso = [];
+    this.lassoPreview.clear();
+    this.lassoDirty = false;
     this.activeTarget = "canvas";
     this.setCursor("canvas");
     this.refresh();
