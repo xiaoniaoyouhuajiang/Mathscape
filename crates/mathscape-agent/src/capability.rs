@@ -99,7 +99,7 @@ pub struct CommandOutput {
 }
 
 /// Environment seam so probing can be tested without real binaries.
-pub trait CommandRunner {
+pub trait CommandRunner: Send + Sync {
     /// Runs `program args…`. `Err` means it could not be started (e.g. not
     /// installed) or timed out.
     fn run(&self, program: &Path, args: &[&str]) -> io::Result<CommandOutput>;
@@ -177,6 +177,23 @@ pub fn probe_capability(runner: &dyn CommandRunner, capability: Capability) -> C
         Capability::ClaudeCode => probe_version_command(runner, "claude", &["--version"]),
         Capability::Hmz => probe_version_command(runner, "hmz", &["--version"]),
     };
+    finish_probe(capability, found)
+}
+
+/// Probes one executable with `program --version` and reports `capability`.
+///
+/// Local process only: no network and no install. Marker keeps the venv lookup
+/// in [`probe_capability`]; this is the Codex / Claude / hmz / lean shape, and
+/// what [`crate::CodexExecutor`] uses for a configured binary path.
+pub fn probe_program(
+    runner: &dyn CommandRunner,
+    capability: Capability,
+    program: &Path,
+) -> CapabilityProbe {
+    finish_probe(capability, version_of(runner, program, &["--version"]))
+}
+
+fn finish_probe(capability: Capability, found: Option<Found>) -> CapabilityProbe {
     let required = capability.required();
     let state = match (&found, required) {
         (None, _) => CapabilityState::Missing,

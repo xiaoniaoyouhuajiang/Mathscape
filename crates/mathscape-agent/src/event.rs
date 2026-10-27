@@ -14,6 +14,8 @@
 //! field only (not repeated inside the payload) and is required for
 //! `turn_start` / `turn_end` — see [`crate::validate_round`].
 
+use std::fmt;
+
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -194,6 +196,23 @@ pub enum ErrorCode {
     Auth,
     Protocol,
     Internal,
+}
+
+impl ErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BackendUnavailable => "backend_unavailable",
+            Self::Auth => "auth",
+            Self::Protocol => "protocol",
+            Self::Internal => "internal",
+        }
+    }
+}
+
+impl fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// `fatal=true` must be followed by `turn_end(failed)`.

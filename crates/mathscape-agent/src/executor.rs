@@ -1,18 +1,20 @@
 //! `AgentExecutor`: the only execution interface Desktop talks to (§5).
 //!
 //! Phase0 ships the trait, [`crate::FakeBackend`] and an
-//! [`UnimplementedExecutor`] placeholder. Real adapters (Codex, Claude Code,
-//! optional hmz, Custom flows on `mathscape-orchestrator`) come in Phase1+;
-//! each one owns session management, registering `mathscape mcp` with the
+//! [`UnimplementedExecutor`] placeholder. [`crate::CodexExecutor`] is the
+//! Phase1b Codex app-server adapter. Claude Code, optional hmz, and Custom
+//! flows on `mathscape-orchestrator` still use [`UnimplementedExecutor`].
+//! Each adapter owns session management, registering `mathscape mcp` with the
 //! harness, mapping native events to `agent_events v0`, cancellation and
-//! `round_id` injection.
+//! `round_id` injection. hmz is never required.
 
 use std::path::PathBuf;
 
 use futures::{future::BoxFuture, stream::BoxStream};
 
 use crate::{
-    AgentBackend, AgentEvent, CapabilityProbe, RoundId, SystemCommandRunner, probe_capability,
+    AgentBackend, AgentEvent, CapabilityProbe, ErrorCode, RoundId, SystemCommandRunner,
+    probe_capability,
 };
 
 /// `start_round(backend, workspace, input_ref, tools_allow)`.
@@ -40,6 +42,14 @@ pub enum AgentError {
     UnknownRound(RoundId),
     #[error("required capability {} is unavailable", .0.capability)]
     CapabilityUnavailable(CapabilityProbe),
+    /// The harness process or its handshake failed. `code` matches §3 `error`.
+    /// Mathscape does not turn an `auth` failure into a login or token proxy.
+    #[error("{backend} adapter ({code}): {message}")]
+    Harness {
+        backend: AgentBackend,
+        code: ErrorCode,
+        message: String,
+    },
 }
 
 /// Object-safe so Desktop can hold `Box<dyn AgentExecutor>` per backend.

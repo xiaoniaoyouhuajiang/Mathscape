@@ -1,0 +1,3 @@
+{"method":"turn/started","params":{"turn":{"id":"turn_1","status":"inProgress","items":[]}}}
+{"method":"error","params":{"error":{"message":"Unauthorized: not logged in","codexErrorInfo":{"type":"Unauthorized"}}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn_1","status":"failed","error":{"message":"Unauthorized: not logged in"}}}}
