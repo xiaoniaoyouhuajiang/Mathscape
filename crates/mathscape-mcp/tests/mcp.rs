@@ -580,3 +580,181 @@ fn opening_a_non_workspace_fails() {
     let dir = tempfile::tempdir().unwrap();
     assert!(McpWorkspace::open(dir.path()).is_err());
 }
+
+#[test]
+fn rejects_invalid_jsonrpc_envelopes_and_ignores_client_responses() {
+    let f = fixture();
+    let server = &f.server;
+
+    let missing = server
+        .handle_message(json!({ "id": 1, "method": "initialize", "params": {} }))
+        .unwrap();
+    assert_eq!(missing["error"]["code"], -32600);
+    assert!(missing["id"].is_null());
+    assert!(
+        missing["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("jsonrpc")
+    );
+
+    let wrong = server
+        .handle_message(json!({ "jsonrpc": "1.0", "id": "req", "method": "ping" }))
+        .unwrap();
+    assert_eq!(wrong["error"]["code"], -32600);
+    assert!(wrong["id"].is_null());
+
+    for id in [json!(null), json!(true), json!({ "n": 1 }), json!([1])] {
+        let response = server
+            .handle_message(json!({ "jsonrpc": "2.0", "id": id, "method": "ping" }))
+            .unwrap();
+        assert_eq!(response["error"]["code"], -32600, "id {id}");
+        assert!(response["id"].is_null(), "id {id}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("id"),
+            "id {id}: {response}"
+        );
+    }
+
+    assert!(
+        server
+            .handle_message(json!({ "jsonrpc": "2.0", "id": 9, "result": { "ok": true } }))
+            .is_none(),
+        "client responses get no reply"
+    );
+    assert!(
+        server
+            .handle_message(json!({ "id": "resp", "error": { "code": -32601, "message": "nope" } }))
+            .is_none()
+    );
+
+    let input = [
+        json!({ "jsonrpc": "2.0", "id": { "bad": true }, "method": "ping" }),
+        json!({ "jsonrpc": "2.0", "id": 4, "result": {} }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": "init",
+            "method": "initialize",
+            "params": { "protocolVersion": "2025-06-18" },
+        }),
+    ]
+    .iter()
+    .map(Value::to_string)
+    .collect::<Vec<_>>()
+    .join("\n");
+    let mut output = Vec::new();
+    server.serve(input.as_bytes(), &mut output).unwrap();
+    let lines: Vec<Value> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "the client response produced no line: {lines:?}"
+    );
+    assert_eq!(lines[0]["error"]["code"], -32600);
+    assert!(lines[0]["id"].is_null());
+    assert_eq!(lines[1]["id"], "init");
+    assert_eq!(lines[1]["result"]["protocolVersion"], "2025-06-18");
+    assert!(lines[1].get("error").is_none());
+}
+
+#[test]
+fn unsupported_protocol_version_falls_back_to_latest() {
+    let f = fixture();
+    for version in ["2025-06-18", "2025-03-26", "2024-11-05"] {
+        let response = request(
+            &f.server,
+            1,
+            "initialize",
+            json!({ "protocolVersion": version }),
+        );
+        assert_eq!(response["result"]["protocolVersion"], version);
+    }
+    let newer = request(
+        &f.server,
+        2,
+        "initialize",
+        json!({ "protocolVersion": "2025-11-25" }),
+    );
+    assert_eq!(
+        newer["result"]["protocolVersion"], "2025-06-18",
+        "2025-11-25 is not implemented"
+    );
+}
+
+fn managed_object_files(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let mut dirs = vec![root.join("objects")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let entry = entry.unwrap();
+            let file_type = entry.file_type().unwrap();
+            if file_type.is_dir() {
+                dirs.push(entry.path());
+            } else if file_type.is_file() {
+                files.push(entry.path());
+            }
+        }
+    }
+    assert!(!files.is_empty(), "fixture should contain managed objects");
+    files
+}
+
+#[test]
+fn missing_managed_object_is_business_not_found() {
+    let f = fixture();
+    for path in managed_object_files(&f.root) {
+        std::fs::remove_file(path).unwrap();
+    }
+    for (id, locator) in [
+        (
+            f.markdown.as_str(),
+            json!({ "md_byte_range": { "start": 0, "end": 1 } }),
+        ),
+        (
+            f.pdf.as_str(),
+            json!({ "pdf_pages": { "from": 1, "to": 1 } }),
+        ),
+    ] {
+        let result = read(&f.server, json!({ "artifact_id": id, "locator": locator }));
+        assert_eq!(result["status"], "not_found", "{result}");
+        assert_eq!(result["details"]["reason"], "content_unavailable");
+        assert!(result.get("text").is_none());
+    }
+}
+
+#[test]
+fn symlinked_managed_object_is_forbidden() {
+    let f = fixture();
+    let target = f.root.join("secret-managed-target");
+    std::fs::write(&target, b"not the managed bytes").unwrap();
+    for path in managed_object_files(&f.root) {
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+    }
+    for (id, locator) in [
+        (
+            f.markdown.as_str(),
+            json!({ "md_byte_range": { "start": 0, "end": 1 } }),
+        ),
+        (
+            f.pdf.as_str(),
+            json!({ "pdf_pages": { "from": 1, "to": 1 } }),
+        ),
+    ] {
+        let error = read_error(&f.server, json!({ "artifact_id": id, "locator": locator }));
+        assert_eq!(error["code"], "forbidden", "{error}");
+        let message = error["message"].as_str().unwrap();
+        assert!(!message.contains("secret-managed-target"), "{message}");
+        assert!(
+            !message.contains(&f.root.display().to_string()),
+            "{message}"
+        );
+    }
+}

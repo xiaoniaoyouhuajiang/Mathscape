@@ -3,8 +3,8 @@
 //! Implemented methods: `initialize`, `notifications/*` (ignored), `ping`,
 //! `tools/list`, `tools/call`. Everything else is `-32601`. Tool business
 //! statuses and call errors travel inside a normal `tools/call` result; only
-//! protocol faults (bad JSON, unknown method/tool, malformed params) are
-//! JSON-RPC errors.
+//! protocol faults (bad JSON, invalid envelope, unknown method/tool,
+//! malformed params) are JSON-RPC errors.
 
 use std::io::{self, BufRead, Write};
 
@@ -16,10 +16,10 @@ use crate::tools;
 pub const JSONRPC_VERSION: &str = "2.0";
 pub const SERVER_NAME: &str = "mathscape";
 pub const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";
-/// Protocol versions this subset is compatible with; a client asking for one
-/// of these gets it echoed back, anything else gets [`LATEST_PROTOCOL_VERSION`].
-pub const SUPPORTED_PROTOCOL_VERSIONS: [&str; 4] =
-    ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+/// Protocol versions this subset actually implements. A client asking for one
+/// of these gets it echoed back; anything else, including a newer date this
+/// server does not implement, gets [`LATEST_PROTOCOL_VERSION`].
+pub const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -68,7 +68,11 @@ impl McpServer {
         }
     }
 
-    /// Handles one decoded JSON-RPC message; `None` for notifications.
+    /// Handles one decoded JSON-RPC message.
+    ///
+    /// Returns `None` for notifications and for client responses (an `id`
+    /// and no `method` — this server never sends requests, so it must not
+    /// answer those). Invalid envelopes are `-32600` with a null id.
     pub fn handle_message(&self, message: Value) -> Option<Value> {
         let Value::Object(message) = message else {
             return Some(error_response(
@@ -77,15 +81,26 @@ impl McpServer {
                 "batch and non-object messages are not supported",
             ));
         };
-        let id = message.get("id").cloned();
+        // A client response has an id and no method. Do not reply, even when
+        // the envelope is otherwise wrong.
+        if message.contains_key("id") && !message.contains_key("method") {
+            return None;
+        }
+        if message.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
+            return Some(invalid_request("jsonrpc must be \"2.0\""));
+        }
         let Some(method) = message.get("method").and_then(Value::as_str) else {
-            // A response from the client (we never send requests) or garbage.
-            return id.map(|id| error_response(id, INVALID_REQUEST, "missing method"));
+            return Some(invalid_request("method must be a string"));
         };
-        let Some(id) = id else {
+        let Some(id) = message.get("id") else {
             // Notifications (`notifications/initialized`, `…/cancelled`) need no reply.
             return None;
         };
+        if !is_request_id(id) {
+            // JSON-RPC allows string, number, or null; MCP requests must not use null.
+            return Some(invalid_request("request id must be a string or number"));
+        }
+        let id = id.clone();
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         Some(match self.dispatch(method, params) {
             Ok(result) => json!({ "jsonrpc": JSONRPC_VERSION, "id": id, "result": result }),
@@ -139,6 +154,15 @@ fn initialize(params: &Value) -> Value {
         "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") },
         "instructions": "Read-only Mathscape workspace tools. Use workspace.search to find materials, then material.read with a locator to quote exact passages.",
     })
+}
+
+fn invalid_request(message: impl Into<String>) -> Value {
+    error_response(Value::Null, INVALID_REQUEST, message)
+}
+
+/// Request ids are JSON strings or numbers. Null, bool, object, and array are rejected.
+fn is_request_id(id: &Value) -> bool {
+    matches!(id, Value::String(_) | Value::Number(_))
 }
 
 fn error_response(id: Value, code: i64, message: impl Into<String>) -> Value {

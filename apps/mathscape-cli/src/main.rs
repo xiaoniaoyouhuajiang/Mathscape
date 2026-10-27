@@ -39,7 +39,13 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
                         .ok_or_else(|| format!("{name} 需要一个值"))
                 };
                 match flag.as_str() {
-                    "--workspace" => workspace = Some(PathBuf::from(value("--workspace")?)),
+                    "--workspace" => {
+                        let path = value("--workspace")?;
+                        if path.is_empty() {
+                            return Err("--workspace 需要一个非空路径".to_owned());
+                        }
+                        workspace = Some(PathBuf::from(path));
+                    }
                     "--round" => round = Some(value("--round")?),
                     "-h" | "--help" => return Ok(Command::Help),
                     other => return Err(format!("未知参数：{other}")),
@@ -122,5 +128,16 @@ mod tests {
         assert!(parse(&["mcp", "--workspace", "/tmp/ws", "--bogus"]).is_err());
         assert!(parse(&["bogus"]).is_err());
         assert_eq!(parse(&[]), Ok(Command::Help));
+    }
+
+    #[test]
+    fn rejects_empty_workspace_path() {
+        for args in [&["mcp", "--workspace="][..], &["mcp", "--workspace", ""]] {
+            let message = parse(args).unwrap_err();
+            assert!(
+                message.contains("非空"),
+                "expected a non-empty path error for {args:?}, got {message}"
+            );
+        }
     }
 }

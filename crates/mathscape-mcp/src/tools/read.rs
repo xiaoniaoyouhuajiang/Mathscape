@@ -12,10 +12,12 @@
 //! Every successful read is capped at [`MAX_READ_BYTES`] of UTF-8 text;
 //! a capped read returns `status: "truncated"` and `truncated: true`.
 
+use std::path::PathBuf;
+
 use mathscape_agent::{
     Capability, CapabilityState, Locator, ToolError, ToolErrorCode, ToolStatus, probe_capability,
 };
-use mathscape_artifact::ArtifactPool;
+use mathscape_artifact::{ArtifactPool, ArtifactPoolError};
 use mathscape_domain::StableId;
 use mathscape_pdf::{PdfEngine, PdfOpenOptions, PdfPageIndex, PdfSelection};
 use serde::{Deserialize, Serialize};
@@ -251,11 +253,77 @@ fn result(result: ReadResult) -> Result<Value, ToolError> {
     to_object(result).map(Value::Object)
 }
 
-fn pool_error(error: mathscape_artifact::ArtifactPoolError) -> ToolError {
+fn pool_error(error: ArtifactPoolError) -> ToolError {
     ToolError::new(
         ToolErrorCode::Internal,
         format!("failed to read managed artifact: {error}"),
     )
+}
+
+/// Tool result (`Ok`) or call error (`Err`) produced while resolving content.
+type ToolReply = Result<Value, ToolError>;
+
+/// Resolves the managed object, or a finished tool reply when it cannot be read.
+///
+/// [`ArtifactPoolError::MissingManagedLocation`] and a missing object file are
+/// business `not_found`. [`ArtifactPoolError::UnsafeManagedPath`] (path escape
+/// or symbolic link) is call-error `forbidden`. Other I/O and catalog failures
+/// are `internal`. The path checks themselves stay inside `managed_path`.
+fn require_managed_path(
+    pool: &ArtifactPool,
+    args: &ReadArgs,
+    id: &StableId,
+) -> Result<PathBuf, ToolReply> {
+    match pool.managed_path(id) {
+        Ok(path) => Ok(path),
+        Err(error) => Err(map_managed_path_error(args, error)),
+    }
+}
+
+fn map_managed_path_error(args: &ReadArgs, error: ArtifactPoolError) -> ToolReply {
+    match managed_path_failure(&error) {
+        ManagedPathFailure::NotFound => not_found(
+            args,
+            "content_unavailable",
+            "the artifact is registered but has no readable managed copy",
+        ),
+        ManagedPathFailure::Forbidden => Err(ToolError::new(
+            ToolErrorCode::Forbidden,
+            "managed artifact path is unsafe or is a symbolic link",
+        )),
+        ManagedPathFailure::Internal => Err(ToolError::new(
+            ToolErrorCode::Internal,
+            format!("failed to resolve managed artifact: {error}"),
+        )),
+    }
+}
+
+enum ManagedPathFailure {
+    NotFound,
+    Forbidden,
+    Internal,
+}
+
+fn managed_path_failure(error: &ArtifactPoolError) -> ManagedPathFailure {
+    match error {
+        ArtifactPoolError::MissingManagedLocation(_) => ManagedPathFailure::NotFound,
+        ArtifactPoolError::Io { source, .. } => {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                ManagedPathFailure::NotFound
+            } else {
+                ManagedPathFailure::Internal
+            }
+        }
+        ArtifactPoolError::UnsafeManagedPath(_) => ManagedPathFailure::Forbidden,
+        ArtifactPoolError::InvalidReadRange
+        | ArtifactPoolError::InvalidWorkspaceManifest { .. }
+        | ArtifactPoolError::SourceNotFile(_)
+        | ArtifactPoolError::InvalidPoolUri(_)
+        | ArtifactPoolError::DigestMismatch { .. }
+        | ArtifactPoolError::ManagedObjectConflict { .. }
+        | ArtifactPoolError::Domain(_)
+        | ArtifactPoolError::Store(_) => ManagedPathFailure::Internal,
+    }
 }
 
 fn read_markdown(
@@ -273,12 +341,8 @@ fn read_markdown(
         )
         .with_details(json!({ "total_bytes": size })));
     }
-    if pool.managed_path(&material.id).is_err() {
-        return not_found(
-            args,
-            "content_unavailable",
-            "the artifact is registered but has no readable managed copy",
-        );
+    if let Err(reply) = require_managed_path(pool, args, &material.id) {
+        return reply;
     }
     let mut diagnostics = Vec::new();
     let expand = args.expand.unwrap_or_default();
@@ -379,12 +443,9 @@ fn read_pdf(
     from: u32,
     to: u32,
 ) -> Result<Value, ToolError> {
-    let Ok(path) = pool.managed_path(&material.id) else {
-        return not_found(
-            args,
-            "content_unavailable",
-            "the artifact is registered but has no readable managed copy",
-        );
+    let path = match require_managed_path(pool, args, &material.id) {
+        Ok(path) => path,
+        Err(reply) => return reply,
     };
     let engine = PdfEngine;
     let options = PdfOpenOptions::new();
@@ -433,7 +494,8 @@ fn read_pdf(
             .page_texts();
         for (index, page_text) in pages {
             let page = index.get() + 1;
-            if !spans.is_empty() && !push_capped(&mut text, PAGE_SEPARATOR) {
+            // The separator is atomic: a one-byte remainder must not become a lone `\n`.
+            if !spans.is_empty() && !push_page_separator(&mut text) {
                 truncated = true;
                 break 'batches;
             }
@@ -504,6 +566,16 @@ fn args_to(args: &ReadArgs) -> u32 {
     }
 }
 
+/// Appends [`PAGE_SEPARATOR`] only when both bytes fit under [`MAX_READ_BYTES`].
+/// Returns whether it was written. Never stores a partial separator.
+fn push_page_separator(text: &mut String) -> bool {
+    if text.len() + PAGE_SEPARATOR.len() > MAX_READ_BYTES {
+        return false;
+    }
+    text.push_str(PAGE_SEPARATOR);
+    true
+}
+
 /// Appends as much of `piece` as fits under [`MAX_READ_BYTES`], cutting at a
 /// character boundary. Returns whether all of it fit.
 fn push_capped(text: &mut String, piece: &str) -> bool {
@@ -560,4 +632,88 @@ fn capability_unavailable(
         details: Some(details),
         diagnostics,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use mathscape_store_sqlite::SqliteStoreError;
+
+    use super::*;
+
+    fn sample_args() -> ReadArgs {
+        serde_json::from_value(json!({
+            "artifact_id": "mathscape:artifact/sha256/0000000000000000000000000000000000000000000000000000000000000000",
+            "locator": { "md_byte_range": { "start": 0, "end": 1 } },
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn page_separator_is_not_split_at_the_byte_cap() {
+        let mut one_byte_short = "x".repeat(MAX_READ_BYTES - 1);
+        assert!(!push_page_separator(&mut one_byte_short));
+        assert_eq!(one_byte_short.len(), MAX_READ_BYTES - 1);
+        assert!(!one_byte_short.ends_with('\n'));
+
+        let mut exact = "x".repeat(MAX_READ_BYTES - PAGE_SEPARATOR.len());
+        assert!(push_page_separator(&mut exact));
+        assert_eq!(exact.len(), MAX_READ_BYTES);
+        assert!(exact.ends_with(PAGE_SEPARATOR));
+    }
+
+    #[test]
+    fn managed_path_errors_map_to_not_found_forbidden_or_internal() {
+        let args = sample_args();
+        let unavailable = map_managed_path_error(
+            &args,
+            ArtifactPoolError::MissingManagedLocation(args.artifact_id.clone()),
+        )
+        .unwrap();
+        assert_eq!(unavailable["status"], "not_found");
+        assert_eq!(unavailable["details"]["reason"], "content_unavailable");
+
+        let missing_object = map_managed_path_error(
+            &args,
+            ArtifactPoolError::Io {
+                operation: "inspect managed object",
+                path: PathBuf::from("objects/sha256/missing"),
+                source: std::io::Error::new(std::io::ErrorKind::NotFound, "missing object"),
+            },
+        )
+        .unwrap();
+        assert_eq!(missing_object["status"], "not_found");
+        assert_eq!(missing_object["details"]["reason"], "content_unavailable");
+
+        let secret = PathBuf::from("/tmp/secret-managed-target");
+        let forbidden =
+            map_managed_path_error(&args, ArtifactPoolError::UnsafeManagedPath(secret.clone()))
+                .unwrap_err();
+        assert_eq!(forbidden.code, ToolErrorCode::Forbidden);
+        assert!(!forbidden.message.contains("secret-managed-target"));
+
+        let internal = map_managed_path_error(
+            &args,
+            ArtifactPoolError::Io {
+                operation: "inspect managed object",
+                path: PathBuf::from("objects/sha256/blocked"),
+                source: std::io::Error::other("permission denied"),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(internal.code, ToolErrorCode::Internal);
+
+        let catalog = map_managed_path_error(
+            &args,
+            ArtifactPoolError::Store(SqliteStoreError::InvalidSchema("catalog unreadable")),
+        )
+        .unwrap_err();
+        assert_eq!(catalog.code, ToolErrorCode::Internal);
+
+        let bad_uri = map_managed_path_error(
+            &args,
+            ArtifactPoolError::InvalidPoolUri("file:///etc/passwd".to_owned()),
+        )
+        .unwrap_err();
+        assert_eq!(bad_uri.code, ToolErrorCode::Internal);
+    }
 }
