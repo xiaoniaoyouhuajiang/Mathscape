@@ -6,6 +6,7 @@ import { eventBus } from "../src/core/events";
 import { connectInkViews } from "../src/ink/views";
 import { GraphController } from "../src/graph/graph-controller";
 import { a, b, documents, snapshots, evidence, evidenceRequests, calls, notes, noteCalls, behavior, links, linkCalls, exports, sourceLabels, overlayCalls } from "./ink-mock-store";
+import { projectInk } from "../src/ink/model";
 import "../src/styles.css";
 
 const workspaceHost = document.querySelector<HTMLElement>("#ink-test-host")!;
@@ -56,7 +57,20 @@ const map = {
   select: (id: string): void => { mapInspector.selectNodeById(id); },
 };
 
-const harness = { map, links, linkCalls, exports, notes, noteCalls, workspace, documents: { a: a.document_id, b: b.document_id }, snapshots, calls, behavior, evidenceRequests, storedDocuments:documents };
+/** N3e: page-space bounds of the visible strokes of the open document (after transforms). */
+const visibleBounds = () => {
+  const id = workspace.currentDocumentId();
+  const document = id ? documents.get(id) : undefined;
+  const points = document ? projectInk(document).visible.flatMap(stroke => stroke.points) : [];
+  if (!points.length) return null;
+  return { minX: Math.min(...points.map(p => p.x)), minY: Math.min(...points.map(p => p.y)), maxX: Math.max(...points.map(p => p.x)), maxY: Math.max(...points.map(p => p.y)) };
+};
+const visibleStrokeCount = () => {
+  const id = workspace.currentDocumentId();
+  const document = id ? documents.get(id) : undefined;
+  return document ? projectInk(document).visible.length : 0;
+};
+const harness = { visibleBounds, visibleStrokeCount, map, links, linkCalls, exports, notes, noteCalls, workspace, documents: { a: a.document_id, b: b.document_id }, snapshots, calls, behavior, evidenceRequests, storedDocuments:documents };
 declare global { interface Window { inkDesktopHarness: typeof harness } }
 window.inkDesktopHarness = harness;
 void workspace.open();

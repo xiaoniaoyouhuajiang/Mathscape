@@ -20,3 +20,43 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 export function isDeleteKey(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey">): boolean {
   return (event.key === "Delete" || event.key === "Backspace") && !event.ctrlKey && !event.metaKey && !event.altKey;
 }
+
+/** M1 canvas shortcuts of the desktop 手稿 workspace. */
+export type InkShortcut =
+  | "undo" | "redo" | "escape" | "delete"
+  | "tool-pen" | "tool-erase" | "tool-partial-erase" | "tool-select" | "tool-pan"
+  | "zoom-in" | "zoom-out" | "zoom-fit";
+
+/** Shortcuts that change the document; they never fire on a read-only board. */
+export const EDITING_SHORTCUTS: ReadonlySet<InkShortcut> = new Set(["undo", "redo", "delete", "tool-pen", "tool-erase", "tool-partial-erase"]);
+
+type ShortcutKey = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"> & { code?: string; isComposing?: boolean; repeat?: boolean };
+
+/**
+ * Maps a key press to an M1 shortcut. Ctrl and ⌘ are interchangeable so the
+ * same build works on Windows, Linux and macOS. Letters are matched through
+ * `code` too, so a non-Latin keyboard layout still reaches them.
+ */
+export function inkShortcut(event: ShortcutKey): InkShortcut | undefined {
+  if (event.isComposing || event.altKey) return undefined;
+  const mod = event.ctrlKey || event.metaKey;
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  const letter = event.code?.startsWith("Key") ? event.code.slice(3).toLowerCase() : key;
+  if (mod) {
+    if (letter === "z") return event.shiftKey ? "redo" : "undo";
+    if (letter === "y" && !event.shiftKey) return "redo";
+    if (key === "+" || key === "=") return "zoom-in";
+    if (key === "-" || key === "_") return "zoom-out";
+    if (key === "0") return "zoom-fit";
+    return undefined;
+  }
+  if (event.key === "Escape") return "escape";
+  if (isDeleteKey(event) && !event.shiftKey) return "delete";
+  if (event.repeat) return undefined;
+  if (letter === "e") return event.shiftKey ? "tool-partial-erase" : "tool-erase";
+  if (event.shiftKey) return undefined;
+  if (letter === "p") return "tool-pen";
+  if (letter === "l") return "tool-select";
+  if (letter === "h") return "tool-pan";
+  return undefined;
+}

@@ -2,6 +2,7 @@
 // workspace switching, the shared overlay cache and the inspector run exactly
 // as in the desktop app; only the Tauri commands are mocked.
 import type { Core } from "cytoscape";
+import { mockWindows } from "@tauri-apps/api/mocks";
 import { a, b, behavior, documents, extraCommands, links, noteCalls, notes, snapshots, snapshotLabelCalls, sourceLabels } from "./ink-mock-store";
 
 const mdSource = "# 正确表述\n\n设 $a_n$ 为数列。\n";
@@ -87,12 +88,32 @@ extraCommands.set("search_workspace", async (args) => {
   return { query: query.text, total: groups.reduce((sum, group) => sum + group.total, 0), groups };
 });
 
+// H5: the Tauri window. getCurrentWindow().onCloseRequested registers through
+// plugin:event|listen; a test fires the close request with requestWindowClose()
+// and checks whether the app let the window be destroyed.
+mockWindows("main");
+const windowEvents = { listeners: [] as Array<{ event: string; handler: number }>, destroyed: 0 };
+extraCommands.set("plugin:event|listen", (args) => {
+  const handler = Number(args.handler);
+  windowEvents.listeners.push({ event: String(args.event), handler });
+  return handler;
+});
+extraCommands.set("plugin:event|unlisten", () => null);
+extraCommands.set("plugin:window|destroy", () => { windowEvents.destroyed += 1; return null; });
+const requestWindowClose = () => {
+  const internals = (window as unknown as { __TAURI_INTERNALS__: { runCallback: (id: number, data: unknown) => void } }).__TAURI_INTERNALS__;
+  const targets = windowEvents.listeners.filter(listener => listener.event === "tauri://close-requested");
+  for (const { handler } of targets) internals.runCallback(handler, { event: "tauri://close-requested", id: handler, payload: null });
+  return targets.length;
+};
+
 await import("../src/main");
 
 const core = (): Core => (document.querySelector("#graph") as unknown as { _cyreg: { cy: Core } } | null)?._cyreg?.cy
   ?? ([...document.querySelectorAll<HTMLElement>("div")].find(div => (div as unknown as { _cyreg?: unknown })._cyreg) as unknown as { _cyreg: { cy: Core } })._cyreg.cy;
 const appHarness = {
   documents: { a: a.document_id, b: b.document_id }, notes, links, behavior, storedDocuments: documents, noteCalls, unexpected,
+  windowEvents, requestWindowClose,
   contentFailures, contentRequests, detailRequests, sourceDetailBehavior, searchBehavior, snapshots, snapshotLabelCalls,
   /** Cytoscape state of a node: selected flag and distance from the canvas centre. */
   nodeView: (id: string) => {
