@@ -171,7 +171,8 @@ AgentExecutor 最小接口（语义，非具体签名）：
    - 目录不可读（成环、超限、panic，或 `get_toc` 的内容/解析失败）：`status: ok`，`entries: []`，`diagnostics` 含 `outline_unreadable`（不是 `outline_empty`）。文件打不开、加密、结构坏到无法 load，仍是调用错误 `internal`，与 `material.read` 一致。
    - 节点上限 10000 是**解析**上限：更大的书签图整棵视为不可读，不返回部分条目。
    - **响应**另有硬顶（防恶意 PDF 撑爆上下文 / stdio）：单条 `title` 截到 512 个 Unicode 字符（按字符边界，条目带 `title_truncated: true`）；最多返回 1000 条；序列化后的 `entries` 数组 ≤ 64 KiB；透传的 reader 警告最多 16 条、每条 ≤ 256 字符，警告里引用的标题只保留前 64 字符。任一截断即 `status: truncated` 且 `truncated: true`（§2.2），按原顺序保留装得下的条目，`total_entries` 给出截断前条数，`diagnostics` 含 `outline_truncated`。未截断的成功结果 `truncated: false`。
-7. [ ] 之后再排：`graph.get/neighborhood`、`ink.snapshot_image`、`user.ask`
+7. [x] Phase1c：`graph.get` / `graph.neighborhood`（只读，`landscape_snapshot` + `project_landscape` 读时投影），契约见 [`phase1c-graph-contract.md`](phase1c-graph-contract.md)。`tools/list` 现为 6 个工具，前 4 个描述不变。
+   - 仍推迟：`ink.snapshot_image`、`user.ask`。
 - 写路径（`propose_changes`）不进 Phase1。
 
 ---

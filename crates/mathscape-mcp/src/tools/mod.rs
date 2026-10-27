@@ -2,6 +2,7 @@
 //! part of the contract (§2.1): fixed, independent of the task, so harness
 //! prompt caches stay stable. Change them only together with the contract.
 
+mod graph;
 mod grep;
 mod material;
 mod outline;
@@ -14,6 +15,10 @@ use serde_json::{Map, Value, json};
 
 use crate::McpWorkspace;
 
+pub use graph::{
+    DEFAULT_EDGE_TYPES, DEFAULT_MAX_EDGES, DEFAULT_MAX_NODES, MAX_DEPTH, MAX_EDGES, MAX_NODES,
+    MAX_SEEDS, MAX_VISITED, RELATION_TYPES,
+};
 pub use grep::{MAX_GREP_HITS, MAX_SCAN_BYTES};
 pub use outline::{
     MAX_DIAGNOSTIC_MESSAGE_CHARS, MAX_OUTLINE_DIAGNOSTICS, MAX_OUTLINE_ENTRIES,
@@ -25,9 +30,18 @@ pub const WORKSPACE_SEARCH: &str = "workspace.search";
 pub const MATERIAL_READ: &str = "material.read";
 pub const MATERIAL_GREP: &str = "material.grep";
 pub const PDF_OUTLINE: &str = "pdf.outline";
+pub const GRAPH_GET: &str = "graph.get";
+pub const GRAPH_NEIGHBORHOOD: &str = "graph.neighborhood";
 
 /// Stable `tools/list` order. New tools are appended; existing entries stay put.
-pub const TOOL_NAMES: [&str; 4] = [WORKSPACE_SEARCH, MATERIAL_READ, MATERIAL_GREP, PDF_OUTLINE];
+pub const TOOL_NAMES: [&str; 6] = [
+    WORKSPACE_SEARCH,
+    MATERIAL_READ,
+    MATERIAL_GREP,
+    PDF_OUTLINE,
+    GRAPH_GET,
+    GRAPH_NEIGHBORHOOD,
+];
 
 /// `tools/list` entries, in [`TOOL_NAMES`] order.
 pub fn tool_definitions() -> Vec<Value> {
@@ -36,6 +50,8 @@ pub fn tool_definitions() -> Vec<Value> {
         read::definition(),
         grep::definition(),
         outline::definition(),
+        graph::get_definition(),
+        graph::neighborhood_definition(),
     ]
 }
 
@@ -52,6 +68,8 @@ pub fn call(
         MATERIAL_READ => Some(read::call(workspace, arguments)),
         MATERIAL_GREP => Some(grep::call(workspace, arguments)),
         PDF_OUTLINE => Some(outline::call(workspace, arguments)),
+        GRAPH_GET => Some(graph::call_get(workspace, arguments)),
+        GRAPH_NEIGHBORHOOD => Some(graph::call_neighborhood(workspace, arguments)),
         _ => None,
     }
 }
