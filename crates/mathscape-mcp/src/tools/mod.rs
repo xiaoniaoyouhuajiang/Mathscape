@@ -15,6 +15,10 @@ use serde_json::{Map, Value, json};
 use crate::McpWorkspace;
 
 pub use grep::{MAX_GREP_HITS, MAX_SCAN_BYTES};
+pub use outline::{
+    MAX_DIAGNOSTIC_MESSAGE_CHARS, MAX_OUTLINE_DIAGNOSTICS, MAX_OUTLINE_ENTRIES,
+    MAX_OUTLINE_ENTRIES_BYTES, MAX_OUTLINE_TITLE_CHARS,
+};
 pub use read::MAX_READ_BYTES;
 
 pub const WORKSPACE_SEARCH: &str = "workspace.search";

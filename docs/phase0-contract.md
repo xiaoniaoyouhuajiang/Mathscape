@@ -51,7 +51,7 @@ MCP **不是**桌面实时同步通道；桌面不通过 MCP 订阅进度。两�
 | `ok` | 正常返回 | — |
 | `not_found` | 目标 id / artifact 不存在 | `material.read` 给了无效 `artifact_id` |
 | `ambiguous` | 输入可解析为多个目标，返回候选 | 以后 `context.resolve_symbol`；search 不用 |
-| `truncated` | 结果有效但被硬顶截断 | `material.read` 超 32KiB；`material.grep` 超过 `max_hits` 或单篇 markdown 扫描上限；search 超 `limit_per_group` 时不算，仅正文截断算 |
+| `truncated` | 结果有效但被硬顶截断 | `material.read` 超 32KiB；`material.grep` 超过 `max_hits` 或单篇 markdown 扫描上限；`pdf.outline` 超标题 512 字符 / 1000 条 / 64KiB 条目；search 超 `limit_per_group` 时不算，仅正文截断算 |
 | `capability_unavailable` | 依赖的外部能力缺失/版本不符 | PDF 无文本层且 Marker 未装；Lean 未装 |
 
 - 这 5 个是**业务结果**，以 MCP 正常 result 返回（不是 JSON-RPC error），Agent 可据此自行重试/换路。
@@ -167,7 +167,8 @@ AgentExecutor 最小接口（语义，非具体签名）：
    - `lopdf` 0.42 的 `get_toc` 用 `IndexMap`、以标题字节为键。同名书签折叠成一条：保留**第一次**出现的位置，页码和 `level` 取**最后一次**。本切片不另写目录解析器去修复。
    - 调用 `get_toc` 之前先走 `/Outlines` 上 `get_toc` 会跟随的引用：`/First`、`/Next`（`/Parent` 只拒绝指向自身的自环；指回祖先是正常书签，不顺着走，否则每棵真书签树都会被当成环）。用 visited 集合、深度上限 64、节点上限 10000。成环或超限则**不**调用 `get_toc`（`/First` 自环是栈溢出 abort，`catch_unwind` 接不住）。`get_toc` 再包一层 `catch_unwind`，把 panic（例如过短的 `/Dest` 数组）收成同一条不可读路径。`get_toc` 还会递归名字树 `/Kids`，那条链用同样的上限，避免另一条栈溢出。`get_toc` 返回的内容/解析错误（不是「没有 `/Outlines`」）同样收成不可读空目录。
    - 目录不可读（成环、超限、panic，或 `get_toc` 的内容/解析失败）：`status: ok`，`entries: []`，`diagnostics` 含 `outline_unreadable`（不是 `outline_empty`）。文件打不开、加密、结构坏到无法 load，仍是调用错误 `internal`，与 `material.read` 一致。
-   - `entries` 没有单独的响应截断。节点上限 10000 是已知上限：更大的书签图整棵视为不可读，不返回部分条目。可读目录最多 10000 条。
+   - 节点上限 10000 是**解析**上限：更大的书签图整棵视为不可读，不返回部分条目。
+   - **响应**另有硬顶（防恶意 PDF 撑爆上下文 / stdio）：单条 `title` 截到 512 个 Unicode 字符（按字符边界，条目带 `title_truncated: true`）；最多返回 1000 条；序列化后的 `entries` 数组 ≤ 64 KiB；透传的 reader 警告最多 16 条、每条 ≤ 256 字符，警告里引用的标题只保留前 64 字符。任一截断即 `status: truncated` 且 `truncated: true`（§2.2），按原顺序保留装得下的条目，`total_entries` 给出截断前条数，`diagnostics` 含 `outline_truncated`。未截断的成功结果 `truncated: false`。
 7. [ ] 之后再排：`graph.get/neighborhood`、`ink.snapshot_image`、`user.ask`
 - 写路径（`propose_changes`）不进 Phase1。
 

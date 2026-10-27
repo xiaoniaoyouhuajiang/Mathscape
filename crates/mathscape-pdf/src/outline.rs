@@ -390,6 +390,17 @@ fn walk_name_kids(
     None
 }
 
+/// Longest title prefix (in chars) quoted in a warning. A hostile PDF can
+/// carry megabyte titles; warnings must not echo them.
+const WARNING_TITLE_CHARS: usize = 64;
+
+fn warning_title(title: &str) -> String {
+    match title.char_indices().nth(WARNING_TITLE_CHARS) {
+        Some((cut, _)) => format!("{:?}…", &title[..cut]),
+        None => format!("{title:?}"),
+    }
+}
+
 fn entry_from_toc(
     title: &str,
     level: usize,
@@ -399,31 +410,36 @@ fn entry_from_toc(
 ) -> Option<PdfOutlineEntry> {
     let Some(zero_based) = page.checked_sub(1) else {
         warnings.push(format!(
-            "skipped outline entry {title:?}: destination has no page"
+            "skipped outline entry {}: destination has no page",
+            warning_title(title)
         ));
         return None;
     };
     let Ok(index) = u32::try_from(zero_based) else {
         warnings.push(format!(
-            "skipped outline entry {title:?}: page index does not fit u32"
+            "skipped outline entry {}: page index does not fit u32",
+            warning_title(title)
         ));
         return None;
     };
     if index >= page_count {
         warnings.push(format!(
-            "skipped outline entry {title:?}: 0-based page {index} is outside {page_count} pages"
+            "skipped outline entry {}: 0-based page {index} is outside {page_count} pages",
+            warning_title(title)
         ));
         return None;
     }
     let Ok(level) = u32::try_from(level) else {
         warnings.push(format!(
-            "skipped outline entry {title:?}: level does not fit u32"
+            "skipped outline entry {}: level does not fit u32",
+            warning_title(title)
         ));
         return None;
     };
     if level == 0 {
         warnings.push(format!(
-            "skipped outline entry {title:?}: level must be >= 1"
+            "skipped outline entry {}: level must be >= 1",
+            warning_title(title)
         ));
         return None;
     }
@@ -496,5 +512,31 @@ mod tests {
             warning.contains("exceeds") && warning.contains("10000"),
             "{warning}"
         );
+    }
+
+    #[test]
+    fn skip_warnings_do_not_echo_huge_titles() {
+        let title = "题".repeat(4 * 1024 * 1024);
+        let mut warnings = Vec::new();
+        assert!(entry_from_toc(&title, 1, 0, 1, &mut warnings).is_none());
+        assert_eq!(warnings.len(), 1);
+        let warning = &warnings[0];
+        assert!(
+            warning.chars().count() < 200,
+            "{} chars",
+            warning.chars().count()
+        );
+        assert!(
+            warning.contains(&"题".repeat(WARNING_TITLE_CHARS)),
+            "{warning}"
+        );
+        assert!(
+            !warning.contains(&"题".repeat(WARNING_TITLE_CHARS + 1)),
+            "{warning}"
+        );
+
+        warnings.clear();
+        assert!(entry_from_toc("Short", 1, 0, 1, &mut warnings).is_none());
+        assert!(warnings[0].contains("\"Short\":"), "{}", warnings[0]);
     }
 }

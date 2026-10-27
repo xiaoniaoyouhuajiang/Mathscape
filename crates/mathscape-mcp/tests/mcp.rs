@@ -11,7 +11,10 @@ use lopdf::{
 use mathscape_agent::{CommandOutput, CommandRunner};
 use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_domain::{ActorRef, MediaType, RightsRecord, RightsStatus};
-use mathscape_mcp::tools::{MAX_GREP_HITS, MAX_READ_BYTES, MAX_SCAN_BYTES, TOOL_NAMES};
+use mathscape_mcp::tools::{
+    MAX_GREP_HITS, MAX_OUTLINE_ENTRIES, MAX_OUTLINE_ENTRIES_BYTES, MAX_OUTLINE_TITLE_CHARS,
+    MAX_READ_BYTES, MAX_SCAN_BYTES, TOOL_NAMES,
+};
 use mathscape_mcp::{McpServer, McpWorkspace};
 use mathscape_query::search::{SearchKind, SearchQuery, SearchRegistry, search};
 use mathscape_store_sqlite::SqliteArtifactStore;
@@ -221,6 +224,16 @@ fn outlined_pdf_bytes() -> Vec<u8> {
         Bookmark::new("Chapter 2".into(), [0.0, 0.0, 0.0], 0, pages[&3]),
         None,
     );
+    finish_pdf(&mut document)
+}
+
+/// One page, top-level bookmarks with the given titles, all on page 1.
+fn bookmarks_pdf_bytes(titles: &[String]) -> Vec<u8> {
+    let mut document = pdf_document(&[&["Only page"]]);
+    let page = document.get_pages()[&1];
+    for title in titles {
+        document.add_bookmark(Bookmark::new(title.clone(), [0.0, 0.0, 0.0], 0, page), None);
+    }
     finish_pdf(&mut document)
 }
 
@@ -880,6 +893,8 @@ fn outline_entries_are_zero_based_and_drive_material_read() {
     assert!(!result["revision"].as_str().unwrap().is_empty());
     assert!(result.get("document_index_id").is_none());
     assert!(result.get("diagnostics").is_none());
+    assert_eq!(result["truncated"], false);
+    assert_eq!(result["total_entries"], 3);
     assert!(result["entries"][0].get("printed_label").is_none());
     assert_eq!(
         result["entries"],
@@ -962,6 +977,102 @@ fn outline_hostile_bookmark_graphs_are_ok_and_unreadable() {
         let message = diagnostics[0]["message"].as_str().unwrap();
         assert!(message.contains(fragment), "{message}");
     }
+}
+
+fn import_outline_pdf(f: &Fixture, titles: &[String], name: &str) -> String {
+    let mut pool = ArtifactPool::open(&f.root).unwrap();
+    let id = import(
+        &mut pool,
+        bookmarks_pdf_bytes(titles),
+        "application/pdf",
+        name,
+        Some(1),
+    );
+    drop(pool);
+    id
+}
+
+fn assert_truncated(result: &Value) {
+    assert_eq!(result["status"], "truncated", "{result}");
+    assert_eq!(result["truncated"], true, "{result}");
+    assert_eq!(result["source"], "embedded_toc");
+    let codes: Vec<&str> = result["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"outline_truncated"), "{codes:?}");
+    let bytes = serde_json::to_vec(&result["entries"]).unwrap().len();
+    assert!(
+        bytes <= MAX_OUTLINE_ENTRIES_BYTES,
+        "entries are {bytes} bytes"
+    );
+}
+
+#[test]
+fn outline_huge_title_is_cut_on_a_char_boundary() {
+    let f = fixture();
+    let huge = format!("题{}", "x".repeat(4 * 1024 * 1024));
+    let id = import_outline_pdf(&f, &[huge, "Short".to_owned()], "huge-title.pdf");
+    let result = outline(&f.server, json!({ "artifact_id": id }));
+    assert_truncated(&result);
+    assert_eq!(result["total_entries"], 2);
+    let entries = result["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    let title = entries[0]["title"].as_str().unwrap();
+    assert_eq!(title.chars().count(), MAX_OUTLINE_TITLE_CHARS);
+    assert!(title.starts_with('题'));
+    assert_eq!(entries[0]["title_truncated"], true);
+    assert_eq!(
+        entries[1],
+        json!({ "title": "Short", "level": 1, "pdf_page_index": 0 })
+    );
+    let response = serde_json::to_vec(&result).unwrap().len();
+    assert!(response < 8 * 1024, "response is {response} bytes");
+}
+
+#[test]
+fn outline_entry_count_is_capped() {
+    let f = fixture();
+    let total = MAX_OUTLINE_ENTRIES + 500;
+    let titles: Vec<String> = (0..total).map(|index| format!("E{index:05}")).collect();
+    let id = import_outline_pdf(&f, &titles, "many-entries.pdf");
+    let result = outline(&f.server, json!({ "artifact_id": id }));
+    assert_truncated(&result);
+    assert_eq!(result["total_entries"], total);
+    let entries = result["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), MAX_OUTLINE_ENTRIES);
+    for (index, entry) in entries.iter().enumerate() {
+        assert_eq!(entry["title"], format!("E{index:05}"));
+        assert!(entry.get("title_truncated").is_none());
+    }
+}
+
+#[test]
+fn outline_total_bytes_are_capped() {
+    // 900 × ~500-char titles ≈ 450 KB uncapped, under the entry-count cap;
+    // the byte budget cuts first.
+    let f = fixture();
+    let titles: Vec<String> = (0..900)
+        .map(|index| format!("{index:04} {}", "lemma ".repeat(82)))
+        .collect();
+    assert!(titles[0].chars().count() <= MAX_OUTLINE_TITLE_CHARS);
+    let id = import_outline_pdf(&f, &titles, "wide-entries.pdf");
+    let result = outline(&f.server, json!({ "artifact_id": id }));
+    assert_truncated(&result);
+    assert_eq!(result["total_entries"], 900);
+    let entries = result["entries"].as_array().unwrap();
+    assert!(
+        entries.len() > 50 && entries.len() < 900,
+        "{} entries",
+        entries.len()
+    );
+    for (index, entry) in entries.iter().enumerate() {
+        assert_eq!(entry["title"].as_str().unwrap(), titles[index]);
+    }
+    let response = serde_json::to_vec(&result).unwrap().len();
+    assert!(response < 80 * 1024, "response is {response} bytes");
 }
 
 #[test]
