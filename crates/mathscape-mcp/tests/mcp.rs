@@ -452,7 +452,12 @@ fn tools_list_order_and_text_are_fixed() {
     assert_eq!(names, TOOL_NAMES);
     assert_eq!(
         names,
-        ["workspace.search", "material.read", "material.grep", "pdf.outline"]
+        [
+            "workspace.search",
+            "material.read",
+            "material.grep",
+            "pdf.outline"
+        ]
     );
     for tool in tools {
         assert!(!tool["description"].as_str().unwrap().is_empty());

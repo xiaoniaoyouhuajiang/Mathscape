@@ -27,6 +27,17 @@ pub(crate) fn find_material(
     workspace: &McpWorkspace,
     id: &StableId,
 ) -> Result<Option<Material>, ToolError> {
+    Ok(find_materials(workspace, std::slice::from_ref(id))?
+        .pop()
+        .flatten())
+}
+
+/// Looks up several ids against one catalog snapshot. The result has one
+/// entry per id, in the given order; `None` means the id is not in the catalog.
+pub(crate) fn find_materials(
+    workspace: &McpWorkspace,
+    ids: &[StableId],
+) -> Result<Vec<Option<Material>>, ToolError> {
     let catalog = workspace
         .store()?
         .read_catalog_snapshot()
@@ -36,20 +47,25 @@ pub(crate) fn find_material(
                 format!("failed to read artifact catalog: {error}"),
             )
         })?;
-    Ok(catalog
-        .artifacts()
+    Ok(ids
         .iter()
-        .find(|record| record.entity().header().stable_id() == id)
-        .map(|record| {
-            let header = record.entity().header();
-            let payload = record.entity().payload();
-            Material {
-                id: id.clone(),
-                media_type: payload.media_type().as_str().to_owned(),
-                byte_size: payload.byte_size(),
-                revision: header.revision_id().to_string(),
-            }
-        }))
+        .map(|id| {
+            catalog
+                .artifacts()
+                .iter()
+                .find(|record| record.entity().header().stable_id() == id)
+                .map(|record| {
+                    let header = record.entity().header();
+                    let payload = record.entity().payload();
+                    Material {
+                        id: id.clone(),
+                        media_type: payload.media_type().as_str().to_owned(),
+                        byte_size: payload.byte_size(),
+                        revision: header.revision_id().to_string(),
+                    }
+                })
+        })
+        .collect())
 }
 
 pub(crate) enum ManagedPathFailure {
