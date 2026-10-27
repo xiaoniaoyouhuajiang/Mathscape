@@ -180,11 +180,29 @@ impl CodexEventMapper {
             .unwrap_or("codex error")
             .to_owned();
         let code = classify_codex_failure(&format!("{message} {error}"));
+        // `ErrorNotification { error, willRetry, threadId, turnId }`: Codex
+        // sends `willRetry: true` for transient failures it is retrying
+        // ("Reconnecting... n/5"). Those must not fail the turn. Only a final
+        // (`willRetry: false` or absent) error is fatal, and at most once.
+        let will_retry = params
+            .get("willRetry")
+            .or_else(|| params.get("will_retry"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let mut events = Vec::new();
         if !self.turn_open {
             events.extend(self.ensure_turn("turn-1", Value::Null));
         }
-        events.push(self.emit_fatal(code, message, error));
+        if will_retry || self.fatal_emitted {
+            events.push(self.emit(EventPayload::Error(ErrorEvent {
+                code,
+                message,
+                fatal: false,
+                raw: Some(params.clone()),
+            })));
+        } else {
+            events.push(self.emit_fatal(code, message, error));
+        }
         events
     }
 
@@ -490,7 +508,8 @@ pub(crate) fn classify_codex_failure(text: &str) -> ErrorCode {
 }
 
 fn tool_result_status(item: &Value) -> ToolResultStatus {
-    if item.get("error").is_some() {
+    // Codex serialises `mcpToolCall.error: None` as `null` on success.
+    if item.get("error").filter(|v| !v.is_null()).is_some() {
         return ToolResultStatus::Error;
     }
     match item.get("status").and_then(Value::as_str).unwrap_or("") {
@@ -567,7 +586,7 @@ fn output_hash(item: &Value) -> Option<String> {
             .or_else(|| result.get("structured_content"));
         return Some(hash_value(structured.unwrap_or(result)));
     }
-    item.get("error").map(hash_value)
+    item.get("error").filter(|v| !v.is_null()).map(hash_value)
 }
 
 fn hash_value(value: &Value) -> String {
@@ -841,6 +860,100 @@ mod tests {
             &event.payload,
             EventPayload::ToolResult(result) if result.status == ToolResultStatus::Error
         )));
+    }
+
+    #[test]
+    fn will_retry_errors_are_not_fatal_and_only_one_fatal_is_emitted() {
+        let mut mapper = CodexEventMapper::new(RoundId::parse("r").unwrap(), "prompt".into());
+        let mut events = mapper.accept_turn("turn_1", &Value::Null);
+        for n in 1..=3 {
+            events.extend(mapper.on_notification(&serde_json::json!({
+                "method": "error",
+                "params": {
+                    "error": { "message": format!("Reconnecting... {n}/5") },
+                    "willRetry": true,
+                    "threadId": "thr_1",
+                    "turnId": "turn_1"
+                }
+            })));
+        }
+        assert!(!mapper.turn_closed(), "willRetry must not close the turn");
+        assert!(events.iter().all(|event| !matches!(
+            &event.payload,
+            EventPayload::Error(error) if error.fatal
+        )));
+        assert!(!events.iter().any(|event| event.type_name() == "turn_end"));
+        let retries = events
+            .iter()
+            .filter(|event| matches!(&event.payload, EventPayload::Error(e) if !e.fatal))
+            .count();
+        assert_eq!(retries, 3);
+
+        // A retried turn may still complete normally.
+        let mut ok_mapper = CodexEventMapper::new(RoundId::parse("r2").unwrap(), "p".into());
+        let mut ok_events = ok_mapper.accept_turn("turn_1", &Value::Null);
+        ok_events.extend(ok_mapper.on_notification(&serde_json::json!({
+            "method": "error",
+            "params": { "error": { "message": "Reconnecting... 1/5" }, "willRetry": true }
+        })));
+        ok_events.extend(ok_mapper.on_notification(&serde_json::json!({
+            "method": "turn/completed",
+            "params": { "turn": { "id": "turn_1", "status": "completed", "error": null } }
+        })));
+        assert_eq!(validate_round(&ok_events), vec![], "{ok_events:?}");
+        let EventPayload::TurnEnd(end) = &ok_events.last().unwrap().payload else {
+            panic!("turn end");
+        };
+        assert_eq!(end.outcome, TurnOutcome::Completed);
+
+        for _ in 0..2 {
+            events.extend(mapper.on_notification(&serde_json::json!({
+                "method": "error",
+                "params": {
+                    "error": { "message": "Unauthorized: not logged in" },
+                    "willRetry": false
+                }
+            })));
+        }
+        events.extend(mapper.on_notification(&serde_json::json!({
+            "method": "turn/completed",
+            "params": { "turn": { "id": "turn_1", "status": "failed",
+                "error": { "message": "Unauthorized: not logged in" } } }
+        })));
+        assert_eq!(validate_round(&events), vec![], "{events:?}");
+        let fatals = events
+            .iter()
+            .filter(|event| matches!(&event.payload, EventPayload::Error(e) if e.fatal))
+            .count();
+        assert_eq!(fatals, 1, "{events:?}");
+        let EventPayload::TurnEnd(end) = &events.last().unwrap().payload else {
+            panic!("turn end");
+        };
+        assert_eq!(end.outcome, TurnOutcome::Failed);
+    }
+
+    #[test]
+    fn null_error_on_successful_mcp_item_is_ok() {
+        let item = serde_json::json!({
+            "type": "mcpToolCall",
+            "status": "completed",
+            "error": null,
+            "result": { "structuredContent": { "status": "ok" }, "isError": false }
+        });
+        assert_eq!(tool_result_status(&item), ToolResultStatus::Ok);
+        assert_eq!(
+            output_hash(&item),
+            Some(hash_value(&serde_json::json!({"status": "ok"})))
+        );
+        let no_result = serde_json::json!({ "type": "mcpToolCall", "error": null });
+        assert_eq!(output_hash(&no_result), None);
+        let failed = serde_json::json!({
+            "type": "mcpToolCall",
+            "status": "failed",
+            "error": { "message": "boom" }
+        });
+        assert_eq!(tool_result_status(&failed), ToolResultStatus::Error);
+        assert!(output_hash(&failed).is_some());
     }
 
     #[test]

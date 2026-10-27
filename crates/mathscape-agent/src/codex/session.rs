@@ -26,6 +26,12 @@ const INITIALIZE_ID: u64 = 1;
 const THREAD_START_ID: u64 = 2;
 const TURN_START_ID: u64 = 3;
 const STDERR_TAIL: usize = 4 * 1024;
+/// Upper bound between SIGTERM and SIGKILL for the app-server process group.
+const TERM_GRACE: Duration = Duration::from_secs(2);
+/// Upper bound for joining the stderr reader after the group is dead. A
+/// process that escaped the group (e.g. `setsid`) may still hold the pipe;
+/// the reader is then detached instead of blocking the session thread.
+const READER_JOIN: Duration = Duration::from_secs(2);
 
 /// How [`CodexExecutor`] locates the Codex CLI and the Mathscape MCP binary.
 ///
@@ -225,24 +231,31 @@ fn drive_child(
             return;
         }
     };
+    let grace = TERM_GRACE.min(config.interrupt_grace);
     let Some(stdin) = child.stdin.take() else {
-        reap(child);
+        terminate_group(&mut child, grace);
         ready.fail(harness(ErrorCode::Internal, "codex stdin was not piped"));
         return;
     };
     let Some(stdout) = child.stdout.take() else {
-        reap(child);
+        drop(stdin);
+        terminate_group(&mut child, grace);
         ready.fail(harness(ErrorCode::Internal, "codex stdout was not piped"));
         return;
     };
     let Some(stderr) = child.stderr.take() else {
-        reap(child);
+        drop(stdin);
+        terminate_group(&mut child, grace);
         ready.fail(harness(ErrorCode::Internal, "codex stderr was not piped"));
         return;
     };
     let stderr_tail = Arc::new(Mutex::new(String::new()));
     let tail_for_thread = Arc::clone(&stderr_tail);
-    let stderr_thread = thread::spawn(move || collect_stderr(stderr, tail_for_thread));
+    let (stderr_done_tx, stderr_done) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        collect_stderr(stderr, tail_for_thread);
+        let _ = stderr_done_tx.send(());
+    });
     let (line_tx, line_rx) = mpsc::channel();
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -257,7 +270,7 @@ fn drive_child(
         }
     });
     let mut session = Session {
-        writer: Box::new(stdin),
+        writer: Some(Box::new(stdin)),
         lines: line_rx,
         commands,
         mapper: CodexEventMapper::new(round_id.clone(), request.input_ref.clone()),
@@ -270,22 +283,30 @@ fn drive_child(
         turn_id: None,
         interrupt_rpc: None,
         child,
+        term_grace: grace,
+        reaped: false,
         mcp_program: config.mcp_program,
     };
     if let Err(error) = session.handshake(&request, &round_id, &ready) {
+        // Kill the whole process group first, then unblock `start_round`.
+        // Joining the stderr reader must never gate `ready`.
         session.shutdown();
-        let _ = stderr_thread.join();
         ready.fail(error);
+        let _ = stderr_done.recv_timeout(READER_JOIN);
         return;
     }
     ready.succeed();
     session.run_until_closed();
     session.shutdown();
-    let _ = stderr_thread.join();
+    // Pipes close once the process group is dead; bounded in case a process
+    // escaped the group and still holds stderr.
+    let _ = stderr_done.recv_timeout(READER_JOIN);
 }
 
 struct Session {
-    writer: Box<dyn Write + Send>,
+    /// `None` after [`Session::shutdown`]: dropping it gives the app-server
+    /// (and any grandchild that inherited the pipe) EOF on stdin.
+    writer: Option<Box<dyn Write + Send>>,
     lines: Receiver<String>,
     commands: Receiver<SessionCommand>,
     mapper: CodexEventMapper,
@@ -297,7 +318,10 @@ struct Session {
     thread_id: Option<String>,
     turn_id: Option<String>,
     interrupt_rpc: Option<u64>,
+    /// Process-group leader (`process_group(0)` on Unix).
     child: Child,
+    term_grace: Duration,
+    reaped: bool,
     mcp_program: PathBuf,
 }
 
@@ -537,19 +561,25 @@ impl Session {
     }
 
     fn write_value(&mut self, value: &Value) -> Result<(), AgentError> {
-        serde_json::to_writer(&mut self.writer, value).map_err(|error| {
+        let Some(writer) = self.writer.as_mut() else {
+            return Err(harness(
+                ErrorCode::Internal,
+                "codex app-server stdin is already closed",
+            ));
+        };
+        serde_json::to_writer(&mut *writer, value).map_err(|error| {
             harness(
                 ErrorCode::Protocol,
                 format!("failed to write app-server message: {error}"),
             )
         })?;
-        self.writer.write_all(b"\n").map_err(|error| {
+        writer.write_all(b"\n").map_err(|error| {
             harness(
                 ErrorCode::Internal,
                 format!("failed to write app-server newline: {error}"),
             )
         })?;
-        self.writer.flush().map_err(|error| {
+        writer.flush().map_err(|error| {
             harness(
                 ErrorCode::Internal,
                 format!("failed to flush app-server: {error}"),
@@ -557,9 +587,15 @@ impl Session {
         })
     }
 
+    /// Idempotent. Drop stdin first, then SIGTERM the process group, wait up
+    /// to `term_grace` for the leader, SIGKILL the group, and reap the leader.
     fn shutdown(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if self.reaped {
+            return;
+        }
+        drop(self.writer.take());
+        terminate_group(&mut self.child, self.term_grace);
+        self.reaped = true;
     }
 
     fn timed_out(&self) -> AgentError {
@@ -597,9 +633,46 @@ impl Session {
     }
 }
 
-fn reap(mut child: Child) {
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// Terminate `child` and every process in its process group.
+///
+/// npm's `codex` is a node wrapper that spawns the native `codex app-server`;
+/// killing only the direct child would orphan the native process (and its
+/// `mathscape mcp` grandchild) while it still holds our pipes. The workspace
+/// forbids `unsafe`, so signals go through the system `kill` utility.
+fn terminate_group(child: &mut Child, grace: Duration) {
+    #[cfg(unix)]
+    {
+        let group = format!("-{}", child.id());
+        signal_group("TERM", &group);
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        // Always KILL the group: grandchildren may ignore TERM or outlive the
+        // leader. A no-op when the group is already gone.
+        signal_group("KILL", &group);
+    }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn signal_group(signal: &str, group: &str) {
+    let _ = Command::new("kill")
+        .args(["-s", signal, "--", group])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn spawn_child(config: &CodexConfig, workspace: &Path) -> Result<Child, AgentError> {
@@ -611,6 +684,13 @@ fn spawn_child(config: &CodexConfig, workspace: &Path) -> Result<Child, AgentErr
         .stderr(Stdio::piped());
     if workspace.is_dir() {
         command.current_dir(workspace);
+    }
+    // Own process group so shutdown can signal the wrapper and everything it
+    // spawned (see `terminate_group`).
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
     }
     // Inherit the environment unchanged. The Codex CLI reads its own login;
     // Mathscape must not add OPENAI_API_KEY / ChatGPT tokens, and must not
@@ -646,7 +726,7 @@ pub(crate) fn thread_start_message(
         "params": {
             "cwd": workspace,
             "approvalPolicy": "never",
-            "sandbox": "readOnly",
+            "sandbox": "read-only",
             "ephemeral": true,
             "serviceName": "mathscape",
             "developerInstructions": developer_instructions(round_id, &request.tools_allow),
@@ -712,10 +792,11 @@ pub(crate) fn server_request_result(method: &str) -> Value {
         }
         "item/permissions/requestApproval" => json!({ "permissions": {} }),
         "mcpServer/elicitation/request" => json!({ "action": "decline", "content": null }),
-        // Shape is not fully specified in the public docs; decline without
-        // implementing user.ask. TODO: match the installed schema if it rejects this.
+        // Codex 0.163 schema: `{ "answers": { <questionId>: { "answers": [..] } } }`.
+        // `answers` is an object and there is no `action` field. An empty map
+        // declines every question without implementing user.ask.
         "item/tool/requestUserInput" | "tool/requestUserInput" => {
-            json!({ "answers": [], "action": "decline" })
+            json!({ "answers": {} })
         }
         "item/tool/call" => json!({
             "contentItems": [{
@@ -977,7 +1058,7 @@ mod tests {
         );
         let params = &message["params"];
         assert_eq!(params["cwd"], "/tmp/mathscape-ws");
-        assert_eq!(params["sandbox"], "readOnly");
+        assert_eq!(params["sandbox"], "read-only");
         assert_eq!(params["approvalPolicy"], "never");
         assert_eq!(params["ephemeral"], true);
         assert_eq!(params["serviceName"], "mathscape");
@@ -1054,6 +1135,8 @@ mod tests {
         assert!(
             server_request_result("item/permissions/requestApproval")["permissions"].is_object()
         );
+        let user_input = server_request_result("item/tool/requestUserInput");
+        assert_eq!(user_input, json!({ "answers": {} }));
     }
 
     struct RecordingRunner {

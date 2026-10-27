@@ -14,7 +14,7 @@
 //! then:
 //!
 //! 1. `initialize` / `initialized`
-//! 2. `thread/start` with `cwd`, `sandbox: readOnly`, `approvalPolicy: never`,
+//! 2. `thread/start` with `cwd`, `sandbox: "read-only"`, `approvalPolicy: never`,
 //!    `ephemeral: true`, and dotted `mcp_servers.mathscape.*` overrides so
 //!    Codex spawns `mathscape mcp --workspace … --round …`
 //! 3. `turn/start` whose user text is [`crate::StartRoundRequest::input_ref`]
@@ -25,6 +25,14 @@
 //! `tool_result` (business `status` taken from `structuredContent` when present).
 //! `thread/tokenUsage/updated` → `usage`. `turn/completed` closes the turn.
 //! `cancel` writes `turn/interrupt`.
+//!
+//! # Process lifecycle
+//!
+//! On Unix the app-server is spawned as its own process-group leader. Shutdown
+//! (end of turn, failed handshake, or `Drop`) closes stdin, sends SIGTERM to
+//! the whole group, then SIGKILL after a short grace, so the native process
+//! behind npm's node wrapper and its `mathscape mcp` child do not outlive the
+//! round.
 //!
 //! Shell and file-change items are dropped until they have a stable tool name.
 //! `user.ask` is not implemented: user-input requests are declined and recorded
@@ -42,8 +50,6 @@
 //! - Split the user prompt from `input_ref` when the contract grows a field.
 //! - One turn per `start_round`; multi-turn steering is not exposed.
 //! - Route approval prompts to Desktop instead of declining them.
-//! - Kill the app-server process group without `unsafe` (workspace forbids it);
-//!   today only the direct child is killed.
 //! - Confirm dotted `thread/start` `config` overrides against the installed
 //!   Codex version (`load_for_cwd` uses `mcp_servers.<name>.command`).
 

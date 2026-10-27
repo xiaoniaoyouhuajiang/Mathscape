@@ -326,6 +326,7 @@ fn mcp_completed(
             "status": status,
             "arguments": arguments,
             "durationMs": duration_ms,
+            "error": null,
             "result": {
                 "content": [{ "type": "text", "text": structured.to_string() }],
                 "structuredContent": structured,
