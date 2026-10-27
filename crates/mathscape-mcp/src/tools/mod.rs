@@ -2,6 +2,7 @@
 //! part of the contract (§2.1): fixed, independent of the task, so harness
 //! prompt caches stay stable. Change them only together with the contract.
 
+mod grep;
 mod read;
 mod search;
 
@@ -11,17 +12,19 @@ use serde_json::{Map, Value, json};
 
 use crate::McpWorkspace;
 
+pub use grep::{MAX_GREP_HITS, MAX_SCAN_BYTES};
 pub use read::MAX_READ_BYTES;
 
 pub const WORKSPACE_SEARCH: &str = "workspace.search";
 pub const MATERIAL_READ: &str = "material.read";
+pub const MATERIAL_GREP: &str = "material.grep";
 
-/// Stable `tools/list` order.
-pub const TOOL_NAMES: [&str; 2] = [WORKSPACE_SEARCH, MATERIAL_READ];
+/// Stable `tools/list` order. New tools are appended; existing entries stay put.
+pub const TOOL_NAMES: [&str; 3] = [WORKSPACE_SEARCH, MATERIAL_READ, MATERIAL_GREP];
 
 /// `tools/list` entries, in [`TOOL_NAMES`] order.
 pub fn tool_definitions() -> Vec<Value> {
-    vec![search::definition(), read::definition()]
+    vec![search::definition(), read::definition(), grep::definition()]
 }
 
 /// Runs one tool. `None` means the tool name is unknown (a protocol error,
@@ -35,6 +38,7 @@ pub fn call(
     match name {
         WORKSPACE_SEARCH => Some(search::call(workspace, arguments)),
         MATERIAL_READ => Some(read::call(workspace, arguments)),
+        MATERIAL_GREP => Some(grep::call(workspace, arguments)),
         _ => None,
     }
 }

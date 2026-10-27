@@ -51,7 +51,7 @@ MCP **不是**桌面实时同步通道；桌面不通过 MCP 订阅进度。两�
 | `ok` | 正常返回 | — |
 | `not_found` | 目标 id / artifact 不存在 | `material.read` 给了无效 `artifact_id` |
 | `ambiguous` | 输入可解析为多个目标，返回候选 | 以后 `context.resolve_symbol`；search 不用 |
-| `truncated` | 结果有效但被硬顶截断 | `material.read` 超 32KiB；search 超 `limit_per_group` 时不算，仅正文截断算 |
+| `truncated` | 结果有效但被硬顶截断 | `material.read` 超 32KiB；`material.grep` 超过 `max_hits` 或单篇 markdown 扫描上限；search 超 `limit_per_group` 时不算，仅正文截断算 |
 | `capability_unavailable` | 依赖的外部能力缺失/版本不符 | PDF 无文本层且 Marker 未装；Lean 未装 |
 
 - 这 5 个是**业务结果**，以 MCP 正常 result 返回（不是 JSON-RPC error），Agent 可据此自行重试/换路。
@@ -155,7 +155,8 @@ AgentExecutor 最小接口（语义，非具体签名）：
 3. [x] `material.read`（md_byte_range + pdf_pages，32KiB 硬顶 → `truncated`）（草案 §2.2）
    - 实现见 `crates/mathscape-mcp`：Markdown 返回范围按 UTF-8 字符边界外扩后回显；PDF 只读文本层（`mathscape-pdf`），所请求页均无文本层时返回 `capability_unavailable` + Marker CapabilityProbe，Phase1 不调用 Marker；结果额外带 `total_bytes` / `total_pages` / `page_spans` / `revision`（artifact 当前修订）及 `diagnostics`。
 4. [ ] 接一个真实后端（Codex 或 Claude Code）跑通：Agent 调 search → read，桌面看到 §3 事件
-5. [ ] 然后 `material.grep`（线性扫描，草案 §2.3）
+5. [x] 然后 `material.grep`（线性扫描，草案 §2.3）
+   - 实现见 `crates/mathscape-mcp`：只扫 `text/markdown`（不扫 PDF 文本层 / OCR）。`artifact_ids` 必填且非空，不提供全库 grep；`pattern` 为大小写敏感的字面子串（非正则，本切片不接受 `terms`）。命中 `locator` 复用 `md_byte_range`（半开字节，覆盖该次匹配本身），可直接交给 `material.read`；`snippet` 是包含匹配的原文片段（行内、有字节上限），`score` 恒为 1。`max_hits` 默认且硬顶 50；超出，或单文件只扫前 1MiB，返回 `status: truncated` 且 `truncated: true`。任一 id 不在目录中为业务 `not_found`（不返回部分命中）；非 markdown 为 `invalid_arg`。本项先于清单第 4 项落地；不包含 `pdf.outline` 与真实 AgentExecutor。
 6. [ ] 之后再排：`pdf.outline`、`graph.get/neighborhood`、`ink.snapshot_image`、`user.ask`
 - 写路径（`propose_changes`）不进 Phase1。
 
@@ -177,7 +178,7 @@ AgentExecutor 最小接口（语义，非具体签名）：
 | 错误码 | `not_found\|invalid_arg\|forbidden\|blocked\|internal` 统一为 error | 业务结果拆为 `status`（5 值）；调用错误保留 `invalid_arg\|forbidden\|internal`；`blocked` 留给 Phase2 |
 | `expand` 单位 | 字节或字符待定 | 锁定字节 |
 | 第三方/hmz 地位 | hmz 用于实验 flow（调研 D5） | hmz 为可选适配器，非必需 |
-| 实现顺序 | search → read → outline → grep | search → read → 接真实后端 → grep；outline 后移 |
+| 实现顺序 | search → read → outline → grep | search → read → grep（Phase1b 线性扫描 markdown）→ 接真实后端；outline 仍后移 |
 
 ---
 
