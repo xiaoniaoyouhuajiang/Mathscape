@@ -33,6 +33,8 @@ P3 正式平板入口已接入桌面：打开当前手稿 → “平板书写”
 cargo check --workspace
 cargo test -p mathscape-orchestrator
 cargo test -p mathscape-agent
+# 需要本机已登录的 Codex CLI 时才跑真机往返（默认测试用夹具，不需要订阅）：
+# MATHSCAPE_CODEX_LIVE=1 cargo test -p mathscape-agent --test codex_roundtrip -- --ignored live_codex
 cargo test -p mathscape-store-sqlite --test schema
 cargo test -p mathscape-desktop --test service
 npm --prefix frontend run build

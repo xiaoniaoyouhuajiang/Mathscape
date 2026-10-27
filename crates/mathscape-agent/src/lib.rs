@@ -3,11 +3,13 @@
 //! The single source of truth is `docs/phase0-contract.md`. This crate only
 //! freezes *how things talk*: MCP envelope DTOs, the `AgentExecutor` event
 //! stream, backend identity, and external capability probing. It contains no
-//! business logic, no MCP server and no real harness adapter; adapters for
-//! Codex / Claude Code / hmz arrive in Phase1+ and implement [`AgentExecutor`].
+//! business orchestration. [`CodexExecutor`] is the Phase1b local Codex
+//! app-server adapter (BYO vendor login). Claude Code and optional hmz still
+//! have no adapter; hmz is not required for any default path.
 
 mod backend;
 mod capability;
+mod codex;
 mod envelope;
 mod event;
 mod executor;
@@ -19,7 +21,11 @@ mod validate;
 pub use backend::AgentBackend;
 pub use capability::{
     Capability, CapabilityProbe, CapabilityState, CommandOutput, CommandRunner,
-    SystemCommandRunner, probe_all, probe_capability,
+    SystemCommandRunner, probe_all, probe_capability, probe_program,
+};
+pub use codex::{
+    CodexConfig, CodexExecutor, CodexFixtureMode, CodexFixtureOptions,
+    serve_codex_app_server_fixture, serve_codex_app_server_fixture_with,
 };
 pub use envelope::{
     Locator, MCP_ENVELOPE_VERSION, Scope, ToolError, ToolErrorCode, ToolErrorResponse, ToolStatus,

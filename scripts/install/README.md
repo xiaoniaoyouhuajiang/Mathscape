@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | `marker.sh` | 可用 | 在 `${XDG_DATA_HOME:-~/.local/share}/mathscape/marker/venv` 创建 venv 并安装 `marker-pdf>=2,<3`（需 Python 3.10+，会下载 PyTorch / 模型）。`--check` 只检测，`--dry-run` 只打印，`--upgrade` 升级。可用 `MATHSCAPE_MARKER_VENV`、`PYTHON`、`PIP_INDEX_URL` 覆盖。 |
 | `lean.sh` | 桩 | 只检测 `lean` 并打印 elan 官方安装提示。 |
-| `codex.sh` | 桩 | 只检测 `codex` 并打印安装提示。 |
+| `codex.sh` | 桩 | 只检测 `codex` 并打印安装提示。Mathscape 之后用 `codex app-server` 和用户本机登录，不代持订阅。 |
 | `claude_code.sh` | 桩 | 只检测 `claude` 并打印安装提示。 |
 | `hmz.sh` | 桩 | 可选适配器；缺失不影响任何默认流程。 |
 

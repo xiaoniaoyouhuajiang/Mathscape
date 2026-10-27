@@ -155,7 +155,9 @@ AgentExecutor 最小接口（语义，非具体签名）：
 2. [x] `workspace.search` 包装现有 `SearchRegistry`，不另写匹配（草案 §1.2、§2.1）
 3. [x] `material.read`（md_byte_range + pdf_pages，32KiB 硬顶 → `truncated`）（草案 §2.2）
    - 实现见 `crates/mathscape-mcp`：Markdown 返回范围按 UTF-8 字符边界外扩后回显；PDF 只读文本层（`mathscape-pdf`），所请求页均无文本层时返回 `capability_unavailable` + Marker CapabilityProbe，Phase1 不调用 Marker；结果额外带 `total_bytes` / `total_pages` / `page_spans` / `revision`（artifact 当前修订）及 `diagnostics`。
-4. [ ] 接一个真实后端（Codex 或 Claude Code）跑通：Agent 调 search → read，桌面看到 §3 事件
+4. 接 Codex（`CodexExecutor` + 本机 `codex app-server`）跑通 §3 事件流：Mathscape 启动用户本机已登录的 Codex CLI（BYO，不持有、不代理 ChatGPT 订阅），用 `thread/start` 的 `mcp_servers.mathscape.*` 登记 `mathscape mcp`，并把 `mcpToolCall` 映射为 `tool_call`/`tool_result`。拆为：
+   - 4a. [x] `CodexExecutor` + 夹具进程 + 事件映射：无登录的 CI 用夹具进程验证事件形状；真机登录测试为 `#[ignore]`。本切片不改桌面 UI，也不实现 graph / ink / `user.ask`。
+   - 4b. [ ] 已登录的真机 Codex 跑通 Agent 调 `workspace.search` → `material.read`（真实 Mathscape workspace + MCP 注册），并由 Desktop / orchestrator 消费 `events(round_id)` 展示 §3 事件。
 5. [x] 然后 `material.grep`（线性扫描，草案 §2.3）
    - 实现见 `crates/mathscape-mcp`：只扫 `text/markdown`（不扫 PDF 文本层 / OCR）。`artifact_ids` 必填且非空，不提供全库 grep；`pattern` 为大小写敏感的字面子串（非正则，本切片不接受 `terms`）。命中 `locator` 复用 `md_byte_range`（半开字节，覆盖该次匹配本身），可直接交给 `material.read`；`snippet` 是包含匹配的原文片段（行内、有字节上限），`score` 恒为 1。`max_hits` 默认且硬顶 50；超出，或单文件只扫前 1MiB，返回 `status: truncated` 且 `truncated: true`。任一 id 不在目录中为业务 `not_found`（不返回部分命中）；非 markdown 为 `invalid_arg`。本项先于清单第 4 项落地；不包含真实 AgentExecutor。
 6. [x] `pdf.outline`（草案 §2.4）
@@ -190,7 +192,7 @@ AgentExecutor 最小接口（语义，非具体签名）：
 | 错误码 | `not_found\|invalid_arg\|forbidden\|blocked\|internal` 统一为 error | 业务结果拆为 `status`（5 值）；调用错误保留 `invalid_arg\|forbidden\|internal`；`blocked` 留给 Phase2 |
 | `expand` 单位 | 字节或字符待定 | 锁定字节 |
 | 第三方/hmz 地位 | hmz 用于实验 flow（调研 D5） | hmz 为可选适配器，非必需 |
-| 实现顺序 | search → read → outline → grep | search → read → `material.grep`（Phase1b 线性扫描 markdown）、`pdf.outline`（只读嵌入式书签）均已落地；接真实后端仍未做 |
+| 实现顺序 | search → read → outline → grep | search → read → `material.grep`（Phase1b 线性扫描 markdown）、`pdf.outline`（只读嵌入式书签）均已落地；Codex 适配器（清单 4a：`CodexExecutor` + 夹具 + 事件映射）已落地；登录态真机 search → read + Desktop 消费（4b）仍未做 |
 
 ---
 
@@ -206,4 +208,11 @@ AgentExecutor 最小接口（语义，非具体签名）：
 - 配对校验 `validate_round`：单一 `round_id`、`seq` 严格递增、`turn_start/turn_end` 成对、`tool_call/tool_result` 按 `call_id` 成对、`fatal` error 后下一个 `turn_end` 为 `failed`、`cancel(ack=true)` 前须有 `cancel(ack=false)`。
 - **locator** 线格式为外部标签：`{"md_byte_range":{"start":0,"end":10}}` 或 `{"pdf_pages":{"from":1,"to":2}}`；调用错误包装为 `{"error":{"code","message","details"}}`。
 - **CapabilityProbe**：`found_version` / `required` / `install_hint` 恒输出（无值为 `null`）；Marker 要求 `>=2.0, <3`（与 `mathscape-tool-marker` 支持的 2.x 一致），按 `$MATHSCAPE_MARKER_EXECUTABLE`、`$MATHSCAPE_MARKER_VENV`、`scripts/install/marker.sh` 默认 venv、`PATH` 顺序查找 `marker_single` 并读取同目录 Python 的 `marker-pdf` 版本；找到但读不到版本记为 `version`。其余能力用 `<cmd> --version`。
-- `AgentExecutor` 为对象安全 trait（`Box<dyn AgentExecutor>`）；真实适配器 Phase1 起实现，Phase0 仅 `FakeBackend` 与 `UnimplementedExecutor`。
+- `AgentExecutor` 为对象安全 trait（`Box<dyn AgentExecutor>`）。Phase0 的 `FakeBackend` 与 `UnimplementedExecutor` 保留。Phase1b 的 `CodexExecutor`（`crates/mathscape-agent`）是第一个真实适配器：
+  - 探测只跑 `<program> --version`（默认 `codex`），不联网、不安装。
+  - 每个 round 启动一次 `codex app-server`（stdio JSON-RPC）。子进程继承当前环境，以便 CLI 使用用户自己的登录；适配器不读取、不注入 API key，也不调用 `account/login`。
+  - `StartRoundRequest.input_ref` 同时写入 `turn_start.input_ref`，并作为 `turn/start` 的用户文本（契约尚无单独 prompt 字段）。
+  - `thread/start` 的 `config` 使用 Codex 已有的点分覆盖键 `mcp_servers.mathscape.command` / `.args` / `.enabled`，参数为 `mcp --workspace <path> --round <round_id>`。`sandbox` 为 `read-only`（Codex `SandboxMode` 取值 `read-only | workspace-write | danger-full-access`；不要与 `turn/start.sandboxPolicy` 的 `{"type":"readOnly"}` 混淆），`approvalPolicy` 为 `never`，`ephemeral` 为 true。hmz 不参与。
+  - `item/started|completed` 且 `item.type=mcpToolCall` 映射为成对的 `tool_call` / `tool_result`；`structuredContent.status` 沿用 §2.2。`thread/tokenUsage/updated` 的 `last` 映射为 `usage`（无美元费用）。`turn/completed` 关闭 turn。`cancel` 发送 `turn/interrupt`。
+  - 审批与 `user.ask` 在本切片直接拒绝并记一条非致命 `error`，避免无 UI 时挂死。shell / fileChange 项丢弃，不发明工具名。
+  - 无登录干跑：`mathscape-codex-fixture`（或 `serve_codex_app_server_fixture`）。真机：`MATHSCAPE_CODEX_LIVE=1 cargo test -p mathscape-agent --test codex_roundtrip -- --ignored live_codex`。

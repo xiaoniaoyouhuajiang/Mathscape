@@ -1,0 +1,14 @@
+{"method":"turn/started","params":{"turn":{"id":"turn_1","status":"inProgress","items":[]}}}
+{"method":"item/started","params":{"item":{"type":"mcpToolCall","id":"c_search","server":"mathscape","tool":"workspace.search","status":"inProgress","arguments":{"query":"紧集"}}}}
+{"method":"item/completed","params":{"item":{"type":"mcpToolCall","id":"c_search","server":"mathscape","tool":"workspace.search","status":"completed","error":null,"arguments":{"query":"紧集"},"durationMs":12,"result":{"content":[{"type":"text","text":"{\"status\":\"ok\"}"}],"structuredContent":{"status":"ok"},"isError":false}}}}
+{"method":"item/started","params":{"item":{"type":"commandExecution","id":"cmd_1","command":"ls","cwd":"/tmp","status":"inProgress"}}}
+{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"cmd_1","command":"ls","cwd":"/tmp","status":"completed","exitCode":0,"durationMs":3}}}
+{"method":"item/started","params":{"item":{"type":"mcpToolCall","id":"c_read","server":"mathscape","tool":"material.read","status":"inProgress","arguments":{"artifact_id":"a1"}}}}
+{"method":"item/completed","params":{"item":{"type":"mcpToolCall","id":"c_read","server":"mathscape","tool":"material.read","status":"completed","error":null,"arguments":{"artifact_id":"a1"},"durationMs":20,"result":{"structuredContent":{"status":"truncated","truncated":true},"isError":false}}}}
+{"method":"item/completed","params":{"item":{"type":"mcpToolCall","id":"c_missing","server":"mathscape","tool":"material.read","status":"completed","error":null,"arguments":{},"result":{"structuredContent":{"status":"not_found"},"isError":false}}}}
+{"method":"item/completed","params":{"item":{"type":"mcpToolCall","id":"c_ambiguous","server":"mathscape","tool":"context.resolve_symbol","status":"completed","error":null,"arguments":{"name":"K"},"result":{"structuredContent":{"status":"ambiguous"},"isError":false}}}}
+{"method":"item/completed","params":{"item":{"type":"mcpToolCall","id":"c_marker","server":"mathscape","tool":"material.read","status":"completed","error":null,"arguments":{},"result":{"structuredContent":{"status":"capability_unavailable"},"isError":false}}}}
+{"method":"item/completed","params":{"item":{"type":"mcpToolCall","id":"c_bad","server":"mathscape","tool":"workspace.search","status":"failed","arguments":{},"result":{"isError":true,"content":[{"type":"text","text":"boom"}]}}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"thr_1","turnId":"turn_1","tokenUsage":{"total":{"totalTokens":2000,"inputTokens":1800,"cachedInputTokens":100,"outputTokens":200,"reasoningOutputTokens":0},"last":{"totalTokens":1500,"inputTokens":1200,"cachedInputTokens":800,"outputTokens":300,"reasoningOutputTokens":0},"modelContextWindow":200000}}}
+{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_1","text":"done"}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn_1","status":"completed","items":[],"error":null}}}
