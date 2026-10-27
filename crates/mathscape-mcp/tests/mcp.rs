@@ -5,11 +5,16 @@ use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 
-use lopdf::{Document, Object, Stream, content::Content, content::Operation, dictionary};
+use lopdf::{
+    Bookmark, Document, Object, ObjectId, Stream, content::Content, content::Operation, dictionary,
+};
 use mathscape_agent::{CommandOutput, CommandRunner};
 use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_domain::{ActorRef, MediaType, RightsRecord, RightsStatus};
-use mathscape_mcp::tools::{MAX_GREP_HITS, MAX_READ_BYTES, MAX_SCAN_BYTES, TOOL_NAMES};
+use mathscape_mcp::tools::{
+    MAX_GREP_HITS, MAX_OUTLINE_ENTRIES, MAX_OUTLINE_ENTRIES_BYTES, MAX_OUTLINE_TITLE_CHARS,
+    MAX_READ_BYTES, MAX_SCAN_BYTES, TOOL_NAMES,
+};
 use mathscape_mcp::{McpServer, McpWorkspace};
 use mathscape_query::search::{SearchKind, SearchQuery, SearchRegistry, search};
 use mathscape_store_sqlite::SqliteArtifactStore;
@@ -43,11 +48,17 @@ struct Fixture {
     plain_text: String,
     pdf: String,
     scanned_pdf: String,
+    outlined_pdf: String,
     markdown_body: String,
 }
 
 /// `pages[i]` = text lines of page i+1 (empty = no text layer).
 fn pdf_bytes(pages: &[&[&str]]) -> Vec<u8> {
+    let mut document = pdf_document(pages);
+    finish_pdf(&mut document)
+}
+
+fn pdf_document(pages: &[&[&str]]) -> Document {
     let mut document = Document::with_version("1.5");
     let pages_id = document.new_object_id();
     let font_id = document.add_object(dictionary! {
@@ -99,9 +110,131 @@ fn pdf_bytes(pages: &[&[&str]]) -> Vec<u8> {
         "Pages" => pages_id,
     });
     document.trailer.set("Root", catalog_id);
+    document
+}
+
+/// Writes bookmarks into `/Outlines` before serializing. `save` alone does not.
+fn finish_pdf(document: &mut Document) -> Vec<u8> {
+    if let Some(outline_id) = document.build_outline() {
+        document
+            .catalog_mut()
+            .expect("catalog")
+            .set("Outlines", Object::Reference(outline_id));
+    }
     let mut bytes = Vec::new();
     document.save_to(&mut bytes).unwrap();
     bytes
+}
+
+/// Three text pages and a nested embedded outline.
+/// 第一章 → page index 0, 引理 → 1, Chapter 2 → 2.
+fn save_pdf(document: &mut Document) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn one_page_outline_document() -> (Document, ObjectId) {
+    let document = pdf_document(&[&["Page"]]);
+    let page_id = document.get_pages()[&1];
+    (document, page_id)
+}
+
+fn fit_dest(page_id: ObjectId) -> Object {
+    Object::Array(vec![page_id.into(), Object::Name(b"Fit".to_vec())])
+}
+
+fn attach_outline(document: &mut Document, first: ObjectId) {
+    let outlines_id = document.add_object(dictionary! {
+        "Type" => "Outlines",
+        "First" => first,
+        "Last" => first,
+        "Count" => 1,
+    });
+    document
+        .catalog_mut()
+        .expect("catalog")
+        .set("Outlines", Object::Reference(outlines_id));
+}
+
+/// `/Dest` has one element. `get_toc` indexes `[0]` and `[1]`.
+fn short_dest_pdf() -> Vec<u8> {
+    let (mut document, page_id) = one_page_outline_document();
+    let item = document.add_object(dictionary! {
+        "Title" => Object::string_literal("Short"),
+        "Dest" => vec![page_id.into()],
+    });
+    attach_outline(&mut document, item);
+    save_pdf(&mut document)
+}
+
+/// `/First` points at the item itself.
+fn first_cycle_pdf() -> Vec<u8> {
+    let (mut document, page_id) = one_page_outline_document();
+    let item_id = document.new_object_id();
+    document.set_object(
+        item_id,
+        dictionary! {
+            "Title" => Object::string_literal("Loop"),
+            "Dest" => fit_dest(page_id),
+            "First" => item_id,
+        },
+    );
+    attach_outline(&mut document, item_id);
+    save_pdf(&mut document)
+}
+
+/// `/Next` links A → B → A.
+fn next_cycle_pdf() -> Vec<u8> {
+    let (mut document, page_id) = one_page_outline_document();
+    let left = document.new_object_id();
+    let right = document.new_object_id();
+    document.set_object(
+        left,
+        dictionary! {
+            "Title" => Object::string_literal("A"),
+            "Dest" => fit_dest(page_id),
+            "Next" => right,
+        },
+    );
+    document.set_object(
+        right,
+        dictionary! {
+            "Title" => Object::string_literal("B"),
+            "Dest" => fit_dest(page_id),
+            "Next" => left,
+        },
+    );
+    attach_outline(&mut document, left);
+    save_pdf(&mut document)
+}
+
+fn outlined_pdf_bytes() -> Vec<u8> {
+    let mut document = pdf_document(&[&["Chapter page"], &["Section page"], &["Last page"]]);
+    let pages = document.get_pages();
+    let chapter = document.add_bookmark(
+        Bookmark::new("第一章".into(), [0.0, 0.0, 0.0], 0, pages[&1]),
+        None,
+    );
+    document.add_bookmark(
+        Bookmark::new("引理".into(), [0.0, 0.0, 0.0], 0, pages[&2]),
+        Some(chapter),
+    );
+    document.add_bookmark(
+        Bookmark::new("Chapter 2".into(), [0.0, 0.0, 0.0], 0, pages[&3]),
+        None,
+    );
+    finish_pdf(&mut document)
+}
+
+/// One page, top-level bookmarks with the given titles, all on page 1.
+fn bookmarks_pdf_bytes(titles: &[String]) -> Vec<u8> {
+    let mut document = pdf_document(&[&["Only page"]]);
+    let page = document.get_pages()[&1];
+    for title in titles {
+        document.add_bookmark(Bookmark::new(title.clone(), [0.0, 0.0, 0.0], 0, page), None);
+    }
+    finish_pdf(&mut document)
 }
 
 fn import(
@@ -169,6 +302,13 @@ fn fixture() -> Fixture {
         "scan.pdf",
         Some(1),
     );
+    let outlined_pdf = import(
+        &mut pool,
+        outlined_pdf_bytes(),
+        "application/pdf",
+        "outlined-paper.pdf",
+        Some(3),
+    );
     drop(pool);
     let workspace = McpWorkspace::open(&root)
         .unwrap()
@@ -183,6 +323,7 @@ fn fixture() -> Fixture {
         plain_text,
         pdf,
         scanned_pdf,
+        outlined_pdf,
         markdown_body,
     }
 }
@@ -230,10 +371,31 @@ fn grep(server: &McpServer, arguments: Value) -> Value {
     result
 }
 
+fn outline(server: &McpServer, arguments: Value) -> Value {
+    let (result, is_error) = call(server, "pdf.outline", arguments);
+    assert!(!is_error, "unexpected call error: {result}");
+    result
+}
+
 fn grep_error(server: &McpServer, arguments: Value) -> Value {
     let (result, is_error) = call(server, "material.grep", arguments);
     assert!(is_error, "expected call error, got {result}");
     result["error"].clone()
+}
+
+fn outline_error(server: &McpServer, arguments: Value) -> Value {
+    let (result, is_error) = call(server, "pdf.outline", arguments);
+    assert!(is_error, "expected call error, got {result}");
+    result["error"].clone()
+}
+
+fn artifact_count(root: &Path) -> usize {
+    SqliteArtifactStore::open(&root.join("mathscape.sqlite3"))
+        .unwrap()
+        .read_catalog_snapshot()
+        .unwrap()
+        .artifacts()
+        .len()
 }
 
 #[test]
@@ -273,7 +435,7 @@ fn initialize_ping_and_notifications() {
         f.server.handle_line("{nope").unwrap()["error"]["code"],
         -32700
     );
-    let unknown_tool = request(&f.server, 4, "tools/call", json!({ "name": "pdf.outline" }));
+    let unknown_tool = request(&f.server, 4, "tools/call", json!({ "name": "graph.get" }));
     assert_eq!(unknown_tool["error"]["code"], -32602);
     assert_eq!(f.server.workspace().round(), Some("placeholder"));
 }
@@ -290,18 +452,24 @@ fn tools_list_order_and_text_are_fixed() {
     assert_eq!(names, TOOL_NAMES);
     assert_eq!(
         names,
-        ["workspace.search", "material.read", "material.grep"]
+        [
+            "workspace.search",
+            "material.read",
+            "material.grep",
+            "pdf.outline"
+        ]
     );
     for tool in tools {
         assert!(!tool["description"].as_str().unwrap().is_empty());
         assert_eq!(tool["inputSchema"]["type"], "object");
-        assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+        assert_eq!(tool["inputSchema"]["additionalProperties"], json!(false));
     }
     assert_eq!(tools[0]["inputSchema"]["required"], json!(["query"]));
     assert_eq!(
         tools[1]["inputSchema"]["required"],
         json!(["artifact_id", "locator"])
     );
+    assert_eq!(tools[2]["name"], "material.grep");
     assert_eq!(
         tools[2]["inputSchema"]["required"],
         json!(["artifact_ids", "pattern"])
@@ -310,6 +478,17 @@ fn tools_list_order_and_text_are_fixed() {
     assert!(grep_description.contains("case-sensitive"));
     assert!(grep_description.contains("material.read"));
     assert!(grep_description.contains("non-empty"));
+    assert_eq!(tools[3]["name"], "pdf.outline");
+    assert_eq!(tools[3]["inputSchema"]["required"], json!(["artifact_id"]));
+    let outline_description = tools[3]["description"].as_str().unwrap();
+    assert!(
+        outline_description.contains("0-based"),
+        "{outline_description}"
+    );
+    assert!(
+        outline_description.contains("1-based"),
+        "{outline_description}"
+    );
     let second = request(&f.server, 2, "tools/list", json!({}));
     assert_eq!(
         first["result"], second["result"],
@@ -707,6 +886,256 @@ fn unsupported_protocol_version_falls_back_to_latest() {
     );
 }
 
+#[test]
+fn outline_entries_are_zero_based_and_drive_material_read() {
+    let f = fixture();
+    let before = artifact_count(&f.root);
+    let result = outline(&f.server, json!({ "artifact_id": f.outlined_pdf }));
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["source"], "embedded_toc");
+    assert_eq!(result["artifact_id"], f.outlined_pdf);
+    assert_eq!(result["total_pages"], 3);
+    assert!(!result["revision"].as_str().unwrap().is_empty());
+    assert!(result.get("document_index_id").is_none());
+    assert!(result.get("diagnostics").is_none());
+    assert_eq!(result["truncated"], false);
+    assert_eq!(result["total_entries"], 3);
+    assert!(result["entries"][0].get("printed_label").is_none());
+    assert_eq!(
+        result["entries"],
+        json!([
+            { "title": "第一章", "level": 1, "pdf_page_index": 0 },
+            { "title": "引理", "level": 2, "pdf_page_index": 1 },
+            { "title": "Chapter 2", "level": 1, "pdf_page_index": 2 },
+        ])
+    );
+    assert_eq!(
+        artifact_count(&f.root),
+        before,
+        "pdf.outline must not persist a catalog row"
+    );
+
+    let page = result["entries"][1]["pdf_page_index"].as_u64().unwrap() as u32 + 1;
+    let body = read(
+        &f.server,
+        json!({
+            "artifact_id": f.outlined_pdf,
+            "locator": { "pdf_pages": { "from": page, "to": page } },
+        }),
+    );
+    assert_eq!(body["status"], "ok");
+    assert!(
+        body["text"].as_str().unwrap().contains("Section page"),
+        "{}",
+        body["text"]
+    );
+}
+
+#[test]
+fn outline_without_bookmarks_is_ok_and_empty() {
+    let f = fixture();
+    let result = outline(
+        &f.server,
+        json!({ "artifact_id": f.pdf, "persist_index": false }),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["entries"], json!([]));
+    assert_eq!(result["source"], "embedded_toc");
+    assert_eq!(result["total_pages"], 3);
+    assert!(result.get("document_index_id").is_none());
+    assert!(result.get("revision").is_some());
+    let codes: Vec<_> = result["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(codes, ["outline_empty"]);
+}
+
+#[test]
+fn outline_hostile_bookmark_graphs_are_ok_and_unreadable() {
+    let f = fixture();
+    let mut pool = ArtifactPool::open(&f.root).unwrap();
+    let samples = [
+        (short_dest_pdf(), "short.pdf", "panicked"),
+        (first_cycle_pdf(), "first-cycle.pdf", "cycle"),
+        (next_cycle_pdf(), "next-cycle.pdf", "cycle"),
+    ];
+    let mut imported = Vec::new();
+    for (bytes, name, fragment) in samples {
+        let id = import(&mut pool, bytes, "application/pdf", name, Some(1));
+        imported.push((id, fragment));
+    }
+    drop(pool);
+
+    for (id, fragment) in imported {
+        let result = outline(&f.server, json!({ "artifact_id": id }));
+        assert_eq!(result["status"], "ok", "{result}");
+        assert_eq!(result["entries"], json!([]), "{result}");
+        assert_eq!(result["source"], "embedded_toc");
+        assert_eq!(result["total_pages"], 1, "{result}");
+        assert!(result.get("revision").is_some());
+        let diagnostics = result["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{result}");
+        assert_eq!(diagnostics[0]["code"], "outline_unreadable", "{result}");
+        let message = diagnostics[0]["message"].as_str().unwrap();
+        assert!(message.contains(fragment), "{message}");
+    }
+}
+
+fn import_outline_pdf(f: &Fixture, titles: &[String], name: &str) -> String {
+    let mut pool = ArtifactPool::open(&f.root).unwrap();
+    let id = import(
+        &mut pool,
+        bookmarks_pdf_bytes(titles),
+        "application/pdf",
+        name,
+        Some(1),
+    );
+    drop(pool);
+    id
+}
+
+fn assert_truncated(result: &Value) {
+    assert_eq!(result["status"], "truncated", "{result}");
+    assert_eq!(result["truncated"], true, "{result}");
+    assert_eq!(result["source"], "embedded_toc");
+    let codes: Vec<&str> = result["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"outline_truncated"), "{codes:?}");
+    let bytes = serde_json::to_vec(&result["entries"]).unwrap().len();
+    assert!(
+        bytes <= MAX_OUTLINE_ENTRIES_BYTES,
+        "entries are {bytes} bytes"
+    );
+}
+
+#[test]
+fn outline_huge_title_is_cut_on_a_char_boundary() {
+    let f = fixture();
+    let huge = format!("题{}", "x".repeat(4 * 1024 * 1024));
+    let id = import_outline_pdf(&f, &[huge, "Short".to_owned()], "huge-title.pdf");
+    let result = outline(&f.server, json!({ "artifact_id": id }));
+    assert_truncated(&result);
+    assert_eq!(result["total_entries"], 2);
+    let entries = result["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    let title = entries[0]["title"].as_str().unwrap();
+    assert_eq!(title.chars().count(), MAX_OUTLINE_TITLE_CHARS);
+    assert!(title.starts_with('题'));
+    assert_eq!(entries[0]["title_truncated"], true);
+    assert_eq!(
+        entries[1],
+        json!({ "title": "Short", "level": 1, "pdf_page_index": 0 })
+    );
+    let response = serde_json::to_vec(&result).unwrap().len();
+    assert!(response < 8 * 1024, "response is {response} bytes");
+}
+
+#[test]
+fn outline_entry_count_is_capped() {
+    let f = fixture();
+    let total = MAX_OUTLINE_ENTRIES + 500;
+    let titles: Vec<String> = (0..total).map(|index| format!("E{index:05}")).collect();
+    let id = import_outline_pdf(&f, &titles, "many-entries.pdf");
+    let result = outline(&f.server, json!({ "artifact_id": id }));
+    assert_truncated(&result);
+    assert_eq!(result["total_entries"], total);
+    let entries = result["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), MAX_OUTLINE_ENTRIES);
+    for (index, entry) in entries.iter().enumerate() {
+        assert_eq!(entry["title"], format!("E{index:05}"));
+        assert!(entry.get("title_truncated").is_none());
+    }
+}
+
+#[test]
+fn outline_total_bytes_are_capped() {
+    // 900 × ~500-char titles ≈ 450 KB uncapped, under the entry-count cap;
+    // the byte budget cuts first.
+    let f = fixture();
+    let titles: Vec<String> = (0..900)
+        .map(|index| format!("{index:04} {}", "lemma ".repeat(82)))
+        .collect();
+    assert!(titles[0].chars().count() <= MAX_OUTLINE_TITLE_CHARS);
+    let id = import_outline_pdf(&f, &titles, "wide-entries.pdf");
+    let result = outline(&f.server, json!({ "artifact_id": id }));
+    assert_truncated(&result);
+    assert_eq!(result["total_entries"], 900);
+    let entries = result["entries"].as_array().unwrap();
+    assert!(
+        entries.len() > 50 && entries.len() < 900,
+        "{} entries",
+        entries.len()
+    );
+    for (index, entry) in entries.iter().enumerate() {
+        assert_eq!(entry["title"].as_str().unwrap(), titles[index]);
+    }
+    let response = serde_json::to_vec(&result).unwrap().len();
+    assert!(response < 80 * 1024, "response is {response} bytes");
+}
+
+#[test]
+fn outline_file_that_will_not_open_is_internal() {
+    let f = fixture();
+    let mut pool = ArtifactPool::open(&f.root).unwrap();
+    let id = import(
+        &mut pool,
+        b"this is not a pdf".to_vec(),
+        "application/pdf",
+        "broken.pdf",
+        Some(1),
+    );
+    drop(pool);
+    let error = outline_error(&f.server, json!({ "artifact_id": id }));
+    assert_eq!(error["code"], "internal", "{error}");
+}
+
+#[test]
+fn outline_rejects_missing_id_non_pdf_and_bad_args() {
+    let f = fixture();
+    let missing = outline(&f.server, json!({ "artifact_id": UNKNOWN_ID }));
+    assert_eq!(missing["status"], "not_found");
+    assert_eq!(missing["entries"], json!([]));
+    assert_eq!(missing["details"]["reason"], "artifact_not_found");
+    assert!(missing.get("source").is_none());
+    assert!(missing.get("revision").is_none());
+
+    for id in [f.markdown.as_str(), f.plain_text.as_str()] {
+        let error = outline_error(&f.server, json!({ "artifact_id": id }));
+        assert_eq!(error["code"], "invalid_arg", "{error}");
+        assert!(error["details"]["media_type"].as_str().is_some());
+    }
+
+    let persist = outline_error(
+        &f.server,
+        json!({ "artifact_id": f.pdf, "persist_index": true }),
+    );
+    assert_eq!(persist["code"], "invalid_arg");
+    assert!(
+        persist["message"]
+            .as_str()
+            .unwrap()
+            .contains("persist_index"),
+        "{persist}"
+    );
+
+    for bad in [
+        json!({ "artifact_id": "not-an-id" }),
+        json!({}),
+        json!({ "artifact_id": f.pdf, "bogus": true }),
+        json!({ "artifact_id": f.outlined_pdf, "persist_index": false, "document_index_id": "x" }),
+    ] {
+        let error = outline_error(&f.server, bad);
+        assert_eq!(error["code"], "invalid_arg", "{error}");
+    }
+}
+
 fn managed_object_files(root: &Path) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
     let mut dirs = vec![root.join("objects")];
@@ -746,6 +1175,10 @@ fn missing_managed_object_is_business_not_found() {
         assert_eq!(result["details"]["reason"], "content_unavailable");
         assert!(result.get("text").is_none());
     }
+    let outlined = outline(&f.server, json!({ "artifact_id": f.outlined_pdf }));
+    assert_eq!(outlined["status"], "not_found", "{outlined}");
+    assert_eq!(outlined["details"]["reason"], "content_unavailable");
+    assert_eq!(outlined["entries"], json!([]));
 }
 
 #[test]
@@ -776,6 +1209,14 @@ fn symlinked_managed_object_is_forbidden() {
             "{message}"
         );
     }
+    let error = outline_error(&f.server, json!({ "artifact_id": f.outlined_pdf }));
+    assert_eq!(error["code"], "forbidden", "{error}");
+    assert!(
+        !error["message"]
+            .as_str()
+            .unwrap()
+            .contains("secret-managed-target")
+    );
 }
 
 #[test]

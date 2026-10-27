@@ -51,7 +51,7 @@ MCP **不是**桌面实时同步通道；桌面不通过 MCP 订阅进度。两�
 | `ok` | 正常返回 | — |
 | `not_found` | 目标 id / artifact 不存在 | `material.read` 给了无效 `artifact_id` |
 | `ambiguous` | 输入可解析为多个目标，返回候选 | 以后 `context.resolve_symbol`；search 不用 |
-| `truncated` | 结果有效但被硬顶截断 | `material.read` 超 32KiB；`material.grep` 超过 `max_hits` 或单篇 markdown 扫描上限；search 超 `limit_per_group` 时不算，仅正文截断算 |
+| `truncated` | 结果有效但被硬顶截断 | `material.read` 超 32KiB；`material.grep` 超过 `max_hits` 或单篇 markdown 扫描上限；`pdf.outline` 超标题 512 字符 / 1000 条 / 64KiB 条目；search 超 `limit_per_group` 时不算，仅正文截断算 |
 | `capability_unavailable` | 依赖的外部能力缺失/版本不符 | PDF 无文本层且 Marker 未装；Lean 未装 |
 
 - 这 5 个是**业务结果**，以 MCP 正常 result 返回（不是 JSON-RPC error），Agent 可据此自行重试/换路。
@@ -61,7 +61,8 @@ MCP **不是**桌面实时同步通道；桌面不通过 MCP 订阅进度。两�
 
 ### 2.3 locator / scope / revision [锁定，字段见草案]
 - **locator**：二选一 `md_byte_range {start,end}`（字节，半开区间）| `pdf_pages {from,to}`（1-based，闭区间）。服务端**回显实际返回范围**。见 MCP 草案 §2.2、§2.3。`expand.before/after` 单位统一为**字节**（草案原为待定，此处锁定）。
-- PDF 内部页索引（`pdf.outline` 的 `pdf_page_index`）为 0-based，与 locator 的 1-based 并存，文档里写清（草案 §2.4）。
+- PDF 内部页索引（`pdf.outline` 的 `pdf_page_index`）为 0-based，与 locator 的 1-based 并存，文档里写清（草案 §2.4）。阅读某条目录时，`material.read` 的 `pdf_pages.from = pdf_page_index + 1`（1-based，闭区间）。
+- `pdf.outline` 无嵌入式书签时返回 `status: ok` 与空 `entries`（附 `outline_empty`），不用 `not_found`（那是 artifact 不存在）也不用 `capability_unavailable`（那是外部能力缺失，如无文本层 PDF）。不发明启发式目录。书签图成环、超限或内容损坏时同样是 `status: ok` 与空 `entries`，诊断为 `outline_unreadable`；文件打不开仍是调用错误 `internal`。详见 Phase1 清单。
 - search 的 `highlights` 保持现有 UTF-16 `[start,end)`（草案 §2.1 [事实]），不改。
 - **scope**：`accepted | investigation`。Phase1 只实现 `accepted`；收到 `investigation` 时按 `accepted` 返回并附 `diagnostics: [{code:"scope_not_supported"}]`，不报错（草案 §1.2）。
 - **revision**：输出可选字段；没有 revision 来源时**省略**而非填假值（草案 §1.2）。输入里的 `revision`（graph 类）Phase1 不实现。
@@ -156,8 +157,19 @@ AgentExecutor 最小接口（语义，非具体签名）：
    - 实现见 `crates/mathscape-mcp`：Markdown 返回范围按 UTF-8 字符边界外扩后回显；PDF 只读文本层（`mathscape-pdf`），所请求页均无文本层时返回 `capability_unavailable` + Marker CapabilityProbe，Phase1 不调用 Marker；结果额外带 `total_bytes` / `total_pages` / `page_spans` / `revision`（artifact 当前修订）及 `diagnostics`。
 4. [ ] 接一个真实后端（Codex 或 Claude Code）跑通：Agent 调 search → read，桌面看到 §3 事件
 5. [x] 然后 `material.grep`（线性扫描，草案 §2.3）
-   - 实现见 `crates/mathscape-mcp`：只扫 `text/markdown`（不扫 PDF 文本层 / OCR）。`artifact_ids` 必填且非空，不提供全库 grep；`pattern` 为大小写敏感的字面子串（非正则，本切片不接受 `terms`）。命中 `locator` 复用 `md_byte_range`（半开字节，覆盖该次匹配本身），可直接交给 `material.read`；`snippet` 是包含匹配的原文片段（行内、有字节上限），`score` 恒为 1。`max_hits` 默认且硬顶 50；超出，或单文件只扫前 1MiB，返回 `status: truncated` 且 `truncated: true`。任一 id 不在目录中为业务 `not_found`（不返回部分命中）；非 markdown 为 `invalid_arg`。本项先于清单第 4 项落地；不包含 `pdf.outline` 与真实 AgentExecutor。
-6. [ ] 之后再排：`pdf.outline`、`graph.get/neighborhood`、`ink.snapshot_image`、`user.ask`
+   - 实现见 `crates/mathscape-mcp`：只扫 `text/markdown`（不扫 PDF 文本层 / OCR）。`artifact_ids` 必填且非空，不提供全库 grep；`pattern` 为大小写敏感的字面子串（非正则，本切片不接受 `terms`）。命中 `locator` 复用 `md_byte_range`（半开字节，覆盖该次匹配本身），可直接交给 `material.read`；`snippet` 是包含匹配的原文片段（行内、有字节上限），`score` 恒为 1。`max_hits` 默认且硬顶 50；超出，或单文件只扫前 1MiB，返回 `status: truncated` 且 `truncated: true`。任一 id 不在目录中为业务 `not_found`（不返回部分命中）；非 markdown 为 `invalid_arg`。本项先于清单第 4 项落地；不包含真实 AgentExecutor。
+6. [x] `pdf.outline`（草案 §2.4）
+   - 实现见 `crates/mathscape-pdf`（`PdfEngine::outline`，薄封装 `lopdf::Document::get_toc`）与 `crates/mathscape-mcp`。`tools/list` 顺序为 `workspace.search`、`material.read`、`material.grep`、`pdf.outline`。
+   - 只读，**不**把目录写入 workspace / catalog。没有 `document_index_id`（省略，不填 `null`，与 revision「没有来源就省略」一致）。`persist_index` 仅接受省略或 `false`；`true` 为调用错误 `invalid_arg`。
+   - `entries[].pdf_page_index` 为 **0-based**；`entries[].level` 为 1-based 深度（1 = 顶层书签）。`material.read` 的 `pdf_pages` 仍为 **1-based** 闭区间。
+   - 无嵌入式书签：`status: ok`，`entries: []`，`source: "embedded_toc"`，`diagnostics` 含 `outline_empty`。这与 `material.read` 在所请求页均无文本层时返回 `capability_unavailable` 不同：空目录不是外部能力缺失。
+   - 不实现草案里的启发式目录（`source: "heuristic"`），也不返回印刷页码 `printed_label`（没有来源就省略）。
+   - `lopdf` 0.42 的 `get_toc` 用 `IndexMap`、以标题字节为键。同名书签折叠成一条：保留**第一次**出现的位置，页码和 `level` 取**最后一次**。本切片不另写目录解析器去修复。
+   - 调用 `get_toc` 之前先走 `/Outlines` 上 `get_toc` 会跟随的引用：`/First`、`/Next`（`/Parent` 只拒绝指向自身的自环；指回祖先是正常书签，不顺着走，否则每棵真书签树都会被当成环）。用 visited 集合、深度上限 64、节点上限 10000。成环或超限则**不**调用 `get_toc`（`/First` 自环是栈溢出 abort，`catch_unwind` 接不住）。`get_toc` 再包一层 `catch_unwind`，把 panic（例如过短的 `/Dest` 数组）收成同一条不可读路径。`get_toc` 还会递归名字树 `/Kids`，那条链用同样的上限，避免另一条栈溢出。`get_toc` 返回的内容/解析错误（不是「没有 `/Outlines`」）同样收成不可读空目录。
+   - 目录不可读（成环、超限、panic，或 `get_toc` 的内容/解析失败）：`status: ok`，`entries: []`，`diagnostics` 含 `outline_unreadable`（不是 `outline_empty`）。文件打不开、加密、结构坏到无法 load，仍是调用错误 `internal`，与 `material.read` 一致。
+   - 节点上限 10000 是**解析**上限：更大的书签图整棵视为不可读，不返回部分条目。
+   - **响应**另有硬顶（防恶意 PDF 撑爆上下文 / stdio）：单条 `title` 截到 512 个 Unicode 字符（按字符边界，条目带 `title_truncated: true`）；最多返回 1000 条；序列化后的 `entries` 数组 ≤ 64 KiB；透传的 reader 警告最多 16 条、每条 ≤ 256 字符，警告里引用的标题只保留前 64 字符。任一截断即 `status: truncated` 且 `truncated: true`（§2.2），按原顺序保留装得下的条目，`total_entries` 给出截断前条数，`diagnostics` 含 `outline_truncated`。未截断的成功结果 `truncated: false`。
+7. [ ] 之后再排：`graph.get/neighborhood`、`ink.snapshot_image`、`user.ask`
 - 写路径（`propose_changes`）不进 Phase1。
 
 ---
@@ -178,7 +190,7 @@ AgentExecutor 最小接口（语义，非具体签名）：
 | 错误码 | `not_found\|invalid_arg\|forbidden\|blocked\|internal` 统一为 error | 业务结果拆为 `status`（5 值）；调用错误保留 `invalid_arg\|forbidden\|internal`；`blocked` 留给 Phase2 |
 | `expand` 单位 | 字节或字符待定 | 锁定字节 |
 | 第三方/hmz 地位 | hmz 用于实验 flow（调研 D5） | hmz 为可选适配器，非必需 |
-| 实现顺序 | search → read → outline → grep | search → read → grep（Phase1b 线性扫描 markdown）→ 接真实后端；outline 仍后移 |
+| 实现顺序 | search → read → outline → grep | search → read → `material.grep`（Phase1b 线性扫描 markdown）、`pdf.outline`（只读嵌入式书签）均已落地；接真实后端仍未做 |
 
 ---
 

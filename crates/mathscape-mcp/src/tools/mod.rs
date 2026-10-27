@@ -3,6 +3,8 @@
 //! prompt caches stay stable. Change them only together with the contract.
 
 mod grep;
+mod material;
+mod outline;
 mod read;
 mod search;
 
@@ -13,18 +15,28 @@ use serde_json::{Map, Value, json};
 use crate::McpWorkspace;
 
 pub use grep::{MAX_GREP_HITS, MAX_SCAN_BYTES};
+pub use outline::{
+    MAX_DIAGNOSTIC_MESSAGE_CHARS, MAX_OUTLINE_DIAGNOSTICS, MAX_OUTLINE_ENTRIES,
+    MAX_OUTLINE_ENTRIES_BYTES, MAX_OUTLINE_TITLE_CHARS,
+};
 pub use read::MAX_READ_BYTES;
 
 pub const WORKSPACE_SEARCH: &str = "workspace.search";
 pub const MATERIAL_READ: &str = "material.read";
 pub const MATERIAL_GREP: &str = "material.grep";
+pub const PDF_OUTLINE: &str = "pdf.outline";
 
 /// Stable `tools/list` order. New tools are appended; existing entries stay put.
-pub const TOOL_NAMES: [&str; 3] = [WORKSPACE_SEARCH, MATERIAL_READ, MATERIAL_GREP];
+pub const TOOL_NAMES: [&str; 4] = [WORKSPACE_SEARCH, MATERIAL_READ, MATERIAL_GREP, PDF_OUTLINE];
 
 /// `tools/list` entries, in [`TOOL_NAMES`] order.
 pub fn tool_definitions() -> Vec<Value> {
-    vec![search::definition(), read::definition(), grep::definition()]
+    vec![
+        search::definition(),
+        read::definition(),
+        grep::definition(),
+        outline::definition(),
+    ]
 }
 
 /// Runs one tool. `None` means the tool name is unknown (a protocol error,
@@ -39,6 +51,7 @@ pub fn call(
         WORKSPACE_SEARCH => Some(search::call(workspace, arguments)),
         MATERIAL_READ => Some(read::call(workspace, arguments)),
         MATERIAL_GREP => Some(grep::call(workspace, arguments)),
+        PDF_OUTLINE => Some(outline::call(workspace, arguments)),
         _ => None,
     }
 }

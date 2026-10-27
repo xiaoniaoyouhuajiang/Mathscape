@@ -10,8 +10,15 @@ Implemented capabilities:
 - fast or exhaustive text/scanned/mixed classification;
 - zero-based, page-level OCR recommendations;
 - native positioned-text extraction;
-- zero-based selections and rotation-aware normalized coordinates; and
-- exact selections consumable by the Marker adapter.
+- zero-based selections and rotation-aware normalized coordinates;
+- exact selections consumable by the Marker adapter; and
+- the embedded outline (bookmarks) as zero-based page indexes. A file with no
+  bookmarks yields an empty list. A cyclic, oversized, or corrupt bookmark
+  graph also yields an empty list (`PdfOutline::is_unreadable`) instead of
+  panicking; opening the file can still fail. There is no heuristic table of
+  contents. `lopdf` folds duplicate titles, keeping the first position and the
+  last page and level. Graphs deeper than 64 or with more than 10000 nodes are
+  unreadable as a whole (not truncated).
 
 The crate does not perform mathematical interpretation, write domain entities,
 or run OCR. Rendering remains an engine-neutral boundary to implement after a

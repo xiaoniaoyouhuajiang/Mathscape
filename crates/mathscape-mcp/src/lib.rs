@@ -8,8 +8,10 @@
 //! Tools (fixed order, see [`tools::TOOL_NAMES`]):
 //! - `workspace.search` wraps [`mathscape_query::search::SearchRegistry`];
 //! - `material.read` reads Markdown by `md_byte_range` and text-layer PDFs by
-//!   `pdf_pages`, capped at [`tools::MAX_READ_BYTES`];
-//! - `material.grep` linearly scans markdown bodies of the given artifact ids.
+//!   `pdf_pages` (1-based), capped at [`tools::MAX_READ_BYTES`];
+//! - `material.grep` linearly scans markdown bodies of the given artifact ids;
+//! - `pdf.outline` returns a PDF's embedded bookmarks. `pdf_page_index` is
+//!   0-based and is not written back to the workspace.
 //!
 //! Wire envelope follows `docs/phase0-contract.md` §2 and reuses the DTOs of
 //! `mathscape-agent` ([`mathscape_agent::ToolStatus`], [`mathscape_agent::Locator`],

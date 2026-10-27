@@ -7,6 +7,7 @@
 mod coordinates;
 mod error;
 mod inspection;
+mod outline;
 mod selection;
 mod text;
 
@@ -16,5 +17,6 @@ pub use inspection::{
     ClassificationMode, OcrReason, PageOcrRecommendation, PdfClassification, PdfContentKind,
     PdfEngine, PdfOpenOptions, PdfProbe, ScanCoverage,
 };
+pub use outline::{PdfOutline, PdfOutlineEntry};
 pub use selection::{PdfPageIndex, PdfPageRange, PdfSelection};
 pub use text::{PdfTextItem, PdfTextItemKind, TextExtraction};

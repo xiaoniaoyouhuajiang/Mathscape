@@ -266,7 +266,7 @@ fn map_content_kind(kind: pdf_inspector::PdfType) -> PdfContentKind {
     }
 }
 
-fn load_document(path: &Path, options: &PdfOpenOptions) -> Result<Document, PdfError> {
+pub(crate) fn load_document(path: &Path, options: &PdfOpenOptions) -> Result<Document, PdfError> {
     let result = match options.password_ref() {
         Some(password) => Document::load_with_password(path, password),
         None => Document::load(path),

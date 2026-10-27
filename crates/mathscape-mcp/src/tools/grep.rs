@@ -24,6 +24,9 @@ use mathscape_domain::StableId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::material::{
+    self, MARKDOWN_MEDIA_TYPE, ManagedPathFailure, Material, find_materials, managed_path_failure,
+};
 use super::{MATERIAL_GREP, diagnostic, parse_args, to_object};
 use crate::McpWorkspace;
 
@@ -38,7 +41,6 @@ pub const MAX_ARTIFACT_IDS: usize = 32;
 /// Snippet window, in UTF-8 bytes. The match itself may be shorter.
 pub const SNIPPET_MAX_BYTES: usize = 512;
 
-const MARKDOWN_MEDIA_TYPE: &str = "text/markdown";
 const LITERAL_SCORE: u32 = 1;
 
 const DESCRIPTION: &str = "Search the markdown body of specific materials for a case-sensitive literal substring (not a regular expression). artifact_ids is required and non-empty; this tool does not scan the whole workspace. Only text/markdown is searched (PDF text and OCR are out of scope). Each hit locator is an md_byte_range of that match and can be passed to material.read. A missing artifact_id yields status not_found and no partial hits. Stops at max_hits (default and maximum 50) or after the first 1 MiB of a file; either limit returns status truncated and truncated true. Read-only.";
@@ -70,13 +72,6 @@ struct GrepHit {
     locator: Locator,
     snippet: String,
     score: u32,
-    revision: String,
-}
-
-struct Material {
-    id: StableId,
-    media_type: String,
-    byte_size: u64,
     revision: String,
 }
 
@@ -271,34 +266,13 @@ fn load_materials(
     workspace: &McpWorkspace,
     ids: &[StableId],
 ) -> Result<LoadedMaterials, ToolError> {
-    let catalog = workspace
-        .store()?
-        .read_catalog_snapshot()
-        .map_err(|error| {
-            ToolError::new(
-                ToolErrorCode::Internal,
-                format!("failed to read artifact catalog: {error}"),
-            )
-        })?;
     let mut found = Vec::with_capacity(ids.len());
     let mut missing = Vec::new();
-    for id in ids {
-        let Some(record) = catalog
-            .artifacts()
-            .iter()
-            .find(|record| record.entity().header().stable_id() == id)
-        else {
-            missing.push(id.to_string());
-            continue;
-        };
-        let header = record.entity().header();
-        let payload = record.entity().payload();
-        found.push(Material {
-            id: id.clone(),
-            media_type: payload.media_type().as_str().to_owned(),
-            byte_size: payload.byte_size(),
-            revision: header.revision_id().to_string(),
-        });
+    for (id, material) in ids.iter().zip(find_materials(workspace, ids)?) {
+        match material {
+            Some(material) => found.push(material),
+            None => missing.push(id.to_string()),
+        }
     }
     Ok(LoadedMaterials {
         found,
@@ -341,6 +315,10 @@ enum Loaded {
 }
 
 fn load_text(pool: &ArtifactPool, material: &Material) -> Result<Loaded, ToolError> {
+    // Same managed-path check and error classes as material.read / pdf.outline.
+    if let Err(error) = material::open_managed_path(pool, &material.id) {
+        return fail_load(material, error);
+    }
     if material.byte_size == 0 {
         return Ok(Loaded::Text {
             text: String::new(),
@@ -364,23 +342,19 @@ fn load_text(pool: &ArtifactPool, material: &Material) -> Result<Loaded, ToolErr
     Ok(Loaded::Text { text, capped })
 }
 
-/// Business `not_found` (`Ok`) or a call error (`Err`).
+/// Business `not_found` (`Ok`) or a call error (`Err`), classified by the
+/// shared [`managed_path_failure`].
 fn fail_load(material: &Material, error: ArtifactPoolError) -> Result<Loaded, ToolError> {
-    match error {
-        ArtifactPoolError::MissingManagedLocation(_) => {
-            content_unavailable(material).map(Loaded::Finished)
-        }
-        ArtifactPoolError::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
-            content_unavailable(material).map(Loaded::Finished)
-        }
-        ArtifactPoolError::UnsafeManagedPath(_) => Err(ToolError::new(
+    match managed_path_failure(&error) {
+        ManagedPathFailure::NotFound => content_unavailable(material).map(Loaded::Finished),
+        ManagedPathFailure::Forbidden => Err(ToolError::new(
             ToolErrorCode::Forbidden,
             "managed artifact path is unsafe or is a symbolic link",
         )
         .with_details(json!({ "artifact_id": material.id.to_string() }))),
-        other => Err(ToolError::new(
+        ManagedPathFailure::Internal => Err(ToolError::new(
             ToolErrorCode::Internal,
-            format!("failed to read managed artifact: {other}"),
+            format!("failed to read managed artifact: {error}"),
         )),
     }
 }
