@@ -256,14 +256,27 @@ export class DesktopInkWorkspace {
     return task;
   }
 
-  /** H5: operations not yet acknowledged by the workspace, after one save attempt. */
+  /**
+   * H5: operations not yet acknowledged by the workspace, after one save
+   * attempt. Quarantined operations count only when the outbox is not
+   * persistent: a persistent outbox keeps them for recovery, an in-memory one
+   * loses them when the window goes away.
+   */
   async unsavedAfterFlush(): Promise<number> {
+    const { retryable, quarantined } = await this.unsavedBreakdownAfterFlush();
+    return retryable + quarantined;
+  }
+
+  /** H5: `retryable` = pending + buffered; `quarantined` only for a non-persistent outbox. */
+  private async unsavedBreakdownAfterFlush(): Promise<{ retryable: number; quarantined: number }> {
     this.board?.resetTransientInteraction();
-    if (!this.outbox) return 0;
+    if (!this.outbox) return { retryable: 0, quarantined: 0 };
     const flushed = this.flush(undefined, true).catch(() => false);
     await Promise.race([flushed, new Promise(resolve => setTimeout(resolve, CLOSE_FLUSH_TIMEOUT_MS))]);
     await this.enqueueTail.catch(() => undefined);
-    return (await this.outbox.pending()).length + this.bufferedOperations.size;
+    const retryable = (await this.outbox.pending()).length + this.bufferedOperations.size;
+    const quarantined = this.outbox.persistent ? 0 : (await this.outbox.quarantined()).length;
+    return { retryable, quarantined };
   }
 
   /** H5: cheap synchronous hint for `beforeunload` (no awaiting possible there). */
@@ -273,18 +286,21 @@ export class DesktopInkWorkspace {
 
   private async confirmLeaveOnce(reason: "close" | "window"): Promise<boolean> {
     for (;;) {
-      const unsaved = await this.unsavedAfterFlush();
-      if (!unsaved) return true;
+      const { retryable, quarantined } = await this.unsavedBreakdownAfterFlush();
+      if (!retryable && !quarantined) return true;
+      // `quarantined` is only non-zero for a non-persistent outbox.
+      const parts: string[] = [];
+      if (retryable) parts.push(`还有 ${retryable} 个手稿操作尚未保存到工作区。`);
+      if (quarantined) parts.push(`${retryable ? "另有" : "有"} ${quarantined} 个手稿操作已被工作区拒绝，无法重试保存。`);
       const kept = this.outbox?.persistent
         ? "它们仍保留在本机恢复队列中，下次打开手稿时会继续保存。"
         : "本机恢复队列不可用，现在离开会丢失这些操作。";
-      const choice = await this.choose(`还有 ${unsaved} 个手稿操作尚未保存到工作区。${kept}`, [
-        { id: "stay", label: "继续编辑", primary: true },
-        { id: "retry", label: "重试保存" },
-        { id: "leave", label: reason === "window" ? "仍然关闭窗口" : "仍然离开" },
-      ]);
+      const choices: DialogChoice[] = [{ id: "stay", label: "继续编辑", primary: true }];
+      if (retryable) choices.push({ id: "retry", label: "重试保存" });
+      choices.push({ id: "leave", label: reason === "window" ? "仍然关闭窗口" : "仍然离开" });
+      const choice = await this.choose(parts.join("") + kept, choices);
       if (choice === "retry") continue;
-      if (choice !== "leave") this.status("尚未保存的操作仍在等待保存；可点“立即保存”重试。", true);
+      if (choice !== "leave") this.status(retryable ? "尚未保存的操作仍在等待保存；可点“立即保存”重试。" : "被拒绝的操作只保留在当前窗口中，关闭窗口会丢失。", true);
       return choice === "leave";
     }
   }

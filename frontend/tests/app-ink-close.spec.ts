@@ -7,6 +7,17 @@ import { settledGeometry } from "./support/ink-geometry";
 const destroyed = (page: Page) => page.evaluate(() => window.appHarness.windowEvents.destroyed);
 const requestClose = (page: Page) => page.evaluate(() => window.appHarness.requestWindowClose());
 const dialog = (page: Page) => page.locator("#ink-dialog");
+const quarantinedCodes = (page: Page) => page.evaluate(() => new Promise<string[]>((resolve, reject) => {
+  const request = indexedDB.open("mathscape-ink-p1", 1);
+  request.onerror = () => reject(request.error);
+  request.onsuccess = () => {
+    const database = request.result;
+    const transaction = database.transaction("operations", "readonly");
+    const items = transaction.objectStore("operations").getAll();
+    transaction.oncomplete = () => { database.close(); resolve(items.result.filter(item => item.quarantined).map(item => item.quarantined.code)); };
+    transaction.onabort = () => { database.close(); reject(transaction.error); };
+  };
+}));
 
 async function openNoteA(page: Page): Promise<void> {
   await page.locator("#ink-button").click();
@@ -69,4 +80,40 @@ test("H5 a retried save that succeeds lets the window close", async ({ page }) =
   await page.evaluate(() => { window.appHarness.behavior.failAppend = false; });
   await dialog(page).getByRole("button", { name: "重试保存", exact: true }).click();
   await expect.poll(() => destroyed(page)).toBe(1);
+});
+
+test("H5 quarantined operations with a persistent outbox do not block closing (kept for recovery)", async ({ page }) => {
+  await openNoteA(page);
+  await page.evaluate(() => { window.appHarness.behavior.appendErrorCode = "writer_epoch_conflict"; });
+  await writeStroke(page);
+  await expect.poll(() => quarantinedCodes(page)).toEqual(["writer_epoch_conflict"]);
+  await requestClose(page);
+  await expect.poll(() => destroyed(page)).toBe(1);
+  await expect(dialog(page)).toBeHidden();
+});
+
+test.describe("without a persistent outbox", () => {
+  test.beforeEach(async ({ page }) => {
+    // IndexedDB unavailable → in-memory outbox (`persistent === false`).
+    await page.addInitScript(() => { Object.defineProperty(window, "indexedDB", { value: undefined, configurable: true }); });
+    await page.goto("/tests/app.html");
+    await expect.poll(() => page.evaluate(() => window.appHarness?.labels()["r-unit-thm"])).toBe("定理 3.2");
+  });
+
+  test("H5 quarantined operations warn before closing and offer no retry", async ({ page }) => {
+    await openNoteA(page);
+    await page.evaluate(() => { window.appHarness.behavior.appendErrorCode = "writer_epoch_conflict"; });
+    await writeStroke(page);
+    await requestClose(page);
+    await expect(dialog(page)).toBeVisible();
+    await expect(page.locator("#ink-dialog-text")).toContainText("1 个手稿操作已被工作区拒绝");
+    await expect(page.locator("#ink-dialog-text")).toContainText("现在离开会丢失这些操作");
+    await expect(dialog(page).getByRole("button", { name: "重试保存", exact: true })).toHaveCount(0);
+    await dialog(page).getByRole("button", { name: "继续编辑", exact: true }).click();
+    await page.waitForTimeout(150);
+    expect(await destroyed(page)).toBe(0);
+    await requestClose(page);
+    await dialog(page).getByRole("button", { name: "仍然关闭窗口", exact: true }).click();
+    await expect.poll(() => destroyed(page)).toBe(1);
+  });
 });

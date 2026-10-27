@@ -32,8 +32,10 @@ describe("handleScale (corner-handle resize)", () => {
 
   it("degenerate zero-width selection does not divide by zero and keeps the drag direction", () => {
     expect(Number.isFinite(handleScale(105, 100, 100))).toBe(true);
-    expect(handleScale(105, 100, 100)).toBeCloseTo(5);
-    expect(handleScale(95, 100, 100)).toBeCloseTo(-5);
+    // Zero span: 1 + Δ / MIN_HANDLE_SPAN, i.e. 1 at the grab point.
+    expect(handleScale(105, 100, 100)).toBeCloseTo(6);
+    expect(handleScale(95, 100, 100)).toBeCloseTo(-4);
+    expect(handleScale(100, 100, 100)).toBe(1);
   });
 });
 
@@ -65,6 +67,29 @@ describe("cornerScale (H1, grab offset and handle direction)", () => {
     expect(scale).toBeLessThanOrEqual(MAX_HANDLE_SCALE);
     // Same press with the old start-based ratio would have mirrored the selection.
     expect(handleScale(80, 100.4, 103)).toBeLessThan(0);
+  });
+
+  it("is exactly 1 at the grab point for zero, sub-unit and normal spans", () => {
+    for (const dir of [-1, 1] as const) {
+      for (const span of [0, 0.5, -0.5, 0.999]) {
+        const anchor = 100;
+        const edge = anchor + span;
+        for (const start of [edge - 6, edge, edge + 6]) expect(cornerScale(start, start, edge, anchor, dir)).toBe(1);
+      }
+    }
+    expect(cornerScale(310, 310, 300, 100, 1)).toBe(1);
+    expect(cornerScale(90, 90, 100, 300, -1)).toBe(1);
+  });
+
+  it("sub-unit spans still scale smoothly with the drag, in the handle's direction", () => {
+    // se-like handle on a 0.5-wide selection: outward grows, inward shrinks then mirrors.
+    expect(cornerScale(100.6, 100.5, 100.5, 100, 1)).toBeCloseTo(1.1);
+    expect(cornerScale(100.4, 100.5, 100.5, 100, 1)).toBeCloseTo(0.9);
+    expect(cornerScale(98.5, 100.5, 100.5, 100, 1)).toBeCloseTo(-1);
+    // nw-like handle on a zero-width selection: moving towards −x grows.
+    expect(cornerScale(99.5, 100, 100, 100, -1)).toBeCloseTo(1.5);
+    // Continuous at |span| === MIN_HANDLE_SPAN.
+    expect(cornerScale(101.25, 101, 101, 100, 1)).toBeCloseTo(cornerScale(100.9999 + 0.25, 100.9999, 100.9999, 100, 1), 3);
   });
 
   it("mirrors past the anchor and keeps the clamp", () => {
