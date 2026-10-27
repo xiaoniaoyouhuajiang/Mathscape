@@ -9,7 +9,7 @@ use lopdf::{Document, Object, Stream, content::Content, content::Operation, dict
 use mathscape_agent::{CommandOutput, CommandRunner};
 use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_domain::{ActorRef, MediaType, RightsRecord, RightsStatus};
-use mathscape_mcp::tools::{MAX_READ_BYTES, TOOL_NAMES};
+use mathscape_mcp::tools::{MAX_GREP_HITS, MAX_READ_BYTES, MAX_SCAN_BYTES, TOOL_NAMES};
 use mathscape_mcp::{McpServer, McpWorkspace};
 use mathscape_query::search::{SearchKind, SearchQuery, SearchRegistry, search};
 use mathscape_store_sqlite::SqliteArtifactStore;
@@ -224,6 +224,18 @@ fn read_error(server: &McpServer, arguments: Value) -> Value {
     result["error"].clone()
 }
 
+fn grep(server: &McpServer, arguments: Value) -> Value {
+    let (result, is_error) = call(server, "material.grep", arguments);
+    assert!(!is_error, "unexpected call error: {result}");
+    result
+}
+
+fn grep_error(server: &McpServer, arguments: Value) -> Value {
+    let (result, is_error) = call(server, "material.grep", arguments);
+    assert!(is_error, "expected call error, got {result}");
+    result["error"].clone()
+}
+
 #[test]
 fn initialize_ping_and_notifications() {
     let f = fixture();
@@ -261,12 +273,7 @@ fn initialize_ping_and_notifications() {
         f.server.handle_line("{nope").unwrap()["error"]["code"],
         -32700
     );
-    let unknown_tool = request(
-        &f.server,
-        4,
-        "tools/call",
-        json!({ "name": "material.grep" }),
-    );
+    let unknown_tool = request(&f.server, 4, "tools/call", json!({ "name": "pdf.outline" }));
     assert_eq!(unknown_tool["error"]["code"], -32602);
     assert_eq!(f.server.workspace().round(), Some("placeholder"));
 }
@@ -281,16 +288,28 @@ fn tools_list_order_and_text_are_fixed() {
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
     assert_eq!(names, TOOL_NAMES);
-    assert_eq!(names, ["workspace.search", "material.read"]);
+    assert_eq!(
+        names,
+        ["workspace.search", "material.read", "material.grep"]
+    );
     for tool in tools {
         assert!(!tool["description"].as_str().unwrap().is_empty());
         assert_eq!(tool["inputSchema"]["type"], "object");
+        assert_eq!(tool["inputSchema"]["additionalProperties"], false);
     }
     assert_eq!(tools[0]["inputSchema"]["required"], json!(["query"]));
     assert_eq!(
         tools[1]["inputSchema"]["required"],
         json!(["artifact_id", "locator"])
     );
+    assert_eq!(
+        tools[2]["inputSchema"]["required"],
+        json!(["artifact_ids", "pattern"])
+    );
+    let grep_description = tools[2]["description"].as_str().unwrap();
+    assert!(grep_description.contains("case-sensitive"));
+    assert!(grep_description.contains("material.read"));
+    assert!(grep_description.contains("non-empty"));
     let second = request(&f.server, 2, "tools/list", json!({}));
     assert_eq!(
         first["result"], second["result"],
@@ -757,4 +776,273 @@ fn symlinked_managed_object_is_forbidden() {
             "{message}"
         );
     }
+}
+
+#[test]
+fn grep_markdown_hits_round_trip_through_material_read() {
+    let f = fixture();
+    let result = grep(
+        &f.server,
+        json!({ "artifact_ids": [f.markdown], "pattern": "Lemma" }),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["truncated"], false);
+    assert!(result.get("diagnostics").is_none());
+    let hits = result["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 1);
+    let hit = &hits[0];
+    assert_eq!(hit["artifact_id"], f.markdown);
+    assert_eq!(hit["score"], 1);
+    assert!(hit["revision"].as_str().unwrap().starts_with("sha256:"));
+    let start = f.markdown_body.find("Lemma").unwrap();
+    assert_eq!(
+        hit["locator"],
+        json!({ "md_byte_range": { "start": start, "end": start + "Lemma".len() } })
+    );
+    assert_eq!(hit["snippet"], "# 引理 Lemma");
+    let quoted = read(
+        &f.server,
+        json!({ "artifact_id": f.markdown, "locator": hit["locator"] }),
+    );
+    assert_eq!(quoted["status"], "ok");
+    assert_eq!(quoted["text"], "Lemma");
+
+    let lemma = grep(
+        &f.server,
+        json!({ "artifact_ids": [f.markdown], "pattern": "引理" }),
+    );
+    assert_eq!(lemma["hits"].as_array().unwrap().len(), 1);
+    let quoted = read(
+        &f.server,
+        json!({
+            "artifact_id": f.markdown,
+            "locator": lemma["hits"][0]["locator"],
+        }),
+    );
+    assert_eq!(quoted["text"], "引理");
+
+    // Case-sensitive literal: "lemma" and a regex-looking pattern miss "Lemma".
+    for pattern in ["lemma", "L.mma"] {
+        let missed = grep(
+            &f.server,
+            json!({ "artifact_ids": [f.markdown], "pattern": pattern }),
+        );
+        assert_eq!(missed["status"], "ok", "{pattern}");
+        assert_eq!(missed["hits"].as_array().unwrap().len(), 0, "{pattern}");
+        assert_eq!(missed["truncated"], false);
+    }
+
+    // Only the named materials are scanned, in the given order.
+    let ordered = grep(
+        &f.server,
+        json!({
+            "artifact_ids": [f.big_markdown, f.markdown],
+            "pattern": "Lemma",
+            "max_hits": 5,
+        }),
+    );
+    assert_eq!(ordered["status"], "ok");
+    assert_eq!(ordered["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(ordered["hits"][0]["artifact_id"], f.markdown);
+
+    let first_file = grep(
+        &f.server,
+        json!({
+            "artifact_ids": [f.markdown, f.big_markdown],
+            "pattern": "e",
+            "max_hits": 1,
+        }),
+    );
+    assert_eq!(first_file["status"], "truncated");
+    assert_eq!(first_file["hits"][0]["artifact_id"], f.markdown);
+}
+
+#[test]
+fn grep_rejects_empty_ids_and_bad_args() {
+    let f = fixture();
+    let invalid = [
+        json!({ "artifact_ids": [], "pattern": "Lemma" }),
+        json!({ "pattern": "Lemma" }),
+        json!({ "artifact_ids": [f.markdown] }),
+        json!({ "artifact_ids": [f.markdown], "pattern": "" }),
+        json!({ "artifact_ids": [f.markdown], "pattern": "Lemma", "terms": ["Lemma"] }),
+        json!({ "artifact_ids": [f.markdown, f.markdown], "pattern": "Lemma" }),
+        json!({ "artifact_ids": ["not-an-id"], "pattern": "Lemma" }),
+        json!({ "artifact_ids": [f.markdown], "pattern": "Lemma", "max_hits": 0 }),
+        json!({ "artifact_ids": [f.markdown], "pattern": "Lemma", "max_hits": MAX_GREP_HITS + 1 }),
+        json!({ "artifact_ids": [f.markdown], "pattern": "a".repeat(201) }),
+        json!({ "artifact_ids": [f.pdf], "pattern": "First" }),
+        json!({ "artifact_ids": [f.markdown, f.pdf], "pattern": "Lemma" }),
+        json!({ "artifact_ids": [f.plain_text], "pattern": "plain" }),
+        json!("Lemma"),
+    ];
+    for arguments in invalid {
+        let error = grep_error(&f.server, arguments.clone());
+        assert_eq!(error["code"], "invalid_arg", "for {arguments}: {error}");
+        assert!(!error["message"].as_str().unwrap().is_empty());
+    }
+    let empty = grep_error(&f.server, json!({ "artifact_ids": [], "pattern": "Lemma" }));
+    assert!(
+        empty["message"].as_str().unwrap().contains("non-empty"),
+        "{empty}"
+    );
+    let pdf = grep_error(
+        &f.server,
+        json!({ "artifact_ids": [f.pdf], "pattern": "First" }),
+    );
+    assert!(
+        pdf["message"].as_str().unwrap().contains("text/markdown"),
+        "{pdf}"
+    );
+    assert_eq!(pdf["details"]["artifacts"][0]["artifact_id"], f.pdf);
+    assert_eq!(
+        pdf["details"]["artifacts"][0]["media_type"],
+        "application/pdf"
+    );
+}
+
+#[test]
+fn grep_missing_artifact_is_not_found() {
+    let f = fixture();
+    let result = grep(
+        &f.server,
+        json!({ "artifact_ids": [UNKNOWN_ID], "pattern": "Lemma" }),
+    );
+    assert_eq!(result["status"], "not_found");
+    assert_eq!(result["hits"].as_array().unwrap().len(), 0);
+    assert_eq!(result["details"]["reason"], "artifact_not_found");
+    assert_eq!(result["details"]["artifact_ids"], json!([UNKNOWN_ID]));
+    assert_eq!(result["diagnostics"][0]["code"], "artifact_not_found");
+    assert!(result.get("truncated").is_none());
+
+    // A missing id fails the whole call; the existing material is not partially scanned.
+    let mixed = grep(
+        &f.server,
+        json!({ "artifact_ids": [f.markdown, UNKNOWN_ID], "pattern": "Lemma" }),
+    );
+    assert_eq!(mixed["status"], "not_found");
+    assert_eq!(mixed["hits"].as_array().unwrap().len(), 0);
+    assert_eq!(mixed["details"]["artifact_ids"], json!([UNKNOWN_ID]));
+}
+
+#[test]
+fn grep_hit_limit_is_truncated() {
+    let f = fixture();
+    let line = "αβγ lemma line\n";
+    let result = grep(
+        &f.server,
+        json!({ "artifact_ids": [f.big_markdown], "pattern": "lemma", "max_hits": 2 }),
+    );
+    assert_eq!(result["status"], "truncated");
+    assert_eq!(result["truncated"], true);
+    assert_eq!(result["diagnostics"][0]["code"], "hit_limit");
+    let hits = result["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 2);
+    let first = line.find("lemma").unwrap() as u64;
+    let second = line.len() as u64 + first;
+    assert_eq!(
+        hits[0]["locator"],
+        json!({ "md_byte_range": { "start": first, "end": first + 5 } })
+    );
+    assert_eq!(
+        hits[1]["locator"],
+        json!({ "md_byte_range": { "start": second, "end": second + 5 } })
+    );
+    assert_eq!(hits[0]["snippet"], "αβγ lemma line");
+    assert_eq!(hits[0]["artifact_id"], f.big_markdown);
+    let quoted = read(
+        &f.server,
+        json!({ "artifact_id": f.big_markdown, "locator": hits[0]["locator"] }),
+    );
+    assert_eq!(quoted["text"], "lemma");
+
+    let all_default = grep(
+        &f.server,
+        json!({ "artifact_ids": [f.markdown], "pattern": "converges" }),
+    );
+    assert_eq!(all_default["status"], "ok");
+    assert_eq!(all_default["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(all_default["truncated"], false);
+}
+
+#[test]
+fn grep_does_not_scan_past_the_byte_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    let mut pool = ArtifactPool::create(&root).unwrap();
+    let head = "token at head\n";
+    let mut body = head.to_owned();
+    let pad = (MAX_SCAN_BYTES as usize).saturating_sub(body.len()) + 8;
+    body.push_str(&"x".repeat(pad));
+    body.push_str("TAIL_ONLY");
+    assert!(body.len() as u64 > MAX_SCAN_BYTES);
+    assert!((body.find("TAIL_ONLY").unwrap() as u64) >= MAX_SCAN_BYTES);
+    let id = import(
+        &mut pool,
+        body.into_bytes(),
+        "text/markdown",
+        "capped.md",
+        None,
+    );
+    drop(pool);
+    let server = McpServer::new(
+        McpWorkspace::open(&root)
+            .unwrap()
+            .with_capability_runner(Box::new(NothingInstalled)),
+    );
+
+    let head_hit = grep(&server, json!({ "artifact_ids": [id], "pattern": "token" }));
+    assert_eq!(head_hit["status"], "truncated");
+    assert_eq!(head_hit["truncated"], true);
+    assert_eq!(head_hit["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(head_hit["diagnostics"][0]["code"], "scan_capped");
+    assert_eq!(head_hit["hits"][0]["snippet"], "token at head");
+    let quoted = read(
+        &server,
+        json!({ "artifact_id": id, "locator": head_hit["hits"][0]["locator"] }),
+    );
+    assert_eq!(quoted["text"], "token");
+
+    let tail = grep(
+        &server,
+        json!({ "artifact_ids": [id], "pattern": "TAIL_ONLY" }),
+    );
+    assert_eq!(tail["status"], "truncated");
+    assert_eq!(tail["truncated"], true);
+    assert!(tail["hits"].as_array().unwrap().is_empty());
+    assert_eq!(tail["diagnostics"][0]["code"], "scan_capped");
+}
+
+#[test]
+fn grep_missing_object_is_not_found_and_symlink_is_forbidden() {
+    let f = fixture();
+    for path in managed_object_files(&f.root) {
+        std::fs::remove_file(path).unwrap();
+    }
+    let missing = grep(
+        &f.server,
+        json!({ "artifact_ids": [f.markdown], "pattern": "Lemma" }),
+    );
+    assert_eq!(missing["status"], "not_found");
+    assert_eq!(missing["details"]["reason"], "content_unavailable");
+    assert!(missing["hits"].as_array().unwrap().is_empty());
+
+    let f = fixture();
+    let target = f.root.join("secret-managed-target");
+    std::fs::write(&target, b"not the managed bytes").unwrap();
+    for path in managed_object_files(&f.root) {
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+    }
+    let error = grep_error(
+        &f.server,
+        json!({ "artifact_ids": [f.markdown], "pattern": "Lemma" }),
+    );
+    assert_eq!(error["code"], "forbidden", "{error}");
+    let message = error["message"].as_str().unwrap();
+    assert!(!message.contains("secret-managed-target"), "{message}");
+    assert!(
+        !message.contains(&f.root.display().to_string()),
+        "{message}"
+    );
 }

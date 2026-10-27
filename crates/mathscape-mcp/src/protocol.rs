@@ -152,7 +152,7 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") },
-        "instructions": "Read-only Mathscape workspace tools. Use workspace.search to find materials, then material.read with a locator to quote exact passages.",
+        "instructions": "Read-only Mathscape workspace tools. Use workspace.search to find materials, material.grep to scan markdown bodies of known artifact ids, then material.read with a locator to quote exact passages.",
     })
 }
 

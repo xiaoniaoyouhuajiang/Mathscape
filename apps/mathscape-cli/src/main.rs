@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use mathscape_mcp::{McpServer, McpWorkspace};
 
-const USAGE: &str = "用法：\n  mathscape mcp --workspace <path> [--round <token>]\n\n子命令：\n  mcp    以 stdio 运行只读 MCP 服务（workspace.search、material.read）";
+const USAGE: &str = "用法：\n  mathscape mcp --workspace <path> [--round <token>]\n\n子命令：\n  mcp    以 stdio 运行只读 MCP 服务（workspace.search、material.read、material.grep）";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
