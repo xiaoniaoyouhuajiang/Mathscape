@@ -32,6 +32,7 @@ P3 正式平板入口已接入桌面：打开当前手稿 → “平板书写”
 ```sh
 cargo check --workspace
 cargo test -p mathscape-orchestrator
+cargo test -p mathscape-agent
 cargo test -p mathscape-store-sqlite --test schema
 cargo test -p mathscape-desktop --test service
 npm --prefix frontend run build
