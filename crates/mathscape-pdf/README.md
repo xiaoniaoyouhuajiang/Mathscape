@@ -10,8 +10,10 @@ Implemented capabilities:
 - fast or exhaustive text/scanned/mixed classification;
 - zero-based, page-level OCR recommendations;
 - native positioned-text extraction;
-- zero-based selections and rotation-aware normalized coordinates; and
-- exact selections consumable by the Marker adapter.
+- zero-based selections and rotation-aware normalized coordinates;
+- exact selections consumable by the Marker adapter; and
+- the embedded outline (bookmarks) as zero-based page indexes. A file with no
+  bookmarks yields an empty list. There is no heuristic table of contents.
 
 The crate does not perform mathematical interpretation, write domain entities,
 or run OCR. Rendering remains an engine-neutral boundary to implement after a

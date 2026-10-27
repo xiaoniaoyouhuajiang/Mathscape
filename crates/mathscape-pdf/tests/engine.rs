@@ -1,4 +1,4 @@
-use lopdf::{Document, Object, Stream, content::Content, content::Operation, dictionary};
+use lopdf::{Bookmark, Document, Object, Stream, content::Content, content::Operation, dictionary};
 use mathscape_pdf::{
     ClassificationMode, PdfContentKind, PdfEngine, PdfError, PdfOpenOptions, PdfPageIndex,
     PdfSelection, ScanCoverage,
@@ -172,6 +172,113 @@ fn reports_non_pdf_input_without_leaking_backend_types() {
         PdfEngine.probe(&path, &PdfOpenOptions::new()),
         Err(PdfError::NotPdf(_))
     ));
+}
+
+fn embed_bookmarks(document: &mut Document) {
+    if let Some(outline_id) = document.build_outline() {
+        document
+            .catalog_mut()
+            .expect("catalog")
+            .set("Outlines", Object::Reference(outline_id));
+    }
+}
+
+/// Three pages. Bookmarks: 第一章 → page 0, child 引理 → page 1, Chapter 2 → page 2.
+fn write_outlined_pdf(path: &std::path::Path) {
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let font_id = document.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+    });
+    let resources_id = document.add_object(dictionary! {
+        "Font" => dictionary! { "F1" => font_id },
+    });
+    let mut kids = Vec::new();
+    let mut page_ids = Vec::new();
+    for line in ["Chapter page", "Section page", "Last page"] {
+        let operations = vec![
+            Operation::new("BT", vec![]),
+            Operation::new("Tf", vec!["F1".into(), 18.into()]),
+            Operation::new("Td", vec![72.into(), 700.into()]),
+            Operation::new("Tj", vec![Object::string_literal(line)]),
+            Operation::new("ET", vec![]),
+        ];
+        let content = Content { operations };
+        let content_id = document.add_object(Stream::new(
+            dictionary! {},
+            content.encode().expect("encode outlined PDF content"),
+        ));
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+        });
+        kids.push(page_id.into());
+        page_ids.push(page_id);
+    }
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => kids,
+            "Count" => page_ids.len() as i64,
+            "Resources" => resources_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    document.trailer.set("Root", catalog_id);
+    let chapter = document.add_bookmark(
+        Bookmark::new("第一章".into(), [0.0, 0.0, 0.0], 0, page_ids[0]),
+        None,
+    );
+    document.add_bookmark(
+        Bookmark::new("引理".into(), [0.0, 0.0, 0.0], 0, page_ids[1]),
+        Some(chapter),
+    );
+    document.add_bookmark(
+        Bookmark::new("Chapter 2".into(), [0.0, 0.0, 0.0], 0, page_ids[2]),
+        None,
+    );
+    embed_bookmarks(&mut document);
+    document.save(path).expect("save outlined PDF");
+}
+
+#[test]
+fn reads_embedded_outline_as_zero_based_pages() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("outlined.pdf");
+    write_outlined_pdf(&path);
+
+    let outline = PdfEngine.outline(&path, &PdfOpenOptions::new()).unwrap();
+    assert_eq!(outline.page_count(), 3);
+    assert!(outline.warnings().is_empty(), "{:?}", outline.warnings());
+    let entries: Vec<_> = outline
+        .entries()
+        .iter()
+        .map(|entry| (entry.title(), entry.level(), entry.page().get()))
+        .collect();
+    assert_eq!(
+        entries,
+        vec![("第一章", 1, 0), ("引理", 2, 1), ("Chapter 2", 1, 2),]
+    );
+}
+
+#[test]
+fn pdf_without_bookmarks_has_an_empty_outline() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("text.pdf");
+    write_pdf(&path, true);
+
+    let outline = PdfEngine.outline(&path, &PdfOpenOptions::new()).unwrap();
+    assert_eq!(outline.page_count(), 1);
+    assert!(outline.entries().is_empty());
+    assert!(outline.warnings().is_empty());
 }
 
 #[test]

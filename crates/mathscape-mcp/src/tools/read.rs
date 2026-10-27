@@ -23,14 +23,15 @@ use mathscape_pdf::{PdfEngine, PdfOpenOptions, PdfPageIndex, PdfSelection};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::material::{
+    self, MARKDOWN_MEDIA_TYPE, Material, PDF_MEDIA_TYPE, find_material, managed_path_failure,
+};
 use super::{MATERIAL_READ, diagnostic, parse_args, to_object};
 use crate::McpWorkspace;
 
 /// Hard cap for returned text, in UTF-8 bytes (contract §2.2: 32KiB).
 pub const MAX_READ_BYTES: usize = 32 * 1024;
 
-const MARKDOWN_MEDIA_TYPE: &str = "text/markdown";
-const PDF_MEDIA_TYPE: &str = "application/pdf";
 /// PDF pages are extracted in small batches so a huge `pdf_pages` range
 /// stops as soon as the cap is reached.
 const PDF_PAGE_BATCH: u32 = 8;
@@ -153,13 +154,6 @@ pub(super) fn definition() -> Value {
     })
 }
 
-struct Material {
-    id: StableId,
-    media_type: String,
-    byte_size: u64,
-    revision: String,
-}
-
 pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, ToolError> {
     let args: ReadArgs = parse_args(arguments)?;
     args.locator.validate()?;
@@ -200,32 +194,6 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
             "supported_media_types": [MARKDOWN_MEDIA_TYPE, PDF_MEDIA_TYPE],
         }))),
     }
-}
-
-fn find_material(workspace: &McpWorkspace, id: &StableId) -> Result<Option<Material>, ToolError> {
-    let catalog = workspace
-        .store()?
-        .read_catalog_snapshot()
-        .map_err(|error| {
-            ToolError::new(
-                ToolErrorCode::Internal,
-                format!("failed to read artifact catalog: {error}"),
-            )
-        })?;
-    Ok(catalog
-        .artifacts()
-        .iter()
-        .find(|record| record.entity().header().stable_id() == id)
-        .map(|record| {
-            let header = record.entity().header();
-            let payload = record.entity().payload();
-            Material {
-                id: id.clone(),
-                media_type: payload.media_type().as_str().to_owned(),
-                byte_size: payload.byte_size(),
-                revision: header.revision_id().to_string(),
-            }
-        }))
 }
 
 fn not_found(args: &ReadArgs, reason: &str, message: &str) -> Result<Value, ToolError> {
@@ -274,7 +242,7 @@ fn require_managed_path(
     args: &ReadArgs,
     id: &StableId,
 ) -> Result<PathBuf, ToolReply> {
-    match pool.managed_path(id) {
+    match material::open_managed_path(pool, id) {
         Ok(path) => Ok(path),
         Err(error) => Err(map_managed_path_error(args, error)),
     }
@@ -282,47 +250,19 @@ fn require_managed_path(
 
 fn map_managed_path_error(args: &ReadArgs, error: ArtifactPoolError) -> ToolReply {
     match managed_path_failure(&error) {
-        ManagedPathFailure::NotFound => not_found(
+        material::ManagedPathFailure::NotFound => not_found(
             args,
             "content_unavailable",
             "the artifact is registered but has no readable managed copy",
         ),
-        ManagedPathFailure::Forbidden => Err(ToolError::new(
+        material::ManagedPathFailure::Forbidden => Err(ToolError::new(
             ToolErrorCode::Forbidden,
             "managed artifact path is unsafe or is a symbolic link",
         )),
-        ManagedPathFailure::Internal => Err(ToolError::new(
+        material::ManagedPathFailure::Internal => Err(ToolError::new(
             ToolErrorCode::Internal,
             format!("failed to resolve managed artifact: {error}"),
         )),
-    }
-}
-
-enum ManagedPathFailure {
-    NotFound,
-    Forbidden,
-    Internal,
-}
-
-fn managed_path_failure(error: &ArtifactPoolError) -> ManagedPathFailure {
-    match error {
-        ArtifactPoolError::MissingManagedLocation(_) => ManagedPathFailure::NotFound,
-        ArtifactPoolError::Io { source, .. } => {
-            if source.kind() == std::io::ErrorKind::NotFound {
-                ManagedPathFailure::NotFound
-            } else {
-                ManagedPathFailure::Internal
-            }
-        }
-        ArtifactPoolError::UnsafeManagedPath(_) => ManagedPathFailure::Forbidden,
-        ArtifactPoolError::InvalidReadRange
-        | ArtifactPoolError::InvalidWorkspaceManifest { .. }
-        | ArtifactPoolError::SourceNotFile(_)
-        | ArtifactPoolError::InvalidPoolUri(_)
-        | ArtifactPoolError::DigestMismatch { .. }
-        | ArtifactPoolError::ManagedObjectConflict { .. }
-        | ArtifactPoolError::Domain(_)
-        | ArtifactPoolError::Store(_) => ManagedPathFailure::Internal,
     }
 }
 

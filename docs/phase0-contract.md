@@ -61,7 +61,8 @@ MCP **不是**桌面实时同步通道；桌面不通过 MCP 订阅进度。两�
 
 ### 2.3 locator / scope / revision [锁定，字段见草案]
 - **locator**：二选一 `md_byte_range {start,end}`（字节，半开区间）| `pdf_pages {from,to}`（1-based，闭区间）。服务端**回显实际返回范围**。见 MCP 草案 §2.2、§2.3。`expand.before/after` 单位统一为**字节**（草案原为待定，此处锁定）。
-- PDF 内部页索引（`pdf.outline` 的 `pdf_page_index`）为 0-based，与 locator 的 1-based 并存，文档里写清（草案 §2.4）。
+- PDF 内部页索引（`pdf.outline` 的 `pdf_page_index`）为 0-based，与 locator 的 1-based 并存，文档里写清（草案 §2.4）。阅读某条目录时，`material.read` 的 `pdf_pages.from = pdf_page_index + 1`（1-based，闭区间）。
+- `pdf.outline` 无嵌入式书签时返回 `status: ok` 与空 `entries`（附 `outline_empty`），不用 `not_found`（那是 artifact 不存在）也不用 `capability_unavailable`（那是外部能力缺失，如无文本层 PDF）。不发明启发式目录。详见 Phase1 清单。
 - search 的 `highlights` 保持现有 UTF-16 `[start,end)`（草案 §2.1 [事实]），不改。
 - **scope**：`accepted | investigation`。Phase1 只实现 `accepted`；收到 `investigation` 时按 `accepted` 返回并附 `diagnostics: [{code:"scope_not_supported"}]`，不报错（草案 §1.2）。
 - **revision**：输出可选字段；没有 revision 来源时**省略**而非填假值（草案 §1.2）。输入里的 `revision`（graph 类）Phase1 不实现。
@@ -156,8 +157,15 @@ AgentExecutor 最小接口（语义，非具体签名）：
    - 实现见 `crates/mathscape-mcp`：Markdown 返回范围按 UTF-8 字符边界外扩后回显；PDF 只读文本层（`mathscape-pdf`），所请求页均无文本层时返回 `capability_unavailable` + Marker CapabilityProbe，Phase1 不调用 Marker；结果额外带 `total_bytes` / `total_pages` / `page_spans` / `revision`（artifact 当前修订）及 `diagnostics`。
 4. [ ] 接一个真实后端（Codex 或 Claude Code）跑通：Agent 调 search → read，桌面看到 §3 事件
 5. [x] 然后 `material.grep`（线性扫描，草案 §2.3）
-   - 实现见 `crates/mathscape-mcp`：只扫 `text/markdown`（不扫 PDF 文本层 / OCR）。`artifact_ids` 必填且非空，不提供全库 grep；`pattern` 为大小写敏感的字面子串（非正则，本切片不接受 `terms`）。命中 `locator` 复用 `md_byte_range`（半开字节，覆盖该次匹配本身），可直接交给 `material.read`；`snippet` 是包含匹配的原文片段（行内、有字节上限），`score` 恒为 1。`max_hits` 默认且硬顶 50；超出，或单文件只扫前 1MiB，返回 `status: truncated` 且 `truncated: true`。任一 id 不在目录中为业务 `not_found`（不返回部分命中）；非 markdown 为 `invalid_arg`。本项先于清单第 4 项落地；不包含 `pdf.outline` 与真实 AgentExecutor。
-6. [ ] 之后再排：`pdf.outline`、`graph.get/neighborhood`、`ink.snapshot_image`、`user.ask`
+   - 实现见 `crates/mathscape-mcp`：只扫 `text/markdown`（不扫 PDF 文本层 / OCR）。`artifact_ids` 必填且非空，不提供全库 grep；`pattern` 为大小写敏感的字面子串（非正则，本切片不接受 `terms`）。命中 `locator` 复用 `md_byte_range`（半开字节，覆盖该次匹配本身），可直接交给 `material.read`；`snippet` 是包含匹配的原文片段（行内、有字节上限），`score` 恒为 1。`max_hits` 默认且硬顶 50；超出，或单文件只扫前 1MiB，返回 `status: truncated` 且 `truncated: true`。任一 id 不在目录中为业务 `not_found`（不返回部分命中）；非 markdown 为 `invalid_arg`。本项先于清单第 4 项落地；不包含真实 AgentExecutor。
+6. [x] `pdf.outline`（草案 §2.4）
+   - 实现见 `crates/mathscape-pdf`（`PdfEngine::outline`，薄封装 `lopdf::Document::get_toc`）与 `crates/mathscape-mcp`。`tools/list` 顺序为 `workspace.search`、`material.read`、`material.grep`、`pdf.outline`。
+   - 只读，**不**把目录写入 workspace / catalog。没有 `document_index_id`（省略，不填 `null`，与 revision「没有来源就省略」一致）。`persist_index` 仅接受省略或 `false`；`true` 为调用错误 `invalid_arg`。
+   - `entries[].pdf_page_index` 为 **0-based**；`entries[].level` 为 1-based 深度（1 = 顶层书签）。`material.read` 的 `pdf_pages` 仍为 **1-based** 闭区间。
+   - 无嵌入式书签：`status: ok`，`entries: []`，`source: "embedded_toc"`，`diagnostics` 含 `outline_empty`。这与 `material.read` 在所请求页均无文本层时返回 `capability_unavailable` 不同：空目录不是外部能力缺失。
+   - 不实现草案里的启发式目录（`source: "heuristic"`），也不返回印刷页码 `printed_label`（没有来源就省略）。
+   - `lopdf` 0.42 的 `get_toc` 以标题为键，同名书签会折叠成一条；本切片不另写目录解析器去修复。
+7. [ ] 之后再排：`graph.get/neighborhood`、`ink.snapshot_image`、`user.ask`
 - 写路径（`propose_changes`）不进 Phase1。
 
 ---
