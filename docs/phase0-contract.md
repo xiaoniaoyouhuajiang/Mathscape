@@ -150,9 +150,10 @@ AgentExecutor 最小接口（语义，非具体签名）：
 - [x] 事件 JSONL 序列化/反序列化 round-trip 测试；`turn_start/turn_end`、`tool_call/tool_result` 配对校验
 
 ### Phase1 首批代码（垂直切片：只读）
-1. [ ] `mathscape mcp` 空壳：`initialize` / `tools/list` / `tools/call`（MCP 草案 §4）
-2. [ ] `workspace.search` 包装现有 `SearchRegistry`，不另写匹配（草案 §1.2、§2.1）
-3. [ ] `material.read`（md_byte_range + pdf_pages，32KiB 硬顶 → `truncated`）（草案 §2.2）
+1. [x] `mathscape mcp` 空壳：`initialize` / `tools/list` / `tools/call`（MCP 草案 §4）
+2. [x] `workspace.search` 包装现有 `SearchRegistry`，不另写匹配（草案 §1.2、§2.1）
+3. [x] `material.read`（md_byte_range + pdf_pages，32KiB 硬顶 → `truncated`）（草案 §2.2）
+   - 实现见 `crates/mathscape-mcp`：Markdown 返回范围按 UTF-8 字符边界外扩后回显；PDF 只读文本层（`mathscape-pdf`），所请求页均无文本层时返回 `capability_unavailable` + Marker CapabilityProbe，Phase1 不调用 Marker；结果额外带 `total_bytes` / `total_pages` / `page_spans` / `revision`（artifact 当前修订）及 `diagnostics`。
 4. [ ] 接一个真实后端（Codex 或 Claude Code）跑通：Agent 调 search → read，桌面看到 §3 事件
 5. [ ] 然后 `material.grep`（线性扫描，草案 §2.3）
 6. [ ] 之后再排：`pdf.outline`、`graph.get/neighborhood`、`ink.snapshot_image`、`user.ask`

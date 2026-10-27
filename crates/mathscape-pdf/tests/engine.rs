@@ -134,6 +134,35 @@ fn exhaustive_classification_produces_zero_based_ocr_route() {
 }
 
 #[test]
+fn page_texts_join_runs_into_lines_and_flag_pages_without_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let text_path = directory.path().join("text.pdf");
+    let blank_path = directory.path().join("blank.pdf");
+    write_pdf(&text_path, true);
+    write_pdf(&blank_path, false);
+    let options = PdfOpenOptions::new();
+    let selection = PdfSelection::all(1).unwrap();
+
+    let texts = PdfEngine
+        .extract_positioned_text(&text_path, &selection, &options)
+        .unwrap()
+        .page_texts();
+    assert_eq!(texts.len(), 1);
+    assert_eq!(texts[0].0, PdfPageIndex::new(0));
+    let lines: Vec<_> = texts[0].1.lines().map(str::trim).collect();
+    assert_eq!(
+        lines,
+        vec!["First text run", "Second text run", "Third text run"]
+    );
+
+    let blank = PdfEngine
+        .extract_positioned_text(&blank_path, &selection, &options)
+        .unwrap()
+        .page_texts();
+    assert_eq!(blank, vec![(PdfPageIndex::new(0), String::new())]);
+}
+
+#[test]
 fn reports_non_pdf_input_without_leaking_backend_types() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("not-a-pdf.txt");

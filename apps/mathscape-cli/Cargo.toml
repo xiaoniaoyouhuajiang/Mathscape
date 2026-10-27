@@ -5,14 +5,18 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "mathscape"
+path = "src/main.rs"
+
 [dependencies]
 mathscape-domain.workspace = true
 mathscape-fixture.workspace = true
 mathscape-graph.workspace = true
+mathscape-mcp.workspace = true
 mathscape-orchestrator.workspace = true
 mathscape-query.workspace = true
 mathscape-store-sqlite.workspace = true
 
 [lints]
 workspace = true
-

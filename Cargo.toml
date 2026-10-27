@@ -27,6 +27,7 @@ mathscape-domain = { path = "crates/mathscape-domain" }
 mathscape-fixture = { path = "crates/mathscape-fixture" }
 mathscape-graph = { path = "crates/mathscape-graph" }
 mathscape-llm = { path = "crates/mathscape-llm" }
+mathscape-mcp = { path = "crates/mathscape-mcp" }
 mathscape-orchestrator = { path = "crates/mathscape-orchestrator" }
 mathscape-pdf = { path = "crates/mathscape-pdf" }
 mathscape-query = { path = "crates/mathscape-query" }

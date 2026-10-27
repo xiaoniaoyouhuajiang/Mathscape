@@ -3082,6 +3082,7 @@ dependencies = [
  "mathscape-domain",
  "mathscape-fixture",
  "mathscape-graph",
+ "mathscape-mcp",
  "mathscape-orchestrator",
  "mathscape-query",
  "mathscape-store-sqlite",
@@ -3169,6 +3170,23 @@ dependencies = [
  "tokio",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "mathscape-mcp"
+version = "0.1.0"
+dependencies = [
+ "lopdf",
+ "mathscape-agent",
+ "mathscape-artifact",
+ "mathscape-domain",
+ "mathscape-pdf",
+ "mathscape-query",
+ "mathscape-store-sqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
