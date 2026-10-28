@@ -579,25 +579,33 @@ fn spans_artifacts_and_relations_resolve() {
         "no_span_locator"
     );
     let inked = get(&f, &unit("inked"));
-    assert!(inked["node"]["content_ref"].is_null());
-    assert_eq!(
-        diag(&inked, "content_unavailable")["details"]["reason"],
-        "ink_out_of_scope"
-    );
+    let content_ref = &inked["node"]["content_ref"];
+    assert_eq!(content_ref["type"], "ink_page", "{inked}");
+    assert_eq!(content_ref["tool"], "ink.page_image");
+    assert_eq!(content_ref["node_id"], span("s_ink"));
+    assert_eq!(content_ref["page_id"], "p");
+    assert_eq!(content_ref["stroke_ids"], json!(["a"]));
+    assert_eq!(content_ref["via"], span("s_ink"));
+    assert!(!codes(&inked).contains(&"content_unavailable".to_owned()));
     assert_eq!(inked["node"]["parent_artifact_id"], f.snapshot_stand_in);
+    // Without an ink_snapshots row a plain application/json artifact stays an artifact.
+    assert_eq!(get(&f, &f.snapshot_stand_in)["node"]["kind"], "artifact");
 }
 
 #[test]
-fn note_has_no_content_ref() {
+fn note_content_ref_is_ink_page() {
     let f = fixture(0);
     let result = get(&f, NOTE_ID);
     assert_eq!(result["status"], "ok", "{result}");
     assert_eq!(result["node"]["kind"], "note");
-    assert!(result["node"]["content_ref"].is_null());
-    assert_eq!(
-        diag(&result, "content_unavailable")["details"]["reason"],
-        "ink_out_of_scope"
-    );
+    let content_ref = &result["node"]["content_ref"];
+    assert_eq!(content_ref["type"], "ink_page", "{result}");
+    assert_eq!(content_ref["tool"], "ink.page_image");
+    assert_eq!(content_ref["node_id"], NOTE_ID);
+    assert_eq!(content_ref["page_count"], 0);
+    assert_eq!(content_ref["media_type"], "image/png");
+    assert!(!codes(&result).contains(&"content_unavailable".to_owned()));
+    // No snapshots or links in the base fixture: the note is isolated.
     let result = hood(&f, json!({ "node_id": NOTE_ID }));
     assert_eq!(result["status"], "ok", "{result}");
     assert_eq!(node_ids(&result), [NOTE_ID]);
@@ -650,7 +658,13 @@ fn default_edge_types_exclude_semantic_relations() {
     assert_eq!(default["status"], "ok", "{default}");
     assert_eq!(
         default["applied"]["edge_types"],
-        json!(["conversion", "located_in", "contains_span", "has_part"])
+        json!([
+            "conversion",
+            "located_in",
+            "contains_span",
+            "has_part",
+            "has_snapshot"
+        ])
     );
     assert_eq!(default["applied"]["direction"], "both");
     assert_eq!(default["applied"]["depth"], 1);
@@ -784,4 +798,332 @@ fn graph_tools_do_not_write_the_workspace_database() {
         std::fs::read(f.root.join("mathscape.sqlite3")).unwrap(),
         bytes_before
     );
+}
+
+/// link_id, kind, key, target_id, target_json, role, primary, state, removed_at.
+type LinkRow<'a> = (
+    &'a str,
+    &'a str,
+    String,
+    String,
+    String,
+    &'a str,
+    i64,
+    &'a str,
+    Option<i64>,
+);
+
+const SNAPSHOT_ID: &str = "snap-0123456789abcdef";
+
+/// Adds one unnamed snapshot of NOTE_ID (the JSON stand-in, label NULL) and
+/// note links: lemma as study + check (two roles, one primary), a Markdown
+/// range, a removed link and a link to a missing object.
+fn add_ink(f: &Fixture) {
+    let connection = Connection::open(f.root.join("mathscape.sqlite3")).unwrap();
+    connection
+        .execute(
+            "UPDATE ink_documents SET pages_json = ?2 WHERE document_id = ?1",
+            params![NOTE_ID, r#"[{"id":"p1"},{"id":"p2"},{"id":"p3"}]"#],
+        )
+        .unwrap();
+    let manifest = json!({"document": {"pages": [{"id": "p"}, {"id": "q"}]}});
+    connection
+        .execute(
+            "INSERT INTO ink_snapshots
+             (snapshot_id, request_id, document_id, through_seq, artifact_id, content_hash,
+              byte_size, manifest_json, created_at, label)
+             VALUES (?1, 'req-1', ?2, 7, ?3, 'hash', 18, ?4, '2026-10-28T10:00:00+08:00', NULL)",
+            params![
+                SNAPSHOT_ID,
+                NOTE_ID,
+                f.snapshot_stand_in,
+                manifest.to_string()
+            ],
+        )
+        .unwrap();
+    let markdown_target = json!({
+        "kind": "markdown", "artifact_id": f.markdown, "content_hash": "h",
+        "first_block": "b1", "last_block": "b2", "block_ids": ["b1", "b2"],
+        "start": 16, "end": 58, "block_hash": "bh", "excerpt": "Every bounded", "label": "引理段落"
+    });
+    let lemma = unit("lemma");
+    let ghost = unit("ghost");
+    let object = |id: &str| json!({"kind": "source_object", "object_id": id}).to_string();
+    let rows: Vec<LinkRow> = vec![
+        (
+            "link-study",
+            "source_object",
+            format!("src:{lemma}"),
+            lemma.clone(),
+            object(&lemma),
+            "study",
+            1,
+            "active",
+            None,
+        ),
+        (
+            "link-check",
+            "source_object",
+            format!("src:{lemma}"),
+            lemma.clone(),
+            object(&lemma),
+            "check",
+            0,
+            "active",
+            None,
+        ),
+        (
+            "link-md",
+            "markdown",
+            format!("md:{}:b1:b2", f.markdown),
+            f.markdown.clone(),
+            markdown_target.to_string(),
+            "reference",
+            0,
+            "active",
+            None,
+        ),
+        (
+            "link-removed",
+            "source_object",
+            format!("src:{}", unit("proof")),
+            unit("proof"),
+            object(&unit("proof")),
+            "attempt",
+            0,
+            "removed",
+            Some(5),
+        ),
+        (
+            "link-ghost",
+            "source_object",
+            format!("src:{ghost}"),
+            ghost.clone(),
+            object(&ghost),
+            "question",
+            0,
+            "active",
+            None,
+        ),
+    ];
+    for (link_id, kind, key, target_id, target_json, role, primary, state, removed_at) in rows {
+        connection
+            .execute(
+                "INSERT INTO ink_note_links
+                 (link_id, document_id, target_kind, target_key, target_id, target_json,
+                  target_revision, target_label, role, is_primary, state, created_at, removed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, 1, ?11)",
+                params![
+                    link_id,
+                    NOTE_ID,
+                    kind,
+                    key,
+                    target_id,
+                    target_json,
+                    format!("{link_id} label"),
+                    role,
+                    primary,
+                    state,
+                    removed_at
+                ],
+            )
+            .unwrap();
+    }
+}
+
+fn edges_of<'a>(result: &'a Value, relation: &str) -> Vec<&'a Value> {
+    result["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["relation"] == relation)
+        .collect()
+}
+
+#[test]
+fn unnamed_snapshot_is_a_snapshot_with_ink_page() {
+    let f = fixture(0);
+    add_ink(&f);
+    let result = get(&f, &f.snapshot_stand_in);
+    assert_eq!(result["status"], "ok", "{result}");
+    let node = &result["node"];
+    assert_eq!(node["kind"], "snapshot", "{result}");
+    assert_eq!(node["snapshot_id"], SNAPSHOT_ID);
+    assert_eq!(node["document_id"], NOTE_ID);
+    let content_ref = &node["content_ref"];
+    assert_eq!(
+        *content_ref,
+        json!({
+            "type": "ink_page", "tool": "ink.page_image", "node_id": SNAPSHOT_ID,
+            "page_id": "p", "page_count": 2, "media_type": "image/png", "via": null
+        })
+    );
+    assert!(!codes(&result).contains(&"content_unavailable".to_owned()));
+    assert_eq!(
+        node["edge_summary"]["has_snapshot"],
+        json!({"in": 1, "out": 0})
+    );
+
+    let note = get(&f, NOTE_ID);
+    assert_eq!(note["node"]["content_ref"]["page_id"], "p1");
+    assert_eq!(note["node"]["content_ref"]["page_count"], 3);
+
+    // material.read refuses the snapshot JSON but points at ink.page_image.
+    let (read, is_error) = call(
+        &f.server,
+        "material.read",
+        json!({ "artifact_id": f.snapshot_stand_in, "locator": {"md_byte_range": {"start": 0, "end": 1}} }),
+    );
+    assert!(is_error, "{read}");
+    assert_eq!(read["error"]["code"], "invalid_arg", "{read}");
+    assert_eq!(
+        read["error"]["details"]["hint"], "use ink.page_image",
+        "{read}"
+    );
+
+    // The ink span picks up page_count from the snapshot row.
+    let ink_span = get(&f, &span("s_ink"));
+    assert_eq!(
+        ink_span["node"]["content_ref"]["page_count"], 2,
+        "{ink_span}"
+    );
+}
+
+#[test]
+fn has_snapshot_is_a_default_edge() {
+    let f = fixture(0);
+    add_ink(&f);
+    let result = hood(&f, json!({ "node_id": NOTE_ID }));
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_no_dangling_edges(&result);
+    let snapshots = edges_of(&result, "has_snapshot");
+    assert_eq!(snapshots.len(), 1, "{result}");
+    let edge = snapshots[0];
+    assert_eq!(edge["from"], NOTE_ID);
+    assert_eq!(edge["to"], f.snapshot_stand_in);
+    assert_eq!(edge["synthetic"], true);
+    assert_eq!(edge["label"], "snapshot @7");
+    assert_eq!(edge["attrs"], json!({"through_seq": 7, "label": null}));
+    assert_eq!(
+        edge["endpoints"],
+        json!([
+            {"node_id": NOTE_ID, "role": "note", "side": "from", "ordinal": null},
+            {"node_id": f.snapshot_stand_in, "role": "snapshot", "side": "to", "ordinal": null}
+        ])
+    );
+    assert!(
+        edges_of(&result, "note_link").is_empty(),
+        "note_link is opt-in"
+    );
+    assert!(!node_ids(&result).contains(&unit("lemma")));
+    // The edge is navigable from the snapshot side as well, and get resolves it.
+    let back = hood(&f, json!({ "node_id": f.snapshot_stand_in }));
+    assert!(node_ids(&back).contains(&NOTE_ID.to_owned()), "{back}");
+    let id = edge["id"].as_str().unwrap();
+    let relation = get(&f, id);
+    assert_eq!(relation["node"]["kind"], "relation", "{relation}");
+    assert_eq!(relation["node"]["relation"], "has_snapshot");
+}
+
+#[test]
+fn note_link_is_opt_in_and_counted_in_edge_summary() {
+    let f = fixture(0);
+    add_ink(&f);
+    let note = get(&f, NOTE_ID);
+    let summary = &note["node"]["edge_summary"];
+    assert_eq!(summary["note_link"], json!({"in": 0, "out": 3}), "{note}");
+    assert_eq!(summary["has_snapshot"], json!({"in": 0, "out": 1}));
+    let lemma = get(&f, &unit("lemma"));
+    assert_eq!(
+        lemma["node"]["edge_summary"]["note_link"],
+        json!({"in": 2, "out": 0}),
+        "{lemma}"
+    );
+    // The removed link and the ghost target never become edges.
+    let skipped = diag(&note, "dangling_endpoint_skipped");
+    assert!(skipped.to_string().contains("link-ghost"), "{skipped}");
+    assert!(!skipped.to_string().contains("link-removed"), "{skipped}");
+
+    let result = hood(
+        &f,
+        json!({ "node_id": NOTE_ID, "edge_types": ["note_link"] }),
+    );
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_no_dangling_edges(&result);
+    let links = edges_of(&result, "note_link");
+    assert_eq!(links.len(), 3, "{result}");
+    let lemma_roles: Vec<&Value> = links
+        .iter()
+        .filter(|e| e["to"] == unit("lemma"))
+        .map(|e| &e["attrs"]["role"])
+        .collect();
+    assert_eq!(lemma_roles.len(), 2, "one edge per role: {result}");
+    assert!(lemma_roles.contains(&&json!("study")) && lemma_roles.contains(&&json!("check")));
+    let study = links
+        .iter()
+        .find(|e| e["attrs"]["role"] == "study")
+        .unwrap();
+    assert_eq!(study["attrs"]["is_primary"], true);
+    assert_eq!(study["attrs"]["target_kind"], "source_object");
+    assert_eq!(study["attrs"]["target_status"], "active");
+    assert!(study["attrs"].get("locator").is_none());
+    assert_eq!(study["endpoints"][1]["role"], "target");
+    assert!(edges_of(&result, "has_snapshot").is_empty());
+    let ids = node_ids(&result);
+    assert!(
+        ids.contains(&unit("lemma")) && ids.contains(&f.markdown),
+        "{ids:?}"
+    );
+    assert!(!ids.contains(&unit("proof")), "removed link: {ids:?}");
+}
+
+#[test]
+fn markdown_note_link_carries_md_byte_range() {
+    let f = fixture(0);
+    add_ink(&f);
+    let result = hood(
+        &f,
+        json!({ "node_id": NOTE_ID, "edge_types": ["note_link"] }),
+    );
+    let edge = edges_of(&result, "note_link")
+        .into_iter()
+        .find(|e| e["attrs"]["target_kind"] == "markdown")
+        .unwrap_or_else(|| panic!("no markdown link in {result}"));
+    assert_eq!(edge["to"], f.markdown);
+    assert_eq!(edge["attrs"]["role"], "reference");
+    assert_eq!(
+        edge["attrs"]["locator"],
+        json!({"md_byte_range": {"start": 16, "end": 58}})
+    );
+    // The locator reads straight through material.read.
+    let read = ok(
+        &f.server,
+        "material.read",
+        json!({ "artifact_id": f.markdown, "locator": edge["attrs"]["locator"] }),
+    );
+    assert_eq!(
+        read["text"], "Every bounded monotone sequence converges.",
+        "{read}"
+    );
+}
+
+#[test]
+fn ink_span_stroke_ids_are_capped() {
+    let f = fixture(0);
+    let mut writer = MapWriter {
+        connection: Connection::open(f.root.join("mathscape.sqlite3")).unwrap(),
+        revision: 2000,
+    };
+    let strokes: Vec<String> = (0..60).map(|i| format!("st{i:02}")).collect();
+    writer.span(
+        &span("s_many"),
+        json!({"ink": {"snapshot_artifact": f.snapshot_stand_in, "page_id": "p", "stroke_ids": strokes, "selection_mode": "lasso"}}),
+    );
+    drop(writer);
+    let result = get(&f, &span("s_many"));
+    let content_ref = &result["node"]["content_ref"];
+    assert_eq!(content_ref["type"], "ink_page", "{result}");
+    assert_eq!(content_ref["stroke_ids"].as_array().unwrap().len(), 50);
+    assert_eq!(content_ref["stroke_ids"][49], "st49");
+    assert_eq!(content_ref["stroke_ids_truncated"], true);
 }

@@ -780,6 +780,25 @@ pub(crate) fn links_of_note(
         .collect()
 }
 
+/// Every active link of every note (trashed notes included), by note then
+/// primary first.
+pub(crate) fn all_active_links(
+    connection: &Connection,
+) -> Result<Vec<InkNoteLink>, SqliteStoreError> {
+    let rows = {
+        let mut query = connection.prepare(&format!(
+            "SELECT {LINK_COLUMNS} FROM ink_note_links WHERE state='active'
+             ORDER BY document_id, is_primary DESC, created_at, link_id"
+        ))?;
+        query
+            .query_map([], link_row)?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    rows.into_iter()
+        .map(|row| build_link(connection, row))
+        .collect()
+}
+
 /// Automatic title for an auto-mode note: from the primary link if any,
 /// otherwise from the creation time.
 pub(crate) fn auto_title_for(

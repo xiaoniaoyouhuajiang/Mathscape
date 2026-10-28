@@ -5,9 +5,13 @@
 //! `SqliteArtifactStore::landscape_snapshot()` with
 //! [`mathscape_query::project_landscape`]; nothing is cached or written. The
 //! projection already contains the synthetic bridges (`contains_span`,
-//! `has_part` from `parent_unit`, `located_in`), so the tools add no edges of
-//! their own. Notes are not landscape nodes: they are resolved from the ink
-//! store as isolated nodes.
+//! `has_part` from `parent_unit`, `located_in`). Notes are not landscape
+//! nodes: they are overlaid from the ink store (Phase1d-a) together with two
+//! read-time edge kinds that are never persisted: `has_snapshot`
+//! (note -> snapshot artifact, default) and `note_link` (note -> linked
+//! target, opt-in). Overlay nodes and edges are indexed after the projection
+//! ones, so every index below `projection.nodes().len()` (resp.
+//! `projection.relations().len()`) is a landscape node (resp. relation).
 //!
 //! Nodes never carry body text. Instead they carry `parent_artifact_id` and a
 //! `content_ref` that can be passed to `material.read` unchanged.
@@ -20,9 +24,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use mathscape_agent::{Scope, ToolError, ToolErrorCode, ToolStatus};
 use mathscape_domain::{EntityKind, LifecycleStatus};
-use mathscape_graph::{GraphProjection, IncidenceDirection, ProjectionRelation};
+use mathscape_graph::{GraphProjection, IncidenceDirection};
 use mathscape_query::{LandscapeProjectionInput, SourceGraphProjectionError, project_landscape};
-use mathscape_store_sqlite::{SourceMapSnapshot, SqliteArtifactStore, StoredMapObject};
+use mathscape_store_sqlite::{
+    InkLinkTarget, SourceMapSnapshot, SqliteArtifactStore, StoredMapObject,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -30,9 +36,9 @@ use super::material::{MARKDOWN_MEDIA_TYPE, PDF_MEDIA_TYPE};
 use super::{GRAPH_GET, GRAPH_NEIGHBORHOOD, diagnostic, parse_args};
 use crate::McpWorkspace;
 
-const GET_DESCRIPTION: &str = "Resolve one id from the material landscape graph (artifacts, source units, source spans, ink snapshots, plus notes from the ink store) without expanding neighbors. Accepts any workspace.search hit id as-is (a snapshot_id is canonicalized to its snapshot artifact id; use canonical_id afterwards) and any graph id (source-span, source-relation, projection-relation, conversion run). Returns kind (artifact|source_span|source_unit|snapshot|note|relation|unsupported), entity_kind, label, lifecycle, parent_artifact_id and content_ref, plus edge_summary counts per relation and direction. No body text: when content_ref is not null, call material.read with content_ref.artifact_id and content_ref.locator unchanged (md_byte_range, or pdf_pages 1-based). content_ref is null with a content_unavailable diagnostic for handwriting (ink_out_of_scope), units without located spans (no_span_locator; do not guess byte ranges), unsupported media, and relations. A missing id is status not_found with node null; an existing id of an unsupported kind is status ok with kind unsupported. Read-only.";
+const GET_DESCRIPTION: &str = "Resolve one id from the material landscape graph (artifacts, source units, source spans, ink snapshots, plus notes from the ink store) without expanding neighbors. Accepts any workspace.search hit id as-is (a snapshot_id is canonicalized to its snapshot artifact id; use canonical_id afterwards) and any graph id (source-span, source-relation, projection-relation, conversion run). Returns kind (artifact|source_span|source_unit|snapshot|note|relation|unsupported), entity_kind, label, lifecycle, parent_artifact_id and content_ref, plus edge_summary counts per relation and direction. No body text: when content_ref is not null, call material.read with content_ref.artifact_id and content_ref.locator unchanged (md_byte_range, or pdf_pages 1-based). Notes, snapshots and ink spans get content_ref.type=ink_page (tool ink.page_image, node_id, page_id, stroke_ids for spans): pass content_ref.node_id and page_id to ink.page_image; that tool ships in a follow-up release and is not callable yet. content_ref is null with a content_unavailable diagnostic for units without located spans (no_span_locator; do not guess byte ranges), unsupported media, and relations. A missing id is status not_found with node null; an existing id of an unsupported kind is status ok with kind unsupported. Read-only.";
 
-const NEIGHBORHOOD_DESCRIPTION: &str = "Bounded BFS from one node_id or 1-8 seed_ids over the material landscape graph (a read-time projection with synthetic bridges: contains_span unit->span, has_part parent->child, located_in span->artifact, conversion pdf->markdown). Relations are returned in edges[] (each counts toward max_edges, keeps every endpoint with role and side; from/to are null for multi-endpoint relations, so read endpoints) and do not consume depth: unit->span->artifact is 2 hops. depth defaults to 1 (max 3; 0 = seeds only). direction defaults to both; out follows from-side to to-side (unit out -> spans -> artifact), in goes the other way (markdown artifact in -> spans -> units); undirected roles such as evidence are only reached with both. edge_types defaults to the structural four [conversion, located_in, contains_span, has_part]; semantic relations (states, proves, poses, hints, solves, explains, applies_method, cites) are opt-in and must be listed together with any structural ones you still want; [] walks no edges. Prefer depth <= 2 and an explicit max_nodes when adding cites. node_kinds (artifact|source_span|source_unit|snapshot|note) filters the output only; traversal still passes through filtered nodes. max_nodes defaults to 40 (max 100), max_edges to 80 (max 200); values over the hard cap are invalid_arg. Over a cap the result is status truncated with truncated true, shallower layers first, and never a dangling edge. Retired (superseded|rejected|deprecated) and trashed ink nodes are hidden unless include_trashed; include_virtual must be false. Nodes carry depth, via_edge, parent_artifact_id and content_ref for material.read, never body text. Any missing seed makes the whole result not_found. Read-only.";
+const NEIGHBORHOOD_DESCRIPTION: &str = "Bounded BFS from one node_id or 1-8 seed_ids over the material landscape graph (a read-time projection with synthetic bridges: contains_span unit->span, has_part parent->child, located_in span->artifact, conversion pdf->markdown, has_snapshot note->ink snapshot; note_link note->linked source unit/span/artifact, Markdown range or note, with attrs role, is_primary, target_status and locator for Markdown ranges). Relations are returned in edges[] (each counts toward max_edges, keeps every endpoint with role and side; from/to are null for multi-endpoint relations, so read endpoints) and do not consume depth: unit->span->artifact is 2 hops. depth defaults to 1 (max 3; 0 = seeds only). direction defaults to both; out follows from-side to to-side (unit out -> spans -> artifact), in goes the other way (markdown artifact in -> spans -> units); undirected roles such as evidence are only reached with both. edge_types defaults to the structural five [conversion, located_in, contains_span, has_part, has_snapshot]; note_link and semantic relations (states, proves, poses, hints, solves, explains, applies_method, cites) are opt-in and must be listed together with any structural ones you still want; [] walks no edges. Prefer depth <= 2 and an explicit max_nodes when adding cites. node_kinds (artifact|source_span|source_unit|snapshot|note) filters the output only; traversal still passes through filtered nodes. max_nodes defaults to 40 (max 100), max_edges to 80 (max 200); values over the hard cap are invalid_arg. Over a cap the result is status truncated with truncated true, shallower layers first, and never a dangling edge. Retired (superseded|rejected|deprecated) and trashed ink nodes are hidden unless include_trashed; include_virtual must be false. Nodes carry depth, via_edge, parent_artifact_id and content_ref for material.read, never body text. Any missing seed makes the whole result not_found. Read-only.";
 
 const SNAPSHOT_MEDIA_TYPE: &str = "application/vnd.mathscape.ink-snapshot+json";
 const SYNTHETIC_PREFIX: &str = "mathscape:projection-relation/";
@@ -53,11 +59,13 @@ const ARTIFACT_HEAD_BYTES: u64 = 32 * 1024;
 const MAX_DANGLING_LISTED: usize = 20;
 
 /// Closed relation enum (contract §7), in contract order.
-pub const RELATION_TYPES: [&str; 12] = [
+pub const RELATION_TYPES: [&str; 14] = [
     "conversion",
     "located_in",
     "contains_span",
     "has_part",
+    "has_snapshot",
+    "note_link",
     "states",
     "proves",
     "poses",
@@ -67,7 +75,17 @@ pub const RELATION_TYPES: [&str; 12] = [
     "applies_method",
     "cites",
 ];
-pub const DEFAULT_EDGE_TYPES: [&str; 4] = ["conversion", "located_in", "contains_span", "has_part"];
+pub const DEFAULT_EDGE_TYPES: [&str; 5] = [
+    "conversion",
+    "located_in",
+    "contains_span",
+    "has_part",
+    "has_snapshot",
+];
+/// Tool that renders `ink_page` content refs (lands in Phase1d-b).
+const INK_PAGE_TOOL: &str = "ink.page_image";
+/// Most stroke ids carried by one `ink_page` content ref.
+const MAX_CONTENT_STROKE_IDS: usize = 50;
 const NODE_KINDS: [&str; 5] = ["artifact", "source_span", "source_unit", "snapshot", "note"];
 const DIRECTIONS: [&str; 3] = ["both", "in", "out"];
 
@@ -139,7 +157,7 @@ pub(super) fn neighborhood_definition() -> Value {
                     "type": "array",
                     "items": { "type": "string", "enum": RELATION_TYPES },
                     "default": DEFAULT_EDGE_TYPES,
-                    "description": "Relations to traverse and return. Omitted = the structural four; [] = no edges.",
+                    "description": "Relations to traverse and return. Omitted = the structural five (incl. has_snapshot); note_link and semantic relations are opt-in; [] = no edges.",
                 },
                 "node_kinds": {
                     "type": "array",
@@ -189,11 +207,36 @@ struct SnapshotInfo {
     snapshot_id: String,
     document_id: String,
     trashed: bool,
+    first_page_id: Option<String>,
+    page_count: u64,
 }
 
 struct NoteInfo {
     title: String,
     trashed: bool,
+    first_page_id: Option<String>,
+    page_count: u64,
+}
+
+/// A read-time ink edge (`has_snapshot` / `note_link`), never persisted.
+/// Always `from` a note (role `note`) `to` one target node.
+struct InkEdge {
+    id: String,
+    kind: &'static str,
+    entity_kind: &'static str,
+    label: String,
+    from: String,
+    to: String,
+    to_role: &'static str,
+    attrs: Value,
+}
+
+/// One relation endpoint, landscape or overlay.
+struct Endpoint<'a> {
+    node: &'a str,
+    role: &'a str,
+    direction: IncidenceDirection,
+    ordinal: Option<u32>,
 }
 
 struct Graph {
@@ -210,6 +253,10 @@ struct Graph {
     /// Snapshot id -> snapshot artifact id.
     snapshot_artifacts: HashMap<String, String>,
     notes: HashMap<String, NoteInfo>,
+    /// Overlay note node ids; note `i` has node index `projection.nodes().len() + i`.
+    note_ids: Vec<String>,
+    /// Overlay edges; edge `i` has relation index `projection.relations().len() + i`.
+    ink_edges: Vec<InkEdge>,
     relation_revisions: HashMap<String, String>,
     /// Diagnostics produced while building the projection (degraded data).
     load_diagnostics: Vec<Value>,
@@ -287,8 +334,8 @@ fn load(workspace: &McpWorkspace) -> Result<Graph, ToolError> {
     let landscape = store
         .landscape_snapshot()
         .map_err(|error| internal("failed to read the landscape snapshot", error))?;
-    let corpus = store
-        .read_search_corpus()
+    let ink = store
+        .read_ink_graph()
         .map_err(|error| internal("failed to read ink notes", error))?;
 
     let mut source_map = landscape.sources().clone();
@@ -317,6 +364,119 @@ fn load(workspace: &McpWorkspace) -> Result<Graph, ToolError> {
         dangling.push(json!({ "object_id": culprit, "missing_entity": entity }));
     };
 
+    let mut node_index = HashMap::new();
+    for (index, node) in projection.nodes().iter().enumerate() {
+        node_index.insert(node.entity_id().to_string(), index);
+    }
+
+    let mut notes = HashMap::new();
+    let mut note_ids = Vec::new();
+    for note in &ink.notes {
+        if node_index.contains_key(&note.document_id) {
+            continue;
+        }
+        node_index.insert(
+            note.document_id.clone(),
+            projection.nodes().len() + note_ids.len(),
+        );
+        note_ids.push(note.document_id.clone());
+        notes.insert(
+            note.document_id.clone(),
+            NoteInfo {
+                title: note.title.clone(),
+                trashed: note.trashed,
+                first_page_id: note.first_page_id.clone(),
+                page_count: note.page_count,
+            },
+        );
+    }
+
+    // Every snapshot row (named or not): membership in ink_snapshots, not the
+    // label or media type, makes an artifact a snapshot node.
+    let mut snapshots = HashMap::new();
+    let mut snapshot_artifacts = HashMap::new();
+    let mut ink_edges = Vec::new();
+    for row in &ink.snapshots {
+        snapshot_artifacts.insert(row.snapshot_id.clone(), row.artifact_id.clone());
+        snapshots.insert(
+            row.artifact_id.clone(),
+            SnapshotInfo {
+                snapshot_id: row.snapshot_id.clone(),
+                document_id: row.document_id.clone(),
+                trashed: row.note_trashed,
+                first_page_id: row.first_page_id.clone(),
+                page_count: row.page_count,
+            },
+        );
+        if !notes.contains_key(&row.document_id) || !node_index.contains_key(&row.artifact_id) {
+            dangling.push(json!({
+                "object_id": row.snapshot_id,
+                "missing_entity": if notes.contains_key(&row.document_id) { &row.artifact_id } else { &row.document_id },
+            }));
+            continue;
+        }
+        let label = row
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("snapshot @{}", row.through_seq));
+        ink_edges.push(InkEdge {
+            id: format!(
+                "{SYNTHETIC_PREFIX}has_snapshot/{}",
+                id_tail(&row.snapshot_id)
+            ),
+            kind: "has_snapshot",
+            entity_kind: "InkSnapshot",
+            label,
+            from: row.document_id.clone(),
+            to: row.artifact_id.clone(),
+            to_role: "snapshot",
+            attrs: json!({ "through_seq": row.through_seq, "label": row.label }),
+        });
+    }
+
+    // Active links only; one edge per (note, target, role).
+    for link in &ink.links {
+        let target = match &link.target {
+            InkLinkTarget::SourceObject { object_id } => object_id.clone(),
+            InkLinkTarget::Markdown(markdown) => markdown.artifact_id.clone(),
+            InkLinkTarget::InkNote { document_id } => document_id.clone(),
+        };
+        if !notes.contains_key(&link.document_id) || !node_index.contains_key(&target) {
+            dangling.push(json!({ "object_id": link.link_id, "missing_entity": target }));
+            continue;
+        }
+        let target_kind = match &link.target {
+            InkLinkTarget::SourceObject { .. } => "source_object",
+            InkLinkTarget::Markdown(_) => "markdown",
+            InkLinkTarget::InkNote { .. } => "ink_note",
+        };
+        let mut attrs = json!({
+            "role": link.role.as_str(),
+            "is_primary": link.is_primary,
+            "target_kind": target_kind,
+            "target_status": link.target_status,
+        });
+        if let InkLinkTarget::Markdown(markdown) = &link.target {
+            attrs["locator"] =
+                json!({ "md_byte_range": { "start": markdown.start, "end": markdown.end } });
+        }
+        let label = if link.target_label.is_empty() {
+            link.role.as_str().to_owned()
+        } else {
+            link.target_label.clone()
+        };
+        ink_edges.push(InkEdge {
+            id: format!("{SYNTHETIC_PREFIX}note_link/{}", link.link_id),
+            kind: "note_link",
+            entity_kind: "InkNoteLink",
+            label,
+            from: link.document_id.clone(),
+            to: target,
+            to_role: "target",
+            attrs,
+        });
+    }
+
     let mut load_diagnostics = Vec::new();
     if !dangling.is_empty() {
         let count = dangling.len();
@@ -328,22 +488,28 @@ fn load(workspace: &McpWorkspace) -> Result<Graph, ToolError> {
         }));
     }
 
-    let mut node_index = HashMap::new();
-    for (index, node) in projection.nodes().iter().enumerate() {
-        node_index.insert(node.entity_id().to_string(), index);
-    }
+    let relation_total = projection.relations().len();
     let mut relation_index = HashMap::new();
-    let mut incident = vec![Vec::new(); projection.nodes().len()];
+    let mut incident = vec![Vec::new(); projection.nodes().len() + note_ids.len()];
+    let mut add_incident = |node: usize, index: usize| {
+        let list: &mut Vec<usize> = &mut incident[node];
+        if list.last() != Some(&index) {
+            list.push(index);
+        }
+    };
     for (index, relation) in projection.relations().iter().enumerate() {
         relation_index.insert(relation.relation_id().to_string(), index);
         for endpoint in relation.endpoints() {
             if let Some(&node) = node_index.get(endpoint.node().as_str()) {
-                let list: &mut Vec<usize> = &mut incident[node];
-                if list.last() != Some(&index) {
-                    list.push(index);
-                }
+                add_incident(node, index);
             }
         }
+    }
+    for (offset, edge) in ink_edges.iter().enumerate() {
+        let index = relation_total + offset;
+        relation_index.insert(edge.id.clone(), index);
+        add_incident(node_index[&edge.from], index);
+        add_incident(node_index[&edge.to], index);
     }
 
     let objects = landscape
@@ -363,60 +529,14 @@ fn load(workspace: &McpWorkspace) -> Result<Graph, ToolError> {
         );
     }
 
-    let notes = corpus
-        .notes
-        .iter()
-        .map(|note| {
-            (
-                note.document_id.clone(),
-                NoteInfo {
-                    title: note.title.clone(),
-                    trashed: note.trashed,
-                },
-            )
-        })
-        .collect::<HashMap<_, _>>();
-
     let mut artifacts = HashMap::new();
-    let mut snapshots = HashMap::new();
-    let mut snapshot_artifacts = HashMap::new();
-    for row in &corpus.snapshots {
-        snapshot_artifacts.insert(row.snapshot_id.clone(), row.artifact_id.clone());
-        snapshots.insert(
-            row.artifact_id.clone(),
-            SnapshotInfo {
-                snapshot_id: row.snapshot_id.clone(),
-                document_id: row.document_id.clone(),
-                trashed: row.note_trashed,
-            },
-        );
-    }
     for record in landscape.artifacts().artifacts() {
         let header = record.entity().header();
         let payload = record.entity().payload();
-        let id = header.stable_id().to_string();
-        let media_type = payload.media_type().as_str().to_owned();
-        if media_type == SNAPSHOT_MEDIA_TYPE
-            && !snapshots.contains_key(&id)
-            && let Some(stored) = store
-                .ink_snapshot_for_artifact(&id)
-                .map_err(|error| internal("failed to read ink snapshots", error))?
-        {
-            let trashed = notes.get(&stored.document_id).is_some_and(|n| n.trashed);
-            snapshot_artifacts.insert(stored.snapshot_id.clone(), id.clone());
-            snapshots.insert(
-                id.clone(),
-                SnapshotInfo {
-                    snapshot_id: stored.snapshot_id,
-                    document_id: stored.document_id,
-                    trashed,
-                },
-            );
-        }
         artifacts.insert(
-            id,
+            header.stable_id().to_string(),
             ArtifactInfo {
-                media_type,
+                media_type: payload.media_type().as_str().to_owned(),
                 revision: header.revision_id().to_string(),
                 byte_size: payload.byte_size(),
             },
@@ -433,6 +553,8 @@ fn load(workspace: &McpWorkspace) -> Result<Graph, ToolError> {
         snapshots,
         snapshot_artifacts,
         notes,
+        note_ids,
+        ink_edges,
         relation_revisions,
         load_diagnostics,
     })
@@ -448,7 +570,6 @@ enum Target {
     Relation(usize),
     /// A source-map object that is not a landscape node or relation.
     Object,
-    Note,
 }
 
 struct Resolved {
@@ -465,8 +586,6 @@ impl Graph {
             Some(Target::Relation(index))
         } else if self.objects.contains_key(canonical) {
             Some(Target::Object)
-        } else if self.notes.contains_key(canonical) {
-            Some(Target::Note)
         } else {
             None
         }
@@ -501,12 +620,75 @@ impl Graph {
         }))
     }
 
+    /// Overlay note id of a node index, if it is a note.
+    fn note_at(&self, index: usize) -> Option<&str> {
+        index
+            .checked_sub(self.projection.nodes().len())
+            .map(|offset| self.note_ids[offset].as_str())
+    }
+
+    fn node_id(&self, index: usize) -> &str {
+        match self.note_at(index) {
+            Some(id) => id,
+            None => self.projection.nodes()[index].entity_id().as_str(),
+        }
+    }
+
+    /// Overlay edge of a relation index, if it is one.
+    fn ink_edge(&self, index: usize) -> Option<&InkEdge> {
+        index
+            .checked_sub(self.projection.relations().len())
+            .map(|offset| &self.ink_edges[offset])
+    }
+
+    fn relation_id(&self, index: usize) -> &str {
+        match self.ink_edge(index) {
+            Some(edge) => edge.id.as_str(),
+            None => self.projection.relations()[index].relation_id().as_str(),
+        }
+    }
+
+    fn endpoints(&self, index: usize) -> Vec<Endpoint<'_>> {
+        match self.ink_edge(index) {
+            Some(edge) => vec![
+                Endpoint {
+                    node: &edge.from,
+                    role: "note",
+                    direction: IncidenceDirection::IntoRelation,
+                    ordinal: None,
+                },
+                Endpoint {
+                    node: &edge.to,
+                    role: edge.to_role,
+                    direction: IncidenceDirection::OutOfRelation,
+                    ordinal: None,
+                },
+            ],
+            None => self.projection.relations()[index]
+                .endpoints()
+                .iter()
+                .map(|endpoint| Endpoint {
+                    node: endpoint.node().as_str(),
+                    role: endpoint.role().as_str(),
+                    direction: endpoint.direction(),
+                    ordinal: endpoint.ordinal(),
+                })
+                .collect(),
+        }
+    }
+
     fn snapshot_of(&self, index: usize) -> Option<&SnapshotInfo> {
+        if self.note_at(index).is_some() {
+            return None;
+        }
         let node = &self.projection.nodes()[index];
         self.snapshots.get(node.entity_id().as_str())
     }
 
     fn is_snapshot_node(&self, index: usize) -> bool {
+        if self.note_at(index).is_some() {
+            return false;
+        }
         let node = &self.projection.nodes()[index];
         node.kind() == EntityKind::SourceArtifact
             && (self.snapshots.contains_key(node.entity_id().as_str())
@@ -517,6 +699,9 @@ impl Graph {
     }
 
     fn node_kind(&self, index: usize) -> &'static str {
+        if self.note_at(index).is_some() {
+            return "note";
+        }
         match self.projection.nodes()[index].kind() {
             EntityKind::SourceArtifact if self.is_snapshot_node(index) => "snapshot",
             EntityKind::SourceArtifact => "artifact",
@@ -527,16 +712,26 @@ impl Graph {
     }
 
     fn node_retired(&self, index: usize) -> bool {
+        if let Some(id) = self.note_at(index) {
+            return self.notes[id].trashed;
+        }
         lifecycle_retired(self.projection.nodes()[index].lifecycle_status())
             || self.snapshot_of(index).is_some_and(|s| s.trashed)
     }
 
     fn relation_kind(&self, index: usize) -> String {
+        if let Some(edge) = self.ink_edge(index) {
+            return edge.kind.to_owned();
+        }
         to_string_value(self.projection.relations()[index].relation_kind_value())
             .unwrap_or_else(|| "unknown".to_owned())
     }
 
     fn relation_retired(&self, index: usize) -> bool {
+        if self.ink_edge(index).is_some() {
+            // Visibility follows the endpoints (trashed note / retired target).
+            return false;
+        }
         lifecycle_retired(self.projection.relations()[index].lifecycle_status())
     }
 
@@ -597,17 +792,31 @@ impl Graph {
                 _ => {}
             }
         }
+        if let Some(artifact) = ink
+            && self.artifacts.contains_key(artifact)
+        {
+            let page_id = str_at(payload, "/ink/page_id");
+            let strokes: Vec<&str> = payload
+                .pointer("/ink/stroke_ids")
+                .and_then(Value::as_array)
+                .map(|ids| ids.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let page_count = self.snapshots.get(artifact).map(|s| s.page_count);
+            return (
+                parent,
+                Ok(ink_page_ref(span_id, page_id, page_count, &strokes)),
+            );
+        }
         let reason = if unsupported {
             "unsupported_media_type"
-        } else if ink.is_some() {
-            "ink_out_of_scope"
         } else {
             "no_span_locator"
         };
         (parent, Err(reason))
     }
 
-    /// Unit: lowest-ordinal Markdown span, else lowest-ordinal PDF page span.
+    /// Unit: lowest-ordinal Markdown span, else lowest-ordinal PDF page span,
+    /// else lowest-ordinal ink span (`ink_page`).
     /// Returns `(parent, content_ref|reason, span_count)`.
     fn unit_ref(&self, unit_id: &str) -> (Option<String>, Result<Value, &'static str>, usize) {
         let spans: Vec<&str> = self
@@ -629,8 +838,9 @@ impl Graph {
                 .iter()
                 .find(|(_, _, content)| content.as_ref().is_ok_and(|value| value["type"] == kind))
         };
-        if let Some((span, parent, Ok(content))) =
-            pick("md_byte_range").or_else(|| pick("pdf_pages"))
+        if let Some((span, parent, Ok(content))) = pick("md_byte_range")
+            .or_else(|| pick("pdf_pages"))
+            .or_else(|| pick("ink_page"))
         {
             let mut content = content.clone();
             content["via"] = json!(span);
@@ -642,9 +852,7 @@ impl Graph {
                 .iter()
                 .any(|(_, _, content)| content.as_ref().err() == Some(&reason))
         };
-        let reason = if has("ink_out_of_scope") {
-            "ink_out_of_scope"
-        } else if has("unsupported_media_type") {
+        let reason = if has("unsupported_media_type") {
             "unsupported_media_type"
         } else {
             "no_span_locator"
@@ -666,6 +874,27 @@ impl Graph {
         let mut content = Value::Null;
         let mut parent = Value::Null;
         match target {
+            Target::Node(index) if self.note_at(index).is_some() => {
+                let note = &self.notes[canonical];
+                node.insert("kind".into(), json!("note"));
+                node.insert("entity_kind".into(), json!("InkDocument"));
+                let label = if note.title.is_empty() {
+                    id_tail(canonical)
+                } else {
+                    note.title.clone()
+                };
+                node.insert("label".into(), json!(label));
+                node.insert(
+                    "lifecycle".into(),
+                    json!(if note.trashed { "trashed" } else { "active" }),
+                );
+                content = ink_page_ref(
+                    canonical,
+                    note.first_page_id.as_deref(),
+                    Some(note.page_count),
+                    &[],
+                );
+            }
             Target::Node(index) => {
                 let projected = &self.projection.nodes()[index];
                 let kind = self.node_kind(index);
@@ -684,11 +913,19 @@ impl Graph {
                             "lifecycle".into(),
                             json!(if trashed { "trashed" } else { "active" }),
                         );
-                        if let Some(snapshot) = snapshot {
-                            node.insert("document_id".into(), json!(snapshot.document_id));
-                            node.insert("snapshot_id".into(), json!(snapshot.snapshot_id));
+                        match snapshot {
+                            Some(snapshot) => {
+                                node.insert("document_id".into(), json!(snapshot.document_id));
+                                node.insert("snapshot_id".into(), json!(snapshot.snapshot_id));
+                                content = ink_page_ref(
+                                    &snapshot.snapshot_id,
+                                    snapshot.first_page_id.as_deref(),
+                                    Some(snapshot.page_count),
+                                    &[],
+                                );
+                            }
+                            None => reason = Some("unsupported_media_type"),
                         }
-                        reason = Some("ink_out_of_scope");
                     }
                     "artifact" => {
                         node.insert("lifecycle".into(), json!(projected.lifecycle_status()));
@@ -758,6 +995,18 @@ impl Graph {
                     node.insert("summary".into(), json!(summary));
                 }
             }
+            Target::Relation(index) if self.ink_edge(index).is_some() => {
+                let edge = self.ink_edge(index).expect("checked");
+                node.insert("kind".into(), json!("relation"));
+                node.insert("entity_kind".into(), json!(edge.entity_kind));
+                node.insert("label".into(), json!(edge.label));
+                node.insert("lifecycle".into(), json!("active"));
+                node.insert("relation".into(), json!(edge.kind));
+                node.insert("synthetic".into(), json!(true));
+                node.insert("endpoints".into(), self.endpoints_json(index));
+                node.insert("attrs".into(), edge.attrs.clone());
+                reason = Some("relation_node");
+            }
             Target::Relation(index) => {
                 let relation = &self.projection.relations()[index];
                 node.insert("kind".into(), json!("relation"));
@@ -772,7 +1021,7 @@ impl Graph {
                     "synthetic".into(),
                     json!(canonical.starts_with(SYNTHETIC_PREFIX)),
                 );
-                node.insert("endpoints".into(), endpoints_json(relation));
+                node.insert("endpoints".into(), self.endpoints_json(index));
                 reason = Some("relation_node");
             }
             Target::Object => {
@@ -789,22 +1038,6 @@ impl Graph {
                 node.insert("lifecycle".into(), json!(object.lifecycle));
                 node.insert("revision".into(), json!(object.revision_id.to_string()));
             }
-            Target::Note => {
-                let note = &self.notes[canonical];
-                node.insert("kind".into(), json!("note"));
-                node.insert("entity_kind".into(), json!("InkDocument"));
-                let label = if note.title.is_empty() {
-                    id_tail(canonical)
-                } else {
-                    note.title.clone()
-                };
-                node.insert("label".into(), json!(label));
-                node.insert(
-                    "lifecycle".into(),
-                    json!(if note.trashed { "trashed" } else { "active" }),
-                );
-                reason = Some("ink_out_of_scope");
-            }
         }
         node.insert("parent_artifact_id".into(), parent);
         node.insert("content_ref".into(), content);
@@ -816,53 +1049,84 @@ impl Graph {
             Target::Node(index) => self.node_retired(index),
             Target::Relation(index) => self.relation_retired(index),
             Target::Object => lifecycle_retired(Some(self.objects[canonical].lifecycle)),
-            Target::Note => self.notes[canonical].trashed,
         }
     }
 
     fn edge_json(&self, index: usize) -> Value {
-        let relation = &self.projection.relations()[index];
-        let id = relation.relation_id().to_string();
+        let id = self.relation_id(index).to_owned();
+        let endpoints = self.endpoints(index);
         let side = |direction: IncidenceDirection| -> Vec<&str> {
-            relation
-                .endpoints()
+            endpoints
                 .iter()
-                .filter(|e| e.direction() == direction)
-                .map(|e| e.node().as_str())
+                .filter(|e| e.direction == direction)
+                .map(|e| e.node)
                 .collect()
         };
         let from = side(IncidenceDirection::IntoRelation);
         let to = side(IncidenceDirection::OutOfRelation);
-        let single = from.len() == 1 && to.len() == 1 && relation.endpoints().len() == 2;
+        let single = from.len() == 1 && to.len() == 1 && endpoints.len() == 2;
+        let (entity_kind, label, lifecycle) = match self.ink_edge(index) {
+            Some(edge) => (json!(edge.entity_kind), json!(edge.label), json!("active")),
+            None => {
+                let relation = &self.projection.relations()[index];
+                (
+                    json!(relation.kind()),
+                    json!(relation.label()),
+                    json!(relation.lifecycle_status()),
+                )
+            }
+        };
         let mut edge = json!({
             "id": id,
             "relation": self.relation_kind(index),
-            "entity_kind": relation.kind(),
+            "entity_kind": entity_kind,
             "synthetic": id.starts_with(SYNTHETIC_PREFIX),
-            "label": relation.label(),
-            "lifecycle": relation.lifecycle_status(),
+            "label": label,
+            "lifecycle": lifecycle,
             "from": if single { json!(from[0]) } else { Value::Null },
             "to": if single { json!(to[0]) } else { Value::Null },
-            "endpoints": endpoints_json(relation),
+            "endpoints": self.endpoints_json(index),
         });
+        if let Some(ink) = self.ink_edge(index) {
+            edge["attrs"] = ink.attrs.clone();
+        }
         if let Some(revision) = self.relation_revisions.get(&id) {
             edge["revision"] = json!(revision);
         }
         edge
     }
 
+    fn endpoints_json(&self, index: usize) -> Value {
+        Value::Array(
+            self.endpoints(index)
+                .iter()
+                .map(|endpoint| {
+                    json!({
+                        "node_id": endpoint.node,
+                        "role": endpoint.role,
+                        "side": side_name(endpoint.direction),
+                        "ordinal": endpoint.ordinal,
+                    })
+                })
+                .collect(),
+        )
+    }
+
     fn edge_summary(&self, index: usize) -> Value {
-        let id = self.projection.nodes()[index].entity_id();
+        let id = self.node_id(index);
         let mut summary: BTreeMap<String, BTreeMap<&'static str, u64>> = BTreeMap::new();
         for &relation_index in &self.incident[index] {
             let kind = self.relation_kind(relation_index);
             if kind == "unknown" {
                 continue;
             }
-            let relation = &self.projection.relations()[relation_index];
             let mut sides = BTreeSet::new();
-            for endpoint in relation.endpoints().iter().filter(|e| e.node() == id) {
-                sides.insert(match endpoint.direction() {
+            for endpoint in self
+                .endpoints(relation_index)
+                .iter()
+                .filter(|e| e.node == id)
+            {
+                sides.insert(match endpoint.direction {
                     IncidenceDirection::IntoRelation => "out",
                     IncidenceDirection::OutOfRelation => "in",
                     IncidenceDirection::Undirected => "undirected",
@@ -879,6 +1143,34 @@ impl Graph {
     }
 }
 
+/// `ink_page` content ref (Phase1d): rendered by `ink.page_image`.
+fn ink_page_ref(
+    node_id: &str,
+    page_id: Option<&str>,
+    page_count: Option<u64>,
+    stroke_ids: &[&str],
+) -> Value {
+    let mut content = json!({
+        "type": "ink_page",
+        "tool": INK_PAGE_TOOL,
+        "node_id": node_id,
+        "page_id": page_id,
+        "media_type": "image/png",
+        "via": Value::Null,
+    });
+    if let Some(page_count) = page_count {
+        content["page_count"] = json!(page_count);
+    }
+    if !stroke_ids.is_empty() {
+        let kept = &stroke_ids[..stroke_ids.len().min(MAX_CONTENT_STROKE_IDS)];
+        content["stroke_ids"] = json!(kept);
+        if stroke_ids.len() > kept.len() {
+            content["stroke_ids_truncated"] = json!(true);
+        }
+    }
+    content
+}
+
 fn id_tail(id: &str) -> String {
     id.rsplit('/').next().unwrap_or(id).to_owned()
 }
@@ -891,26 +1183,8 @@ fn side_name(direction: IncidenceDirection) -> &'static str {
     }
 }
 
-fn endpoints_json(relation: &ProjectionRelation) -> Value {
-    Value::Array(
-        relation
-            .endpoints()
-            .iter()
-            .map(|endpoint| {
-                json!({
-                    "node_id": endpoint.node().as_str(),
-                    "role": endpoint.role().as_str(),
-                    "side": side_name(endpoint.direction()),
-                    "ordinal": endpoint.ordinal(),
-                })
-            })
-            .collect(),
-    )
-}
-
 fn content_unavailable(reason: &str, node_ids: Vec<String>) -> Value {
     let message = match reason {
-        "ink_out_of_scope" => "handwriting content is not readable in Phase1c",
         "no_span_locator" => {
             "no source span with a Markdown or PDF page locator; do not guess a byte range"
         }
@@ -1012,10 +1286,10 @@ pub(super) fn call_get(workspace: &McpWorkspace, arguments: Value) -> Result<Val
         node.insert("edge_summary".into(), graph.edge_summary(index));
     }
     if span_count > 1 && !node["content_ref"].is_null() {
-        let which = if node["content_ref"]["type"] == "md_byte_range" {
-            "Markdown"
-        } else {
-            "PDF page"
+        let which = match node["content_ref"]["type"].as_str() {
+            Some("md_byte_range") => "Markdown",
+            Some("pdf_pages") => "PDF page",
+            _ => "ink",
         };
         diagnostics.push(json!({
             "code": "multiple_spans",
@@ -1293,7 +1567,7 @@ pub(super) fn call_neighborhood(
     diagnostics.extend(graph.load_diagnostics.iter().cloned());
 
     let mut seed_ids: Vec<String> = Vec::new();
-    // Seeds returned as-is without expansion (note / unsupported).
+    // Seeds returned as-is without expansion (unsupported objects).
     let mut static_seeds: Vec<(String, Target)> = Vec::new();
     let mut visits: BTreeMap<usize, Visit> = BTreeMap::new();
     let mut frontier: Vec<usize> = Vec::new();
@@ -1364,7 +1638,7 @@ pub(super) fn call_neighborhood(
         let expanding = depth < applied.depth;
         let mut next = Vec::new();
         for &current in &frontier {
-            let current_id = graph.projection.nodes()[current].entity_id().clone();
+            let current_id = graph.node_id(current);
             let seed = visits[&current].seed;
             for &relation_index in &graph.incident[current] {
                 let kind = graph.relation_kind(relation_index);
@@ -1383,20 +1657,12 @@ pub(super) fn call_neighborhood(
                     }
                     continue;
                 }
-                let relation = &graph.projection.relations()[relation_index];
+                let endpoints = graph.endpoints(relation_index);
                 let mut targets = BTreeSet::new();
-                for own in relation
-                    .endpoints()
-                    .iter()
-                    .filter(|e| e.node() == &current_id)
-                {
-                    for other in relation
-                        .endpoints()
-                        .iter()
-                        .filter(|e| e.node() != &current_id)
-                    {
-                        if reachable(applied.direction, own.direction(), other.direction())
-                            && let Some(&index) = graph.node_index.get(other.node().as_str())
+                for own in endpoints.iter().filter(|e| e.node == current_id) {
+                    for other in endpoints.iter().filter(|e| e.node != current_id) {
+                        if reachable(applied.direction, own.direction, other.direction)
+                            && let Some(&index) = graph.node_index.get(other.node)
                         {
                             targets.insert(index);
                         }
@@ -1452,15 +1718,11 @@ pub(super) fn call_neighborhood(
             filtered_nodes += 1;
             continue;
         }
-        let id = graph.projection.nodes()[index].entity_id().to_string();
+        let id = graph.node_id(index).to_owned();
         candidates.push((visit.depth, kind, id, Some(index)));
     }
-    for (canonical, target) in &static_seeds {
-        let kind = match target {
-            Target::Note => "note",
-            _ => "unsupported",
-        };
-        candidates.push((0, kind, canonical.clone(), None));
+    for (canonical, _) in &static_seeds {
+        candidates.push((0, "unsupported", canonical.clone(), None));
     }
     candidates.sort();
     let nodes_seen = candidates.len();
@@ -1482,14 +1744,13 @@ pub(super) fn call_neighborhood(
             if !applied.include_trashed && graph.relation_retired(relation_index) {
                 continue;
             }
-            let relation = &graph.projection.relations()[relation_index];
-            let depths: Option<Vec<u32>> = relation
-                .endpoints()
+            let depths: Option<Vec<u32>> = graph
+                .endpoints(relation_index)
                 .iter()
                 .map(|endpoint| {
                     graph
                         .node_index
-                        .get(endpoint.node().as_str())
+                        .get(endpoint.node)
                         .and_then(|i| returned.get(i))
                         .copied()
                 })
@@ -1499,7 +1760,7 @@ pub(super) fn call_neighborhood(
                 edge_candidates.insert((
                     min_depth,
                     kind,
-                    relation.relation_id().to_string(),
+                    graph.relation_id(relation_index).to_owned(),
                     relation_index,
                 ));
             }
@@ -1536,10 +1797,7 @@ pub(super) fn call_neighborhood(
         };
         let (mut view, reason, _) = graph.view(id, target);
         view.insert("depth".into(), json!(depth));
-        view.insert(
-            "via_edge".into(),
-            json!(via.map(|r| graph.projection.relations()[r].relation_id().to_string())),
-        );
+        view.insert("via_edge".into(), json!(via.map(|r| graph.relation_id(r))));
         if multi_seed {
             view.insert("seed_of".into(), json!(seed_of));
         }

@@ -6,6 +6,7 @@
 mod discovery;
 mod ink;
 mod ink_evidence;
+mod ink_graph;
 mod ink_lan;
 mod ink_link;
 mod ink_note;
@@ -43,6 +44,7 @@ pub use ink::{
     StoredInkDocumentSummary, StoredInkSession, StoredInkSnapshot, StoredInkSnapshotSummary,
 };
 pub use ink_evidence::InkEvidenceReceipt;
+pub use ink_graph::{InkGraphNote, InkGraphRows, InkGraphSnapshot};
 pub use ink_lan::{InkLanSettings, InkMirrorDelta, InkPairingOffer, InkRemoteLease, InkWriterView};
 pub use ink_link::{
     INK_LINK_LABEL_MAX_CHARS, InkContextCreateReceipt, InkContextCreateRequest, InkLinkOverlay,
