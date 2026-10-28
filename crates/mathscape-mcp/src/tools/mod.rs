@@ -4,6 +4,7 @@
 
 mod graph;
 mod grep;
+mod ink;
 mod material;
 mod outline;
 mod read;
@@ -20,6 +21,10 @@ pub use graph::{
     MAX_SEEDS, MAX_VISITED, RELATION_TYPES,
 };
 pub use grep::{MAX_GREP_HITS, MAX_SCAN_BYTES};
+pub use ink::{
+    CROP_MARGIN, DEFAULT_MAX_BYTES, DEFAULT_MAX_EDGE_PX, FADED_OPACITY, MAX_MAX_BYTES,
+    MAX_MAX_EDGE_PX, MAX_NODE_ID_CHARS, MAX_PAGE_INDEX, MIN_MAX_BYTES, MIN_MAX_EDGE_PX,
+};
 pub use outline::{
     MAX_DIAGNOSTIC_MESSAGE_CHARS, MAX_OUTLINE_DIAGNOSTICS, MAX_OUTLINE_ENTRIES,
     MAX_OUTLINE_ENTRIES_BYTES, MAX_OUTLINE_TITLE_CHARS,
@@ -32,15 +37,17 @@ pub const MATERIAL_GREP: &str = "material.grep";
 pub const PDF_OUTLINE: &str = "pdf.outline";
 pub const GRAPH_GET: &str = "graph.get";
 pub const GRAPH_NEIGHBORHOOD: &str = "graph.neighborhood";
+pub const INK_PAGE_IMAGE: &str = "ink.page_image";
 
 /// Stable `tools/list` order. New tools are appended; existing entries stay put.
-pub const TOOL_NAMES: [&str; 6] = [
+pub const TOOL_NAMES: [&str; 7] = [
     WORKSPACE_SEARCH,
     MATERIAL_READ,
     MATERIAL_GREP,
     PDF_OUTLINE,
     GRAPH_GET,
     GRAPH_NEIGHBORHOOD,
+    INK_PAGE_IMAGE,
 ];
 
 /// `tools/list` entries, in [`TOOL_NAMES`] order.
@@ -52,24 +59,44 @@ pub fn tool_definitions() -> Vec<Value> {
         outline::definition(),
         graph::get_definition(),
         graph::neighborhood_definition(),
+        ink::definition(),
     ]
 }
 
+/// What a successful tool call returns.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ToolOutput {
+    /// The usual Phase0 envelope: the text block mirrors `structured`, which
+    /// is also sent as `structuredContent`.
+    Structured(Value),
+    /// Same envelope with a pre-serialized text block (field order kept).
+    Text { text: String, structured: Value },
+    /// `ink.page_image` success (contract Phase1d §3.4): a metadata text
+    /// block, then one image block, and **no** `structuredContent`.
+    Image {
+        text: String,
+        png: Vec<u8>,
+        mime_type: &'static str,
+    },
+}
+
 /// Runs one tool. `None` means the tool name is unknown (a protocol error,
-/// not a tool result). `Ok` carries the structured result with its business
-/// `status`; `Err` is a call error (`invalid_arg|forbidden|internal`).
+/// not a tool result). `Ok` carries the result with its business `status`;
+/// `Err` is a call error (`invalid_arg|forbidden|internal`).
 pub fn call(
     workspace: &McpWorkspace,
     name: &str,
     arguments: Value,
-) -> Option<Result<Value, ToolError>> {
+) -> Option<Result<ToolOutput, ToolError>> {
+    let structured = |result: Result<Value, ToolError>| Some(result.map(ToolOutput::Structured));
     match name {
-        WORKSPACE_SEARCH => Some(search::call(workspace, arguments)),
-        MATERIAL_READ => Some(read::call(workspace, arguments)),
-        MATERIAL_GREP => Some(grep::call(workspace, arguments)),
-        PDF_OUTLINE => Some(outline::call(workspace, arguments)),
-        GRAPH_GET => Some(graph::call_get(workspace, arguments)),
-        GRAPH_NEIGHBORHOOD => Some(graph::call_neighborhood(workspace, arguments)),
+        WORKSPACE_SEARCH => structured(search::call(workspace, arguments)),
+        MATERIAL_READ => structured(read::call(workspace, arguments)),
+        MATERIAL_GREP => structured(grep::call(workspace, arguments)),
+        PDF_OUTLINE => structured(outline::call(workspace, arguments)),
+        GRAPH_GET => structured(graph::call_get(workspace, arguments)),
+        GRAPH_NEIGHBORHOOD => structured(graph::call_neighborhood(workspace, arguments)),
+        INK_PAGE_IMAGE => Some(ink::call(workspace, arguments)),
         _ => None,
     }
 }

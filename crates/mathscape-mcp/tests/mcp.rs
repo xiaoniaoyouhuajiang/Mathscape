@@ -458,7 +458,8 @@ fn tools_list_order_and_text_are_fixed() {
             "material.grep",
             "pdf.outline",
             "graph.get",
-            "graph.neighborhood"
+            "graph.neighborhood",
+            "ink.page_image"
         ]
     );
     for tool in tools {
@@ -493,11 +494,23 @@ fn tools_list_order_and_text_are_fixed() {
     );
     assert_eq!(tools[4]["inputSchema"]["required"], json!(["node_id"]));
     assert!(tools[5]["inputSchema"].get("required").is_none());
-    for tool in &tools[4..] {
+    for tool in &tools[4..6] {
         let description = tool["description"].as_str().unwrap();
         assert!(description.contains("content_ref"), "{description}");
         assert!(description.contains("material.read"), "{description}");
+        assert!(!description.contains("not callable"), "{description}");
     }
+    // Phase1d-b: the 7th tool is appended; the first six are unchanged.
+    assert_eq!(tools[6]["name"], "ink.page_image");
+    assert_eq!(tools[6]["inputSchema"]["required"], json!(["node_id"]));
+    assert_eq!(
+        tools[6]["inputSchema"]["properties"]["format"]["enum"],
+        json!(["png"])
+    );
+    assert_eq!(
+        tools[6]["inputSchema"]["properties"]["crop"]["enum"],
+        json!(["page", "strokes", "selection"])
+    );
     let second = request(&f.server, 2, "tools/list", json!({}));
     assert_eq!(
         first["result"], second["result"],

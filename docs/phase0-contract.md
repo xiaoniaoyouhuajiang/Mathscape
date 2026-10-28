@@ -172,7 +172,14 @@ AgentExecutor 最小接口（语义，非具体签名）：
    - 节点上限 10000 是**解析**上限：更大的书签图整棵视为不可读，不返回部分条目。
    - **响应**另有硬顶（防恶意 PDF 撑爆上下文 / stdio）：单条 `title` 截到 512 个 Unicode 字符（按字符边界，条目带 `title_truncated: true`）；最多返回 1000 条；序列化后的 `entries` 数组 ≤ 64 KiB；透传的 reader 警告最多 16 条、每条 ≤ 256 字符，警告里引用的标题只保留前 64 字符。任一截断即 `status: truncated` 且 `truncated: true`（§2.2），按原顺序保留装得下的条目，`total_entries` 给出截断前条数，`diagnostics` 含 `outline_truncated`。未截断的成功结果 `truncated: false`。
 7. [x] Phase1c：`graph.get` / `graph.neighborhood`（只读，`landscape_snapshot` + `project_landscape` 读时投影），契约见 [`phase1c-graph-contract.md`](phase1c-graph-contract.md)。`tools/list` 现为 6 个工具，前 4 个描述不变。
-   - 仍推迟：`ink.snapshot_image`、`user.ask`。
+   - 仍推迟：`user.ask`。
+8. [x] Phase1d-b：`ink.page_image`（只读，把手写笔记页 / 墨迹快照页 / 墨迹证据 span 渲染为 PNG），`tools/list` 现为 7 个工具，前 6 个描述不变。
+   - 渲染器为 `crates/mathscape-ink-raster`：perfect-freehand@1.2.3 自移植 + tiny-skia，白底、确定性（同输入同字节），与前端轮廓夹具 `testdata/ink/raster/` 对拍。
+   - `node_id` 接受笔记 document id（渲染实时 head，`revision: null`，诊断 `live_note_head`）、快照 id 或快照 artifact id（规范化后诊断 `id_canonicalized`）、墨迹证据 span id（渲染 span 所在快照，非选中笔画 25% 不透明度，默认 `crop: "selection"`）。`page_id` / `page_index`（0..99）互斥；`crop` 为 `page|strokes|selection`，`bounds` 覆盖 crop 且须与页面相交。
+   - `format` 仅 `png`；`max_edge_px` 默认 1024（256..2048），`max_bytes` 默认 524288（32768..1048576），越界为 `invalid_arg`，不夹取。超出 `max_bytes` 时按 ×0.75 最多缩 3 次（不低于 256 边长），诊断 `image_downscaled`；仍超出则 `status: truncated`、`truncated: true`、不返回图像（诊断 `image_too_large`）。
+   - 成功返回图像时 `content` 为一段文本元数据 + 一个 `image` 块，**不**带 `structuredContent`（避免重复撑大上下文）；`include_image: false` 与调用错误仍为文本 + `structuredContent`。
+   - 非墨迹节点为 `invalid_arg`（`details.node_kind`，`hint: "use material.read with content_ref"`）；快照清单哈希不符、清单无效或渲染失败为 `internal`（`details.reason` 为 `integrity_failed|invalid_manifest|render_failed`）。笔记已入回收站时为 `not_found`（诊断 `trashed`），`include_trashed: true` 可渲染。
+   - 不做 OCR、墨迹 grep、WebP/SVG，不写 workspace。
 - 写路径（`propose_changes`）不进 Phase1。
 
 ---

@@ -16,7 +16,11 @@
 //!   resolve one id or run a bounded BFS over the material landscape
 //!   projection ([`mathscape_query::project_landscape`], rebuilt per call,
 //!   synthetic bridges included). Nodes carry `content_ref` locators for
-//!   `material.read`, never body text.
+//!   `material.read`, never body text;
+//! - `ink.page_image` (Phase1d-b) renders one ink page — a note's live head,
+//!   an ink snapshot, or the snapshot behind an ink evidence span — to a PNG
+//!   with [`mathscape_ink_raster`]. Image results carry a text metadata block
+//!   plus an `image` block and omit `structuredContent`.
 //!
 //! Wire envelope follows `docs/phase0-contract.md` §2 and reuses the DTOs of
 //! `mathscape-agent` ([`mathscape_agent::ToolStatus`], [`mathscape_agent::Locator`],
