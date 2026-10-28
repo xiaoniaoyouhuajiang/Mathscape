@@ -3177,13 +3177,16 @@ dependencies = [
 name = "mathscape-mcp"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "lopdf",
  "mathscape-agent",
  "mathscape-artifact",
  "mathscape-domain",
+ "mathscape-graph",
  "mathscape-pdf",
  "mathscape-query",
  "mathscape-store-sqlite",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

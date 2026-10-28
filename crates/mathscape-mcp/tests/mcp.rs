@@ -435,7 +435,7 @@ fn initialize_ping_and_notifications() {
         f.server.handle_line("{nope").unwrap()["error"]["code"],
         -32700
     );
-    let unknown_tool = request(&f.server, 4, "tools/call", json!({ "name": "graph.get" }));
+    let unknown_tool = request(&f.server, 4, "tools/call", json!({ "name": "graph.path" }));
     assert_eq!(unknown_tool["error"]["code"], -32602);
     assert_eq!(f.server.workspace().round(), Some("placeholder"));
 }
@@ -456,7 +456,9 @@ fn tools_list_order_and_text_are_fixed() {
             "workspace.search",
             "material.read",
             "material.grep",
-            "pdf.outline"
+            "pdf.outline",
+            "graph.get",
+            "graph.neighborhood"
         ]
     );
     for tool in tools {
@@ -489,6 +491,13 @@ fn tools_list_order_and_text_are_fixed() {
         outline_description.contains("1-based"),
         "{outline_description}"
     );
+    assert_eq!(tools[4]["inputSchema"]["required"], json!(["node_id"]));
+    assert!(tools[5]["inputSchema"].get("required").is_none());
+    for tool in &tools[4..] {
+        let description = tool["description"].as_str().unwrap();
+        assert!(description.contains("content_ref"), "{description}");
+        assert!(description.contains("material.read"), "{description}");
+    }
     let second = request(&f.server, 2, "tools/list", json!({}));
     assert_eq!(
         first["result"], second["result"],

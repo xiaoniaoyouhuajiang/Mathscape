@@ -11,7 +11,12 @@
 //!   `pdf_pages` (1-based), capped at [`tools::MAX_READ_BYTES`];
 //! - `material.grep` linearly scans markdown bodies of the given artifact ids;
 //! - `pdf.outline` returns a PDF's embedded bookmarks. `pdf_page_index` is
-//!   0-based and is not written back to the workspace.
+//!   0-based and is not written back to the workspace;
+//! - `graph.get` / `graph.neighborhood` (Phase1c, `docs/phase1c-graph-contract.md`)
+//!   resolve one id or run a bounded BFS over the material landscape
+//!   projection ([`mathscape_query::project_landscape`], rebuilt per call,
+//!   synthetic bridges included). Nodes carry `content_ref` locators for
+//!   `material.read`, never body text.
 //!
 //! Wire envelope follows `docs/phase0-contract.md` §2 and reuses the DTOs of
 //! `mathscape-agent` ([`mathscape_agent::ToolStatus`], [`mathscape_agent::Locator`],
