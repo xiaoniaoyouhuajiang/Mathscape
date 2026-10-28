@@ -185,14 +185,27 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
             ),
         )
         .with_details(json!({ "media_type": material.media_type }))),
-        (other, _) => Err(ToolError::new(
-            ToolErrorCode::InvalidArg,
-            format!("material.read does not support media type {other}"),
-        )
-        .with_details(json!({
-            "media_type": other,
-            "supported_media_types": [MARKDOWN_MEDIA_TYPE, PDF_MEDIA_TYPE],
-        }))),
+        (other, _) => {
+            let mut details = json!({
+                "media_type": other,
+                "supported_media_types": [MARKDOWN_MEDIA_TYPE, PDF_MEDIA_TYPE],
+            });
+            // Ink snapshots are rendered by ink.page_image (Phase1d), never
+            // read as text. A failed lookup only drops the hint.
+            let snapshot = workspace
+                .store()
+                .ok()
+                .and_then(|store| store.ink_snapshot_for_artifact(id.as_str()).ok().flatten());
+            if let Some(snapshot) = snapshot {
+                details["hint"] = json!("use ink.page_image");
+                details["snapshot_id"] = json!(snapshot.snapshot_id);
+            }
+            Err(ToolError::new(
+                ToolErrorCode::InvalidArg,
+                format!("material.read does not support media type {other}"),
+            )
+            .with_details(details))
+        }
     }
 }
 
