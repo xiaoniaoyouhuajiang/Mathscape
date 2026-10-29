@@ -8,10 +8,12 @@
 
 use std::io::{self, BufRead, Write};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
 
 use crate::McpWorkspace;
-use crate::tools;
+use crate::tools::{self, ToolOutput};
 
 pub const JSONRPC_VERSION: &str = "2.0";
 pub const SERVER_NAME: &str = "mathscape";
@@ -126,17 +128,33 @@ impl McpServer {
         let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
         let outcome = tools::call(&self.workspace, name, arguments)
             .ok_or_else(|| (INVALID_PARAMS, format!("unknown tool: {name}")))?;
-        let (structured, is_error) = match outcome {
-            Ok(result) => (result, false),
-            Err(error) => (
-                serde_json::to_value(error.into_response()).unwrap_or_else(|_| {
+        let (text, structured, is_error) = match outcome {
+            Ok(ToolOutput::Structured(result)) => (result.to_string(), result, false),
+            Ok(ToolOutput::Text { text, structured }) => (text, structured, false),
+            Ok(ToolOutput::Image {
+                text,
+                png,
+                mime_type,
+            }) => {
+                // Image results carry no structuredContent: MCP clients that
+                // see it drop content[] and the image with it.
+                return Ok(json!({
+                    "content": [
+                        { "type": "text", "text": text },
+                        { "type": "image", "data": BASE64.encode(png), "mimeType": mime_type },
+                    ],
+                    "isError": false,
+                }));
+            }
+            Err(error) => {
+                let structured = serde_json::to_value(error.into_response()).unwrap_or_else(|_| {
                     json!({ "error": { "code": "internal", "message": "failed to encode error" } })
-                }),
-                true,
-            ),
+                });
+                (structured.to_string(), structured, true)
+            }
         };
         Ok(json!({
-            "content": [{ "type": "text", "text": structured.to_string() }],
+            "content": [{ "type": "text", "text": text }],
             "structuredContent": structured,
             "isError": is_error,
         }))
@@ -152,7 +170,7 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") },
-        "instructions": "Read-only Mathscape workspace tools. Use workspace.search to find materials, material.grep to scan markdown bodies of known artifact ids, pdf.outline for a PDF table of contents (pdf_page_index is 0-based; nothing is persisted), then material.read with a locator to quote exact passages (pdf_pages is 1-based). graph.get and graph.neighborhood navigate the material landscape: a read-time projection of artifacts, source spans, source units, ink snapshots and notes, including synthetic bridges (contains_span unit->span, has_part parent->child, located_in span->artifact, has_snapshot note->snapshot, note_link note->linked target) next to conversion and semantic relations. Graph nodes carry no body text; pass content_ref.artifact_id and content_ref.locator to material.read unchanged. Recipes: R1 search hit -> graph.get -> material.read(content_ref), and if content_ref is null read content_unavailable.reason instead of guessing byte ranges; R2 graph.neighborhood(node_id, depth=1) with defaults for structural neighbors; R3 proofs are opt-in, e.g. edge_types=[contains_span, has_part, proves, states], depth=2; R4 add cites only when crossing works, keep depth <= 2 with an explicit max_nodes, and on truncated narrow edge_types or depth before raising caps; R5 a Markdown artifact's units: direction=in, depth=2, node_kinds=[source_unit] (unit->artifact is direction=out; from a PDF use direction=both, depth=3); R6 notes, snapshots and ink spans: content_ref.type=ink_page -> call ink.page_image(content_ref.node_id, page_id) (that tool arrives in a follow-up release; until then report the ink metadata only); notes link to sources via note_link (opt-in edge) and to frozen evidence via has_snapshot (default edge). Read relation endpoints (role, side), not only from/to, which are null for multi-endpoint relations.",
+        "instructions": "Read-only Mathscape workspace tools. Use workspace.search to find materials, material.grep to scan markdown bodies of known artifact ids, pdf.outline for a PDF table of contents (pdf_page_index is 0-based; nothing is persisted), then material.read with a locator to quote exact passages (pdf_pages is 1-based). graph.get and graph.neighborhood navigate the material landscape: a read-time projection of artifacts, source spans, source units, ink snapshots and notes, including synthetic bridges (contains_span unit->span, has_part parent->child, located_in span->artifact, has_snapshot note->snapshot, note_link note->linked target) next to conversion and semantic relations. Graph nodes carry no body text; pass content_ref.artifact_id and content_ref.locator to material.read unchanged. Recipes: R1 search hit -> graph.get -> material.read(content_ref), and if content_ref is null read content_unavailable.reason instead of guessing byte ranges; R2 graph.neighborhood(node_id, depth=1) with defaults for structural neighbors; R3 proofs are opt-in, e.g. edge_types=[contains_span, has_part, proves, states], depth=2; R4 add cites only when crossing works, keep depth <= 2 with an explicit max_nodes, and on truncated narrow edge_types or depth before raising caps; R5 a Markdown artifact's units: direction=in, depth=2, node_kinds=[source_unit] (unit->artifact is direction=out; from a PDF use direction=both, depth=3); R6 notes, snapshots and ink spans: content_ref.type=ink_page -> call ink.page_image(content_ref.node_id, page_id); notes link to sources via note_link (opt-in edge) and to frozen evidence via has_snapshot (default edge). Read relation endpoints (role, side), not only from/to, which are null for multi-endpoint relations.",
     })
 }
 

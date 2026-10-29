@@ -26,6 +26,7 @@ mathscape-artifact = { path = "crates/mathscape-artifact" }
 mathscape-domain = { path = "crates/mathscape-domain" }
 mathscape-fixture = { path = "crates/mathscape-fixture" }
 mathscape-graph = { path = "crates/mathscape-graph" }
+mathscape-ink-raster = { path = "crates/mathscape-ink-raster" }
 mathscape-llm = { path = "crates/mathscape-llm" }
 mathscape-mcp = { path = "crates/mathscape-mcp" }
 mathscape-orchestrator = { path = "crates/mathscape-orchestrator" }
@@ -36,6 +37,8 @@ mathscape-tool-lean = { path = "crates/mathscape-tool-lean" }
 mathscape-tool-marker = { path = "crates/mathscape-tool-marker" }
 mathscape-validation = { path = "crates/mathscape-validation" }
 lopdf = "0.42"
+base64 = "0.22"
+png = "0.17"
 pdf-inspector = { version = "=1.17.0", default-features = false }
 petgraph = { version = "0.8.3", default-features = false, features = ["stable_graph", "std"] }
 pulldown-cmark = { version = "=0.13.4", default-features = false }
@@ -49,6 +52,9 @@ tauri = "2.11.5"
 tauri-build = "2.6.3"
 tauri-plugin-dialog = "2.7.3"
 thiserror = "2"
+# Phase1d-b ink raster: no SIMD (bit-identical output on every CPU), no
+# built-in PNG codec (the crate encodes RGB itself).
+tiny-skia = { version = "0.11.4", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 url = { version = "2", features = ["serde"] }
 wiremock = "0.6.5"

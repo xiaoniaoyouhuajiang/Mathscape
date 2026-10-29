@@ -556,6 +556,143 @@ fn validate_stroke_data(
 impl InkLabDocument {
     /// Deserialization is shape checking; this method checks references and history.
     pub fn validate(&self) -> Result<InkLabProjection> {
+        let InkHistory {
+            active,
+            undo,
+            redo,
+            point_count,
+        } = self.checked_history()?;
+        // Preserve creation order, rather than BTreeMap's lexicographic ordering.
+        let mut visible = BTreeSet::new();
+        for operation in &self.operations {
+            let (_, command_id) = operation.identity();
+            if active.get(command_id) != Some(&true) {
+                continue;
+            }
+            match operation {
+                InkLabOperation::Stroke { stroke, .. } => {
+                    visible.insert(stroke.id.as_str());
+                }
+                InkLabOperation::Erase { stroke_ids, .. } => {
+                    for id in stroke_ids {
+                        visible.remove(id.as_str());
+                    }
+                }
+                InkLabOperation::PartialErase {
+                    source_stroke_id,
+                    fragments,
+                    ..
+                } => {
+                    visible.remove(source_stroke_id.as_str());
+                    for fragment in fragments {
+                        visible.insert(fragment.id.as_str());
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut visible_stroke_ids = Vec::new();
+        for operation in &self.operations {
+            match operation {
+                InkLabOperation::Stroke { stroke, .. } if visible.contains(stroke.id.as_str()) => {
+                    visible_stroke_ids.push(stroke.id.clone())
+                }
+                InkLabOperation::PartialErase { fragments, .. } => {
+                    for fragment in fragments {
+                        if visible.contains(fragment.id.as_str()) {
+                            visible_stroke_ids.push(fragment.id.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(InkLabProjection {
+            visible_stroke_ids,
+            undo,
+            redo,
+            point_count,
+        })
+    }
+
+    /// Visible strokes with their current geometry and colour, in drawing
+    /// order: the Rust twin of the frontend `projectInk(...).visible`.
+    ///
+    /// Shares the undo/redo active set with [`Self::validate`] (and runs the
+    /// same checks). `transform` maps points with `x' = a*x + c*y + e`,
+    /// `y' = b*x + d*y + f` and keeps the brush width; `restyle` only changes
+    /// the colour; `partial_erase` removes its source and appends fragments.
+    /// Operations on strokes that are not visible at that point are ignored.
+    pub fn project_visible_strokes(&self) -> Result<Vec<InkLabStroke>> {
+        let history = self.checked_history()?;
+        let mut order: Vec<Option<InkLabStroke>> = Vec::new();
+        let mut slots: BTreeMap<&str, usize> = BTreeMap::new();
+        for operation in &self.operations {
+            let (_, command_id) = operation.identity();
+            if history.active.get(command_id) != Some(&true) {
+                continue;
+            }
+            match operation {
+                InkLabOperation::Stroke { stroke, .. } => {
+                    insert_visible(&mut order, &mut slots, stroke);
+                }
+                InkLabOperation::Erase { stroke_ids, .. } => {
+                    for id in stroke_ids {
+                        if let Some(slot) = slots.remove(id.as_str()) {
+                            order[slot] = None;
+                        }
+                    }
+                }
+                InkLabOperation::PartialErase {
+                    source_stroke_id,
+                    fragments,
+                    ..
+                } => {
+                    if let Some(slot) = slots.remove(source_stroke_id.as_str()) {
+                        order[slot] = None;
+                    }
+                    for fragment in fragments {
+                        insert_visible(&mut order, &mut slots, fragment);
+                    }
+                }
+                InkLabOperation::Transform {
+                    stroke_ids, matrix, ..
+                } => {
+                    for id in stroke_ids {
+                        let Some(stroke) = slots
+                            .get(id.as_str())
+                            .and_then(|slot| order[*slot].as_mut())
+                        else {
+                            continue;
+                        };
+                        for point in &mut stroke.points {
+                            let (x, y) = (point.x, point.y);
+                            point.x = matrix.a * x + matrix.c * y + matrix.e;
+                            point.y = matrix.b * x + matrix.d * y + matrix.f;
+                        }
+                    }
+                }
+                InkLabOperation::Restyle {
+                    stroke_ids, color, ..
+                } => {
+                    for id in stroke_ids {
+                        if let Some(stroke) = slots
+                            .get(id.as_str())
+                            .and_then(|slot| order[*slot].as_mut())
+                        {
+                            stroke.brush.color = color.clone();
+                        }
+                    }
+                }
+                InkLabOperation::PageAdd { .. }
+                | InkLabOperation::Undo { .. }
+                | InkLabOperation::Redo { .. } => {}
+            }
+        }
+        Ok(order.into_iter().flatten().collect())
+    }
+
+    fn checked_history(&self) -> Result<InkHistory<'_>> {
         require(self.version == INK_LAB_VERSION, "version")?;
         for (field, value) in [
             ("document_id", &self.document_id),
@@ -729,56 +866,34 @@ impl InkLabDocument {
                 }
             }
         }
-        // Preserve creation order, rather than BTreeMap's lexicographic ordering.
-        let mut visible = BTreeSet::new();
-        for operation in &self.operations {
-            let (_, command_id) = operation.identity();
-            if active.get(command_id) != Some(&true) {
-                continue;
-            }
-            match operation {
-                InkLabOperation::Stroke { stroke, .. } => {
-                    visible.insert(stroke.id.as_str());
-                }
-                InkLabOperation::Erase { stroke_ids, .. } => {
-                    for id in stroke_ids {
-                        visible.remove(id.as_str());
-                    }
-                }
-                InkLabOperation::PartialErase {
-                    source_stroke_id,
-                    fragments,
-                    ..
-                } => {
-                    visible.remove(source_stroke_id.as_str());
-                    for fragment in fragments {
-                        visible.insert(fragment.id.as_str());
-                    }
-                }
-                _ => {}
-            }
-        }
-        let mut visible_stroke_ids = Vec::new();
-        for operation in &self.operations {
-            match operation {
-                InkLabOperation::Stroke { stroke, .. } if visible.contains(stroke.id.as_str()) => {
-                    visible_stroke_ids.push(stroke.id.clone())
-                }
-                InkLabOperation::PartialErase { fragments, .. } => {
-                    for fragment in fragments {
-                        if visible.contains(fragment.id.as_str()) {
-                            visible_stroke_ids.push(fragment.id.clone());
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(InkLabProjection {
-            visible_stroke_ids,
+        Ok(InkHistory {
+            active,
             undo,
             redo,
             point_count,
         })
     }
+}
+
+/// Checked operation history: which commands are active after undo/redo.
+struct InkHistory<'a> {
+    active: BTreeMap<&'a str, bool>,
+    undo: Vec<String>,
+    redo: Vec<String>,
+    point_count: usize,
+}
+
+fn insert_visible<'a>(
+    order: &mut Vec<Option<InkLabStroke>>,
+    slots: &mut BTreeMap<&'a str, usize>,
+    stroke: &'a InkLabStroke,
+) {
+    // Stroke ids are unique per document (checked by `checked_history`), so a
+    // visible id is never re-inserted; keep the existing slot if it were.
+    if let Some(slot) = slots.get(stroke.id.as_str()) {
+        order[*slot] = Some(stroke.clone());
+        return;
+    }
+    slots.insert(stroke.id.as_str(), order.len());
+    order.push(Some(stroke.clone()));
 }

@@ -36,13 +36,13 @@ use super::material::{MARKDOWN_MEDIA_TYPE, PDF_MEDIA_TYPE};
 use super::{GRAPH_GET, GRAPH_NEIGHBORHOOD, diagnostic, parse_args};
 use crate::McpWorkspace;
 
-const GET_DESCRIPTION: &str = "Resolve one id from the material landscape graph (artifacts, source units, source spans, ink snapshots, plus notes from the ink store) without expanding neighbors. Accepts any workspace.search hit id as-is (a snapshot_id is canonicalized to its snapshot artifact id; use canonical_id afterwards) and any graph id (source-span, source-relation, projection-relation, conversion run). Returns kind (artifact|source_span|source_unit|snapshot|note|relation|unsupported), entity_kind, label, lifecycle, parent_artifact_id and content_ref, plus edge_summary counts per relation and direction. No body text: when content_ref is not null, call material.read with content_ref.artifact_id and content_ref.locator unchanged (md_byte_range, or pdf_pages 1-based). Notes, snapshots and ink spans get content_ref.type=ink_page (tool ink.page_image, node_id, page_id, stroke_ids for spans): pass content_ref.node_id and page_id to ink.page_image; that tool ships in a follow-up release and is not callable yet. content_ref is null with a content_unavailable diagnostic for units without located spans (no_span_locator; do not guess byte ranges), unsupported media, and relations. A missing id is status not_found with node null; an existing id of an unsupported kind is status ok with kind unsupported. Read-only.";
+const GET_DESCRIPTION: &str = "Resolve one id from the material landscape graph (artifacts, source units, source spans, ink snapshots, plus notes from the ink store) without expanding neighbors. Accepts any workspace.search hit id as-is (a snapshot_id is canonicalized to its snapshot artifact id; use canonical_id afterwards) and any graph id (source-span, source-relation, projection-relation, conversion run). Returns kind (artifact|source_span|source_unit|snapshot|note|relation|unsupported), entity_kind, label, lifecycle, parent_artifact_id and content_ref, plus edge_summary counts per relation and direction. No body text: when content_ref is not null, call material.read with content_ref.artifact_id and content_ref.locator unchanged (md_byte_range, or pdf_pages 1-based). Notes, snapshots and ink spans get content_ref.type=ink_page (tool ink.page_image, node_id, page_id, stroke_ids for spans): pass content_ref.node_id and page_id to ink.page_image. content_ref is null with a content_unavailable diagnostic for units without located spans (no_span_locator; do not guess byte ranges), unsupported media, and relations. A missing id is status not_found with node null; an existing id of an unsupported kind is status ok with kind unsupported. Read-only.";
 
 const NEIGHBORHOOD_DESCRIPTION: &str = "Bounded BFS from one node_id or 1-8 seed_ids over the material landscape graph (a read-time projection with synthetic bridges: contains_span unit->span, has_part parent->child, located_in span->artifact, conversion pdf->markdown, has_snapshot note->ink snapshot; note_link note->linked source unit/span/artifact, Markdown range or note, with attrs role, is_primary, target_status and locator for Markdown ranges). Relations are returned in edges[] (each counts toward max_edges, keeps every endpoint with role and side; from/to are null for multi-endpoint relations, so read endpoints) and do not consume depth: unit->span->artifact is 2 hops. depth defaults to 1 (max 3; 0 = seeds only). direction defaults to both; out follows from-side to to-side (unit out -> spans -> artifact), in goes the other way (markdown artifact in -> spans -> units); undirected roles such as evidence are only reached with both. edge_types defaults to the structural five [conversion, located_in, contains_span, has_part, has_snapshot]; note_link and semantic relations (states, proves, poses, hints, solves, explains, applies_method, cites) are opt-in and must be listed together with any structural ones you still want; [] walks no edges. Prefer depth <= 2 and an explicit max_nodes when adding cites. node_kinds (artifact|source_span|source_unit|snapshot|note) filters the output only; traversal still passes through filtered nodes. max_nodes defaults to 40 (max 100), max_edges to 80 (max 200); values over the hard cap are invalid_arg. Over a cap the result is status truncated with truncated true, shallower layers first, and never a dangling edge. Retired (superseded|rejected|deprecated) and trashed ink nodes are hidden unless include_trashed; include_virtual must be false. Nodes carry depth, via_edge, parent_artifact_id and content_ref for material.read, never body text. Any missing seed makes the whole result not_found. Read-only.";
 
 const SNAPSHOT_MEDIA_TYPE: &str = "application/vnd.mathscape.ink-snapshot+json";
 const SYNTHETIC_PREFIX: &str = "mathscape:projection-relation/";
-const INK_SNAPSHOT_PREFIX: &str = "mathscape:ink-snapshot/";
+pub(super) const INK_SNAPSHOT_PREFIX: &str = "mathscape:ink-snapshot/";
 
 pub const DEFAULT_DEPTH: u32 = 1;
 pub const MAX_DEPTH: u32 = 3;
@@ -82,7 +82,7 @@ pub const DEFAULT_EDGE_TYPES: [&str; 5] = [
     "has_part",
     "has_snapshot",
 ];
-/// Tool that renders `ink_page` content refs (lands in Phase1d-b).
+/// Tool that renders `ink_page` content refs (Phase1d-b).
 const INK_PAGE_TOOL: &str = "ink.page_image";
 /// Most stroke ids carried by one `ink_page` content ref.
 const MAX_CONTENT_STROKE_IDS: usize = 50;
@@ -266,7 +266,7 @@ fn internal(context: &str, error: impl std::fmt::Display) -> ToolError {
     ToolError::new(ToolErrorCode::Internal, format!("{context}: {error}"))
 }
 
-fn inner_payload(value: &Value) -> &Value {
+pub(super) fn inner_payload(value: &Value) -> &Value {
     value.get("payload").unwrap_or(value)
 }
 
@@ -278,7 +278,7 @@ fn inner_payload_mut(value: &mut Value) -> &mut Value {
     }
 }
 
-fn str_at<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
+pub(super) fn str_at<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
     value.pointer(pointer).and_then(Value::as_str)
 }
 
@@ -296,7 +296,7 @@ fn lifecycle_retired(lifecycle: Option<LifecycleStatus>) -> bool {
     )
 }
 
-fn as_of() -> String {
+pub(super) fn as_of() -> String {
     chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
 
@@ -1207,7 +1207,7 @@ fn unsupported_diagnostic(entity_kind: &Value) -> Value {
     })
 }
 
-fn canonicalized(input: &str, canonical: &str) -> Value {
+pub(super) fn canonicalized(input: &str, canonical: &str) -> Value {
     json!({
         "code": "id_canonicalized",
         "message": "input id was mapped to its graph id; use canonical_id in later calls",
@@ -1222,11 +1222,11 @@ fn scope_diagnostic() -> Value {
     )
 }
 
-fn invalid(message: impl Into<String>, details: Value) -> ToolError {
+pub(super) fn invalid(message: impl Into<String>, details: Value) -> ToolError {
     ToolError::new(ToolErrorCode::InvalidArg, message).with_details(details)
 }
 
-fn status_value(status: ToolStatus) -> Value {
+pub(super) fn status_value(status: ToolStatus) -> Value {
     serde_json::to_value(status).unwrap_or(Value::Null)
 }
 
@@ -1390,7 +1390,7 @@ fn validate_enum(
     Ok(out)
 }
 
-fn bounded(
+pub(super) fn bounded(
     field: &str,
     value: Option<u64>,
     default: usize,
