@@ -26,7 +26,7 @@
 - 把通用 Desktop `commit_*` / `plan_*` Tauri 命令开放给 Agent（FX §7.1）。
 - 通用 undo/redo（REV §1）；物理删除。
 
-**相关 / 并行（不在本 PR 范围）**：Phase0 清单 4b（登录态真机 Codex `workspace.search → material.read` + Desktop 消费事件）与 Phase1 硬化工作与本文并行推进，**本 PR 不实现、不修改**它们。Phase2 的 `user.ask` 桥（§4.1）依赖 4b 打通的 Desktop 事件消费，见 §9 依赖说明。
+**相关 / 并行（不在本 PR 范围）**：Phase0 清单 4b（登录态真机 Codex `workspace.search → material.read` + Desktop 消费事件）与 Phase1 硬化工作与本文并行推进，**本 PR 不实现、不修改**它们。Phase2 的 `user.ask` 桥（§4.1）依赖 4b 打通的 Desktop 事件消费，见 §9 依赖说明。**沙箱 Flow**（[`sandbox-flow.md`](sandbox-flow.md)）是定向写路径产品化之前的可拆卸探索床，实现顺序上可先于本文 §9；不修改本文锁定决策。
 
 ---
 
