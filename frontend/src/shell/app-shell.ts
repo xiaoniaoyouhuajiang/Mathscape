@@ -87,7 +87,7 @@ export class AppShell {
         </button>
         <button id="workspace-search-button" class="secondary-button workspace-search-button" type="button" title="搜索手稿、材料、来源单元和命名快照（⌘K / Ctrl+K）" aria-keyshortcuts="Meta+K Control+K">搜索</button>
         <button id="ink-button" class="secondary-button" type="button">手写</button>
-        <button id="sandbox-button" class="secondary-button" type="button" title="沙箱会话：从 checkpoint 复制隔离工作区，可丢弃或导出">沙箱</button>
+        <button id="sandbox-button" class="secondary-button" type="button" title="沙箱：从检查点复制隔离工作区，可丢弃或导出">沙箱</button>
         <button id="import-pdf" class="primary-button" type="button">
           <span aria-hidden="true">＋</span> 导入 PDF
         </button>

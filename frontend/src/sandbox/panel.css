@@ -1,5 +1,14 @@
+/* Sandbox panel — reuses the settings dialog shell (llm/settings.css); only sandbox-specific bits live here. */
+
 .sandbox-dialog {
-  max-width: 760px;
+  width: min(760px, 100%);
+}
+
+.sandbox-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 26px;
+  padding: 22px 26px 26px;
 }
 
 .sandbox-body.is-busy {
@@ -10,28 +19,173 @@
 .sandbox-section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sandbox-section + .sandbox-section {
+  padding-top: 22px;
+  border-top: 1px solid #293640;
 }
 
 .sandbox-input {
   width: 100%;
   box-sizing: border-box;
-  padding: 6px 8px;
-  border: 1px solid rgba(127, 127, 127, 0.35);
-  border-radius: 6px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid #34434e;
+  border-radius: 10px;
+  outline: none;
+  color: #dbe6e6;
+  background: #0b141b;
   font: inherit;
+  font-size: 12px;
 }
 
+.sandbox-input::placeholder {
+  color: #66747e;
+}
+
+.sandbox-input:focus {
+  border-color: #618f86;
+  box-shadow: 0 0 0 2px rgb(69 119 108 / 16%);
+}
+
+/* Buttons: primary (开沙箱) > secondary (导出) > quiet (导出到… / 移除登记); danger (丢弃) stands apart. */
 .sandbox-actions,
 .sandbox-item-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+}
+
+.sandbox-actions {
+  justify-content: flex-end;
+}
+
+.sandbox-actions-spacer {
+  flex: 1 1 auto;
+}
+
+.sandbox-btn {
+  min-height: 32px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.sandbox-btn:focus-visible {
+  outline: 2px solid #618f86;
+  outline-offset: 2px;
+}
+
+.sandbox-btn-primary {
+  border-color: #5b887f;
+  color: #e4f1ee;
+  background: #255e56;
+  font-weight: 600;
+}
+
+.sandbox-btn-primary:hover {
+  background: #2c6e65;
+}
+
+.sandbox-btn-secondary {
+  border-color: #3a4954;
+  color: #c6d1d7;
+  background: #1a2630;
+}
+
+.sandbox-btn-secondary:hover {
+  border-color: #4a5b67;
+  background: #20303b;
+}
+
+.sandbox-btn-quiet {
+  border-color: #2c3943;
+  color: #8f9ea8;
+  background: transparent;
+}
+
+.sandbox-btn-quiet:hover {
+  color: #c6d1d7;
+  background: #151f27;
+}
+
+.sandbox-btn-danger {
+  border-color: #5a3434;
+  color: #e3a59f;
+  background: transparent;
+}
+
+.sandbox-btn-danger:hover {
+  border-color: #8a4440;
+  color: #f2c1bc;
+  background: #2b1b1b;
+}
+
+/* Paths and ids: monospace, small, single line; paths truncate from the left so the tail stays visible. */
+.sandbox-digest {
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #b7c2c9;
+}
+
+.sandbox-id {
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #dbe6e6;
+}
+
+.sandbox-path {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: #8fa0aa;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.sandbox-field {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: #7f8e99;
+  font-size: 11px;
+}
+
+.sandbox-field-label {
+  flex: 0 0 auto;
+}
+
+.sandbox-field .sandbox-path {
+  flex: 1 1 auto;
 }
 
 .sandbox-hint {
-  opacity: 0.7;
-  word-break: break-all;
+  margin: 0;
+  color: #71808c;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.sandbox-env {
+  display: block;
+  margin: 4px 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: #a9b8c1;
+  background: #0b141b;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+  user-select: all;
 }
 
 .sandbox-list {
@@ -40,58 +194,158 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .sandbox-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-  border: 1px solid rgba(127, 127, 127, 0.25);
-  border-radius: 8px;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid #293943;
+  border-radius: 12px;
+  background: #0d171e;
 }
 
 .sandbox-item.state-discarded {
-  opacity: 0.55;
+  opacity: 0.6;
 }
 
 .sandbox-meta {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  word-break: break-all;
+  gap: 6px;
+  min-width: 0;
 }
 
-.sandbox-session-head {
+.sandbox-meta strong {
+  color: #dfe8e9;
+  font-size: 13px;
+}
+
+/* Collapsible session card: one-line summary, details on expand. */
+.sandbox-session {
+  padding: 0;
+}
+
+.sandbox-details {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sandbox-summary {
+  display: flex;
   align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 16px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.sandbox-summary::-webkit-details-marker {
+  display: none;
+}
+
+.sandbox-summary::before {
+  content: "▸";
+  flex: 0 0 auto;
+  color: #71808c;
+  font-size: 11px;
+  transition: transform 120ms ease;
+}
+
+.sandbox-details[open] > .sandbox-summary::before {
+  transform: rotate(90deg);
+}
+
+.sandbox-summary .sandbox-id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sandbox-summary-time {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: #7f8e99;
+  font-size: 11px;
+}
+
+.sandbox-details[open] > .sandbox-summary {
+  border-bottom: 1px solid #1f2d36;
+}
+
+.sandbox-details > :not(summary) {
+  margin: 0 16px;
+}
+
+.sandbox-details > .sandbox-meta {
+  margin-top: 12px;
+}
+
+.sandbox-details > .sandbox-input {
+  width: calc(100% - 32px);
+  margin-top: 12px;
+}
+
+.sandbox-details > :last-child:not(summary) {
+  margin-bottom: 14px;
+}
+
+.sandbox-details > .sandbox-item-actions {
+  margin-top: 10px;
+}
+
+.sandbox-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 11px;
+}
+
+.sandbox-facts dt {
+  color: #71808c;
+}
+
+.sandbox-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: #b7c2c9;
+  overflow-wrap: anywhere;
 }
 
 .sandbox-state {
-  font-size: 12px;
-  padding: 1px 6px;
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 1px 8px;
   border-radius: 999px;
   border: 1px solid currentColor;
 }
 
 .sandbox-state.state-active {
-  color: #2f7d4f;
+  color: #5fb889;
 }
 
 .sandbox-state.state-exported {
-  color: #2c5fa8;
+  color: #6f9bd8;
 }
 
 .sandbox-state.state-discarded {
   color: #888;
 }
 
-.sandbox-danger {
-  color: #b3261e;
+.sandbox-empty {
+  padding: 4px 2px;
+  color: #71808c;
+  font-size: 12px;
 }
 
-.sandbox-empty {
-  opacity: 0.6;
+.sandbox-error {
+  margin: 0;
 }

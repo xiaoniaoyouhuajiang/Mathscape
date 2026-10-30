@@ -8,9 +8,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import { errorMessage } from "../core/ipc";
+import { fullTimestamp, sessionOpenByDefault, shortTimestamp, STATE_LABEL, type SessionState } from "./format";
 import "./panel.css";
-
-type SessionState = "active" | "exported" | "discarded";
 
 interface CheckpointRecord {
   checkpoint_id: string;
@@ -51,12 +50,6 @@ type CheckpointSource =
 
 type Toast = (message: string, kind: "success" | "error") => void;
 
-const STATE_LABEL: Record<SessionState, string> = {
-  active: "进行中",
-  exported: "已导出",
-  discarded: "已丢弃",
-};
-
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className = "",
@@ -68,17 +61,38 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function button(label: string, onClick: () => void, className = "settings-secondary"): HTMLButtonElement {
-  const node = el("button", className, label);
+type ButtonTone = "primary" | "secondary" | "quiet" | "danger";
+
+function button(label: string, onClick: () => void, tone: ButtonTone = "secondary"): HTMLButtonElement {
+  const node = el("button", `sandbox-btn sandbox-btn-${tone}`, label);
   node.type = "button";
   node.onclick = onClick;
   return node;
+}
+
+/** Monospace path, truncated from the left (keeps the tail visible); full text on hover. */
+function pathText(path: string, className = ""): HTMLElement {
+  const node = el("span", `sandbox-path ${className}`.trim());
+  node.title = path;
+  const inner = el("bdi", "", path);
+  inner.dir = "ltr";
+  node.append(inner);
+  return node;
+}
+
+/** `label：<path>` line used inside cards and section hints. */
+function labeledPath(label: string, path: string): HTMLElement {
+  const row = el("div", "sandbox-field");
+  row.append(el("span", "sandbox-field-label", label), pathText(path));
+  return row;
 }
 
 export class SandboxPanelController {
   private readonly overlay: HTMLElement;
   private readonly body: HTMLElement;
   private busy = false;
+  /** User-toggled open/closed state per session, kept across re-renders. */
+  private readonly sessionOpen = new Map<string, boolean>();
 
   constructor(
     host: HTMLElement,
@@ -90,13 +104,13 @@ export class SandboxPanelController {
     const dialog = el("section", "settings-dialog sandbox-dialog");
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    dialog.setAttribute("aria-label", "沙箱会话");
+    dialog.setAttribute("aria-label", "沙箱");
     const header = el("header", "settings-header");
     const heading = el("div");
     heading.append(
       el("span", "settings-eyebrow", "SANDBOX · S0"),
-      el("h2", "", "沙箱会话"),
-      el("p", "", "从 checkpoint 完整复制出一个隔离工作区；丢弃即物理删除，checkpoint 永不被修改。"),
+      el("h2", "", "沙箱"),
+      el("p", "", "从检查点完整复制出一个隔离工作区；丢弃即物理删除，检查点永不被修改。"),
     );
     const close = el("button", "settings-close", "×");
     close.type = "button";
@@ -156,7 +170,7 @@ export class SandboxPanelController {
         invoke<CheckpointRecord | null>("sandbox_register_checkpoint", {
           request: { source, label },
         }),
-      (record) => (record ? `已登记 checkpoint「${record.label}」（${record.checkpoint_id}）` : null),
+      (record) => (record ? `已登记检查点「${record.label}」（${record.checkpoint_id}）` : null),
     );
   }
 
@@ -168,17 +182,17 @@ export class SandboxPanelController {
     const section = el("section", "settings-section sandbox-section");
     const heading = el("div", "settings-section-heading");
     const title = el("div");
-    title.append(el("span", "settings-eyebrow", "CHECKPOINTS"), el("h3", "", "Checkpoint（只读基线）"));
+    title.append(el("span", "settings-eyebrow", "CHECKPOINTS"), el("h3", "", "检查点"));
     heading.append(title, el("span", "settings-scope", "只读"));
     section.append(heading);
 
     const label = el("input", "sandbox-input");
-    label.placeholder = "可选：checkpoint 名称";
+    label.placeholder = "可选：检查点名称";
     label.maxLength = 80;
     const pathInput = el("input", "sandbox-input");
     pathInput.placeholder = "或粘贴工作区目录路径（含 mathscape.sqlite3）";
     const labelValue = () => label.value.trim() || null;
-    const actions = el("div", "settings-actions sandbox-actions");
+    const actions = el("div", "sandbox-actions");
     actions.append(
       button("登记当前工作区", () => this.register({ kind: "current_workspace" }, labelValue())),
       button("选择文件夹…", () => this.register({ kind: "pick_folder" }, labelValue())),
@@ -192,19 +206,19 @@ export class SandboxPanelController {
       }),
     );
     section.append(label, pathInput, actions);
-    section.append(el("small", "sandbox-hint", `当前工作区：${overview.currentWorkspaceRoot}`));
+    section.append(labeledPath("当前工作区", overview.currentWorkspaceRoot));
 
     const list = el("ul", "sandbox-list");
     if (overview.checkpoints.length === 0) {
-      list.append(el("li", "sandbox-empty", "还没有 checkpoint。"));
+      list.append(el("li", "sandbox-empty", "还没有检查点。"));
     }
     for (const checkpoint of overview.checkpoints) {
       const item = el("li", "sandbox-item");
       const meta = el("div", "sandbox-meta");
       meta.append(
         el("strong", "", checkpoint.label),
-        el("code", "", checkpoint.checkpoint_id),
-        el("small", "", checkpoint.root),
+        el("code", "sandbox-id", checkpoint.checkpoint_id),
+        pathText(checkpoint.root),
       );
       const row = el("div", "sandbox-item-actions");
       row.append(
@@ -215,7 +229,7 @@ export class SandboxPanelController {
               () => invoke<SessionView>("sandbox_start_session", { checkpointId: checkpoint.checkpoint_id }),
               (session) => `已开沙箱 ${session.sandbox_session_id}`,
             ),
-          "settings-primary",
+          "primary",
         ),
         button("移除登记", () => {
           if (!window.confirm(`只移除别名「${checkpoint.label}」，不会删除目录或已有沙箱。继续？`)) return;
@@ -223,7 +237,7 @@ export class SandboxPanelController {
             () => invoke("sandbox_unregister_checkpoint", { checkpointId: checkpoint.checkpoint_id }),
             () => "已移除登记",
           );
-        }),
+        }, "quiet"),
       );
       item.append(meta, row);
       list.append(item);
@@ -236,73 +250,107 @@ export class SandboxPanelController {
     const section = el("section", "settings-section sandbox-section");
     const heading = el("div", "settings-section-heading");
     const title = el("div");
-    title.append(el("span", "settings-eyebrow", "SESSIONS"), el("h3", "", "沙箱会话"));
+    title.append(el("span", "settings-eyebrow", "SESSIONS"), el("h3", "", "沙箱列表"));
     heading.append(title, el("span", "settings-scope", "完整复制"));
     section.append(heading);
-    section.append(el("small", "sandbox-hint", `默认导出目录：${overview.defaultExportDir}`));
+    section.append(labeledPath("默认导出目录", overview.defaultExportDir));
 
     const list = el("ul", "sandbox-list");
     if (overview.sessions.length === 0) {
-      list.append(el("li", "sandbox-empty", "还没有沙箱会话。"));
+      list.append(el("li", "sandbox-empty", "还没有沙箱。"));
     }
     for (const session of overview.sessions) {
-      const item = el("li", `sandbox-item state-${session.state}`);
-      const meta = el("div", "sandbox-meta");
-      const head = el("div", "sandbox-session-head");
-      head.append(
-        el("code", "", session.sandbox_session_id),
-        el("span", `sandbox-state state-${session.state}`, STATE_LABEL[session.state]),
-      );
-      meta.append(head, el("small", "", `checkpoint：${session.checkpoint_id} · 创建于 ${session.created_at}`));
-      if (session.checkpoint_digest) {
-        meta.append(el("small", "", `指纹：${session.checkpoint_digest.slice(0, 23)}…`));
-      }
-      if (session.last_exported_at) {
-        meta.append(el("small", "", `已导出 ${session.export_count} 次，最近 ${session.last_exported_at}`));
-      }
-      if (session.discarded_at) {
-        meta.append(el("small", "", `丢弃于 ${session.discarded_at}（隔离目录已删除）`));
-      }
-      if (session.workspace_root) {
-        meta.append(
-          el("small", "", `隔离工作区：${session.workspace_root}`),
-          el("small", "sandbox-hint", `S0 不切换当前窗口；可用 MATHSCAPE_WORKSPACE_ROOT="${session.workspace_root}" 另开一个 Mathscape 查看。`),
-        );
-      }
-      item.append(meta);
-      if (session.state !== "discarded") {
-        const notes = el("input", "sandbox-input");
-        notes.placeholder = "可选：导出备注";
-        notes.maxLength = 2000;
-        const exportWith = (chooseDestination: boolean) =>
-          void this.act(
-            () =>
-              invoke<ExportOutcome | null>("sandbox_export_session", {
-                request: {
-                  sandboxSessionId: session.sandbox_session_id,
-                  chooseDestination,
-                  notes: notes.value.trim() || null,
-                },
-              }),
-            (outcome) => (outcome ? `已导出到 ${outcome.export_dir}` : null),
-          );
-        const row = el("div", "sandbox-item-actions");
-        row.append(
-          button("导出", () => exportWith(false), "settings-primary"),
-          button("导出到…", () => exportWith(true)),
-          button("丢弃", () => {
-            if (!window.confirm(`丢弃会物理删除 ${session.sandbox_session_id} 的整个隔离目录，且不可恢复（已导出的包保留）。继续？`)) return;
-            void this.act(
-              () => invoke<SessionView>("sandbox_discard_session", { sandboxSessionId: session.sandbox_session_id }),
-              () => "已丢弃，隔离目录已删除",
-            );
-          }, "settings-secondary sandbox-danger"),
-        );
-        item.append(notes, row);
-      }
-      list.append(item);
+      list.append(this.renderSession(session));
     }
     section.append(list);
     return section;
+  }
+
+  private renderSession(session: SessionView): HTMLElement {
+    const id = session.sandbox_session_id;
+    const item = el("li", `sandbox-item sandbox-session state-${session.state}`);
+    const details = el("details", "sandbox-details");
+    details.open = this.sessionOpen.get(id) ?? sessionOpenByDefault(session.state);
+    details.addEventListener("toggle", () => this.sessionOpen.set(id, details.open));
+
+    const summary = el("summary", "sandbox-summary");
+    const time = el("time", "sandbox-summary-time", shortTimestamp(session.created_at));
+    time.dateTime = session.created_at;
+    time.title = `创建于 ${fullTimestamp(session.created_at)}`;
+    summary.append(
+      el("code", "sandbox-id", id),
+      el("span", `sandbox-state state-${session.state}`, STATE_LABEL[session.state]),
+      time,
+    );
+    details.append(summary);
+
+    const meta = el("div", "sandbox-meta");
+    const facts = el("dl", "sandbox-facts");
+    const fact = (label: string, value: string | HTMLElement) => {
+      const dd = el("dd");
+      if (typeof value === "string") dd.textContent = value;
+      else dd.append(value);
+      facts.append(el("dt", "", label), dd);
+    };
+    fact("检查点", session.checkpoint_id);
+    fact("创建于", fullTimestamp(session.created_at));
+    if (session.checkpoint_digest) {
+      const digest = el("code", "sandbox-digest", `${session.checkpoint_digest.slice(0, 23)}…`);
+      digest.title = session.checkpoint_digest;
+      fact("指纹", digest);
+    }
+    if (session.last_exported_at) {
+      fact("导出", `${session.export_count} 次，最近 ${fullTimestamp(session.last_exported_at)}`);
+    }
+    if (session.discarded_at) {
+      fact("丢弃于", `${fullTimestamp(session.discarded_at)}（隔离目录已删除）`);
+    }
+    if (session.workspace_root) {
+      fact("隔离工作区", pathText(session.workspace_root));
+    }
+    meta.append(facts);
+    if (session.workspace_root) {
+      const hint = el("p", "sandbox-hint");
+      hint.append(
+        "S0 不切换当前窗口；可用以下环境变量另开一个 Mathscape 查看：",
+        el("code", "sandbox-env", `MATHSCAPE_WORKSPACE_ROOT="${session.workspace_root}"`),
+      );
+      meta.append(hint);
+    }
+    details.append(meta);
+
+    if (session.state !== "discarded") {
+      const notes = el("input", "sandbox-input");
+      notes.placeholder = "可选：导出备注";
+      notes.maxLength = 2000;
+      const exportWith = (chooseDestination: boolean) =>
+        void this.act(
+          () =>
+            invoke<ExportOutcome | null>("sandbox_export_session", {
+              request: {
+                sandboxSessionId: id,
+                chooseDestination,
+                notes: notes.value.trim() || null,
+              },
+            }),
+          (outcome) => (outcome ? `已导出到 ${outcome.export_dir}` : null),
+        );
+      const row = el("div", "sandbox-item-actions");
+      row.append(
+        button("导出", () => exportWith(false), "secondary"),
+        button("导出到…", () => exportWith(true), "quiet"),
+        el("span", "sandbox-actions-spacer"),
+        button("丢弃", () => {
+          if (!window.confirm(`丢弃会物理删除 ${id} 的整个隔离目录，且不可恢复（已导出的包保留）。继续？`)) return;
+          void this.act(
+            () => invoke<SessionView>("sandbox_discard_session", { sandboxSessionId: id }),
+            () => "已丢弃，隔离目录已删除",
+          );
+        }, "danger"),
+      );
+      details.append(notes, row);
+    }
+    item.append(details);
+    return item;
   }
 }
