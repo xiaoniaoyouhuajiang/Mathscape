@@ -185,6 +185,9 @@ AgentExecutor 最小接口（语义，非具体签名）：
 ### Phase2 写路径（指针）
 - [ ] 写路径（`user.ask` / `propose_changes` / `get_change_set` / `scope=investigation` 投影 / Desktop 接受 / 回滚）及 D1–D3 最小口径见 [`phase2-write-contract.md`](phase2-write-contract.md)（用户决策 2026-10-30 锁定）；本文 §1、§7 的推迟项以该文为准，Phase0 其余条款不变。
 
+### 沙箱 Flow（指针）
+- [ ] 探索用可拆卸沙箱会话（checkpoint 只读、会话副本隔离、丢弃/导出、淡化 workflow 的对话壳）见 [`sandbox-flow.md`](sandbox-flow.md)（用户决策 2026-10-30 锁定）。**先于**定向 Phase2 写路径产品化落地；不修改 Phase2 锁定决策。勿与 Codex `SandboxMode` 混淆。
+
 ---
 
 ## 7. Out of Scope（明确不做）
