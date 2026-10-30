@@ -182,6 +182,9 @@ AgentExecutor 最小接口（语义，非具体签名）：
    - 不做 OCR、墨迹 grep、WebP/SVG，不写 workspace。
 - 写路径（`propose_changes`）不进 Phase1。
 
+### Phase2 写路径（指针）
+- [ ] 写路径（`user.ask` / `propose_changes` / `get_change_set` / `scope=investigation` 投影 / Desktop 接受 / 回滚）及 D1–D3 最小口径见 [`phase2-write-contract.md`](phase2-write-contract.md)（用户决策 2026-10-30 锁定）；本文 §1、§7 的推迟项以该文为准，Phase0 其余条款不变。
+
 ---
 
 ## 7. Out of Scope（明确不做）
