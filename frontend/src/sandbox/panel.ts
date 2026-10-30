@@ -1,13 +1,15 @@
 /**
- * S0 sandbox panel (docs/sandbox-flow.md §5 S0): register checkpoints, open
- * sandbox sessions (full-copy isolation), discard and export them.
+ * Sandbox panel (docs/sandbox-flow.md §5 S0/S1): register checkpoints, open
+ * sandbox sessions (full-copy isolation), discard and export them (S0); open a
+ * session in this window and talk to the local Codex over it (S1).
  *
  * "Sandbox session" is the product concept; it has nothing to do with Codex
- * `SandboxMode`. S0 has no dialogue and no write path back to the checkpoint.
+ * `SandboxMode`. There is still no write path back to the checkpoint.
  */
 import { invoke } from "@tauri-apps/api/core";
 
 import { errorMessage } from "../core/ipc";
+import { enterSandbox, returnToMother, type WorkspaceStatus } from "./chrome";
 import { fullTimestamp, sessionOpenByDefault, shortTimestamp, STATE_LABEL, type SessionState } from "./format";
 import "./panel.css";
 
@@ -34,6 +36,7 @@ interface SandboxOverview {
   sandboxRoot: string;
   defaultExportDir: string;
   currentWorkspaceRoot: string;
+  workspace: WorkspaceStatus;
   checkpoints: CheckpointRecord[];
   sessions: SessionView[];
 }
@@ -98,6 +101,7 @@ export class SandboxPanelController {
     host: HTMLElement,
     trigger: HTMLButtonElement,
     private readonly toast: Toast,
+    private readonly dialogue: { open: (sessionId: string) => void; forget: (sessionId: string) => void },
   ) {
     this.overlay = el("div", "settings-overlay sandbox-overlay");
     this.overlay.hidden = true;
@@ -108,9 +112,9 @@ export class SandboxPanelController {
     const header = el("header", "settings-header");
     const heading = el("div");
     heading.append(
-      el("span", "settings-eyebrow", "SANDBOX · S0"),
+      el("span", "settings-eyebrow", "SANDBOX · S1"),
       el("h2", "", "沙箱"),
-      el("p", "", "从检查点完整复制出一个隔离工作区；丢弃即物理删除，检查点永不被修改。"),
+      el("p", "", "从检查点完整复制出一个隔离工作区，可在本窗口打开并与本机 Codex 对话；丢弃即物理删除，检查点永不被修改。"),
     );
     const close = el("button", "settings-close", "×");
     close.type = "button";
@@ -260,13 +264,13 @@ export class SandboxPanelController {
       list.append(el("li", "sandbox-empty", "还没有沙箱。"));
     }
     for (const session of overview.sessions) {
-      list.append(this.renderSession(session));
+      list.append(this.renderSession(session, overview.workspace));
     }
     section.append(list);
     return section;
   }
 
-  private renderSession(session: SessionView): HTMLElement {
+  private renderSession(session: SessionView, workspace: WorkspaceStatus): HTMLElement {
     const id = session.sandbox_session_id;
     const item = el("li", `sandbox-item sandbox-session state-${session.state}`);
     const details = el("details", "sandbox-details");
@@ -277,11 +281,13 @@ export class SandboxPanelController {
     const time = el("time", "sandbox-summary-time", shortTimestamp(session.created_at));
     time.dateTime = session.created_at;
     time.title = `创建于 ${fullTimestamp(session.created_at)}`;
+    const inWindow = workspace.sandbox?.sandboxSessionId === id;
     summary.append(
       el("code", "sandbox-id", id),
       el("span", `sandbox-state state-${session.state}`, STATE_LABEL[session.state]),
       time,
     );
+    if (inWindow) summary.append(el("span", "sandbox-current-badge", "本窗口"));
     details.append(summary);
 
     const meta = el("div", "sandbox-meta");
@@ -309,15 +315,22 @@ export class SandboxPanelController {
       fact("隔离工作区", pathText(session.workspace_root));
     }
     meta.append(facts);
-    if (session.workspace_root) {
-      const hint = el("p", "sandbox-hint");
-      hint.append(
-        "S0 不切换当前窗口；可用以下环境变量另开一个 Mathscape 查看：",
-        el("code", "sandbox-env", `MATHSCAPE_WORKSPACE_ROOT="${session.workspace_root}"`),
-      );
-      meta.append(hint);
-    }
     details.append(meta);
+
+    if (session.state !== "discarded" && session.workspace_root) {
+      const root = session.workspace_root;
+      const row = el("div", "sandbox-item-actions");
+      row.append(
+        inWindow
+          ? button("返回母工作区", () => void returnToMother(workspace.motherWorkspaceRoot, this.toast), "primary")
+          : button("在本窗口打开…", () => void enterSandbox(id, root, this.toast), "primary"),
+        button("对话", () => {
+          this.close();
+          this.dialogue.open(id);
+        }, "secondary"),
+      );
+      details.append(row);
+    }
 
     if (session.state !== "discarded") {
       const notes = el("input", "sandbox-input");
@@ -344,7 +357,10 @@ export class SandboxPanelController {
           if (!window.confirm(`丢弃会物理删除 ${id} 的整个隔离目录，且不可恢复（已导出的包保留）。继续？`)) return;
           void this.act(
             () => invoke<SessionView>("sandbox_discard_session", { sandboxSessionId: id }),
-            () => "已丢弃，隔离目录已删除",
+            () => {
+              this.dialogue.forget(id);
+              return "已丢弃，隔离目录已删除";
+            },
           );
         }, "danger"),
       );

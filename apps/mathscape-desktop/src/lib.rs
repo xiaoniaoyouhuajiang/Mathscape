@@ -21,6 +21,7 @@ mod map_edit;
 mod markdown_patch;
 mod registration;
 mod sandbox;
+mod sandbox_dialogue;
 mod search;
 pub use registration::RegistrationSourceContext;
 mod workspace_settings;
@@ -152,6 +153,17 @@ impl DesktopService {
 
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
+    }
+
+    /// Opens another workspace with the same Marker install and credential
+    /// store, but fresh per-workspace runtime state (parse/discovery slots,
+    /// InkPad LAN runtime). Used for the S1 in-window sandbox switch.
+    pub fn reopen_at(&self, workspace_root: impl AsRef<Path>) -> Result<Self, DesktopServiceError> {
+        Self::open_with_components(
+            workspace_root,
+            self.marker.clone(),
+            Arc::clone(&self.credentials),
+        )
     }
 
     pub fn snapshot(&self) -> Result<DesktopSnapshot, DesktopServiceError> {
@@ -707,14 +719,104 @@ pub enum DesktopServiceError {
     Credential(#[from] mathscape_llm::CredentialError),
 }
 
+/// The workspace this window is bound to. S1 lets the window switch into a
+/// sandbox session's isolated copy and back to the workspace it was launched
+/// with ("mother"), so commands read the current service through
+/// [`DesktopState::service`] instead of holding one for the app's lifetime.
 #[derive(Clone)]
 struct DesktopState {
+    slot: Arc<std::sync::RwLock<WorkspaceSlot>>,
+    mother_root: PathBuf,
+}
+
+struct WorkspaceSlot {
     service: DesktopService,
+    sandbox: Option<sandbox::InWindowSandbox>,
+}
+
+impl DesktopState {
+    fn new(service: DesktopService) -> Self {
+        let mother_root = service.workspace_root().to_path_buf();
+        Self {
+            slot: Arc::new(std::sync::RwLock::new(WorkspaceSlot {
+                service,
+                sandbox: None,
+            })),
+            mother_root,
+        }
+    }
+
+    /// Cheap clone of the currently bound service (all fields are `Arc`s).
+    fn service(&self) -> DesktopService {
+        self.slot
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .service
+            .clone()
+    }
+
+    fn in_window_sandbox(&self) -> Option<sandbox::InWindowSandbox> {
+        self.slot
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .sandbox
+            .clone()
+    }
+
+    fn mother_root(&self) -> &Path {
+        &self.mother_root
+    }
+
+    /// Rebinds the window to `root`. Refuses while a parse or discovery run
+    /// is in flight (they hold the old workspace), stops the old workspace's
+    /// InkPad LAN service, and leaves the old workspace's files untouched.
+    async fn switch_to(
+        &self,
+        root: PathBuf,
+        sandbox: Option<sandbox::InWindowSandbox>,
+    ) -> Result<(), String> {
+        let current = self.service();
+        if current.active_parse().is_some() {
+            return Err("当前工作区有 PDF 解析正在进行，请等它结束后再切换".into());
+        }
+        if current.active_discovery().is_some() {
+            return Err("当前工作区有内容发现正在进行，请等它结束或取消后再切换".into());
+        }
+        let opener = current.clone();
+        let next = tauri::async_runtime::spawn_blocking(move || opener.reopen_at(root))
+            .await
+            .map_err(|error| format!("workspace switch worker failed: {error}"))?
+            .map_err(|error| format!("无法打开目标工作区：{error}"))?;
+        current.shutdown_ink_lan(false).await.ok();
+        let returning_home = sandbox.is_none();
+        {
+            let mut slot = self
+                .slot
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            slot.service = next.clone();
+            slot.sandbox = sandbox;
+        }
+        if returning_home {
+            // Same resume rule as app start; sandbox copies never auto-start
+            // the LAN service even if their checkpoint had it enabled.
+            tauri::async_runtime::spawn(async move {
+                if next
+                    .ink_lan_status()
+                    .await
+                    .is_ok_and(|status| status.enabled)
+                {
+                    let _ = next.start_ink_lan(None).await;
+                }
+            });
+        }
+        Ok(())
+    }
 }
 
 #[tauri::command]
 async fn get_desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.snapshot())
         .await
         .map_err(|error| format!("catalog read worker failed: {error}"))?
@@ -737,7 +839,7 @@ async fn choose_and_import_pdf(
     let source_path = selected
         .into_path()
         .map_err(|error| format!("selected file is not a local path: {error}"))?;
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.import_pdf(source_path))
         .await
         .map_err(|error| format!("PDF import worker failed: {error}"))?
@@ -747,7 +849,7 @@ async fn choose_and_import_pdf(
 
 #[tauri::command]
 fn get_active_parse(state: State<'_, DesktopState>) -> Option<ParsePdfRequest> {
-    state.service.active_parse()
+    state.service().active_parse()
 }
 
 #[tauri::command]
@@ -755,7 +857,7 @@ async fn parse_pdf(
     state: State<'_, DesktopState>,
     request: ParsePdfRequest,
 ) -> Result<PdfParseResult, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.parse_pdf(&request))
         .await
         .map_err(|error| format!("PDF parse worker failed: {error}"))?
@@ -781,7 +883,8 @@ pub fn run() {
                     let _ = resume.start_ink_lan(None).await;
                 }
             });
-            app.manage(DesktopState { service });
+            app.manage(DesktopState::new(service));
+            app.manage(sandbox_dialogue::SandboxDialogueState::from_environment());
             app.manage(sandbox::SandboxState::open(sandbox::sandbox_root(
                 app.handle(),
             )?)?);
@@ -887,14 +990,21 @@ pub fn run() {
             sandbox::sandbox_start_session,
             sandbox::sandbox_list_sessions,
             sandbox::sandbox_discard_session,
-            sandbox::sandbox_export_session
+            sandbox::sandbox_export_session,
+            sandbox::sandbox_workspace_status,
+            sandbox::sandbox_enter_session,
+            sandbox::sandbox_return_to_mother,
+            sandbox_dialogue::sandbox_agent_status,
+            sandbox_dialogue::sandbox_session_dialogue,
+            sandbox_dialogue::sandbox_send_message,
+            sandbox_dialogue::sandbox_cancel_round
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Mathscape desktop application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
                 if let Some(state) = app.try_state::<DesktopState>() {
-                    tauri::async_runtime::block_on(state.service.shutdown_ink_lan(false)).ok();
+                    tauri::async_runtime::block_on(state.service().shutdown_ink_lan(false)).ok();
                 }
             }
         });

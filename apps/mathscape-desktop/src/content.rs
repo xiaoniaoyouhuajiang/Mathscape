@@ -449,7 +449,7 @@ pub async fn get_markdown_document(
     artifact_id: String,
     conversion_id: Option<String>,
 ) -> Result<AnchoredMarkdown, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         service.markdown_document(&artifact_id, conversion_id.as_deref())
     })
@@ -462,7 +462,7 @@ pub async fn resolve_markdown_selection(
     state: State<'_, DesktopState>,
     request: DiscoverySelectionRequest,
 ) -> Result<ResolvedDiscoverySelection, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.resolve_markdown_selection(request))
         .await
         .map_err(|e| e.to_string())?
@@ -473,7 +473,7 @@ pub async fn prepare_discovery_input(
     state: State<'_, DesktopState>,
     request: DiscoverySelectionRequest,
 ) -> Result<DiscoveryInput, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.prepare_discovery_input(request))
         .await
         .map_err(|e| e.to_string())?
@@ -484,7 +484,7 @@ pub async fn get_artifact_content_info(
     state: State<'_, DesktopState>,
     artifact_id: String,
 ) -> Result<ArtifactContentInfo, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.content_info(&artifact_id))
         .await
         .map_err(|e| e.to_string())?
@@ -495,7 +495,7 @@ pub async fn get_source_node_detail(
     state: State<'_, DesktopState>,
     node_id: String,
 ) -> Result<SourceNodeDetail, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.source_node_detail(&node_id))
         .await
         .map_err(|e| e.to_string())?
@@ -508,7 +508,7 @@ pub async fn read_artifact_bytes(
     offset: u64,
     length: u32,
 ) -> Result<tauri::ipc::Response, String> {
-    let service = state.service.clone();
+    let service = state.service();
     let bytes = tauri::async_runtime::spawn_blocking(move || {
         service.read_artifact_bytes(&artifact_id, offset, length)
     })

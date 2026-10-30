@@ -55,6 +55,12 @@ impl CodexEventMapper {
         }
     }
 
+    /// Final (or accumulated) agent message text of the turn, if any. Its
+    /// sha256 is `turn_end.final_text_ref`.
+    pub(crate) fn agent_text(&self) -> Option<&str> {
+        (!self.agent_text.is_empty()).then_some(self.agent_text.as_str())
+    }
+
     pub(crate) fn turn_closed(&self) -> bool {
         self.turn_closed
     }

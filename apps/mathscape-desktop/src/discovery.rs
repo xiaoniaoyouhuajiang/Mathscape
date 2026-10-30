@@ -1747,7 +1747,7 @@ impl From<StoredDiscoveryRunSummary> for DesktopDiscoveryRunSummary {
 
 #[tauri::command]
 pub(crate) fn get_active_discovery(state: State<'_, DesktopState>) -> Option<ActiveDiscoveryTask> {
-    state.service.active_discovery()
+    state.service().active_discovery()
 }
 
 #[tauri::command]
@@ -1755,7 +1755,7 @@ pub(crate) async fn list_discovery_runs(
     state: State<'_, DesktopState>,
     request: ListDiscoveryRunsRequest,
 ) -> Result<Vec<DesktopDiscoveryRunSummary>, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         service.list_discovery_runs(request.artifact_id.as_deref())
     })
@@ -1769,7 +1769,7 @@ pub(crate) async fn get_discovery_review(
     state: State<'_, DesktopState>,
     run_id: String,
 ) -> Result<DesktopDiscoveryReviewEnvelope, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.get_discovery_review(&run_id))
         .await
         .map_err(|error| format!("恢复内容发现结果线程失败：{error}"))?
@@ -1781,7 +1781,7 @@ pub(crate) async fn get_discovery_diagnostics(
     state: State<'_, DesktopState>,
     run_id: String,
 ) -> Result<DesktopDiscoveryRunDiagnostics, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.get_discovery_diagnostics(&run_id))
         .await
         .map_err(|error| format!("读取内容发现诊断线程失败：{error}"))?
@@ -1793,7 +1793,7 @@ pub(crate) async fn discard_discovery_run(
     state: State<'_, DesktopState>,
     request: DiscardDiscoveryRunRequest,
 ) -> Result<DiscoveryRunDispositionReceipt, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.discard_discovery_run(request))
         .await
         .map_err(|error| format!("放弃内容发现结果线程失败：{error}"))?
@@ -1805,7 +1805,7 @@ pub(crate) async fn restore_discovery_review(
     state: State<'_, DesktopState>,
     request: RestoreDiscoveryReviewRequest,
 ) -> Result<DiscoveryRunDispositionReceipt, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.restore_discovery_review(request))
         .await
         .map_err(|e| format!("恢复审核线程失败：{e}"))?
@@ -1814,7 +1814,7 @@ pub(crate) async fn restore_discovery_review(
 
 #[tauri::command]
 pub(crate) fn cancel_discovery(state: State<'_, DesktopState>) -> bool {
-    state.service.cancel_discovery()
+    state.service().cancel_discovery()
 }
 
 #[tauri::command]
@@ -1822,7 +1822,7 @@ pub(crate) async fn accept_discovery_result(
     state: State<'_, DesktopState>,
     request: AcceptDiscoveryRequest,
 ) -> Result<DesktopDiscoveryAcceptance, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.accept_discovery_result(request))
         .await
         .map_err(|error| format!("来源审核线程失败：{error}"))?
@@ -1836,7 +1836,7 @@ pub(crate) async fn run_discovery(
     on_progress: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<DesktopDiscoveryOutcome, String> {
     state
-        .service
+        .service()
         .run_discovery_observed(
             request,
             Some(Arc::new(move |progress| {
@@ -1856,7 +1856,7 @@ pub(crate) async fn resume_discovery_after_patch(
     on_progress: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<DesktopDiscoveryOutcome, String> {
     state
-        .service
+        .service()
         .resume_discovery_after_patch_observed(
             request,
             Some(Arc::new(move |progress| {

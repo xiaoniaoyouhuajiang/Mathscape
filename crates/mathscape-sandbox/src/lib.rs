@@ -8,9 +8,10 @@
 //! `SandboxMode` (`read-only | workspace-write | …`), which only governs what
 //! the Codex harness may do to the host filesystem.
 //!
-//! S0 deliberately has no dialogue, no Codex mount and no write API: the
-//! session copy is only created, listed, exported and discarded (T2 = read-only
-//! tools only once S1 mounts them).
+//! S0 created, listed, exported and discarded the session copy. S1 adds the
+//! dialogue storage ([`TranscriptEntry`] lines and raw `agent_events v0` in
+//! `events.jsonl`), both inside the session dir; Agent tools stay read-only
+//! (T2). The Codex mount itself lives in the Desktop app.
 //!
 //! On-disk layout under a [`SandboxHome`] root:
 //!
@@ -20,14 +21,20 @@
 //!   discarded.jsonl                  # tombstones: one line per discarded session id
 //!   sessions/<sandbox_session_id>/   # the whole isolation layer; discard deletes it
 //!     session.json
-//!     transcript.jsonl
+//!     transcript.jsonl               # user / agent / system lines (S1)
+//!     events.jsonl                   # raw agent_events v0 of every round (S1)
 //!     workspace/                     # full copy of the checkpoint workspace root
 //!   exports/                         # default export destination (survives discard)
 //!   .staging/  .trash/               # internal; make create/discard atomic
 //! ```
 
 mod copy;
+mod dialogue;
 mod fingerprint;
+
+pub use dialogue::{
+    EVENTS_FILE, MAX_MESSAGE_CHARS, TranscriptEntry, TranscriptRole, build_dialogue_prompt,
+};
 
 pub use fingerprint::{
     CheckpointFingerprint, FINGERPRINT_ALGORITHM, FingerprintFile, fingerprint_workspace,
@@ -492,7 +499,8 @@ impl SandboxHome {
         })
     }
 
-    /// Export `manifest.json` + `transcript.jsonl` into
+    /// Export `manifest.json` + `transcript.jsonl` (+ `events.jsonl` once a
+    /// dialogue round ran) into
     /// `<parent>/sandbox_export_<id>[-N]/` (default parent: `<root>/exports`).
     /// The destination may not lie inside the session dir (it would vanish on
     /// discard) nor inside the checkpoint (never mutated). The session stays
@@ -538,6 +546,13 @@ impl SandboxHome {
             .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
             .count();
 
+        let events_source = self.events_path(session_id);
+        let events = match fs::read(&events_source) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(SandboxError::io(&events_source, e)),
+        };
+
         let exported_at = now_rfc3339();
         let manifest = ExportManifest {
             schema: EXPORT_SCHEMA.to_owned(),
@@ -551,7 +566,15 @@ impl SandboxHome {
             notes,
             isolation: record.isolation.clone(),
             transcript_entries,
-            files: vec![MANIFEST_FILE.to_owned(), TRANSCRIPT_FILE.to_owned()],
+            files: if events.is_empty() {
+                vec![MANIFEST_FILE.to_owned(), TRANSCRIPT_FILE.to_owned()]
+            } else {
+                vec![
+                    MANIFEST_FILE.to_owned(),
+                    TRANSCRIPT_FILE.to_owned(),
+                    EVENTS_FILE.to_owned(),
+                ]
+            },
         };
 
         let base = format!("sandbox_export_{session_id}");
@@ -567,6 +590,10 @@ impl SandboxHome {
             write_json_atomic(&partial.join(MANIFEST_FILE), &manifest)?;
             let path = partial.join(TRANSCRIPT_FILE);
             fs::write(&path, &transcript).map_err(|e| SandboxError::io(&path, e))?;
+            if !events.is_empty() {
+                let path = partial.join(EVENTS_FILE);
+                fs::write(&path, &events).map_err(|e| SandboxError::io(&path, e))?;
+            }
             fs::rename(&partial, &export_dir).map_err(|e| SandboxError::io(&export_dir, e))
         })();
         if let Err(error) = written {

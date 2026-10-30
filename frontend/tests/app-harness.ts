@@ -107,6 +107,65 @@ const requestWindowClose = () => {
   return targets.length;
 };
 
+// S1 sandbox: the in-window binding survives the reload the switch triggers
+// (sessionStorage), like DesktopState survives a webview reload.
+const sandboxSession = { sandbox_session_id: "sbx_demo", state: "active", checkpoint_id: "ckpt_demo", checkpoint_digest: null,
+  created_at: "2026-10-31T09:00:00+08:00", last_exported_at: null, export_count: 0, discarded_at: null, workspace_root: "/sandbox/sessions/sbx_demo/workspace" };
+const sandboxCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+const workspaceStatus = () => {
+  const inSandbox = sessionStorage.getItem("harness.sandbox") === "1";
+  return {
+    motherWorkspaceRoot: "/w",
+    currentWorkspaceRoot: inSandbox ? sandboxSession.workspace_root : "/w",
+    sandbox: inSandbox ? { sandboxSessionId: "sbx_demo", checkpointId: "ckpt_demo", workspaceRoot: sandboxSession.workspace_root } : null,
+  };
+};
+const transcript: Array<Record<string, unknown>> = [];
+const sandboxEvents: Array<Record<string, unknown>> = [];
+const emitDialogue = (payload: Record<string, unknown>) => {
+  const internals = (window as unknown as { __TAURI_INTERNALS__: { runCallback: (id: number, data: unknown) => void } }).__TAURI_INTERNALS__;
+  for (const { handler } of windowEvents.listeners.filter(listener => listener.event === "sandbox://dialogue")) {
+    internals.runCallback(handler, { event: "sandbox://dialogue", id: handler, payload });
+  }
+};
+extraCommands.set("sandbox_workspace_status", () => workspaceStatus());
+extraCommands.set("sandbox_overview", () => ({
+  sandboxRoot: "/sandbox", defaultExportDir: "/sandbox/exports", currentWorkspaceRoot: workspaceStatus().currentWorkspaceRoot,
+  workspace: workspaceStatus(),
+  checkpoints: [{ checkpoint_id: "ckpt_demo", label: "demo", root: "/w", registered_at: "2026-10-31T08:59:00+08:00" }],
+  sessions: [sandboxSession],
+}));
+extraCommands.set("sandbox_enter_session", (args) => { sandboxCalls.push({ command: "enter", args }); sessionStorage.setItem("harness.sandbox", "1"); return workspaceStatus(); });
+extraCommands.set("sandbox_return_to_mother", (args) => { sandboxCalls.push({ command: "return", args }); sessionStorage.removeItem("harness.sandbox"); return workspaceStatus(); });
+extraCommands.set("sandbox_agent_status", () => ({ backend: "codex", codexProgram: "codex", mcpProgram: "mathscape", tools: ["1", "2", "3", "4", "5", "6", "7"],
+  probes: [{ capability: "codex", state: "available", found_version: "0.124.0", required: null, install_hint: null }], available: true }));
+extraCommands.set("sandbox_session_dialogue", (args) => ({ sandboxSessionId: String(args.sandboxSessionId), transcript: structuredClone(transcript), events: structuredClone(sandboxEvents), activeRoundId: null }));
+extraCommands.set("sandbox_send_message", (args) => {
+  sandboxCalls.push({ command: "send", args });
+  const id = String(args.sandboxSessionId);
+  const userEntry = { ts: new Date().toISOString(), role: "user", text: String(args.text), round_id: "r1" };
+  transcript.push(userEntry);
+  // Stream the round after the command resolves, as the Rust pump does.
+  setTimeout(() => {
+    const event = (seq: number, type: string, payload: Record<string, unknown>) => {
+      const value = { round_id: "r1", turn_id: "t1", seq, ts: "2026-10-31T09:01:00+08:00", backend: "codex", type, payload };
+      sandboxEvents.push(value);
+      emitDialogue({ kind: "agent_event", sandbox_session_id: id, event: value });
+    };
+    event(0, "turn_start", { input_ref: "x" });
+    event(1, "tool_call", { call_id: "c1", tool: "workspace.search", server: "mathscape", args_summary: "query=紧集" });
+    event(2, "tool_result", { call_id: "c1", status: "ok", duration_ms: 12 });
+    event(3, "usage", { input_tokens: 120, output_tokens: 30 });
+    event(4, "turn_end", { outcome: "completed" });
+    const reply = { ts: new Date().toISOString(), role: "agent", text: "找到 1 条：定理 3.2。", round_id: "r1", outcome: "completed" };
+    transcript.push(reply);
+    emitDialogue({ kind: "transcript", sandbox_session_id: id, entry: reply });
+    emitDialogue({ kind: "round_finished", sandbox_session_id: id, round_id: "r1" });
+  }, 30);
+  return { roundId: "r1", userEntry };
+});
+extraCommands.set("sandbox_cancel_round", () => false);
+
 await import("../src/main");
 
 const core = (): Core => (document.querySelector("#graph") as unknown as { _cyreg: { cy: Core } } | null)?._cyreg?.cy
@@ -114,6 +173,7 @@ const core = (): Core => (document.querySelector("#graph") as unknown as { _cyre
 const appHarness = {
   documents: { a: a.document_id, b: b.document_id }, notes, links, behavior, storedDocuments: documents, noteCalls, unexpected,
   windowEvents, requestWindowClose,
+  sandboxCalls,
   contentFailures, contentRequests, detailRequests, sourceDetailBehavior, searchBehavior, snapshots, snapshotLabelCalls,
   /** Cytoscape state of a node: selected flag and distance from the canvas centre. */
   nodeView: (id: string) => {

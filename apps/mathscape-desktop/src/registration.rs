@@ -46,7 +46,7 @@ pub(crate) async fn get_source_registration_context(
     decision_id: String,
     state: State<'_, DesktopState>,
 ) -> Result<RegistrationSourceContext, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.registration_source_context(&decision_id))
         .await
         .map_err(|e| e.to_string())?
@@ -109,7 +109,7 @@ pub(crate) fn commit_registration(
 }
 #[tauri::command]
 pub(crate) async fn get_map_head(state: State<'_, DesktopState>) -> Result<Option<String>, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         Ok(store(&service)?
             .map_edit_snapshot()
@@ -124,7 +124,7 @@ pub(crate) async fn get_pending_source_registration_plans(
     run_id: String,
     state: State<'_, DesktopState>,
 ) -> Result<Vec<SourceRegistrationCommitPlan>, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         let s = store(&service)?;
         let mut result = vec![];
@@ -163,7 +163,7 @@ pub async fn list_discovery_registrations(
     run_id: String,
     state: State<'_, DesktopState>,
 ) -> Result<Vec<RegistrationSummary>, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         store(&service)?
             .list_discovery_registrations(&run_id)
@@ -177,7 +177,7 @@ pub async fn plan_discovery_registration_reversal(
     request: ReverseDiscoveryRequest,
     state: State<'_, DesktopState>,
 ) -> Result<DiscoveryReversalPlan, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         let s = store(&service)?
             .registration_snapshot()
@@ -192,7 +192,7 @@ pub async fn commit_discovery_registration_reversal(
     request: CommitDiscoveryReversalRequest,
     state: State<'_, DesktopState>,
 ) -> Result<DiscoveryReversalReceipt, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         store(&service)?
             .commit_registration_reversal(
@@ -215,7 +215,7 @@ pub async fn get_discovery_registration_reversal(
     decision_id: String,
     state: State<'_, DesktopState>,
 ) -> Result<Option<DiscoveryReversalReceipt>, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         store(&service)?
             .discovery_registration_reversal(&decision_id)
@@ -229,7 +229,7 @@ pub async fn get_registration_history(
     decision_id: String,
     state: State<'_, DesktopState>,
 ) -> Result<MapEditSnapshot, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         store(&service)?
             .registration_history(&decision_id)
@@ -244,7 +244,7 @@ pub async fn get_registration_object_detail(
     object_id: String,
     state: State<'_, DesktopState>,
 ) -> Result<crate::SourceNodeDetail, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         service.registration_object_detail(&decision_id, &object_id)
     })
@@ -256,7 +256,7 @@ pub async fn plan_source_registration_commit(
     request: SourceRegistrationCommitRequest,
     state: State<'_, DesktopState>,
 ) -> Result<SourceRegistrationCommitPlan, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || plan_commit(&service, &request))
         .await
         .map_err(|e| e.to_string())?
@@ -267,7 +267,7 @@ pub async fn commit_source_registration_commit(
     expected_plan_fingerprint: String,
     state: State<'_, DesktopState>,
 ) -> Result<SourceRegistrationReceipt, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         commit_registration(&service, &request, &expected_plan_fingerprint)
     })

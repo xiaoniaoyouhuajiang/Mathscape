@@ -315,7 +315,7 @@ pub(crate) async fn set_default_llm_profile(
     state: State<'_, DesktopState>,
     profile_id: String,
 ) -> Result<LlmSettingsSnapshot, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.set_default_llm_profile(&profile_id))
         .await
         .map_err(|e| e.to_string())?
@@ -326,7 +326,7 @@ pub(crate) async fn set_default_llm_profile(
 pub(crate) async fn get_llm_settings(
     state: State<'_, DesktopState>,
 ) -> Result<LlmSettingsSnapshot, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.llm_settings())
         .await
         .map_err(|error| format!("LLM settings worker failed: {error}"))?
@@ -338,7 +338,7 @@ pub(crate) async fn save_llm_profile(
     state: State<'_, DesktopState>,
     request: SaveLlmProfileRequest,
 ) -> Result<LlmSettingsSnapshot, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.save_llm_profile(request))
         .await
         .map_err(|error| format!("LLM settings worker failed: {error}"))?
@@ -351,7 +351,7 @@ pub(crate) async fn test_llm_profile(
     profile_id: Option<String>,
 ) -> Result<LlmConnectionTest, String> {
     state
-        .service
+        .service()
         .test_llm_profile(profile_id.as_deref())
         .await
         .map_err(|error| error.to_string())

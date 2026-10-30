@@ -23,7 +23,7 @@ pub async fn search_workspace(
     state: State<'_, DesktopState>,
     query: SearchQuery,
 ) -> Result<SearchResponse, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.search_workspace(&query))
         .await
         .map_err(|error| format!("搜索任务失败：{error}"))?

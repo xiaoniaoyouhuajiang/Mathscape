@@ -16,9 +16,11 @@ if-addrs.workspace = true
 futures.workspace = true
 sha2.workspace = true
 time.workspace = true
+mathscape-agent.workspace = true
 mathscape-artifact.workspace = true
 mathscape-domain.workspace = true
 mathscape-graph.workspace = true
+mathscape-mcp.workspace = true
 mathscape-llm = { workspace = true, features = ["keyring"] }
 mathscape-orchestrator.workspace = true
 mathscape-pdf.workspace = true

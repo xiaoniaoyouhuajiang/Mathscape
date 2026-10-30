@@ -67,6 +67,13 @@ pub trait AgentExecutor: Send + Sync {
     /// `cancel(ack=true)` and `turn_end(cancelled)`.
     fn cancel(&self, round_id: &RoundId) -> BoxFuture<'_, Result<(), AgentError>>;
 
+    /// Resolves a round's `turn_end.final_text_ref` to the agent's visible
+    /// reply text, once the round has ended. Adapters that do not keep the
+    /// text return `None` (the default), so this is additive to §5.
+    fn final_text(&self, _round_id: &RoundId) -> Option<String> {
+        None
+    }
+
     /// Backend self-reported availability. Blocking (may spawn
     /// `--version` probes); call from a blocking context.
     fn probe(&self) -> Vec<CapabilityProbe>;

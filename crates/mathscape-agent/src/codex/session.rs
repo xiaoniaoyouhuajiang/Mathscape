@@ -138,6 +138,11 @@ impl AgentExecutor for CodexExecutor {
         Box::pin(async move { result })
     }
 
+    fn final_text(&self, round_id: &RoundId) -> Option<String> {
+        let rounds = self.shared.rounds.lock().expect("codex rounds");
+        rounds.get(round_id).and_then(|slot| slot.bus.final_text())
+    }
+
     fn probe(&self) -> Vec<CapabilityProbe> {
         vec![probe_program(
             self.shared.runner.as_ref(),
@@ -326,6 +331,21 @@ struct Session {
 }
 
 impl Session {
+    /// Publishes mapped events. Before a `turn_end` goes out, the agent's
+    /// final message text is recorded on the bus so a consumer that sees
+    /// `turn_end.final_text_ref` can immediately resolve it with
+    /// [`AgentExecutor::final_text`].
+    fn publish(&self, events: Vec<AgentEvent>) {
+        if events
+            .iter()
+            .any(|event| matches!(event.payload, crate::EventPayload::TurnEnd(_)))
+        {
+            self.bus
+                .set_final_text(self.mapper.agent_text().map(str::to_owned));
+        }
+        self.bus.publish_all(events);
+    }
+
     fn handshake(
         &mut self,
         request: &StartRoundRequest,
@@ -387,7 +407,7 @@ impl Session {
             .to_owned();
         self.turn_id = Some(turn_id.clone());
         let events = self.mapper.accept_turn(&turn_id, &result);
-        self.bus.publish_all(events);
+        self.publish(events);
         Ok(())
     }
 
@@ -400,7 +420,7 @@ impl Session {
                     "turn/interrupt was not acknowledged before the grace period",
                     ErrorCode::Internal,
                 );
-                self.bus.publish_all(events);
+                self.publish(events);
                 break;
             }
             match self.lines.recv_timeout(Duration::from_millis(50)) {
@@ -411,7 +431,7 @@ impl Session {
                             &error_text(&error),
                             error_code(&error),
                         );
-                        self.bus.publish_all(events);
+                        self.publish(events);
                         break;
                     }
                 }
@@ -426,7 +446,7 @@ impl Session {
                         &message,
                         classify_codex_failure(&message),
                     );
-                    self.bus.publish_all(events);
+                    self.publish(events);
                     break;
                 }
             }
@@ -435,14 +455,14 @@ impl Session {
                     continue;
                 }
                 let events = self.mapper.on_cancel_request();
-                self.bus.publish_all(events);
+                self.publish(events);
                 if let Err(error) = self.write_interrupt() {
                     let events = self.mapper.force_stop(
                         "interrupted",
                         &error_text(&error),
                         ErrorCode::Internal,
                     );
-                    self.bus.publish_all(events);
+                    self.publish(events);
                     break;
                 }
                 interrupt_deadline.get_or_insert_with(|| Instant::now() + self.interrupt_grace);
@@ -457,12 +477,12 @@ impl Session {
                 let events = self
                     .mapper
                     .note_protocol(format!("ignored invalid app-server json: {message}"));
-                self.bus.publish_all(events);
+                self.publish(events);
                 Ok(())
             }
             Incoming::Notification(message) => {
                 let events = self.mapper.on_notification(&message);
-                self.bus.publish_all(events);
+                self.publish(events);
                 Ok(())
             }
             Incoming::Request { id, method, params } => self.answer(&id, &method, &params),
@@ -476,7 +496,7 @@ impl Session {
                         &format!("turn/interrupt: {text}"),
                         classify_codex_failure(&text),
                     );
-                    self.bus.publish_all(events);
+                    self.publish(events);
                 }
                 Ok(())
             }
@@ -507,7 +527,7 @@ impl Session {
                 }
                 Incoming::Notification(message) => {
                     let events = self.mapper.on_notification(&message);
-                    self.bus.publish_all(events);
+                    self.publish(events);
                 }
                 Incoming::Request { id, method, params } => self.answer(&id, &method, &params)?,
                 Incoming::Response(message) => {
@@ -537,7 +557,7 @@ impl Session {
     fn answer(&mut self, id: &Value, method: &str, params: &Value) -> Result<(), AgentError> {
         if is_user_input(method) {
             let events = self.mapper.note_declined_user_input(params.clone());
-            self.bus.publish_all(events);
+            self.publish(events);
         }
         self.write_value(&json!({
             "id": id,
@@ -974,6 +994,7 @@ impl Drop for FinishBus {
 
 struct BusInner {
     events: Vec<AgentEvent>,
+    final_text: Option<String>,
     senders: Vec<futures_mpsc::UnboundedSender<AgentEvent>>,
     finished: bool,
 }
@@ -987,6 +1008,7 @@ impl EventBus {
         Self {
             inner: Mutex::new(BusInner {
                 events: Vec::new(),
+                final_text: None,
                 senders: Vec::new(),
                 finished: false,
             }),
@@ -1008,6 +1030,14 @@ impl EventBus {
         guard
             .senders
             .retain(|sender| sender.unbounded_send(event.clone()).is_ok());
+    }
+
+    fn set_final_text(&self, text: Option<String>) {
+        self.inner.lock().expect("event bus").final_text = text;
+    }
+
+    fn final_text(&self) -> Option<String> {
+        self.inner.lock().expect("event bus").final_text.clone()
     }
 
     fn finish(&self) {

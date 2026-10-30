@@ -147,6 +147,9 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
         panic!("turn_start");
     };
     assert_eq!(start.input_ref, "explain 紧集");
+    // The fixture echoes the user text as its agent message; `final_text`
+    // resolves `turn_end.final_text_ref` to that visible reply.
+    assert_eq!(executor.final_text(&round).as_deref(), Some("explain 紧集"));
     assert_eq!(
         start
             .raw
