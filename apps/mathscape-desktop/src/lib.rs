@@ -20,6 +20,7 @@ mod llm_settings;
 mod map_edit;
 mod markdown_patch;
 mod registration;
+mod sandbox;
 mod search;
 pub use registration::RegistrationSourceContext;
 mod workspace_settings;
@@ -781,6 +782,9 @@ pub fn run() {
                 }
             });
             app.manage(DesktopState { service });
+            app.manage(sandbox::SandboxState::open(sandbox::sandbox_root(
+                app.handle(),
+            )?)?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -875,7 +879,15 @@ pub fn run() {
             ink_lan::start_ink_setup,
             ink_lan::get_ink_setup_status,
             ink_lan::prepare_ink_setup_handoff,
-            ink_lan::cancel_ink_setup
+            ink_lan::cancel_ink_setup,
+            sandbox::sandbox_overview,
+            sandbox::sandbox_list_checkpoints,
+            sandbox::sandbox_register_checkpoint,
+            sandbox::sandbox_unregister_checkpoint,
+            sandbox::sandbox_start_session,
+            sandbox::sandbox_list_sessions,
+            sandbox::sandbox_discard_session,
+            sandbox::sandbox_export_session
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Mathscape desktop application")

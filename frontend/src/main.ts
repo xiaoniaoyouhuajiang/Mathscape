@@ -8,6 +8,7 @@ import { mountDiscoveryTask } from "./discovery-task";
 import { GraphController } from "./graph/graph-controller";
 import { InspectorController } from "./inspector/inspector-controller";
 import { LlmSettingsController } from "./llm/settings";
+import { SandboxPanelController } from "./sandbox/panel";
 import { DesktopInkWorkspace } from "./ink/desktop";
 import { connectInkViews, type InkViewSync } from "./ink/views";
 import {
@@ -343,6 +344,8 @@ const llmSettings = new LlmSettingsController(
   el.llmSettingsLabel,
   (msg, kind) => shell.showToast(msg, kind),
 );
+
+new SandboxPanelController(el.sandboxHost, el.sandboxButton, (msg, kind) => shell.showToast(msg, kind));
 
 let currentSnapshot: DesktopSnapshot | undefined;
 let inspectorController!: InspectorController;

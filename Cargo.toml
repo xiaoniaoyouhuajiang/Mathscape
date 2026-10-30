@@ -32,6 +32,7 @@ mathscape-mcp = { path = "crates/mathscape-mcp" }
 mathscape-orchestrator = { path = "crates/mathscape-orchestrator" }
 mathscape-pdf = { path = "crates/mathscape-pdf" }
 mathscape-query = { path = "crates/mathscape-query" }
+mathscape-sandbox = { path = "crates/mathscape-sandbox" }
 mathscape-store-sqlite = { path = "crates/mathscape-store-sqlite" }
 mathscape-tool-lean = { path = "crates/mathscape-tool-lean" }
 mathscape-tool-marker = { path = "crates/mathscape-tool-marker" }

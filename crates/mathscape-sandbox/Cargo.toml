@@ -1,0 +1,18 @@
+[package]
+name = "mathscape-sandbox"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Sandbox Flow S0: checkpoint registry, full-copy session isolation, discard and export (docs/sandbox-flow.md)."
+
+[dependencies]
+chrono.workspace = true
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -230,3 +230,4 @@ PR 描述固定三节（用户体感调试约定，保持简单）：
 | 日期 | 说明 |
 | --- | --- |
 | 2026-10-30 | 初稿。用户锁定沙箱探索床、可拆卸副作用、淡化 workflow；同意先写短契约再实现。 |
+| 2026-10-30 | S0 实现状态（`mob/sandbox-s0-base`）：新 crate `mathscape-sandbox` + Desktop「沙箱」面板。T1=完整复制、T2=只读。布局 `<app_data>/sandbox/{checkpoints.json, sessions/<id>/, exports/, discarded.jsonl}`（可用 `MATHSCAPE_SANDBOX_ROOT` 覆盖）；默认导出到 `exports/`（会话目录外，丢弃后保留）。契约本身未改。 |

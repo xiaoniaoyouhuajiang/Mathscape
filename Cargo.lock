@@ -3118,6 +3118,7 @@ dependencies = [
  "mathscape-orchestrator",
  "mathscape-pdf",
  "mathscape-query",
+ "mathscape-sandbox",
  "mathscape-store-sqlite",
  "mathscape-tool-marker",
  "rcgen",
@@ -3261,6 +3262,18 @@ dependencies = [
  "mathscape-graph",
  "mathscape-store-sqlite",
  "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "mathscape-sandbox"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "getrandom 0.3.4",
  "serde",
  "serde_json",
  "sha2 0.10.9",

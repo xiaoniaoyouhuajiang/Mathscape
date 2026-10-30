@@ -1,0 +1,97 @@
+.sandbox-dialog {
+  max-width: 760px;
+}
+
+.sandbox-body.is-busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.sandbox-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sandbox-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.sandbox-actions,
+.sandbox-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sandbox-hint {
+  opacity: 0.7;
+  word-break: break-all;
+}
+
+.sandbox-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sandbox-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 8px;
+}
+
+.sandbox-item.state-discarded {
+  opacity: 0.55;
+}
+
+.sandbox-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  word-break: break-all;
+}
+
+.sandbox-session-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.sandbox-state {
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.sandbox-state.state-active {
+  color: #2f7d4f;
+}
+
+.sandbox-state.state-exported {
+  color: #2c5fa8;
+}
+
+.sandbox-state.state-discarded {
+  color: #888;
+}
+
+.sandbox-danger {
+  color: #b3261e;
+}
+
+.sandbox-empty {
+  opacity: 0.6;
+}
