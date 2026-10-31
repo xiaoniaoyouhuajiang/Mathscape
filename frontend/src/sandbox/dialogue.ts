@@ -3,8 +3,13 @@
  * sandbox session, backed by the local Codex with the 7 Mathscape MCP tools,
  * plus a per-turn process timeline (collapsible cards before the answer).
  *
- * The expanded window is resizable and remembers its last size; when collapsed
- * it becomes a draggable float handle (not a fixed corner dock). The status
+ * A2 (A-PR2): the same shell renders in one of two dock modes. `sidebar`
+ * (default) pins it to the right edge below the top bar and shrinks the map
+ * pane so map and dialogue share the screen; `floating` is the S1 window
+ * (draggable, corner-resizable). The header button switches modes; the
+ * mode, sidebar width, and floating size/position are all remembered. When
+ * collapsed it becomes a draggable float handle that reopens in the last
+ * mode. A window too narrow for a sidebar renders floating. The status
  * line shows Codex availability; when the adapter supports selection a
  * model <select> and a reasoning-effort <select> (levels from the selected
  * model's catalog entry) let the user pick before the next round. Both are
@@ -30,6 +35,13 @@ import {
   type TranscriptRole,
 } from "./format";
 import {
+  clampSidebarWidth,
+  effectiveDockMode,
+  parseDockMode,
+  parseSidebarWidth,
+  type DockMode,
+} from "./layout";
+import {
   KIND_ICON,
   STATUS_LABEL,
   dialogueRows,
@@ -41,6 +53,12 @@ import {
 export const DIALOGUE_EVENT = "sandbox://dialogue";
 export const DIALOGUE_SIZE_KEY = "mathscape:sandbox-dialogue-size";
 export const DIALOGUE_POS_KEY = "mathscape:sandbox-dialogue-pos";
+export const DIALOGUE_MODE_KEY = "mathscape:sandbox-dialogue-mode";
+export const DIALOGUE_SIDEBAR_WIDTH_KEY = "mathscape:sandbox-dialogue-sidebar-width";
+/** Set on `.shell` while the sidebar is showing; layout CSS reads the width var. */
+export const SIDEBAR_SHELL_CLASS = "has-sandbox-sidebar";
+const SIDEBAR_WIDTH_VAR = "--sandbox-sidebar-width";
+const SIDEBAR_KEY_STEP = 24;
 
 const DEFAULT_WIDTH = 460;
 const DEFAULT_HEIGHT = 520;
@@ -136,6 +154,22 @@ function savePos(pos: PosPref): void {
   }
 }
 
+function readPref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* Optional preference. */
+  }
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.round(Math.min(max, Math.max(min, value)));
 }
@@ -171,6 +205,10 @@ export class SandboxDialogueDock {
   private readonly collapseButton: HTMLButtonElement;
   private readonly floatHandle: HTMLButtonElement;
   private readonly resizeHandle: HTMLElement;
+  private readonly sideResizeHandle: HTMLElement;
+  private readonly modeButton: HTMLButtonElement;
+  /** Element that gives the map pane room for the sidebar (`.shell`). */
+  private readonly layoutHost: HTMLElement;
 
   private sessionId: string | null = null;
   private transcript: TranscriptEntry[] = [];
@@ -184,11 +222,16 @@ export class SandboxDialogueDock {
   private readonly stepOpen = new Set<string>();
   private size = loadSize();
   private pos: PosPref = loadPos() ?? defaultPos(this.size);
+  private mode: DockMode = parseDockMode(readPref(DIALOGUE_MODE_KEY));
+  private sidebarWidth = parseSidebarWidth(readPref(DIALOGUE_SIDEBAR_WIDTH_KEY), window.innerWidth);
+  /** Last sidebar footprint pushed to the shell; avoids resize feedback loops. */
+  private layoutKey = "none";
 
   constructor(
     host: HTMLElement,
     private readonly toast: Toast,
   ) {
+    this.layoutHost = host.closest<HTMLElement>(".shell") ?? document.body;
     this.root = el("aside", "sandbox-dock");
     this.root.hidden = true;
     this.root.setAttribute("aria-label", "沙箱对话");
@@ -235,8 +278,13 @@ export class SandboxDialogueDock {
     close.title = "关闭对话（不会取消正在进行的一轮）";
     close.setAttribute("aria-label", "关闭对话");
     close.onclick = () => this.close();
-    header.append(heading, this.collapseButton, close);
-    this.bindDrag(header, () => ({ width: this.size.width, height: this.size.height }));
+    this.modeButton = el("button", "sandbox-dock-icon sandbox-dock-mode");
+    this.modeButton.type = "button";
+    this.modeButton.onclick = () => this.setMode(this.mode === "sidebar" ? "floating" : "sidebar");
+    header.append(heading, this.modeButton, this.collapseButton, close);
+    this.bindDrag(header, () => ({ width: this.size.width, height: this.size.height }), false, () =>
+      this.effectiveMode() === "floating",
+    );
 
     const body = el("div", "sandbox-dock-body");
     this.log = el("ol", "sandbox-dock-log");
@@ -275,7 +323,15 @@ export class SandboxDialogueDock {
     this.resizeHandle.title = "拖动调整大小";
     this.bindResize(this.resizeHandle);
 
-    this.root.append(header, body, this.resizeHandle);
+    this.sideResizeHandle = el("div", "sandbox-dock-side-resize");
+    this.sideResizeHandle.setAttribute("role", "separator");
+    this.sideResizeHandle.setAttribute("aria-orientation", "vertical");
+    this.sideResizeHandle.setAttribute("aria-label", "调整侧栏宽度");
+    this.sideResizeHandle.tabIndex = 0;
+    this.sideResizeHandle.title = "拖动调整侧栏宽度（←/→ 微调）";
+    this.bindSideResize(this.sideResizeHandle);
+
+    this.root.append(header, body, this.resizeHandle, this.sideResizeHandle);
 
     this.floatHandle = el("button", "sandbox-dock-float", "对话");
     this.floatHandle.type = "button";
@@ -296,6 +352,24 @@ export class SandboxDialogueDock {
     this.applyGeometry();
     this.syncControls();
     window.addEventListener("resize", () => this.clampIntoViewport());
+  }
+
+  /** The persisted preference (what the user picked last). */
+  get dockMode(): DockMode {
+    return this.mode;
+  }
+
+  /** What is actually rendered: a too-narrow window falls back to floating. */
+  private effectiveMode(): DockMode {
+    return effectiveDockMode(this.mode, window.innerWidth);
+  }
+
+  setMode(mode: DockMode): void {
+    if (mode !== this.mode) {
+      this.mode = mode;
+      writePref(DIALOGUE_MODE_KEY, mode);
+    }
+    this.applyGeometry();
   }
 
   get currentSessionId(): string | null {
@@ -334,6 +408,7 @@ export class SandboxDialogueDock {
   close(): void {
     this.root.hidden = true;
     this.floatHandle.hidden = true;
+    this.applyGeometry();
   }
 
   /** Close if showing `sessionId` (e.g. after it was discarded). */
@@ -371,16 +446,112 @@ export class SandboxDialogueDock {
     this.pos = this.clampPos(this.pos, this.root.hidden && !this.floatHandle.hidden
       ? { width: HANDLE_SIZE, height: HANDLE_SIZE }
       : this.size);
-    this.root.style.width = `${this.size.width}px`;
-    this.root.style.height = `${this.size.height}px`;
-    this.root.style.left = `${this.pos.left}px`;
-    this.root.style.top = `${this.pos.top}px`;
-    this.root.style.right = "auto";
-    this.root.style.bottom = "auto";
+    const sidebar = this.effectiveMode() === "sidebar";
+    this.root.classList.toggle("is-sidebar", sidebar);
+    this.root.classList.toggle("is-floating", !sidebar);
+    this.root.dataset.dockMode = sidebar ? "sidebar" : "floating";
+    this.resizeHandle.hidden = sidebar;
+    this.sideResizeHandle.hidden = !sidebar;
+    this.modeButton.textContent = sidebar ? "浮动" : "侧栏";
+    this.modeButton.title = sidebar ? "改为浮动窗口" : "停靠到右侧栏（与地图同屏）";
+    this.modeButton.setAttribute("aria-label", this.modeButton.title);
+    this.modeButton.setAttribute("aria-pressed", sidebar ? "true" : "false");
+    if (sidebar) {
+      this.sidebarWidth = clampSidebarWidth(this.sidebarWidth, window.innerWidth);
+      this.root.style.width = `${this.sidebarWidth}px`;
+      this.root.style.height = "auto";
+      this.root.style.left = "auto";
+      this.root.style.right = "0px";
+      this.root.style.top = `${this.sidebarTop()}px`;
+      this.root.style.bottom = "0px";
+    } else {
+      this.root.style.width = `${this.size.width}px`;
+      this.root.style.height = `${this.size.height}px`;
+      this.root.style.left = `${this.pos.left}px`;
+      this.root.style.top = `${this.pos.top}px`;
+      this.root.style.right = "auto";
+      this.root.style.bottom = "auto";
+    }
     this.floatHandle.style.left = `${this.pos.left}px`;
     this.floatHandle.style.top = `${this.pos.top}px`;
     this.floatHandle.style.right = "auto";
     this.floatHandle.style.bottom = "auto";
+    this.syncShellLayout(sidebar && !this.root.hidden);
+  }
+
+  /** Sidebar starts under the top bar so the banner and controls stay reachable. */
+  private sidebarTop(): number {
+    const topbar = this.layoutHost.querySelector<HTMLElement>(".topbar");
+    const bottom = topbar?.getBoundingClientRect().bottom ?? 0;
+    return Math.max(0, Math.round(bottom));
+  }
+
+  /**
+   * Give the map pane room for the sidebar (it shrinks rather than being
+   * covered) and nudge listeners such as the graph canvas to re-measure.
+   */
+  private syncShellLayout(showing: boolean): void {
+    const key = showing ? `sidebar:${this.sidebarWidth}` : "none";
+    if (key === this.layoutKey) return;
+    this.layoutKey = key;
+    this.layoutHost.classList.toggle(SIDEBAR_SHELL_CLASS, showing);
+    if (showing) this.layoutHost.style.setProperty(SIDEBAR_WIDTH_VAR, `${this.sidebarWidth}px`);
+    else this.layoutHost.style.removeProperty(SIDEBAR_WIDTH_VAR);
+    this.scheduleRelayout();
+  }
+
+  private relayoutFrame: number | null = null;
+
+  private scheduleRelayout(): void {
+    if (this.relayoutFrame !== null) return;
+    this.relayoutFrame = requestAnimationFrame(() => {
+      this.relayoutFrame = null;
+      window.dispatchEvent(new Event("resize"));
+    });
+  }
+
+  private bindSideResize(handle: HTMLElement): void {
+    let dragging: number | undefined;
+    let startX = 0;
+    let origin = 0;
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragging = event.pointerId;
+      startX = event.clientX;
+      origin = this.sidebarWidth;
+      try {
+        handle.setPointerCapture(event.pointerId);
+      } catch {
+        /* Synthetic pointers. */
+      }
+      handle.classList.add("is-dragging");
+      this.root.classList.add("is-resizing");
+    });
+    handle.addEventListener("pointermove", (event) => {
+      if (event.pointerId !== dragging) return;
+      // The handle is on the left edge: dragging left widens the sidebar.
+      this.sidebarWidth = clampSidebarWidth(origin - (event.clientX - startX), window.innerWidth);
+      this.applyGeometry();
+    });
+    const finish = (event: PointerEvent) => {
+      if (event.pointerId !== dragging) return;
+      dragging = undefined;
+      handle.classList.remove("is-dragging");
+      this.root.classList.remove("is-resizing");
+      writePref(DIALOGUE_SIDEBAR_WIDTH_KEY, String(this.sidebarWidth));
+    };
+    handle.addEventListener("pointerup", finish);
+    handle.addEventListener("pointercancel", finish);
+    handle.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const delta = event.key === "ArrowLeft" ? SIDEBAR_KEY_STEP : -SIDEBAR_KEY_STEP;
+      this.sidebarWidth = clampSidebarWidth(this.sidebarWidth + delta, window.innerWidth);
+      this.applyGeometry();
+      writePref(DIALOGUE_SIDEBAR_WIDTH_KEY, String(this.sidebarWidth));
+    });
   }
 
   private clampIntoViewport(): void {
@@ -398,6 +569,7 @@ export class SandboxDialogueDock {
     target: HTMLElement,
     box: () => { width: number; height: number },
     markClickSuppress = false,
+    enabled: () => boolean = () => true,
   ): void {
     let dragging: number | undefined;
     let startX = 0;
@@ -405,7 +577,7 @@ export class SandboxDialogueDock {
     let origin: PosPref = { left: 0, top: 0 };
     let moved = false;
     target.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 || !enabled()) return;
       // Interactive controls inside the drag handle (the model <select> lives in
       // the header) must keep their native pointer behaviour: preventDefault +
       // pointer capture here suppresses the compat mousedown that opens the
