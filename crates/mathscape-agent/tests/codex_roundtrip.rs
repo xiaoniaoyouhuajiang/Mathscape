@@ -222,6 +222,77 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
     assert!(!lower.contains("experimentalapi"));
 }
 
+fn run_to_end(args: Vec<String>) -> Vec<AgentEvent> {
+    let executor = fixture_executor(args);
+    let round = block_on(executor.start_round(request())).expect("start round");
+    let events = collect_until(
+        executor.events(&round).unwrap(),
+        Duration::from_secs(5),
+        |event| event.type_name() == "turn_end",
+    );
+    assert!(
+        events
+            .last()
+            .is_some_and(|event| event.type_name() == "turn_end"),
+        "timed out waiting for turn_end: {events:?}"
+    );
+    assert_eq!(validate_round(&events), vec![], "{events:?}");
+    events
+}
+
+fn mcp_startup_result(events: &[AgentEvent]) -> &mathscape_agent::ToolResult {
+    events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ToolResult(result) if result.call_id.as_str() == "mcp-startup" => {
+                Some(result)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no mcp-startup result: {events:?}"))
+}
+
+#[test]
+fn mcp_startup_inventory_is_probed_and_shown_as_a_step() {
+    // The round allows two tools; the server only exposes one.
+    let events = run_to_end(vec![
+        "--mcp-ready".into(),
+        "workspace.search".into(),
+        "app-server".into(),
+    ]);
+    let types: Vec<_> = events.iter().map(AgentEvent::type_name).collect();
+    assert_eq!(&types[..3], ["turn_start", "tool_call", "tool_result"]);
+    let result = mcp_startup_result(&events);
+    assert_eq!(result.status, mathscape_agent::ToolResultStatus::Error);
+    let mcp = &result.raw.as_ref().unwrap()["mcp"];
+    assert_eq!(mcp["tools"], serde_json::json!(["workspace.search"]));
+    assert_eq!(mcp["missing"], serde_json::json!(["material.read"]));
+
+    let events = run_to_end(vec![
+        "--mcp-ready".into(),
+        "workspace.search,material.read".into(),
+        "app-server".into(),
+    ]);
+    assert_eq!(
+        mcp_startup_result(&events).status,
+        mathscape_agent::ToolResultStatus::Ok
+    );
+}
+
+#[test]
+fn mcp_startup_failure_is_visible_and_turn_still_runs() {
+    let events = run_to_end(vec![
+        "--mcp-fail".into(),
+        "MCP startup failed: No such file or directory (os error 2)".into(),
+        "app-server".into(),
+    ]);
+    let result = mcp_startup_result(&events);
+    assert_eq!(result.status, mathscape_agent::ToolResultStatus::Error);
+    let mcp = &result.raw.as_ref().unwrap()["mcp"];
+    assert_eq!(mcp["status"], "failed");
+    assert!(mcp["error"].as_str().unwrap().contains("No such file"));
+}
+
 #[test]
 fn shell_approval_is_declined_and_named_in_the_event_stream() {
     let executor = fixture_executor(vec!["--ask-shell".into(), "app-server".into()]);

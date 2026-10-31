@@ -707,6 +707,13 @@
   font-size: 12px;
 }
 
+.sandbox-process-usage {
+  margin: 4px 0 0;
+  color: #7f9296;
+  font-size: 11px;
+  cursor: help;
+}
+
 .sandbox-steps {
   display: flex;
   flex-direction: column;

@@ -4,19 +4,24 @@
 //! not log in and does not call a model.
 //!
 //! ```text
-//! mathscape-codex-fixture [--hold | --reject-auth | --ask-shell] [--log PATH] [app-server]
+//! mathscape-codex-fixture [--hold | --reject-auth | --ask-shell] [--log PATH]
+//!                         [--mcp-ready TOOL,TOOL | --mcp-fail MESSAGE] [app-server]
 //! mathscape-codex-fixture --version
 //! ```
 //!
 //! `--hold` emits one in-progress MCP call and waits for `turn/interrupt`.
 //! `--reject-auth` fails `turn/start` with `Unauthorized: not logged in`.
 //! `--ask-shell` requests command approval and echoes the client's decision.
+//! `--mcp-ready` / `--mcp-fail` script `mcpServer/startupStatus/updated` for
+//! the `mathscape` server (and answer `mcpServerStatus/list`).
 
 use std::io::{self, BufReader, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use mathscape_agent::{CodexFixtureMode, CodexFixtureOptions, serve_codex_app_server_fixture_with};
+use mathscape_agent::{
+    CodexFixtureMcp, CodexFixtureMode, CodexFixtureOptions, serve_codex_app_server_fixture_with,
+};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -31,6 +36,24 @@ fn main() -> ExitCode {
             "--hold" => options.mode = CodexFixtureMode::HoldUntilInterrupt,
             "--reject-auth" => options.mode = CodexFixtureMode::RejectTurnAuth,
             "--ask-shell" => options.mode = CodexFixtureMode::AskShell,
+            "--mcp-ready" => {
+                index += 1;
+                let tools = args
+                    .get(index)
+                    .map(|list| {
+                        list.split(',')
+                            .filter(|name| !name.is_empty())
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                options.mcp = Some(CodexFixtureMcp::Ready(tools));
+            }
+            "--mcp-fail" => {
+                index += 1;
+                let message = args.get(index).cloned().unwrap_or_default();
+                options.mcp = Some(CodexFixtureMcp::Failed(message));
+            }
             "--log" => {
                 index += 1;
                 if let Some(path) = args.get(index) {

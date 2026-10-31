@@ -65,16 +65,18 @@ test.describe("S1 sandbox shell", () => {
     const live = dock.locator(".sandbox-line.is-live");
     await expect(live.locator(".sandbox-turn-status")).toHaveText("正在调用 workspace.search");
     await expect(live.locator(".sandbox-step.is-running .sandbox-step-badge")).toHaveText("进行中");
-    await expect(live.locator(".sandbox-step-title")).toHaveText("workspace.search");
+    await expect(live.locator(".sandbox-step-title")).toHaveText(["MCP 工具 7/7", "workspace.search"]);
     const agent = dock.locator(".sandbox-line.role-agent");
     await expect(agent.locator(".sandbox-line-text")).toHaveText(/定理 3\.2/);
     await expect(agent.locator(".sandbox-turn-status")).toHaveText("已完成");
     const summary = agent.locator(".sandbox-process-summary");
-    await expect(summary).toContainText("已完成 2 步");
+    await expect(summary).toContainText("已完成 1 步");
+    await expect(summary).toContainText("120/30 tokens");
     await expect(agent.locator(".sandbox-step")).toHaveCount(0);
     await summary.click();
-    await expect(agent.locator(".sandbox-step-title")).toHaveText(["workspace.search", "用量 120/30"]);
-    await agent.locator(".sandbox-step-head").first().click();
+    await expect(agent.locator(".sandbox-step-title")).toHaveText(["MCP 工具 7/7", "workspace.search"]);
+    await expect(agent.locator(".sandbox-process-usage")).toHaveText("用量：输入 120 · 输出 30");
+    await agent.locator(".sandbox-step-head").nth(1).click();
     await expect(agent.locator(".sandbox-step-pre").first()).toContainText("query=紧集");
     await expect(dock.getByRole("button", { name: "发送" })).toBeEnabled();
     await page.evaluate(() => {
