@@ -55,6 +55,7 @@
 
 mod fixture;
 mod map;
+mod model;
 mod session;
 
 pub use fixture::{

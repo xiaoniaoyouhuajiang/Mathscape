@@ -144,25 +144,43 @@ export function returnConfirmMessage(motherRoot: string): string {
   ].join("\n");
 }
 
+export interface AgentModelLike {
+  id: string;
+  displayName?: string | null;
+}
+
 export interface AgentStatusLike {
   backend: string;
   codexProgram: string;
   tools: string[];
   available: boolean;
   probes: { capability: string; state: string; found_version?: string | null; install_hint?: string | null }[];
-  /** Local Codex default model (display-only; S1 has no picker). */
+  /** Current model id from the agent adapter. */
   model?: string | null;
+  /** Selectable models when the adapter supports selection. */
+  models?: AgentModelLike[];
+  /** True when the adapter exposes list/set model. */
+  modelSelection?: boolean;
 }
 
-/** One line for the dock header: Codex version, default model, tool count. */
+/** One line for the dock header: Codex version (+ model when no picker), tool count. */
 export function agentStatusLine(status: AgentStatusLike): string {
   const probe = status.probes.find((item) => item.capability === "codex");
   const tools = `${status.tools.length} 个 Mathscape 工具`;
   if (status.available) {
     const version = probe?.found_version ? ` ${probe.found_version}` : "";
-    const model = status.model?.trim() ? ` · ${status.model.trim()}` : "";
+    // When the dock shows a model <select>, keep the status line free of the id.
+    const model =
+      status.modelSelection || !status.model?.trim() ? "" : ` · ${status.model.trim()}`;
     return `本机 Codex${version}${model} · ${tools}`;
   }
   const hint = probe?.install_hint ? `（${probe.install_hint}）` : "";
   return `未检测到可用的本机 Codex：${status.codexProgram}${hint}`;
+}
+
+/** Label for a model option: display name when distinct, else id. */
+export function modelOptionLabel(model: AgentModelLike): string {
+  const name = model.displayName?.trim();
+  if (name && name !== model.id) return `${name} (${model.id})`;
+  return model.id;
 }

@@ -5,7 +5,8 @@
  *
  * The expanded window is resizable and remembers its last size; when collapsed
  * it becomes a draggable float handle (not a fixed corner dock). The status
- * line shows the local Codex default model (S1 has no model picker).
+ * line shows Codex availability; when the adapter supports selection a
+ * model <select> lets the user pick before the next round.
  *
  * Everything the agent reads or writes is the session's isolated copy; the
  * shell never touches the checkpoint. The reply is only shown once the round
@@ -19,6 +20,7 @@ import {
   agentStatusLine,
   eventChip,
   latestRoundEvents,
+  modelOptionLabel,
   ROLE_LABEL,
   type AgentEventLike,
   type AgentStatusLike,
@@ -146,6 +148,8 @@ export class SandboxDialogueDock {
   private readonly root: HTMLElement;
   private readonly title: HTMLElement;
   private readonly status: HTMLElement;
+  private readonly modelRow: HTMLElement;
+  private readonly modelSelect: HTMLSelectElement;
   private readonly log: HTMLElement;
   private readonly strip: HTMLElement;
   private readonly input: HTMLTextAreaElement;
@@ -176,7 +180,20 @@ export class SandboxDialogueDock {
     const heading = el("div", "sandbox-dock-heading");
     this.title = el("strong", "", "沙箱对话");
     this.status = el("span", "sandbox-dock-status", "正在检测本机 Codex…");
-    heading.append(el("span", "settings-eyebrow", "SANDBOX · S1"), this.title, this.status);
+    this.modelRow = el("label", "sandbox-dock-model");
+    this.modelRow.hidden = true;
+    this.modelRow.append(el("span", "sandbox-dock-model-label", "模型"));
+    this.modelSelect = el("select", "sandbox-dock-model-select");
+    this.modelSelect.setAttribute("aria-label", "选择 Codex 模型");
+    this.modelSelect.disabled = true;
+    this.modelSelect.onchange = () => void this.onModelChange();
+    this.modelRow.append(this.modelSelect);
+    heading.append(
+      el("span", "settings-eyebrow", "SANDBOX · S1"),
+      this.title,
+      this.status,
+      this.modelRow,
+    );
     this.collapseButton = el("button", "sandbox-dock-icon", "–");
     this.collapseButton.type = "button";
     this.collapseButton.title = "收起为浮动入口";
@@ -443,11 +460,61 @@ export class SandboxDialogueDock {
   private async refreshStatus(): Promise<void> {
     try {
       const status = await invoke<AgentStatusLike>("sandbox_agent_status");
-      this.status.textContent = agentStatusLine(status);
-      this.status.classList.toggle("is-unavailable", !status.available);
+      this.applyAgentStatus(status);
     } catch (error) {
       this.status.textContent = errorMessage(error);
       this.status.classList.add("is-unavailable");
+      this.modelRow.hidden = true;
+      this.modelSelect.disabled = true;
+    }
+  }
+
+  private applyAgentStatus(status: AgentStatusLike): void {
+    this.status.textContent = agentStatusLine(status);
+    this.status.classList.toggle("is-unavailable", !status.available);
+    const canSelect = Boolean(status.modelSelection) && status.available;
+    if (!canSelect) {
+      this.modelRow.hidden = true;
+      this.modelSelect.disabled = true;
+      return;
+    }
+    const models = [...(status.models ?? [])];
+    const current = status.model?.trim() || "";
+    if (current && !models.some((model) => model.id === current)) {
+      models.unshift({ id: current });
+    }
+    this.modelSelect.replaceChildren();
+    if (models.length === 0) {
+      const empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = current || "（无可用模型）";
+      this.modelSelect.append(empty);
+      this.modelSelect.disabled = true;
+      this.modelRow.hidden = false;
+      return;
+    }
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = modelOptionLabel(model);
+      this.modelSelect.append(option);
+    }
+    this.modelSelect.value = current && models.some((m) => m.id === current) ? current : models[0].id;
+    this.modelSelect.disabled = Boolean(this.activeRoundId) || this.sending;
+    this.modelRow.hidden = false;
+  }
+
+  private async onModelChange(): Promise<void> {
+    const id = this.modelSelect.value.trim();
+    if (!id || this.modelSelect.disabled) return;
+    this.modelSelect.disabled = true;
+    try {
+      const status = await invoke<AgentStatusLike>("sandbox_set_model", { modelId: id });
+      this.applyAgentStatus(status);
+      this.toast(`已切换模型：${id}`, "success");
+    } catch (error) {
+      this.toast(`切换模型失败：${errorMessage(error)}`, "error");
+      await this.refreshStatus();
     }
   }
 
@@ -560,6 +627,9 @@ export class SandboxDialogueDock {
     this.sendButton.disabled = running || this.sending || !this.sessionId;
     this.sendButton.textContent = running ? "进行中…" : "发送";
     this.cancelButton.hidden = !running;
+    if (!this.modelRow.hidden) {
+      this.modelSelect.disabled = running || this.sending || this.modelSelect.options.length === 0;
+    }
   }
 }
 

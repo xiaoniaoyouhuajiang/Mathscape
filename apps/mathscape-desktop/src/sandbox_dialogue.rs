@@ -23,8 +23,8 @@ use std::{
 
 use futures::StreamExt;
 use mathscape_agent::{
-    AgentBackend, AgentExecutor, CapabilityProbe, CodexConfig, CodexExecutor, EventPayload,
-    RoundId, StartRoundRequest, TurnOutcome,
+    AgentBackend, AgentExecutor, AgentModel, CapabilityProbe, CodexConfig, CodexExecutor,
+    EventPayload, RoundId, StartRoundRequest, TurnOutcome,
 };
 use mathscape_sandbox::{
     MAX_MESSAGE_CHARS, SandboxError, SandboxHome, TranscriptEntry, TranscriptRole,
@@ -78,9 +78,12 @@ pub struct AgentStatus {
     pub tools: Vec<String>,
     pub probes: Vec<CapabilityProbe>,
     pub available: bool,
-    /// Top-level `model` from the local Codex config (`~/.codex/config.toml`),
-    /// if present. S1 has no model picker; this is display-only.
+    /// Current model id from the adapter (`AgentExecutor::current_model`).
     pub model: Option<String>,
+    /// Selectable models from the adapter (`list_models`). Empty when unsupported.
+    pub models: Vec<AgentModel>,
+    /// True when the adapter implements model selection (Codex).
+    pub model_selection: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -127,44 +130,6 @@ fn env_path(name: &str) -> Option<PathBuf> {
 }
 
 
-fn codex_config_toml() -> Option<PathBuf> {
-    if let Some(home) = env::var_os("CODEX_HOME") {
-        return Some(PathBuf::from(home).join("config.toml"));
-    }
-    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))?;
-    Some(PathBuf::from(home).join(".codex").join("config.toml"))
-}
-
-/// Best-effort read of Codex's default model (top-level `model = "..."` before
-/// the first `[section]`). Missing file / missing key → `None`.
-fn read_codex_default_model() -> Option<String> {
-    read_codex_default_model_from(codex_config_toml()?)
-}
-
-fn read_codex_default_model_from(path: PathBuf) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if trimmed.starts_with('[') {
-            break;
-        }
-        let Some(rest) = trimmed.strip_prefix("model") else {
-            continue;
-        };
-        let rest = rest.trim_start();
-        let Some(rest) = rest.strip_prefix('=') else {
-            continue;
-        };
-        let value = rest.trim().trim_matches(|c| c == '"' || c == '\'');
-        if !value.is_empty() {
-            return Some(value.to_owned());
-        }
-    }
-    None
-}
 
 fn default_mcp_program() -> PathBuf {
     let file = format!("mathscape{}", env::consts::EXE_SUFFIX);
@@ -244,9 +209,18 @@ impl SandboxDialogueState {
 
     async fn status(&self) -> AgentStatus {
         let executor = Arc::clone(&self.inner.executor);
-        let probes = tauri::async_runtime::spawn_blocking(move || executor.probe())
-            .await
-            .unwrap_or_default();
+        let snapshot = tauri::async_runtime::spawn_blocking(move || {
+            let probes = executor.probe();
+            let model = executor.current_model();
+            let (models, model_selection) = match executor.list_models() {
+                Ok(models) => (models, true),
+                Err(_) => (Vec::new(), false),
+            };
+            (probes, model, models, model_selection)
+        })
+        .await
+        .unwrap_or_else(|_| (Vec::new(), None, Vec::new(), false));
+        let (probes, model, models, model_selection) = snapshot;
         AgentStatus {
             backend: BACKEND_LABEL,
             codex_program: self.inner.codex_program.clone(),
@@ -254,8 +228,19 @@ impl SandboxDialogueState {
             tools: tool_allowlist(),
             available: !probes.is_empty() && probes.iter().all(CapabilityProbe::is_available),
             probes,
-            model: read_codex_default_model(),
+            model,
+            models,
+            model_selection,
         }
+    }
+
+    async fn set_model(&self, id: String) -> Result<AgentStatus, String> {
+        let executor = Arc::clone(&self.inner.executor);
+        tauri::async_runtime::spawn_blocking(move || executor.set_model(&id))
+            .await
+            .map_err(|error| format!("set_model worker failed: {error}"))?
+            .map_err(|error| error.to_string())?;
+        Ok(self.status().await)
     }
 
     async fn dialogue(
@@ -475,6 +460,15 @@ pub async fn sandbox_agent_status(
     dialogue: State<'_, SandboxDialogueState>,
 ) -> Result<AgentStatus, String> {
     Ok(dialogue.status().await)
+}
+
+/// Persist a Codex model selection for subsequent sandbox rounds.
+#[tauri::command]
+pub async fn sandbox_set_model(
+    dialogue: State<'_, SandboxDialogueState>,
+    model_id: String,
+) -> Result<AgentStatus, String> {
+    dialogue.set_model(model_id).await
 }
 
 #[tauri::command]
@@ -827,28 +821,4 @@ mod tests {
         let home = fx.home.lock().unwrap();
         assert!(home.read_transcript(&fx.session_id).unwrap().is_empty());
     }
-    #[test]
-    fn read_codex_default_model_skips_sections_and_comments() {
-        let root = env::temp_dir().join(format!(
-            "mathscape-codex-model-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        let config = root.join("config.toml");
-        std::fs::write(
-            &config,
-            "# comment\nmodel = \"gpt-test\"\n\n[projects.\"/x\"]\nmodel = \"ignored\"\n",
-        )
-        .unwrap();
-        assert_eq!(
-            super::read_codex_default_model_from(config).as_deref(),
-            Some("gpt-test")
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
 }

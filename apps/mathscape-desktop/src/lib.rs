@@ -995,6 +995,7 @@ pub fn run() {
             sandbox::sandbox_enter_session,
             sandbox::sandbox_return_to_mother,
             sandbox_dialogue::sandbox_agent_status,
+            sandbox_dialogue::sandbox_set_model,
             sandbox_dialogue::sandbox_session_dialogue,
             sandbox_dialogue::sandbox_send_message,
             sandbox_dialogue::sandbox_cancel_round

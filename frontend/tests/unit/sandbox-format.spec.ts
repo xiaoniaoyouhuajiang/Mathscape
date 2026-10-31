@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   agentStatusLine,
+  modelOptionLabel,
   enterConfirmMessage,
   eventChip,
   fullTimestamp,
@@ -73,7 +74,7 @@ describe("S1 event strip and switch prompts", () => {
 
 describe("S1 agent status line", () => {
   const base = { backend: "codex", codexProgram: "codex", tools: ["a", "b", "c", "d", "e", "f", "g"] };
-  it("shows version, model, and tool count when Codex is available", () => {
+  it("shows version, model, and tool count when Codex is available without a picker", () => {
     expect(
       agentStatusLine({
         ...base,
@@ -82,6 +83,18 @@ describe("S1 agent status line", () => {
         probes: [{ capability: "codex", state: "available", found_version: "0.124.0" }],
       }),
     ).toBe("本机 Codex 0.124.0 · gpt-6.1-sol · 7 个 Mathscape 工具");
+  });
+  it("omits the model segment when the dock shows a model picker", () => {
+    expect(
+      agentStatusLine({
+        ...base,
+        available: true,
+        model: "gpt-6.1-sol",
+        modelSelection: true,
+        models: [{ id: "gpt-6.1-sol" }],
+        probes: [{ capability: "codex", state: "available", found_version: "0.124.0" }],
+      }),
+    ).toBe("本机 Codex 0.124.0 · 7 个 Mathscape 工具");
   });
   it("omits the model segment when Codex has no default model recorded", () => {
     expect(
@@ -92,5 +105,10 @@ describe("S1 agent status line", () => {
     expect(
       agentStatusLine({ ...base, available: false, probes: [{ capability: "codex", state: "missing", install_hint: "npm i -g @openai/codex" }] }),
     ).toBe("未检测到可用的本机 Codex：codex（npm i -g @openai/codex）");
+  });
+  it("formats model option labels", () => {
+    expect(modelOptionLabel({ id: "gpt-a", displayName: "A" })).toBe("A (gpt-a)");
+    expect(modelOptionLabel({ id: "gpt-a", displayName: "gpt-a" })).toBe("gpt-a");
+    expect(modelOptionLabel({ id: "gpt-a" })).toBe("gpt-a");
   });
 });

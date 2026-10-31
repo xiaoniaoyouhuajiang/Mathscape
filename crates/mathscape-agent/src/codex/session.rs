@@ -51,6 +51,9 @@ pub struct CodexConfig {
     pub handshake_timeout: Duration,
     /// After `turn/interrupt`, how long to wait before killing the child.
     pub interrupt_grace: Duration,
+    /// Override for Codex home (`config.toml` / `models_cache.json`).
+    /// `None` → `$CODEX_HOME` or `~/.codex`. Tests pass a temp dir.
+    pub home: Option<PathBuf>,
 }
 
 impl Default for CodexConfig {
@@ -61,6 +64,7 @@ impl Default for CodexConfig {
             mcp_program: PathBuf::from("mathscape"),
             handshake_timeout: Duration::from_secs(20),
             interrupt_grace: Duration::from_secs(5),
+            home: None,
         }
     }
 }
@@ -141,6 +145,18 @@ impl AgentExecutor for CodexExecutor {
     fn final_text(&self, round_id: &RoundId) -> Option<String> {
         let rounds = self.shared.rounds.lock().expect("codex rounds");
         rounds.get(round_id).and_then(|slot| slot.bus.final_text())
+    }
+
+    fn current_model(&self) -> Option<String> {
+        super::model::current_model(self.shared.config.home.as_deref())
+    }
+
+    fn list_models(&self) -> Result<Vec<crate::AgentModel>, AgentError> {
+        super::model::list_models(self.shared.config.home.as_deref())
+    }
+
+    fn set_model(&self, id: &str) -> Result<(), AgentError> {
+        super::model::set_model(self.shared.config.home.as_deref(), id)
     }
 
     fn probe(&self) -> Vec<CapabilityProbe> {
@@ -290,7 +306,8 @@ fn drive_child(
         child,
         term_grace: grace,
         reaped: false,
-        mcp_program: config.mcp_program,
+        mcp_program: config.mcp_program.clone(),
+        model: super::model::current_model(config.home.as_deref()),
     };
     if let Err(error) = session.handshake(&request, &round_id, &ready) {
         // Kill the whole process group first, then unblock `start_round`.
@@ -328,6 +345,8 @@ struct Session {
     term_grace: Duration,
     reaped: bool,
     mcp_program: PathBuf,
+    /// Top-level Codex default at handshake time (forwarded on thread/start).
+    model: Option<String>,
 }
 
 impl Session {
@@ -360,6 +379,7 @@ impl Session {
             request,
             round_id,
             &self.mcp_program,
+            self.model.as_deref(),
         ))?;
         let opened = self.collect_responses(&[INITIALIZE_ID, THREAD_START_ID], deadline, ready)?;
         if let Some(message) = rpc_error_message(&opened[&INITIALIZE_ID]) {
@@ -737,31 +757,36 @@ pub(crate) fn thread_start_message(
     request: &StartRoundRequest,
     round_id: &RoundId,
     mcp_program: &Path,
+    model: Option<&str>,
 ) -> Value {
     let workspace = absolute_path(&request.workspace);
     let workspace = workspace.display().to_string();
+    let mut params = json!({
+        "cwd": workspace,
+        "approvalPolicy": "never",
+        "sandbox": "read-only",
+        "ephemeral": true,
+        "serviceName": "mathscape",
+        "developerInstructions": developer_instructions(round_id, &request.tools_allow),
+        "config": {
+            "mcp_servers.mathscape.command": mcp_program.display().to_string(),
+            "mcp_servers.mathscape.args": [
+                "mcp",
+                "--workspace",
+                workspace,
+                "--round",
+                round_id.as_str()
+            ],
+            "mcp_servers.mathscape.enabled": true
+        }
+    });
+    if let Some(model) = model.map(str::trim).filter(|id| !id.is_empty()) {
+        params["model"] = json!(model);
+    }
     json!({
         "method": "thread/start",
         "id": id,
-        "params": {
-            "cwd": workspace,
-            "approvalPolicy": "never",
-            "sandbox": "read-only",
-            "ephemeral": true,
-            "serviceName": "mathscape",
-            "developerInstructions": developer_instructions(round_id, &request.tools_allow),
-            "config": {
-                "mcp_servers.mathscape.command": mcp_program.display().to_string(),
-                "mcp_servers.mathscape.args": [
-                    "mcp",
-                    "--workspace",
-                    workspace,
-                    "--round",
-                    round_id.as_str()
-                ],
-                "mcp_servers.mathscape.enabled": true
-            }
-        }
+        "params": params
     })
 }
 
@@ -1085,6 +1110,7 @@ mod tests {
             &request(AgentBackend::Codex),
             &round,
             Path::new("mathscape"),
+            None,
         );
         let params = &message["params"];
         assert_eq!(params["cwd"], "/tmp/mathscape-ws");
@@ -1126,6 +1152,7 @@ mod tests {
             &request,
             &RoundId::parse("codex-1").unwrap(),
             Path::new("mathscape"),
+            None,
         );
         let instructions = message["params"]["developerInstructions"].as_str().unwrap();
         assert!(instructions.contains("fixed read-only tool list"));
@@ -1138,6 +1165,18 @@ mod tests {
         assert_eq!(message["params"]["threadId"], "thr_1");
         assert_eq!(message["params"]["input"][0]["text"], "explain 紧集");
         assert!(message["params"].get("model").is_none());
+    }
+
+    #[test]
+    fn thread_start_forwards_selected_model() {
+        let message = thread_start_message(
+            2,
+            &request(AgentBackend::Codex),
+            &RoundId::parse("codex-1").unwrap(),
+            Path::new("mathscape"),
+            Some("gpt-test"),
+        );
+        assert_eq!(message["params"]["model"], "gpt-test");
     }
 
     #[test]

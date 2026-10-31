@@ -466,6 +466,37 @@
   color: #e7a16b;
 }
 
+.sandbox-dock-model {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted, #6b7280);
+}
+
+.sandbox-dock-model-label {
+  flex: 0 0 auto;
+}
+
+.sandbox-dock-model-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.15rem 0.35rem;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--border, #d1d5db) 80%, transparent);
+  background: var(--surface, #fff);
+  color: inherit;
+}
+
+.sandbox-dock-model-select:disabled {
+  opacity: 0.6;
+}
+
+
 .sandbox-dock-icon {
   width: 28px;
   height: 28px;
