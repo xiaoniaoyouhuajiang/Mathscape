@@ -48,13 +48,30 @@ test.describe("S1 sandbox shell", () => {
       const calls = await page.evaluate(() => window.appHarness.sandboxCalls.map((c) => c.command));
       return calls;
     }).toContain("set_model");
+    // A2: sidebar by default — beside the map, not over it.
+    await expect(dock).toHaveClass(/is-sidebar/);
+    await expect(page.locator(".shell")).toHaveClass(/has-sandbox-sidebar/);
+    await expect(dock.locator(".sandbox-dock-side-resize")).toBeVisible();
+    await expect(dock.locator(".sandbox-dock-resize")).toBeHidden();
+    await expect.poll(async () => {
+      const grid = (await page.locator(".workspace-grid").boundingBox())!;
+      const side = (await dock.boundingBox())!;
+      return grid.x + grid.width <= side.x + 1;
+    }).toBe(true);
+    await dock.getByRole("button", { name: "改为浮动窗口" }).click();
+    await expect(dock).toHaveClass(/is-floating/);
+    await expect(page.locator(".shell")).not.toHaveClass(/has-sandbox-sidebar/);
     await expect(dock.locator(".sandbox-dock-resize")).toBeVisible();
+    await dock.getByRole("button", { name: "停靠到右侧栏（与地图同屏）" }).click();
+    await expect(dock).toHaveClass(/is-sidebar/);
     await dock.locator("button[title=\"收起为浮动入口\"]").click();
+    await expect(page.locator(".shell")).not.toHaveClass(/has-sandbox-sidebar/);
     await expect(dock).toBeHidden();
     const floatHandle = page.getByRole("button", { name: "展开沙箱对话" });
     await expect(floatHandle).toBeVisible();
     await floatHandle.click();
     await expect(dock).toBeVisible();
+    await expect(dock).toHaveClass(/is-sidebar/);
     await page.evaluate(() => {
       window.appHarness.sandboxRound.delayMs = 40;
       window.appHarness.sandboxRound.gapMs = 1200;
@@ -91,6 +108,79 @@ test.describe("S1 sandbox shell", () => {
     expect(prompts[0]).toContain("返回母工作区");
     await expect(page.locator("#sandbox-button")).toBeVisible();
     await expect(page.locator(".sandbox-banner")).toHaveCount(0);
+  });
+
+  test("sidebar width and dock mode persist across reloads; floating still drags", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    const banner = page.locator(".topbar .sandbox-banner");
+    await banner.getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    await expect(dock).toHaveClass(/is-sidebar/);
+    const before = (await dock.boundingBox())!;
+    expect(Math.round(before.width)).toBe(420);
+    const topbar = (await page.locator(".topbar").boundingBox())!;
+    expect(Math.round(before.y)).toBe(Math.round(topbar.y + topbar.height));
+    const gridBefore = (await page.locator(".workspace-grid").boundingBox())!;
+
+    const handle = dock.locator(".sandbox-dock-side-resize");
+    const hb = (await handle.boundingBox())!;
+    await page.mouse.move(hb.x + hb.width / 2, hb.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(hb.x + hb.width / 2 - 100, hb.y + 200, { steps: 5 });
+    await page.mouse.up();
+    await expect.poll(async () => Math.round((await dock.boundingBox())!.width)).toBe(520);
+    await expect.poll(async () => Math.round((await page.locator(".workspace-grid").boundingBox())!.width))
+      .toBe(Math.round(gridBefore.width) - 100);
+    await handle.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(async () => Math.round((await dock.boundingBox())!.width)).toBe(496);
+    expect(await page.evaluate(() => localStorage.getItem("mathscape:sandbox-dialogue-sidebar-width"))).toBe("496");
+
+    // Header does not drag the sidebar.
+    const header = dock.locator(".sandbox-dock-header");
+    const h = (await header.boundingBox())!;
+    await page.mouse.move(h.x + 20, h.y + 8);
+    await page.mouse.down();
+    await page.mouse.move(h.x - 200, h.y + 100, { steps: 4 });
+    await page.mouse.up();
+    expect(Math.round((await dock.boundingBox())!.x)).toBe(1400 - 496);
+
+    await page.reload();
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    await expect(dock).toHaveClass(/is-sidebar/);
+    await expect.poll(async () => Math.round((await dock.boundingBox())!.width)).toBe(496);
+
+    await dock.getByRole("button", { name: "改为浮动窗口" }).click();
+    await expect(dock).toHaveClass(/is-floating/);
+    const floatX = Math.round((await dock.boundingBox())!.x);
+    const f = (await header.boundingBox())!;
+    await page.mouse.move(f.x + 20, f.y + 8);
+    await page.mouse.down();
+    await page.mouse.move(f.x - 160, f.y - 60, { steps: 4 });
+    await page.mouse.up();
+    await expect.poll(async () => Math.round((await dock.boundingBox())!.x)).toBe(floatX - 180);
+    await page.reload();
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    await expect(dock).toHaveClass(/is-floating/);
+    await expect(page.locator(".shell")).not.toHaveClass(/has-sandbox-sidebar/);
+    expect(await page.evaluate(() => localStorage.getItem("mathscape:sandbox-dialogue-mode"))).toBe("floating");
+  });
+
+  test("a narrow window renders the sidebar preference as floating", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    await expect(dock).toHaveClass(/is-sidebar/);
+    await page.setViewportSize({ width: 740, height: 760 });
+    await expect(dock).toHaveClass(/is-floating/);
+    await expect(page.locator(".shell")).not.toHaveClass(/has-sandbox-sidebar/);
+    await page.setViewportSize({ width: 1400, height: 860 });
+    await expect(dock).toHaveClass(/is-sidebar/);
+    await expect(page.locator(".shell")).toHaveClass(/has-sandbox-sidebar/);
   });
 
   test("a real click on the model bar reaches the native picker (header drag must not swallow it)", async ({ page }) => {

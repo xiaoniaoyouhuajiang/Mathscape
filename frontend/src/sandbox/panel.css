@@ -406,7 +406,7 @@
   font-size: 11px;
 }
 
-/* Dialogue shell: floating resizable window + draggable entry handle. */
+/* Dialogue shell: floating resizable window (or A2 sidebar) + draggable entry handle. */
 .sandbox-dock {
   position: fixed;
   z-index: 60;
@@ -582,6 +582,81 @@
 
 .sandbox-dock-resize.is-dragging {
   background-color: rgb(111 163 216 / 18%);
+}
+
+/* A2 sidebar mode: pinned to the right edge under the top bar; the map pane
+   gives up exactly the sidebar width instead of being covered. */
+.sandbox-dock.is-sidebar {
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  border-width: 0 0 0 1px;
+  border-radius: 0;
+  background: rgb(12 19 26 / 99%);
+  box-shadow: -10px 0 28px rgb(0 0 0 / 28%);
+}
+
+.sandbox-dock.is-sidebar .sandbox-dock-header {
+  cursor: default;
+}
+
+.sandbox-dock.is-resizing {
+  user-select: none;
+}
+
+.sandbox-dock-side-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 1;
+}
+
+.sandbox-dock-side-resize[hidden],
+.sandbox-dock-resize[hidden] {
+  display: none;
+}
+
+.sandbox-dock-side-resize:hover,
+.sandbox-dock-side-resize:focus-visible,
+.sandbox-dock-side-resize.is-dragging {
+  outline: none;
+  background: linear-gradient(90deg, transparent 3px, #6fa3d8 3px, #6fa3d8 5px, transparent 5px);
+}
+
+.shell.has-sandbox-sidebar .workspace-grid {
+  margin-right: var(--sandbox-sidebar-width, 420px);
+  /* Let the map column give way (≥240px) so the grid never runs under the sidebar. */
+  grid-template-columns: 260px minmax(240px, 1fr) var(--detail-width, 280px);
+}
+
+.shell.has-sandbox-sidebar .workspace-grid.sources-collapsed {
+  grid-template-columns: 48px minmax(240px, 1fr) var(--detail-width, 280px);
+}
+
+/* A narrower map pane must not squeeze the map title into a vertical column. */
+.shell.has-sandbox-sidebar .canvas-toolbar {
+  gap: 12px;
+}
+
+.shell.has-sandbox-sidebar .canvas-toolbar > div:first-child {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.sandbox-dock-mode {
+  width: auto;
+  padding: 0 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.shell.has-sandbox-sidebar .ink-workspace {
+  right: var(--sandbox-sidebar-width, 420px);
 }
 
 .sandbox-dock-float {
