@@ -66,7 +66,7 @@ mod model;
 mod session;
 
 pub use fixture::{
-    CodexFixtureMode, CodexFixtureOptions, serve_codex_app_server_fixture,
+    CodexFixtureMcp, CodexFixtureMode, CodexFixtureOptions, serve_codex_app_server_fixture,
     serve_codex_app_server_fixture_with,
 };
 pub use session::{CodexConfig, CodexExecutor};

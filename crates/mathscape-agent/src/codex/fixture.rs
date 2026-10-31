@@ -24,11 +24,23 @@ pub enum CodexFixtureMode {
     AskShell,
 }
 
+/// Optional `mcpServer/startupStatus/updated` script for the `mathscape`
+/// MCP server (and the matching `mcpServerStatus/list` answer).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CodexFixtureMcp {
+    /// `starting` then `ready`; `mcpServerStatus/list` reports these tools.
+    Ready(Vec<String>),
+    /// `starting` then `failed` with this error text.
+    Failed(String),
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct CodexFixtureOptions {
     pub mode: CodexFixtureMode,
     /// Append each inbound JSON line here (adapter request log).
     pub log_path: Option<PathBuf>,
+    /// MCP startup notifications. `None` = Codex sends none (older CLI).
+    pub mcp: Option<CodexFixtureMcp>,
 }
 
 /// Scripted peer with no request log.
@@ -107,6 +119,12 @@ pub fn serve_codex_app_server_fixture_with(
                 }),
             )?,
             "thread/start" => {
+                // Real Codex sends these right after `thread/started`. The
+                // fixture sends them first so the inventory answer lands
+                // before its instant scripted turn completes.
+                if let Some(mcp) = &options.mcp {
+                    write_mcp_startup(&mut writer, &thread_id, mcp)?;
+                }
                 write_json(
                     &mut writer,
                     &json!({
@@ -180,6 +198,27 @@ pub fn serve_codex_app_server_fixture_with(
                     }
                 }
             }
+            "mcpServerStatus/list" => {
+                let data = match &options.mcp {
+                    Some(CodexFixtureMcp::Ready(tools)) => {
+                        let tools: serde_json::Map<String, Value> = tools
+                            .iter()
+                            .map(|name| (name.clone(), json!({ "name": name, "inputSchema": {} })))
+                            .collect();
+                        json!([{ "name": "mathscape", "runtimeStatus": "connected",
+                                 "tools": tools, "toolsError": null }])
+                    }
+                    Some(CodexFixtureMcp::Failed(error)) => {
+                        json!([{ "name": "mathscape", "runtimeStatus": "failed",
+                                 "tools": {}, "toolsError": error }])
+                    }
+                    None => json!([]),
+                };
+                write_json(
+                    &mut writer,
+                    &json!({ "id": id, "result": { "data": data, "nextCursor": null } }),
+                )?;
+            }
             "turn/interrupt" => {
                 write_json(&mut writer, &json!({ "id": id, "result": {} }))?;
                 write_json(
@@ -203,6 +242,25 @@ pub fn serve_codex_app_server_fixture_with(
             }
             _ => {}
         }
+    }
+}
+
+fn write_mcp_startup(
+    writer: &mut impl Write,
+    thread_id: &str,
+    mcp: &CodexFixtureMcp,
+) -> io::Result<()> {
+    let status = |status: &str, error: Value| {
+        json!({
+            "method": "mcpServer/startupStatus/updated",
+            "params": { "threadId": thread_id, "name": "mathscape", "status": status,
+                        "error": error, "failureReason": null }
+        })
+    };
+    write_json(writer, &status("starting", Value::Null))?;
+    match mcp {
+        CodexFixtureMcp::Ready(_) => write_json(writer, &status("ready", Value::Null)),
+        CodexFixtureMcp::Failed(error) => write_json(writer, &status("failed", json!(error))),
     }
 }
 

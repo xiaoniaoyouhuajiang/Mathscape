@@ -20,7 +20,9 @@ use super::approval::{
     APPROVAL_TIMEOUT, ApprovalPlan, SANDBOX_APPROVAL_POLICY, approval_event_raw, approval_plan,
     enabled_tools, timeout_plan,
 };
-use super::map::{CodexEventMapper, classify_codex_failure};
+use super::map::{
+    CodexEventMapper, classify_codex_failure, mcp_ready_thread, mcp_status_list_message,
+};
 use crate::{
     AgentBackend, AgentError, AgentEvent, AgentExecutor, Capability, CapabilityProbe,
     CommandRunner, ErrorCode, RoundId, StartRoundRequest, SystemCommandRunner, probe_program,
@@ -354,6 +356,7 @@ fn drive_child(
         thread_id: None,
         turn_id: None,
         interrupt_rpc: None,
+        mcp_list_rpc: None,
         child,
         term_grace: grace,
         reaped: false,
@@ -402,6 +405,8 @@ struct Session {
     thread_id: Option<String>,
     turn_id: Option<String>,
     interrupt_rpc: Option<u64>,
+    /// In-flight `mcpServerStatus/list` (MCP tool inventory probe), if sent.
+    mcp_list_rpc: Option<u64>,
     /// Process-group leader (`process_group(0)` on Unix).
     child: Child,
     term_grace: Duration,
@@ -578,13 +583,15 @@ impl Session {
                 Ok(())
             }
             Incoming::Notification(message) => {
-                let events = self.mapper.on_notification(&message);
-                self.publish(events);
+                self.on_notification(&message);
                 Ok(())
             }
             Incoming::Request { id, method, params } => self.answer(&id, &method, &params),
             Incoming::Response(message) => {
                 let id = response_id(&message);
+                if self.take_mcp_inventory(id, &message) {
+                    return Ok(());
+                }
                 if id == self.interrupt_rpc
                     && let Some(text) = rpc_error_message(&message)
                 {
@@ -622,12 +629,12 @@ impl Session {
                         format!("codex app-server sent invalid json: {message}"),
                     ));
                 }
-                Incoming::Notification(message) => {
-                    let events = self.mapper.on_notification(&message);
-                    self.publish(events);
-                }
+                Incoming::Notification(message) => self.on_notification(&message),
                 Incoming::Request { id, method, params } => self.answer(&id, &method, &params)?,
                 Incoming::Response(message) => {
+                    if self.take_mcp_inventory(response_id(&message), &message) {
+                        continue;
+                    }
                     if let Some(id) = response_id(&message)
                         && wanted.contains(&id)
                     {
@@ -637,6 +644,39 @@ impl Session {
             }
         }
         Ok(got)
+    }
+
+    fn on_notification(&mut self, message: &Value) {
+        let events = self.mapper.on_notification(message);
+        self.publish(events);
+        // Once Codex says the mathscape MCP server is ready, ask once for its
+        // tool inventory so the step can show e.g. "MCP 工具 7/7".
+        if self.mcp_list_rpc.is_none()
+            && let Some(thread_id) = mcp_ready_thread(message)
+        {
+            self.next_id += 1;
+            let id = self.next_id;
+            self.mcp_list_rpc = Some(id);
+            if self
+                .write_value(&mcp_status_list_message(id, &thread_id))
+                .is_err()
+            {
+                let events = self
+                    .mapper
+                    .on_mcp_inventory(&Value::Null, &self.tools_allow);
+                self.publish(events);
+            }
+        }
+    }
+
+    /// Routes the `mcpServerStatus/list` response; true when consumed.
+    fn take_mcp_inventory(&mut self, id: Option<u64>, message: &Value) -> bool {
+        if id.is_none() || id != self.mcp_list_rpc {
+            return false;
+        }
+        let events = self.mapper.on_mcp_inventory(message, &self.tools_allow);
+        self.publish(events);
+        true
     }
 
     fn next_incoming(&mut self, deadline: Instant) -> Result<Incoming, AgentError> {

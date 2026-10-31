@@ -24,7 +24,7 @@ pub use capability::{
     SystemCommandRunner, probe_all, probe_capability, probe_program,
 };
 pub use codex::{
-    CodexConfig, CodexExecutor, CodexFixtureMode, CodexFixtureOptions,
+    CodexConfig, CodexExecutor, CodexFixtureMcp, CodexFixtureMode, CodexFixtureOptions,
     serve_codex_app_server_fixture, serve_codex_app_server_fixture_with,
 };
 pub use envelope::{

@@ -1,6 +1,14 @@
 //! Map Codex app-server JSON-RPC messages onto `agent_events v0`.
 //!
 //! Unknown item types are dropped. This module does not invent event types.
+//!
+//! MCP startup observability: Codex reports `mcpServer/startupStatus/updated`
+//! for the `mathscape` server it spawns. A failed start, and the tool
+//! inventory read back with `mcpServerStatus/list` once it is ready, are
+//! surfaced as one synthetic `tool_call` / `tool_result` pair
+//! (`call_id = mcp-startup`, `tool = mcp.startup`, `server = codex`) whose
+//! `raw.mcp` carries `{server, status, tools, expected, missing, error}`.
+//! It is buffered until `turn_start` so the round stays well-formed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
@@ -33,6 +41,56 @@ pub(crate) struct CodexEventMapper {
     agent_text_final: bool,
     /// Message supplied by [`Self::force_stop`] when the process dies.
     pending_note: Option<(ErrorCode, String)>,
+    /// When Codex reported `starting` for the mathscape MCP server.
+    mcp_started: Option<Instant>,
+    /// The `mcp-startup` pair was emitted (or buffered); report only once.
+    mcp_reported: bool,
+    /// MCP startup report that arrived before `turn_start`.
+    pending_mcp: Option<McpReport>,
+}
+
+/// Name the adapter registers the Mathscape MCP server under (`thread/start`).
+pub(crate) const MATHSCAPE_MCP_SERVER: &str = "mathscape";
+/// Synthetic call id / tool name for the MCP startup step.
+pub(crate) const MCP_STARTUP_CALL_ID: &str = "mcp-startup";
+pub(crate) const MCP_STARTUP_TOOL: &str = "mcp.startup";
+
+#[derive(Debug)]
+struct McpReport {
+    status: ToolResultStatus,
+    duration_ms: u64,
+    raw: Value,
+}
+
+/// `Some(thread_id)` when `message` says the mathscape MCP server is ready.
+/// The session then asks `mcpServerStatus/list` for its tool inventory.
+pub(crate) fn mcp_ready_thread(message: &Value) -> Option<String> {
+    if message.get("method").and_then(Value::as_str) != Some("mcpServer/startupStatus/updated") {
+        return None;
+    }
+    let params = message.get("params")?;
+    if params.get("name").and_then(Value::as_str) != Some(MATHSCAPE_MCP_SERVER)
+        || params.get("status").and_then(Value::as_str) != Some("ready")
+    {
+        return None;
+    }
+    params
+        .get("threadId")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+/// `mcpServerStatus/list` request for the mathscape server's tool inventory.
+pub(crate) fn mcp_status_list_message(id: u64, thread_id: &str) -> Value {
+    serde_json::json!({
+        "method": "mcpServerStatus/list",
+        "id": id,
+        "params": {
+            "threadId": thread_id,
+            "serverName": MATHSCAPE_MCP_SERVER,
+            "detail": "toolsAndAuthOnly"
+        }
+    })
 }
 
 impl CodexEventMapper {
@@ -53,6 +111,9 @@ impl CodexEventMapper {
             agent_text: String::new(),
             agent_text_final: false,
             pending_note: None,
+            mcp_started: None,
+            mcp_reported: false,
+            pending_mcp: None,
         }
     }
 
@@ -112,6 +173,7 @@ impl CodexEventMapper {
                 events
             }
             "error" => self.on_error_notification(&params),
+            "mcpServer/startupStatus/updated" => self.on_mcp_startup(&params),
             "thread/tokenUsage/updated" => self.on_usage(&params),
             "item/agentMessage/delta" => {
                 if !self.agent_text_final
@@ -218,6 +280,144 @@ impl CodexEventMapper {
             events.push(self.emit_fatal(code, message, error));
         }
         events
+    }
+
+    fn on_mcp_startup(&mut self, params: &Value) -> Vec<AgentEvent> {
+        if params.get("name").and_then(Value::as_str) != Some(MATHSCAPE_MCP_SERVER) {
+            return Vec::new();
+        }
+        let status = params.get("status").and_then(Value::as_str).unwrap_or("");
+        match status {
+            "starting" => {
+                self.mcp_started.get_or_insert_with(Instant::now);
+                Vec::new()
+            }
+            "failed" | "cancelled" => {
+                let error = params
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.trim().is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("MCP 服务 {MATHSCAPE_MCP_SERVER} 状态 {status}"));
+                let raw = serde_json::json!({
+                    "mcp": {
+                        "server": MATHSCAPE_MCP_SERVER,
+                        "status": status,
+                        "error": error,
+                        "failureReason": params.get("failureReason").cloned().unwrap_or(Value::Null),
+                    }
+                });
+                self.report_mcp(ToolResultStatus::Error, raw)
+            }
+            // `ready`: the session follows up with `mcpServerStatus/list`
+            // and calls [`Self::on_mcp_inventory`].
+            _ => Vec::new(),
+        }
+    }
+
+    /// Response to `mcpServerStatus/list`. `expected` is the round allow-list
+    /// (Desktop passes the fixed seven); empty = no expectation.
+    pub(crate) fn on_mcp_inventory(
+        &mut self,
+        response: &Value,
+        expected: &[String],
+    ) -> Vec<AgentEvent> {
+        let entry = response
+            .pointer("/result/data")
+            .and_then(Value::as_array)
+            .and_then(|servers| {
+                servers.iter().find(|server| {
+                    server.get("name").and_then(Value::as_str) == Some(MATHSCAPE_MCP_SERVER)
+                })
+            });
+        let rpc_error = response
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let Some(entry) = entry else {
+            // Older Codex without `mcpServerStatus/list`, or no entry: the
+            // server is ready but the inventory is unknown. Not a failure.
+            let raw = serde_json::json!({
+                "mcp": {
+                    "server": MATHSCAPE_MCP_SERVER,
+                    "status": "ready",
+                    "tools": Value::Null,
+                    "expected": expected,
+                    "error": rpc_error,
+                }
+            });
+            return self.report_mcp(ToolResultStatus::Ok, raw);
+        };
+        let mut tools: Vec<String> = entry
+            .get("tools")
+            .and_then(Value::as_object)
+            .map(|tools| tools.keys().cloned().collect())
+            .unwrap_or_default();
+        tools.sort();
+        let tools_error = entry
+            .get("toolsError")
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+            .map(str::to_owned);
+        let missing: Vec<&String> = expected
+            .iter()
+            .filter(|name| !tools.contains(name))
+            .collect();
+        let status = if tools_error.is_some() || !missing.is_empty() {
+            ToolResultStatus::Error
+        } else {
+            ToolResultStatus::Ok
+        };
+        let raw = serde_json::json!({
+            "mcp": {
+                "server": MATHSCAPE_MCP_SERVER,
+                "status": if tools_error.is_some() { "failed" } else { "ready" },
+                "tools": tools,
+                "expected": expected,
+                "missing": missing,
+                "error": tools_error,
+            }
+        });
+        self.report_mcp(status, raw)
+    }
+
+    fn report_mcp(&mut self, status: ToolResultStatus, raw: Value) -> Vec<AgentEvent> {
+        if self.mcp_reported || self.turn_closed {
+            return Vec::new();
+        }
+        self.mcp_reported = true;
+        let report = McpReport {
+            status,
+            duration_ms: self.mcp_started.map(elapsed_ms).unwrap_or(0),
+            raw,
+        };
+        if !self.turn_open {
+            self.pending_mcp = Some(report);
+            return Vec::new();
+        }
+        self.emit_mcp(report)
+    }
+
+    fn emit_mcp(&mut self, report: McpReport) -> Vec<AgentEvent> {
+        let call_id = CallId::parse(MCP_STARTUP_CALL_ID).expect("mcp startup call id");
+        self.seen_calls.insert(call_id.clone());
+        vec![
+            self.emit(EventPayload::ToolCall(ToolCall {
+                call_id: call_id.clone(),
+                tool: MCP_STARTUP_TOOL.to_owned(),
+                server: "codex".to_owned(),
+                args_summary: MATHSCAPE_MCP_SERVER.to_owned(),
+                raw: Some(report.raw.clone()),
+            })),
+            self.emit(EventPayload::ToolResult(ToolResult {
+                call_id,
+                status: report.status,
+                duration_ms: report.duration_ms,
+                output_hash: None,
+                raw: Some(report.raw),
+            })),
+        ]
     }
 
     fn on_usage(&mut self, params: &Value) -> Vec<AgentEvent> {
@@ -386,10 +586,14 @@ impl CodexEventMapper {
             body.insert("codexThreadId".into(), Value::String(thread.clone()));
         }
         body.insert("codex".into(), raw);
-        vec![self.emit(EventPayload::TurnStart(TurnStart {
+        let mut events = vec![self.emit(EventPayload::TurnStart(TurnStart {
             input_ref: self.input_ref.clone(),
             raw: Some(Value::Object(body)),
-        }))]
+        }))];
+        if let Some(report) = self.pending_mcp.take() {
+            events.extend(self.emit_mcp(report));
+        }
+        events
     }
 
     fn finish_turn(&mut self, status: &str, error: Option<&Value>, raw: Value) -> Vec<AgentEvent> {
@@ -1031,5 +1235,118 @@ mod tests {
             ErrorCode::Protocol
         );
         assert_eq!(classify_codex_failure("boom"), ErrorCode::Internal);
+    }
+
+    fn mapper() -> CodexEventMapper {
+        CodexEventMapper::new(RoundId::parse("r-mcp").unwrap(), "sha256:input".into())
+    }
+
+    fn startup(status: &str, error: Value) -> Value {
+        serde_json::json!({
+            "method": "mcpServer/startupStatus/updated",
+            "params": { "threadId": "thr", "name": "mathscape", "status": status,
+                        "error": error, "failureReason": null }
+        })
+    }
+
+    fn turn_completed() -> Value {
+        serde_json::json!({"method": "turn/completed",
+            "params": {"turn": {"id": "t1", "status": "completed", "error": null}}})
+    }
+
+    #[test]
+    fn mcp_failure_before_turn_is_buffered_until_turn_start() {
+        let mut m = mapper();
+        assert!(
+            m.on_notification(&startup("starting", Value::Null))
+                .is_empty()
+        );
+        let other = serde_json::json!({"method": "mcpServer/startupStatus/updated",
+            "params": {"name": "codex_apps", "status": "failed", "error": "x"}});
+        assert!(m.on_notification(&other).is_empty());
+        assert!(
+            m.on_notification(&startup("failed", serde_json::json!("No such file")))
+                .is_empty()
+        );
+        let mut events = m.accept_turn("t1", &Value::Null);
+        events.extend(m.on_notification(&turn_completed()));
+        assert_eq!(validate_round(&events), vec![]);
+        let types: Vec<_> = events.iter().map(AgentEvent::type_name).collect();
+        assert_eq!(
+            types,
+            ["turn_start", "tool_call", "tool_result", "turn_end"]
+        );
+        let EventPayload::ToolCall(call) = &events[1].payload else {
+            panic!("call");
+        };
+        assert_eq!(call.tool, MCP_STARTUP_TOOL);
+        assert_eq!(call.call_id.as_str(), MCP_STARTUP_CALL_ID);
+        let EventPayload::ToolResult(result) = &events[2].payload else {
+            panic!("result");
+        };
+        assert_eq!(result.status, ToolResultStatus::Error);
+        let raw = result.raw.as_ref().unwrap();
+        assert_eq!(raw["mcp"]["status"], "failed");
+        assert_eq!(raw["mcp"]["error"], "No such file");
+    }
+
+    #[test]
+    fn mcp_ready_thread_only_for_mathscape_ready() {
+        assert_eq!(
+            mcp_ready_thread(&startup("ready", Value::Null)).as_deref(),
+            Some("thr")
+        );
+        assert_eq!(mcp_ready_thread(&startup("starting", Value::Null)), None);
+        let list = mcp_status_list_message(7, "thr");
+        assert_eq!(list["method"], "mcpServerStatus/list");
+        assert_eq!(list["params"]["serverName"], "mathscape");
+    }
+
+    #[test]
+    fn mcp_inventory_reports_count_and_missing_tools_once() {
+        let expected: Vec<String> = ["workspace.search", "graph.get", "ink.page_image"]
+            .map(str::to_owned)
+            .to_vec();
+        let response = serde_json::json!({"id": 4, "result": {"data": [
+            {"name": "mathscape", "tools": {"workspace.search": {}}, "toolsError": null}
+        ]}});
+        let mut m = mapper();
+        let mut events = m.accept_turn("t1", &Value::Null);
+        events.extend(m.on_mcp_inventory(&response, &expected));
+        assert!(m.on_mcp_inventory(&response, &expected).is_empty());
+        events.extend(m.on_notification(&turn_completed()));
+        assert_eq!(validate_round(&events), vec![]);
+        let EventPayload::ToolResult(result) = &events[2].payload else {
+            panic!("result");
+        };
+        assert_eq!(result.status, ToolResultStatus::Error);
+        let mcp = &result.raw.as_ref().unwrap()["mcp"];
+        assert_eq!(mcp["tools"], serde_json::json!(["workspace.search"]));
+        assert_eq!(
+            mcp["missing"],
+            serde_json::json!(["graph.get", "ink.page_image"])
+        );
+
+        let full = serde_json::json!({"id": 4, "result": {"data": [{"name": "mathscape",
+            "tools": {"workspace.search": {}, "graph.get": {}, "ink.page_image": {}}}]}});
+        let mut m = mapper();
+        let _ = m.accept_turn("t1", &Value::Null);
+        let events = m.on_mcp_inventory(&full, &expected);
+        let EventPayload::ToolResult(result) = &events[1].payload else {
+            panic!("result");
+        };
+        assert_eq!(result.status, ToolResultStatus::Ok);
+
+        // Older Codex: method not found -> ready, inventory unknown, not an error.
+        let unsupported =
+            serde_json::json!({"id": 4, "error": {"code": -32601, "message": "unknown"}});
+        let mut m = mapper();
+        let _ = m.accept_turn("t1", &Value::Null);
+        let events = m.on_mcp_inventory(&unsupported, &expected);
+        let EventPayload::ToolResult(result) = &events[1].payload else {
+            panic!("result");
+        };
+        assert_eq!(result.status, ToolResultStatus::Ok);
+        assert!(result.raw.as_ref().unwrap()["mcp"]["tools"].is_null());
     }
 }
