@@ -734,6 +734,8 @@ mod tests {
                 "tool_result",
                 "tool_call",
                 "tool_result",
+                "tool_call",
+                "tool_result",
                 "usage",
                 "turn_end"
             ]

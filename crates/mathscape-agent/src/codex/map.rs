@@ -9,6 +9,7 @@ use chrono::{DateTime, FixedOffset, Local};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use super::approval::explain_codex_error;
 use crate::{
     AgentBackend, AgentEvent, CallId, ErrorCode, EventPayload, RoundId, ToolResultStatus, TurnId,
     TurnOutcome,
@@ -138,8 +139,6 @@ impl CodexEventMapper {
         }))]
     }
 
-    /// User-input / `user.ask` is out of scope. Record the decline; do not fail
-    /// the turn by itself.
     pub(crate) fn note_protocol(&mut self, message: impl Into<String>) -> Vec<AgentEvent> {
         vec![self.emit(EventPayload::Error(ErrorEvent {
             code: ErrorCode::Protocol,
@@ -149,11 +148,19 @@ impl CodexEventMapper {
         }))]
     }
 
-    pub(crate) fn note_declined_user_input(&mut self, raw: Value) -> Vec<AgentEvent> {
+    /// Non-fatal, readable approval note. Does not open a turn by itself:
+    /// handshake can answer a request before `turn/start` is accepted.
+    pub(crate) fn note_approval(
+        &mut self,
+        message: impl Into<String>,
+        raw: Value,
+    ) -> Vec<AgentEvent> {
+        if self.turn_closed {
+            return Vec::new();
+        }
         vec![self.emit(EventPayload::Error(ErrorEvent {
-            code: ErrorCode::Internal,
-            message: "Codex requested user input; Phase1b does not implement user.ask and declined it"
-                .into(),
+            code: ErrorCode::Protocol,
+            message: message.into(),
             fatal: false,
             raw: Some(raw),
         }))]
@@ -186,6 +193,7 @@ impl CodexEventMapper {
             .unwrap_or("codex error")
             .to_owned();
         let code = classify_codex_failure(&format!("{message} {error}"));
+        let (code, message) = explain_codex_error(code, &message);
         // `ErrorNotification { error, willRetry, threadId, turnId }`: Codex
         // sends `willRetry: true` for transient failures it is retrying
         // ("Reconnecting... n/5"). Those must not fail the turn. Only a final
@@ -245,6 +253,8 @@ impl CodexEventMapper {
         match kind {
             "mcpToolCall" => self.on_tool(phase, item, None),
             "dynamicToolCall" => self.on_tool(phase, item, Some("dynamic")),
+            "commandExecution" => self.on_side_effect(phase, item, "shell"),
+            "fileChange" => self.on_side_effect(phase, item, "file_change"),
             "agentMessage" if phase == ItemPhase::Completed => {
                 if let Some(text) = item.get("text").and_then(Value::as_str) {
                     self.agent_text = text.to_owned();
@@ -273,6 +283,45 @@ impl CodexEventMapper {
             .filter(|server| !server.is_empty())
             .unwrap_or("codex")
             .to_owned();
+        let arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
+        self.track_call(phase, item, tool, &server, args_summary(&arguments))
+    }
+
+    fn on_side_effect(&mut self, phase: ItemPhase, item: &Value, tool: &str) -> Vec<AgentEvent> {
+        let summary = if tool == "shell" {
+            let command = item
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if command.is_empty() {
+                "shell".to_owned()
+            } else {
+                truncate_chars(command, 240)
+            }
+        } else {
+            let count = item
+                .get("changes")
+                .and_then(Value::as_array)
+                .map(|changes| changes.len())
+                .unwrap_or(0);
+            if count == 0 {
+                "文件变更".to_owned()
+            } else {
+                format!("{count} 个文件变更")
+            }
+        };
+        self.track_call(phase, item, tool, "codex", summary)
+    }
+
+    fn track_call(
+        &mut self,
+        phase: ItemPhase,
+        item: &Value,
+        tool: &str,
+        server: &str,
+        args_summary: String,
+    ) -> Vec<AgentEvent> {
         let call_id = self.call_id(item);
         let mut events = Vec::new();
         if self.seen_calls.insert(call_id.clone()) {
@@ -280,12 +329,11 @@ impl CodexEventMapper {
                 events.extend(self.ensure_turn("turn-1", Value::Null));
             }
             self.open_calls.insert(call_id.clone(), Instant::now());
-            let arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
             events.push(self.emit(EventPayload::ToolCall(ToolCall {
                 call_id: call_id.clone(),
                 tool: tool.to_owned(),
-                server,
-                args_summary: args_summary(&arguments),
+                server: server.to_owned(),
+                args_summary,
                 raw: Some(item.clone()),
             })));
         }
@@ -695,7 +743,7 @@ mod tests {
     }
 
     #[test]
-    fn fixture_round_maps_mcp_statuses_and_drops_shell() {
+    fn fixture_round_maps_mcp_statuses_and_shell() {
         let events = feed(include_str!(
             "../../tests/fixtures/codex_app_server_round.jsonl"
         ));
@@ -722,6 +770,8 @@ mod tests {
                 "tool_result",
                 "tool_call",
                 "tool_result",
+                "tool_call",
+                "tool_result",
                 "usage",
                 "turn_end",
             ]
@@ -735,6 +785,13 @@ mod tests {
         assert_eq!(search.tool, "workspace.search");
         assert_eq!(search.server, "mathscape");
         assert_eq!(search.args_summary, "query=紧集");
+        let shell = events.iter().find_map(|event| match &event.payload {
+            EventPayload::ToolCall(call) if call.tool == "shell" => Some(call),
+            _ => None,
+        });
+        let shell = shell.expect("shell item");
+        assert_eq!(shell.server, "codex");
+        assert_eq!(shell.args_summary, "ls");
         assert_eq!(
             search
                 .raw
@@ -753,6 +810,7 @@ mod tests {
         assert_eq!(
             statuses,
             [
+                ToolResultStatus::Ok,
                 ToolResultStatus::Ok,
                 ToolResultStatus::Truncated,
                 ToolResultStatus::NotFound,

@@ -139,6 +139,8 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
             "tool_result",
             "tool_call",
             "tool_result",
+            "tool_call",
+            "tool_result",
             "usage",
             "turn_end",
         ]
@@ -164,18 +166,24 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
     assert_eq!(search.server, "mathscape");
     assert_eq!(search.tool, "workspace.search");
     assert_eq!(search.args_summary, "query=紧集");
-    let EventPayload::ToolResult(read) = &events[4].payload else {
+    let EventPayload::ToolCall(shell) = &events[3].payload else {
+        panic!("shell");
+    };
+    assert_eq!(shell.tool, "shell");
+    assert_eq!(shell.server, "codex");
+    assert_eq!(shell.args_summary, "ls");
+    let EventPayload::ToolResult(read) = &events[6].payload else {
         panic!("read result");
     };
     assert_eq!(read.status, mathscape_agent::ToolResultStatus::Truncated);
-    let EventPayload::Usage(usage) = &events[5].payload else {
+    let EventPayload::Usage(usage) = &events[7].payload else {
         panic!("usage");
     };
     assert_eq!(usage.input_tokens, 1200);
     assert_eq!(usage.output_tokens, 300);
     assert_eq!(usage.cached_input_tokens, Some(800));
     assert_eq!(usage.cost_usd, None);
-    let EventPayload::TurnEnd(end) = &events[6].payload else {
+    let EventPayload::TurnEnd(end) = &events[8].payload else {
         panic!("end");
     };
     assert_eq!(end.outcome, TurnOutcome::Completed);
@@ -201,6 +209,10 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
     assert!(log_text.contains("\"method\":\"turn/start\""));
     assert!(log_text.contains("explain 紧集"));
     assert!(log_text.contains("mcp_servers.mathscape.command"));
+    assert!(log_text.contains("\"approvalPolicy\":\"onRequest\""));
+    assert!(log_text.contains("default_tools_approval_mode"));
+    assert!(log_text.contains("\"approve\""));
+    assert!(log_text.contains("workspace.search"));
     assert!(log_text.contains(&format!("\"--round\",\"{}\"", round.as_str())));
     assert!(log_text.contains("mathscape"));
     let lower = log_text.to_ascii_lowercase();
@@ -208,6 +220,51 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
     assert!(!lower.contains("apikey"));
     assert!(!lower.contains("authorization"));
     assert!(!lower.contains("experimentalapi"));
+}
+
+#[test]
+fn shell_approval_is_declined_and_named_in_the_event_stream() {
+    let executor = fixture_executor(vec!["--ask-shell".into(), "app-server".into()]);
+    let round = block_on(executor.start_round(request())).expect("start");
+    let events = collect_until(
+        executor.events(&round).unwrap(),
+        Duration::from_secs(5),
+        |event| event.type_name() == "turn_end",
+    );
+    assert!(
+        events
+            .last()
+            .is_some_and(|event| event.type_name() == "turn_end"),
+        "timed out waiting for turn_end: {events:?}"
+    );
+    assert_eq!(validate_round(&events), vec![], "{events:?}");
+    let denied = events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            EventPayload::Error(error)
+                if error.message.contains("审批策略拒绝了 shell") && !error.fatal
+        )
+    });
+    assert!(denied, "missing readable shell denial: {events:?}");
+    let shell_denied = events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            EventPayload::ToolResult(result) if result
+                .raw
+                .as_ref()
+                .and_then(|raw| raw.get("status"))
+                .and_then(|status| status.as_str())
+                == Some("declined")
+        )
+    });
+    assert!(
+        shell_denied,
+        "shell item should complete as declined: {events:?}"
+    );
+    assert_eq!(
+        executor.final_text(&round).as_deref(),
+        Some("decision:decline")
+    );
 }
 
 #[test]

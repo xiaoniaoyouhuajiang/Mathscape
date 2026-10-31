@@ -20,6 +20,8 @@ pub enum CodexFixtureMode {
     HoldUntilInterrupt,
     /// `turn/start` returns HTTP-style unauthorized. No turn is accepted.
     RejectTurnAuth,
+    /// After the turn starts, ask for shell approval and wait for the client.
+    AskShell,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -165,7 +167,17 @@ pub fn serve_codex_app_server_fixture_with(
                 )?;
                 if !script_sent {
                     script_sent = true;
-                    emit_script(&mut writer, options.mode, &thread_id, &turn_id, &user_text)?;
+                    if options.mode == CodexFixtureMode::AskShell {
+                        ask_shell(
+                            &mut reader,
+                            &mut writer,
+                            &options.log_path,
+                            &thread_id,
+                            &turn_id,
+                        )?;
+                    } else {
+                        emit_script(&mut writer, options.mode, &thread_id, &turn_id, &user_text)?;
+                    }
                 }
             }
             "turn/interrupt" => {
@@ -227,7 +239,7 @@ fn emit_script(
             12,
         ),
     )?;
-    // Harness shell item: the adapter must drop it (no invented tool name).
+    // Harness shell item: mapped as tool `shell` (server `codex`), not an MCP tool.
     write_json(
         writer,
         &json!({
@@ -363,6 +375,112 @@ fn mcp_completed(
             }
         }}
     })
+}
+
+/// Sends one shell approval request and finishes the turn from the client's decision.
+fn ask_shell(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+    log: &Option<PathBuf>,
+    thread_id: &str,
+    turn_id: &str,
+) -> io::Result<()> {
+    let request_id = 9001_i64;
+    write_json(
+        writer,
+        &json!({
+            "method": "item/commandExecution/requestApproval",
+            "id": request_id,
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id,
+                "itemId": "cmd_ask",
+                "command": "rm -rf /tmp/mathscape-sandbox",
+                "cwd": "/tmp",
+                "reason": "fixture"
+            }
+        }),
+    )?;
+    let response = read_response(reader, log, request_id)?;
+    let decision = response
+        .pointer("/result/decision")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let declined = decision == "decline";
+    write_json(
+        writer,
+        &json!({
+            "method": "item/started",
+            "params": { "item": {
+                "type": "commandExecution",
+                "id": "cmd_ask",
+                "command": "rm -rf /tmp/mathscape-sandbox",
+                "cwd": "/tmp",
+                "status": "inProgress"
+            }}
+        }),
+    )?;
+    write_json(
+        writer,
+        &json!({
+            "method": "item/completed",
+            "params": { "item": {
+                "type": "commandExecution",
+                "id": "cmd_ask",
+                "command": "rm -rf /tmp/mathscape-sandbox",
+                "cwd": "/tmp",
+                "status": if declined { "declined" } else { "completed" }
+            }}
+        }),
+    )?;
+    write_json(
+        writer,
+        &json!({
+            "method": "item/completed",
+            "params": { "item": {
+                "type": "agentMessage",
+                "id": "msg_1",
+                "text": format!("decision:{decision}")
+            }}
+        }),
+    )?;
+    write_json(
+        writer,
+        &json!({
+            "method": "turn/completed",
+            "params": { "turn": { "id": turn_id, "status": "completed", "items": [], "error": null } }
+        }),
+    )?;
+    Ok(())
+}
+
+fn read_response(reader: &mut impl BufRead, log: &Option<PathBuf>, id: i64) -> io::Result<Value> {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "approval response missing",
+            ));
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(path) = log {
+            append_log(path, trimmed);
+        }
+        let Ok(message) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+        if message.get("method").is_some() {
+            continue;
+        }
+        if message.get("id").and_then(Value::as_i64) == Some(id) {
+            return Ok(message);
+        }
+    }
 }
 
 fn write_json(writer: &mut impl Write, value: &Value) -> io::Result<()> {

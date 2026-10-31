@@ -16,6 +16,10 @@ use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use serde_json::{Value, json};
 
+use super::approval::{
+    APPROVAL_TIMEOUT, ApprovalPlan, SANDBOX_APPROVAL_POLICY, approval_event_raw, approval_plan,
+    enabled_tools, timeout_plan,
+};
 use super::map::{CodexEventMapper, classify_codex_failure};
 use crate::{
     AgentBackend, AgentError, AgentEvent, AgentExecutor, Capability, CapabilityProbe,
@@ -51,6 +55,9 @@ pub struct CodexConfig {
     pub handshake_timeout: Duration,
     /// After `turn/interrupt`, how long to wait before killing the child.
     pub interrupt_grace: Duration,
+    /// Unclassified approval requests are declined after this long.
+    /// Default [`APPROVAL_TIMEOUT`] (60s). The dialogue shows 「等待审批已超时」.
+    pub approval_timeout: Duration,
     /// Override for Codex home (`config.toml` / `models_cache.json`).
     /// `None` → `$CODEX_HOME` or `~/.codex`. Tests pass a temp dir.
     pub home: Option<PathBuf>,
@@ -64,6 +71,7 @@ impl Default for CodexConfig {
             mcp_program: PathBuf::from("mathscape"),
             handshake_timeout: Duration::from_secs(20),
             interrupt_grace: Duration::from_secs(5),
+            approval_timeout: APPROVAL_TIMEOUT,
             home: None,
         }
     }
@@ -83,6 +91,13 @@ struct RoundSlot {
 
 enum SessionCommand {
     Cancel,
+}
+
+struct PendingApproval {
+    id: Value,
+    method: String,
+    params: Value,
+    deadline: Instant,
 }
 
 /// Local Codex backend. One app-server process per round.
@@ -343,6 +358,9 @@ fn drive_child(
         term_grace: grace,
         reaped: false,
         mcp_program: config.mcp_program.clone(),
+        tools_allow: request.tools_allow.clone(),
+        pending: Vec::new(),
+        approval_timeout: config.approval_timeout,
         model: super::model::current_model(config.home.as_deref()),
         effort: {
             let home = config.home.as_deref();
@@ -389,6 +407,11 @@ struct Session {
     term_grace: Duration,
     reaped: bool,
     mcp_program: PathBuf,
+    /// Round allow-list. Empty means the fixed read-only Mathscape catalog.
+    tools_allow: Vec<String>,
+    /// Approval requests we could not accept or decline immediately.
+    pending: Vec<PendingApproval>,
+    approval_timeout: Duration,
     /// Top-level Codex default at handshake time (forwarded on thread/start).
     model: Option<String>,
     /// Effective reasoning effort at handshake time (forwarded on turn/start).
@@ -481,6 +504,13 @@ impl Session {
     fn run_until_closed(&mut self) {
         let mut interrupt_deadline: Option<Instant> = None;
         while !self.mapper.turn_closed() {
+            if let Err(error) = self.expire_approvals() {
+                let events =
+                    self.mapper
+                        .force_stop("failed", &error_text(&error), error_code(&error));
+                self.publish(events);
+                break;
+            }
             if interrupt_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 let events = self.mapper.force_stop(
                     "interrupted",
@@ -622,13 +652,61 @@ impl Session {
     }
 
     fn answer(&mut self, id: &Value, method: &str, params: &Value) -> Result<(), AgentError> {
-        if is_user_input(method) {
-            let events = self.mapper.note_declined_user_input(params.clone());
+        match approval_plan(method, params, &self.tools_allow) {
+            ApprovalPlan::Respond(reply) => self.send_reply(id, method, params, reply),
+            ApprovalPlan::Hold { note } => {
+                let events = self.mapper.note_approval(
+                    note.message,
+                    approval_event_raw(note.phase, method, id, params),
+                );
+                self.publish(events);
+                self.pending.push(PendingApproval {
+                    id: id.clone(),
+                    method: method.to_owned(),
+                    params: params.clone(),
+                    deadline: Instant::now() + self.approval_timeout,
+                });
+                Ok(())
+            }
+        }
+    }
+
+    fn expire_approvals(&mut self) -> Result<(), AgentError> {
+        let now = Instant::now();
+        let mut waiting = Vec::new();
+        let mut due = Vec::new();
+        for pending in self.pending.drain(..) {
+            if now >= pending.deadline {
+                due.push(pending);
+            } else {
+                waiting.push(pending);
+            }
+        }
+        self.pending = waiting;
+        for pending in due {
+            let reply = timeout_plan(&pending.method);
+            self.send_reply(&pending.id, &pending.method, &pending.params, reply)?;
+        }
+        Ok(())
+    }
+
+    fn send_reply(
+        &mut self,
+        id: &Value,
+        method: &str,
+        params: &Value,
+        reply: super::approval::ApprovalReply,
+    ) -> Result<(), AgentError> {
+        if let Some(note) = &reply.note {
+            let events = self.mapper.note_approval(
+                note.message.clone(),
+                approval_event_raw(note.phase, method, id, params),
+            );
             self.publish(events);
         }
         self.write_value(&json!({
             "id": id,
-            "result": server_request_result(method),
+            "result": reply.result,
         }))
     }
 
@@ -810,7 +888,7 @@ pub(crate) fn thread_start_message(
     let workspace = workspace.display().to_string();
     let mut params = json!({
         "cwd": workspace,
-        "approvalPolicy": "never",
+        "approvalPolicy": SANDBOX_APPROVAL_POLICY,
         "sandbox": "read-only",
         "ephemeral": true,
         "serviceName": "mathscape",
@@ -824,7 +902,9 @@ pub(crate) fn thread_start_message(
                 "--round",
                 round_id.as_str()
             ],
-            "mcp_servers.mathscape.enabled": true
+            "mcp_servers.mathscape.enabled": true,
+            "mcp_servers.mathscape.default_tools_approval_mode": "approve",
+            "mcp_servers.mathscape.enabled_tools": enabled_tools(&request.tools_allow)
         }
     });
     if let Some(model) = model.map(str::trim).filter(|id| !id.is_empty()) {
@@ -886,37 +966,6 @@ fn developer_instructions(round_id: &RoundId, tools_allow: &[String]) -> String 
     };
     format!(
         "This is Mathscape round {round_id}. {tools} Mathscape does not provide model credentials; use this Codex process's existing local login. Do not ask the user for an API key."
-    )
-}
-
-pub(crate) fn server_request_result(method: &str) -> Value {
-    match method {
-        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-            json!({ "decision": "decline" })
-        }
-        "item/permissions/requestApproval" => json!({ "permissions": {} }),
-        "mcpServer/elicitation/request" => json!({ "action": "decline", "content": null }),
-        // Codex 0.163 schema: `{ "answers": { <questionId>: { "answers": [..] } } }`.
-        // `answers` is an object and there is no `action` field. An empty map
-        // declines every question without implementing user.ask.
-        "item/tool/requestUserInput" | "tool/requestUserInput" => {
-            json!({ "answers": {} })
-        }
-        "item/tool/call" => json!({
-            "contentItems": [{
-                "type": "inputText",
-                "text": "Mathscape Phase1b does not execute Codex dynamic tools; use the mathscape MCP server."
-            }],
-            "success": false
-        }),
-        _ => json!({}),
-    }
-}
-
-fn is_user_input(method: &str) -> bool {
-    matches!(
-        method,
-        "item/tool/requestUserInput" | "tool/requestUserInput"
     )
 }
 
@@ -1174,13 +1223,21 @@ mod tests {
         let params = &message["params"];
         assert_eq!(params["cwd"], "/tmp/mathscape-ws");
         assert_eq!(params["sandbox"], "read-only");
-        assert_eq!(params["approvalPolicy"], "never");
+        assert_eq!(params["approvalPolicy"], "onRequest");
         assert_eq!(params["ephemeral"], true);
         assert_eq!(params["serviceName"], "mathscape");
         assert!(message.get("params").unwrap().get("capabilities").is_none());
         let config = &params["config"];
         assert_eq!(config["mcp_servers.mathscape.command"], "mathscape");
         assert_eq!(config["mcp_servers.mathscape.enabled"], true);
+        assert_eq!(
+            config["mcp_servers.mathscape.default_tools_approval_mode"],
+            "approve"
+        );
+        assert_eq!(
+            config["mcp_servers.mathscape.enabled_tools"],
+            json!(["workspace.search", "material.read"])
+        );
         assert_eq!(
             config["mcp_servers.mathscape.args"],
             json!([
@@ -1216,6 +1273,16 @@ mod tests {
         let instructions = message["params"]["developerInstructions"].as_str().unwrap();
         assert!(instructions.contains("fixed read-only tool list"));
         assert!(!instructions.contains("Call only these"));
+        let tools = &message["params"]["config"]["mcp_servers.mathscape.enabled_tools"];
+        assert_eq!(tools.as_array().map(Vec::len), Some(7));
+        assert!(
+            tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool == "ink.page_image")
+        );
+        assert!(tools.as_array().unwrap().iter().all(|tool| tool != "shell"));
     }
 
     #[test]
@@ -1252,28 +1319,6 @@ mod tests {
         let message = initialize_message();
         assert!(message["params"].get("capabilities").is_none());
         assert_eq!(message["params"]["clientInfo"]["name"], "mathscape");
-    }
-
-    #[test]
-    fn approval_requests_are_declined() {
-        assert_eq!(
-            server_request_result("item/commandExecution/requestApproval")["decision"],
-            "decline"
-        );
-        assert_eq!(
-            server_request_result("item/fileChange/requestApproval")["decision"],
-            "decline"
-        );
-        assert_eq!(
-            server_request_result("mcpServer/elicitation/request")["action"],
-            "decline"
-        );
-        assert_eq!(server_request_result("item/tool/call")["success"], false);
-        assert!(
-            server_request_result("item/permissions/requestApproval")["permissions"].is_object()
-        );
-        let user_input = server_request_result("item/tool/requestUserInput");
-        assert_eq!(user_input, json!({ "answers": {} }));
     }
 
     struct RecordingRunner {
