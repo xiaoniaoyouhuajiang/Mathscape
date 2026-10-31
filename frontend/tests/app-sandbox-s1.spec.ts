@@ -99,5 +99,42 @@ test.describe("S1 sandbox shell", () => {
     const seen = await page.evaluate(() => (window as unknown as { __selectSeen: string[] }).__selectSeen);
     expect(seen).toEqual(["pointerdown:ok", "mousedown"]);
   });
+
+  test("effort follows the selected model, persists via set_effort, and locks during a round", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    const modelSelect = dock.locator(".sandbox-dock-model-select");
+    const effortSelect = dock.locator(".sandbox-dock-effort-select");
+    await expect(effortSelect).toBeVisible();
+    await expect(effortSelect).toBeEnabled();
+    await expect(effortSelect).toHaveValue("high");
+    await expect(effortSelect.locator("option")).toHaveText([
+      "low · 低（默认）", "medium · 中", "high · 高", "xhigh · 超高", "max · 最大", "ultra · 极限",
+    ]);
+
+    await effortSelect.selectOption("ultra");
+    await expect(effortSelect).toHaveValue("ultra");
+    await expect.poll(() => page.evaluate(() => window.appHarness.sandboxCalls.filter((c) => c.command === "set_effort").map((c) => c.args.effort)))
+      .toEqual(["ultra"]);
+
+    // gpt-alt has no ultra: the list is rebuilt and the effort falls back to its default.
+    await modelSelect.selectOption("gpt-alt");
+    await expect(effortSelect.locator("option")).toHaveCount(5);
+    await expect(effortSelect).toHaveValue("medium");
+    await expect(effortSelect.locator("option", { hasText: "ultra" })).toHaveCount(0);
+
+    await page.evaluate(() => { window.appHarness.sandboxRound.delayMs = 1500; });
+    await dock.locator("textarea").fill("紧集在哪？");
+    await dock.getByRole("button", { name: "发送" }).click();
+    await expect(effortSelect).toBeDisabled();
+    await expect(modelSelect).toBeDisabled();
+    await expect(dock.locator(".sandbox-line.role-agent")).toHaveText(/定理 3\.2/);
+    await expect(effortSelect).toBeEnabled();
+    await expect(modelSelect).toBeEnabled();
+    await page.evaluate(() => { window.appHarness.sandboxRound.delayMs = 30; });
+  });
 });
 

@@ -338,3 +338,89 @@ fn list_models_falls_back_to_app_server_model_list() {
     assert_eq!(executor.current_model().as_deref(), Some("fixture-b"));
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// Effort follows the model trait end to end: list from the selected model's
+/// catalog entry (here via app-server `model/list`), persist as top-level
+/// `model_reasoning_effort`, and forward as `effort` on the next `turn/start`.
+#[test]
+fn effort_is_listed_persisted_and_forwarded_on_turn_start() {
+    let home = std::env::temp_dir().join(format!(
+        "mathscape-effort-{}-{}",
+        std::process::id(),
+        unique()
+    ));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.toml"), "model = \"fixture-b\"\n").unwrap();
+    let log = home.join("requests.log");
+    let executor = CodexExecutor::new(CodexConfig {
+        program: fixture_program(),
+        args: vec![
+            "--log".into(),
+            log.display().to_string(),
+            "app-server".into(),
+        ],
+        handshake_timeout: Duration::from_secs(5),
+        interrupt_grace: Duration::from_secs(2),
+        home: Some(home.clone()),
+        ..CodexConfig::default()
+    });
+    let efforts: Vec<_> = executor
+        .list_efforts(None)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(efforts, ["low", "medium", "xhigh"]);
+    let for_a: Vec<_> = executor
+        .list_efforts(Some("fixture-a"))
+        .unwrap()
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(for_a, ["low", "medium"]);
+
+    assert!(executor.set_effort("ultra").is_err(), "not advertised");
+    executor.set_effort("xhigh").unwrap();
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(
+        config.contains("model_reasoning_effort = \"xhigh\""),
+        "{config}"
+    );
+    assert_eq!(executor.current_effort().as_deref(), Some("xhigh"));
+
+    let _ = std::fs::remove_file(&log);
+    let round = block_on(executor.start_round(request())).expect("start round");
+    let events = collect_until(
+        executor.events(&round).unwrap(),
+        Duration::from_secs(5),
+        |event| event.type_name() == "turn_end",
+    );
+    assert!(
+        events.iter().any(|e| e.type_name() == "turn_end"),
+        "{events:?}"
+    );
+    let log_text = std::fs::read_to_string(&log).expect("fixture request log");
+    let turn_start: serde_json::Value = log_text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|v| v["method"] == "turn/start")
+        .expect("turn/start logged");
+    assert_eq!(turn_start["params"]["effort"], "xhigh");
+    let thread_start: serde_json::Value = log_text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|v| v["method"] == "thread/start")
+        .expect("thread/start logged");
+    assert_eq!(thread_start["params"]["model"], "fixture-b");
+
+    // Switching to a model without `xhigh` resets the persisted effort to
+    // that model's default, as the Codex picker would.
+    executor.set_model("fixture-a").unwrap();
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(config.contains("model = \"fixture-a\""), "{config}");
+    assert!(
+        config.contains("model_reasoning_effort = \"medium\""),
+        "{config}"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}

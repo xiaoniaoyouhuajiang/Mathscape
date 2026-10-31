@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   agentStatusLine,
+  effortOptionLabel,
+  effortOptions,
   modelCatalogHint,
   modelOptionLabel,
   enterConfirmMessage,
@@ -125,5 +127,15 @@ describe("modelCatalogHint", () => {
   });
   it("explains a completely empty catalog", () => {
     expect(modelCatalogHint([], "")).toContain("未读到 Codex 模型目录");
+  });
+
+  it("labels reasoning efforts and keeps the in-use effort selectable", () => {
+    expect(effortOptionLabel({ id: "xhigh" })).toBe("xhigh · 超高");
+    expect(effortOptionLabel({ id: "low" }, "low")).toBe("low · 低（默认）");
+    expect(effortOptionLabel({ id: "turbo" })).toBe("turbo");
+    const levels = [{ id: "low" }, { id: "medium" }];
+    expect(effortOptions(levels, "medium").map((e) => e.id)).toEqual(["low", "medium"]);
+    expect(effortOptions(levels, "max").map((e) => e.id)).toEqual(["max", "low", "medium"]);
+    expect(effortOptions(undefined, null)).toEqual([]);
   });
 });

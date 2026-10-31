@@ -144,9 +144,18 @@ export function returnConfirmMessage(motherRoot: string): string {
   ].join("\n");
 }
 
+export interface AgentEffortLike {
+  id: string;
+  description?: string | null;
+}
+
 export interface AgentModelLike {
   id: string;
   displayName?: string | null;
+  /** Reasoning efforts the model advertises (Codex `supported_reasoning_levels`). */
+  reasoningEfforts?: AgentEffortLike[];
+  /** Catalog default effort (Codex `default_reasoning_level`). */
+  defaultReasoningEffort?: string | null;
 }
 
 export interface AgentStatusLike {
@@ -161,6 +170,12 @@ export interface AgentStatusLike {
   models?: AgentModelLike[];
   /** True when the adapter exposes list/set model. */
   modelSelection?: boolean;
+  /** Reasoning effort the next round will use. */
+  effort?: string | null;
+  /** Efforts the current model advertises. */
+  efforts?: AgentEffortLike[];
+  /** True when the adapter can set effort for the current model. */
+  effortSelection?: boolean;
 }
 
 /** One line for the dock header: Codex version (+ model when no picker), tool count. */
@@ -195,4 +210,37 @@ export function modelCatalogHint(models: AgentModelLike[], current: string): str
   if (models.length === 0) return `未读到 Codex 模型目录（${where}），也未设置默认模型。`;
   const only = current || models[0].id;
   return `未读到 Codex 的其他可选模型（${where}），仅显示当前模型 ${only}。在终端运行一次 codex 刷新目录后重开对话。`;
+}
+
+const EFFORT_ZH: Record<string, string> = {
+  none: "无",
+  minimal: "最低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "超高",
+  max: "最大",
+  ultra: "极限",
+};
+
+/** Label for a reasoning-effort option: `high · 高`; unknown levels show the raw id. */
+export function effortOptionLabel(effort: AgentEffortLike, defaultEffort?: string | null): string {
+  const zh = EFFORT_ZH[effort.id.toLowerCase()];
+  const base = zh ? `${effort.id} · ${zh}` : effort.id;
+  return defaultEffort && defaultEffort === effort.id ? `${base}（默认）` : base;
+}
+
+/**
+ * Effort options for the dock: the current model's advertised levels, plus the
+ * current effort first when the catalog does not list it (never drop the
+ * value the next round will actually use).
+ */
+export function effortOptions(
+  efforts: AgentEffortLike[] | undefined,
+  current: string | null | undefined,
+): AgentEffortLike[] {
+  const out = [...(efforts ?? [])];
+  const id = current?.trim();
+  if (id && !out.some((effort) => effort.id === id)) out.unshift({ id });
+  return out;
 }

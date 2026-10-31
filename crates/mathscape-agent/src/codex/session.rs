@@ -166,7 +166,33 @@ impl AgentExecutor for CodexExecutor {
     }
 
     fn set_model(&self, id: &str) -> Result<(), AgentError> {
-        super::model::set_model(self.shared.config.home.as_deref(), id)
+        let catalog = self.list_models().unwrap_or_default();
+        super::model::set_model(self.shared.config.home.as_deref(), id, &catalog)
+    }
+
+    fn current_effort(&self) -> Option<String> {
+        let home = self.shared.config.home.as_deref();
+        super::model::effective_effort(
+            super::model::configured_effort(home).as_deref(),
+            super::model::current_model(home).as_deref(),
+            &super::model::cached_catalog(home),
+        )
+    }
+
+    fn list_efforts(&self, model: Option<&str>) -> Result<Vec<crate::AgentEffort>, AgentError> {
+        let model = match model {
+            Some(model) => Some(model.to_owned()),
+            None => self.current_model(),
+        };
+        let Some(model) = model else {
+            return Ok(Vec::new());
+        };
+        Ok(super::model::efforts_for(&model, &self.list_models()?))
+    }
+
+    fn set_effort(&self, effort: &str) -> Result<(), AgentError> {
+        let catalog = self.list_models().unwrap_or_default();
+        super::model::set_effort(self.shared.config.home.as_deref(), effort, &catalog)
     }
 
     fn probe(&self) -> Vec<CapabilityProbe> {
@@ -318,6 +344,14 @@ fn drive_child(
         reaped: false,
         mcp_program: config.mcp_program.clone(),
         model: super::model::current_model(config.home.as_deref()),
+        effort: {
+            let home = config.home.as_deref();
+            super::model::effective_effort(
+                super::model::configured_effort(home).as_deref(),
+                super::model::current_model(home).as_deref(),
+                &super::model::cached_catalog(home),
+            )
+        },
     };
     if let Err(error) = session.handshake(&request, &round_id, &ready) {
         // Kill the whole process group first, then unblock `start_round`.
@@ -357,6 +391,8 @@ struct Session {
     mcp_program: PathBuf,
     /// Top-level Codex default at handshake time (forwarded on thread/start).
     model: Option<String>,
+    /// Effective reasoning effort at handshake time (forwarded on turn/start).
+    effort: Option<String>,
 }
 
 impl Session {
@@ -420,6 +456,7 @@ impl Session {
             thread_id,
             &request.input_ref,
             &cwd.display().to_string(),
+            self.effort.as_deref(),
         ))?;
         let turn = self.collect_responses(&[TURN_START_ID], deadline, ready)?;
         let turn = &turn[&TURN_START_ID];
@@ -800,15 +837,27 @@ pub(crate) fn thread_start_message(
     })
 }
 
-pub(crate) fn turn_start_message(id: u64, thread_id: &str, input_ref: &str, cwd: &str) -> Value {
+/// `effort` maps to app-server v2 `TurnStartParams.effort` ("Override the
+/// reasoning effort for this turn and subsequent turns").
+pub(crate) fn turn_start_message(
+    id: u64,
+    thread_id: &str,
+    input_ref: &str,
+    cwd: &str,
+    effort: Option<&str>,
+) -> Value {
+    let mut params = json!({
+        "threadId": thread_id,
+        "cwd": cwd,
+        "input": [{ "type": "text", "text": input_ref }]
+    });
+    if let Some(effort) = effort.map(str::trim).filter(|e| !e.is_empty()) {
+        params["effort"] = json!(effort);
+    }
     json!({
         "method": "turn/start",
         "id": id,
-        "params": {
-            "threadId": thread_id,
-            "cwd": cwd,
-            "input": [{ "type": "text", "text": input_ref }]
-        }
+        "params": params
     })
 }
 
@@ -1171,10 +1220,19 @@ mod tests {
 
     #[test]
     fn turn_start_forwards_input_ref_as_user_text() {
-        let message = turn_start_message(3, "thr_1", "explain 紧集", "/tmp/mathscape-ws");
+        let message = turn_start_message(3, "thr_1", "explain 紧集", "/tmp/mathscape-ws", None);
         assert_eq!(message["params"]["threadId"], "thr_1");
         assert_eq!(message["params"]["input"][0]["text"], "explain 紧集");
         assert!(message["params"].get("model").is_none());
+        assert!(message["params"].get("effort").is_none());
+    }
+
+    #[test]
+    fn turn_start_forwards_selected_effort() {
+        let message = turn_start_message(3, "thr_1", "hi", "/tmp/ws", Some("xhigh"));
+        assert_eq!(message["params"]["effort"], "xhigh");
+        let blank = turn_start_message(3, "thr_1", "hi", "/tmp/ws", Some("  "));
+        assert!(blank["params"].get("effort").is_none());
     }
 
     #[test]

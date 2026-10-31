@@ -34,7 +34,9 @@ pub use event::{
     AGENT_EVENTS_VERSION, AgentEvent, Cancel, CancelRequester, ErrorCode, ErrorEvent, EventPayload,
     ToolCall, ToolResult, ToolResultStatus, TurnEnd, TurnOutcome, TurnStart, Usage,
 };
-pub use executor::{AgentError, AgentExecutor, AgentModel, StartRoundRequest, UnimplementedExecutor};
+pub use executor::{
+    AgentEffort, AgentError, AgentExecutor, AgentModel, StartRoundRequest, UnimplementedExecutor,
+};
 pub use fake::{FakeBackend, scripted_round};
 pub use id::{CallId, IdError, RoundId, TurnId};
 pub use jsonl::{JsonlError, from_jsonl_line, read_jsonl, to_jsonl_line, write_jsonl};

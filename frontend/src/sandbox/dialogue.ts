@@ -6,7 +6,9 @@
  * The expanded window is resizable and remembers its last size; when collapsed
  * it becomes a draggable float handle (not a fixed corner dock). The status
  * line shows Codex availability; when the adapter supports selection a
- * model <select> lets the user pick before the next round.
+ * model <select> and a reasoning-effort <select> (levels from the selected
+ * model's catalog entry) let the user pick before the next round. Both are
+ * disabled while a round runs.
  *
  * Everything the agent reads or writes is the session's isolated copy; the
  * shell never touches the checkpoint. The reply is only shown once the round
@@ -20,6 +22,8 @@ import {
   agentStatusLine,
   eventChip,
   latestRoundEvents,
+  effortOptionLabel,
+  effortOptions,
   modelCatalogHint,
   modelOptionLabel,
   ROLE_LABEL,
@@ -152,6 +156,8 @@ export class SandboxDialogueDock {
   private readonly modelRow: HTMLElement;
   private readonly modelSelect: HTMLSelectElement;
   private readonly modelHint: HTMLElement;
+  private readonly effortRow: HTMLElement;
+  private readonly effortSelect: HTMLSelectElement;
   private readonly log: HTMLElement;
   private readonly strip: HTMLElement;
   private readonly input: HTMLTextAreaElement;
@@ -190,13 +196,25 @@ export class SandboxDialogueDock {
     this.modelSelect.disabled = true;
     this.modelSelect.onchange = () => void this.onModelChange();
     this.modelRow.append(this.modelSelect);
+    // Reasoning effort sits next to the model picker and is rebuilt from the
+    // selected model's catalog entry whenever the model changes.
+    this.effortRow = el("label", "sandbox-dock-model sandbox-dock-effort");
+    this.effortRow.hidden = true;
+    this.effortRow.append(el("span", "sandbox-dock-model-label", "推理强度"));
+    this.effortSelect = el("select", "sandbox-dock-effort-select");
+    this.effortSelect.setAttribute("aria-label", "选择推理强度");
+    this.effortSelect.disabled = true;
+    this.effortSelect.onchange = () => void this.onEffortChange();
+    this.effortRow.append(this.effortSelect);
+    const pickers = el("div", "sandbox-dock-pickers");
+    pickers.append(this.modelRow, this.effortRow);
     this.modelHint = el("span", "sandbox-dock-model-hint");
     this.modelHint.hidden = true;
     heading.append(
       el("span", "settings-eyebrow", "SANDBOX · S1"),
       this.title,
       this.status,
-      this.modelRow,
+      pickers,
       this.modelHint,
     );
     this.collapseButton = el("button", "sandbox-dock-icon", "–");
@@ -475,12 +493,16 @@ export class SandboxDialogueDock {
       this.status.classList.add("is-unavailable");
       this.modelRow.hidden = true;
       this.modelSelect.disabled = true;
+      this.effortRow.hidden = true;
+      this.effortSelect.disabled = true;
     }
   }
 
   private applyAgentStatus(status: AgentStatusLike): void {
     this.status.textContent = agentStatusLine(status);
     this.status.classList.toggle("is-unavailable", !status.available);
+    this.currentEffort = status.effort?.trim() || null;
+    this.applyEffort(status);
     const canSelect = Boolean(status.modelSelection) && status.available;
     if (!canSelect) {
       this.modelRow.hidden = true;
@@ -519,14 +541,71 @@ export class SandboxDialogueDock {
     this.modelRow.hidden = false;
   }
 
+  private currentEffort: string | null = null;
+
+  /** Rebuild the effort <select> from the current model's advertised levels. */
+  private applyEffort(status: AgentStatusLike): void {
+    const options = effortOptions(status.efforts, status.effort);
+    const canSelect = Boolean(status.effortSelection) && status.available && options.length > 0;
+    this.effortSelect.replaceChildren();
+    if (!canSelect) {
+      this.effortRow.hidden = true;
+      this.effortSelect.disabled = true;
+      return;
+    }
+    const model = status.models?.find((m) => m.id === status.model?.trim());
+    const fallback = model?.defaultReasoningEffort ?? null;
+    const current = status.effort?.trim() || "";
+    if (!current) {
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "（Codex 默认）";
+      this.effortSelect.append(placeholder);
+    }
+    for (const effort of options) {
+      const option = document.createElement("option");
+      option.value = effort.id;
+      option.textContent = effortOptionLabel(effort, fallback);
+      if (effort.description) option.title = effort.description;
+      this.effortSelect.append(option);
+    }
+    this.effortSelect.value = current;
+    const selected = options.find((effort) => effort.id === current);
+    this.effortSelect.title = selected?.description ?? `${options.length} 个推理强度`;
+    this.effortSelect.disabled =
+      Boolean(this.activeRoundId) || this.sending || options.length < 2;
+    this.effortRow.hidden = false;
+  }
+
+  private async onEffortChange(): Promise<void> {
+    const effort = this.effortSelect.value.trim();
+    if (!effort || this.effortSelect.disabled) return;
+    this.effortSelect.disabled = true;
+    try {
+      const status = await invoke<AgentStatusLike>("sandbox_set_effort", { effort });
+      this.applyAgentStatus(status);
+      this.toast(`已切换推理强度：${effort}`, "success");
+    } catch (error) {
+      this.toast(`切换推理强度失败：${errorMessage(error)}`, "error");
+      await this.refreshStatus();
+    }
+  }
+
   private async onModelChange(): Promise<void> {
     const id = this.modelSelect.value.trim();
     if (!id || this.modelSelect.disabled) return;
     this.modelSelect.disabled = true;
+    this.effortSelect.disabled = true;
+    const previousEffort = this.currentEffort;
     try {
       const status = await invoke<AgentStatusLike>("sandbox_set_model", { modelId: id });
       this.applyAgentStatus(status);
-      this.toast(`已切换模型：${id}`, "success");
+      const effort = status.effort?.trim() || null;
+      const note =
+        effort && previousEffort && effort !== previousEffort
+          ? `（推理强度 ${previousEffort} → ${effort}）`
+          : "";
+      this.toast(`已切换模型：${id}${note}`, "success");
     } catch (error) {
       this.toast(`切换模型失败：${errorMessage(error)}`, "error");
       await this.refreshStatus();
@@ -644,6 +723,9 @@ export class SandboxDialogueDock {
     this.cancelButton.hidden = !running;
     if (!this.modelRow.hidden) {
       this.modelSelect.disabled = running || this.sending || this.modelSelect.options.length < 2;
+    }
+    if (!this.effortRow.hidden) {
+      this.effortSelect.disabled = running || this.sending || this.effortSelect.options.length < 2;
     }
   }
 }

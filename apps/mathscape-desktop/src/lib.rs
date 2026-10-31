@@ -6,11 +6,11 @@ mod ink;
 mod ink_lan;
 mod ink_link;
 mod ink_problem_card;
-pub use ink_problem_card::{InkProblemCard, ProblemCardBodyFormat, ProblemCardStatus};
 pub use ink_link::{
     CreateInkNoteFromContextRequest, InkLinkTargetRequest, InkMarkdownLinks,
     InkMarkdownTargetRequest, LinkInkNoteRequest,
 };
+pub use ink_problem_card::{InkProblemCard, ProblemCardBodyFormat, ProblemCardStatus};
 mod ink_tls;
 pub use ink_lan::{
     AddressKind, InkLanMirror, InkLanStatus, InkPairingLink, InkRecoveryImport, InkSetupCheck,
@@ -996,6 +996,7 @@ pub fn run() {
             sandbox::sandbox_return_to_mother,
             sandbox_dialogue::sandbox_agent_status,
             sandbox_dialogue::sandbox_set_model,
+            sandbox_dialogue::sandbox_set_effort,
             sandbox_dialogue::sandbox_session_dialogue,
             sandbox_dialogue::sandbox_send_message,
             sandbox_dialogue::sandbox_cancel_round

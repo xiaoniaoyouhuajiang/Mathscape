@@ -23,8 +23,8 @@ use std::{
 
 use futures::StreamExt;
 use mathscape_agent::{
-    AgentBackend, AgentExecutor, AgentModel, CapabilityProbe, CodexConfig, CodexExecutor,
-    EventPayload, RoundId, StartRoundRequest, TurnOutcome,
+    AgentBackend, AgentEffort, AgentExecutor, AgentModel, CapabilityProbe, CodexConfig,
+    CodexExecutor, EventPayload, RoundId, StartRoundRequest, TurnOutcome,
 };
 use mathscape_sandbox::{
     MAX_MESSAGE_CHARS, SandboxError, SandboxHome, TranscriptEntry, TranscriptRole,
@@ -47,6 +47,18 @@ pub(crate) const DIALOGUE_EVENT: &str = "sandbox://dialogue";
 const BACKEND_LABEL: &str = "codex";
 
 /// Live update for the dialogue view.
+/// Blocking-side result of [`SandboxDialogueState::status`].
+#[derive(Default)]
+struct StatusSnapshot {
+    probes: Vec<CapabilityProbe>,
+    model: Option<String>,
+    models: Vec<AgentModel>,
+    model_selection: bool,
+    effort: Option<String>,
+    efforts: Vec<AgentEffort>,
+    effort_selection: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DialogueUpdate {
@@ -84,6 +96,13 @@ pub struct AgentStatus {
     pub models: Vec<AgentModel>,
     /// True when the adapter implements model selection (Codex).
     pub model_selection: bool,
+    /// Reasoning effort the next round will use (`AgentExecutor::current_effort`).
+    pub effort: Option<String>,
+    /// Efforts the current model advertises (`list_efforts(None)`). Empty when
+    /// the catalog says nothing for this model.
+    pub efforts: Vec<AgentEffort>,
+    /// True when the adapter implements effort selection (Codex).
+    pub effort_selection: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -128,8 +147,6 @@ fn env_path(name: &str) -> Option<PathBuf> {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }
-
-
 
 fn default_mcp_program() -> PathBuf {
     let file = format!("mathscape{}", env::consts::EXE_SUFFIX);
@@ -216,11 +233,41 @@ impl SandboxDialogueState {
                 Ok(models) => (models, true),
                 Err(_) => (Vec::new(), false),
             };
-            (probes, model, models, model_selection)
+            let effort = executor.current_effort();
+            // Efforts come from the selected model's catalog entry. Reuse the
+            // catalog fetched above instead of asking the adapter again (which
+            // may spawn an app-server when the cache is missing).
+            let efforts = if model_selection {
+                Ok(model
+                    .as_deref()
+                    .and_then(|id| models.iter().find(|m| m.id == id))
+                    .map(|m| m.reasoning_efforts.clone())
+                    .unwrap_or_default())
+            } else {
+                executor.list_efforts(None)
+            };
+            // Selectable only when the adapter supports it and the model
+            // advertises at least one level (otherwise nothing to validate).
+            let (efforts, effort_selection) = match efforts {
+                Ok(efforts) => {
+                    let selectable = !efforts.is_empty();
+                    (efforts, selectable)
+                }
+                Err(_) => (Vec::new(), false),
+            };
+            StatusSnapshot {
+                probes,
+                model,
+                models,
+                model_selection,
+                effort,
+                efforts,
+                effort_selection,
+            }
         })
         .await
-        .unwrap_or_else(|_| (Vec::new(), None, Vec::new(), false));
-        let (probes, model, models, model_selection) = snapshot;
+        .unwrap_or_default();
+        let probes = snapshot.probes;
         AgentStatus {
             backend: BACKEND_LABEL,
             codex_program: self.inner.codex_program.clone(),
@@ -228,10 +275,22 @@ impl SandboxDialogueState {
             tools: tool_allowlist(),
             available: !probes.is_empty() && probes.iter().all(CapabilityProbe::is_available),
             probes,
-            model,
-            models,
-            model_selection,
+            model: snapshot.model,
+            models: snapshot.models,
+            model_selection: snapshot.model_selection,
+            effort: snapshot.effort,
+            efforts: snapshot.efforts,
+            effort_selection: snapshot.effort_selection,
         }
+    }
+
+    async fn set_effort(&self, effort: String) -> Result<AgentStatus, String> {
+        let executor = Arc::clone(&self.inner.executor);
+        tauri::async_runtime::spawn_blocking(move || executor.set_effort(&effort))
+            .await
+            .map_err(|error| format!("set_effort worker failed: {error}"))?
+            .map_err(|error| error.to_string())?;
+        Ok(self.status().await)
     }
 
     async fn set_model(&self, id: String) -> Result<AgentStatus, String> {
@@ -460,6 +519,15 @@ pub async fn sandbox_agent_status(
     dialogue: State<'_, SandboxDialogueState>,
 ) -> Result<AgentStatus, String> {
     Ok(dialogue.status().await)
+}
+
+/// Persist a Codex reasoning effort for subsequent sandbox rounds.
+#[tauri::command]
+pub async fn sandbox_set_effort(
+    dialogue: State<'_, SandboxDialogueState>,
+    effort: String,
+) -> Result<AgentStatus, String> {
+    dialogue.set_effort(effort).await
 }
 
 /// Persist a Codex model selection for subsequent sandbox rounds.

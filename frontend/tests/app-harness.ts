@@ -138,29 +138,17 @@ extraCommands.set("sandbox_overview", () => ({
 extraCommands.set("sandbox_enter_session", (args) => { sandboxCalls.push({ command: "enter", args }); sessionStorage.setItem("harness.sandbox", "1"); return workspaceStatus(); });
 extraCommands.set("sandbox_return_to_mother", (args) => { sandboxCalls.push({ command: "return", args }); sessionStorage.removeItem("harness.sandbox"); return workspaceStatus(); });
 let harnessModel = "gpt-test";
-const harnessModels = [
-  { id: "gpt-test", displayName: "GPT Test" },
-  { id: "gpt-alt", displayName: "GPT Alt" },
+// Placeholder catalog in the real models_cache.json shape (levels + default).
+const levels = (...ids: string[]) => ids.map((id) => ({ id, description: `harness ${id}` }));
+const harnessModels: { id: string; displayName: string; reasoningEfforts?: { id: string; description: string }[]; defaultReasoningEffort?: string }[] = [
+  { id: "gpt-test", displayName: "GPT Test", reasoningEfforts: levels("low", "medium", "high", "xhigh", "max", "ultra"), defaultReasoningEffort: "low" },
+  { id: "gpt-alt", displayName: "GPT Alt", reasoningEfforts: levels("low", "medium", "high", "xhigh", "max"), defaultReasoningEffort: "medium" },
 ];
-extraCommands.set("sandbox_agent_status", () => ({
-  backend: "codex",
-  codexProgram: "codex",
-  mcpProgram: "mathscape",
-  tools: ["1", "2", "3", "4", "5", "6", "7"],
-  probes: [{ capability: "codex", state: "available", found_version: "0.124.0", required: null, install_hint: null }],
-  available: true,
-  model: harnessModel,
-  models: harnessModels,
-  modelSelection: true,
-}));
-extraCommands.set("sandbox_set_model", (args) => {
-  const id = String(args.modelId ?? "").trim();
-  if (!id) throw new Error("model id required");
-  harnessModel = id;
-  if (!harnessModels.some((model) => model.id === id)) {
-    harnessModels.push({ id, displayName: id });
-  }
-  sandboxCalls.push({ command: "set_model", args });
+let harnessEffort: string | null = "high";
+const harnessEntry = () => harnessModels.find((model) => model.id === harnessModel);
+const agentStatus = () => {
+  const entry = harnessEntry();
+  const efforts = entry?.reasoningEfforts ?? [];
   return {
     backend: "codex",
     codexProgram: "codex",
@@ -171,8 +159,40 @@ extraCommands.set("sandbox_set_model", (args) => {
     model: harnessModel,
     models: harnessModels,
     modelSelection: true,
+    effort: harnessEffort,
+    efforts,
+    effortSelection: efforts.length > 0,
   };
+};
+extraCommands.set("sandbox_agent_status", () => agentStatus());
+extraCommands.set("sandbox_set_model", (args) => {
+  const id = String(args.modelId ?? "").trim();
+  if (!id) throw new Error("model id required");
+  harnessModel = id;
+  if (!harnessModels.some((model) => model.id === id)) {
+    harnessModels.push({ id, displayName: id });
+  }
+  // Same rule as the Codex adapter: an effort the new model does not list
+  // falls back to that model's default.
+  const entry = harnessEntry();
+  if (harnessEffort && entry?.reasoningEfforts?.length && !entry.reasoningEfforts.some((e) => e.id === harnessEffort)) {
+    harnessEffort = entry.defaultReasoningEffort ?? harnessEffort;
+  }
+  sandboxCalls.push({ command: "set_model", args });
+  return agentStatus();
 });
+extraCommands.set("sandbox_set_effort", (args) => {
+  const effort = String(args.effort ?? "").trim();
+  const entry = harnessEntry();
+  if (!effort) throw new Error("effort required");
+  if (entry?.reasoningEfforts?.length && !entry.reasoningEfforts.some((e) => e.id === effort)) {
+    throw new Error(`model ${harnessModel} does not support reasoning effort ${effort}`);
+  }
+  harnessEffort = effort;
+  sandboxCalls.push({ command: "set_effort", args });
+  return agentStatus();
+});
+const sandboxRound = { delayMs: 30 };
 extraCommands.set("sandbox_session_dialogue", (args) => ({ sandboxSessionId: String(args.sandboxSessionId), transcript: structuredClone(transcript), events: structuredClone(sandboxEvents), activeRoundId: null }));
 extraCommands.set("sandbox_send_message", (args) => {
   sandboxCalls.push({ command: "send", args });
@@ -195,7 +215,7 @@ extraCommands.set("sandbox_send_message", (args) => {
     transcript.push(reply);
     emitDialogue({ kind: "transcript", sandbox_session_id: id, entry: reply });
     emitDialogue({ kind: "round_finished", sandbox_session_id: id, round_id: "r1" });
-  }, 30);
+  }, sandboxRound.delayMs);
   return { roundId: "r1", userEntry };
 });
 extraCommands.set("sandbox_cancel_round", () => false);
@@ -208,6 +228,7 @@ const appHarness = {
   documents: { a: a.document_id, b: b.document_id }, notes, links, behavior, storedDocuments: documents, noteCalls, unexpected,
   windowEvents, requestWindowClose,
   sandboxCalls,
+  sandboxRound,
   contentFailures, contentRequests, detailRequests, sourceDetailBehavior, searchBehavior, snapshots, snapshotLabelCalls,
   /** Cytoscape state of a node: selected flag and distance from the canvas centre. */
   nodeView: (id: string) => {

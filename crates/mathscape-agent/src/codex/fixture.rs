@@ -85,10 +85,17 @@ pub fn serve_codex_app_server_fixture_with(
                         "data": [
                             { "id": "fixture-a", "model": "fixture-a", "displayName": "Fixture A",
                               "hidden": false, "isDefault": true, "description": "",
-                              "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [] },
+                              "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [
+                                { "reasoningEffort": "low", "description": "fixture low" },
+                                { "reasoningEffort": "medium", "description": "fixture medium" }
+                              ] },
                             { "id": "fixture-b", "model": "fixture-b", "displayName": "Fixture B",
                               "hidden": false, "isDefault": false, "description": "",
-                              "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [] },
+                              "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [
+                                { "reasoningEffort": "low", "description": "fixture low" },
+                                { "reasoningEffort": "medium", "description": "fixture medium" },
+                                { "reasoningEffort": "xhigh", "description": "fixture xhigh" }
+                              ] },
                             { "id": "fixture-hidden", "model": "fixture-hidden", "displayName": "H",
                               "hidden": true, "isDefault": false, "description": "",
                               "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [] }
