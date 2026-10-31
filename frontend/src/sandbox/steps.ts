@@ -4,6 +4,14 @@
  * Codex `agent_events v0` stays the wire format. This module folds those
  * events into a small step list (id, kind, title, status, raw input/output)
  * so the DOM does not special-case every app-server item.
+ *
+ * Two event shapes are folded specially:
+ * - `usage` never becomes a step. Token counts are summed per turn into
+ *   `TurnView.usage` and shown in the summary only when non-zero.
+ * - The adapter reports MCP startup as a synthetic `mcp.startup` tool pair
+ *   (`raw.mcp` = server status, tools listed, expected, missing). It renders
+ *   as one `mcp` step titled 「MCP 工具 4/7」 or 「MCP 启动失败：…」 and is
+ *   not counted as a work step.
  */
 import type { AgentEventLike } from "./format";
 
@@ -15,7 +23,7 @@ export type StepKind =
   | "think"
   | "approval"
   | "error"
-  | "usage"
+  | "mcp"
   | "tool";
 
 export type StepStatus =
@@ -47,10 +55,22 @@ export interface TurnView {
   header: string;
   headerTone: HeaderTone;
   steps: ToolStep[];
-  /** Collapsed label, e.g. `已完成 2 步 · 1.2s`. */
+  /** Collapsed label, e.g. `已完成 2 步 · 1.2s · 1.2k/300 tokens`. */
   summary: string;
+  /** Summed token usage for the turn; absent when every count is 0. */
+  usage?: TurnUsage;
+  /** Set when the MCP startup step failed or is missing tools. */
+  mcpAlert?: string;
   expandedByDefault: boolean;
   durationMs: number;
+}
+
+export interface TurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens?: number;
+  /** Raw `usage` payloads, pretty-printed, for the expanded summary. */
+  raw: string;
 }
 
 export interface TranscriptLike {
@@ -73,7 +93,7 @@ export const KIND_ICON: Record<StepKind, string> = {
   think: "思",
   approval: "批",
   error: "误",
-  usage: "量",
+  mcp: "接",
   tool: "具",
 };
 
@@ -206,6 +226,112 @@ function inputText(payload: Record<string, unknown>): string {
   return str(payload.args_summary);
 }
 
+export const MCP_STARTUP_TOOL = "mcp.startup";
+
+interface McpRaw {
+  status?: unknown;
+  error?: unknown;
+  tools?: unknown;
+  expected?: unknown;
+  missing?: unknown;
+}
+
+function mcpOf(payload: Record<string, unknown>): McpRaw | null {
+  const raw = payload.raw;
+  if (!raw || typeof raw !== "object") return null;
+  const mcp = (raw as Record<string, unknown>).mcp;
+  if (!mcp || typeof mcp !== "object") return null;
+  return mcp as McpRaw;
+}
+
+function stringList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+/**
+ * Codex wraps the cause: "MCP client for `mathscape` failed to start: MCP
+ * startup failed: No such file or directory (os error 2)". The title keeps
+ * the last clause; the full text stays in the step detail.
+ */
+function errorTail(error: string): string {
+  const parts = error.split(": ").map((part) => part.trim()).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : error;
+}
+
+/** 「MCP 工具 4/7」, 「MCP 启动失败：…」, or 「MCP 已就绪」 (count unknown). */
+export function mcpTitle(mcp: McpRaw, resultStatus: string): string {
+  const status = str(mcp.status);
+  const error = str(mcp.error);
+  if (status === "failed" || status === "cancelled") {
+    return clip(`MCP 启动失败：${errorTail(error) || status}`);
+  }
+  const tools = stringList(mcp.tools);
+  const expected = stringList(mcp.expected) ?? [];
+  if (tools) {
+    const total = expected.length > 0 ? expected.length : tools.length;
+    return `MCP 工具 ${tools.length}/${total}`;
+  }
+  if (resultStatus === "error") return clip(`MCP 异常：${error || "未知"}`);
+  return "MCP 已就绪";
+}
+
+function mcpDetail(mcp: McpRaw): string {
+  const lines: string[] = [];
+  const status = str(mcp.status);
+  if (status) lines.push(`状态：${status}`);
+  const tools = stringList(mcp.tools);
+  if (tools) lines.push(`已连接工具：${tools.length ? tools.join("、") : "无"}`);
+  else lines.push("已连接工具：未知（Codex 未返回工具清单）");
+  const missing = stringList(mcp.missing) ?? [];
+  if (missing.length) lines.push(`缺少：${missing.join("、")}`);
+  const error = str(mcp.error);
+  if (error) lines.push(`错误：${error}`);
+  return lines.join("\n");
+}
+
+function num(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/** Sum the turn's `usage` events. Returns `undefined` when every count is 0. */
+export function turnUsage(events: AgentEventLike[]): TurnUsage | undefined {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cached = 0;
+  let sawCached = false;
+  const raws: unknown[] = [];
+  for (const event of events) {
+    if (event.type !== "usage") continue;
+    const payload = payloadOf(event);
+    inputTokens += num(payload.input_tokens);
+    outputTokens += num(payload.output_tokens);
+    if (typeof payload.cached_input_tokens === "number") {
+      sawCached = true;
+      cached += payload.cached_input_tokens;
+    }
+    raws.push(payload);
+  }
+  if (inputTokens === 0 && outputTokens === 0) return undefined;
+  return {
+    inputTokens,
+    outputTokens,
+    cachedInputTokens: sawCached && cached > 0 ? cached : undefined,
+    raw: pretty(raws.length === 1 ? raws[0] : raws),
+  };
+}
+
+export function formatTokens(count: number): string {
+  if (count < 1000) return String(count);
+  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
+  return `${Math.round(count / 1000)}k`;
+}
+
+/** `1.2k/300 tokens` (input/output). */
+export function usageLabel(usage: TurnUsage): string {
+  return `${formatTokens(usage.inputTokens)}/${formatTokens(usage.outputTokens)} tokens`;
+}
+
 function upsert(steps: ToolStep[], step: ToolStep): void {
   const index = steps.findIndex((item) => item.id === step.id);
   if (index < 0) {
@@ -266,6 +392,31 @@ export function buildTurnProcess(
       const end = str(payload.outcome);
       if (end) outcome = end;
       continue;
+    }
+    if (event.type === "tool_call" || event.type === "tool_result") {
+      const mcp = mcpOf(payload);
+      if (mcp && (str(payload.tool) === MCP_STARTUP_TOOL || event.type === "tool_result")) {
+        const id = str(payload.call_id) || "mcp-startup";
+        const existing = steps.find((step) => step.id === id);
+        if (event.type === "tool_call" || existing?.kind === "mcp") {
+          const done = event.type === "tool_result";
+          const status: StepStatus = done ? (str(payload.status) === "error" ? "error" : "completed") : "running";
+          const title = done ? mcpTitle(mcp, str(payload.status)) : "MCP 启动中";
+          const detail = mcpDetail(mcp);
+          upsert(steps, {
+            id,
+            kind: "mcp",
+            title,
+            status,
+            rawInput: "mathscape",
+            rawOutput: done ? detail : undefined,
+            error: status === "error" ? title : undefined,
+            startedAt: event.ts,
+            endedAt: done ? event.ts : undefined,
+          });
+          continue;
+        }
+      }
     }
     if (event.type === "tool_call") {
       const tool = str(payload.tool) || "tool";
@@ -333,22 +484,7 @@ export function buildTurnProcess(
       }
       continue;
     }
-    if (event.type === "usage") {
-      const input = typeof payload.input_tokens === "number" ? payload.input_tokens : undefined;
-      const output = typeof payload.output_tokens === "number" ? payload.output_tokens : undefined;
-      const tokens =
-        input !== undefined || output !== undefined ? `${input ?? "?"}/${output ?? "?"}` : "";
-      steps.push({
-        id: `usage-${event.seq ?? steps.length}`,
-        kind: "usage",
-        title: tokens ? `用量 ${tokens}` : "用量",
-        status: "completed",
-        rawOutput: pretty(payload),
-        startedAt: event.ts,
-        endedAt: event.ts,
-      });
-      continue;
-    }
+    if (event.type === "usage") continue;
     if (event.type === "cancel" && payload.ack !== true) {
       steps.push({
         id: `cancel-${event.seq ?? steps.length}`,
@@ -364,14 +500,21 @@ export function buildTurnProcess(
   const running = options.running === true && !ended;
   const durationMs = elapsedMs(events, running, options.nowMs ?? Date.now());
   const header = headerText(steps, running, outcome);
+  const usage = turnUsage(events);
+  const mcpStep = steps.find((step) => step.kind === "mcp" && step.status === "error");
+  const mcpAlert = mcpStep?.title;
+  const workSteps = steps.filter((step) => step.kind !== "mcp").length;
+  const tone = headerTone(header, running, outcome);
   return {
     roundId: options.roundId,
     running,
     outcome,
     header,
-    headerTone: headerTone(header, running, outcome),
+    headerTone: tone === "ok" && mcpAlert ? "warn" : tone,
     steps,
-    summary: summaryText(steps.length, durationMs, running),
+    summary: summaryText(workSteps, durationMs, running, usage, mcpAlert),
+    usage,
+    mcpAlert,
     expandedByDefault: running,
     durationMs,
   };
@@ -399,7 +542,9 @@ function headerText(steps: ToolStep[], running: boolean, outcome?: string): stri
   if (running) {
     const awaiting = [...steps].reverse().find((step) => step.status === "awaiting-approval");
     if (awaiting) return "等待审批";
-    const active = [...steps].reverse().find((step) => step.status === "running" || step.status === "pending");
+    const active = [...steps]
+      .reverse()
+      .find((step) => step.kind !== "mcp" && (step.status === "running" || step.status === "pending"));
     if (active) return clip(`正在调用 ${active.title}`);
     return "处理中";
   }
@@ -422,9 +567,18 @@ function headerTone(header: string, running: boolean, outcome?: string): HeaderT
   return "ok";
 }
 
-function summaryText(count: number, durationMs: number, running: boolean): string {
+function summaryText(
+  count: number,
+  durationMs: number,
+  running: boolean,
+  usage?: TurnUsage,
+  mcpAlert?: string,
+): string {
   const time = formatElapsed(durationMs);
-  const suffix = time ? ` · ${time}` : "";
+  const suffix = [time, usage ? usageLabel(usage) : "", mcpAlert ?? ""]
+    .filter(Boolean)
+    .map((part) => ` · ${part}`)
+    .join("");
   if (running) return count > 0 ? `进行中 · ${count} 步${suffix}` : `进行中${suffix}`;
   return count > 0 ? `已完成 ${count} 步${suffix}` : `已完成${suffix}`;
 }

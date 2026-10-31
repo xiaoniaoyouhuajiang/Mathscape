@@ -42,9 +42,89 @@ describe("buildTurnProcess", () => {
     );
     expect(done.header).toBe("已完成");
     expect(done.expandedByDefault).toBe(false);
-    expect(done.summary).toBe("已完成 2 步 · 12ms");
-    expect(done.steps.map((step) => step.status)).toEqual(["completed", "completed"]);
+    expect(done.summary).toBe("已完成 1 步 · 12ms · 120/30 tokens");
+    expect(done.steps.map((step) => step.status)).toEqual(["completed"]);
+    expect(done.usage).toMatchObject({ inputTokens: 120, outputTokens: 30 });
     expect(done.steps[0].rawInput).toBe("query=紧集");
+  });
+
+  it("folds usage into the turn and hides it when every count is 0", () => {
+    const zero = buildTurnProcess(
+      [
+        event(0, "turn_start", {}),
+        event(1, "usage", { input_tokens: 0, output_tokens: 0 }),
+        event(2, "usage", { input_tokens: 0, output_tokens: 0 }),
+        event(3, "turn_end", { outcome: "completed" }),
+      ],
+      { running: false },
+    );
+    expect(zero.steps).toEqual([]);
+    expect(zero.usage).toBeUndefined();
+    expect(zero.summary).not.toContain("tokens");
+
+    const summed = buildTurnProcess(
+      [
+        event(1, "usage", { input_tokens: 1200, output_tokens: 100, cached_input_tokens: 800 }),
+        event(2, "usage", { input_tokens: 300, output_tokens: 200 }),
+        event(3, "turn_end", { outcome: "completed" }),
+      ],
+      { running: false },
+    );
+    expect(summed.steps).toEqual([]);
+    expect(summed.usage).toMatchObject({ inputTokens: 1500, outputTokens: 300, cachedInputTokens: 800 });
+    expect(summed.summary).toContain("1.5k/300 tokens");
+    expect(summed.usage?.raw).toContain("1200");
+  });
+
+  it("renders MCP startup as one uncounted step with the tool count", () => {
+    const mcp = (status: string, raw: Record<string, unknown>) => [
+      event(1, "tool_call", { call_id: "mcp-startup", tool: "mcp.startup", server: "codex", args_summary: "mathscape", raw: { mcp: raw } }),
+      event(2, "tool_result", { call_id: "mcp-startup", status, raw: { mcp: raw } }),
+    ];
+    const seven = ["workspace.search", "material.read", "material.grep", "pdf.outline", "graph.get", "graph.neighborhood", "ink.page_image"];
+    const ok = buildTurnProcess(
+      [
+        event(0, "turn_start", {}),
+        ...mcp("ok", { server: "mathscape", status: "ready", tools: seven, expected: seven, missing: [] }),
+        event(3, "tool_call", { call_id: "c1", tool: "workspace.search" }),
+        event(4, "tool_result", { call_id: "c1", status: "ok", duration_ms: 3 }),
+        event(5, "turn_end", { outcome: "completed" }),
+      ],
+      { running: false },
+    );
+    expect(ok.steps[0]).toMatchObject({ kind: "mcp", title: "MCP 工具 7/7", status: "completed" });
+    expect(ok.summary).toMatch(/^已完成 1 步/);
+    expect(ok.mcpAlert).toBeUndefined();
+    expect(ok.headerTone).toBe("ok");
+
+    const partial = buildTurnProcess(
+      [
+        ...mcp("error", { server: "mathscape", status: "ready", tools: seven.slice(0, 4), expected: seven, missing: seven.slice(4) }),
+        event(3, "turn_end", { outcome: "completed" }),
+      ],
+      { running: false },
+    );
+    expect(partial.steps[0]).toMatchObject({ kind: "mcp", title: "MCP 工具 4/7", status: "error" });
+    expect(partial.steps[0].rawOutput).toContain("缺少：graph.get、graph.neighborhood、ink.page_image");
+    expect(partial.summary).toBe("已完成 · MCP 工具 4/7");
+    expect(partial.headerTone).toBe("warn");
+
+    const failed = buildTurnProcess(
+      [...mcp("error", {
+        server: "mathscape",
+        status: "failed",
+        error: "MCP client for `mathscape` failed to start: MCP startup failed: No such file or directory",
+      })],
+      { running: true },
+    );
+    expect(failed.steps[0].title).toBe("MCP 启动失败：No such file or directory");
+    expect(failed.header).toBe("处理中");
+    expect(failed.steps[0].rawOutput).toContain("MCP client for `mathscape` failed to start");
+
+    const unknown = buildTurnProcess(mcp("ok", { server: "mathscape", status: "ready", tools: null }), {
+      running: false,
+    });
+    expect(unknown.steps[0].title).toBe("MCP 已就绪");
   });
 
   it("names an approval-policy failure instead of a bare internal code", () => {

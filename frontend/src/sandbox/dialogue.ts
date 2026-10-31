@@ -34,6 +34,7 @@ import {
   STATUS_LABEL,
   dialogueRows,
   type ToolStep,
+  type TurnUsage,
   type TurnView,
 } from "./steps";
 
@@ -745,12 +746,24 @@ export class SandboxDialogueDock {
     if (!open) return section;
     if (process.steps.length === 0) {
       section.append(el("p", "sandbox-process-live", process.running ? "正在处理…" : "这一轮没有工具步骤"));
-      return section;
+    } else {
+      const list = el("ol", "sandbox-steps");
+      for (const step of process.steps) list.append(this.renderStep(key, step));
+      section.append(list);
     }
-    const list = el("ol", "sandbox-steps");
-    for (const step of process.steps) list.append(this.renderStep(key, step));
-    section.append(list);
+    if (process.usage) section.append(this.renderUsage(process.usage));
     return section;
+  }
+
+  private renderUsage(usage: TurnUsage): HTMLElement {
+    const cached = usage.cachedInputTokens ? `（缓存 ${usage.cachedInputTokens}）` : "";
+    const line = el(
+      "p",
+      "sandbox-process-usage",
+      `用量：输入 ${usage.inputTokens}${cached} · 输出 ${usage.outputTokens}`,
+    );
+    line.title = usage.raw;
+    return line;
   }
 
   private renderStep(roundKey: string, step: ToolStep): HTMLLIElement {

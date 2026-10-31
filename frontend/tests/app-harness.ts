@@ -209,13 +209,17 @@ extraCommands.set("sandbox_send_message", (args) => {
   };
   const gap = sandboxRound.gapMs > 0 ? sandboxRound.gapMs : Math.min(400, Math.max(80, sandboxRound.delayMs));
   setTimeout(() => {
+    const tools = ["workspace.search", "material.read", "material.grep", "pdf.outline", "graph.get", "graph.neighborhood", "ink.page_image"];
+    const mcp = { mcp: { server: "mathscape", status: "ready", tools, expected: tools, missing: [], error: null } };
     event(0, "turn_start", { input_ref: "x" });
-    event(1, "tool_call", { call_id: "c1", tool: "workspace.search", server: "mathscape", args_summary: "query=紧集" });
+    event(1, "tool_call", { call_id: "mcp-startup", tool: "mcp.startup", server: "codex", args_summary: "mathscape", raw: mcp });
+    event(2, "tool_result", { call_id: "mcp-startup", status: "ok", duration_ms: 40, raw: mcp });
+    event(3, "tool_call", { call_id: "c1", tool: "workspace.search", server: "mathscape", args_summary: "query=紧集" });
   }, sandboxRound.delayMs);
   setTimeout(() => {
-    event(2, "tool_result", { call_id: "c1", status: "ok", duration_ms: 12 });
-    event(3, "usage", { input_tokens: 120, output_tokens: 30 });
-    event(4, "turn_end", { outcome: "completed" });
+    event(4, "tool_result", { call_id: "c1", status: "ok", duration_ms: 12 });
+    event(5, "usage", { input_tokens: 120, output_tokens: 30 });
+    event(6, "turn_end", { outcome: "completed" });
     const reply = { ts: new Date().toISOString(), role: "agent", text: "找到 1 条：定理 3.2。", round_id: "r1", outcome: "completed" };
     transcript.push(reply);
     emitDialogue({ kind: "transcript", sandbox_session_id: id, entry: reply });
