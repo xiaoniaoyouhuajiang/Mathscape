@@ -1223,7 +1223,7 @@ mod tests {
         let params = &message["params"];
         assert_eq!(params["cwd"], "/tmp/mathscape-ws");
         assert_eq!(params["sandbox"], "read-only");
-        assert_eq!(params["approvalPolicy"], "onRequest");
+        assert_eq!(params["approvalPolicy"], "on-request");
         assert_eq!(params["ephemeral"], true);
         assert_eq!(params["serviceName"], "mathscape");
         assert!(message.get("params").unwrap().get("capabilities").is_none());

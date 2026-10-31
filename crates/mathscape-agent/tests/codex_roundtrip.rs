@@ -209,7 +209,7 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
     assert!(log_text.contains("\"method\":\"turn/start\""));
     assert!(log_text.contains("explain 紧集"));
     assert!(log_text.contains("mcp_servers.mathscape.command"));
-    assert!(log_text.contains("\"approvalPolicy\":\"onRequest\""));
+    assert!(log_text.contains("\"approvalPolicy\":\"on-request\""));
     assert!(log_text.contains("default_tools_approval_mode"));
     assert!(log_text.contains("\"approve\""));
     assert!(log_text.contains("workspace.search"));

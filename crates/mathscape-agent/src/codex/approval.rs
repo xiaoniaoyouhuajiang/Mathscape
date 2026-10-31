@@ -3,7 +3,7 @@
 //! `approvalPolicy: never` does not mean "auto-approve". Codex rejects MCP
 //! calls it thinks need a person (`MCP tool call requires approval, but
 //! approval policy is never`), and unannotated tools default to destructive.
-//! Sandbox rounds therefore use `onRequest`, keep `sandbox: read-only`, and
+//! Sandbox rounds therefore use `on-request`, keep `sandbox: read-only`, and
 //! mark the mathscape server `default_tools_approval_mode = approve` with an
 //! `enabled_tools` whitelist. This module is the client half of that policy:
 //! accept whitelisted read-only Mathscape MCP, decline shell / writes, and
@@ -21,8 +21,11 @@ pub(crate) const APPROVAL_TIMEOUT: Duration = Duration::from_secs(60);
 /// Shown on the dialogue when a held approval is auto-declined.
 pub(crate) const APPROVAL_TIMEOUT_MESSAGE: &str = "等待审批已超时";
 
-/// Wire value for `thread/start` `approvalPolicy` (app-server v2 camelCase).
-pub(crate) const SANDBOX_APPROVAL_POLICY: &str = "onRequest";
+/// Wire value for `thread/start` `approvalPolicy`.
+///
+/// This Codex build's serde enum is kebab-case: `untrusted`, `on-request`,
+/// `granular`, `never`. `onRequest` is rejected as an unknown variant.
+pub(crate) const SANDBOX_APPROVAL_POLICY: &str = "on-request";
 
 /// The seven Phase1 read-only Mathscape tools. Duplicated so the adapter can
 /// whitelist them without depending on `mathscape-mcp`.

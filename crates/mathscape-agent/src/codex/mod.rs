@@ -14,7 +14,7 @@
 //! then:
 //!
 //! 1. `initialize` / `initialized`
-//! 2. `thread/start` with `cwd`, `sandbox: "read-only"`, `approvalPolicy: onRequest`,
+//! 2. `thread/start` with `cwd`, `sandbox: "read-only"`, `approvalPolicy: on-request`,
 //!    `ephemeral: true`, and dotted `mcp_servers.mathscape.*` overrides so
 //!    Codex spawns `mathscape mcp --workspace … --round …`. The mathscape
 //!    server is whitelisted (`enabled_tools`) with
