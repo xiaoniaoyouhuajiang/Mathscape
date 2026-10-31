@@ -640,7 +640,7 @@ pub async fn create_ink_document(
     state: State<'_, DesktopState>,
     request: CreateInkDocumentRequest,
 ) -> Result<InkCreateReceipt, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.create_ink_document(request))
         .await
         .map_err(|error| worker(format!("Ink document creation worker failed: {error}")))?
@@ -651,7 +651,7 @@ pub async fn start_ink_session(
     state: State<'_, DesktopState>,
     request: StartInkSessionRequest,
 ) -> Result<StoredInkSession, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.start_ink_session(request))
         .await
         .map_err(|error| worker(format!("Ink session worker failed: {error}")))?
@@ -662,7 +662,7 @@ pub async fn append_ink_operation(
     state: State<'_, DesktopState>,
     request: AppendInkOperationRequest,
 ) -> Result<InkOperationReceipt, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.append_ink_operation(request))
         .await
         .map_err(|error| worker(format!("Ink operation worker failed: {error}")))?
@@ -673,7 +673,7 @@ pub async fn create_ink_snapshot(
     state: State<'_, DesktopState>,
     request: CreateInkSnapshotRequest,
 ) -> Result<StoredInkSnapshot, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.create_ink_snapshot(request))
         .await
         .map_err(|error| worker(format!("Ink snapshot worker failed: {error}")))?
@@ -684,7 +684,7 @@ pub async fn rename_ink_snapshot(
     state: State<'_, DesktopState>,
     request: InkSnapshotLabelRequest,
 ) -> Result<InkSnapshotLabelReceipt, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.rename_ink_snapshot(request))
         .await
         .map_err(|error| worker(format!("Ink snapshot rename worker failed: {error}")))?
@@ -695,7 +695,7 @@ pub async fn list_ink_snapshots(
     state: State<'_, DesktopState>,
     document_id: String,
 ) -> Result<Vec<StoredInkSnapshotSummary>, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.list_ink_snapshots(document_id))
         .await
         .map_err(|error| worker(format!("Ink snapshot list worker failed: {error}")))?
@@ -706,7 +706,7 @@ pub async fn get_ink_snapshot(
     state: State<'_, DesktopState>,
     snapshot_id: String,
 ) -> Result<Option<StoredInkSnapshot>, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.open_ink_snapshot(snapshot_id))
         .await
         .map_err(|error| worker(format!("Ink snapshot read worker failed: {error}")))?
@@ -717,7 +717,7 @@ pub(crate) async fn get_ink_snapshot_for_artifact(
     state: State<'_, DesktopState>,
     artifact_id: String,
 ) -> Result<Option<StoredInkSnapshot>, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         service.open_ink_snapshot_for_artifact(artifact_id)
     })
@@ -730,7 +730,7 @@ pub(crate) async fn register_ink_evidence(
     state: State<'_, DesktopState>,
     request: RegisterInkEvidenceRequest,
 ) -> Result<InkEvidenceReceipt, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.register_ink_evidence(request))
         .await
         .map_err(fail)?
@@ -741,7 +741,7 @@ pub(crate) async fn list_ink_evidence(
     state: State<'_, DesktopState>,
     snapshot_id: String,
 ) -> Result<Vec<InkEvidenceReceipt>, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.list_ink_evidence(snapshot_id))
         .await
         .map_err(fail)?
@@ -752,7 +752,7 @@ pub async fn get_ink_document(
     state: State<'_, DesktopState>,
     document_id: String,
 ) -> Result<Option<StoredInkDocument>, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.open_ink_document(document_id))
         .await
         .map_err(|error| worker(format!("Ink document read worker failed: {error}")))?
@@ -762,7 +762,7 @@ pub async fn get_ink_document(
 pub async fn list_ink_documents(
     state: State<'_, DesktopState>,
 ) -> Result<Vec<StoredInkDocumentSummary>, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.list_ink_documents())
         .await
         .map_err(|error| worker(format!("Ink document list worker failed: {error}")))?
@@ -773,7 +773,7 @@ pub async fn list_ink_sessions(
     state: State<'_, DesktopState>,
     document_id: String,
 ) -> Result<Vec<StoredInkSession>, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.list_ink_sessions(document_id))
         .await
         .map_err(|error| worker(format!("Ink session list worker failed: {error}")))?
@@ -784,7 +784,7 @@ pub async fn close_ink_session(
     state: State<'_, DesktopState>,
     session_id: String,
 ) -> Result<(), InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.close_ink_session(session_id))
         .await
         .map_err(|error| worker(format!("Ink session close worker failed: {error}")))?
@@ -795,7 +795,7 @@ pub async fn get_ink_note(
     state: State<'_, DesktopState>,
     document_id: String,
 ) -> Result<Option<InkNoteState>, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.ink_note(document_id))
         .await
         .map_err(|error| worker(format!("Ink note worker failed: {error}")))?
@@ -806,7 +806,7 @@ pub async fn get_ink_trash_impact(
     state: State<'_, DesktopState>,
     document_id: String,
 ) -> Result<InkTrashImpactView, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.ink_trash_impact(document_id))
         .await
         .map_err(|error| worker(format!("Ink trash impact worker failed: {error}")))?
@@ -816,7 +816,7 @@ pub async fn get_ink_trash_impact(
 pub async fn list_trashed_ink_documents(
     state: State<'_, DesktopState>,
 ) -> Result<Vec<StoredInkDocumentSummary>, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.list_trashed_ink_documents())
         .await
         .map_err(|error| worker(format!("Ink trash list worker failed: {error}")))?
@@ -827,7 +827,7 @@ pub async fn rename_ink_note(
     state: State<'_, DesktopState>,
     request: InkRenameRequest,
 ) -> Result<InkNoteReceipt, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.rename_ink_note(request))
         .await
         .map_err(|error| worker(format!("Ink rename worker failed: {error}")))?
@@ -838,7 +838,7 @@ pub async fn trash_ink_note(
     state: State<'_, DesktopState>,
     request: InkLifecycleRequest,
 ) -> Result<InkNoteReceipt, InkCommandError> {
-    state.service.clone().trash_ink_note(request).await
+    state.service().trash_ink_note(request).await
 }
 
 #[tauri::command]
@@ -846,7 +846,7 @@ pub async fn restore_ink_note(
     state: State<'_, DesktopState>,
     request: InkLifecycleRequest,
 ) -> Result<InkNoteReceipt, InkCommandError> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.restore_ink_note(request))
         .await
         .map_err(|error| worker(format!("Ink restore worker failed: {error}")))?
@@ -857,5 +857,5 @@ pub async fn clean_blank_ink_notes(
     state: State<'_, DesktopState>,
     request: InkCleanBlankRequest,
 ) -> Result<InkCleanBlankReceipt, InkCommandError> {
-    state.service.clone().clean_blank_ink_notes(request).await
+    state.service().clean_blank_ink_notes(request).await
 }

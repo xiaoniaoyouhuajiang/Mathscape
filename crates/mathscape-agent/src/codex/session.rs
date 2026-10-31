@@ -16,6 +16,10 @@ use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use serde_json::{Value, json};
 
+use super::approval::{
+    APPROVAL_TIMEOUT, ApprovalPlan, SANDBOX_APPROVAL_POLICY, approval_event_raw, approval_plan,
+    enabled_tools, timeout_plan,
+};
 use super::map::{CodexEventMapper, classify_codex_failure};
 use crate::{
     AgentBackend, AgentError, AgentEvent, AgentExecutor, Capability, CapabilityProbe,
@@ -51,6 +55,12 @@ pub struct CodexConfig {
     pub handshake_timeout: Duration,
     /// After `turn/interrupt`, how long to wait before killing the child.
     pub interrupt_grace: Duration,
+    /// Unclassified approval requests are declined after this long.
+    /// Default [`APPROVAL_TIMEOUT`] (60s). The dialogue shows 「等待审批已超时」.
+    pub approval_timeout: Duration,
+    /// Override for Codex home (`config.toml` / `models_cache.json`).
+    /// `None` → `$CODEX_HOME` or `~/.codex`. Tests pass a temp dir.
+    pub home: Option<PathBuf>,
 }
 
 impl Default for CodexConfig {
@@ -61,6 +71,8 @@ impl Default for CodexConfig {
             mcp_program: PathBuf::from("mathscape"),
             handshake_timeout: Duration::from_secs(20),
             interrupt_grace: Duration::from_secs(5),
+            approval_timeout: APPROVAL_TIMEOUT,
+            home: None,
         }
     }
 }
@@ -79,6 +91,13 @@ struct RoundSlot {
 
 enum SessionCommand {
     Cancel,
+}
+
+struct PendingApproval {
+    id: Value,
+    method: String,
+    params: Value,
+    deadline: Instant,
 }
 
 /// Local Codex backend. One app-server process per round.
@@ -136,6 +155,59 @@ impl AgentExecutor for CodexExecutor {
             }
         };
         Box::pin(async move { result })
+    }
+
+    fn final_text(&self, round_id: &RoundId) -> Option<String> {
+        let rounds = self.shared.rounds.lock().expect("codex rounds");
+        rounds.get(round_id).and_then(|slot| slot.bus.final_text())
+    }
+
+    fn current_model(&self) -> Option<String> {
+        super::model::current_model(self.shared.config.home.as_deref())
+    }
+
+    fn list_models(&self) -> Result<Vec<crate::AgentModel>, AgentError> {
+        let config = &self.shared.config;
+        super::model::list_models(
+            config.home.as_deref(),
+            Some(super::model::AppServerProbe {
+                program: &config.program,
+                args: &config.args,
+                timeout: config
+                    .handshake_timeout
+                    .min(std::time::Duration::from_secs(8)),
+            }),
+        )
+    }
+
+    fn set_model(&self, id: &str) -> Result<(), AgentError> {
+        let catalog = self.list_models().unwrap_or_default();
+        super::model::set_model(self.shared.config.home.as_deref(), id, &catalog)
+    }
+
+    fn current_effort(&self) -> Option<String> {
+        let home = self.shared.config.home.as_deref();
+        super::model::effective_effort(
+            super::model::configured_effort(home).as_deref(),
+            super::model::current_model(home).as_deref(),
+            &super::model::cached_catalog(home),
+        )
+    }
+
+    fn list_efforts(&self, model: Option<&str>) -> Result<Vec<crate::AgentEffort>, AgentError> {
+        let model = match model {
+            Some(model) => Some(model.to_owned()),
+            None => self.current_model(),
+        };
+        let Some(model) = model else {
+            return Ok(Vec::new());
+        };
+        Ok(super::model::efforts_for(&model, &self.list_models()?))
+    }
+
+    fn set_effort(&self, effort: &str) -> Result<(), AgentError> {
+        let catalog = self.list_models().unwrap_or_default();
+        super::model::set_effort(self.shared.config.home.as_deref(), effort, &catalog)
     }
 
     fn probe(&self) -> Vec<CapabilityProbe> {
@@ -285,7 +357,19 @@ fn drive_child(
         child,
         term_grace: grace,
         reaped: false,
-        mcp_program: config.mcp_program,
+        mcp_program: config.mcp_program.clone(),
+        tools_allow: request.tools_allow.clone(),
+        pending: Vec::new(),
+        approval_timeout: config.approval_timeout,
+        model: super::model::current_model(config.home.as_deref()),
+        effort: {
+            let home = config.home.as_deref();
+            super::model::effective_effort(
+                super::model::configured_effort(home).as_deref(),
+                super::model::current_model(home).as_deref(),
+                &super::model::cached_catalog(home),
+            )
+        },
     };
     if let Err(error) = session.handshake(&request, &round_id, &ready) {
         // Kill the whole process group first, then unblock `start_round`.
@@ -323,9 +407,33 @@ struct Session {
     term_grace: Duration,
     reaped: bool,
     mcp_program: PathBuf,
+    /// Round allow-list. Empty means the fixed read-only Mathscape catalog.
+    tools_allow: Vec<String>,
+    /// Approval requests we could not accept or decline immediately.
+    pending: Vec<PendingApproval>,
+    approval_timeout: Duration,
+    /// Top-level Codex default at handshake time (forwarded on thread/start).
+    model: Option<String>,
+    /// Effective reasoning effort at handshake time (forwarded on turn/start).
+    effort: Option<String>,
 }
 
 impl Session {
+    /// Publishes mapped events. Before a `turn_end` goes out, the agent's
+    /// final message text is recorded on the bus so a consumer that sees
+    /// `turn_end.final_text_ref` can immediately resolve it with
+    /// [`AgentExecutor::final_text`].
+    fn publish(&self, events: Vec<AgentEvent>) {
+        if events
+            .iter()
+            .any(|event| matches!(event.payload, crate::EventPayload::TurnEnd(_)))
+        {
+            self.bus
+                .set_final_text(self.mapper.agent_text().map(str::to_owned));
+        }
+        self.bus.publish_all(events);
+    }
+
     fn handshake(
         &mut self,
         request: &StartRoundRequest,
@@ -340,6 +448,7 @@ impl Session {
             request,
             round_id,
             &self.mcp_program,
+            self.model.as_deref(),
         ))?;
         let opened = self.collect_responses(&[INITIALIZE_ID, THREAD_START_ID], deadline, ready)?;
         if let Some(message) = rpc_error_message(&opened[&INITIALIZE_ID]) {
@@ -370,6 +479,7 @@ impl Session {
             thread_id,
             &request.input_ref,
             &cwd.display().to_string(),
+            self.effort.as_deref(),
         ))?;
         let turn = self.collect_responses(&[TURN_START_ID], deadline, ready)?;
         let turn = &turn[&TURN_START_ID];
@@ -387,20 +497,27 @@ impl Session {
             .to_owned();
         self.turn_id = Some(turn_id.clone());
         let events = self.mapper.accept_turn(&turn_id, &result);
-        self.bus.publish_all(events);
+        self.publish(events);
         Ok(())
     }
 
     fn run_until_closed(&mut self) {
         let mut interrupt_deadline: Option<Instant> = None;
         while !self.mapper.turn_closed() {
+            if let Err(error) = self.expire_approvals() {
+                let events =
+                    self.mapper
+                        .force_stop("failed", &error_text(&error), error_code(&error));
+                self.publish(events);
+                break;
+            }
             if interrupt_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 let events = self.mapper.force_stop(
                     "interrupted",
                     "turn/interrupt was not acknowledged before the grace period",
                     ErrorCode::Internal,
                 );
-                self.bus.publish_all(events);
+                self.publish(events);
                 break;
             }
             match self.lines.recv_timeout(Duration::from_millis(50)) {
@@ -411,7 +528,7 @@ impl Session {
                             &error_text(&error),
                             error_code(&error),
                         );
-                        self.bus.publish_all(events);
+                        self.publish(events);
                         break;
                     }
                 }
@@ -426,7 +543,7 @@ impl Session {
                         &message,
                         classify_codex_failure(&message),
                     );
-                    self.bus.publish_all(events);
+                    self.publish(events);
                     break;
                 }
             }
@@ -435,14 +552,14 @@ impl Session {
                     continue;
                 }
                 let events = self.mapper.on_cancel_request();
-                self.bus.publish_all(events);
+                self.publish(events);
                 if let Err(error) = self.write_interrupt() {
                     let events = self.mapper.force_stop(
                         "interrupted",
                         &error_text(&error),
                         ErrorCode::Internal,
                     );
-                    self.bus.publish_all(events);
+                    self.publish(events);
                     break;
                 }
                 interrupt_deadline.get_or_insert_with(|| Instant::now() + self.interrupt_grace);
@@ -457,12 +574,12 @@ impl Session {
                 let events = self
                     .mapper
                     .note_protocol(format!("ignored invalid app-server json: {message}"));
-                self.bus.publish_all(events);
+                self.publish(events);
                 Ok(())
             }
             Incoming::Notification(message) => {
                 let events = self.mapper.on_notification(&message);
-                self.bus.publish_all(events);
+                self.publish(events);
                 Ok(())
             }
             Incoming::Request { id, method, params } => self.answer(&id, &method, &params),
@@ -476,7 +593,7 @@ impl Session {
                         &format!("turn/interrupt: {text}"),
                         classify_codex_failure(&text),
                     );
-                    self.bus.publish_all(events);
+                    self.publish(events);
                 }
                 Ok(())
             }
@@ -507,7 +624,7 @@ impl Session {
                 }
                 Incoming::Notification(message) => {
                     let events = self.mapper.on_notification(&message);
-                    self.bus.publish_all(events);
+                    self.publish(events);
                 }
                 Incoming::Request { id, method, params } => self.answer(&id, &method, &params)?,
                 Incoming::Response(message) => {
@@ -535,13 +652,61 @@ impl Session {
     }
 
     fn answer(&mut self, id: &Value, method: &str, params: &Value) -> Result<(), AgentError> {
-        if is_user_input(method) {
-            let events = self.mapper.note_declined_user_input(params.clone());
-            self.bus.publish_all(events);
+        match approval_plan(method, params, &self.tools_allow) {
+            ApprovalPlan::Respond(reply) => self.send_reply(id, method, params, reply),
+            ApprovalPlan::Hold { note } => {
+                let events = self.mapper.note_approval(
+                    note.message,
+                    approval_event_raw(note.phase, method, id, params),
+                );
+                self.publish(events);
+                self.pending.push(PendingApproval {
+                    id: id.clone(),
+                    method: method.to_owned(),
+                    params: params.clone(),
+                    deadline: Instant::now() + self.approval_timeout,
+                });
+                Ok(())
+            }
+        }
+    }
+
+    fn expire_approvals(&mut self) -> Result<(), AgentError> {
+        let now = Instant::now();
+        let mut waiting = Vec::new();
+        let mut due = Vec::new();
+        for pending in self.pending.drain(..) {
+            if now >= pending.deadline {
+                due.push(pending);
+            } else {
+                waiting.push(pending);
+            }
+        }
+        self.pending = waiting;
+        for pending in due {
+            let reply = timeout_plan(&pending.method);
+            self.send_reply(&pending.id, &pending.method, &pending.params, reply)?;
+        }
+        Ok(())
+    }
+
+    fn send_reply(
+        &mut self,
+        id: &Value,
+        method: &str,
+        params: &Value,
+        reply: super::approval::ApprovalReply,
+    ) -> Result<(), AgentError> {
+        if let Some(note) = &reply.note {
+            let events = self.mapper.note_approval(
+                note.message.clone(),
+                approval_event_raw(note.phase, method, id, params),
+            );
+            self.publish(events);
         }
         self.write_value(&json!({
             "id": id,
-            "result": server_request_result(method),
+            "result": reply.result,
         }))
     }
 
@@ -717,43 +882,62 @@ pub(crate) fn thread_start_message(
     request: &StartRoundRequest,
     round_id: &RoundId,
     mcp_program: &Path,
+    model: Option<&str>,
 ) -> Value {
     let workspace = absolute_path(&request.workspace);
     let workspace = workspace.display().to_string();
+    let mut params = json!({
+        "cwd": workspace,
+        "approvalPolicy": SANDBOX_APPROVAL_POLICY,
+        "sandbox": "read-only",
+        "ephemeral": true,
+        "serviceName": "mathscape",
+        "developerInstructions": developer_instructions(round_id, &request.tools_allow),
+        "config": {
+            "mcp_servers.mathscape.command": mcp_program.display().to_string(),
+            "mcp_servers.mathscape.args": [
+                "mcp",
+                "--workspace",
+                workspace,
+                "--round",
+                round_id.as_str()
+            ],
+            "mcp_servers.mathscape.enabled": true,
+            "mcp_servers.mathscape.default_tools_approval_mode": "approve",
+            "mcp_servers.mathscape.enabled_tools": enabled_tools(&request.tools_allow)
+        }
+    });
+    if let Some(model) = model.map(str::trim).filter(|id| !id.is_empty()) {
+        params["model"] = json!(model);
+    }
     json!({
         "method": "thread/start",
         "id": id,
-        "params": {
-            "cwd": workspace,
-            "approvalPolicy": "never",
-            "sandbox": "read-only",
-            "ephemeral": true,
-            "serviceName": "mathscape",
-            "developerInstructions": developer_instructions(round_id, &request.tools_allow),
-            "config": {
-                "mcp_servers.mathscape.command": mcp_program.display().to_string(),
-                "mcp_servers.mathscape.args": [
-                    "mcp",
-                    "--workspace",
-                    workspace,
-                    "--round",
-                    round_id.as_str()
-                ],
-                "mcp_servers.mathscape.enabled": true
-            }
-        }
+        "params": params
     })
 }
 
-pub(crate) fn turn_start_message(id: u64, thread_id: &str, input_ref: &str, cwd: &str) -> Value {
+/// `effort` maps to app-server v2 `TurnStartParams.effort` ("Override the
+/// reasoning effort for this turn and subsequent turns").
+pub(crate) fn turn_start_message(
+    id: u64,
+    thread_id: &str,
+    input_ref: &str,
+    cwd: &str,
+    effort: Option<&str>,
+) -> Value {
+    let mut params = json!({
+        "threadId": thread_id,
+        "cwd": cwd,
+        "input": [{ "type": "text", "text": input_ref }]
+    });
+    if let Some(effort) = effort.map(str::trim).filter(|e| !e.is_empty()) {
+        params["effort"] = json!(effort);
+    }
     json!({
         "method": "turn/start",
         "id": id,
-        "params": {
-            "threadId": thread_id,
-            "cwd": cwd,
-            "input": [{ "type": "text", "text": input_ref }]
-        }
+        "params": params
     })
 }
 
@@ -782,37 +966,6 @@ fn developer_instructions(round_id: &RoundId, tools_allow: &[String]) -> String 
     };
     format!(
         "This is Mathscape round {round_id}. {tools} Mathscape does not provide model credentials; use this Codex process's existing local login. Do not ask the user for an API key."
-    )
-}
-
-pub(crate) fn server_request_result(method: &str) -> Value {
-    match method {
-        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-            json!({ "decision": "decline" })
-        }
-        "item/permissions/requestApproval" => json!({ "permissions": {} }),
-        "mcpServer/elicitation/request" => json!({ "action": "decline", "content": null }),
-        // Codex 0.163 schema: `{ "answers": { <questionId>: { "answers": [..] } } }`.
-        // `answers` is an object and there is no `action` field. An empty map
-        // declines every question without implementing user.ask.
-        "item/tool/requestUserInput" | "tool/requestUserInput" => {
-            json!({ "answers": {} })
-        }
-        "item/tool/call" => json!({
-            "contentItems": [{
-                "type": "inputText",
-                "text": "Mathscape Phase1b does not execute Codex dynamic tools; use the mathscape MCP server."
-            }],
-            "success": false
-        }),
-        _ => json!({}),
-    }
-}
-
-fn is_user_input(method: &str) -> bool {
-    matches!(
-        method,
-        "item/tool/requestUserInput" | "tool/requestUserInput"
     )
 }
 
@@ -974,6 +1127,7 @@ impl Drop for FinishBus {
 
 struct BusInner {
     events: Vec<AgentEvent>,
+    final_text: Option<String>,
     senders: Vec<futures_mpsc::UnboundedSender<AgentEvent>>,
     finished: bool,
 }
@@ -987,6 +1141,7 @@ impl EventBus {
         Self {
             inner: Mutex::new(BusInner {
                 events: Vec::new(),
+                final_text: None,
                 senders: Vec::new(),
                 finished: false,
             }),
@@ -1008,6 +1163,14 @@ impl EventBus {
         guard
             .senders
             .retain(|sender| sender.unbounded_send(event.clone()).is_ok());
+    }
+
+    fn set_final_text(&self, text: Option<String>) {
+        self.inner.lock().expect("event bus").final_text = text;
+    }
+
+    fn final_text(&self) -> Option<String> {
+        self.inner.lock().expect("event bus").final_text.clone()
     }
 
     fn finish(&self) {
@@ -1055,17 +1218,26 @@ mod tests {
             &request(AgentBackend::Codex),
             &round,
             Path::new("mathscape"),
+            None,
         );
         let params = &message["params"];
         assert_eq!(params["cwd"], "/tmp/mathscape-ws");
         assert_eq!(params["sandbox"], "read-only");
-        assert_eq!(params["approvalPolicy"], "never");
+        assert_eq!(params["approvalPolicy"], "on-request");
         assert_eq!(params["ephemeral"], true);
         assert_eq!(params["serviceName"], "mathscape");
         assert!(message.get("params").unwrap().get("capabilities").is_none());
         let config = &params["config"];
         assert_eq!(config["mcp_servers.mathscape.command"], "mathscape");
         assert_eq!(config["mcp_servers.mathscape.enabled"], true);
+        assert_eq!(
+            config["mcp_servers.mathscape.default_tools_approval_mode"],
+            "approve"
+        );
+        assert_eq!(
+            config["mcp_servers.mathscape.enabled_tools"],
+            json!(["workspace.search", "material.read"])
+        );
         assert_eq!(
             config["mcp_servers.mathscape.args"],
             json!([
@@ -1096,18 +1268,50 @@ mod tests {
             &request,
             &RoundId::parse("codex-1").unwrap(),
             Path::new("mathscape"),
+            None,
         );
         let instructions = message["params"]["developerInstructions"].as_str().unwrap();
         assert!(instructions.contains("fixed read-only tool list"));
         assert!(!instructions.contains("Call only these"));
+        let tools = &message["params"]["config"]["mcp_servers.mathscape.enabled_tools"];
+        assert_eq!(tools.as_array().map(Vec::len), Some(7));
+        assert!(
+            tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool == "ink.page_image")
+        );
+        assert!(tools.as_array().unwrap().iter().all(|tool| tool != "shell"));
     }
 
     #[test]
     fn turn_start_forwards_input_ref_as_user_text() {
-        let message = turn_start_message(3, "thr_1", "explain 紧集", "/tmp/mathscape-ws");
+        let message = turn_start_message(3, "thr_1", "explain 紧集", "/tmp/mathscape-ws", None);
         assert_eq!(message["params"]["threadId"], "thr_1");
         assert_eq!(message["params"]["input"][0]["text"], "explain 紧集");
         assert!(message["params"].get("model").is_none());
+        assert!(message["params"].get("effort").is_none());
+    }
+
+    #[test]
+    fn turn_start_forwards_selected_effort() {
+        let message = turn_start_message(3, "thr_1", "hi", "/tmp/ws", Some("xhigh"));
+        assert_eq!(message["params"]["effort"], "xhigh");
+        let blank = turn_start_message(3, "thr_1", "hi", "/tmp/ws", Some("  "));
+        assert!(blank["params"].get("effort").is_none());
+    }
+
+    #[test]
+    fn thread_start_forwards_selected_model() {
+        let message = thread_start_message(
+            2,
+            &request(AgentBackend::Codex),
+            &RoundId::parse("codex-1").unwrap(),
+            Path::new("mathscape"),
+            Some("gpt-test"),
+        );
+        assert_eq!(message["params"]["model"], "gpt-test");
     }
 
     #[test]
@@ -1115,28 +1319,6 @@ mod tests {
         let message = initialize_message();
         assert!(message["params"].get("capabilities").is_none());
         assert_eq!(message["params"]["clientInfo"]["name"], "mathscape");
-    }
-
-    #[test]
-    fn approval_requests_are_declined() {
-        assert_eq!(
-            server_request_result("item/commandExecution/requestApproval")["decision"],
-            "decline"
-        );
-        assert_eq!(
-            server_request_result("item/fileChange/requestApproval")["decision"],
-            "decline"
-        );
-        assert_eq!(
-            server_request_result("mcpServer/elicitation/request")["action"],
-            "decline"
-        );
-        assert_eq!(server_request_result("item/tool/call")["success"], false);
-        assert!(
-            server_request_result("item/permissions/requestApproval")["permissions"].is_object()
-        );
-        let user_input = server_request_result("item/tool/requestUserInput");
-        assert_eq!(user_input, json!({ "answers": {} }));
     }
 
     struct RecordingRunner {

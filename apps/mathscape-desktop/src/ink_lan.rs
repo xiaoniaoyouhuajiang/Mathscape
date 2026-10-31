@@ -1821,17 +1821,17 @@ pub(crate) async fn start_ink_lan(
     state: TauriState<'_, DesktopState>,
     port: Option<u16>,
 ) -> Result<InkLanStatus, String> {
-    state.service.start_ink_lan(port).await
+    state.service().start_ink_lan(port).await
 }
 #[tauri::command]
 pub(crate) async fn get_ink_lan_status(
     state: TauriState<'_, DesktopState>,
 ) -> Result<InkLanStatus, String> {
-    state.service.ink_lan_status().await
+    state.service().ink_lan_status().await
 }
 #[tauri::command]
 pub(crate) async fn stop_ink_lan(state: TauriState<'_, DesktopState>) -> Result<(), String> {
-    state.service.shutdown_ink_lan(true).await
+    state.service().shutdown_ink_lan(true).await
 }
 #[tauri::command]
 pub(crate) async fn push_ink_to_tablet(
@@ -1840,7 +1840,7 @@ pub(crate) async fn push_ink_to_tablet(
     allow_transfer: Option<bool>,
 ) -> Result<InkPushResult, String> {
     state
-        .service
+        .service()
         .push_ink_to_tablet(&document_id, allow_transfer.unwrap_or(false))
         .await
 }
@@ -1849,7 +1849,7 @@ pub(crate) fn set_ink_lan_preferred_host(
     state: TauriState<'_, DesktopState>,
     host: Option<String>,
 ) -> Result<InkLanSettings, String> {
-    state.service.set_ink_lan_preferred_host(host)
+    state.service().set_ink_lan_preferred_host(host)
 }
 #[tauri::command]
 pub(crate) async fn create_ink_pairing(
@@ -1859,7 +1859,7 @@ pub(crate) async fn create_ink_pairing(
     allow_transfer: Option<bool>,
 ) -> Result<InkPairingLink, String> {
     state
-        .service
+        .service()
         .create_ink_pairing_with(document_id, expected_head, allow_transfer.unwrap_or(false))
         .await
 }
@@ -1868,7 +1868,7 @@ pub(crate) async fn cancel_ink_pairing(
     state: TauriState<'_, DesktopState>,
     document_id: String,
 ) -> Result<(), String> {
-    store(&state.service)?
+    store(&state.service())?
         .cancel_ink_pairing(&document_id, now())
         .map_err(|e| e.to_string())
 }
@@ -1878,7 +1878,7 @@ pub(crate) async fn get_ink_lan_mirror(
     document_id: String,
     after_seq: u64,
 ) -> Result<InkLanMirror, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tokio::task::spawn_blocking(move || service.ink_lan_mirror(&document_id, after_seq))
         .await
         .map_err(|e| e.to_string())?
@@ -1891,7 +1891,7 @@ pub(crate) async fn reclaim_ink_writer(
     expected_head: u64,
     request_id: String,
 ) -> Result<mathscape_store_sqlite::StoredInkSession, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tokio::task::spawn_blocking(move || {
         service.reclaim_ink_writer(&document_id, expected_epoch, expected_head, &request_id)
     })
@@ -1903,7 +1903,7 @@ pub(crate) async fn export_ink_trust_certificate(
     app: AppHandle,
     state: TauriState<'_, DesktopState>,
 ) -> Result<Option<String>, String> {
-    let (pem, fingerprint) = ink_tls::certificate(state.service.workspace_root())?;
+    let (pem, fingerprint) = ink_tls::certificate(state.service().workspace_root())?;
     let selected = app
         .dialog()
         .file()
@@ -1933,7 +1933,7 @@ pub(crate) async fn choose_ink_recovery(
         return Ok(None);
     };
     let path = selected.into_path().map_err(|error| error.to_string())?;
-    let service = state.service.clone();
+    let service = state.service();
     tokio::task::spawn_blocking(move || {
         if std::fs::metadata(&path)
             .map_err(|error| error.to_string())?
@@ -1956,7 +1956,7 @@ pub(crate) async fn start_ink_setup(
     state: TauriState<'_, DesktopState>,
     document_id: Option<String>,
 ) -> Result<InkSetupStatus, String> {
-    state.service.start_ink_setup_for(document_id).await
+    state.service().start_ink_setup_for(document_id).await
 }
 #[tauri::command]
 pub(crate) async fn prepare_ink_setup_handoff(
@@ -1965,7 +1965,7 @@ pub(crate) async fn prepare_ink_setup_handoff(
     confirm_transfer: bool,
 ) -> Result<InkSetupStatus, String> {
     state
-        .service
+        .service()
         .prepare_ink_setup_handoff(expected_head, confirm_transfer)
         .await
 }
@@ -1973,11 +1973,11 @@ pub(crate) async fn prepare_ink_setup_handoff(
 pub(crate) async fn get_ink_setup_status(
     state: TauriState<'_, DesktopState>,
 ) -> Result<InkSetupStatus, String> {
-    Ok(state.service.ink_setup_status())
+    Ok(state.service().ink_setup_status())
 }
 #[tauri::command]
 pub(crate) async fn cancel_ink_setup(state: TauriState<'_, DesktopState>) -> Result<(), String> {
-    state.service.cancel_ink_setup().await;
+    state.service().cancel_ink_setup().await;
     Ok(())
 }
 

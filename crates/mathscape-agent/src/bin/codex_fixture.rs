@@ -4,12 +4,13 @@
 //! not log in and does not call a model.
 //!
 //! ```text
-//! mathscape-codex-fixture [--hold | --reject-auth] [--log PATH] [app-server]
+//! mathscape-codex-fixture [--hold | --reject-auth | --ask-shell] [--log PATH] [app-server]
 //! mathscape-codex-fixture --version
 //! ```
 //!
 //! `--hold` emits one in-progress MCP call and waits for `turn/interrupt`.
 //! `--reject-auth` fails `turn/start` with `Unauthorized: not logged in`.
+//! `--ask-shell` requests command approval and echoes the client's decision.
 
 use std::io::{self, BufReader, Write};
 use std::path::PathBuf;
@@ -29,6 +30,7 @@ fn main() -> ExitCode {
         match args[index].as_str() {
             "--hold" => options.mode = CodexFixtureMode::HoldUntilInterrupt,
             "--reject-auth" => options.mode = CodexFixtureMode::RejectTurnAuth,
+            "--ask-shell" => options.mode = CodexFixtureMode::AskShell,
             "--log" => {
                 index += 1;
                 if let Some(path) = args.get(index) {

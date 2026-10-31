@@ -8,6 +8,8 @@ import { mountDiscoveryTask } from "./discovery-task";
 import { GraphController } from "./graph/graph-controller";
 import { InspectorController } from "./inspector/inspector-controller";
 import { LlmSettingsController } from "./llm/settings";
+import { mountSandboxChrome } from "./sandbox/chrome";
+import { SandboxDialogueDock } from "./sandbox/dialogue";
 import { SandboxPanelController } from "./sandbox/panel";
 import { DesktopInkWorkspace } from "./ink/desktop";
 import { connectInkViews, type InkViewSync } from "./ink/views";
@@ -345,7 +347,10 @@ const llmSettings = new LlmSettingsController(
   (msg, kind) => shell.showToast(msg, kind),
 );
 
-new SandboxPanelController(el.sandboxHost, el.sandboxButton, (msg, kind) => shell.showToast(msg, kind));
+const sandboxToast = (msg: string, kind: "success" | "error") => shell.showToast(msg, kind);
+const sandboxDock = new SandboxDialogueDock(el.sandboxHost, sandboxToast);
+new SandboxPanelController(el.sandboxHost, el.sandboxButton, sandboxToast, sandboxDock);
+void mountSandboxChrome(el.shell, { toast: sandboxToast, openDialogue: (id) => void sandboxDock.open(id) });
 
 let currentSnapshot: DesktopSnapshot | undefined;
 let inspectorController!: InspectorController;

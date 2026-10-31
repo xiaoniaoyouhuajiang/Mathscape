@@ -287,7 +287,7 @@ pub(crate) async fn get_source_backlink(
     state: tauri::State<'_, crate::DesktopState>,
     request: SourceBacklinkRequest,
 ) -> Result<SourceBacklink, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.get_source_backlink(request))
         .await
         .map_err(|error| format!("读取 PDF 回链线程失败：{error}"))?

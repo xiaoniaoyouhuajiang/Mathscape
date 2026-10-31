@@ -151,14 +151,14 @@ sandbox_export_<session_id>/
 | 入口 | 「沙箱」或「探索会话」：选 checkpoint、开 / 列 / 丢弃 / 导出 |
 | Flow 面板 | 可折叠；建议贴边 dock + 可拖锚点的圆形入口（点=展开/收起）；快捷键展开 |
 | 历史 | User / Agent / System 角色条（颜色+短名即可）；**不做**虚拟形象系统 |
-| 事件 | 消费 `events(round_id)`：turn / tool_call·result / error / cancel（依赖 4b 或与 S1 同批的最小事件条） |
+| 事件 | 消费 `events(round_id)`：turn / tool_call·result / error / cancel（依赖 4b，线协议仍是 `agent_events v0` 七类）。每轮回复**之前**用纵向可折叠过程卡展示步骤（进行中自动展开，结束后收成「已完成 N 步 · Xs」）；气泡上有状态头（正在调用 / 等待审批 / 已完成 / 失败）。不做向右生长的状态芯片条。 |
 | 待答 / 提案条 | **不**作为 S1 必达；有 `user.ask` 后再加 |
 
 ### 4.3 Agent 挂载 [锁定]
 
 - 本机 **Codex**（已有 `CodexExecutor`）+ `mathscape mcp --workspace <sandbox_copy> --round <round_id>`。
 - 工具面 v0 = Phase1 已有 **7 个只读工具**；allowlist 可配置，默认全开只读集。
-- `approvalPolicy: never`、Codex sandbox `read-only`、`ephemeral: true` 沿用 Phase0 附，除非实现 PR 证明必须调整（调整不得导致写入源 checkpoint）。
+- Codex sandbox `read-only`、`ephemeral: true` 沿用 Phase0 附。`approvalPolicy` 用 `on-request`（本机 Codex 的 serde 枚举是 kebab-case：`untrusted` | `on-request` | `granular` | `never`；`onRequest` 会被拒绝为 unknown variant），**不用** `never`：缺少 `readOnlyHint` 的 MCP 工具会被 Codex 当成破坏性调用，`never` 会直接拒绝并报 `approval policy is never`。Mathscape 7 个只读工具在 `tools/list` 上带注解 `readOnlyHint: true`、`destructiveHint: false`、`openWorldHint: false`；`thread/start` 另设 `mcp_servers.mathscape.default_tools_approval_mode = "approve"` 与 `enabled_tools` 白名单。适配器接受白名单内的只读 MCP；shell、文件写入、额外权限、动态工具与打开外链一律拒绝。未能归类的审批最多等 60 秒，超时记「等待审批已超时」并拒绝。以上不得写入源 checkpoint。
 
 ### 4.4 引用与视图信号（S2，薄）[锁定可后置 / 本文记方向]
 
@@ -231,3 +231,6 @@ PR 描述固定三节（用户体感调试约定，保持简单）：
 | --- | --- |
 | 2026-10-30 | 初稿。用户锁定沙箱探索床、可拆卸副作用、淡化 workflow；同意先写短契约再实现。 |
 | 2026-10-30 | S0 实现状态（`mob/sandbox-s0-base`）：新 crate `mathscape-sandbox` + Desktop「沙箱」面板。T1=完整复制、T2=只读。布局 `<app_data>/sandbox/{checkpoints.json, sessions/<id>/, exports/, discarded.jsonl}`（可用 `MATHSCAPE_SANDBOX_ROOT` 覆盖）；默认导出到 `exports/`（会话目录外，丢弃后保留）。契约本身未改。 |
+| 2026-10-31 | S1 实现状态（`mob/sandbox-s1-shell`）：对话 dock（User/Agent/System 角色条 + 最小事件条，消费 `agent_events v0` 七类事件，4b 与 S1 同批薄做）；后端为本机 Codex app-server + `mathscape mcp --workspace <会话副本>` 的 7 个只读工具（T2 仍为只读）。每轮单 turn、ephemeral，历史以 transcript 回放进提示词（`turn_start.input_ref` 即完整提示）。会话目录新增 `events.jsonl`，导出包随附。窗口内切换：沙箱「在本窗口打开…」/ 顶栏「返回母工作区」均先确认再切换，沙箱中顶栏常驻琥珀色「沙箱」横幅；切换不持久化（重启回母工作区），沙箱中不自动启动手写局域网。可用 `MATHSCAPE_CODEX_PROGRAM` / `MATHSCAPE_MCP_PROGRAM` 覆盖程序路径。对话 dock 支持经 `AgentExecutor` 适配器选择本机 Codex 模型（`current_model` / `list_models` / `set_model`，读写 `~/.codex/config.toml` 与 `models_cache.json`）；并可选择推理强度 effort（`current_effort` / `list_efforts` / `set_effort`）：可选档位取自所选模型在 `models_cache.json` 的 `supported_reasoning_levels` / `default_reasoning_level`（缓存缺失时回退 app-server `model/list` 的 `supportedReasoningEfforts`），持久化到 config.toml 顶层 `model_reasoning_effort`（与 Codex 同键），每轮经 `turn/start.effort` 下发；切换模型时若当前 effort 不受新模型支持则重置为该模型默认档。契约本身未改。 |
+| 2026-10-31 | S1 审批与过程卡（仍在 `mob/sandbox-s1-shell`）：§4.3 的 `approvalPolicy` 从 `never` 改为 `on-request`，只读 MCP 注解 + `default_tools_approval_mode=approve` + `enabled_tools` 白名单，shell / 写入仍拒绝，未归类审批 60 秒超时。§4.2 事件条改为回复前的纵向可折叠过程卡。线协议仍是七类事件。不引入 ACP。 |
+| 2026-10-31 | 修正：`thread/start.approvalPolicy` 的线上值是 kebab-case `on-request`。本机 Codex 报 unknown variant `onRequest`，期望 `untrusted` / `on-request` / `granular` / `never`。 |

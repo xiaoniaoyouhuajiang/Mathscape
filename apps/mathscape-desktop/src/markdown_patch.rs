@@ -929,7 +929,7 @@ pub async fn run_markdown_patch(
     state: State<'_, DesktopState>,
     request: RunMarkdownPatchRequest,
 ) -> Result<DesktopMarkdownPatchReview, String> {
-    let service = state.service.clone();
+    let service = state.service();
     service
         .run_markdown_patch(request)
         .await
@@ -941,7 +941,7 @@ pub async fn get_markdown_patch_review(
     state: State<'_, DesktopState>,
     run_id: String,
 ) -> Result<DesktopMarkdownPatchReview, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.get_markdown_patch_review(run_id))
         .await
         .map_err(|error| error.to_string())?
@@ -953,7 +953,7 @@ pub async fn get_pending_markdown_patch_review(
     state: State<'_, DesktopState>,
     artifact_id: String,
 ) -> Result<Option<DesktopMarkdownPatchReview>, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         service.get_pending_markdown_patch_review(artifact_id)
     })
@@ -967,7 +967,7 @@ pub async fn preview_markdown_patch(
     state: State<'_, DesktopState>,
     request: PreviewMarkdownPatchRequest,
 ) -> Result<DesktopMarkdownPatchPreview, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.preview_markdown_patch(request))
         .await
         .map_err(|error| error.to_string())?
@@ -979,7 +979,7 @@ pub async fn submit_markdown_patch_decision(
     state: State<'_, DesktopState>,
     request: SubmitMarkdownPatchDecisionRequest,
 ) -> Result<MarkdownPatchApplyReceipt, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.submit_markdown_patch_decision(request))
         .await
         .map_err(|error| error.to_string())?

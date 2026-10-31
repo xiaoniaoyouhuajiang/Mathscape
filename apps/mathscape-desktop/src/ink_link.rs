@@ -506,7 +506,7 @@ fn worker(message: String) -> InkCommandError {
 
 macro_rules! blocking {
     ($state:expr, $label:literal, |$service:ident| $body:expr) => {{
-        let $service = $state.service.clone();
+        let $service = $state.service();
         tauri::async_runtime::spawn_blocking(move || $body)
             .await
             .map_err(|error| worker(format!(concat!($label, " worker failed: {}"), error)))?

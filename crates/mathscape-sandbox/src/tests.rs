@@ -384,3 +384,101 @@ fn shm_is_not_copied() {
     assert!(!ws.join("mathscape.sqlite3-shm").exists());
     assert!(checkpoint.join("mathscape.sqlite3-shm").exists());
 }
+
+// ---------------------------------------------------------------- S1 dialogue
+
+#[test]
+fn dialogue_lines_and_events_stay_inside_session_and_export() {
+    let (_tmp, home, checkpoint) = setup();
+    let before = snapshot_tree(&checkpoint);
+    let ckpt = home.register_checkpoint(&checkpoint, Some("t")).unwrap();
+    let session = home.start_session(&ckpt.checkpoint_id).unwrap();
+    let id = session.sandbox_session_id.clone();
+
+    home.append_transcript(&id, TranscriptRole::User, "紧集是什么？", None, None)
+        .unwrap();
+    home.append_event(
+        &id,
+        &serde_json::json!({"type": "turn_start", "round_id": "r1", "seq": 0}),
+    )
+    .unwrap();
+    home.append_transcript(
+        &id,
+        TranscriptRole::Agent,
+        "紧集是……",
+        Some("r1"),
+        Some("completed"),
+    )
+    .unwrap();
+    let view = home
+        .record_backend(&id, "codex", &["workspace.search".to_owned()])
+        .unwrap();
+    assert_eq!(view.sandbox_session_id, id);
+
+    let transcript = home.read_transcript(&id).unwrap();
+    assert_eq!(transcript.len(), 2);
+    assert_eq!(transcript[0].role, TranscriptRole::User);
+    assert_eq!(transcript[1].round_id.as_deref(), Some("r1"));
+    assert_eq!(home.read_events(&id).unwrap().len(), 1);
+    assert!(home.events_path(&id).starts_with(home.session_dir(&id)));
+
+    let outcome = home.export_session(&id, None, None).unwrap();
+    assert_eq!(outcome.manifest.backend, "codex");
+    assert_eq!(outcome.manifest.tool_allowlist, vec!["workspace.search"]);
+    assert_eq!(outcome.manifest.transcript_entries, 2);
+    assert!(outcome.manifest.files.iter().any(|f| f == EVENTS_FILE));
+    assert!(outcome.export_dir.join(EVENTS_FILE).is_file());
+
+    home.discard_session(&id).unwrap();
+    assert!(!home.session_dir(&id).exists());
+    // A late write from a still-running round must not revive the session.
+    assert!(matches!(
+        home.append_transcript(&id, TranscriptRole::Agent, "late", None, None),
+        Err(SandboxError::SessionDiscarded(_))
+    ));
+    assert!(matches!(
+        home.append_event(&id, &serde_json::json!({})),
+        Err(SandboxError::SessionDiscarded(_))
+    ));
+    assert!(!home.session_dir(&id).exists());
+    assert_eq!(snapshot_tree(&checkpoint), before);
+}
+
+#[test]
+fn export_without_rounds_has_no_events_file() {
+    let (_tmp, home, checkpoint) = setup();
+    let ckpt = home.register_checkpoint(&checkpoint, None).unwrap();
+    let session = home.start_session(&ckpt.checkpoint_id).unwrap();
+    let outcome = home
+        .export_session(&session.sandbox_session_id, None, None)
+        .unwrap();
+    assert_eq!(outcome.manifest.files, vec![MANIFEST_FILE, TRANSCRIPT_FILE]);
+}
+
+#[test]
+fn dialogue_prompt_replays_recent_history_without_system_lines() {
+    let entry = |role, text: &str| TranscriptEntry {
+        ts: "2026-10-31T00:00:00.000+08:00".into(),
+        role,
+        text: text.into(),
+        round_id: None,
+        outcome: None,
+    };
+    let history = vec![
+        entry(TranscriptRole::User, "第一问"),
+        entry(TranscriptRole::Agent, "第一答"),
+        entry(TranscriptRole::System, "本轮已取消"),
+    ];
+    let prompt = build_dialogue_prompt(&history, "  第二问 ");
+    assert!(
+        prompt.contains("[用户] 第一问\n[助手] 第一答\n"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("本轮已取消"));
+    assert!(prompt.ends_with("用户本轮消息：\n第二问"));
+
+    let long = "长".repeat(13_000);
+    let prompt = build_dialogue_prompt(&[entry(TranscriptRole::User, &long)], "q");
+    assert!(!prompt.contains("此前的对话"));
+    assert!(build_dialogue_prompt(&[], "q").ends_with("q"));
+}

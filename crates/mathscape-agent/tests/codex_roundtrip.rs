@@ -139,6 +139,8 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
             "tool_result",
             "tool_call",
             "tool_result",
+            "tool_call",
+            "tool_result",
             "usage",
             "turn_end",
         ]
@@ -147,6 +149,9 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
         panic!("turn_start");
     };
     assert_eq!(start.input_ref, "explain 紧集");
+    // The fixture echoes the user text as its agent message; `final_text`
+    // resolves `turn_end.final_text_ref` to that visible reply.
+    assert_eq!(executor.final_text(&round).as_deref(), Some("explain 紧集"));
     assert_eq!(
         start
             .raw
@@ -161,18 +166,24 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
     assert_eq!(search.server, "mathscape");
     assert_eq!(search.tool, "workspace.search");
     assert_eq!(search.args_summary, "query=紧集");
-    let EventPayload::ToolResult(read) = &events[4].payload else {
+    let EventPayload::ToolCall(shell) = &events[3].payload else {
+        panic!("shell");
+    };
+    assert_eq!(shell.tool, "shell");
+    assert_eq!(shell.server, "codex");
+    assert_eq!(shell.args_summary, "ls");
+    let EventPayload::ToolResult(read) = &events[6].payload else {
         panic!("read result");
     };
     assert_eq!(read.status, mathscape_agent::ToolResultStatus::Truncated);
-    let EventPayload::Usage(usage) = &events[5].payload else {
+    let EventPayload::Usage(usage) = &events[7].payload else {
         panic!("usage");
     };
     assert_eq!(usage.input_tokens, 1200);
     assert_eq!(usage.output_tokens, 300);
     assert_eq!(usage.cached_input_tokens, Some(800));
     assert_eq!(usage.cost_usd, None);
-    let EventPayload::TurnEnd(end) = &events[6].payload else {
+    let EventPayload::TurnEnd(end) = &events[8].payload else {
         panic!("end");
     };
     assert_eq!(end.outcome, TurnOutcome::Completed);
@@ -198,6 +209,10 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
     assert!(log_text.contains("\"method\":\"turn/start\""));
     assert!(log_text.contains("explain 紧集"));
     assert!(log_text.contains("mcp_servers.mathscape.command"));
+    assert!(log_text.contains("\"approvalPolicy\":\"on-request\""));
+    assert!(log_text.contains("default_tools_approval_mode"));
+    assert!(log_text.contains("\"approve\""));
+    assert!(log_text.contains("workspace.search"));
     assert!(log_text.contains(&format!("\"--round\",\"{}\"", round.as_str())));
     assert!(log_text.contains("mathscape"));
     let lower = log_text.to_ascii_lowercase();
@@ -205,6 +220,51 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
     assert!(!lower.contains("apikey"));
     assert!(!lower.contains("authorization"));
     assert!(!lower.contains("experimentalapi"));
+}
+
+#[test]
+fn shell_approval_is_declined_and_named_in_the_event_stream() {
+    let executor = fixture_executor(vec!["--ask-shell".into(), "app-server".into()]);
+    let round = block_on(executor.start_round(request())).expect("start");
+    let events = collect_until(
+        executor.events(&round).unwrap(),
+        Duration::from_secs(5),
+        |event| event.type_name() == "turn_end",
+    );
+    assert!(
+        events
+            .last()
+            .is_some_and(|event| event.type_name() == "turn_end"),
+        "timed out waiting for turn_end: {events:?}"
+    );
+    assert_eq!(validate_round(&events), vec![], "{events:?}");
+    let denied = events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            EventPayload::Error(error)
+                if error.message.contains("审批策略拒绝了 shell") && !error.fatal
+        )
+    });
+    assert!(denied, "missing readable shell denial: {events:?}");
+    let shell_denied = events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            EventPayload::ToolResult(result) if result
+                .raw
+                .as_ref()
+                .and_then(|raw| raw.get("status"))
+                .and_then(|status| status.as_str())
+                == Some("declined")
+        )
+    });
+    assert!(
+        shell_denied,
+        "shell item should complete as declined: {events:?}"
+    );
+    assert_eq!(
+        executor.final_text(&round).as_deref(),
+        Some("decision:decline")
+    );
 }
 
 #[test]
@@ -313,4 +373,111 @@ fn live_codex_app_server_round_trip() {
 fn unique() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Cache missing → `list_models` asks the app-server (`model/list`) instead of
+/// leaving the picker with only the current model.
+#[test]
+fn list_models_falls_back_to_app_server_model_list() {
+    let home = std::env::temp_dir().join(format!("mathscape-model-list-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.toml"), "model = \"fixture-b\"\n").unwrap();
+    let executor = CodexExecutor::new(CodexConfig {
+        program: fixture_program(),
+        args: Vec::new(),
+        handshake_timeout: Duration::from_secs(5),
+        home: Some(home.clone()),
+        ..CodexConfig::default()
+    });
+    let models = executor.list_models().unwrap();
+    let ids: Vec<_> = models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["fixture-a", "fixture-b"]);
+    assert_eq!(executor.current_model().as_deref(), Some("fixture-b"));
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Effort follows the model trait end to end: list from the selected model's
+/// catalog entry (here via app-server `model/list`), persist as top-level
+/// `model_reasoning_effort`, and forward as `effort` on the next `turn/start`.
+#[test]
+fn effort_is_listed_persisted_and_forwarded_on_turn_start() {
+    let home = std::env::temp_dir().join(format!(
+        "mathscape-effort-{}-{}",
+        std::process::id(),
+        unique()
+    ));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.toml"), "model = \"fixture-b\"\n").unwrap();
+    let log = home.join("requests.log");
+    let executor = CodexExecutor::new(CodexConfig {
+        program: fixture_program(),
+        args: vec![
+            "--log".into(),
+            log.display().to_string(),
+            "app-server".into(),
+        ],
+        handshake_timeout: Duration::from_secs(5),
+        interrupt_grace: Duration::from_secs(2),
+        home: Some(home.clone()),
+        ..CodexConfig::default()
+    });
+    let efforts: Vec<_> = executor
+        .list_efforts(None)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(efforts, ["low", "medium", "xhigh"]);
+    let for_a: Vec<_> = executor
+        .list_efforts(Some("fixture-a"))
+        .unwrap()
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(for_a, ["low", "medium"]);
+
+    assert!(executor.set_effort("ultra").is_err(), "not advertised");
+    executor.set_effort("xhigh").unwrap();
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(
+        config.contains("model_reasoning_effort = \"xhigh\""),
+        "{config}"
+    );
+    assert_eq!(executor.current_effort().as_deref(), Some("xhigh"));
+
+    let _ = std::fs::remove_file(&log);
+    let round = block_on(executor.start_round(request())).expect("start round");
+    let events = collect_until(
+        executor.events(&round).unwrap(),
+        Duration::from_secs(5),
+        |event| event.type_name() == "turn_end",
+    );
+    assert!(
+        events.iter().any(|e| e.type_name() == "turn_end"),
+        "{events:?}"
+    );
+    let log_text = std::fs::read_to_string(&log).expect("fixture request log");
+    let turn_start: serde_json::Value = log_text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|v| v["method"] == "turn/start")
+        .expect("turn/start logged");
+    assert_eq!(turn_start["params"]["effort"], "xhigh");
+    let thread_start: serde_json::Value = log_text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|v| v["method"] == "thread/start")
+        .expect("thread/start logged");
+    assert_eq!(thread_start["params"]["model"], "fixture-b");
+
+    // Switching to a model without `xhigh` resets the persisted effort to
+    // that model's default, as the Codex picker would.
+    executor.set_model("fixture-a").unwrap();
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(config.contains("model = \"fixture-a\""), "{config}");
+    assert!(
+        config.contains("model_reasoning_effort = \"medium\""),
+        "{config}"
+    );
+    let _ = std::fs::remove_dir_all(&home);
 }

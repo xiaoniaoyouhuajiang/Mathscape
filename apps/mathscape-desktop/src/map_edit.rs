@@ -62,7 +62,7 @@ pub async fn get_map_object_edit_context(
     object_id: String,
     state: State<'_, DesktopState>,
 ) -> Result<mathscape_domain::EditContext, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || {
         let store = store(&service)?;
         let snapshot = store
@@ -79,7 +79,7 @@ pub async fn plan_map_change(
     request: UserChangeRequest,
     state: State<'_, DesktopState>,
 ) -> Result<ImpactPlan, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || plan(&service, request))
         .await
         .map_err(|error| format!("impact planner failed: {error}"))?
@@ -91,7 +91,7 @@ pub async fn commit_map_change(
     plan_fingerprint: String,
     state: State<'_, DesktopState>,
 ) -> Result<CommitReceipt, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || commit(&service, request, plan_fingerprint))
         .await
         .map_err(|error| format!("map commit worker failed: {error}"))?

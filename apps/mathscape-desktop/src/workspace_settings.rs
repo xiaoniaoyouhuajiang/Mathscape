@@ -148,7 +148,7 @@ impl DesktopService {
 pub(crate) async fn get_workspace_settings(
     state: State<'_, DesktopState>,
 ) -> Result<WorkspaceSettings, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.workspace_settings())
         .await
         .map_err(|error| format!("Workspace settings worker failed: {error}"))?
@@ -160,7 +160,7 @@ pub(crate) async fn save_workspace_settings(
     state: State<'_, DesktopState>,
     request: SaveWorkspaceSettingsRequest,
 ) -> Result<WorkspaceSettings, String> {
-    let service = state.service.clone();
+    let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.save_workspace_settings(request))
         .await
         .map_err(|error| format!("Workspace settings worker failed: {error}"))?
