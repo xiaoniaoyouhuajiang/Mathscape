@@ -149,7 +149,7 @@ propose ──► staged ──accept──► accepted ──withdraw──► 
 
 #### 4.1.3 harness 桥与 `awaiting_user`
 
-- **Codex 原生 `requestUserInput`**：当前 `CodexExecutor` 用空 `answers` 直接拒绝（`crates/mathscape-agent/src/codex/session.rs` `server_request_result`，Phase0 附录末条）。Phase2-1 改为：适配器创建 `origin: harness_native` 的 PendingQuestion 并**持有**该 server request；用户回答后按 Codex 0.163 形状 `{ "answers": { <questionId>: { "answers": [..] } } }` 写回。若 round 在等待期间被取消 / 进程重启，适配器以空 `answers` 结束该请求，回答改为下一 turn 输入投递（不丢答案）。
+- **Codex 原生 `requestUserInput`**：当前 `CodexExecutor` 对自由提问用空 `answers` 直接拒绝（`crates/mathscape-agent/src/codex/approval.rs`）。若选项是接受/拒绝且点名了白名单工具，则按接受写回。见 Phase0 附录末条。Phase2-1 改为：适配器创建 `origin: harness_native` 的 PendingQuestion 并**持有**该 server request；用户回答后按 Codex 0.163 形状 `{ "answers": { <questionId>: { "answers": [..] } } }` 写回。若 round 在等待期间被取消 / 进程重启，适配器以空 `answers` 结束该请求，回答改为下一 turn 输入投递（不丢答案）。
 - **MCP `user.ask`**：`tool_result` 返回后，Agent 结束 turn；适配器在 `turn_end` 后把调查置为 `awaiting_user`。回答到达时，适配器以新 generation 起下一 turn，输入中带回答块 `{question_id, answer_text, selected_option, ink_snapshot_ref}`。
 - **进入 `awaiting_user` 时** [锁定]：撤销该调查当前 generation 的执行授权 = **释放该调查的写槽**（FX §8.2 末段「进入 awaiting_user 前保存检查点并撤销本轮执行授权」）；期间该调查发出的任何 `propose_changes` 返回 `forbidden`。其他调查、手工编辑、接受 / 丢弃操作均不受影响（决策 1）。
 - **回答到达** [锁定]：重新取得新 generation（写槽）后继续；不自动抢占其他调查（FX §8.2「回复到达不会自动抢占」）。
