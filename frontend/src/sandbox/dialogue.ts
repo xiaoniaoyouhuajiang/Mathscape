@@ -1,7 +1,7 @@
 /**
  * S1 dialogue shell (docs/sandbox-flow.md §4.2, §5 S1): a plain chat over one
  * sandbox session, backed by the local Codex with the 7 Mathscape MCP tools,
- * plus an event strip that shows the live `agent_events v0` stream.
+ * plus a per-turn process timeline (collapsible cards before the answer).
  *
  * The expanded window is resizable and remembers its last size; when collapsed
  * it becomes a draggable float handle (not a fixed corner dock). The status
@@ -20,8 +20,6 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { errorMessage } from "../core/ipc";
 import {
   agentStatusLine,
-  eventChip,
-  latestRoundEvents,
   effortOptionLabel,
   effortOptions,
   modelCatalogHint,
@@ -31,6 +29,13 @@ import {
   type AgentStatusLike,
   type TranscriptRole,
 } from "./format";
+import {
+  KIND_ICON,
+  STATUS_LABEL,
+  dialogueRows,
+  type ToolStep,
+  type TurnView,
+} from "./steps";
 
 export const DIALOGUE_EVENT = "sandbox://dialogue";
 export const DIALOGUE_SIZE_KEY = "mathscape:sandbox-dialogue-size";
@@ -159,7 +164,6 @@ export class SandboxDialogueDock {
   private readonly effortRow: HTMLElement;
   private readonly effortSelect: HTMLSelectElement;
   private readonly log: HTMLElement;
-  private readonly strip: HTMLElement;
   private readonly input: HTMLTextAreaElement;
   private readonly sendButton: HTMLButtonElement;
   private readonly cancelButton: HTMLButtonElement;
@@ -173,6 +177,10 @@ export class SandboxDialogueDock {
   private activeRoundId: string | null = null;
   private sending = false;
   private unlisten: Promise<UnlistenFn> | null = null;
+  /** User override for a round's process section. Absent means follow running/done. */
+  private readonly processOpen = new Map<string, boolean>();
+  /** Step cards the user has expanded, keyed by round + step id. */
+  private readonly stepOpen = new Set<string>();
   private size = loadSize();
   private pos: PosPref = loadPos() ?? defaultPos(this.size);
 
@@ -232,8 +240,6 @@ export class SandboxDialogueDock {
     const body = el("div", "sandbox-dock-body");
     this.log = el("ol", "sandbox-dock-log");
     this.log.setAttribute("aria-live", "polite");
-    this.strip = el("div", "sandbox-dock-strip");
-    this.strip.setAttribute("aria-label", "事件条");
 
     const composer = el("form", "sandbox-dock-composer");
     this.input = el("textarea", "sandbox-input sandbox-dock-input");
@@ -259,7 +265,7 @@ export class SandboxDialogueDock {
       void this.send();
     });
 
-    body.append(this.log, this.strip, composer);
+    body.append(this.log, composer);
 
     this.resizeHandle = el("div", "sandbox-dock-resize");
     this.resizeHandle.setAttribute("role", "separator");
@@ -617,7 +623,7 @@ export class SandboxDialogueDock {
     switch (update.kind) {
       case "agent_event":
         this.events.push(update.event);
-        this.renderStrip();
+        this.renderLog();
         break;
       case "transcript":
         if (!this.transcript.some((entry) => sameEntry(entry, update.entry))) {
@@ -677,42 +683,109 @@ export class SandboxDialogueDock {
 
   private renderAll(): void {
     this.renderLog();
-    this.renderStrip();
     this.syncControls();
   }
 
-  private renderLog(): void {
-    if (this.transcript.length === 0) {
+  private renderLog(stick = true): void {
+    const nearBottom = this.log.scrollHeight - this.log.scrollTop - this.log.clientHeight < 48;
+    const rows = dialogueRows(this.transcript, this.events, this.activeRoundId);
+    if (rows.length === 0) {
       this.log.replaceChildren(
         el("li", "sandbox-empty", "还没有对话。Agent 只能读写这个沙箱的隔离副本；检查点不会被修改。"),
       );
       return;
     }
     this.log.replaceChildren(
-      ...this.transcript.map((entry) => {
-        const item = el("li", `sandbox-line role-${entry.role}`);
-        item.append(el("span", "sandbox-line-role", ROLE_LABEL[entry.role] ?? entry.role), el("div", "sandbox-line-text", entry.text));
-        return item;
+      ...rows.map((row) => {
+        if (row.kind === "live") return this.renderTurn("agent", null, row.process, "正在生成回复…");
+        const entry = row.entry;
+        if (!row.process) {
+          const item = el("li", `sandbox-line role-${entry.role}`);
+          item.append(
+            el("span", "sandbox-line-role", ROLE_LABEL[entry.role] ?? entry.role),
+            el("div", "sandbox-line-text", entry.text),
+          );
+          return item;
+        }
+        return this.renderTurn(entry.role, entry.text, row.process);
       }),
     );
-    this.log.scrollTop = this.log.scrollHeight;
+    if (stick && nearBottom) this.log.scrollTop = this.log.scrollHeight;
   }
 
-  private renderStrip(): void {
-    const round = latestRoundEvents(this.events);
-    if (round.length === 0) {
-      this.strip.replaceChildren(el("span", "sandbox-strip-empty", "事件条：尚无事件"));
-      return;
+  private renderTurn(
+    role: TranscriptRole,
+    text: string | null,
+    process: TurnView,
+    pending?: string,
+  ): HTMLLIElement {
+    const item = el("li", `sandbox-line role-${role}${pending ? " is-live" : ""}`);
+    item.append(el("span", "sandbox-line-role", ROLE_LABEL[role] ?? role));
+    const status = el("div", `sandbox-turn-status tone-${process.headerTone}`, process.header);
+    if (process.running) status.classList.add("is-running");
+    item.append(status);
+    item.append(this.renderProcess(process));
+    if (text !== null) item.append(el("div", "sandbox-line-text", text));
+    else if (pending) item.append(el("div", "sandbox-line-pending", pending));
+    return item;
+  }
+
+  private renderProcess(process: TurnView): HTMLElement {
+    const key = process.roundId ?? "live";
+    const open = this.processOpen.has(key) ? this.processOpen.get(key)! : process.expandedByDefault;
+    const section = el("section", "sandbox-process");
+    const toggle = el("button", "sandbox-process-summary", `${open ? "▾" : "▸"} ${process.summary}`);
+    toggle.type = "button";
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    toggle.onclick = () => {
+      this.processOpen.set(key, !open);
+      this.renderLog(false);
+    };
+    section.append(toggle);
+    if (!open) return section;
+    if (process.steps.length === 0) {
+      section.append(el("p", "sandbox-process-live", process.running ? "正在处理…" : "这一轮没有工具步骤"));
+      return section;
     }
-    this.strip.replaceChildren(
-      ...round.map((event) => {
-        const chip = eventChip(event);
-        const node = el("span", `sandbox-chip tone-${chip.tone}`, chip.label);
-        node.title = chip.title;
-        return node;
-      }),
+    const list = el("ol", "sandbox-steps");
+    for (const step of process.steps) list.append(this.renderStep(key, step));
+    section.append(list);
+    return section;
+  }
+
+  private renderStep(roundKey: string, step: ToolStep): HTMLLIElement {
+    const openKey = `${roundKey}:${step.id}`;
+    const open = this.stepOpen.has(openKey);
+    const item = el("li", `sandbox-step is-${step.status}`);
+    const head = el("button", "sandbox-step-head");
+    head.type = "button";
+    head.setAttribute("aria-expanded", open ? "true" : "false");
+    head.append(
+      el("span", "sandbox-step-kind", KIND_ICON[step.kind]),
+      el("span", "sandbox-step-title", step.title),
+      el("span", `sandbox-step-badge tone-${step.status}`, STATUS_LABEL[step.status]),
     );
-    this.strip.scrollLeft = this.strip.scrollWidth;
+    head.onclick = () => {
+      if (open) this.stepOpen.delete(openKey);
+      else this.stepOpen.add(openKey);
+      this.renderLog(false);
+    };
+    item.append(head);
+    if (open) item.append(this.renderStepDetail(step));
+    return item;
+  }
+
+  private renderStepDetail(step: ToolStep): HTMLElement {
+    const detail = el("div", "sandbox-step-detail");
+    const block = (label: string, value: string | undefined) => {
+      if (!value) return;
+      detail.append(el("div", "sandbox-step-label", label), el("pre", "sandbox-step-pre", value));
+    };
+    block("参数", step.rawInput);
+    block("结果", step.rawOutput);
+    block("错误", step.error);
+    if (!detail.childElementCount) detail.append(el("div", "sandbox-step-label", "没有更多细节"));
+    return detail;
   }
 
   private syncControls(): void {

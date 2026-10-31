@@ -39,11 +39,13 @@ export const ROLE_LABEL: Record<TranscriptRole, string> = {
   system: "System",
 };
 
-/** Minimal `agent_events v0` shape the event strip reads (extra fields ignored). */
+/** Minimal `agent_events v0` shape the dialogue reads (extra fields ignored). */
 export interface AgentEventLike {
   type: string;
   round_id?: string;
   seq?: number;
+  /** RFC 3339 timestamp from the event line, used for step duration. */
+  ts?: string;
   payload?: Record<string, unknown>;
 }
 
@@ -106,12 +108,20 @@ export function eventChip(event: AgentEventLike): EventChip {
         tone: "warn",
         title: `${seq}cancel · ${str(p.requested_by)}`,
       };
-    case "error":
+    case "error": {
+      const message = str(p.message);
+      if (message.includes("等待审批已超时")) {
+        return { label: "等待审批已超时", tone: "warn", title: `${seq}${message}` };
+      }
+      if (message.includes("审批")) {
+        return { label: "审批被拒绝", tone: "error", title: `${seq}${clip(message, 200)}` };
+      }
       return {
         label: `错误 ${str(p.code)}`.trim(),
         tone: "error",
-        title: `${seq}error · ${clip(str(p.message), 200)}`,
+        title: `${seq}error · ${clip(message, 200)}`,
       };
+    }
     default:
       return { label: event.type || "?", tone: "muted", title: `${seq}${event.type}` };
   }

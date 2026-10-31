@@ -192,7 +192,7 @@ extraCommands.set("sandbox_set_effort", (args) => {
   sandboxCalls.push({ command: "set_effort", args });
   return agentStatus();
 });
-const sandboxRound = { delayMs: 30 };
+const sandboxRound: { delayMs: number; gapMs: number } = { delayMs: 30, gapMs: 0 };
 extraCommands.set("sandbox_session_dialogue", (args) => ({ sandboxSessionId: String(args.sandboxSessionId), transcript: structuredClone(transcript), events: structuredClone(sandboxEvents), activeRoundId: null }));
 extraCommands.set("sandbox_send_message", (args) => {
   sandboxCalls.push({ command: "send", args });
@@ -200,14 +200,19 @@ extraCommands.set("sandbox_send_message", (args) => {
   const userEntry = { ts: new Date().toISOString(), role: "user", text: String(args.text), round_id: "r1" };
   transcript.push(userEntry);
   // Stream the round after the command resolves, as the Rust pump does.
+  // The tool call lands first so the dialogue can show an in-progress card
+  // before the answer.
+  const event = (seq: number, type: string, payload: Record<string, unknown>) => {
+    const value = { round_id: "r1", turn_id: "t1", seq, ts: "2026-10-31T09:01:00+08:00", backend: "codex", type, payload };
+    sandboxEvents.push(value);
+    emitDialogue({ kind: "agent_event", sandbox_session_id: id, event: value });
+  };
+  const gap = sandboxRound.gapMs > 0 ? sandboxRound.gapMs : Math.min(400, Math.max(80, sandboxRound.delayMs));
   setTimeout(() => {
-    const event = (seq: number, type: string, payload: Record<string, unknown>) => {
-      const value = { round_id: "r1", turn_id: "t1", seq, ts: "2026-10-31T09:01:00+08:00", backend: "codex", type, payload };
-      sandboxEvents.push(value);
-      emitDialogue({ kind: "agent_event", sandbox_session_id: id, event: value });
-    };
     event(0, "turn_start", { input_ref: "x" });
     event(1, "tool_call", { call_id: "c1", tool: "workspace.search", server: "mathscape", args_summary: "query=紧集" });
+  }, sandboxRound.delayMs);
+  setTimeout(() => {
     event(2, "tool_result", { call_id: "c1", status: "ok", duration_ms: 12 });
     event(3, "usage", { input_tokens: 120, output_tokens: 30 });
     event(4, "turn_end", { outcome: "completed" });
@@ -215,7 +220,7 @@ extraCommands.set("sandbox_send_message", (args) => {
     transcript.push(reply);
     emitDialogue({ kind: "transcript", sandbox_session_id: id, entry: reply });
     emitDialogue({ kind: "round_finished", sandbox_session_id: id, round_id: "r1" });
-  }, sandboxRound.delayMs);
+  }, sandboxRound.delayMs + gap);
   return { roundId: "r1", userEntry };
 });
 extraCommands.set("sandbox_cancel_round", () => false);

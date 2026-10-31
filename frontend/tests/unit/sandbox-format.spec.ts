@@ -49,6 +49,14 @@ describe("S1 event strip and switch prompts", () => {
       label: "错误 auth",
       tone: "error",
     });
+    expect(eventChip({ type: "error", payload: { code: "protocol", message: "审批被策略拒绝：approval policy is never" } })).toMatchObject({
+      label: "审批被拒绝",
+      tone: "error",
+    });
+    expect(eventChip({ type: "error", payload: { message: "等待审批已超时" } })).toMatchObject({
+      label: "等待审批已超时",
+      tone: "warn",
+    });
     expect(eventChip({ type: "turn_end", payload: { outcome: "completed" } })).toMatchObject({ label: "完成", tone: "ok" });
     expect(eventChip({ type: "turn_end", payload: { outcome: "cancelled" } }).tone).toBe("warn");
     expect(eventChip({ type: "turn_end", payload: { outcome: "failed" } }).tone).toBe("error");
