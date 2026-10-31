@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.mathscape.desktop",
   "build": {
-    "beforeDevCommand": "npm --prefix ../frontend run dev",
+    "beforeDevCommand": "cargo build -p mathscape-cli && npm --prefix ../frontend run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm --prefix ../frontend run build",
+    "beforeBuildCommand": "cargo build -p mathscape-cli --release && npm --prefix ../frontend run build",
     "frontendDist": "../../frontend/dist"
   },
   "app": {

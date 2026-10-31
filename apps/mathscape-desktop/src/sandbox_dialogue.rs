@@ -39,7 +39,10 @@ use crate::sandbox::SandboxState;
 /// Codex CLI used for dialogue rounds (default `codex` on `PATH`).
 pub(crate) const CODEX_PROGRAM_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_CODEX_PROGRAM";
 /// `mathscape` CLI that Codex spawns as `mathscape mcp` (default: the binary
-/// beside this executable if present, else `mathscape` on `PATH`).
+/// beside this executable if present, else `mathscape` on `PATH`). Setting
+/// this variable always wins over the sibling binary. `tauri dev` / `tauri
+/// build` build the sibling first (`beforeDevCommand` / `beforeBuildCommand`
+/// in `tauri.conf.json` run `cargo build -p mathscape-cli [--release]`).
 pub(crate) const MCP_PROGRAM_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_MCP_PROGRAM";
 /// Tauri event carrying [`DialogueUpdate`]s.
 pub(crate) const DIALOGUE_EVENT: &str = "sandbox://dialogue";
