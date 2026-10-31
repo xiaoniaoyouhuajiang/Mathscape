@@ -50,9 +50,31 @@ pub const TOOL_NAMES: [&str; 7] = [
     INK_PAGE_IMAGE,
 ];
 
+/// MCP `annotations` for this read-only catalog.
+///
+/// Codex treats a missing `readOnlyHint` as destructive (`destructiveHint`
+/// defaults to true). Under `approvalPolicy: never` that becomes
+/// "MCP tool call requires approval, but approval policy is never" and the
+/// call never runs. Every tool in [`TOOL_NAMES`] is read-only; a future write
+/// tool must not reuse this object.
+pub fn read_only_annotations() -> Value {
+    json!({
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false,
+    })
+}
+
+fn with_read_only_annotations(mut definition: Value) -> Value {
+    if let Some(object) = definition.as_object_mut() {
+        object.insert("annotations".into(), read_only_annotations());
+    }
+    definition
+}
+
 /// `tools/list` entries, in [`TOOL_NAMES`] order.
 pub fn tool_definitions() -> Vec<Value> {
-    vec![
+    [
         search::definition(),
         read::definition(),
         grep::definition(),
@@ -61,6 +83,9 @@ pub fn tool_definitions() -> Vec<Value> {
         graph::neighborhood_definition(),
         ink::definition(),
     ]
+    .into_iter()
+    .map(with_read_only_annotations)
+    .collect()
 }
 
 /// What a successful tool call returns.

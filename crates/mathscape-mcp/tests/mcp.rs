@@ -466,6 +466,16 @@ fn tools_list_order_and_text_are_fixed() {
         assert!(!tool["description"].as_str().unwrap().is_empty());
         assert_eq!(tool["inputSchema"]["type"], "object");
         assert_eq!(tool["inputSchema"]["additionalProperties"], json!(false));
+        assert_eq!(
+            tool["annotations"],
+            json!({
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "openWorldHint": false,
+            }),
+            "{} must stay read-only for Codex approval",
+            tool["name"]
+        );
     }
     assert_eq!(tools[0]["inputSchema"]["required"], json!(["query"]));
     assert_eq!(
