@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   agentStatusLine,
+  modelCatalogHint,
   modelOptionLabel,
   enterConfirmMessage,
   eventChip,
@@ -110,5 +111,19 @@ describe("S1 agent status line", () => {
     expect(modelOptionLabel({ id: "gpt-a", displayName: "A" })).toBe("A (gpt-a)");
     expect(modelOptionLabel({ id: "gpt-a", displayName: "gpt-a" })).toBe("gpt-a");
     expect(modelOptionLabel({ id: "gpt-a" })).toBe("gpt-a");
+  });
+});
+
+describe("modelCatalogHint", () => {
+  it("stays silent when Codex offers a real choice", () => {
+    expect(modelCatalogHint([{ id: "a" }, { id: "b" }], "a")).toBeNull();
+  });
+  it("explains a catalog with only the current model", () => {
+    const hint = modelCatalogHint([{ id: "cur" }], "cur");
+    expect(hint).toContain("仅显示当前模型 cur");
+    expect(hint).toContain("models_cache.json");
+  });
+  it("explains a completely empty catalog", () => {
+    expect(modelCatalogHint([], "")).toContain("未读到 Codex 模型目录");
   });
 });

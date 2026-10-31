@@ -20,6 +20,7 @@ import {
   agentStatusLine,
   eventChip,
   latestRoundEvents,
+  modelCatalogHint,
   modelOptionLabel,
   ROLE_LABEL,
   type AgentEventLike,
@@ -150,6 +151,7 @@ export class SandboxDialogueDock {
   private readonly status: HTMLElement;
   private readonly modelRow: HTMLElement;
   private readonly modelSelect: HTMLSelectElement;
+  private readonly modelHint: HTMLElement;
   private readonly log: HTMLElement;
   private readonly strip: HTMLElement;
   private readonly input: HTMLTextAreaElement;
@@ -188,11 +190,14 @@ export class SandboxDialogueDock {
     this.modelSelect.disabled = true;
     this.modelSelect.onchange = () => void this.onModelChange();
     this.modelRow.append(this.modelSelect);
+    this.modelHint = el("span", "sandbox-dock-model-hint");
+    this.modelHint.hidden = true;
     heading.append(
       el("span", "settings-eyebrow", "SANDBOX · S1"),
       this.title,
       this.status,
       this.modelRow,
+      this.modelHint,
     );
     this.collapseButton = el("button", "sandbox-dock-icon", "–");
     this.collapseButton.type = "button";
@@ -376,7 +381,11 @@ export class SandboxDialogueDock {
     let moved = false;
     target.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
-      if ((event.target as HTMLElement).closest("button") && event.target !== target) return;
+      // Interactive controls inside the drag handle (the model <select> lives in
+      // the header) must keep their native pointer behaviour: preventDefault +
+      // pointer capture here suppresses the compat mousedown that opens the
+      // native picker, so clicking the model bar showed no options.
+      if (event.target !== target && isInteractive(event.target)) return;
       event.preventDefault();
       dragging = event.pointerId;
       moved = false;
@@ -475,6 +484,7 @@ export class SandboxDialogueDock {
     const canSelect = Boolean(status.modelSelection) && status.available;
     if (!canSelect) {
       this.modelRow.hidden = true;
+      this.modelHint.hidden = true;
       this.modelSelect.disabled = true;
       return;
     }
@@ -484,10 +494,13 @@ export class SandboxDialogueDock {
       models.unshift({ id: current });
     }
     this.modelSelect.replaceChildren();
+    const hint = modelCatalogHint(models, current);
+    this.modelHint.textContent = hint ?? "";
+    this.modelHint.hidden = hint === null;
     if (models.length === 0) {
       const empty = document.createElement("option");
       empty.value = "";
-      empty.textContent = current || "（无可用模型）";
+      empty.textContent = "（未设置）";
       this.modelSelect.append(empty);
       this.modelSelect.disabled = true;
       this.modelRow.hidden = false;
@@ -500,7 +513,9 @@ export class SandboxDialogueDock {
       this.modelSelect.append(option);
     }
     this.modelSelect.value = current && models.some((m) => m.id === current) ? current : models[0].id;
-    this.modelSelect.disabled = Boolean(this.activeRoundId) || this.sending;
+    this.modelSelect.title = `${models.length} 个可选模型`;
+    this.modelSelect.disabled =
+      Boolean(this.activeRoundId) || this.sending || models.length < 2;
     this.modelRow.hidden = false;
   }
 
@@ -628,9 +643,18 @@ export class SandboxDialogueDock {
     this.sendButton.textContent = running ? "进行中…" : "发送";
     this.cancelButton.hidden = !running;
     if (!this.modelRow.hidden) {
-      this.modelSelect.disabled = running || this.sending || this.modelSelect.options.length === 0;
+      this.modelSelect.disabled = running || this.sending || this.modelSelect.options.length < 2;
     }
   }
+}
+
+/** Form controls that must not start a dock drag. */
+function isInteractive(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest("button, select, option, input, textarea, a, label, [contenteditable], [data-no-drag]") !==
+      null
+  );
 }
 
 function sameEntry(a: TranscriptEntry, b: TranscriptEntry): boolean {

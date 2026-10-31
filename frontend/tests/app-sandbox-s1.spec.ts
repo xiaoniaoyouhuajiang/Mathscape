@@ -70,4 +70,34 @@ test.describe("S1 sandbox shell", () => {
     await expect(page.locator("#sandbox-button")).toBeVisible();
     await expect(page.locator(".sandbox-banner")).toHaveCount(0);
   });
+
+  test("a real click on the model bar reaches the native picker (header drag must not swallow it)", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    const modelSelect = dock.locator(".sandbox-dock-model-select");
+    await expect(modelSelect).toBeEnabled();
+    await expect(modelSelect.locator("option")).toHaveCount(2);
+    await expect(dock.locator(".sandbox-dock-model-hint")).toBeHidden();
+    await modelSelect.evaluate((select) => {
+      const seen: string[] = [];
+      (window as unknown as { __selectSeen: string[] }).__selectSeen = seen;
+      // Bubble-phase listener on document runs after the header's handler.
+      document.addEventListener("pointerdown", (event) => {
+        if (event.target === select) seen.push(`pointerdown:${event.defaultPrevented ? "prevented" : "ok"}`);
+      });
+      select.addEventListener("mousedown", () => seen.push("mousedown"));
+    });
+    const box = (await modelSelect.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await expect(dock.locator(".sandbox-dock-header")).not.toHaveClass(/is-dragging/);
+    await page.mouse.up();
+    await page.keyboard.press("Escape");
+    const seen = await page.evaluate(() => (window as unknown as { __selectSeen: string[] }).__selectSeen);
+    expect(seen).toEqual(["pointerdown:ok", "mousedown"]);
+  });
 });
+

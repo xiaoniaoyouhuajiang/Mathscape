@@ -75,6 +75,28 @@ pub fn serve_codex_app_server_fixture_with(
                 }),
             )?,
             "initialized" => {}
+            // Same response shape as Codex app-server v2 `model/list`. Ids are
+            // fixture placeholders, not a real model catalog.
+            "model/list" => write_json(
+                &mut writer,
+                &json!({
+                    "id": id,
+                    "result": {
+                        "data": [
+                            { "id": "fixture-a", "model": "fixture-a", "displayName": "Fixture A",
+                              "hidden": false, "isDefault": true, "description": "",
+                              "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [] },
+                            { "id": "fixture-b", "model": "fixture-b", "displayName": "Fixture B",
+                              "hidden": false, "isDefault": false, "description": "",
+                              "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [] },
+                            { "id": "fixture-hidden", "model": "fixture-hidden", "displayName": "H",
+                              "hidden": true, "isDefault": false, "description": "",
+                              "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [] }
+                        ],
+                        "nextCursor": null
+                    }
+                }),
+            )?,
             "thread/start" => {
                 write_json(
                     &mut writer,

@@ -317,3 +317,24 @@ fn unique() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
+
+/// Cache missing → `list_models` asks the app-server (`model/list`) instead of
+/// leaving the picker with only the current model.
+#[test]
+fn list_models_falls_back_to_app_server_model_list() {
+    let home = std::env::temp_dir().join(format!("mathscape-model-list-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.toml"), "model = \"fixture-b\"\n").unwrap();
+    let executor = CodexExecutor::new(CodexConfig {
+        program: fixture_program(),
+        args: Vec::new(),
+        handshake_timeout: Duration::from_secs(5),
+        home: Some(home.clone()),
+        ..CodexConfig::default()
+    });
+    let models = executor.list_models().unwrap();
+    let ids: Vec<_> = models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["fixture-a", "fixture-b"]);
+    assert_eq!(executor.current_model().as_deref(), Some("fixture-b"));
+    let _ = std::fs::remove_dir_all(&home);
+}

@@ -152,7 +152,17 @@ impl AgentExecutor for CodexExecutor {
     }
 
     fn list_models(&self) -> Result<Vec<crate::AgentModel>, AgentError> {
-        super::model::list_models(self.shared.config.home.as_deref())
+        let config = &self.shared.config;
+        super::model::list_models(
+            config.home.as_deref(),
+            Some(super::model::AppServerProbe {
+                program: &config.program,
+                args: &config.args,
+                timeout: config
+                    .handshake_timeout
+                    .min(std::time::Duration::from_secs(8)),
+            }),
+        )
     }
 
     fn set_model(&self, id: &str) -> Result<(), AgentError> {

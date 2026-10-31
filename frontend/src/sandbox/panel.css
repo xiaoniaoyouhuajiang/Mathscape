@@ -492,6 +492,23 @@
   color: inherit;
 }
 
+.sandbox-dock-model-hint {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--warning, #b45309);
+}
+
+.sandbox-dock-model-hint[hidden] {
+  display: none;
+}
+
+.sandbox-dock-model,
+.sandbox-dock-model-select {
+  cursor: pointer;
+}
+
 .sandbox-dock-model-select:disabled {
   opacity: 0.6;
 }
