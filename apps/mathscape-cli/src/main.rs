@@ -8,9 +8,17 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use mathscape_mcp::tools::TOOL_NAMES;
 use mathscape_mcp::{McpServer, McpWorkspace};
 
-const USAGE: &str = "用法：\n  mathscape mcp --workspace <path> [--round <token>]\n\n子命令：\n  mcp    以 stdio 运行只读 MCP 服务（workspace.search、material.read、material.grep、pdf.outline）";
+/// Help text. The tool list comes from [`TOOL_NAMES`] so it cannot drift.
+fn usage() -> String {
+    format!(
+        "用法：\n  mathscape mcp --workspace <path> [--round <token>]\n\n子命令：\n  mcp    以 stdio 运行只读 MCP 服务（{} 个工具：{}）",
+        TOOL_NAMES.len(),
+        TOOL_NAMES.join("、")
+    )
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -62,13 +70,13 @@ fn main() -> ExitCode {
     let command = match parse_args(std::env::args().skip(1)) {
         Ok(command) => command,
         Err(message) => {
-            eprintln!("{message}\n\n{USAGE}");
+            eprintln!("{message}\n\n{}", usage());
             return ExitCode::from(2);
         }
     };
     match command {
         Command::Help => {
-            println!("{USAGE}");
+            println!("{}", usage());
             ExitCode::SUCCESS
         }
         Command::Mcp { workspace, round } => run_mcp(workspace, round),
@@ -128,6 +136,15 @@ mod tests {
         assert!(parse(&["mcp", "--workspace", "/tmp/ws", "--bogus"]).is_err());
         assert!(parse(&["bogus"]).is_err());
         assert_eq!(parse(&[]), Ok(Command::Help));
+    }
+
+    #[test]
+    fn help_lists_every_mcp_tool() {
+        let text = usage();
+        assert!(text.contains("7 个工具"), "{text}");
+        for name in TOOL_NAMES {
+            assert!(text.contains(name), "help is missing {name}: {text}");
+        }
     }
 
     #[test]
