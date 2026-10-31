@@ -138,7 +138,7 @@ extraCommands.set("sandbox_overview", () => ({
 extraCommands.set("sandbox_enter_session", (args) => { sandboxCalls.push({ command: "enter", args }); sessionStorage.setItem("harness.sandbox", "1"); return workspaceStatus(); });
 extraCommands.set("sandbox_return_to_mother", (args) => { sandboxCalls.push({ command: "return", args }); sessionStorage.removeItem("harness.sandbox"); return workspaceStatus(); });
 extraCommands.set("sandbox_agent_status", () => ({ backend: "codex", codexProgram: "codex", mcpProgram: "mathscape", tools: ["1", "2", "3", "4", "5", "6", "7"],
-  probes: [{ capability: "codex", state: "available", found_version: "0.124.0", required: null, install_hint: null }], available: true }));
+  probes: [{ capability: "codex", state: "available", found_version: "0.124.0", required: null, install_hint: null }], available: true, model: "gpt-test" }));
 extraCommands.set("sandbox_session_dialogue", (args) => ({ sandboxSessionId: String(args.sandboxSessionId), transcript: structuredClone(transcript), events: structuredClone(sandboxEvents), activeRoundId: null }));
 extraCommands.set("sandbox_send_message", (args) => {
   sandboxCalls.push({ command: "send", args });

@@ -150,15 +150,18 @@ export interface AgentStatusLike {
   tools: string[];
   available: boolean;
   probes: { capability: string; state: string; found_version?: string | null; install_hint?: string | null }[];
+  /** Local Codex default model (display-only; S1 has no picker). */
+  model?: string | null;
 }
 
-/** One line for the dock header: backend, Codex version or install hint, tool count. */
+/** One line for the dock header: Codex version, default model, tool count. */
 export function agentStatusLine(status: AgentStatusLike): string {
   const probe = status.probes.find((item) => item.capability === "codex");
   const tools = `${status.tools.length} 个 Mathscape 工具`;
   if (status.available) {
     const version = probe?.found_version ? ` ${probe.found_version}` : "";
-    return `本机 Codex${version} · ${tools}`;
+    const model = status.model?.trim() ? ` · ${status.model.trim()}` : "";
+    return `本机 Codex${version}${model} · ${tools}`;
   }
   const hint = probe?.install_hint ? `（${probe.install_hint}）` : "";
   return `未检测到可用的本机 Codex：${status.codexProgram}${hint}`;

@@ -78,6 +78,9 @@ pub struct AgentStatus {
     pub tools: Vec<String>,
     pub probes: Vec<CapabilityProbe>,
     pub available: bool,
+    /// Top-level `model` from the local Codex config (`~/.codex/config.toml`),
+    /// if present. S1 has no model picker; this is display-only.
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -121,6 +124,46 @@ fn env_path(name: &str) -> Option<PathBuf> {
     env::var_os(name)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+}
+
+
+fn codex_config_toml() -> Option<PathBuf> {
+    if let Some(home) = env::var_os("CODEX_HOME") {
+        return Some(PathBuf::from(home).join("config.toml"));
+    }
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".codex").join("config.toml"))
+}
+
+/// Best-effort read of Codex's default model (top-level `model = "..."` before
+/// the first `[section]`). Missing file / missing key → `None`.
+fn read_codex_default_model() -> Option<String> {
+    read_codex_default_model_from(codex_config_toml()?)
+}
+
+fn read_codex_default_model_from(path: PathBuf) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            break;
+        }
+        let Some(rest) = trimmed.strip_prefix("model") else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let value = rest.trim().trim_matches(|c| c == '"' || c == '\'');
+        if !value.is_empty() {
+            return Some(value.to_owned());
+        }
+    }
+    None
 }
 
 fn default_mcp_program() -> PathBuf {
@@ -211,6 +254,7 @@ impl SandboxDialogueState {
             tools: tool_allowlist(),
             available: !probes.is_empty() && probes.iter().all(CapabilityProbe::is_available),
             probes,
+            model: read_codex_default_model(),
         }
     }
 
@@ -783,4 +827,28 @@ mod tests {
         let home = fx.home.lock().unwrap();
         assert!(home.read_transcript(&fx.session_id).unwrap().is_empty());
     }
+    #[test]
+    fn read_codex_default_model_skips_sections_and_comments() {
+        let root = env::temp_dir().join(format!(
+            "mathscape-codex-model-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let config = root.join("config.toml");
+        std::fs::write(
+            &config,
+            "# comment\nmodel = \"gpt-test\"\n\n[projects.\"/x\"]\nmodel = \"ignored\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            super::read_codex_default_model_from(config).as_deref(),
+            Some("gpt-test")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
 }

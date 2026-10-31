@@ -38,7 +38,14 @@ test.describe("S1 sandbox shell", () => {
     await banner.getByRole("button", { name: "对话" }).click();
     const dock = page.getByRole("complementary", { name: "沙箱对话" });
     await expect(dock).toBeVisible();
-    await expect(dock.locator(".sandbox-dock-status")).toHaveText("本机 Codex 0.124.0 · 7 个 Mathscape 工具");
+    await expect(dock.locator(".sandbox-dock-status")).toHaveText("本机 Codex 0.124.0 · gpt-test · 7 个 Mathscape 工具");
+    await expect(dock.locator(".sandbox-dock-resize")).toBeVisible();
+    await dock.locator("button[title=\"收起为浮动入口\"]").click();
+    await expect(dock).toBeHidden();
+    const floatHandle = page.getByRole("button", { name: "展开沙箱对话" });
+    await expect(floatHandle).toBeVisible();
+    await floatHandle.click();
+    await expect(dock).toBeVisible();
     await dock.locator("textarea").fill("紧集在哪？");
     await dock.getByRole("button", { name: "发送" }).click();
     await expect(dock.locator(".sandbox-line.role-user")).toHaveText(/紧集在哪？/);

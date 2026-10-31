@@ -1,10 +1,14 @@
 /**
- * S1 dialogue dock (docs/sandbox-flow.md §4.2, §5 S1): a plain chat over one
+ * S1 dialogue shell (docs/sandbox-flow.md §4.2, §5 S1): a plain chat over one
  * sandbox session, backed by the local Codex with the 7 Mathscape MCP tools,
  * plus an event strip that shows the live `agent_events v0` stream.
  *
+ * The expanded window is resizable and remembers its last size; when collapsed
+ * it becomes a draggable float handle (not a fixed corner dock). The status
+ * line shows the local Codex default model (S1 has no model picker).
+ *
  * Everything the agent reads or writes is the session's isolated copy; the
- * dock never touches the checkpoint. The reply is only shown once the round
+ * shell never touches the checkpoint. The reply is only shown once the round
  * has an event stream — no fake "connected" state.
  */
 import { invoke } from "@tauri-apps/api/core";
@@ -22,6 +26,14 @@ import {
 } from "./format";
 
 export const DIALOGUE_EVENT = "sandbox://dialogue";
+export const DIALOGUE_SIZE_KEY = "mathscape:sandbox-dialogue-size";
+export const DIALOGUE_POS_KEY = "mathscape:sandbox-dialogue-pos";
+
+const DEFAULT_WIDTH = 460;
+const DEFAULT_HEIGHT = 520;
+const MIN_WIDTH = 320;
+const MIN_HEIGHT = 280;
+const HANDLE_SIZE = 48;
 
 interface TranscriptEntry {
   ts: string;
@@ -50,11 +62,84 @@ type DialogueUpdate =
 
 type Toast = (message: string, kind: "success" | "error") => void;
 
+interface SizePref {
+  width: number;
+  height: number;
+}
+
+interface PosPref {
+  left: number;
+  top: number;
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = ""): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text) node.textContent = text;
   return node;
+}
+
+function loadSize(): SizePref {
+  try {
+    const raw = localStorage.getItem(DIALOGUE_SIZE_KEY);
+    if (!raw) return { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT };
+    const parsed = JSON.parse(raw) as Partial<SizePref>;
+    return {
+      width: clamp(Number(parsed.width) || DEFAULT_WIDTH, MIN_WIDTH, maxWidth()),
+      height: clamp(Number(parsed.height) || DEFAULT_HEIGHT, MIN_HEIGHT, maxHeight()),
+    };
+  } catch {
+    return { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT };
+  }
+}
+
+function saveSize(size: SizePref): void {
+  try {
+    localStorage.setItem(DIALOGUE_SIZE_KEY, JSON.stringify(size));
+  } catch {
+    /* Optional preference. */
+  }
+}
+
+function loadPos(): PosPref | null {
+  try {
+    const raw = localStorage.getItem(DIALOGUE_POS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PosPref>;
+    const left = Number(parsed.left);
+    const top = Number(parsed.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+    return { left, top };
+  } catch {
+    return null;
+  }
+}
+
+function savePos(pos: PosPref): void {
+  try {
+    localStorage.setItem(DIALOGUE_POS_KEY, JSON.stringify(pos));
+  } catch {
+    /* Optional preference. */
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.round(Math.min(max, Math.max(min, value)));
+}
+
+function maxWidth(): number {
+  return Math.max(MIN_WIDTH, window.innerWidth - 24);
+}
+
+function maxHeight(): number {
+  return Math.max(MIN_HEIGHT, window.innerHeight - 24);
+}
+
+function defaultPos(size: SizePref): PosPref {
+  return {
+    left: Math.max(12, window.innerWidth - size.width - 20),
+    top: Math.max(12, window.innerHeight - size.height - 20),
+  };
 }
 
 export class SandboxDialogueDock {
@@ -67,6 +152,8 @@ export class SandboxDialogueDock {
   private readonly sendButton: HTMLButtonElement;
   private readonly cancelButton: HTMLButtonElement;
   private readonly collapseButton: HTMLButtonElement;
+  private readonly floatHandle: HTMLButtonElement;
+  private readonly resizeHandle: HTMLElement;
 
   private sessionId: string | null = null;
   private transcript: TranscriptEntry[] = [];
@@ -74,6 +161,8 @@ export class SandboxDialogueDock {
   private activeRoundId: string | null = null;
   private sending = false;
   private unlisten: Promise<UnlistenFn> | null = null;
+  private size = loadSize();
+  private pos: PosPref = loadPos() ?? defaultPos(this.size);
 
   constructor(
     host: HTMLElement,
@@ -90,14 +179,15 @@ export class SandboxDialogueDock {
     heading.append(el("span", "settings-eyebrow", "SANDBOX · S1"), this.title, this.status);
     this.collapseButton = el("button", "sandbox-dock-icon", "–");
     this.collapseButton.type = "button";
-    this.collapseButton.title = "折叠";
-    this.collapseButton.onclick = () => this.toggleCollapsed();
+    this.collapseButton.title = "收起为浮动入口";
+    this.collapseButton.onclick = () => this.collapseToFloat();
     const close = el("button", "sandbox-dock-icon", "×");
     close.type = "button";
     close.title = "关闭对话（不会取消正在进行的一轮）";
     close.setAttribute("aria-label", "关闭对话");
     close.onclick = () => this.close();
     header.append(heading, this.collapseButton, close);
+    this.bindDrag(header, () => ({ width: this.size.width, height: this.size.height }));
 
     const body = el("div", "sandbox-dock-body");
     this.log = el("ol", "sandbox-dock-log");
@@ -130,17 +220,45 @@ export class SandboxDialogueDock {
     });
 
     body.append(this.log, this.strip, composer);
-    this.root.append(header, body);
-    host.append(this.root);
+
+    this.resizeHandle = el("div", "sandbox-dock-resize");
+    this.resizeHandle.setAttribute("role", "separator");
+    this.resizeHandle.setAttribute("aria-orientation", "both");
+    this.resizeHandle.setAttribute("aria-label", "调整对话窗口大小");
+    this.resizeHandle.title = "拖动调整大小";
+    this.bindResize(this.resizeHandle);
+
+    this.root.append(header, body, this.resizeHandle);
+
+    this.floatHandle = el("button", "sandbox-dock-float", "对话");
+    this.floatHandle.type = "button";
+    this.floatHandle.hidden = true;
+    this.floatHandle.title = "展开沙箱对话（可拖动）";
+    this.floatHandle.setAttribute("aria-label", "展开沙箱对话");
+    this.floatHandle.addEventListener("click", (event) => {
+      if (this.floatHandle.dataset.dragged === "1") {
+        event.preventDefault();
+        this.floatHandle.dataset.dragged = "0";
+        return;
+      }
+      this.expandFromFloat();
+    });
+    this.bindDrag(this.floatHandle, () => ({ width: HANDLE_SIZE, height: HANDLE_SIZE }), true);
+
+    host.append(this.root, this.floatHandle);
+    this.applyGeometry();
     this.syncControls();
+    window.addEventListener("resize", () => this.clampIntoViewport());
   }
 
   get currentSessionId(): string | null {
-    return this.root.hidden ? null : this.sessionId;
+    if (this.root.hidden && this.floatHandle.hidden) return null;
+    return this.sessionId;
   }
 
   async open(sessionId: string): Promise<void> {
     this.ensureListening();
+    this.floatHandle.hidden = true;
     this.root.hidden = false;
     this.root.classList.remove("is-collapsed");
     if (this.sessionId !== sessionId) {
@@ -150,6 +268,8 @@ export class SandboxDialogueDock {
       this.activeRoundId = null;
     }
     this.title.textContent = `沙箱对话 · ${sessionId}`;
+    this.floatHandle.textContent = "对话";
+    this.applyGeometry();
     void this.refreshStatus();
     try {
       const dialogue = await invoke<SessionDialogue>("sandbox_session_dialogue", { sandboxSessionId: sessionId });
@@ -166,6 +286,7 @@ export class SandboxDialogueDock {
 
   close(): void {
     this.root.hidden = true;
+    this.floatHandle.hidden = true;
   }
 
   /** Close if showing `sessionId` (e.g. after it was discarded). */
@@ -176,10 +297,138 @@ export class SandboxDialogueDock {
     }
   }
 
-  private toggleCollapsed(): void {
-    const collapsed = this.root.classList.toggle("is-collapsed");
-    this.collapseButton.textContent = collapsed ? "+" : "–";
-    this.collapseButton.title = collapsed ? "展开" : "折叠";
+  private collapseToFloat(): void {
+    if (!this.sessionId) {
+      this.close();
+      return;
+    }
+    this.root.hidden = true;
+    this.floatHandle.hidden = false;
+    this.floatHandle.textContent = "对话";
+    this.applyGeometry();
+  }
+
+  private expandFromFloat(): void {
+    if (!this.sessionId) {
+      this.close();
+      return;
+    }
+    void this.open(this.sessionId);
+  }
+
+  private applyGeometry(): void {
+    this.size = {
+      width: clamp(this.size.width, MIN_WIDTH, maxWidth()),
+      height: clamp(this.size.height, MIN_HEIGHT, maxHeight()),
+    };
+    this.pos = this.clampPos(this.pos, this.root.hidden && !this.floatHandle.hidden
+      ? { width: HANDLE_SIZE, height: HANDLE_SIZE }
+      : this.size);
+    this.root.style.width = `${this.size.width}px`;
+    this.root.style.height = `${this.size.height}px`;
+    this.root.style.left = `${this.pos.left}px`;
+    this.root.style.top = `${this.pos.top}px`;
+    this.root.style.right = "auto";
+    this.root.style.bottom = "auto";
+    this.floatHandle.style.left = `${this.pos.left}px`;
+    this.floatHandle.style.top = `${this.pos.top}px`;
+    this.floatHandle.style.right = "auto";
+    this.floatHandle.style.bottom = "auto";
+  }
+
+  private clampIntoViewport(): void {
+    this.applyGeometry();
+  }
+
+  private clampPos(pos: PosPref, box: { width: number; height: number }): PosPref {
+    return {
+      left: clamp(pos.left, 8, Math.max(8, window.innerWidth - box.width - 8)),
+      top: clamp(pos.top, 8, Math.max(8, window.innerHeight - box.height - 8)),
+    };
+  }
+
+  private bindDrag(
+    target: HTMLElement,
+    box: () => { width: number; height: number },
+    markClickSuppress = false,
+  ): void {
+    let dragging: number | undefined;
+    let startX = 0;
+    let startY = 0;
+    let origin: PosPref = { left: 0, top: 0 };
+    let moved = false;
+    target.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      if ((event.target as HTMLElement).closest("button") && event.target !== target) return;
+      event.preventDefault();
+      dragging = event.pointerId;
+      moved = false;
+      startX = event.clientX;
+      startY = event.clientY;
+      origin = { ...this.pos };
+      try {
+        target.setPointerCapture(event.pointerId);
+      } catch {
+        /* Synthetic pointers. */
+      }
+      target.classList.add("is-dragging");
+    });
+    target.addEventListener("pointermove", (event) => {
+      if (event.pointerId !== dragging) return;
+      const dx = event.clientX - startX;
+      const dy = event.clientY - startY;
+      if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+      this.pos = this.clampPos({ left: origin.left + dx, top: origin.top + dy }, box());
+      this.applyGeometry();
+    });
+    const finish = (event: PointerEvent) => {
+      if (event.pointerId !== dragging) return;
+      dragging = undefined;
+      target.classList.remove("is-dragging");
+      savePos(this.pos);
+      if (markClickSuppress && moved) target.dataset.dragged = "1";
+    };
+    target.addEventListener("pointerup", finish);
+    target.addEventListener("pointercancel", finish);
+  }
+
+  private bindResize(handle: HTMLElement): void {
+    let dragging: number | undefined;
+    let startX = 0;
+    let startY = 0;
+    let origin: SizePref = { width: 0, height: 0 };
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragging = event.pointerId;
+      startX = event.clientX;
+      startY = event.clientY;
+      origin = { ...this.size };
+      try {
+        handle.setPointerCapture(event.pointerId);
+      } catch {
+        /* Synthetic pointers. */
+      }
+      handle.classList.add("is-dragging");
+    });
+    handle.addEventListener("pointermove", (event) => {
+      if (event.pointerId !== dragging) return;
+      this.size = {
+        width: clamp(origin.width + (event.clientX - startX), MIN_WIDTH, maxWidth()),
+        height: clamp(origin.height + (event.clientY - startY), MIN_HEIGHT, maxHeight()),
+      };
+      this.applyGeometry();
+    });
+    const finish = (event: PointerEvent) => {
+      if (event.pointerId !== dragging) return;
+      dragging = undefined;
+      handle.classList.remove("is-dragging");
+      saveSize(this.size);
+      savePos(this.pos);
+    };
+    handle.addEventListener("pointerup", finish);
+    handle.addEventListener("pointercancel", finish);
   }
 
   private ensureListening(): void {
