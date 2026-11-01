@@ -532,7 +532,8 @@ const styles: StylesheetJson = [
     selector: "edge.ink-note-edge.is-primary",
     style: { width: 2 },
   },
-  // A-PR3 sandbox echo (graph/sandbox-echo.ts): transient, never persisted.
+  // A-PR3 sandbox echo (graph/sandbox-echo.ts) and the Map Scene Player
+  // (graph/scene-player.ts) share these: transient, never persisted.
   // Seeds = what a tool call asked about, hits = what its result returned;
   // `-fade` is the second half of the 2–3s pulse.
   {

@@ -1255,3 +1255,96 @@ code {
 .ink-desktop-body.is-list-collapsed > .ink-session-panel, .ink-session-panel[hidden] { display: none; }
 #ink-list-toggle[aria-expanded="true"] { border-color: #3d8f7a; }
 #desktop-ink-pan[aria-pressed="true"] { background: #2c5f53; border-color: #3d8f7a; }
+
+/* Sandbox Map Scene Player (graph/scene-player.ts): Announce HUD + lock. */
+.scene-hud {
+  position: absolute;
+  top: 78px;
+  right: 16px;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "tag title step stop"
+    "tag summary summary stop";
+  gap: 2px 10px;
+  align-items: center;
+  max-width: min(460px, calc(100% - 32px));
+  padding: 8px 10px 8px 12px;
+  border: 1px solid #3d6b78;
+  border-radius: 8px;
+  background: rgb(10 22 30 / 92%);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 35%);
+  color: #d9eef3;
+  pointer-events: auto;
+  animation: scene-hud-in 180ms ease-out;
+}
+
+.scene-hud[hidden] {
+  display: none;
+}
+
+.scene-hud.is-error {
+  border-color: #a5524a;
+}
+
+.scene-hud-tag {
+  grid-area: tag;
+  padding: 1px 6px;
+  border: 1px solid #4fc3d9;
+  border-radius: 999px;
+  color: #4fc3d9;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.scene-hud-title {
+  grid-area: title;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-hud-summary {
+  grid-area: summary;
+  overflow: hidden;
+  color: #9fb8bf;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-hud-step {
+  grid-area: step;
+  color: #f2b84b;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.scene-hud-stop {
+  grid-area: stop;
+  padding: 3px 9px;
+  border: 1px solid #45606c;
+  border-radius: 6px;
+  background: transparent;
+  color: #cfe3e8;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.scene-hud-stop:hover {
+  border-color: #4fc3d9;
+}
+
+/* While a scene plays the map takes no pointer input (sidebar stays live). */
+.graph-canvas.is-scene-playing {
+  pointer-events: none;
+  cursor: progress;
+}
+
+@keyframes scene-hud-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}

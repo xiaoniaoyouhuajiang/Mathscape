@@ -67,6 +67,8 @@ export class GraphController {
   private focusRootId: string | null = null;
   private focusDepth: FocusDepth = "all";
   private pendingRelationSourceId: string | null = null;
+  /** Last applied focus-mode scope, so a map scene can put it back. */
+  private focusScope: ReadonlySet<string> | null = null;
 
   private visibleNodeKinds = new Set<string>(PRESET_NODE_KINDS.source);
   private activePreset: PresetName | "custom" = "source";
@@ -98,6 +100,11 @@ export class GraphController {
 
   setPendingRelationSourceId(id: string | null): void {
     this.pendingRelationSourceId = id;
+  }
+
+  /** Re-apply the focus-mode dim (after a sandbox map scene used it). */
+  reapplyFocusScope(): void {
+    if (this.graphCore) applyFocusScope(this.graphCore, this.focusScope);
   }
 
   resize(): void {
@@ -365,6 +372,7 @@ export class GraphController {
       syncCytoscapeGraph(this.graphCore, this.displayedGraph, this.renderMode);
     }
 
+    this.focusScope = focusScope;
     applyFocusScope(this.graphCore, focusScope);
     this.inkOverlayResult = applyInkOverlay(this.graphCore, this.inkOverlay, this.showInkNotes);
     this.renderInkToggle();
