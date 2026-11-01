@@ -1042,3 +1042,59 @@ button.sandbox-cite:focus-visible {
   color: #e6c98a;
   font-weight: 400;
 }
+
+/* Map Scene Player replay controls (process card). */
+.sandbox-process-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sandbox-process-head .sandbox-process-summary {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.sandbox-process-replay,
+.sandbox-step-replay {
+  flex: none;
+  border: 1px solid #3d6b78;
+  border-radius: 6px;
+  background: transparent;
+  color: #8fd3e2;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sandbox-process-replay {
+  padding: 2px 8px;
+}
+
+.sandbox-step-replay {
+  align-self: center;
+  margin-right: 6px;
+  padding: 1px 7px;
+}
+
+.sandbox-process-replay:hover:not(:disabled),
+.sandbox-step-replay:hover:not(:disabled) {
+  border-color: #4fc3d9;
+  color: #d9eef3;
+}
+
+.sandbox-process-replay:disabled,
+.sandbox-step-replay:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.sandbox-step.has-replay {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.sandbox-step.has-replay > .sandbox-step-detail {
+  grid-column: 1 / -1;
+}

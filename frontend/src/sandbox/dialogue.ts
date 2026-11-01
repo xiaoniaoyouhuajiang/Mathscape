@@ -17,8 +17,12 @@
  *
  * A-PR3: agent and user bubbles render Markdown + KaTeX (bubble.ts); ids in
  * bubbles and in process-card args/results become cite chips (cite.ts) that
- * select the node on the map through `setCiteContext().jump`; live
- * tool_call / tool_result events pulse the map through `echo`.
+ * select the node on the map through `setCiteContext().jump`.
+ *
+ * Map Scene Player (first slice): every live tool_call / tool_result compiles
+ * to a map scene (scene/compile.ts) played through `setCiteContext().scenes`;
+ * process cards replay one step (▶ per step) or the whole turn (回放全部),
+ * recompiled from the round's persisted events.
  *
  * Everything the agent reads or writes is the session's isolated copy; the
  * shell never touches the checkpoint. The reply is only shown once the round
@@ -46,12 +50,11 @@ import {
   buildRoundCiteIndex,
   citeResolver,
   citeTextHtml,
-  mapNodeIds,
-  toolCallIds,
-  toolResultIds,
   type CiteIndex,
   type CiteResolver,
 } from "./cite";
+import { compileRoundScenes, compileToolScene, resolveScene } from "./scene/compile";
+import type { SceneDraft, SceneResolve, ToolScene } from "./scene/types";
 import {
   clampSidebarWidth,
   effectiveDockMode,
@@ -117,8 +120,19 @@ export interface CiteContext {
   nodes: () => readonly IncidenceNode[];
   /** Select + reveal a projection node; the dock stays open. */
   jump: (nodeId: string) => void;
-  /** Transient read-path echo; `[]` clears the previous pulse. */
-  echo?: (kind: "seed" | "hit", nodeIds: string[]) => void;
+  /** Map Scene Player: live tool events and process-card replays. */
+  scenes?: {
+    live: (scene: ToolScene, part: "call" | "result") => void;
+    replay: (scenes: ToolScene[]) => void;
+  };
+}
+
+/** Cite resolver → scene resolver: unique map hits only (no wrong flash). */
+function sceneResolve(resolve: CiteResolver): SceneResolve {
+  return (id) => {
+    const hit = resolve(id);
+    return hit.status === "map" && hit.target ? { nodeId: hit.target.nodeId, label: hit.target.label } : null;
+  };
 }
 
 interface SizePref {
@@ -868,17 +882,24 @@ export class SandboxDialogueDock {
     if (nodeId) this.cite.jump(nodeId);
   }
 
-  /** Live tool events pulse the map: call → seeds, result → returned nodes. */
-  private echoEvent(event: AgentEventLike): void {
-    const echo = this.cite?.echo;
-    if (!echo || (event.type !== "tool_call" && event.type !== "tool_result")) return;
-    const index = this.citeIndex();
-    if (!index) return;
-    const round = buildRoundCiteIndex(this.events.filter((item) => item.round_id === event.round_id));
-    const ids = event.type === "tool_call" ? toolCallIds(event) : toolResultIds(event);
-    const nodes = mapNodeIds(ids, index, round);
-    // The next tool clears the previous pulse even when it names nothing.
-    if (nodes.length || event.type === "tool_call") echo(event.type === "tool_call" ? "seed" : "hit", nodes);
+  /** Live tool events play as map scenes: call → seeds, result → layers. */
+  private sceneEvent(event: AgentEventLike): void {
+    const scenes = this.cite?.scenes;
+    if (!scenes || (event.type !== "tool_call" && event.type !== "tool_result")) return;
+    const callId = event.payload?.call_id;
+    if (typeof callId !== "string") return;
+    const step = this.events.filter((item) => item.round_id === event.round_id && item.payload?.call_id === callId);
+    const call = step.find((item) => item.type === "tool_call");
+    const draft = compileToolScene(call, event.type === "tool_result" ? event : undefined);
+    const resolve = this.resolvers()(event.round_id);
+    if (!draft || !resolve) return;
+    scenes.live(resolveScene(draft, sceneResolve(resolve)), event.type === "tool_call" ? "call" : "result");
+  }
+
+  private replay(drafts: SceneDraft[], resolve: CiteResolver | undefined): void {
+    if (!this.cite?.scenes || !resolve || drafts.length === 0) return;
+    const map = sceneResolve(resolve);
+    this.cite.scenes.replay(drafts.map((draft) => resolveScene(draft, map)));
   }
 
   private apply(update: DialogueUpdate): void {
@@ -887,7 +908,7 @@ export class SandboxDialogueDock {
       case "agent_event":
         this.events.push(update.event);
         this.renderLog();
-        this.echoEvent(update.event);
+        this.sceneEvent(update.event);
         break;
       case "transcript":
         if (!this.transcript.some((entry) => sameEntry(entry, update.entry))) {
@@ -898,6 +919,8 @@ export class SandboxDialogueDock {
       case "round_finished":
         if (this.activeRoundId === update.round_id) this.activeRoundId = null;
         this.syncControls();
+        // Replay buttons unlock once the round is over.
+        this.renderLog(false);
         break;
     }
   }
@@ -1007,13 +1030,43 @@ export class SandboxDialogueDock {
       this.processOpen.set(key, !open);
       this.renderLog(false);
     };
-    section.append(toggle);
+    const drafts = this.cite?.scenes && process.roundId
+      ? compileRoundScenes(this.events.filter((event) => event.round_id === process.roundId))
+      : [];
+    if (drafts.length > 0) {
+      const head = el("div", "sandbox-process-head");
+      const all = el("button", "sandbox-process-replay", "▶ 回放全部");
+      all.type = "button";
+      all.title = `在地图上连续回放本轮 ${drafts.length} 步`;
+      all.disabled = process.running || this.activeRoundId !== null;
+      all.onclick = () => this.replay(drafts, resolve);
+      head.append(toggle, all);
+      section.append(head);
+    } else {
+      section.append(toggle);
+    }
     if (!open) return section;
     if (process.steps.length === 0) {
       section.append(el("p", "sandbox-process-live", process.running ? "正在处理…" : "这一轮没有工具步骤"));
     } else {
       const list = el("ol", "sandbox-steps");
-      for (const step of process.steps) list.append(this.renderStep(key, step, resolve));
+      const byCall = new Map(drafts.map((draft) => [draft.callId, draft] as const));
+      const locked = process.running || this.activeRoundId !== null;
+      for (const step of process.steps) {
+        const item = this.renderStep(key, step, resolve);
+        const draft = byCall.get(step.id);
+        if (draft) {
+          const replay = el("button", "sandbox-step-replay", "▶");
+          replay.type = "button";
+          replay.title = "在地图上回放这一步";
+          replay.setAttribute("aria-label", `回放 ${step.title}`);
+          replay.disabled = locked;
+          replay.onclick = () => this.replay([draft], resolve);
+          item.classList.add("has-replay");
+          item.firstElementChild?.after(replay);
+        }
+        list.append(item);
+      }
       section.append(list);
     }
     if (process.usage) section.append(this.renderUsage(process.usage));
