@@ -6,6 +6,7 @@ import { errorMessage } from "./core/ipc";
 import { DiscoveryLedgerController } from "./discovery/discovery-ledger";
 import { mountDiscoveryTask } from "./discovery-task";
 import { GraphController } from "./graph/graph-controller";
+import { SandboxEcho } from "./graph/sandbox-echo";
 import { InspectorController } from "./inspector/inspector-controller";
 import { LlmSettingsController } from "./llm/settings";
 import { mountSandboxChrome } from "./sandbox/chrome";
@@ -456,6 +457,7 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
   graphController.renderCurrentGraph(snapshot);
   inspectorController.refreshIfUnlocked();
   loadInkOverlay();
+  sandboxDock.refreshCites();
 }
 
 // N2: map count markers and "我的手稿" come from a separate overlay query that
@@ -582,19 +584,50 @@ eventBus.on("open-source", (detail) => {
 let searchNavigation = 0;
 const nextFrame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 
-/** Select + center a map node by domain id. Leaves 手稿 first if needed. */
-async function locateOnMap(domainId: string, current: () => boolean): Promise<boolean> {
+/** Leave 手稿 / the reader so the map is showing. */
+async function showMap(current: () => boolean): Promise<boolean> {
   const fromInk = inkOpen;
   if (inkOpen && !await inkWorkspace.close()) return false;
   if (reader.hasContent() || reader.isLoading() || !el.readerHost.hidden) { reader.close(); el.readerHost.hidden = true; }
   if (fromInk) { await nextFrame(); await nextFrame(); }
-  if (!current()) return false;
+  return current();
+}
+
+/** Select + center a projection node; the inspector shows it either way. */
+function selectMapNode(nodeId: string): void {
+  inspectorController.selectNodeById(nodeId);
+  if (graphController.revealNode(nodeId) === "hidden") shell.showToast("该节点被当前筛选隐藏，详情已显示在右侧检查器。", "success");
+}
+
+/** Select + center a map node by domain id. Leaves 手稿 first if needed. */
+async function locateOnMap(domainId: string, current: () => boolean): Promise<boolean> {
+  if (!await showMap(current)) return false;
   const node = currentSnapshot?.landscape_graph.nodes.find(item => item.domain_id === domainId && item.element_kind === "entity");
   if (!node) { shell.showToast("该结果不在当前地图中，请刷新后重试。", "error"); return false; }
-  inspectorController.selectNodeById(node.id);
-  if (graphController.revealNode(node.id) === "hidden") shell.showToast("该节点被当前筛选隐藏，详情已显示在右侧检查器。", "success");
+  selectMapNode(node.id);
   return true;
 }
+
+// A-PR3: sandbox dialogue cite chips jump to the map and live tool events
+// echo on it. The dock stays open (sidebar beside the map).
+const sandboxEcho = new SandboxEcho(() => graphController.getGraphCore());
+const noNodes: never[] = [];
+sandboxDock.setCiteContext({
+  nodes: () => currentSnapshot?.landscape_graph.nodes ?? noNodes,
+  jump: (nodeId) => {
+    const token = ++searchNavigation;
+    void (async () => {
+      if (!await showMap(() => token === searchNavigation)) return;
+      if (!currentSnapshot?.landscape_graph.nodes.some(node => node.id === nodeId)) {
+        shell.showToast("该对象不在当前地图中，请刷新后重试。", "error");
+        return;
+      }
+      selectMapNode(nodeId);
+      sandboxEcho.pulse("hit", [nodeId]);
+    })();
+  },
+  echo: (kind, nodeIds) => { if (!inkOpen) sandboxEcho.pulse(kind, nodeIds); },
+});
 
 /** Open a source result in the map-page reader (non-split). Resolves
  * source objects to their material + focus first (as in PR #7). */

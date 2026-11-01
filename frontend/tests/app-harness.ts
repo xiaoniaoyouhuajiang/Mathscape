@@ -19,7 +19,15 @@ const snapshot = {
   ] },
 };
 const unexpected: string[] = [];
-extraCommands.set("get_desktop_snapshot", () => structuredClone(snapshot));
+// A-PR3: inside the sandbox the map also holds one unit with a canonical
+// stable id, so cite chips and the read-path echo have something to hit.
+const citeUnitId = "mathscape:source-unit/" + "ab12".repeat(16);
+const citeNode = { id: "r-cite-unit", element_kind: "entity", domain_id: citeUnitId, domain_kind: "SourceSemanticUnit", relation_kind: null, layer: "source", label: "引理 1.4", summary: null, lifecycle: "active", parent: null, boundary: false };
+extraCommands.set("get_desktop_snapshot", () => {
+  const value = structuredClone(snapshot);
+  if (sessionStorage.getItem("harness.sandbox") === "1") value.landscape_graph.nodes.push(structuredClone(citeNode));
+  return value;
+});
 for (const command of ["list_discovery_runs", "list_parse_jobs", "list_review_items"]) extraCommands.set(command, () => []);
 extraCommands.set("get_llm_settings_summary", () => ({ configured: false }));
 const mdBytes = new TextEncoder().encode(mdSource);
@@ -192,7 +200,9 @@ extraCommands.set("sandbox_set_effort", (args) => {
   sandboxCalls.push({ command: "set_effort", args });
   return agentStatus();
 });
-const sandboxRound: { delayMs: number; gapMs: number } = { delayMs: 30, gapMs: 0 };
+/** `cite`: the round reads the canonical unit with graph.get and answers
+ * with its id plus LaTeX (A-PR3 chips / echo / KaTeX). */
+const sandboxRound: { delayMs: number; gapMs: number; cite: boolean } = { delayMs: 30, gapMs: 0, cite: false };
 extraCommands.set("sandbox_session_dialogue", (args) => ({ sandboxSessionId: String(args.sandboxSessionId), transcript: structuredClone(transcript), events: structuredClone(sandboxEvents), activeRoundId: null }));
 extraCommands.set("sandbox_send_message", (args) => {
   sandboxCalls.push({ command: "send", args });
@@ -214,13 +224,27 @@ extraCommands.set("sandbox_send_message", (args) => {
     event(0, "turn_start", { input_ref: "x" });
     event(1, "tool_call", { call_id: "mcp-startup", tool: "mcp.startup", server: "codex", args_summary: "mathscape", raw: mcp });
     event(2, "tool_result", { call_id: "mcp-startup", status: "ok", duration_ms: 40, raw: mcp });
-    event(3, "tool_call", { call_id: "c1", tool: "workspace.search", server: "mathscape", args_summary: "query=紧集" });
+    if (sandboxRound.cite) {
+      const raw = { type: "mcpToolCall", id: "c1", server: "mathscape", tool: "graph.get", arguments: { node_id: citeUnitId } };
+      event(3, "tool_call", { call_id: "c1", tool: "graph.get", server: "mathscape", args_summary: `node_id=${citeUnitId}`, raw });
+    } else {
+      event(3, "tool_call", { call_id: "c1", tool: "workspace.search", server: "mathscape", args_summary: "query=紧集" });
+    }
   }, sandboxRound.delayMs);
   setTimeout(() => {
-    event(4, "tool_result", { call_id: "c1", status: "ok", duration_ms: 12 });
+    if (sandboxRound.cite) {
+      const result = { structuredContent: { status: "ok", node: { id: citeUnitId, kind: "source_unit", label: "引理 1.4", content_ref: null } }, isError: false };
+      const raw = { type: "mcpToolCall", id: "c1", server: "mathscape", tool: "graph.get", arguments: { node_id: citeUnitId }, status: "completed", result };
+      event(4, "tool_result", { call_id: "c1", status: "ok", duration_ms: 12, raw });
+    } else {
+      event(4, "tool_result", { call_id: "c1", status: "ok", duration_ms: 12 });
+    }
     event(5, "usage", { input_tokens: 120, output_tokens: 30 });
     event(6, "turn_end", { outcome: "completed" });
-    const reply = { ts: new Date().toISOString(), role: "agent", text: "找到 1 条：定理 3.2。", round_id: "r1", outcome: "completed" };
+    const text = sandboxRound.cite
+      ? `依据 ${citeUnitId}，有 $\\sum_{n=1}^{\\infty} a_n < \\infty$。未知对象 ${"f".repeat(64)}。`
+      : "找到 1 条：定理 3.2。";
+    const reply = { ts: new Date().toISOString(), role: "agent", text, round_id: "r1", outcome: "completed" };
     transcript.push(reply);
     emitDialogue({ kind: "transcript", sandbox_session_id: id, entry: reply });
     emitDialogue({ kind: "round_finished", sandbox_session_id: id, round_id: "r1" });
@@ -250,6 +274,8 @@ const appHarness = {
   labels: () => Object.fromEntries(core().nodes().map(node => [node.id(), String(node.data("label"))])),
   inkNodes: () => core().nodes(".ink-note-node").map(node => `${node.id()}=${String(node.data("label"))}`),
   selectNode: (id: string) => { core().getElementById(id).emit("tap"); },
+  nodeClasses: (id: string) => { const node = core().getElementById(id); return node.empty() ? null : node.classes(); },
+  citeUnitId,
   panTo: (x: number, y: number) => { core().pan({ x, y }); },
 };
 declare global { interface Window { appHarness: typeof appHarness } }

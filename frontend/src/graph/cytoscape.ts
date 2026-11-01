@@ -532,6 +532,26 @@ const styles: StylesheetJson = [
     selector: "edge.ink-note-edge.is-primary",
     style: { width: 2 },
   },
+  // A-PR3 sandbox echo (graph/sandbox-echo.ts): transient, never persisted.
+  // Seeds = what a tool call asked about, hits = what its result returned;
+  // `-fade` is the second half of the 2–3s pulse.
+  {
+    selector: "node.sandbox-echo-seed, node.sandbox-echo-hit",
+    style: {
+      "overlay-opacity": 0.28,
+      "overlay-padding": 7,
+      "transition-property": "overlay-opacity",
+      "transition-duration": 280,
+    },
+  },
+  { selector: "node.sandbox-echo-seed", style: { "overlay-color": "#f2b84b" } },
+  { selector: "node.sandbox-echo-hit", style: { "overlay-color": "#4fc3d9" } },
+  { selector: "node.sandbox-echo-fade", style: { "overlay-opacity": 0.1 } },
+  {
+    selector: "edge.sandbox-echo-edge",
+    style: { "overlay-color": "#4fc3d9", "overlay-opacity": 0.22, "overlay-padding": 3 },
+  },
+  { selector: "edge.sandbox-echo-edge.sandbox-echo-fade", style: { "overlay-opacity": 0.08 } },
 ];
 
 export const OUT_OF_FOCUS_CLASS = "is-out-of-focus";
