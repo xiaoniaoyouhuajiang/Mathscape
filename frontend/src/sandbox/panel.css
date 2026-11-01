@@ -722,6 +722,147 @@
   overflow-wrap: anywhere;
 }
 
+/* A-PR3: Markdown + KaTeX bubbles. Undo the reader's light page styles. */
+.sandbox-line-text.markdown-body {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  line-height: 1.55;
+  white-space: normal;
+}
+
+.sandbox-line-text.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.sandbox-line-text.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.sandbox-line-text.markdown-body p,
+.sandbox-line-text.markdown-body ul,
+.sandbox-line-text.markdown-body ol,
+.sandbox-line-text.markdown-body blockquote,
+.sandbox-line-text.markdown-body pre {
+  margin: 0 0 6px;
+}
+
+.sandbox-line-text.markdown-body ul,
+.sandbox-line-text.markdown-body ol {
+  padding-left: 20px;
+}
+
+.sandbox-line-text.markdown-body h1,
+.sandbox-line-text.markdown-body h2,
+.sandbox-line-text.markdown-body h3,
+.sandbox-line-text.markdown-body h4 {
+  margin: 8px 0 4px;
+  font-size: 14px;
+}
+
+.sandbox-line-text.markdown-body code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: #1b2731;
+  font-size: 12px;
+}
+
+.sandbox-line-text.markdown-body pre {
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #1b2731;
+  font-size: 12px;
+}
+
+.sandbox-line-text.markdown-body pre code {
+  padding: 0;
+  background: none;
+}
+
+.sandbox-line-text.markdown-body blockquote {
+  padding-left: 8px;
+  border-left: 2px solid #3a4954;
+  color: #a9b6bd;
+}
+
+.sandbox-line-text.markdown-body th,
+.sandbox-line-text.markdown-body td {
+  border-color: #3a4954;
+  padding: 3px 6px;
+}
+
+.sandbox-line-text .katex {
+  font-size: 1.05em;
+}
+
+.sandbox-link {
+  text-decoration: underline dotted;
+  cursor: help;
+}
+
+/* A-PR3 cite chips: jump (map), ambiguous, label-only, unknown. */
+.sandbox-cite {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  margin: 0 1px;
+  padding: 0 6px;
+  border: 1px solid #3a5866;
+  border-radius: 9px;
+  background: #16303b;
+  color: #bfe3ee;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  vertical-align: baseline;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+button.sandbox-cite {
+  cursor: pointer;
+}
+
+button.sandbox-cite:hover,
+button.sandbox-cite:focus-visible {
+  border-color: #4fc3d9;
+  background: #1c3d4a;
+  outline: none;
+}
+
+.sandbox-cite.is-ambiguous {
+  border-color: #7a6532;
+}
+
+.sandbox-cite-flag {
+  padding: 0 3px;
+  border-radius: 6px;
+  background: #4a3d1c;
+  color: #f2d48b;
+  font-size: 10px;
+}
+
+.sandbox-cite.is-label {
+  border-style: dashed;
+  background: #1a252d;
+  color: #b7c2c9;
+}
+
+.sandbox-cite.is-unknown {
+  border-color: #33414b;
+  background: #182128;
+  color: #7f8e99;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.sandbox-step-pre .sandbox-cite {
+  font-size: 11px;
+  line-height: 15px;
+}
+
 .sandbox-turn-status {
   display: flex;
   align-items: center;

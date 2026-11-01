@@ -248,5 +248,54 @@ test.describe("S1 sandbox shell", () => {
     await expect(modelSelect).toBeEnabled();
     await page.evaluate(() => { window.appHarness.sandboxRound.delayMs = 30; });
   });
+  test("A-PR3: cite chips jump to the map, the read path echoes, and bubbles render LaTeX", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    await expect(dock).toHaveClass(/is-sidebar/);
+    const unitId = await page.evaluate(() => window.appHarness.citeUnitId);
+    await page.evaluate(() => { Object.assign(window.appHarness.sandboxRound, { cite: true, delayMs: 30, gapMs: 1200 }); });
+
+    await dock.locator("textarea").fill(`看看 ${unitId} 和 $x^2$`);
+    await dock.getByRole("button", { name: "发送" }).click();
+
+    // tool_call: the seed lights up on the map while the call runs.
+    await expect.poll(() => page.evaluate(() => window.appHarness.nodeClasses("r-cite-unit"))).toContain("sandbox-echo-seed");
+    // tool_result: the returned node is flashed as a hit (the seed pulse is replaced).
+    await expect.poll(() => page.evaluate(() => window.appHarness.nodeClasses("r-cite-unit"))).toContain("sandbox-echo-hit");
+
+    const user = dock.locator(".sandbox-line.role-user").last();
+    await expect(user.locator(".sandbox-line-text.markdown-body .katex")).toHaveCount(1);
+    await expect(user.locator("button.sandbox-cite.is-map")).toHaveText("引理 1.4");
+
+    const agent = dock.locator(".sandbox-line.role-agent").last();
+    const body = agent.locator(".sandbox-line-text.markdown-body");
+    await expect(body.locator(".katex")).toHaveCount(1);
+    const chip = body.locator("button.sandbox-cite.is-map");
+    await expect(chip).toHaveText("引理 1.4");
+    await expect(chip).toHaveAttribute("data-cite-id", unitId);
+    await expect(chip).toHaveAttribute("title", /source-unit\/ab12ab12…/);
+    const unknown = body.locator(".sandbox-cite.is-unknown");
+    await expect(unknown).toHaveCount(1);
+    await expect(unknown).toHaveAttribute("title", /未在地图或本轮工具结果中找到/);
+    await expect(body.locator("button.sandbox-cite.is-unknown")).toHaveCount(0);
+
+    // Process card args are chip-ified too, with the full id kept on the chip.
+    await agent.locator(".sandbox-process-summary").click();
+    await agent.locator(".sandbox-step-head").nth(1).click();
+    await expect(agent.locator(".sandbox-step-pre").first().locator("button.sandbox-cite")).toHaveText("引理 1.4");
+
+    // Clicking the chip selects the node and keeps the sidebar dialogue open.
+    await expect.poll(() => page.evaluate(() => window.appHarness.nodeView("r-cite-unit")?.selected)).toBe(false);
+    await chip.click();
+    await expect.poll(() => page.evaluate(() => window.appHarness.nodeView("r-cite-unit")?.selected)).toBe(true);
+    await expect(dock).toBeVisible();
+    await expect(dock).toHaveClass(/is-sidebar/);
+    await expect(page.locator(".shell")).toHaveClass(/has-sandbox-sidebar/);
+
+    await page.evaluate(() => { Object.assign(window.appHarness.sandboxRound, { cite: false, gapMs: 0 }); });
+  });
 });
 

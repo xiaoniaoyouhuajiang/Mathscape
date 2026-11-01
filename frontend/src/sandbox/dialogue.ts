@@ -15,6 +15,11 @@
  * model's catalog entry) let the user pick before the next round. Both are
  * disabled while a round runs.
  *
+ * A-PR3: agent and user bubbles render Markdown + KaTeX (bubble.ts); ids in
+ * bubbles and in process-card args/results become cite chips (cite.ts) that
+ * select the node on the map through `setCiteContext().jump`; live
+ * tool_call / tool_result events pulse the map through `echo`.
+ *
  * Everything the agent reads or writes is the session's isolated copy; the
  * shell never touches the checkpoint. The reply is only shown once the round
  * has an event stream — no fake "connected" state.
@@ -34,6 +39,19 @@ import {
   type AgentStatusLike,
   type TranscriptRole,
 } from "./format";
+import type { IncidenceNode } from "../graph/projection";
+import { renderBubbleHtml } from "./bubble";
+import {
+  buildCiteIndex,
+  buildRoundCiteIndex,
+  citeResolver,
+  citeTextHtml,
+  mapNodeIds,
+  toolCallIds,
+  toolResultIds,
+  type CiteIndex,
+  type CiteResolver,
+} from "./cite";
 import {
   clampSidebarWidth,
   effectiveDockMode,
@@ -92,6 +110,16 @@ type DialogueUpdate =
   | { kind: "round_finished"; sandbox_session_id: string; round_id: string };
 
 type Toast = (message: string, kind: "success" | "error") => void;
+
+/** How the dock reaches the map without importing main (A-PR3). */
+export interface CiteContext {
+  /** Landscape projection nodes currently on the map. */
+  nodes: () => readonly IncidenceNode[];
+  /** Select + reveal a projection node; the dock stays open. */
+  jump: (nodeId: string) => void;
+  /** Transient read-path echo; `[]` clears the previous pulse. */
+  echo?: (kind: "seed" | "hit", nodeIds: string[]) => void;
+}
 
 interface SizePref {
   width: number;
@@ -226,6 +254,8 @@ export class SandboxDialogueDock {
   private sidebarWidth = parseSidebarWidth(readPref(DIALOGUE_SIDEBAR_WIDTH_KEY), window.innerWidth);
   /** Last sidebar footprint pushed to the shell; avoids resize feedback loops. */
   private layoutKey = "none";
+  private cite: CiteContext | null = null;
+  private citeIndexCache: { nodes: readonly IncidenceNode[]; index: CiteIndex } | null = null;
 
   constructor(
     host: HTMLElement,
@@ -289,6 +319,7 @@ export class SandboxDialogueDock {
     const body = el("div", "sandbox-dock-body");
     this.log = el("ol", "sandbox-dock-log");
     this.log.setAttribute("aria-live", "polite");
+    this.log.addEventListener("click", (event) => this.onLogClick(event));
 
     const composer = el("form", "sandbox-dock-composer");
     this.input = el("textarea", "sandbox-input sandbox-dock-input");
@@ -791,12 +822,72 @@ export class SandboxDialogueDock {
     }
   }
 
+  /** Wire cite chips and echo to the map (main.ts, after the graph exists). */
+  setCiteContext(context: CiteContext): void {
+    this.cite = context;
+    this.refreshCites();
+  }
+
+  /** The landscape changed: re-resolve chips against the new map. */
+  refreshCites(): void {
+    this.citeIndexCache = null;
+    if (!this.root.hidden && this.sessionId) this.renderLog(false);
+  }
+
+  private citeIndex(): CiteIndex | null {
+    if (!this.cite) return null;
+    const nodes = this.cite.nodes();
+    if (this.citeIndexCache?.nodes !== nodes) this.citeIndexCache = { nodes, index: buildCiteIndex(nodes) };
+    return this.citeIndexCache.index;
+  }
+
+  /** Resolver per round: the map plus that round's tool ids and labels. */
+  private resolvers(): (roundId: string | undefined) => CiteResolver | undefined {
+    const index = this.citeIndex();
+    const cache = new Map<string, CiteResolver>();
+    return (roundId) => {
+      if (!index) return undefined;
+      const key = roundId ?? "";
+      let resolver = cache.get(key);
+      if (!resolver) {
+        const round = roundId ? buildRoundCiteIndex(this.events.filter((event) => event.round_id === roundId)) : undefined;
+        resolver = citeResolver(index, round);
+        cache.set(key, resolver);
+      }
+      return resolver;
+    };
+  }
+
+  private onLogClick(event: MouseEvent): void {
+    const target = event.target instanceof Element ? event.target : null;
+    const chip = target?.closest<HTMLElement>("[data-cite-node]");
+    if (!chip || !this.cite) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const nodeId = chip.dataset.citeNode;
+    if (nodeId) this.cite.jump(nodeId);
+  }
+
+  /** Live tool events pulse the map: call → seeds, result → returned nodes. */
+  private echoEvent(event: AgentEventLike): void {
+    const echo = this.cite?.echo;
+    if (!echo || (event.type !== "tool_call" && event.type !== "tool_result")) return;
+    const index = this.citeIndex();
+    if (!index) return;
+    const round = buildRoundCiteIndex(this.events.filter((item) => item.round_id === event.round_id));
+    const ids = event.type === "tool_call" ? toolCallIds(event) : toolResultIds(event);
+    const nodes = mapNodeIds(ids, index, round);
+    // The next tool clears the previous pulse even when it names nothing.
+    if (nodes.length || event.type === "tool_call") echo(event.type === "tool_call" ? "seed" : "hit", nodes);
+  }
+
   private apply(update: DialogueUpdate): void {
     if (update.sandbox_session_id !== this.sessionId) return;
     switch (update.kind) {
       case "agent_event":
         this.events.push(update.event);
         this.renderLog();
+        this.echoEvent(update.event);
         break;
       case "transcript":
         if (!this.transcript.some((entry) => sameEntry(entry, update.entry))) {
@@ -868,19 +959,20 @@ export class SandboxDialogueDock {
       );
       return;
     }
+    const resolverFor = this.resolvers();
     this.log.replaceChildren(
       ...rows.map((row) => {
-        if (row.kind === "live") return this.renderTurn("agent", null, row.process, "正在生成回复…");
+        if (row.kind === "live") {
+          return this.renderTurn("agent", null, row.process, resolverFor(row.process.roundId), "正在生成回复…");
+        }
         const entry = row.entry;
+        const resolve = resolverFor(row.process?.roundId ?? entry.round_id);
         if (!row.process) {
           const item = el("li", `sandbox-line role-${entry.role}`);
-          item.append(
-            el("span", "sandbox-line-role", ROLE_LABEL[entry.role] ?? entry.role),
-            el("div", "sandbox-line-text", entry.text),
-          );
+          item.append(el("span", "sandbox-line-role", ROLE_LABEL[entry.role] ?? entry.role), messageBody(entry.role, entry.text, resolve));
           return item;
         }
-        return this.renderTurn(entry.role, entry.text, row.process);
+        return this.renderTurn(entry.role, entry.text, row.process, resolve);
       }),
     );
     if (stick && nearBottom) this.log.scrollTop = this.log.scrollHeight;
@@ -890,6 +982,7 @@ export class SandboxDialogueDock {
     role: TranscriptRole,
     text: string | null,
     process: TurnView,
+    resolve: CiteResolver | undefined,
     pending?: string,
   ): HTMLLIElement {
     const item = el("li", `sandbox-line role-${role}${pending ? " is-live" : ""}`);
@@ -897,13 +990,13 @@ export class SandboxDialogueDock {
     const status = el("div", `sandbox-turn-status tone-${process.headerTone}`, process.header);
     if (process.running) status.classList.add("is-running");
     item.append(status);
-    item.append(this.renderProcess(process));
-    if (text !== null) item.append(el("div", "sandbox-line-text", text));
+    item.append(this.renderProcess(process, resolve));
+    if (text !== null) item.append(messageBody(role, text, resolve));
     else if (pending) item.append(el("div", "sandbox-line-pending", pending));
     return item;
   }
 
-  private renderProcess(process: TurnView): HTMLElement {
+  private renderProcess(process: TurnView, resolve: CiteResolver | undefined): HTMLElement {
     const key = process.roundId ?? "live";
     const open = this.processOpen.has(key) ? this.processOpen.get(key)! : process.expandedByDefault;
     const section = el("section", "sandbox-process");
@@ -920,7 +1013,7 @@ export class SandboxDialogueDock {
       section.append(el("p", "sandbox-process-live", process.running ? "正在处理…" : "这一轮没有工具步骤"));
     } else {
       const list = el("ol", "sandbox-steps");
-      for (const step of process.steps) list.append(this.renderStep(key, step));
+      for (const step of process.steps) list.append(this.renderStep(key, step, resolve));
       section.append(list);
     }
     if (process.usage) section.append(this.renderUsage(process.usage));
@@ -938,7 +1031,7 @@ export class SandboxDialogueDock {
     return line;
   }
 
-  private renderStep(roundKey: string, step: ToolStep): HTMLLIElement {
+  private renderStep(roundKey: string, step: ToolStep, resolve: CiteResolver | undefined): HTMLLIElement {
     const openKey = `${roundKey}:${step.id}`;
     const open = this.stepOpen.has(openKey);
     const item = el("li", `sandbox-step is-${step.status}`);
@@ -956,15 +1049,18 @@ export class SandboxDialogueDock {
       this.renderLog(false);
     };
     item.append(head);
-    if (open) item.append(this.renderStepDetail(step));
+    if (open) item.append(this.renderStepDetail(step, resolve));
     return item;
   }
 
-  private renderStepDetail(step: ToolStep): HTMLElement {
+  private renderStepDetail(step: ToolStep, resolve: CiteResolver | undefined): HTMLElement {
     const detail = el("div", "sandbox-step-detail");
     const block = (label: string, value: string | undefined) => {
       if (!value) return;
-      detail.append(el("div", "sandbox-step-label", label), el("pre", "sandbox-step-pre", value));
+      const pre = el("pre", "sandbox-step-pre");
+      // citeTextHtml escapes every non-chip piece.
+      pre.innerHTML = citeTextHtml(value, resolve);
+      detail.append(el("div", "sandbox-step-label", label), pre);
     };
     block("参数", step.rawInput);
     block("结果", step.rawOutput);
@@ -986,6 +1082,15 @@ export class SandboxDialogueDock {
       this.effortSelect.disabled = running || this.sending || this.effortSelect.options.length < 2;
     }
   }
+}
+
+/** User/agent text as Markdown + KaTeX with cite chips; system lines and
+ * process summaries stay plain text. */
+function messageBody(role: TranscriptRole, text: string, resolve: CiteResolver | undefined): HTMLElement {
+  if (role === "system") return el("div", "sandbox-line-text", text);
+  const body = el("div", "sandbox-line-text markdown-body");
+  body.innerHTML = renderBubbleHtml(text, resolve);
+  return body;
 }
 
 /** Form controls that must not start a dock drag. */

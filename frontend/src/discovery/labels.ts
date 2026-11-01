@@ -1,3 +1,4 @@
+import { shortStableId } from "../core/stable-id";
 import type { ReviewStatus, WorkflowStatus } from "./types";
 
 const lookup = (table: Record<string, string>) => (value: string): string => table[value] ?? value;
@@ -35,5 +36,5 @@ export const discoveryStageLabel: (stage: string) => string = lookup({
 });
 
 export function shortRunId(runId: string): string {
-  return runId.length > 34 ? `${runId.slice(0, 17)}…${runId.slice(-12)}` : runId;
+  return shortStableId(runId);
 }
