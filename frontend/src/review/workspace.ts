@@ -10,6 +10,7 @@ import {
 import { ReviewGraph } from "./review-graph";
 import type { DiscoveryAcceptanceOutcome, DiscoveryOutcome, DiscoveryRun, ReviewRunMeta, SourceReviewProjection } from "./types";
 import { eventBus } from "../core/events";
+import { shortStableId } from "../core/stable-id";
 import "./review.css";
 import { openSourceRegistrationReview } from "../discovery/registration-workspace";
 
@@ -62,7 +63,7 @@ function button(text: string, onclick: () => void, className = ""): HTMLButtonEl
 }
 
 function shortId(value: string): string {
-  return value.length > 30 ? `${value.slice(0, 14)}…${value.slice(-10)}` : value;
+  return shortStableId(value, { max: 30, head: 14, tail: 10 });
 }
 
 function buildModel(outcome: DiscoveryOutcome): Model {
