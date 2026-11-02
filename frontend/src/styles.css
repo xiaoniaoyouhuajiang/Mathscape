@@ -1266,6 +1266,7 @@ code {
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   grid-template-areas:
     "tag title step stop"
+    "tag type type stop"
     "tag summary summary stop";
   gap: 2px 10px;
   align-items: center;
@@ -1342,6 +1343,140 @@ code {
 .graph-canvas.is-scene-playing {
   pointer-events: none;
   cursor: progress;
+}
+
+/* Act (second slice): search typewriter line in the HUD. */
+.scene-hud-type {
+  grid-area: type;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 2px 8px;
+  border: 1px solid #2f5866;
+  border-radius: 999px;
+  background: rgb(4 12 18 / 80%);
+  color: #f2f7f8;
+  font-size: 13px;
+}
+
+.scene-hud-type[hidden] {
+  display: none;
+}
+
+.scene-hud-type-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.scene-hud-caret {
+  flex: none;
+  width: 1px;
+  height: 14px;
+  margin-left: 2px;
+  background: #4fc3d9;
+  animation: scene-caret 900ms steps(1) infinite;
+}
+
+.scene-hud-type.is-typing .scene-hud-caret {
+  animation: none;
+}
+
+@keyframes scene-caret {
+  50% { opacity: 0; }
+}
+
+/* Act mini-windows: 目录 (pdf.outline) and 页图 (ink.page_image). */
+.scene-act {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(280px, calc(100% - 16px));
+  max-height: min(380px, calc(100% - 16px));
+  padding: 8px 10px;
+  border: 1px solid #3d6b78;
+  border-radius: 8px;
+  background: rgb(10 22 30 / 94%);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 40%);
+  color: #d9eef3;
+  font-size: 12px;
+  pointer-events: auto;
+  animation: scene-hud-in 180ms ease-out;
+}
+
+.scene-act.is-stage {
+  left: 16px;
+  bottom: 16px;
+}
+
+.scene-act-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.scene-act-title {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-act-meta {
+  flex: none;
+  color: #f2b84b;
+  font-size: 11px;
+}
+
+.scene-act-outline {
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.scene-act-row {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.scene-act-row[data-level="1"] {
+  color: #f2f7f8;
+  font-weight: 600;
+}
+
+.scene-act-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-act-row-page {
+  flex: none;
+  color: #8fb0b8;
+  font-variant-numeric: tabular-nums;
+}
+
+.scene-act-empty,
+.scene-act-foot {
+  margin: 0;
+  color: #9fb8bf;
+}
+
+.scene-act-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: #fdfdf8;
 }
 
 @keyframes scene-hud-in {
