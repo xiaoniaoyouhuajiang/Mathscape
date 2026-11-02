@@ -359,5 +359,100 @@ test.describe("S1 sandbox shell", () => {
 
     await page.evaluate(() => { Object.assign(window.appHarness.sandboxRound, { cite: false, gapMs: 0 }); });
   });
+  /** Enter the sandbox, open the sidebar dock, set the harness round. */
+  async function sandboxDock(page: import("@playwright/test").Page, round: Record<string, unknown>) {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    await expect(dock).toHaveClass(/is-sidebar/);
+    await page.evaluate((value) => { Object.assign(window.appHarness.sandboxRound, value); }, round);
+    return dock;
+  }
+
+  test("Scene Act: workspace.search types the query in the HUD, then hits land", async ({ page }) => {
+    const dock = await sandboxDock(page, { act: "search", delayMs: 30, gapMs: 2500 });
+    await dock.locator("textarea").fill("搜一下紧集");
+    await dock.getByRole("button", { name: "发送" }).click();
+    const hud = page.locator(".canvas-panel .scene-hud");
+    const typed = hud.locator(".scene-hud-type");
+    await expect(typed).toBeVisible();
+    await expect(hud.locator(".scene-hud-title")).toHaveText("搜索 · 紧集 开覆盖");
+    // Mid-typing the line holds a prefix of the query; then the whole query.
+    await expect(typed).toHaveClass(/is-typing/);
+    const partial = await typed.locator(".scene-hud-type-text").textContent();
+    expect("紧集 开覆盖".startsWith(partial ?? "x")).toBe(true);
+    await expect(typed.locator(".scene-hud-type-text")).toHaveText("紧集 开覆盖");
+    await expect(typed).not.toHaveClass(/is-typing/);
+    // Nothing is lit before the result; then the hits light on the map.
+    expect(await page.evaluate(() => window.appHarness.nodeClasses("r-cite-unit"))).not.toContain("sandbox-echo-hit");
+    await expect.poll(() => page.evaluate(() => window.appHarness.nodeClasses("r-cite-unit")), { timeout: 6000 }).toContain("sandbox-echo-hit");
+    await expect(typed.locator(".scene-hud-type-text")).toHaveText("紧集 开覆盖");
+    await expect(hud).toBeHidden({ timeout: 8000 });
+    await expect(typed).toBeHidden();
+  });
+
+  test("Scene Act: pdf.outline opens a 目录 window beside the PDF; settle closes it; replay reopens it", async ({ page }) => {
+    const dock = await sandboxDock(page, { act: "outline", delayMs: 30, gapMs: 400 });
+    await dock.locator("textarea").fill("看看目录");
+    await dock.getByRole("button", { name: "发送" }).click();
+    const hud = page.locator(".canvas-panel .scene-hud");
+    await expect(hud.locator(".scene-hud-title")).toHaveText("PDF 目录 · notes.pdf");
+    const win = page.locator(".canvas-panel .scene-act[data-act='outline']");
+    await expect(win).toBeVisible();
+    await expect(win).toHaveClass(/is-anchored/);
+    await expect(win).toHaveAttribute("data-anchor", "r-pdf-notes");
+    await expect(win.locator(".scene-act-row")).toHaveCount(2);
+    await expect(win.locator(".scene-act-row").nth(0)).toContainText("第一章 拓扑空间");
+    await expect(win.locator(".scene-act-row").nth(0)).toContainText("第 1 页");
+    await expect(win.locator(".scene-act-row").nth(1)).toContainText("1.1 紧集");
+    await expect(win.locator(".scene-act-row").nth(1)).toContainText("第 2 页");
+    await expect(win.locator(".scene-act-row").nth(1)).toHaveAttribute("data-level", "2");
+    expect(await page.evaluate(() => window.appHarness.nodeClasses("r-pdf-notes"))).toContain("sandbox-echo-seed");
+    await expect(hud).toBeHidden({ timeout: 10000 });
+    await expect(win).toHaveCount(0);
+
+    // Replay from the process card rebuilds the window from the round's events.
+    const agent = dock.locator(".sandbox-line.role-agent").last();
+    await expect(agent.locator(".sandbox-turn-status")).toHaveText("已完成");
+    await agent.locator(".sandbox-process-replay").click();
+    await expect(win).toBeVisible();
+    await expect(win.locator(".scene-act-row")).toHaveCount(2);
+    await hud.getByRole("button", { name: "停止" }).click();
+    await expect(win).toHaveCount(0);
+  });
+
+  test("Scene Act: ink.page_image shows the page image at the stage corner (note is not a map node)", async ({ page }) => {
+    const dock = await sandboxDock(page, { act: "page_image", delayMs: 30, gapMs: 400 });
+    await dock.locator("textarea").fill("看看手稿");
+    await dock.getByRole("button", { name: "发送" }).click();
+    const hud = page.locator(".canvas-panel .scene-hud");
+    await expect(hud.locator(".scene-hud-title")).toHaveText("手稿页图 · 手稿 A · 第 1/3 页");
+    const win = page.locator(".canvas-panel .scene-act[data-act='page_image']");
+    await expect(win).toBeVisible();
+    await expect(win).toHaveClass(/is-stage/);
+    await expect(win.locator(".scene-act-title")).toHaveText("手稿 A");
+    await expect(win.locator(".scene-act-meta")).toHaveText("第 1/3 页");
+    const img = win.locator("img.scene-act-image");
+    await expect(img).toHaveAttribute("src", /^data:image\/png;base64,/);
+    await expect.poll(() => img.evaluate((node: HTMLImageElement) => node.naturalWidth)).toBe(1);
+    // No fake map node for the note's document id.
+    expect(await page.evaluate(() => window.appHarness.nodeClasses("ink-doc-1"))).toBeNull();
+    await expect(hud).toBeHidden({ timeout: 10000 });
+    await expect(win).toHaveCount(0);
+  });
+
+  test("Scene Act: ink.page_image without image bytes degrades to text meta", async ({ page }) => {
+    const dock = await sandboxDock(page, { act: "page_image_meta", delayMs: 30, gapMs: 400 });
+    await dock.locator("textarea").fill("看看手稿");
+    await dock.getByRole("button", { name: "发送" }).click();
+    const hud = page.locator(".canvas-panel .scene-hud");
+    await expect(hud.locator(".scene-hud-summary")).toContainText("仅元数据（无页图）");
+    const win = page.locator(".canvas-panel .scene-act[data-act='page_image']");
+    await expect(win).toBeVisible();
+    await expect(win.locator(".scene-act-empty")).toHaveText("未取得页图（仅元数据）");
+    await expect(win.locator("img")).toHaveCount(0);
+  });
 });
 
