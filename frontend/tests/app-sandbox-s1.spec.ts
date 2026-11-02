@@ -393,6 +393,45 @@ test.describe("S1 sandbox shell", () => {
     await expect(typed).toBeHidden();
   });
 
+  test("Scene clump: a sparse multi-node focus is pulled together while playing and glides back on settle; replay clumps again", async ({ page }) => {
+    const dock = await sandboxDock(page, { act: "search", delayMs: 30, gapMs: 1500 });
+    const unit = "r-cite-unit";
+    const pdf = "r-pdf-notes";
+    // Make the two search hits a sparse pair.
+    const start = await page.evaluate(({ unit }) => window.appHarness.nodePosition(unit), { unit });
+    expect(start).not.toBeNull();
+    await page.evaluate(({ pdf, x, y }) => window.appHarness.setNodePosition(pdf, x, y), { pdf, x: start!.x + 1400, y: start!.y + 600 });
+    const before = await page.evaluate(({ unit, pdf }) => ({ unit: window.appHarness.nodePosition(unit)!, pdf: window.appHarness.nodePosition(pdf)! }), { unit, pdf });
+    const gap = (p: { unit: { x: number; y: number }; pdf: { x: number; y: number } }) => Math.hypot(p.unit.x - p.pdf.x, p.unit.y - p.pdf.y);
+    const positions = () => page.evaluate(({ unit, pdf }) => ({ unit: window.appHarness.nodePosition(unit)!, pdf: window.appHarness.nodePosition(pdf)! }), { unit, pdf });
+    const viewBefore = await page.evaluate(() => window.appHarness.viewport());
+
+    await dock.locator("textarea").fill("搜一下紧集");
+    await dock.getByRole("button", { name: "发送" }).click();
+    const hud = page.locator(".canvas-panel .scene-hud");
+    await expect.poll(() => page.evaluate(() => window.appHarness.nodeClasses("r-cite-unit")), { timeout: 6000 }).toContain("sandbox-echo-hit");
+    // While the hits are lit the pair sits much closer together (capped pull).
+    await expect.poll(async () => gap(await positions())).toBeLessThan(gap(before) * 0.75);
+    const during = await positions();
+    expect(Math.hypot(during.pdf.x - before.pdf.x, during.pdf.y - before.pdf.y)).toBeLessThanOrEqual(521);
+    // Settle: positions tween back to the snapshot, camera returns.
+    await expect(hud).toBeHidden({ timeout: 8000 });
+    await expect.poll(positions).toEqual(before);
+    await expect.poll(() => page.evaluate(() => window.appHarness.viewport())).toEqual(viewBefore);
+
+    // Replay takes the same path: clumps again, 停止 brings everything home.
+    const agent = dock.locator(".sandbox-line.role-agent").last();
+    await expect(agent.locator(".sandbox-turn-status")).toHaveText("已完成");
+    await agent.locator(".sandbox-process-summary").click();
+    await agent.locator(".sandbox-step-replay").last().click();
+    await expect(hud).toBeVisible();
+    await expect.poll(async () => gap(await positions())).toBeLessThan(gap(before) * 0.75);
+    await hud.getByRole("button", { name: "停止" }).click();
+    await expect(hud).toBeHidden();
+    await expect.poll(positions).toEqual(before);
+    expect(await page.evaluate(() => window.appHarness.viewport())).toEqual(viewBefore);
+  });
+
   test("Scene Act: pdf.outline opens a 目录 window beside the PDF; settle closes it; replay reopens it", async ({ page }) => {
     const dock = await sandboxDock(page, { act: "outline", delayMs: 30, gapMs: 400 });
     await dock.locator("textarea").fill("看看目录");
