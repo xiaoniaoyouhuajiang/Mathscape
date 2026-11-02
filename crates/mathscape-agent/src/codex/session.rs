@@ -917,6 +917,18 @@ fn spawn_child(config: &CodexConfig, workspace: &Path) -> Result<Child, AgentErr
     })
 }
 
+/// Environment variables Codex forwards to the Mathscape MCP child so the
+/// Marker capability lookup matches the desktop. Names only; no credentials.
+const MCP_FORWARDED_ENV_VARS: [&str; 3] = [
+    "MATHSCAPE_MARKER_EXECUTABLE",
+    "MATHSCAPE_MARKER_VENV",
+    "XDG_DATA_HOME",
+];
+
+/// Per-call MCP tool timeout. Covers `material.read`'s bounded ensure wait
+/// (see `mathscape-mcp` ensure policy) with margin.
+const MCP_TOOL_TIMEOUT_SEC: u64 = 120;
+
 pub(crate) fn thread_start_message(
     id: u64,
     request: &StartRoundRequest,
@@ -944,7 +956,12 @@ pub(crate) fn thread_start_message(
             ],
             "mcp_servers.mathscape.enabled": true,
             "mcp_servers.mathscape.default_tools_approval_mode": "approve",
-            "mcp_servers.mathscape.enabled_tools": enabled_tools(&request.tools_allow)
+            "mcp_servers.mathscape.enabled_tools": enabled_tools(&request.tools_allow),
+            // material.read may run a bounded Marker ensure on a scanned PDF:
+            // forward only the Marker lookup variables (no secrets) and allow
+            // the ensure wait plus margin.
+            "mcp_servers.mathscape.env_vars": MCP_FORWARDED_ENV_VARS,
+            "mcp_servers.mathscape.tool_timeout_sec": MCP_TOOL_TIMEOUT_SEC
         }
     });
     if let Some(model) = model.map(str::trim).filter(|id| !id.is_empty()) {
@@ -1278,6 +1295,15 @@ mod tests {
             config["mcp_servers.mathscape.enabled_tools"],
             json!(["workspace.search", "material.read"])
         );
+        assert_eq!(
+            config["mcp_servers.mathscape.env_vars"],
+            json!([
+                "MATHSCAPE_MARKER_EXECUTABLE",
+                "MATHSCAPE_MARKER_VENV",
+                "XDG_DATA_HOME"
+            ])
+        );
+        assert_eq!(config["mcp_servers.mathscape.tool_timeout_sec"], 120);
         assert_eq!(
             config["mcp_servers.mathscape.args"],
             json!([

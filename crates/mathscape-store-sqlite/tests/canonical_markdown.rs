@@ -8,7 +8,10 @@ use std::{
 use mathscape_domain::{
     CanonicalMarkdownKey, CanonicalSegment, InclusivePageRange, StableId, Timestamp,
 };
-use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
+use mathscape_store_sqlite::{
+    CanonicalEnsureClaim, CanonicalEnsureClaimOutcome, CanonicalEnsureLimits,
+    CanonicalEnsureOutcome, SqliteArtifactStore, SqliteStoreError,
+};
 use rusqlite::Connection;
 
 fn open() -> (PathBuf, PathBuf, SqliteArtifactStore) {
@@ -143,6 +146,165 @@ fn sync_on_an_empty_catalog_clears_the_registry() {
     let views = store.sync_canonical_markdown_from_catalog(&now()).unwrap();
     assert!(views.is_empty());
     assert!(store.list_canonical_markdown().unwrap().is_empty());
+    drop(store);
+    fs::remove_dir_all(directory).ok();
+}
+
+#[test]
+fn scoped_sync_leaves_other_pdfs_untouched() {
+    let (directory, _database, mut store) = open();
+    let other = CanonicalMarkdownKey::new(
+        StableId::parse("mathscape:artifact/other-pdf").unwrap(),
+        "mathscape.marker.math-ocr.v1",
+        "marker-2.0.0",
+    )
+    .unwrap();
+    store
+        .upsert_canonical_markdown(&key("marker-2.0.0"), None, None, Some(3), &now())
+        .unwrap();
+    store
+        .upsert_canonical_markdown(&other, None, None, Some(9), &now())
+        .unwrap();
+    // The catalog has no conversions: the scoped sync clears only `pdf`.
+    let views = store
+        .sync_canonical_markdown_for_pdf(
+            &StableId::parse("mathscape:artifact/pdf").unwrap(),
+            &now(),
+        )
+        .unwrap();
+    assert!(views.is_empty());
+    let remaining = store.list_canonical_markdown().unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].canonical_id, other.canonical_id());
+    drop(store);
+    fs::remove_dir_all(directory).ok();
+}
+
+fn claim(id: &str, pdf: &str, from: u32, to: u32) -> CanonicalEnsureClaim {
+    let key = CanonicalMarkdownKey::new(
+        StableId::parse(pdf).unwrap(),
+        "mathscape.marker.math-ocr.v1",
+        "marker-2.1.0",
+    )
+    .unwrap();
+    CanonicalEnsureClaim {
+        ensure_id: id.to_owned(),
+        idempotency_key: format!("{pdf}|{from}-{to}"),
+        source_pdf_artifact_id: StableId::parse(pdf).unwrap(),
+        canonical_id: key.canonical_id(),
+        parser_profile: "mathscape.marker.math-ocr.v1".to_owned(),
+        parser_policy_version: "marker-2.1.0".to_owned(),
+        pages: InclusivePageRange::new(from, to).unwrap(),
+        owner: "test".to_owned(),
+    }
+}
+
+const LIMITS: CanonicalEnsureLimits = CanonicalEnsureLimits {
+    max_running: 1,
+    window_pages: 10,
+    window_ms: 60_000,
+    lease_ms: 1_000,
+};
+
+#[test]
+fn ensure_claims_lock_per_pdf_share_one_global_slot_and_expire() {
+    let (directory, _database, mut store) = open();
+    let first = claim("e1", "mathscape:artifact/a", 1, 2);
+    assert_eq!(
+        store.claim_canonical_ensure(&first, LIMITS, 100).unwrap(),
+        CanonicalEnsureClaimOutcome::Acquired
+    );
+    // Same PDF: blocked by the per-PDF lock, reported with the live lease.
+    let busy = store
+        .claim_canonical_ensure(&claim("e2", "mathscape:artifact/a", 3, 3), LIMITS, 200)
+        .unwrap();
+    assert!(
+        matches!(busy, CanonicalEnsureClaimOutcome::PdfBusy(ref lease) if lease.ensure_id == "e1")
+    );
+    // Another PDF: blocked by the global Marker slot.
+    assert_eq!(
+        store
+            .claim_canonical_ensure(&claim("e3", "mathscape:artifact/b", 1, 1), LIMITS, 200)
+            .unwrap(),
+        CanonicalEnsureClaimOutcome::SlotsBusy { running: 1 }
+    );
+    assert_eq!(store.active_canonical_ensures(200).unwrap().len(), 1);
+    // The lease expires: it is abandoned and the PDF can be claimed again.
+    assert!(store.active_canonical_ensures(1_100).unwrap().is_empty());
+    assert_eq!(
+        store
+            .claim_canonical_ensure(&claim("e4", "mathscape:artifact/a", 1, 2), LIMITS, 1_200)
+            .unwrap(),
+        CanonicalEnsureClaimOutcome::Acquired
+    );
+    assert_eq!(
+        store
+            .canonical_ensure_receipt("e1")
+            .unwrap()
+            .unwrap()
+            .status,
+        "abandoned"
+    );
+    store
+        .finish_canonical_ensure(
+            "e4",
+            CanonicalEnsureOutcome::Succeeded,
+            Some("mathscape:conversion/x"),
+            Some("mathscape:artifact/md"),
+            None,
+            1_300,
+        )
+        .unwrap();
+    let receipt = store.canonical_ensure_receipt("e4").unwrap().unwrap();
+    assert_eq!(receipt.status, "succeeded");
+    assert_eq!(
+        receipt.conversion_id.as_deref(),
+        Some("mathscape:conversion/x")
+    );
+    assert!(store.active_canonical_ensures(1_300).unwrap().is_empty());
+    drop(store);
+    fs::remove_dir_all(directory).ok();
+}
+
+#[test]
+fn ensure_claims_respect_the_rolling_page_budget() {
+    let (directory, _database, mut store) = open();
+    let limits = CanonicalEnsureLimits {
+        max_running: 4,
+        ..LIMITS
+    };
+    assert_eq!(
+        store
+            .claim_canonical_ensure(&claim("b1", "mathscape:artifact/a", 1, 8), limits, 0)
+            .unwrap(),
+        CanonicalEnsureClaimOutcome::Acquired
+    );
+    store
+        .finish_canonical_ensure(
+            "b1",
+            CanonicalEnsureOutcome::Failed,
+            None,
+            None,
+            Some("x"),
+            10,
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .claim_canonical_ensure(&claim("b2", "mathscape:artifact/b", 1, 3), limits, 20)
+            .unwrap(),
+        CanonicalEnsureClaimOutcome::BudgetExhausted {
+            used_pages: 8,
+            window_pages: 10
+        }
+    );
+    // Outside the window the budget is free again.
+    assert_eq!(
+        store
+            .claim_canonical_ensure(&claim("b3", "mathscape:artifact/b", 1, 3), limits, 70_000)
+            .unwrap(),
+        CanonicalEnsureClaimOutcome::Acquired
+    );
     drop(store);
     fs::remove_dir_all(directory).ok();
 }

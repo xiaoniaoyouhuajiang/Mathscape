@@ -381,6 +381,49 @@ pub(super) fn replace_canonical_markdown(
     let transaction = connection.transaction()?;
     transaction.execute("DELETE FROM canonical_markdown_coverage", [])?;
     transaction.execute("DELETE FROM canonical_markdown", [])?;
+    insert_views(&transaction, views.iter(), recorded_at)?;
+    transaction.commit()?;
+    list_canonical_markdown(connection)
+}
+
+/// Rebuilds only the registry rows of one source PDF. Rows of every other PDF
+/// are left untouched, so an ensure on one book never rewrites another's head.
+pub(super) fn replace_canonical_markdown_for_pdf(
+    connection: &mut Connection,
+    source_pdf_artifact_id: &StableId,
+    views: &[CanonicalMarkdownView],
+    recorded_at: &Timestamp,
+) -> Result<Vec<CanonicalMarkdownView>, SqliteStoreError> {
+    let transaction = connection.transaction()?;
+    transaction.execute(
+        "DELETE FROM canonical_markdown_coverage WHERE canonical_id IN (
+            SELECT canonical_id FROM canonical_markdown WHERE source_pdf_artifact_id = ?1
+         )",
+        [source_pdf_artifact_id.as_str()],
+    )?;
+    transaction.execute(
+        "DELETE FROM canonical_markdown WHERE source_pdf_artifact_id = ?1",
+        [source_pdf_artifact_id.as_str()],
+    )?;
+    insert_views(
+        &transaction,
+        views
+            .iter()
+            .filter(|view| &view.source_pdf_artifact_id == source_pdf_artifact_id),
+        recorded_at,
+    )?;
+    transaction.commit()?;
+    Ok(list_canonical_markdown(connection)?
+        .into_iter()
+        .filter(|view| &view.source_pdf_artifact_id == source_pdf_artifact_id)
+        .collect())
+}
+
+fn insert_views<'a>(
+    transaction: &Connection,
+    views: impl Iterator<Item = &'a CanonicalMarkdownView>,
+    recorded_at: &Timestamp,
+) -> Result<(), SqliteStoreError> {
     for view in views {
         let key = CanonicalMarkdownKey::new(
             view.source_pdf_artifact_id.clone(),
@@ -388,7 +431,7 @@ pub(super) fn replace_canonical_markdown(
             view.parser_policy_version.clone(),
         )?;
         upsert_canonical_markdown(
-            &transaction,
+            transaction,
             &key,
             view.head_artifact_id.as_ref(),
             view.head_revision.as_deref(),
@@ -398,7 +441,7 @@ pub(super) fn replace_canonical_markdown(
         for segment in &view.segments {
             if segment.pages.is_some() {
                 record_canonical_coverage_segment(
-                    &transaction,
+                    transaction,
                     &view.canonical_id,
                     segment,
                     recorded_at,
@@ -406,8 +449,7 @@ pub(super) fn replace_canonical_markdown(
             }
         }
     }
-    transaction.commit()?;
-    list_canonical_markdown(connection)
+    Ok(())
 }
 
 fn sqlite_page(value: i64) -> Result<u32, SqliteStoreError> {

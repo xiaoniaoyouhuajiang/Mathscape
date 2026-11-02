@@ -1,7 +1,7 @@
 //! Readonly canonical markdown lookup for the existing material tools.
 //!
-//! Coverage is projected from conversion history. This module never writes the
-//! registry and never runs Marker. A persisted head, when present, replaces
+//! Coverage is projected from conversion history. This module only reads; the
+//! registry is written by ensure (`super::ensure`) after a promotion. A persisted head, when present, replaces
 //! the projected head so an explicit registry row wins.
 
 use std::collections::BTreeMap;
@@ -63,6 +63,15 @@ impl CanonicalIndex {
         pdf_id: &str,
         requested: Option<InclusivePageRange>,
     ) -> Option<&CanonicalMarkdownView> {
+        self.all_for_pdf(pdf_id, requested).into_iter().next()
+    }
+
+    /// Every lineage of one PDF, best match for `requested` first.
+    pub(super) fn all_for_pdf(
+        &self,
+        pdf_id: &str,
+        requested: Option<InclusivePageRange>,
+    ) -> Vec<&CanonicalMarkdownView> {
         let mut matches: Vec<_> = self
             .views
             .iter()
@@ -73,7 +82,7 @@ impl CanonicalIndex {
                 .cmp(&rank(left, requested))
                 .then_with(|| left.canonical_id.cmp(&right.canonical_id))
         });
-        matches.into_iter().next()
+        matches
     }
 
     pub(super) fn for_markdown(&self, artifact_id: &str) -> Option<&CanonicalMarkdownView> {

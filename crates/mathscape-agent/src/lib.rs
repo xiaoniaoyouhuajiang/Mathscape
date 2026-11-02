@@ -21,7 +21,7 @@ mod validate;
 pub use backend::AgentBackend;
 pub use capability::{
     Capability, CapabilityProbe, CapabilityState, CommandOutput, CommandRunner,
-    SystemCommandRunner, probe_all, probe_capability, probe_program,
+    SystemCommandRunner, locate_marker_executable, probe_all, probe_capability, probe_program,
 };
 pub use codex::{
     CodexConfig, CodexExecutor, CodexFixtureMcp, CodexFixtureMode, CodexFixtureOptions,
