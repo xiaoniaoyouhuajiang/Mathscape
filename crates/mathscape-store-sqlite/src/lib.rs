@@ -3,6 +3,7 @@
 //! Artifact bytes remain in the managed filesystem pool. This crate owns only
 //! authoritative metadata and provenance transactions.
 
+mod canonical_markdown;
 mod discovery;
 mod ink;
 mod ink_evidence;
@@ -33,6 +34,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
+pub use canonical_markdown::project_canonical_markdown;
 pub use discovery::{
     AcceptedRegistrationPlanRecord, DiscoveryAttemptCheckpoint, DiscoveryCheckpointStatus,
     DiscoveryDiagnosticCheckpoint, DiscoveryFactCheckpointRecord, DiscoveryRunCheckpoint,
@@ -92,7 +94,9 @@ const DISCOVERY_RUN_RECOVERY_MIGRATION: &str =
     include_str!("../../../migrations/0010_discovery_run_recovery.sql");
 const INK_MIGRATION: &str = include_str!("../../../migrations/0013_ink_p1.sql");
 const INK_SNAPSHOT_MIGRATION: &str = include_str!("../../../migrations/0014_ink_snapshots_p2.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 20;
+const CANONICAL_MARKDOWN_MIGRATION: &str =
+    include_str!("../../../migrations/0021_canonical_markdown.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 21;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -197,6 +201,17 @@ pub enum SqliteStoreError {
     },
     #[error("ink snapshot_label_invalid: {0}")]
     InkSnapshotLabelInvalid(String),
+    #[error(
+        "canonical markdown identity {source_pdf_artifact_id} / {parser_profile} / {parser_policy_version} is already bound to {existing_canonical_id}"
+    )]
+    CanonicalMarkdownConflict {
+        source_pdf_artifact_id: String,
+        parser_profile: String,
+        parser_policy_version: String,
+        existing_canonical_id: String,
+    },
+    #[error("canonical markdown invariant failed: {0}")]
+    CanonicalMarkdownInvariant(&'static str),
 }
 
 impl SqliteStoreError {
@@ -326,6 +341,8 @@ pub struct LandscapeSnapshot {
     sources: SourceMapSnapshot,
     /// N3d: snapshot Artifact id → snapshot name, for map labels.
     ink_snapshot_labels: std::collections::BTreeMap<String, String>,
+    /// Persisted canonical markdown views. Empty until a registry sync.
+    canonical_markdown: Vec<mathscape_domain::CanonicalMarkdownView>,
 }
 
 impl LandscapeSnapshot {
@@ -339,6 +356,10 @@ impl LandscapeSnapshot {
 
     pub fn ink_snapshot_labels(&self) -> &std::collections::BTreeMap<String, String> {
         &self.ink_snapshot_labels
+    }
+
+    pub fn canonical_markdown(&self) -> &[mathscape_domain::CanonicalMarkdownView] {
+        &self.canonical_markdown
     }
 }
 
@@ -626,7 +647,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=20 => {
+            6..=21 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -781,6 +802,20 @@ impl SqliteArtifactStore {
                 ink_snapshot_label::migrate_v20(&connection)?;
             } else {
                 connection.pragma_update(None, "user_version", 20)?;
+            }
+        }
+        if version < 21 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 21",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                connection.execute_batch(CANONICAL_MARKDOWN_MIGRATION)?;
+            } else {
+                connection.pragma_update(None, "user_version", 21)?;
             }
         }
         validate_registration_schema(&connection)?;
@@ -1128,12 +1163,68 @@ impl SqliteArtifactStore {
         source_map::source_map_snapshot(&self.connection)
     }
 
+    /// Readonly canonical views derived from conversion history. Does not write.
+    pub fn project_canonical_markdown(
+        &self,
+    ) -> Result<Vec<mathscape_domain::CanonicalMarkdownView>, SqliteStoreError> {
+        canonical_markdown::project_canonical_markdown(&self.read_catalog_snapshot()?)
+    }
+
+    pub fn list_canonical_markdown(
+        &self,
+    ) -> Result<Vec<mathscape_domain::CanonicalMarkdownView>, SqliteStoreError> {
+        canonical_markdown::list_canonical_markdown(&self.connection)
+    }
+
+    pub fn upsert_canonical_markdown(
+        &mut self,
+        key: &mathscape_domain::CanonicalMarkdownKey,
+        head_artifact_id: Option<&StableId>,
+        head_revision: Option<&str>,
+        total_pages: Option<u32>,
+        recorded_at: &Timestamp,
+    ) -> Result<StableId, SqliteStoreError> {
+        canonical_markdown::upsert_canonical_markdown(
+            &self.connection,
+            key,
+            head_artifact_id,
+            head_revision,
+            total_pages,
+            recorded_at,
+        )
+    }
+
+    pub fn record_canonical_coverage_segment(
+        &mut self,
+        canonical_id: &StableId,
+        segment: &mathscape_domain::CanonicalSegment,
+        recorded_at: &Timestamp,
+    ) -> Result<(), SqliteStoreError> {
+        canonical_markdown::record_canonical_coverage_segment(
+            &self.connection,
+            canonical_id,
+            segment,
+            recorded_at,
+        )
+    }
+
+    /// Rebuilds the registry from the current catalog. Replaces every canonical
+    /// row. Does not run Marker or modify artifact bytes.
+    pub fn sync_canonical_markdown_from_catalog(
+        &mut self,
+        recorded_at: &Timestamp,
+    ) -> Result<Vec<mathscape_domain::CanonicalMarkdownView>, SqliteStoreError> {
+        let views = self.project_canonical_markdown()?;
+        canonical_markdown::replace_canonical_markdown(&mut self.connection, &views, recorded_at)
+    }
+
     pub fn landscape_snapshot(&self) -> Result<LandscapeSnapshot, SqliteStoreError> {
         let transaction = self.connection.unchecked_transaction()?;
         let snapshot = LandscapeSnapshot {
             artifacts: read::catalog_snapshot_from(&transaction)?,
             sources: source_map::source_map_snapshot(&transaction)?,
             ink_snapshot_labels: ink::snapshot_labels_by_artifact(&transaction)?,
+            canonical_markdown: canonical_markdown::list_canonical_markdown(&transaction)?,
         };
         transaction.commit()?;
         Ok(snapshot)

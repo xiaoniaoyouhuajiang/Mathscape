@@ -20,10 +20,11 @@ use std::collections::HashSet;
 
 use mathscape_agent::{Locator, ToolError, ToolErrorCode, ToolStatus};
 use mathscape_artifact::{ArtifactPool, ArtifactPoolError};
-use mathscape_domain::StableId;
+use mathscape_domain::{MarkdownCoverage, StableId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::canonical::CanonicalIndex;
 use super::material::{
     self, MARKDOWN_MEDIA_TYPE, ManagedPathFailure, Material, find_materials, managed_path_failure,
 };
@@ -43,7 +44,7 @@ pub const SNIPPET_MAX_BYTES: usize = 512;
 
 const LITERAL_SCORE: u32 = 1;
 
-const DESCRIPTION: &str = "Search the markdown body of specific materials for a case-sensitive literal substring (not a regular expression). artifact_ids is required and non-empty; this tool does not scan the whole workspace. Only text/markdown is searched (PDF text and OCR are out of scope). Each hit locator is an md_byte_range of that match and can be passed to material.read. A missing artifact_id yields status not_found and no partial hits. Stops at max_hits (default and maximum 50) or after the first 1 MiB of a file; either limit returns status truncated and truncated true. Read-only.";
+const DESCRIPTION: &str = "Search the markdown body of specific materials for a case-sensitive literal substring (not a regular expression). artifact_ids is required and non-empty; this tool does not scan the whole workspace. Only text/markdown is searched (PDF text and OCR are out of scope). A canonical markdown id is resolved to its head snapshot. Hits on a canonical snapshot include canonical_id, coverage and partial. Each hit locator is an md_byte_range of that match and can be passed to material.read. A missing artifact_id yields status not_found and no partial hits. Stops at max_hits (default and maximum 50) or after the first 1 MiB of a file; either limit returns status truncated and truncated true. This tool never runs Marker. Read-only.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,6 +74,12 @@ struct GrepHit {
     snippet: String,
     score: u32,
     revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    canonical_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coverage: Option<MarkdownCoverage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    partial: Option<bool>,
 }
 
 struct RawHit {
@@ -123,7 +130,12 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
     let max_hits = validated_max_hits(args.max_hits)?;
     validate_pattern(&args.pattern)?;
     let ids = parse_ids(&args.artifact_ids)?;
-    let materials = load_materials(workspace, &ids)?;
+    let index = CanonicalIndex::load(workspace)?;
+    let resolved: Vec<StableId> = ids
+        .iter()
+        .map(|id| index.markdown_target(id).clone())
+        .collect();
+    let materials = load_materials(workspace, &resolved)?;
     if let Some(missing) = materials.missing {
         return not_found("artifact_not_found", "no artifact with this id", missing);
     }
@@ -155,6 +167,10 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
         }
         let room = max_hits - hits.len();
         let (found, limited) = scan_text(&text, &args.pattern, room);
+        let attachment = index.for_markdown(material.id.as_str()).map(|view| {
+            let coverage = view.coverage(None);
+            (view.canonical_id.to_string(), coverage.partial, coverage)
+        });
         for found in found {
             hits.push(GrepHit {
                 artifact_id: material.id.to_string(),
@@ -165,6 +181,9 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
                 snippet: found.snippet,
                 score: LITERAL_SCORE,
                 revision: material.revision.clone(),
+                canonical_id: attachment.as_ref().map(|(id, _, _)| id.clone()),
+                partial: attachment.as_ref().map(|(_, partial, _)| *partial),
+                coverage: attachment.as_ref().map(|(_, _, coverage)| coverage.clone()),
             });
         }
         if limited {

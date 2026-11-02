@@ -1,6 +1,6 @@
 use mathscape_domain::{
-    ConversionExitStatus, ConversionRun, EntityKind, LocationStatus, PageIndexBase, SourcePayload,
-    StableId,
+    CanonicalMarkdownView, ConversionExitStatus, ConversionRun, EntityKind, LocationStatus,
+    PageIndexBase, SourcePayload, StableId,
 };
 use mathscape_graph::{
     GraphProjection, GraphProjectionError, IncidenceDirection, ProjectionEndpoint, ProjectionLens,
@@ -27,7 +27,7 @@ pub fn project_artifact_catalog(
     catalog: &ArtifactCatalogSnapshot,
     lens: ProjectionLens,
 ) -> Result<GraphProjection, ArtifactGraphProjectionError> {
-    project_artifact_catalog_labeled(catalog, lens, None)
+    project_artifact_catalog_labeled(catalog, lens, None, &[])
 }
 
 /// Like [`project_artifact_catalog`], with N3d snapshot names (snapshot
@@ -36,6 +36,7 @@ pub(crate) fn project_artifact_catalog_labeled(
     catalog: &ArtifactCatalogSnapshot,
     lens: ProjectionLens,
     snapshot_labels: Option<&BTreeMap<String, String>>,
+    canonical: &[CanonicalMarkdownView],
 ) -> Result<GraphProjection, ArtifactGraphProjectionError> {
     if !matches!(lens, ProjectionLens::Source | ProjectionLens::Provenance) {
         return Err(ArtifactGraphProjectionError::UnsupportedLens(lens));
@@ -179,7 +180,115 @@ pub(crate) fn project_artifact_catalog_labeled(
         );
     }
 
+    let (nodes, relations) = collapse_canonical_markdown(nodes, relations, canonical, &names)?;
     GraphProjection::new(lens, vec![], nodes, relations).map_err(Into::into)
+}
+
+/// Markdown artifact id → canonical id, for fragments a registry entry replaces.
+pub(crate) fn canonical_markdown_aliases(
+    views: &[CanonicalMarkdownView],
+) -> BTreeMap<StableId, StableId> {
+    let mut aliases = BTreeMap::new();
+    for view in views {
+        if view.head_artifact_id.is_none() {
+            continue;
+        }
+        for id in view.collapsed_markdown_ids() {
+            aliases
+                .entry(id)
+                .or_insert_with(|| view.canonical_id.clone());
+        }
+    }
+    aliases
+}
+
+fn collapse_canonical_markdown(
+    nodes: Vec<ProjectionNode>,
+    relations: Vec<ProjectionRelation>,
+    views: &[CanonicalMarkdownView],
+    names: &BTreeMap<StableId, String>,
+) -> Result<(Vec<ProjectionNode>, Vec<ProjectionRelation>), ArtifactGraphProjectionError> {
+    let aliases = canonical_markdown_aliases(views);
+    if aliases.is_empty() {
+        return Ok((nodes, relations));
+    }
+    let mut nodes: Vec<_> = nodes
+        .into_iter()
+        .filter(|node| !aliases.contains_key(node.entity_id()))
+        .collect();
+    let present: BTreeSet<_> = nodes.iter().map(|node| node.entity_id().clone()).collect();
+    for view in views {
+        if view.head_artifact_id.is_none() || present.contains(&view.canonical_id) {
+            continue;
+        }
+        let pdf_label = names
+            .get(&view.source_pdf_artifact_id)
+            .map(String::as_str)
+            .unwrap_or("PDF");
+        let coverage = view.coverage(None);
+        let head = view
+            .head_artifact_id
+            .as_ref()
+            .map(StableId::to_string)
+            .unwrap_or_default();
+        let summary = format!(
+            "text/markdown · canonical {} · head {head} · {}",
+            view.canonical_id,
+            if coverage.complete {
+                "complete"
+            } else {
+                "partial"
+            }
+        );
+        nodes.push(
+            ProjectionNode::new(
+                view.canonical_id.clone(),
+                EntityKind::SourceArtifact,
+                ViewLayer::Source,
+                format!("{pdf_label} · 规范解析正文"),
+            )?
+            .summary(summary)?
+            .lifecycle(mathscape_domain::LifecycleStatus::Active),
+        );
+    }
+    let mut rewritten = Vec::with_capacity(relations.len());
+    for relation in relations {
+        let endpoints = relation
+            .endpoints()
+            .iter()
+            .map(|endpoint| {
+                let node = aliases
+                    .get(endpoint.node())
+                    .cloned()
+                    .unwrap_or_else(|| endpoint.node().clone());
+                ProjectionEndpoint::new(
+                    node,
+                    endpoint.role().clone(),
+                    endpoint.ordinal(),
+                    endpoint.direction(),
+                )
+            })
+            .collect();
+        let mut rebuilt = ProjectionRelation::new(
+            relation.relation_id().clone(),
+            relation.kind(),
+            relation.layer(),
+            relation.label(),
+            endpoints,
+        )?
+        .relation_kind(relation.relation_kind_value());
+        if let Some(summary) = relation.summary_ref() {
+            rebuilt = rebuilt.summary(summary)?;
+        }
+        if let Some(lifecycle) = relation.lifecycle_status() {
+            rebuilt = rebuilt.lifecycle(lifecycle);
+        }
+        if let Some(group) = relation.group_ref() {
+            rebuilt = rebuilt.group(group.clone());
+        }
+        rewritten.push(rebuilt);
+    }
+    Ok((nodes, rewritten))
 }
 
 fn page_label(run: &ConversionRun) -> String {

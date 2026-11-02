@@ -4,6 +4,7 @@
 //! providers, Marker, and Lean. It defines the narrow waist that all writers
 //! must cross before data can enter the canonical map.
 
+mod canonical_markdown;
 mod discovery;
 mod discovery_proposal;
 mod entity;
@@ -21,6 +22,7 @@ mod source_review;
 mod staged_discovery;
 mod trust;
 
+pub use canonical_markdown::*;
 pub use discovery::*;
 pub use discovery_proposal::*;
 pub use entity::{

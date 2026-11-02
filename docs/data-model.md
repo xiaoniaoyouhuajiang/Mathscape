@@ -14,6 +14,7 @@ EMIR 区分来源方言 DialectScope、连接方言与共享表示的 Representa
 
 - StableId 标识对象，RevisionId 标识版本；描述变化不能靠静默覆盖消除历史。MapPatch 表达带修订前置条件的受控变更；各存储入口仍须执行对应不变量检查。
 - Artifact 的内容哈希与字节大小不可改变；媒体类型、文件名、页数和版权描述可以修订。字节变化必须产生新 Artifact。
+- 扫描 PDF 的对外 Markdown 是逻辑 canonical（PDF + parser profile + policy），不是可原地追加的 Artifact。物理快照仍按内容寻址保留。契约见 [canonical-markdown](canonical-markdown.md)。
 - ArtifactLocation 与追加式 ArtifactCheck 独立于内容身份；移动文件或重新检查不产生新的数学对象。
 - 转换和来源关系使用角色化端点，证据也是明确端点；不能将超边压成失去证据与身份的普通边。
 - 来源单元只保存 parent，不复制 children、对齐或证明上下文的反向列表。新增关联不应迫使原单元修订。

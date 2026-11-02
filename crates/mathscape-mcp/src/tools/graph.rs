@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use mathscape_agent::{Scope, ToolError, ToolErrorCode, ToolStatus};
-use mathscape_domain::{EntityKind, LifecycleStatus};
+use mathscape_domain::{CanonicalMarkdownView, EntityKind, LifecycleStatus};
 use mathscape_graph::{GraphProjection, IncidenceDirection};
 use mathscape_query::{LandscapeProjectionInput, SourceGraphProjectionError, project_landscape};
 use mathscape_store_sqlite::{
@@ -260,6 +260,8 @@ struct Graph {
     relation_revisions: HashMap<String, String>,
     /// Diagnostics produced while building the projection (degraded data).
     load_diagnostics: Vec<Value>,
+    /// Logical canonical markdown nodes, keyed by canonical id.
+    canonical_nodes: HashMap<String, CanonicalMarkdownView>,
 }
 
 fn internal(context: &str, error: impl std::fmt::Display) -> ToolError {
@@ -343,7 +345,8 @@ fn load(workspace: &McpWorkspace) -> Result<Graph, ToolError> {
     let mut attempts = source_map.objects.len() + 1;
     let projection = loop {
         let input = LandscapeProjectionInput::new(landscape.artifacts(), &source_map)
-            .with_ink_snapshot_labels(landscape.ink_snapshot_labels());
+            .with_ink_snapshot_labels(landscape.ink_snapshot_labels())
+            .with_canonical_markdown(landscape.canonical_markdown());
         let (culprit, entity) = match project_landscape(input) {
             Ok(projection) => break projection,
             Err(SourceGraphProjectionError::UnknownEndpoint { relation, entity }) => {
@@ -543,6 +546,12 @@ fn load(workspace: &McpWorkspace) -> Result<Graph, ToolError> {
         );
     }
 
+    let canonical_nodes = landscape
+        .canonical_markdown()
+        .iter()
+        .map(|view| (view.canonical_id.to_string(), view.clone()))
+        .collect();
+
     Ok(Graph {
         projection,
         node_index,
@@ -557,6 +566,7 @@ fn load(workspace: &McpWorkspace) -> Result<Graph, ToolError> {
         ink_edges,
         relation_revisions,
         load_diagnostics,
+        canonical_nodes,
     })
 }
 
@@ -929,31 +939,61 @@ impl Graph {
                     }
                     "artifact" => {
                         node.insert("lifecycle".into(), json!(projected.lifecycle_status()));
-                        let info = self.artifacts.get(canonical);
-                        if let Some(info) = info {
-                            node.insert("revision".into(), json!(info.revision));
-                            node.insert("media_type".into(), json!(info.media_type));
-                        }
-                        match info {
-                            Some(info) if info.media_type == MARKDOWN_MEDIA_TYPE => {
+                        if let Some(view) = self.canonical_nodes.get(canonical) {
+                            node.insert(
+                                "source_pdf_artifact_id".into(),
+                                json!(view.source_pdf_artifact_id.as_str()),
+                            );
+                            let coverage = view.coverage(None);
+                            node.insert("partial".into(), json!(coverage.partial));
+                            if let Some(head) = &view.head_artifact_id {
+                                let info = self.artifacts.get(head.as_str());
+                                let end = info
+                                    .map(|info| info.byte_size.min(ARTIFACT_HEAD_BYTES))
+                                    .unwrap_or(0);
+                                if let Some(info) = info {
+                                    node.insert("revision".into(), json!(info.revision));
+                                    node.insert("media_type".into(), json!(MARKDOWN_MEDIA_TYPE));
+                                }
                                 content = json!({
                                     "type": "artifact_head",
-                                    "artifact_id": canonical,
-                                    "locator": { "md_byte_range": { "start": 0, "end": info.byte_size.min(ARTIFACT_HEAD_BYTES) } },
+                                    "artifact_id": head.as_str(),
+                                    "locator": { "md_byte_range": { "start": 0, "end": end } },
                                     "media_type": MARKDOWN_MEDIA_TYPE,
+                                    "partial": coverage.partial,
+                                    "coverage": coverage,
                                     "via": Value::Null,
                                 });
+                            } else {
+                                reason = Some("canonical_head_missing");
                             }
-                            Some(info) if info.media_type == PDF_MEDIA_TYPE => {
-                                content = json!({
-                                    "type": "artifact_head",
-                                    "artifact_id": canonical,
-                                    "locator": { "pdf_pages": { "from": 1, "to": 1 } },
-                                    "media_type": PDF_MEDIA_TYPE,
-                                    "via": Value::Null,
-                                });
+                        } else {
+                            let info = self.artifacts.get(canonical);
+                            if let Some(info) = info {
+                                node.insert("revision".into(), json!(info.revision));
+                                node.insert("media_type".into(), json!(info.media_type));
                             }
-                            _ => reason = Some("unsupported_media_type"),
+                            match info {
+                                Some(info) if info.media_type == MARKDOWN_MEDIA_TYPE => {
+                                    content = json!({
+                                        "type": "artifact_head",
+                                        "artifact_id": canonical,
+                                        "locator": { "md_byte_range": { "start": 0, "end": info.byte_size.min(ARTIFACT_HEAD_BYTES) } },
+                                        "media_type": MARKDOWN_MEDIA_TYPE,
+                                        "via": Value::Null,
+                                    });
+                                }
+                                Some(info) if info.media_type == PDF_MEDIA_TYPE => {
+                                    content = json!({
+                                        "type": "artifact_head",
+                                        "artifact_id": canonical,
+                                        "locator": { "pdf_pages": { "from": 1, "to": 1 } },
+                                        "media_type": PDF_MEDIA_TYPE,
+                                        "via": Value::Null,
+                                    });
+                                }
+                                _ => reason = Some("unsupported_media_type"),
+                            }
                         }
                     }
                     "source_span" => {
@@ -1189,6 +1229,7 @@ fn content_unavailable(reason: &str, node_ids: Vec<String>) -> Value {
             "no source span with a Markdown or PDF page locator; do not guess a byte range"
         }
         "unsupported_media_type" => "material.read does not support this media type",
+        "canonical_head_missing" => "canonical markdown has no head snapshot to read",
         _ => "relations have no readable content; inspect their endpoints",
     };
     json!({

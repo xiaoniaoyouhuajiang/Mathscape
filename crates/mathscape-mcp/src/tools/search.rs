@@ -9,10 +9,11 @@ use mathscape_query::search::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::canonical::CanonicalIndex;
 use super::{WORKSPACE_SEARCH, diagnostic, parse_args, to_object};
 use crate::McpWorkspace;
 
-const DESCRIPTION: &str = "Search the Mathscape workspace (notes, source units, materials, snapshots) with the same unified matcher as the desktop search box. Returns hits grouped by kind; highlights are UTF-16 [start,end) offsets into each hit title. Read-only.";
+const DESCRIPTION: &str = "Search the Mathscape workspace (notes, source units, materials, snapshots) with the same unified matcher as the desktop search box. Returns hits grouped by kind; highlights are UTF-16 [start,end) offsets into each hit title. Material hits that belong to a canonical markdown view include canonical_id, coverage and partial. Read-only; this tool never runs Marker.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -90,7 +91,21 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
             format!("failed to read search corpus: {error}"),
         )
     })?;
-    let response = search(&SearchRegistry::with_defaults(), &corpus, &query);
+    let mut response = search(&SearchRegistry::with_defaults(), &corpus, &query);
+    let index = CanonicalIndex::load(workspace)?;
+    for group in &mut response.groups {
+        for hit in &mut group.hits {
+            let view = index
+                .for_pdf(&hit.id, None)
+                .or_else(|| index.for_markdown(&hit.id));
+            if let Some(view) = view {
+                let coverage = view.coverage(None);
+                hit.canonical_id = Some(view.canonical_id.to_string());
+                hit.partial = Some(coverage.partial);
+                hit.coverage = Some(coverage);
+            }
+        }
+    }
 
     let mut result = to_object(&response)?;
     result.insert(

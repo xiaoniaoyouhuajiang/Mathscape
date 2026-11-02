@@ -2,6 +2,7 @@
 //! part of the contract (§2.1): fixed, independent of the task, so harness
 //! prompt caches stay stable. Change them only together with the contract.
 
+mod canonical;
 mod graph;
 mod grep;
 mod ink;
