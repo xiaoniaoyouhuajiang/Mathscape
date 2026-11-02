@@ -388,6 +388,8 @@ const graphController = new GraphController(
     onRequestCreateRelation: (sourceId, targetId) =>
       void inspectorController.enterCreateRelationMode(sourceId, targetId),
     onBeforeRenderGraph: () => {
+      // Clump (临时收拢) is animation state: never let a sync see it.
+      scenePlayer?.beforeGraphSync();
       if (reader.isInkOpen()) return;
       if (inkSplit && inkOpen) return;
       reader.close();

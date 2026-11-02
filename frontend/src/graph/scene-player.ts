@@ -18,10 +18,25 @@
  * Ink pad open = the whole scene is skipped (same `canPlay` rule), so the page
  * image never sits on top of the pad.
  *
- * Animation state only: the landscape graph and positions are never touched.
+ * Third slice (临时收拢布局 / clump): a multi-node focus is pulled toward its
+ * centroid (`scene-clump.ts`) so a sparse cluster reads as one topology.
+ * Order per segment: snapshot original positions → clump tween and camera
+ * fit run together (same duration; the camera aims at the *clumped* box) →
+ * seeds / layers light up → Act window opens once both have landed. The next
+ * segment re-clumps from the original positions (nodes that left the focus
+ * glide home in the same tween). Settle / 停止 / ink pad tween every moved
+ * node back to its snapshot, then the camera returns; a cite jump
+ * (`cancel(false)`) and any graph re-render restore instantly. Junctions and
+ * ink-note satellites follow their endpoints; edges follow on their own.
+ * Single-node focus: no-op. Kill-switch: `SCENE_CLUMP.enabled`.
+ *
+ * Animation state only: the landscape graph is never touched; clumped
+ * coordinates live in Cytoscape for the duration of the scene and are never
+ * written to the graph model or storage.
  */
-import type { Core, NodeCollection } from "cytoscape";
+import type { BoundingBox12, Core, NodeCollection, NodeSingular } from "cytoscape";
 import { OUT_OF_FOCUS_CLASS, applyFocusScope } from "./cytoscape";
+import { SCENE_CLUMP, clumpTargets, ease, lerp, satelliteShift, type Point } from "./scene-clump";
 import type { OutlineAct, PageImageAct, SceneAct, ToolScene } from "../sandbox/scene/types";
 
 export type ScenePart = "call" | "result" | "full";
@@ -82,6 +97,8 @@ const ACT_GAP = 18;
 const ACT_MARGIN = 8;
 const FIT_PADDING = 64;
 const FIT_MAX_ZOOM = 1.6;
+/** Nodes that hang off entities and follow them when they move. */
+const SATELLITE_SELECTOR = '[elementKind = "junction"], .ink-note-node';
 const SCENE_CLASSES = "sandbox-echo-seed sandbox-echo-hit sandbox-echo-fade sandbox-echo-edge";
 
 export class ScenePlayer {
@@ -99,6 +116,12 @@ export class ScenePlayer {
   private readonly hudStep: HTMLElement;
   private readonly hudType: HTMLElement;
   private readonly hudTypeText: HTMLElement;
+  /** Clump: original model positions of every node moved this session. */
+  private origin = new Map<string, Point>();
+  /** Clump: the focus the current segment clumped (re-applied after render). */
+  private clumpFocus: string[] = [];
+  /** Running position tween (clump in / restore out). */
+  private tween: { frame: number; done: () => void } | null = null;
   /** The open Act mini-window, if any. */
   private actWindow: HTMLElement | null = null;
   /** Notified when a session starts/ends (tests, dock). */
@@ -172,7 +195,24 @@ export class ScenePlayer {
 
   /** The graph re-rendered (class/scope reset): re-apply the current frame. */
   reapply(): void {
-    if (this.session && this.visual) this.paint(this.visual);
+    if (!this.session) return;
+    if (this.visual) this.paint(this.visual);
+    const core = this.host.core();
+    if (core && this.clumpFocus.length > 0) this.clump(core, this.clumpFocus, false);
+  }
+
+  /**
+   * About to re-render / sync the graph: put every moved node back at its
+   * original position now, so the sync (and ink-note placement) never sees
+   * clumped coordinates. `reapply()` clumps again afterwards.
+   */
+  beforeGraphSync(): void {
+    this.restorePositions(false);
+  }
+
+  /** Test hook: ids currently displaced by the clump. */
+  clumpedIds(): string[] {
+    return [...this.origin.keys()];
   }
 
   private async pump(): Promise<void> {
@@ -236,6 +276,8 @@ export class ScenePlayer {
     if (!core || !nodes || nodes.empty()) {
       this.visual = null;
       this.clearPaint();
+      this.clumpFocus = [];
+      if (core) this.clump(core, [], true);
       if (windowAct) {
         this.openAct(windowAct, null);
         await this.wait(Math.max(SCENE_TIMING.hudOnlyMs, SCENE_TIMING.actMs), token);
@@ -247,10 +289,13 @@ export class ScenePlayer {
     // Isolate the seeds first; each result layer then joins the focus.
     const visual: Visual = { focus: new Set(seeds), seeds, layers: [] };
     if (seeds.length > 0 || layers.length === 0) this.paint(visual);
-    this.fit(core, nodes);
+    // Clump and fit move together; the camera aims at where nodes will be.
+    this.clumpFocus = nodes.map((node) => node.id());
+    const box = this.clump(core, this.clumpFocus, true);
+    this.fit(core, box ?? nodes.boundingBox({}));
     if (seeds.length > 0) {
       if (!(await this.wait(part === "call" ? SCENE_TIMING.seedMs : SCENE_TIMING.layerMs, token))) return;
-    } else if (!(await this.wait(SCENE_TIMING.fitMs, token))) return;
+    } else if (!(await this.wait(Math.max(SCENE_TIMING.fitMs, SCENE_CLUMP.ms) + 40, token))) return;
     // The camera has landed: the window can sit beside its node.
     if (windowAct) this.openAct(windowAct, scene.anchor ?? null);
     for (const layer of layers) {
@@ -382,8 +427,7 @@ export class ScenePlayer {
   }
 
   /** Fit the focus with padding; never zoom past FIT_MAX_ZOOM (single node). */
-  private fit(core: Core, nodes: NodeCollection): void {
-    const box = nodes.boundingBox({});
+  private fit(core: Core, box: BoundingBox12 & { w: number; h: number }): void {
     const width = core.width();
     const height = core.height();
     if (width <= 0 || height <= 0 || !Number.isFinite(box.w)) return;
@@ -396,6 +440,146 @@ export class ScenePlayer {
     core.animate({ zoom, pan: { x: width / 2 - zoom * cx, y: height / 2 - zoom * cy } }, { duration: SCENE_TIMING.fitMs });
   }
 
+  /**
+   * Clump `focusIds` (from their original positions) and send every other
+   * node moved earlier this session home, in one tween (or at once).
+   * Returns the focus bounding box at the target positions, for the fit.
+   */
+  private clump(core: Core, focusIds: readonly string[], animate: boolean): (BoundingBox12 & { w: number; h: number }) | null {
+    const focus = collect(core, focusIds).filter((node) => !node.is(SATELLITE_SELECTOR));
+    const targets = new Map<string, Point>();
+    if (SCENE_CLUMP.enabled && focus.length >= 2) {
+      const origin = new Map<string, Point>();
+      focus.forEach((node) => {
+        origin.set(node.id(), this.originOf(node));
+      });
+      for (const [id, to] of clumpTargets(origin)) targets.set(id, to);
+      // Satellites follow the average shift of their neighbours.
+      const shift = (node: NodeSingular): Point | null => {
+        const to = targets.get(node.id());
+        if (!to) return null;
+        const from = origin.get(node.id())!;
+        return { x: to.x - from.x, y: to.y - from.y };
+      };
+      if (targets.size > 0) {
+        core.nodes(SATELLITE_SELECTOR).forEach((sat) => {
+          const neighbours = sat.neighborhood().nodes().not(SATELLITE_SELECTOR).toArray() as NodeSingular[];
+          if (!neighbours.some((n) => targets.has(n.id()))) return;
+          const d = satelliteShift(neighbours.map(shift));
+          const from = this.originOf(sat);
+          targets.set(sat.id(), { x: from.x + d.x, y: from.y + d.y });
+        });
+      }
+    }
+    // Everything moved before and not targeted now goes back home.
+    for (const [id, home] of this.origin) if (!targets.has(id)) targets.set(id, home);
+    if (targets.size === 0) {
+      this.origin.clear();
+      return null;
+    }
+    let box: (BoundingBox12 & { w: number; h: number }) | null = null;
+    focus.forEach((node) => {
+      const to = targets.get(node.id());
+      const at = node.position();
+      const b = node.boundingBox({});
+      const dx = to ? to.x - at.x : 0;
+      const dy = to ? to.y - at.y : 0;
+      const x1 = b.x1 + dx, x2 = b.x2 + dx, y1 = b.y1 + dy, y2 = b.y2 + dy;
+      box = box
+        ? { x1: Math.min(box.x1, x1), y1: Math.min(box.y1, y1), x2: Math.max(box.x2, x2), y2: Math.max(box.y2, y2), w: 0, h: 0 }
+        : { x1, y1, x2, y2, w: 0, h: 0 };
+    });
+    if (box) {
+      const b = box as BoundingBox12 & { w: number; h: number };
+      b.w = b.x2 - b.x1;
+      b.h = b.y2 - b.y1;
+    }
+    this.moveTo(core, targets, animate, () => {
+      // Nodes that are back home need no snapshot any more.
+      for (const [id, home] of [...this.origin]) {
+        const node = core.getElementById(id);
+        if (node.empty()) {
+          this.origin.delete(id);
+          continue;
+        }
+        const at = node.position();
+        if (Math.abs(at.x - home.x) < 0.5 && Math.abs(at.y - home.y) < 0.5) this.origin.delete(id);
+      }
+    });
+    return box;
+  }
+
+  /** Original position of `node` (snapshotted on first move). */
+  private originOf(node: NodeSingular): Point {
+    let home = this.origin.get(node.id());
+    if (!home) {
+      const at = node.position();
+      home = { x: at.x, y: at.y };
+      this.origin.set(node.id(), home);
+    }
+    return home;
+  }
+
+  /** Every moved node back to its snapshot (tweened or at once). */
+  private restorePositions(animate: boolean): void {
+    const core = this.host.core();
+    if (!core || this.origin.size === 0) {
+      this.stopTween();
+      this.origin.clear();
+      return;
+    }
+    const targets = new Map(this.origin);
+    this.moveTo(core, targets, animate, () => {
+      for (const [id, home] of targets) if (this.origin.get(id) === home) this.origin.delete(id);
+    });
+  }
+
+  private stopTween(): void {
+    if (!this.tween) return;
+    cancelAnimationFrame(this.tween.frame);
+    this.tween = null;
+  }
+
+  /** Tween nodes to `targets`; a new tween replaces the running one. */
+  private moveTo(core: Core, targets: ReadonlyMap<string, Point>, animate: boolean, done: () => void): void {
+    this.stopTween();
+    const moves: { node: NodeSingular; from: Point; to: Point }[] = [];
+    for (const [id, to] of targets) {
+      const node = core.getElementById(id);
+      if (node.empty() || !node.isNode()) continue;
+      const at = node.position();
+      moves.push({ node, from: { x: at.x, y: at.y }, to });
+    }
+    const place = (t: number) => {
+      core.batch(() => {
+        for (const move of moves) {
+          if (move.node.removed() || move.node.grabbed()) continue;
+          move.node.position(t >= 1 ? { ...move.to } : lerp(move.from, move.to, ease(t)));
+        }
+      });
+    };
+    if (!animate || SCENE_CLUMP.ms <= 0) {
+      place(1);
+      done();
+      return;
+    }
+    const start = performance.now();
+    const tween = { frame: 0, done };
+    const step = (now: number) => {
+      if (this.tween !== tween) return;
+      const t = (now - start) / SCENE_CLUMP.ms;
+      place(t);
+      if (t >= 1) {
+        this.tween = null;
+        done();
+        return;
+      }
+      tween.frame = requestAnimationFrame(step);
+    };
+    this.tween = tween;
+    tween.frame = requestAnimationFrame(step);
+  }
+
   private settle(restoreCamera: boolean, animate: boolean): void {
     clearTimeout(this.settleTimer);
     const session = this.session;
@@ -405,6 +589,9 @@ export class ScenePlayer {
     this.setTyped(null);
     this.closeAct();
     this.host.canvas.classList.remove("is-scene-playing");
+    this.clumpFocus = [];
+    // Nodes glide home (instantly when a jump follows: restoreCamera false).
+    this.restorePositions(restoreCamera);
     const core = this.host.core();
     if (!core) return;
     core.elements().removeClass(SCENE_CLASSES);
