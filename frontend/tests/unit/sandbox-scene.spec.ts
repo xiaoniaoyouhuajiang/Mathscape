@@ -2,14 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   callArgs,
   compileRoundScenes,
+  compileSceneAct,
   compileToolScene,
   parseArgsSummary,
   resolveScene,
+  resultImage,
   resultPayload,
   sceneHasFocus,
   sceneToolName,
 } from "../../src/sandbox/scene/compile";
-import { SCENE_FOCUS_CAP, SCENE_TOOLS, type SceneResolve } from "../../src/sandbox/scene/types";
+import { OUTLINE_ROWS_CAP, SCENE_FOCUS_CAP, SCENE_TOOLS, type SceneResolve } from "../../src/sandbox/scene/types";
 import type { AgentEventLike } from "../../src/sandbox/format";
 
 const UNIT = `mathscape:source-unit/${"a".repeat(64)}`;
@@ -17,7 +19,7 @@ const ART = `mathscape:artifact/${"b".repeat(64)}`;
 const ART2 = `mathscape:artifact/${"c".repeat(64)}`;
 
 /** A tool_call + tool_result pair in the real adapter shape. */
-function step(tool: string, args: Record<string, unknown>, result?: unknown, opts: { id?: string; text?: boolean; status?: string } = {}) {
+function step(tool: string, args: Record<string, unknown>, result?: unknown, opts: { id?: string; text?: boolean; status?: string; image?: Record<string, unknown> | null } = {}) {
   const id = opts.id ?? "c1";
   const call: AgentEventLike = {
     type: "tool_call",
@@ -25,7 +27,7 @@ function step(tool: string, args: Record<string, unknown>, result?: unknown, opt
     payload: { call_id: id, tool, server: "mathscape", args_summary: "", raw: { tool, server: "mathscape", arguments: args, id } },
   };
   const content = opts.text
-    ? { content: [{ type: "text", text: JSON.stringify(result) }, { type: "image", data: "…", mimeType: "image/png" }] }
+    ? { content: [{ type: "text", text: JSON.stringify(result) }, ...(opts.image === null ? [] : [{ type: "image", data: "…", mimeType: "image/png", ...opts.image }])] }
     : { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result };
   const done: AgentEventLike | undefined = result === undefined ? undefined : {
     type: "tool_result",
@@ -193,5 +195,89 @@ describe("compileRoundScenes", () => {
       ["a", "graph.get", "ok"],
       ["b", "workspace.search", "running"],
     ]);
+  });
+});
+
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const INK_META = {
+  status: "ok", node_id: "ink-node",
+  source: { kind: "ink_snapshot", node_id: "ink-node", document_id: "doc-1", note_title: "笔记 A" },
+  page: { id: "p2", index: 1 }, page_count: 3, image: { width: 800, height: 1000 },
+};
+
+describe("Act overlays (第二刀)", () => {
+  it("workspace.search: typewriter with the query; empty query → no act", () => {
+    const { call, done } = step("workspace.search", { query: "  紧集 开覆盖 " }, { status: "ok", query: "紧集 开覆盖", total: 0, groups: [] });
+    expect(compileSceneAct(call)).toEqual({ kind: "typewriter", text: "紧集 开覆盖" });
+    expect(compileToolScene(call, done)!.act).toEqual({ kind: "typewriter", text: "紧集 开覆盖" });
+    const { call: blank } = step("workspace.search", { query: "   " });
+    expect(compileSceneAct(blank)).toBeUndefined();
+    expect(compileToolScene(blank)!.act).toBeUndefined();
+  });
+
+  it("pdf.outline: rows with 1-based page, only once the result is in", () => {
+    const { call, done } = step("pdf.outline", { artifact_id: ART }, {
+      status: "ok", artifact_id: ART, total_pages: 9,
+      entries: [{ title: "第一章", level: 1, pdf_page_index: 0 }, { title: "1.1 紧集", level: 2, pdf_page_index: 4 }, { title: "无页", level: 2 }],
+    });
+    expect(compileSceneAct(call)).toBeUndefined();
+    expect(compileSceneAct(call, done)).toEqual({
+      kind: "outline", total: 3, truncated: false, totalPages: 9,
+      rows: [{ title: "第一章", level: 1, page: 1 }, { title: "1.1 紧集", level: 2, page: 5 }, { title: "无页", level: 2 }],
+    });
+  });
+
+  it("pdf.outline: empty and unreadable empty-states; truncated is still ok", () => {
+    const none = step("pdf.outline", { artifact_id: ART }, { status: "ok", artifact_id: ART, entries: [] });
+    expect(compileSceneAct(none.call, none.done)).toMatchObject({ kind: "outline", rows: [], empty: "none" });
+    const bad = step("pdf.outline", { artifact_id: ART }, { status: "ok", artifact_id: ART, entries: [], diagnostics: [{ code: "outline_unreadable" }] });
+    expect(compileSceneAct(bad.call, bad.done)).toMatchObject({ empty: "unreadable" });
+    const entries = Array.from({ length: OUTLINE_ROWS_CAP + 5 }, (_, i) => ({ title: `t${i}`, level: 1, pdf_page_index: i }));
+    const big = step("pdf.outline", { artifact_id: ART }, { status: "truncated", artifact_id: ART, entries, truncated: true, total_entries: 500 });
+    const act = compileSceneAct(big.call, big.done);
+    expect(act).toMatchObject({ kind: "outline", total: 500, truncated: true });
+    expect(act && act.kind === "outline" ? act.rows.length : 0).toBe(OUTLINE_ROWS_CAP);
+    expect(compileToolScene(big.call, big.done)!.status).toBe("ok");
+    const missing = step("pdf.outline", { artifact_id: ART }, { status: "not_found", artifact_id: ART });
+    expect(compileSceneAct(missing.call, missing.done)).toBeUndefined();
+  });
+
+  it("ink.page_image: PNG data URL + note title + page; degrades to meta without an image", () => {
+    const { call, done } = step("ink.page_image", { node_id: "ink-node", page_index: 1 }, INK_META, { text: true, image: { data: PNG } });
+    expect(resultImage(done)).toBe(`data:image/png;base64,${PNG}`);
+    expect(compileSceneAct(call, done)).toEqual({
+      kind: "page_image", src: `data:image/png;base64,${PNG}`, noteTitle: "笔记 A", pageLabel: "第 2/3 页", width: 800, height: 1000,
+    });
+    expect(compileToolScene(call, done)!.summary).toContain("已取得页图");
+    const bare = step("ink.page_image", { node_id: "ink-node", page_index: 1 }, INK_META, { text: true, image: null });
+    expect(resultImage(bare.done)).toBeUndefined();
+    expect(compileSceneAct(bare.call, bare.done)).toMatchObject({ kind: "page_image", noteTitle: "笔记 A", pageLabel: "第 2/3 页" });
+    expect(compileSceneAct(bare.call, bare.done)).not.toHaveProperty("src");
+    expect(compileToolScene(bare.call, bare.done)!.summary).toContain("仅元数据");
+  });
+
+  it("resultImage rejects non-image mime types and non-base64 data", () => {
+    expect(resultImage(step("ink.page_image", {}, INK_META, { text: true, image: { data: PNG, mimeType: "text/html" } }).done)).toBeUndefined();
+    expect(resultImage(step("ink.page_image", {}, INK_META, { text: true, image: { data: "<svg onload=x>" } }).done)).toBeUndefined();
+    expect(resultImage(step("ink.page_image", {}, INK_META, { text: true, image: { data: PNG, mimeType: undefined, mime_type: "image/jpeg" } }).done))
+      .toBe(`data:image/jpeg;base64,${PNG}`);
+  });
+
+  it("document_id is never registered as a map node; act + anchor survive resolveScene", () => {
+    const { call, done } = step("ink.page_image", { node_id: "ink-node", page_index: 1 }, INK_META, { text: true, image: { data: PNG } });
+    const draft = compileToolScene(call, done)!;
+    expect(JSON.stringify([draft.seeds, draft.layers])).not.toContain("doc-1");
+    const offMap = resolveScene(draft, resolver(["ink-node"]));
+    expect(offMap.anchor).toBeUndefined();
+    expect(offMap.act).toEqual(draft.act);
+    const outline = step("pdf.outline", { artifact_id: ART }, { status: "ok", artifact_id: ART, entries: [] });
+    const scene = resolveScene(compileToolScene(outline.call, outline.done)!, resolver());
+    expect(scene.anchor).toBe(`n:${ART}`);
+    expect(scene.act).toMatchObject({ kind: "outline", empty: "none" });
+  });
+
+  it("other tools carry no act", () => {
+    const { call, done } = step("graph.get", { node_id: UNIT }, { status: "ok", node: { id: UNIT, label: "x" } });
+    expect(compileSceneAct(call, done)).toBeUndefined();
   });
 });

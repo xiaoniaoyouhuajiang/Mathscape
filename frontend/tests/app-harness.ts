@@ -202,7 +202,39 @@ extraCommands.set("sandbox_set_effort", (args) => {
 });
 /** `cite`: the round reads the canonical unit with graph.get and answers
  * with its id plus LaTeX (A-PR3 chips / echo / KaTeX). */
-const sandboxRound: { delayMs: number; gapMs: number; cite: boolean } = { delayMs: 30, gapMs: 0, cite: false };
+/** `act` (Map Scene Player second slice): the round instead runs one
+ * Act tool — search typewriter, pdf.outline 目录 window, ink.page_image 页图 window. */
+type SandboxAct = "" | "search" | "outline" | "outline_empty" | "page_image" | "page_image_meta";
+const sandboxRound: { delayMs: number; gapMs: number; cite: boolean; act: SandboxAct } = { delayMs: 30, gapMs: 0, cite: false, act: "" };
+/** 1×1 PNG for the page-image window. */
+const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+function actStep(act: Exclude<SandboxAct, "">): { tool: string; args: Record<string, unknown>; result: Record<string, unknown> } {
+  switch (act) {
+    case "search": {
+      const structured = { status: "ok", query: "紧集 开覆盖", total: 2, groups: [
+        { kind: "source_unit", hits: [{ id: "h1", target: { kind: "source_object", object_id: citeUnitId } }] },
+        { kind: "artifact", hits: [{ id: "h2", target: { kind: "artifact", artifact_id: "pdf-notes" } }] },
+      ] };
+      return { tool: "workspace.search", args: { query: "紧集 开覆盖" }, result: { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured, isError: false } };
+    }
+    case "outline":
+    case "outline_empty": {
+      const entries = act === "outline" ? [
+        { title: "第一章 拓扑空间", level: 1, pdf_page_index: 0 },
+        { title: "1.1 紧集", level: 2, pdf_page_index: 1 },
+      ] : [];
+      const structured = { status: "ok", artifact_id: "pdf-notes", entries, total_entries: entries.length, total_pages: 2 };
+      return { tool: "pdf.outline", args: { artifact_id: "pdf-notes" }, result: { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured, isError: false } };
+    }
+    case "page_image":
+    case "page_image_meta": {
+      const meta = { status: "ok", truncated: false, node_id: "ink-doc-1", source: { kind: "note", node_id: "ink-doc-1", document_id: "ink-doc-1", note_title: "手稿 A" }, page: { id: "p0", index: 0, width: 800, height: 1000 }, page_count: 3, image: { format: "png", width: 1, height: 1, scale: 1 } };
+      const content: unknown[] = [{ type: "text", text: JSON.stringify(meta) }];
+      if (act === "page_image") content.push({ type: "image", data: tinyPng, mimeType: "image/png" });
+      return { tool: "ink.page_image", args: { node_id: "ink-doc-1", page_index: 0 }, result: { content, isError: false } };
+    }
+  }
+}
 extraCommands.set("sandbox_session_dialogue", (args) => ({ sandboxSessionId: String(args.sandboxSessionId), transcript: structuredClone(transcript), events: structuredClone(sandboxEvents), activeRoundId: null }));
 extraCommands.set("sandbox_send_message", (args) => {
   sandboxCalls.push({ command: "send", args });
@@ -224,7 +256,11 @@ extraCommands.set("sandbox_send_message", (args) => {
     event(0, "turn_start", { input_ref: "x" });
     event(1, "tool_call", { call_id: "mcp-startup", tool: "mcp.startup", server: "codex", args_summary: "mathscape", raw: mcp });
     event(2, "tool_result", { call_id: "mcp-startup", status: "ok", duration_ms: 40, raw: mcp });
-    if (sandboxRound.cite) {
+    if (sandboxRound.act) {
+      const { tool, args } = actStep(sandboxRound.act);
+      const raw = { type: "mcpToolCall", id: "c1", server: "mathscape", tool, arguments: args };
+      event(3, "tool_call", { call_id: "c1", tool, server: "mathscape", args_summary: "", raw });
+    } else if (sandboxRound.cite) {
       const raw = { type: "mcpToolCall", id: "c1", server: "mathscape", tool: "graph.get", arguments: { node_id: citeUnitId } };
       event(3, "tool_call", { call_id: "c1", tool: "graph.get", server: "mathscape", args_summary: `node_id=${citeUnitId}`, raw });
     } else {
@@ -232,7 +268,11 @@ extraCommands.set("sandbox_send_message", (args) => {
     }
   }, sandboxRound.delayMs);
   setTimeout(() => {
-    if (sandboxRound.cite) {
+    if (sandboxRound.act) {
+      const { tool, args, result } = actStep(sandboxRound.act);
+      const raw = { type: "mcpToolCall", id: "c1", server: "mathscape", tool, arguments: args, status: "completed", result };
+      event(4, "tool_result", { call_id: "c1", status: "ok", duration_ms: 12, raw });
+    } else if (sandboxRound.cite) {
       const result = { structuredContent: { status: "ok", node: { id: citeUnitId, kind: "source_unit", label: "引理 1.4", content_ref: null } }, isError: false };
       const raw = { type: "mcpToolCall", id: "c1", server: "mathscape", tool: "graph.get", arguments: { node_id: citeUnitId }, status: "completed", result };
       event(4, "tool_result", { call_id: "c1", status: "ok", duration_ms: 12, raw });
