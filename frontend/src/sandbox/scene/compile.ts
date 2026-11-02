@@ -5,13 +5,20 @@
  * own argument/result fields (not a blind id walk), so seeds and result
  * layers mean what the tool meant: a `graph.neighborhood` result lights
  * depth by depth, a grep lights only the materials that matched, and so on.
+ *
+ * Second slice: three tools also carry an Act overlay (`SceneDraft.act`):
+ * `workspace.search` types its query in the HUD, `pdf.outline` opens a 目录
+ * mini-window, `ink.page_image` opens a page-image mini-window.
  */
 import { shortStableId } from "../../core/stable-id";
 import type { AgentEventLike } from "../format";
 import { MCP_STARTUP_TOOL } from "../steps";
 import {
+  OUTLINE_ROWS_CAP,
   SCENE_FOCUS_CAP,
   SCENE_TOOLS,
+  type OutlineRow,
+  type SceneAct,
   type SceneDraft,
   type SceneResolve,
   type SceneStatus,
@@ -96,13 +103,31 @@ export function resultPayload(result: AgentEventLike | undefined): Json | undefi
   return "status" in value ? value : undefined;
 }
 
+const IMAGE_MIME = /^image\/(png|jpeg|webp|gif)$/;
+const BASE64 = /^[A-Za-z0-9+/=\s]+$/;
+
+/** The result's image block as a `data:` URL (ink.page_image), if any. */
+export function resultImage(result: AgentEventLike | undefined): string | undefined {
+  let value: unknown = rawOf(result)?.result;
+  if (typeof value === "string") value = parseJson(value);
+  if (!isObject(value)) return undefined;
+  for (const block of list(value.content)) {
+    if (!isObject(block) || block.type !== "image") continue;
+    const data = str(block.data);
+    const mime = str(block.mimeType) ?? str(block.mime_type) ?? "image/png";
+    if (data && IMAGE_MIME.test(mime) && BASE64.test(data)) return `data:${mime};base64,${data.replace(/\s+/g, "")}`;
+  }
+  return undefined;
+}
+
 function resultStatus(result: AgentEventLike | undefined, payload: Json | undefined): SceneStatus {
   if (!result) return "running";
   const status = str(result.payload?.status);
   if (rawOf(result)?.error) return "error";
-  if (status && !["ok", "completed", "success"].includes(status)) return "error";
+  // `truncated` is a successful, capped result (contract §2.2), not a failure.
+  if (status && !["ok", "completed", "success", "truncated"].includes(status)) return "error";
   const inner = str(payload?.status);
-  if (inner && inner !== "ok") return "error";
+  if (inner && inner !== "ok" && inner !== "truncated") return "error";
   return "ok";
 }
 
@@ -274,12 +299,83 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
       subject: str(source.note_title) ?? str(source.label),
       subjectId: str(args.node_id) ?? str(source.node_id),
       detail: index !== undefined ? `第 ${index + 1}${count !== undefined ? `/${count}` : ""} 页` : undefined,
-      summary: status === "running" ? "正在渲染手稿页…" : "已取得页图（页图窗口留待后续）",
+      summary: status === "running" ? "正在渲染手稿页…" : "已取得页图",
       seeds: [...new Set(focus)],
       layers: [],
     };
   },
 };
+
+type ActCompiler = (args: Json, payload: Json | undefined, status: SceneStatus, result: AgentEventLike | undefined) => SceneAct | undefined;
+
+function outlineRows(entries: unknown[]): OutlineRow[] {
+  const rows: OutlineRow[] = [];
+  for (const entry of entries) {
+    if (!isObject(entry)) continue;
+    const title = str(entry.title);
+    if (!title) continue;
+    const index = num(entry.pdf_page_index);
+    rows.push({
+      title,
+      level: Math.max(1, Math.min(8, Math.round(num(entry.level) ?? 1))),
+      ...(index !== undefined && index >= 0 ? { page: index + 1 } : {}),
+    });
+    if (rows.length >= OUTLINE_ROWS_CAP) break;
+  }
+  return rows;
+}
+
+const hasDiagnostic = (payload: Json | undefined, code: string): boolean =>
+  list(payload?.diagnostics).some((item) => isObject(item) && item.code === code);
+
+/** Act overlays: only these three tools have one (others stay unchanged). */
+const ACTS: Partial<Record<SceneToolName, ActCompiler>> = {
+  "workspace.search": (args, payload) => {
+    const text = str(args.query) ?? str(payload?.query);
+    return text ? { kind: "typewriter", text } : undefined;
+  },
+  "pdf.outline": (_args, payload, status) => {
+    if (status !== "ok") return undefined;
+    const entries = list(payload?.entries);
+    const rows = outlineRows(entries);
+    const total = num(payload?.total_entries) ?? entries.length;
+    const truncated = payload?.truncated === true || str(payload?.status) === "truncated" || total > rows.length;
+    return {
+      kind: "outline",
+      rows,
+      total,
+      truncated: rows.length > 0 && truncated,
+      ...(rows.length === 0 ? { empty: hasDiagnostic(payload, "outline_unreadable") ? "unreadable" as const : "none" as const } : {}),
+      ...(num(payload?.total_pages) !== undefined ? { totalPages: num(payload?.total_pages) } : {}),
+    };
+  },
+  "ink.page_image": (args, payload, status, result) => {
+    if (status !== "ok") return undefined;
+    const source = isObject(payload?.source) ? payload.source : {};
+    const page = isObject(payload?.page) ? payload.page : {};
+    const image = isObject(payload?.image) ? payload.image : {};
+    const index = num(page.index) ?? num(args.page_index);
+    const count = num(payload?.page_count);
+    const src = resultImage(result);
+    return {
+      kind: "page_image",
+      ...(src ? { src } : {}),
+      noteTitle: str(source.note_title) ?? str(source.label),
+      pageLabel: index !== undefined ? `第 ${index + 1}${count !== undefined ? `/${count}` : ""} 页` : undefined,
+      width: num(image.width),
+      height: num(image.height),
+    };
+  },
+};
+
+/** One tool step's Act overlay (exported for tests). */
+export function compileSceneAct(call: AgentEventLike | undefined, result?: AgentEventLike): SceneAct | undefined {
+  const tool = sceneToolName(call?.payload?.tool ?? rawOf(call)?.tool ?? rawOf(result)?.tool);
+  const act = tool ? ACTS[tool] : undefined;
+  if (!act) return undefined;
+  const payload = resultPayload(result);
+  return act(callArgs(call ?? result), payload, resultStatus(result, payload), result);
+}
 
 /** One tool step (call, plus its result once it arrived) → draft. */
 export function compileToolScene(call: AgentEventLike | undefined, result?: AgentEventLike): SceneDraft | null {
@@ -291,6 +387,10 @@ export function compileToolScene(call: AgentEventLike | undefined, result?: Agen
   const payload = resultPayload(result);
   const status = resultStatus(result, payload);
   const parts = COMPILERS[tool](args, payload, status);
+  const act = ACTS[tool]?.(args, payload, status, result);
+  if (tool === "ink.page_image" && act?.kind === "page_image" && !act.src && status === "ok") {
+    parts.summary = "仅元数据（无页图）";
+  }
   return {
     callId,
     roundId: event?.round_id,
@@ -298,6 +398,7 @@ export function compileToolScene(call: AgentEventLike | undefined, result?: Agen
     status,
     ...parts,
     summary: status === "error" ? errorSummary(result, payload) : parts.summary,
+    ...(act ? { act } : {}),
   };
 }
 
@@ -372,6 +473,8 @@ export function resolveScene(draft: SceneDraft, resolve: SceneResolve, cap = SCE
     layers,
     offMap,
     capped,
+    ...(draft.act ? { act: draft.act } : {}),
+    ...(seeds[0] ? { anchor: seeds[0] } : {}),
   };
 }
 

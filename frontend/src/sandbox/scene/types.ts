@@ -47,6 +47,8 @@ export interface SceneDraft {
   seeds: string[];
   /** What the result returned, shallow first (neighborhood: one per depth). */
   layers: string[][];
+  /** Act overlay (second slice): typewriter / outline window / page image. */
+  act?: SceneAct;
 }
 
 /** A draft resolved against the current map: projection node ids only. */
@@ -65,6 +67,10 @@ export interface ToolScene {
   offMap: number;
   /** Focus was cut to `SCENE_FOCUS_CAP`. */
   capped: boolean;
+  /** Act overlay, copied from the draft. */
+  act?: SceneAct;
+  /** Map node an Act window sits beside (first resolved seed), if any. */
+  anchor?: string;
 }
 
 /** Map node a raw id resolves to (unique, unambiguous). */
@@ -81,3 +87,49 @@ export type SceneResolve = (id: string) => SceneTarget | null;
  * plus its seeds fits whole. Seeds and shallow layers are kept first.
  */
 export const SCENE_FOCUS_CAP = 60;
+
+// ---------------------------------------------------------------------------
+// Act overlays (second slice)
+
+/** `workspace.search`: type the query in the HUD before the hits land. */
+export interface TypewriterAct {
+  kind: "typewriter";
+  text: string;
+}
+
+export interface OutlineRow {
+  title: string;
+  /** 1 = top level. */
+  level: number;
+  /** 1-based page shown to the user (`pdf_page_index + 1`). */
+  page?: number;
+}
+
+/** `pdf.outline`: a temporary 目录 mini-window beside the artifact. */
+export interface OutlineAct {
+  kind: "outline";
+  rows: OutlineRow[];
+  /** Entries the reader produced (may exceed `rows` when truncated). */
+  total: number;
+  truncated: boolean;
+  /** Why `rows` is empty: no bookmarks, or an unreadable bookmark tree. */
+  empty?: "none" | "unreadable";
+  totalPages?: number;
+}
+
+/** `ink.page_image`: a temporary page-image mini-window. */
+export interface PageImageAct {
+  kind: "page_image";
+  /** `data:image/…;base64,…` of the returned image block, when present. */
+  src?: string;
+  noteTitle?: string;
+  /** e.g. `第 2/3 页`. */
+  pageLabel?: string;
+  width?: number;
+  height?: number;
+}
+
+export type SceneAct = TypewriterAct | OutlineAct | PageImageAct;
+
+/** At most this many outline rows are drawn in the mini-window. */
+export const OUTLINE_ROWS_CAP = 60;
