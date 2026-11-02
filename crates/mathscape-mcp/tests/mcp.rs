@@ -1,6 +1,7 @@
 //! End-to-end tests of the read-only MCP slice on a fixture workspace built
 //! through the real artifact pool (markdown + generated PDFs).
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io;
 use std::path::Path;
@@ -10,7 +11,11 @@ use lopdf::{
 };
 use mathscape_agent::{CommandOutput, CommandRunner};
 use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
-use mathscape_domain::{ActorRef, MediaType, RightsRecord, RightsStatus};
+use mathscape_domain::{
+    ActorRef, CanonicalMarkdownKey, CommandRecordStatus, ConversionExitStatus,
+    ConversionParameters, ConversionRun, EntityHeader, EntityKind, LifecycleStatus, MediaType,
+    PageIndexBase, PageRange, RevisionId, RightsRecord, RightsStatus, SchemaVersion, Timestamp,
+};
 use mathscape_mcp::tools::{
     MAX_GREP_HITS, MAX_OUTLINE_ENTRIES, MAX_OUTLINE_ENTRIES_BYTES, MAX_OUTLINE_TITLE_CHARS,
     MAX_READ_BYTES, MAX_SCAN_BYTES, TOOL_NAMES,
@@ -1518,4 +1523,269 @@ fn grep_missing_object_is_not_found_and_symlink_is_forbidden() {
         !message.contains(&f.root.display().to_string()),
         "{message}"
     );
+}
+
+#[test]
+fn scanned_pdf_read_reports_canonical_coverage_without_running_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    let mut pool = ArtifactPool::create(&root).unwrap();
+    let actor = ActorRef::parse("canonical-test").unwrap();
+    let pdf = import(
+        &mut pool,
+        pdf_bytes(&[&[], &[]]),
+        "application/pdf",
+        "scan-book.pdf",
+        Some(2),
+    );
+    let markdown_body = "扫描页正文\n";
+    let markdown = import(
+        &mut pool,
+        markdown_body.as_bytes().to_vec(),
+        "text/markdown",
+        "scan-book.md",
+        None,
+    );
+    let conversion = ConversionRun::new(
+        "marker_single".to_owned(),
+        Some("2.0.0".to_owned()),
+        None,
+        CommandRecordStatus::Recorded,
+        ConversionParameters::new(
+            Some(PageRange::new(0, 0, PageIndexBase::Zero).unwrap()),
+            "markdown".to_owned(),
+            Some(false),
+            BTreeMap::from([(
+                "marker_profile".to_owned(),
+                "mathscape.marker.math-ocr.v1".to_owned(),
+            )]),
+        )
+        .unwrap(),
+        None,
+        Some(Timestamp::parse("2026-11-02T00:00:00+08:00").unwrap()),
+        Some(Timestamp::parse("2026-11-02T00:01:00+08:00").unwrap()),
+        ConversionExitStatus::Succeeded,
+        vec![],
+        None,
+    )
+    .unwrap()
+    .into_record(
+        EntityHeader::new(
+            mathscape_domain::StableId::parse("mathscape:conversion/marker/scan").unwrap(),
+            RevisionId::parse(format!("sha256:{}", "c".repeat(64))).unwrap(),
+            EntityKind::ConversionRun,
+            SchemaVersion::parse("canonical-test-v1").unwrap(),
+            LifecycleStatus::Active,
+            Timestamp::parse("2026-11-02T00:01:00+08:00").unwrap(),
+            actor,
+            None,
+        ),
+        vec![mathscape_domain::StableId::parse(&pdf).unwrap()],
+        vec![mathscape_domain::StableId::parse(&markdown).unwrap()],
+    )
+    .unwrap();
+    pool.record_conversion(&conversion).unwrap();
+    drop(pool);
+
+    let server = McpServer::new(
+        McpWorkspace::open(&root)
+            .unwrap()
+            .with_capability_runner(Box::new(NothingInstalled)),
+    );
+    let canonical = CanonicalMarkdownKey::new(
+        mathscape_domain::StableId::parse(&pdf).unwrap(),
+        "mathscape.marker.math-ocr.v1",
+        "marker-2.0.0",
+    )
+    .unwrap();
+
+    let covered = read(
+        &server,
+        json!({ "artifact_id": pdf, "locator": { "pdf_pages": { "from": 1, "to": 1 } } }),
+    );
+    assert_eq!(covered["status"], "ok");
+    assert_eq!(covered["content_type"], "markdown");
+    assert_eq!(covered["text"], markdown_body);
+    assert_eq!(covered["partial"], true);
+    assert_eq!(covered["canonical_id"], canonical.canonical_id().as_str());
+    assert_eq!(covered["served_artifact_id"], markdown);
+    assert_eq!(covered["coverage"]["complete"], false);
+    assert_eq!(covered["coverage"]["page_index_base"], "one");
+    assert_eq!(
+        covered["coverage"]["covered"],
+        json!([{ "from": 1, "to": 1 }])
+    );
+    assert_eq!(
+        covered["coverage"]["missing"],
+        json!([{ "from": 2, "to": 2 }])
+    );
+    assert_eq!(covered["coverage"]["total_pages"], 2);
+    assert!(
+        covered["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["code"] == "served_canonical_markdown")
+    );
+
+    let missing = read(
+        &server,
+        json!({ "artifact_id": pdf, "locator": { "pdf_pages": { "from": 2, "to": 2 } } }),
+    );
+    assert_eq!(missing["status"], "capability_unavailable");
+    assert!(missing.get("text").is_none());
+    assert_eq!(missing["partial"], true);
+    assert_eq!(missing["canonical_id"], canonical.canonical_id().as_str());
+    assert_eq!(missing["details"]["state"], "missing");
+
+    let via_canonical = read(
+        &server,
+        json!({
+            "artifact_id": canonical.canonical_id().as_str(),
+            "locator": { "md_byte_range": { "start": 0, "end": 64 } },
+        }),
+    );
+    assert_eq!(via_canonical["text"], markdown_body);
+    assert_eq!(via_canonical["artifact_id"], markdown);
+    assert_eq!(via_canonical["partial"], true);
+    assert!(
+        via_canonical["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["code"] == "canonical_id_resolved"),
+        "{via_canonical}"
+    );
+
+    let hits = grep(
+        &server,
+        json!({ "artifact_ids": [markdown], "pattern": "扫描" }),
+    );
+    assert_eq!(
+        hits["hits"][0]["canonical_id"],
+        canonical.canonical_id().as_str()
+    );
+    assert_eq!(hits["hits"][0]["partial"], true);
+    assert_eq!(
+        hits["hits"][0]["coverage"]["covered"],
+        json!([{ "from": 1, "to": 1 }])
+    );
+
+    let (found, is_error) = call(
+        &server,
+        "workspace.search",
+        json!({ "query": "scan-book", "kinds": ["material"] }),
+    );
+    assert!(!is_error);
+    let annotated = found["groups"][0]["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|hit| {
+            hit["canonical_id"] == canonical.canonical_id().as_str() && hit["partial"] == true
+        });
+    assert!(annotated, "{found}");
+
+    let outline = outline(&server, json!({ "artifact_id": pdf }));
+    assert_eq!(outline["status"], "ok");
+    assert_eq!(outline["canonical_id"], canonical.canonical_id().as_str());
+    assert_eq!(outline["partial"], true);
+}
+
+#[test]
+fn scanned_pdf_read_refuses_snapshot_that_only_overlaps_the_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    let mut pool = ArtifactPool::create(&root).unwrap();
+    let actor = ActorRef::parse("canonical-test").unwrap();
+    let pdf = import(
+        &mut pool,
+        pdf_bytes(&[&[], &[], &[]]),
+        "application/pdf",
+        "scan-overlap.pdf",
+        Some(3),
+    );
+    let markdown_body = "仅第二、三页\n";
+    let markdown = import(
+        &mut pool,
+        markdown_body.as_bytes().to_vec(),
+        "text/markdown",
+        "scan-overlap.md",
+        None,
+    );
+    // Snapshot covers 1-based pages 2–3 only (0-based 1..=2).
+    let conversion = ConversionRun::new(
+        "marker_single".to_owned(),
+        Some("2.0.0".to_owned()),
+        None,
+        CommandRecordStatus::Recorded,
+        ConversionParameters::new(
+            Some(PageRange::new(1, 2, PageIndexBase::Zero).unwrap()),
+            "markdown".to_owned(),
+            Some(false),
+            BTreeMap::from([(
+                "marker_profile".to_owned(),
+                "mathscape.marker.math-ocr.v1".to_owned(),
+            )]),
+        )
+        .unwrap(),
+        None,
+        Some(Timestamp::parse("2026-11-02T00:00:00+08:00").unwrap()),
+        Some(Timestamp::parse("2026-11-02T00:01:00+08:00").unwrap()),
+        ConversionExitStatus::Succeeded,
+        vec![],
+        None,
+    )
+    .unwrap()
+    .into_record(
+        EntityHeader::new(
+            mathscape_domain::StableId::parse("mathscape:conversion/marker/overlap").unwrap(),
+            RevisionId::parse(format!("sha256:{}", "d".repeat(64))).unwrap(),
+            EntityKind::ConversionRun,
+            SchemaVersion::parse("canonical-test-v1").unwrap(),
+            LifecycleStatus::Active,
+            Timestamp::parse("2026-11-02T00:01:00+08:00").unwrap(),
+            actor,
+            None,
+        ),
+        vec![mathscape_domain::StableId::parse(&pdf).unwrap()],
+        vec![mathscape_domain::StableId::parse(&markdown).unwrap()],
+    )
+    .unwrap();
+    pool.record_conversion(&conversion).unwrap();
+    drop(pool);
+
+    let server = McpServer::new(
+        McpWorkspace::open(&root)
+            .unwrap()
+            .with_capability_runner(Box::new(NothingInstalled)),
+    );
+
+    // Request 1–3 only overlaps the 2–3 snapshot: the body must not be
+    // returned under a 1–3 locator.
+    let overlapping = read(
+        &server,
+        json!({ "artifact_id": pdf, "locator": { "pdf_pages": { "from": 1, "to": 3 } } }),
+    );
+    assert_eq!(
+        overlapping["status"], "capability_unavailable",
+        "{overlapping}"
+    );
+    assert!(overlapping.get("text").is_none(), "{overlapping}");
+    assert!(
+        overlapping.get("served_artifact_id").is_none(),
+        "{overlapping}"
+    );
+    assert_eq!(overlapping["partial"], true);
+
+    // A fully covered request is still served.
+    let covered = read(
+        &server,
+        json!({ "artifact_id": pdf, "locator": { "pdf_pages": { "from": 2, "to": 3 } } }),
+    );
+    assert_eq!(covered["status"], "ok", "{covered}");
+    assert_eq!(covered["text"], markdown_body);
+    assert_eq!(covered["served_artifact_id"], markdown);
+    assert_eq!(covered["locator"]["pdf_pages"]["from"], 2);
+    assert_eq!(covered["locator"]["pdf_pages"]["to"], 3);
 }

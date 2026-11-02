@@ -33,16 +33,17 @@
 //! always carry `truncated` (`false` when nothing was cut).
 
 use mathscape_agent::{ToolError, ToolErrorCode, ToolStatus};
-use mathscape_domain::StableId;
+use mathscape_domain::{MarkdownCoverage, StableId};
 use mathscape_pdf::{PdfEngine, PdfOpenOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::canonical::CanonicalIndex;
 use super::material::{self, PDF_MEDIA_TYPE, find_material, managed_path_failure};
 use super::{PDF_OUTLINE, diagnostic, parse_args, to_object};
 use crate::McpWorkspace;
 
-const DESCRIPTION: &str = "Read the embedded table of contents (bookmarks) of one PDF material. Input is artifact_id. persist_index must be omitted or false: the outline is returned only, never written to the workspace or catalog. Each entry has title, level (1 = top-level), and pdf_page_index (0-based). To read that page with material.read, use locator pdf_pages {from, to} where from = pdf_page_index + 1 (1-based, inclusive). A PDF with no bookmarks returns status ok and entries []. A cyclic, oversized, or corrupt bookmark tree also returns status ok and entries [] with diagnostic outline_unreadable; a file that cannot be opened is an internal error. Duplicate titles collapse to one entry (first position, last page and level). Graphs deeper than 64 or with more than 10000 nodes are unreadable, not truncated. Output is capped: each title at 512 characters (entry gets title_truncated true), at most 1000 entries, and at most 64 KiB of serialized entries; on any cut the result is status truncated with truncated true, keeps the entries that fit in order, and reports total_entries. Read-only.";
+const DESCRIPTION: &str = "Read the embedded table of contents (bookmarks) of one PDF material. Input is artifact_id. persist_index must be omitted or false: the outline is returned only, never written to the workspace or catalog. Each entry has title, level (1 = top-level), and pdf_page_index (0-based). To read that page with material.read, use locator pdf_pages {from, to} where from = pdf_page_index + 1 (1-based, inclusive). A PDF with no bookmarks returns status ok and entries []. A cyclic, oversized, or corrupt bookmark tree also returns status ok and entries [] with diagnostic outline_unreadable; a file that cannot be opened is an internal error. Duplicate titles collapse to one entry (first position, last page and level). Graphs deeper than 64 or with more than 10000 nodes are unreadable, not truncated. Output is capped: each title at 512 characters (entry gets title_truncated true), at most 1000 entries, and at most 64 KiB of serialized entries; on any cut the result is status truncated with truncated true, keeps the entries that fit in order, and reports total_entries. When a canonical markdown view exists, the result includes canonical_id, coverage and partial. Read-only; this tool never runs Marker.";
 
 const SOURCE_EMBEDDED: &str = "embedded_toc";
 
@@ -95,6 +96,12 @@ struct OutlineResult {
     details: Option<Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     diagnostics: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    canonical_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coverage: Option<MarkdownCoverage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    partial: Option<bool>,
 }
 
 pub(super) fn definition() -> Value {
@@ -198,6 +205,11 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
             .iter()
             .map(|entry| (entry.title(), entry.level(), entry.page().get())),
     )?;
+    let index = CanonicalIndex::load(workspace)?;
+    let attachment = index.for_pdf(material.id.as_str(), None).map(|view| {
+        let coverage = view.coverage(None);
+        (view.canonical_id.to_string(), coverage.partial, coverage)
+    });
     let truncated = warnings_truncated || capped.truncated;
     if capped.truncated {
         diagnostics.push(diagnostic(
@@ -225,6 +237,9 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
         revision: Some(material.revision.clone()),
         details: None,
         diagnostics,
+        canonical_id: attachment.as_ref().map(|(id, _, _)| id.clone()),
+        partial: attachment.as_ref().map(|(_, partial, _)| *partial),
+        coverage: attachment.map(|(_, _, coverage)| coverage),
     })
 }
 
@@ -240,6 +255,9 @@ fn not_found(args: &OutlineArgs, reason: &str, message: &str) -> Result<Value, T
         revision: None,
         details: Some(json!({ "reason": reason })),
         diagnostics: vec![diagnostic(reason, message)],
+        canonical_id: None,
+        coverage: None,
+        partial: None,
     })
 }
 

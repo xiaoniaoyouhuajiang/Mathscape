@@ -364,7 +364,7 @@ fn upgrading_v19_keeps_snapshots_unnamed_and_renamable() {
         .connection()
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 20);
+    assert_eq!(version, 21);
     let reopened = upgraded
         .open_ink_snapshot(snapshot.snapshot_id.clone())
         .unwrap()

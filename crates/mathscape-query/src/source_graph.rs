@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use mathscape_domain::{EntityKind, StableId};
+use mathscape_domain::{CanonicalMarkdownView, EntityKind, StableId};
 use mathscape_graph::{
     GraphProjection, GraphProjectionError, IncidenceDirection, ProjectionEndpoint, ProjectionGroup,
     ProjectionGroupId, ProjectionLens, ProjectionNode, ProjectionRelation, ProjectionRelationKind,
@@ -30,6 +30,7 @@ pub struct LandscapeProjectionInput<'a> {
     catalog: &'a ArtifactCatalogSnapshot,
     source_map: &'a SourceMapSnapshot,
     ink_snapshot_labels: Option<&'a BTreeMap<String, String>>,
+    canonical_markdown: &'a [CanonicalMarkdownView],
 }
 
 impl<'a> LandscapeProjectionInput<'a> {
@@ -38,7 +39,14 @@ impl<'a> LandscapeProjectionInput<'a> {
             catalog,
             source_map,
             ink_snapshot_labels: None,
+            canonical_markdown: &[],
         }
+    }
+
+    /// Registry rows that collapse physical markdown fragments into one node.
+    pub fn with_canonical_markdown(mut self, views: &'a [CanonicalMarkdownView]) -> Self {
+        self.canonical_markdown = views;
+        self
     }
 
     /// N3d: snapshot Artifact id → snapshot name, shown on the snapshot
@@ -51,6 +59,7 @@ impl<'a> LandscapeProjectionInput<'a> {
     pub fn from_snapshot(snapshot: &'a LandscapeSnapshot) -> Self {
         Self::new(snapshot.artifacts(), snapshot.sources())
             .with_ink_snapshot_labels(snapshot.ink_snapshot_labels())
+            .with_canonical_markdown(snapshot.canonical_markdown())
     }
 }
 
@@ -300,8 +309,11 @@ pub fn project_landscape(
         input.catalog,
         ProjectionLens::Source,
         input.ink_snapshot_labels,
+        input.canonical_markdown,
     )
     .map_err(|error| SourceGraphProjectionError::Material(error.to_string()))?;
+    let canonical_aliases =
+        super::artifact_graph::canonical_markdown_aliases(input.canonical_markdown);
     // Ink evidence spans → their snapshot's name, if the snapshot is named.
     let evidence_snapshot_names: BTreeMap<StableId, &str> = input
         .ink_snapshot_labels
@@ -410,9 +422,13 @@ pub fn project_landscape(
                     .map(|id| (id, "来源于手稿快照", "SourceSpan Ink 笔迹定位"))
             });
         let Some((artifact, label, summary)) = locator.and_then(|(id, label, summary)| {
-            StableId::parse(id)
-                .ok()
-                .map(|artifact| (artifact, label, summary))
+            StableId::parse(id).ok().map(|artifact| {
+                let artifact = canonical_aliases
+                    .get(&artifact)
+                    .cloned()
+                    .unwrap_or(artifact);
+                (artifact, label, summary)
+            })
         }) else {
             continue;
         };

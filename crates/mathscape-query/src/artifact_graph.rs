@@ -1,6 +1,6 @@
 use mathscape_domain::{
-    ConversionExitStatus, ConversionRun, EntityKind, LocationStatus, PageIndexBase, SourcePayload,
-    StableId,
+    CanonicalMarkdownView, ConversionExitStatus, ConversionRun, EntityKind, LocationStatus,
+    PageIndexBase, SourcePayload, StableId,
 };
 use mathscape_graph::{
     GraphProjection, GraphProjectionError, IncidenceDirection, ProjectionEndpoint, ProjectionLens,
@@ -27,7 +27,7 @@ pub fn project_artifact_catalog(
     catalog: &ArtifactCatalogSnapshot,
     lens: ProjectionLens,
 ) -> Result<GraphProjection, ArtifactGraphProjectionError> {
-    project_artifact_catalog_labeled(catalog, lens, None)
+    project_artifact_catalog_labeled(catalog, lens, None, &[])
 }
 
 /// Like [`project_artifact_catalog`], with N3d snapshot names (snapshot
@@ -36,6 +36,7 @@ pub(crate) fn project_artifact_catalog_labeled(
     catalog: &ArtifactCatalogSnapshot,
     lens: ProjectionLens,
     snapshot_labels: Option<&BTreeMap<String, String>>,
+    canonical: &[CanonicalMarkdownView],
 ) -> Result<GraphProjection, ArtifactGraphProjectionError> {
     if !matches!(lens, ProjectionLens::Source | ProjectionLens::Provenance) {
         return Err(ArtifactGraphProjectionError::UnsupportedLens(lens));
@@ -179,7 +180,153 @@ pub(crate) fn project_artifact_catalog_labeled(
         );
     }
 
+    let (nodes, relations) = collapse_canonical_markdown(nodes, relations, canonical, &names)?;
     GraphProjection::new(lens, vec![], nodes, relations).map_err(Into::into)
+}
+
+/// Markdown artifact id → canonical id, for fragments a registry entry replaces.
+///
+/// A physical markdown artifact that several canonical views claim (shared
+/// across lineages) is ambiguous: folding it into whichever view came first
+/// would rewire its edges to the wrong canonical node. Such artifacts are left
+/// out of the map so they stay as their own uncollapsed node.
+pub(crate) fn canonical_markdown_aliases(
+    views: &[CanonicalMarkdownView],
+) -> BTreeMap<StableId, StableId> {
+    resolve_canonical_markdown_aliases(views).0
+}
+
+/// Returns `(aliases, conflicts)`: conflicts map each refused artifact to
+/// every distinct canonical id that claimed it.
+fn resolve_canonical_markdown_aliases(
+    views: &[CanonicalMarkdownView],
+) -> (
+    BTreeMap<StableId, StableId>,
+    BTreeMap<StableId, BTreeSet<StableId>>,
+) {
+    let mut claims: BTreeMap<StableId, BTreeSet<StableId>> = BTreeMap::new();
+    for view in views {
+        if view.head_artifact_id.is_none() {
+            continue;
+        }
+        for id in view.collapsed_markdown_ids() {
+            claims
+                .entry(id)
+                .or_default()
+                .insert(view.canonical_id.clone());
+        }
+    }
+    let mut aliases = BTreeMap::new();
+    let mut conflicts = BTreeMap::new();
+    for (artifact, canonical_ids) in claims {
+        if canonical_ids.len() == 1 {
+            let canonical = canonical_ids.into_iter().next().expect("one claim");
+            aliases.insert(artifact, canonical);
+        } else {
+            conflicts.insert(artifact, canonical_ids);
+        }
+    }
+    (aliases, conflicts)
+}
+
+fn collapse_canonical_markdown(
+    nodes: Vec<ProjectionNode>,
+    relations: Vec<ProjectionRelation>,
+    views: &[CanonicalMarkdownView],
+    names: &BTreeMap<StableId, String>,
+) -> Result<(Vec<ProjectionNode>, Vec<ProjectionRelation>), ArtifactGraphProjectionError> {
+    let (aliases, conflicts) = resolve_canonical_markdown_aliases(views);
+    if aliases.is_empty() && conflicts.is_empty() {
+        return Ok((nodes, relations));
+    }
+    let mut nodes: Vec<_> = nodes
+        .into_iter()
+        .filter(|node| !aliases.contains_key(node.entity_id()))
+        .collect();
+    let present: BTreeSet<_> = nodes.iter().map(|node| node.entity_id().clone()).collect();
+    for view in views {
+        if view.head_artifact_id.is_none() || present.contains(&view.canonical_id) {
+            continue;
+        }
+        let pdf_label = names
+            .get(&view.source_pdf_artifact_id)
+            .map(String::as_str)
+            .unwrap_or("PDF");
+        let coverage = view.coverage(None);
+        let head = view
+            .head_artifact_id
+            .as_ref()
+            .map(StableId::to_string)
+            .unwrap_or_default();
+        let mut summary = format!(
+            "text/markdown · canonical {} · head {head} · {}",
+            view.canonical_id,
+            if coverage.complete {
+                "complete"
+            } else {
+                "partial"
+            }
+        );
+        let shared = conflicts
+            .values()
+            .filter(|claimants| claimants.contains(&view.canonical_id))
+            .count();
+        if shared > 0 {
+            // Diagnostic: these snapshots are claimed by several canonical
+            // views, so they are not folded into this node.
+            summary.push_str(&format!(
+                " · canonical_alias_conflict: {shared} 个共享解析正文未折叠"
+            ));
+        }
+        nodes.push(
+            ProjectionNode::new(
+                view.canonical_id.clone(),
+                EntityKind::SourceArtifact,
+                ViewLayer::Source,
+                format!("{pdf_label} · 规范解析正文"),
+            )?
+            .summary(summary)?
+            .lifecycle(mathscape_domain::LifecycleStatus::Active),
+        );
+    }
+    let mut rewritten = Vec::with_capacity(relations.len());
+    for relation in relations {
+        let endpoints = relation
+            .endpoints()
+            .iter()
+            .map(|endpoint| {
+                let node = aliases
+                    .get(endpoint.node())
+                    .cloned()
+                    .unwrap_or_else(|| endpoint.node().clone());
+                ProjectionEndpoint::new(
+                    node,
+                    endpoint.role().clone(),
+                    endpoint.ordinal(),
+                    endpoint.direction(),
+                )
+            })
+            .collect();
+        let mut rebuilt = ProjectionRelation::new(
+            relation.relation_id().clone(),
+            relation.kind(),
+            relation.layer(),
+            relation.label(),
+            endpoints,
+        )?
+        .relation_kind(relation.relation_kind_value());
+        if let Some(summary) = relation.summary_ref() {
+            rebuilt = rebuilt.summary(summary)?;
+        }
+        if let Some(lifecycle) = relation.lifecycle_status() {
+            rebuilt = rebuilt.lifecycle(lifecycle);
+        }
+        if let Some(group) = relation.group_ref() {
+            rebuilt = rebuilt.group(group.clone());
+        }
+        rewritten.push(rebuilt);
+    }
+    Ok((nodes, rewritten))
 }
 
 fn page_label(run: &ConversionRun) -> String {
@@ -257,4 +404,143 @@ fn conversion_summary(status: ConversionExitStatus, output_format: &str) -> Stri
         ConversionExitStatus::Cancelled => "cancelled",
     };
     format!("{status} · output {output_format}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mathscape_domain::{CanonicalSegment, EndpointRole, InclusivePageRange};
+
+    fn id(value: &str) -> StableId {
+        StableId::parse(value).unwrap()
+    }
+
+    fn view(canonical: &str, pdf: &str, markdown: &[&str]) -> CanonicalMarkdownView {
+        CanonicalMarkdownView {
+            canonical_id: id(canonical),
+            source_pdf_artifact_id: id(pdf),
+            parser_profile: "profile".to_owned(),
+            parser_policy_version: "marker-2.0.0".to_owned(),
+            head_artifact_id: Some(id(markdown[0])),
+            head_revision: None,
+            total_pages: Some(2),
+            segments: markdown
+                .iter()
+                .enumerate()
+                .map(|(index, artifact)| CanonicalSegment {
+                    conversion_id: id(&format!("mathscape:conversion/marker/{canonical}-{index}")
+                        .replace("mathscape:canonical-markdown/", "")),
+                    markdown_artifact_id: id(artifact),
+                    pages: Some(InclusivePageRange::new(1, 1).unwrap()),
+                    finished_at: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn node(entity: &str) -> ProjectionNode {
+        ProjectionNode::new(
+            id(entity),
+            EntityKind::SourceArtifact,
+            ViewLayer::Source,
+            entity.to_owned(),
+        )
+        .unwrap()
+    }
+
+    fn conversion(relation: &str, input: &str, output: &str) -> ProjectionRelation {
+        ProjectionRelation::new(
+            id(relation),
+            EntityKind::ConversionRun,
+            ViewLayer::Source,
+            relation.to_owned(),
+            vec![
+                ProjectionEndpoint::new(
+                    id(input),
+                    EndpointRole::parse("input").unwrap(),
+                    None,
+                    IncidenceDirection::IntoRelation,
+                ),
+                ProjectionEndpoint::new(
+                    id(output),
+                    EndpointRole::parse("output").unwrap(),
+                    None,
+                    IncidenceDirection::OutOfRelation,
+                ),
+            ],
+        )
+        .unwrap()
+        .relation_kind(ProjectionRelationKind::Conversion)
+    }
+
+    #[test]
+    fn shared_markdown_claimed_by_two_canonicals_is_not_collapsed_first_wins() {
+        let canonical_a = "mathscape:canonical-markdown/a";
+        let canonical_b = "mathscape:canonical-markdown/b";
+        let pdf_a = "mathscape:artifact/test/pdf-a";
+        let pdf_b = "mathscape:artifact/test/pdf-b";
+        let own_a = "mathscape:artifact/test/md-a";
+        let shared = "mathscape:artifact/test/md-shared";
+        let views = vec![
+            view(canonical_a, pdf_a, &[own_a, shared]),
+            view(canonical_b, pdf_b, &[shared]),
+        ];
+
+        let aliases = canonical_markdown_aliases(&views);
+        assert_eq!(aliases.get(&id(own_a)), Some(&id(canonical_a)));
+        assert!(
+            !aliases.contains_key(&id(shared)),
+            "shared artifact must not silently map to the first canonical"
+        );
+        let (_, conflicts) = resolve_canonical_markdown_aliases(&views);
+        assert_eq!(
+            conflicts.get(&id(shared)),
+            Some(&BTreeSet::from([id(canonical_a), id(canonical_b)]))
+        );
+
+        let nodes = vec![node(pdf_a), node(pdf_b), node(own_a), node(shared)];
+        let relations = vec![
+            conversion("mathscape:conversion/marker/run-a", pdf_a, own_a),
+            conversion("mathscape:conversion/marker/run-b", pdf_b, shared),
+        ];
+        let (nodes, relations) =
+            collapse_canonical_markdown(nodes, relations, &views, &BTreeMap::new()).unwrap();
+        let ids: BTreeSet<_> = nodes.iter().map(|node| node.entity_id().clone()).collect();
+        assert!(
+            ids.contains(&id(shared)),
+            "conflicting artifact stays uncollapsed"
+        );
+        assert!(
+            !ids.contains(&id(own_a)),
+            "unambiguous artifact still collapses"
+        );
+        assert!(ids.contains(&id(canonical_a)));
+        assert!(ids.contains(&id(canonical_b)));
+
+        let run_b = relations
+            .iter()
+            .find(|relation| relation.relation_id() == &id("mathscape:conversion/marker/run-b"))
+            .unwrap();
+        let outputs: Vec<_> = run_b
+            .endpoints()
+            .iter()
+            .filter(|endpoint| endpoint.role().as_str() == "output")
+            .map(|endpoint| endpoint.node().clone())
+            .collect();
+        assert_eq!(
+            outputs,
+            vec![id(shared)],
+            "edge is not folded into canonical a"
+        );
+
+        let summary_a = nodes
+            .iter()
+            .find(|node| node.entity_id() == &id(canonical_a))
+            .and_then(|node| node.summary_ref().map(str::to_owned))
+            .unwrap();
+        assert!(
+            summary_a.contains("canonical_alias_conflict"),
+            "{summary_a}"
+        );
+    }
 }

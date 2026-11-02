@@ -26,6 +26,7 @@ pub mod normalize;
 pub mod providers;
 pub mod score;
 
+use mathscape_domain::MarkdownCoverage;
 use mathscape_store_sqlite::SearchCorpus;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -165,6 +166,13 @@ pub struct SearchHit {
     pub highlights: Vec<[u32; 2]>,
     pub trashed: bool,
     pub target: SearchTarget,
+    /// Set by MCP when this material belongs to a canonical markdown view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<MarkdownCoverage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial: Option<bool>,
     #[serde(skip)]
     pub recency: i64,
 }
@@ -236,6 +244,9 @@ pub fn score_candidate(
         subtitle: candidate.subtitle,
         trashed: candidate.trashed,
         target: candidate.target,
+        canonical_id: None,
+        coverage: None,
+        partial: None,
         recency: candidate.recency,
     })
 }

@@ -7,7 +7,9 @@
 //!   text layer extracted by `mathscape-pdf`. Pages without a text layer are
 //!   never OCRed here: when no requested page has text, the tool returns
 //!   `capability_unavailable` with the Marker CapabilityProbe in `details`.
-//!   Marker itself is not invoked in Phase1.
+//!   Marker itself is not invoked. If a canonical markdown snapshot already
+//!   covers the request, that immutable snapshot is returned instead and the
+//!   result carries `canonical_id`, `coverage` and `partial`.
 //!
 //! Every successful read is capped at [`MAX_READ_BYTES`] of UTF-8 text;
 //! a capped read returns `status: "truncated"` and `truncated: true`.
@@ -18,11 +20,12 @@ use mathscape_agent::{
     Capability, CapabilityState, Locator, ToolError, ToolErrorCode, ToolStatus, probe_capability,
 };
 use mathscape_artifact::{ArtifactPool, ArtifactPoolError};
-use mathscape_domain::StableId;
+use mathscape_domain::{CanonicalMarkdownView, InclusivePageRange, StableId};
 use mathscape_pdf::{PdfEngine, PdfOpenOptions, PdfPageIndex, PdfSelection};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::canonical::CanonicalIndex;
 use super::material::{
     self, MARKDOWN_MEDIA_TYPE, Material, PDF_MEDIA_TYPE, find_material, managed_path_failure,
 };
@@ -37,7 +40,7 @@ pub const MAX_READ_BYTES: usize = 32 * 1024;
 const PDF_PAGE_BATCH: u32 = 8;
 const PAGE_SEPARATOR: &str = "\n\n";
 
-const DESCRIPTION: &str = "Read part of one workspace material by locator. Markdown: locator md_byte_range {start,end} in bytes, half-open; optional expand {before,after} in bytes. PDF: locator pdf_pages {from,to}, 1-based and inclusive, text layer only. Returns the actual locator read; text is capped at 32 KiB (status truncated, truncated true). Read-only.";
+const DESCRIPTION: &str = "Read part of one workspace material by locator. Markdown: locator md_byte_range {start,end} in bytes, half-open; optional expand {before,after} in bytes. PDF: locator pdf_pages {from,to}, 1-based and inclusive, text layer only. Returns the actual locator read; text is capped at 32 KiB (status truncated, truncated true). When a canonical markdown view exists, the result includes canonical_id, coverage and partial (partial true means this request or the book is not fully covered). A scanned PDF with no text layer is served from an existing immutable snapshot when one covers the request; this tool never runs Marker. A canonical id may be passed as artifact_id with md_byte_range to read its head snapshot. Read-only.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -165,17 +168,23 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
         .with_details(json!({ "artifact_id": args.artifact_id }))
     })?;
 
+    let index = CanonicalIndex::load(workspace)?;
+    let pool = workspace.pool()?;
     let Some(material) = find_material(workspace, &id)? else {
+        if let Some(view) = index.by_id(id.as_str()) {
+            return read_canonical_view(workspace, &pool, view, &args);
+        }
         return not_found(&args, "artifact_not_found", "no artifact with this id");
     };
-    let pool = workspace.pool()?;
 
     match (material.media_type.as_str(), args.locator) {
         (MARKDOWN_MEDIA_TYPE, Locator::MdByteRange { start, end }) => {
-            read_markdown(&pool, &material, &args, start, end)
+            read_markdown(&pool, &material, &args, start, end).and_then(|value| {
+                annotate_view(value, index.for_markdown(material.id.as_str()), None, None)
+            })
         }
         (PDF_MEDIA_TYPE, Locator::PdfPages { from, to }) => {
-            read_pdf(workspace, &pool, &material, &args, from, to)
+            read_pdf(workspace, &pool, &material, &args, from, to, &index)
         }
         (MARKDOWN_MEDIA_TYPE | PDF_MEDIA_TYPE, _) => Err(ToolError::new(
             ToolErrorCode::InvalidArg,
@@ -395,6 +404,7 @@ fn read_pdf(
     args: &ReadArgs,
     from: u32,
     to: u32,
+    index: &CanonicalIndex,
 ) -> Result<Value, ToolError> {
     let path = match require_managed_path(pool, args, &material.id) {
         Ok(path) => path,
@@ -471,14 +481,34 @@ fn read_pdf(
     }
 
     let returned_to = spans.last().map_or(from, |span| span.page);
+    let requested = InclusivePageRange::new(from, returned_to).ok();
     if !truncated && empty_pages.len() == spans.len() {
-        return capability_unavailable(
+        if let Some(served) = serve_canonical_snapshot(
+            workspace,
+            pool,
+            material,
+            args,
+            index,
+            from,
+            returned_to,
+            page_count,
+            diagnostics.clone(),
+        )? {
+            return Ok(served);
+        }
+        let unavailable = capability_unavailable(
             workspace,
             material,
             from,
             returned_to,
             page_count,
             diagnostics,
+        )?;
+        return annotate_view(
+            unavailable,
+            index.for_pdf(material.id.as_str(), requested),
+            requested,
+            None,
         );
     }
     if !empty_pages.is_empty() {
@@ -489,7 +519,7 @@ fn read_pdf(
         }));
     }
 
-    result(ReadResult {
+    let value = result(ReadResult {
         status: if truncated {
             ToolStatus::Truncated
         } else {
@@ -509,7 +539,13 @@ fn read_pdf(
         revision: Some(material.revision.clone()),
         details: None,
         diagnostics,
-    })
+    })?;
+    annotate_view(
+        value,
+        index.for_pdf(material.id.as_str(), requested),
+        requested,
+        None,
+    )
 }
 
 fn args_to(args: &ReadArgs) -> u32 {
@@ -543,6 +579,209 @@ fn push_capped(text: &mut String, piece: &str) -> bool {
     }
     text.push_str(&piece[..cut]);
     false
+}
+
+fn read_canonical_view(
+    workspace: &McpWorkspace,
+    pool: &ArtifactPool,
+    view: &CanonicalMarkdownView,
+    args: &ReadArgs,
+) -> Result<Value, ToolError> {
+    let Locator::MdByteRange { start, end } = args.locator else {
+        return Err(ToolError::new(
+            ToolErrorCode::InvalidArg,
+            "a canonical markdown id is read with md_byte_range; pdf_pages addresses the source PDF",
+        )
+        .with_details(json!({
+            "canonical_id": view.canonical_id.as_str(),
+            "source_pdf_artifact_id": view.source_pdf_artifact_id.as_str(),
+        })));
+    };
+    let Some(head_id) = view.head_artifact_id.clone() else {
+        return not_found(
+            args,
+            "canonical_head_missing",
+            "canonical markdown has no head snapshot",
+        );
+    };
+    let Some(head) = find_material(workspace, &head_id)? else {
+        return not_found(
+            args,
+            "canonical_head_missing",
+            "canonical markdown head artifact is not in the catalog",
+        );
+    };
+    if head.media_type != MARKDOWN_MEDIA_TYPE {
+        return Err(ToolError::new(
+            ToolErrorCode::InvalidArg,
+            format!(
+                "canonical markdown head is {} and cannot be read as markdown",
+                head.media_type
+            ),
+        ));
+    }
+    let mut value = read_markdown(pool, &head, args, start, end)?;
+    if let Some(object) = value.as_object_mut() {
+        let diagnostics = object
+            .entry("diagnostics")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Some(diagnostics) = diagnostics.as_array_mut() {
+            diagnostics.push(diagnostic(
+                "canonical_id_resolved",
+                "artifact_id was a canonical markdown id; the head snapshot was read",
+            ));
+        }
+    }
+    annotate_view(value, Some(view), None, Some(head.id.as_str()))
+}
+
+fn serve_canonical_snapshot(
+    workspace: &McpWorkspace,
+    pool: &ArtifactPool,
+    material: &Material,
+    args: &ReadArgs,
+    index: &CanonicalIndex,
+    from: u32,
+    to: u32,
+    page_count: u32,
+    mut diagnostics: Vec<Value>,
+) -> Result<Option<Value>, ToolError> {
+    let Some(request) = InclusivePageRange::new(from, to).ok() else {
+        return Ok(None);
+    };
+    let Some(view) = index.for_pdf(material.id.as_str(), Some(request)) else {
+        return Ok(None);
+    };
+    let Some(segment) = choose_segment(view, request) else {
+        return Ok(None);
+    };
+    let Some(served) = find_material(workspace, &segment.markdown_artifact_id)? else {
+        return Ok(None);
+    };
+    match require_managed_path(pool, args, &served.id) {
+        Ok(_) => {}
+        Err(Ok(_)) => return Ok(None),
+        Err(Err(error)) => return Err(error),
+    }
+    let (text, truncated) = read_markdown_prefix(pool, &served)?;
+    diagnostics.push(diagnostic(
+        "served_canonical_markdown",
+        "requested pages have no text layer; returned the immutable canonical markdown snapshot that covers every requested page. Marker was not run",
+    ));
+    let value = result(ReadResult {
+        status: if truncated {
+            ToolStatus::Truncated
+        } else {
+            ToolStatus::Ok
+        },
+        artifact_id: material.id.to_string(),
+        content_type: "markdown",
+        text: Some(text),
+        locator: Locator::PdfPages { from, to },
+        truncated: Some(truncated),
+        total_bytes: None,
+        total_pages: Some(page_count),
+        page_spans: None,
+        revision: Some(material.revision.clone()),
+        details: None,
+        diagnostics,
+    })?;
+    annotate_view(value, Some(view), Some(request), Some(served.id.as_str())).map(Some)
+}
+
+/// Picks the snapshot to serve for `request`. Only a segment whose page range
+/// fully contains the request is eligible: serving a merely overlapping
+/// snapshot under the requested `pdf_pages` locator would mislabel pages the
+/// body does not contain. The head wins when it covers; otherwise the newest
+/// covering segment. `None` falls through to `capability_unavailable`.
+fn choose_segment(
+    view: &CanonicalMarkdownView,
+    request: InclusivePageRange,
+) -> Option<&mathscape_domain::CanonicalSegment> {
+    let covers = |segment: &&mathscape_domain::CanonicalSegment| {
+        segment.pages.is_some_and(|pages| pages.contains(request))
+    };
+    if let Some(head) = &view.head_artifact_id
+        && let Some(segment) = view
+            .segments
+            .iter()
+            .filter(covers)
+            .find(|segment| &segment.markdown_artifact_id == head)
+    {
+        return Some(segment);
+    }
+    view.segments.iter().filter(covers).max_by(|left, right| {
+        left.finished_at
+            .cmp(&right.finished_at)
+            .then_with(|| left.conversion_id.cmp(&right.conversion_id))
+    })
+}
+
+fn read_markdown_prefix(
+    pool: &ArtifactPool,
+    material: &Material,
+) -> Result<(String, bool), ToolError> {
+    let size = material.byte_size;
+    if size == 0 {
+        return Ok((String::new(), false));
+    }
+    let cap = MAX_READ_BYTES as u64;
+    let want = size.min(cap);
+    let window_end = want.saturating_add(4).min(size);
+    let length = u32::try_from(window_end)
+        .map_err(|_| ToolError::new(ToolErrorCode::Internal, "read window exceeds u32"))?;
+    let window = pool
+        .read_bytes(&material.id, 0, length)
+        .map_err(pool_error)?;
+    if window.len() as u64 != window_end {
+        return Err(ToolError::new(
+            ToolErrorCode::Internal,
+            "managed artifact is shorter than its catalog byte size",
+        ));
+    }
+    let mut end = usize::try_from(want)
+        .unwrap_or(window.len())
+        .min(window.len());
+    while end > 0 && end < window.len() && (window[end] as i8) < -0x40 {
+        end -= 1;
+    }
+    let text = std::str::from_utf8(&window[..end]).map_err(|error| {
+        ToolError::new(
+            ToolErrorCode::Internal,
+            format!("canonical markdown snapshot is not valid UTF-8: {error}"),
+        )
+    })?;
+    Ok((text.to_owned(), want < size))
+}
+
+fn annotate_view(
+    mut value: Value,
+    view: Option<&CanonicalMarkdownView>,
+    requested: Option<InclusivePageRange>,
+    served_artifact_id: Option<&str>,
+) -> Result<Value, ToolError> {
+    let Some(view) = view else {
+        return Ok(value);
+    };
+    let coverage = view.coverage(requested);
+    let Some(object) = value.as_object_mut() else {
+        return Ok(value);
+    };
+    object.insert("canonical_id".into(), json!(view.canonical_id.as_str()));
+    object.insert("partial".into(), json!(coverage.partial));
+    object.insert(
+        "coverage".into(),
+        serde_json::to_value(&coverage).map_err(|error| {
+            ToolError::new(
+                ToolErrorCode::Internal,
+                format!("failed to serialize canonical coverage: {error}"),
+            )
+        })?,
+    );
+    if let Some(served) = served_artifact_id {
+        object.insert("served_artifact_id".into(), json!(served));
+    }
+    Ok(value)
 }
 
 fn capability_unavailable(
@@ -668,5 +907,79 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(bad_uri.code, ToolErrorCode::Internal);
+    }
+
+    fn segment(
+        id: &str,
+        from: u32,
+        to: u32,
+        finished_at: &str,
+    ) -> mathscape_domain::CanonicalSegment {
+        mathscape_domain::CanonicalSegment {
+            conversion_id: StableId::parse(format!("mathscape:conversion/marker/{id}")).unwrap(),
+            markdown_artifact_id: StableId::parse(format!("mathscape:artifact/test/{id}")).unwrap(),
+            pages: Some(InclusivePageRange::new(from, to).unwrap()),
+            finished_at: Some(finished_at.to_owned()),
+        }
+    }
+
+    fn view(
+        head: Option<&str>,
+        segments: Vec<mathscape_domain::CanonicalSegment>,
+    ) -> CanonicalMarkdownView {
+        CanonicalMarkdownView {
+            canonical_id: StableId::parse("mathscape:canonical-markdown/test").unwrap(),
+            source_pdf_artifact_id: StableId::parse("mathscape:artifact/test/pdf").unwrap(),
+            parser_profile: "profile".to_owned(),
+            parser_policy_version: "marker-2.0.0".to_owned(),
+            head_artifact_id: head
+                .map(|id| StableId::parse(format!("mathscape:artifact/test/{id}")).unwrap()),
+            head_revision: None,
+            total_pages: Some(60),
+            segments,
+        }
+    }
+
+    #[test]
+    fn choose_segment_requires_full_containment_not_overlap() {
+        let request = InclusivePageRange::new(12, 40).unwrap();
+        // Head snapshot only overlaps (30–50): must not be served as 12–40.
+        let only_overlap = view(
+            Some("late"),
+            vec![segment("late", 30, 50, "2026-11-02T01:00:00Z")],
+        );
+        assert!(choose_segment(&only_overlap, request).is_none());
+
+        // A non-covering head is skipped in favour of a covering segment.
+        let fallback = view(
+            Some("late"),
+            vec![
+                segment("late", 30, 50, "2026-11-02T02:00:00Z"),
+                segment("wide", 1, 45, "2026-11-02T01:00:00Z"),
+            ],
+        );
+        let chosen = choose_segment(&fallback, request).unwrap();
+        assert_eq!(
+            chosen.markdown_artifact_id.as_str(),
+            "mathscape:artifact/test/wide"
+        );
+
+        // A covering head still wins over a newer covering segment.
+        let head_covers = view(
+            Some("head"),
+            vec![
+                segment("head", 10, 40, "2026-11-02T01:00:00Z"),
+                segment("newer", 1, 60, "2026-11-02T03:00:00Z"),
+            ],
+        );
+        let chosen = choose_segment(&head_covers, request).unwrap();
+        assert_eq!(
+            chosen.markdown_artifact_id.as_str(),
+            "mathscape:artifact/test/head"
+        );
+
+        // Exact bounds count as coverage.
+        let exact = view(None, vec![segment("exact", 12, 40, "2026-11-02T01:00:00Z")]);
+        assert!(choose_segment(&exact, request).is_some());
     }
 }

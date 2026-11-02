@@ -860,7 +860,7 @@ fn upgrading_v17_rebuilds_requests_and_keeps_them_replayable() {
         .unwrap()
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 20);
+    assert_eq!(version, 21);
     fs::remove_dir_all(directory).ok();
 }
 
