@@ -107,6 +107,11 @@ impl InclusivePageRange {
         self.from <= other.to && other.from <= self.to
     }
 
+    /// True when `other` lies entirely inside `self` (containment, not overlap).
+    pub fn contains(self, other: Self) -> bool {
+        self.from <= other.from && other.to <= self.to
+    }
+
     pub fn page_count(self) -> u32 {
         self.to.saturating_sub(self.from).saturating_add(1)
     }

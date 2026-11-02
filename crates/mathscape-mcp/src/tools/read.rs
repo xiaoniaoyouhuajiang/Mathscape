@@ -666,17 +666,8 @@ fn serve_canonical_snapshot(
     let (text, truncated) = read_markdown_prefix(pool, &served)?;
     diagnostics.push(diagnostic(
         "served_canonical_markdown",
-        "requested pages have no text layer; returned the immutable canonical markdown snapshot. Marker was not run",
+        "requested pages have no text layer; returned the immutable canonical markdown snapshot that covers every requested page. Marker was not run",
     ));
-    let snapshot_covers = segment
-        .pages
-        .is_some_and(|pages| pages.from <= request.from && request.to <= pages.to);
-    if !snapshot_covers {
-        diagnostics.push(diagnostic(
-            "canonical_snapshot_partial",
-            "the served snapshot does not contain every requested page",
-        ));
-    }
     let value = result(ReadResult {
         status: if truncated {
             ToolStatus::Truncated
@@ -698,22 +689,28 @@ fn serve_canonical_snapshot(
     annotate_view(value, Some(view), Some(request), Some(served.id.as_str())).map(Some)
 }
 
+/// Picks the snapshot to serve for `request`. Only a segment whose page range
+/// fully contains the request is eligible: serving a merely overlapping
+/// snapshot under the requested `pdf_pages` locator would mislabel pages the
+/// body does not contain. The head wins when it covers; otherwise the newest
+/// covering segment. `None` falls through to `capability_unavailable`.
 fn choose_segment(
     view: &CanonicalMarkdownView,
     request: InclusivePageRange,
 ) -> Option<&mathscape_domain::CanonicalSegment> {
-    let overlaps = |segment: &&mathscape_domain::CanonicalSegment| {
-        segment.pages.is_some_and(|pages| pages.overlaps(request))
+    let covers = |segment: &&mathscape_domain::CanonicalSegment| {
+        segment.pages.is_some_and(|pages| pages.contains(request))
     };
     if let Some(head) = &view.head_artifact_id
-        && let Some(segment) = view.segments.iter().find(|segment| {
-            &segment.markdown_artifact_id == head
-                && segment.pages.is_some_and(|pages| pages.overlaps(request))
-        })
+        && let Some(segment) = view
+            .segments
+            .iter()
+            .filter(covers)
+            .find(|segment| &segment.markdown_artifact_id == head)
     {
         return Some(segment);
     }
-    view.segments.iter().filter(overlaps).max_by(|left, right| {
+    view.segments.iter().filter(covers).max_by(|left, right| {
         left.finished_at
             .cmp(&right.finished_at)
             .then_with(|| left.conversion_id.cmp(&right.conversion_id))
@@ -910,5 +907,79 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(bad_uri.code, ToolErrorCode::Internal);
+    }
+
+    fn segment(
+        id: &str,
+        from: u32,
+        to: u32,
+        finished_at: &str,
+    ) -> mathscape_domain::CanonicalSegment {
+        mathscape_domain::CanonicalSegment {
+            conversion_id: StableId::parse(format!("mathscape:conversion/marker/{id}")).unwrap(),
+            markdown_artifact_id: StableId::parse(format!("mathscape:artifact/test/{id}")).unwrap(),
+            pages: Some(InclusivePageRange::new(from, to).unwrap()),
+            finished_at: Some(finished_at.to_owned()),
+        }
+    }
+
+    fn view(
+        head: Option<&str>,
+        segments: Vec<mathscape_domain::CanonicalSegment>,
+    ) -> CanonicalMarkdownView {
+        CanonicalMarkdownView {
+            canonical_id: StableId::parse("mathscape:canonical-markdown/test").unwrap(),
+            source_pdf_artifact_id: StableId::parse("mathscape:artifact/test/pdf").unwrap(),
+            parser_profile: "profile".to_owned(),
+            parser_policy_version: "marker-2.0.0".to_owned(),
+            head_artifact_id: head
+                .map(|id| StableId::parse(format!("mathscape:artifact/test/{id}")).unwrap()),
+            head_revision: None,
+            total_pages: Some(60),
+            segments,
+        }
+    }
+
+    #[test]
+    fn choose_segment_requires_full_containment_not_overlap() {
+        let request = InclusivePageRange::new(12, 40).unwrap();
+        // Head snapshot only overlaps (30–50): must not be served as 12–40.
+        let only_overlap = view(
+            Some("late"),
+            vec![segment("late", 30, 50, "2026-11-02T01:00:00Z")],
+        );
+        assert!(choose_segment(&only_overlap, request).is_none());
+
+        // A non-covering head is skipped in favour of a covering segment.
+        let fallback = view(
+            Some("late"),
+            vec![
+                segment("late", 30, 50, "2026-11-02T02:00:00Z"),
+                segment("wide", 1, 45, "2026-11-02T01:00:00Z"),
+            ],
+        );
+        let chosen = choose_segment(&fallback, request).unwrap();
+        assert_eq!(
+            chosen.markdown_artifact_id.as_str(),
+            "mathscape:artifact/test/wide"
+        );
+
+        // A covering head still wins over a newer covering segment.
+        let head_covers = view(
+            Some("head"),
+            vec![
+                segment("head", 10, 40, "2026-11-02T01:00:00Z"),
+                segment("newer", 1, 60, "2026-11-02T03:00:00Z"),
+            ],
+        );
+        let chosen = choose_segment(&head_covers, request).unwrap();
+        assert_eq!(
+            chosen.markdown_artifact_id.as_str(),
+            "mathscape:artifact/test/head"
+        );
+
+        // Exact bounds count as coverage.
+        let exact = view(None, vec![segment("exact", 12, 40, "2026-11-02T01:00:00Z")]);
+        assert!(choose_segment(&exact, request).is_some());
     }
 }
