@@ -317,6 +317,10 @@ const appHarness = {
   nodeClasses: (id: string) => { const node = core().getElementById(id); return node.empty() ? null : node.classes(); },
   citeUnitId,
   panTo: (x: number, y: number) => { core().pan({ x, y }); },
+  /** Model position (rounded), to check the scene clump moves and restores nodes. */
+  nodePosition: (id: string) => { const node = core().getElementById(id); if (node.empty()) return null; const p = node.position(); return { x: Math.round(p.x), y: Math.round(p.y) }; },
+  /** Place a node (sets up a sparse focus before a scene). */
+  setNodePosition: (id: string, x: number, y: number) => { core().getElementById(id).position({ x, y }); },
   /** Rounded zoom/pan, to check the scene player restores the camera. */
   viewport: () => { const cy = core(), pan = cy.pan(); return { zoom: Math.round(cy.zoom() * 1000) / 1000, x: Math.round(pan.x), y: Math.round(pan.y) }; },
 };
