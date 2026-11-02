@@ -7,6 +7,7 @@ import { DiscoveryLedgerController } from "./discovery/discovery-ledger";
 import { mountDiscoveryTask } from "./discovery-task";
 import { GraphController } from "./graph/graph-controller";
 import { SandboxEcho } from "./graph/sandbox-echo";
+import { ScenePlayer } from "./graph/scene-player";
 import { InspectorController } from "./inspector/inspector-controller";
 import { LlmSettingsController } from "./llm/settings";
 import { mountSandboxChrome } from "./sandbox/chrome";
@@ -53,6 +54,8 @@ const el = shell.elements;
 
 let inkWorkspace!: DesktopInkWorkspace;
 let inkOpen = false;
+/** Sandbox Map Scene Player (created once the graph controller exists). */
+let scenePlayer: ScenePlayer | undefined;
 let inkSplit = false;
 /** Last pane that received a pointer: used so Delete in the reader never erases ink. */
 let inkPaneFocused = true;
@@ -303,6 +306,7 @@ el.inkSplitReader.addEventListener("pointerdown", () => { inkPaneFocused = false
 (window as unknown as { __mathscapeInkPaneFocused?: () => boolean }).__mathscapeInkPaneFocused = () => inkPaneFocused;
 
 function openInkWorkspaceFromButton(): Promise<void> {
+  scenePlayer?.cancel();
   inkOpen = true;
   el.workspaceGrid.hidden = true;
   el.inkWorkspace.hidden = false;
@@ -389,7 +393,10 @@ const graphController = new GraphController(
       reader.close();
       el.readerHost.hidden = true;
     },
-    onGraphRendered: () => artifactController.refreshParseState(),
+    onGraphRendered: () => {
+      artifactController.refreshParseState();
+      scenePlayer?.reapply();
+    },
     showToast: (msg, kind) => shell.showToast(msg, kind),
     getSnapshot: () => currentSnapshot,
     onOpenInkNote: (documentId) => eventBus.emit("open-ink-document", { documentId }),
@@ -608,14 +615,25 @@ async function locateOnMap(domainId: string, current: () => boolean): Promise<bo
   return true;
 }
 
-// A-PR3: sandbox dialogue cite chips jump to the map and live tool events
-// echo on it. The dock stays open (sidebar beside the map).
+// A-PR3: sandbox dialogue cite chips jump to the map. Map Scene Player:
+// live tool events (and replays from process cards) play as map scenes.
+// The dock stays open (sidebar beside the map).
 const sandboxEcho = new SandboxEcho(() => graphController.getGraphCore());
+const player = new ScenePlayer({
+  core: () => graphController.getGraphCore(),
+  hudHost: el.graphContainer.parentElement ?? el.graphContainer,
+  canvas: el.graphContainer,
+  // Like the A-PR3 echo: nothing plays behind the open ink pad / 手稿 layer.
+  canPlay: () => !inkOpen,
+  restoreFocusScope: () => graphController.reapplyFocusScope(),
+});
+scenePlayer = player;
 const noNodes: never[] = [];
 sandboxDock.setCiteContext({
   nodes: () => currentSnapshot?.landscape_graph.nodes ?? noNodes,
   jump: (nodeId) => {
     const token = ++searchNavigation;
+    player.cancel(false);
     void (async () => {
       if (!await showMap(() => token === searchNavigation)) return;
       if (!currentSnapshot?.landscape_graph.nodes.some(node => node.id === nodeId)) {
@@ -626,7 +644,20 @@ sandboxDock.setCiteContext({
       sandboxEcho.pulse("hit", [nodeId]);
     })();
   },
-  echo: (kind, nodeIds) => { if (!inkOpen) sandboxEcho.pulse(kind, nodeIds); },
+  scenes: {
+    live: (scene, part) => player.live(scene, part),
+    replay: (scenes) => {
+      if (inkOpen) {
+        shell.showToast("手稿打开时不能在地图上回放，请先返回地图。", "error");
+        return;
+      }
+      const token = ++searchNavigation;
+      void (async () => {
+        if (!await showMap(() => token === searchNavigation)) return;
+        player.replay(scenes);
+      })();
+    },
+  },
 });
 
 /** Open a source result in the map-page reader (non-split). Resolves

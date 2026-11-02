@@ -297,5 +297,67 @@ test.describe("S1 sandbox shell", () => {
 
     await page.evaluate(() => { Object.assign(window.appHarness.sandboxRound, { cite: false, gapMs: 0 }); });
   });
+
+  test("Map Scene Player: live HUD + isolate, settle restores, per-step and whole-turn replay", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    await expect(dock).toHaveClass(/is-sidebar/);
+    const unitId = await page.evaluate(() => window.appHarness.citeUnitId);
+    await page.evaluate(() => { Object.assign(window.appHarness.sandboxRound, { cite: true, delayMs: 30, gapMs: 1200 }); });
+    const viewBefore = await page.evaluate(() => window.appHarness.viewport());
+
+    await dock.locator("textarea").fill(`看看 ${unitId}`);
+    await dock.getByRole("button", { name: "发送" }).click();
+
+    // Announce: HUD on the map with the Chinese title (map label while running).
+    const hud = page.locator(".canvas-panel .scene-hud");
+    await expect(hud).toBeVisible();
+    await expect(hud.locator(".scene-hud-title")).toHaveText("查看节点 · 引理 1.4");
+    // Isolate: the focus stays lit, everything else uses the focus-mode dim.
+    await expect.poll(() => page.evaluate(() => window.appHarness.nodeClasses("r-cite-unit"))).toContain("sandbox-echo-seed");
+    expect(await page.evaluate(() => window.appHarness.nodeClasses("r-cite-unit"))).not.toContain("is-out-of-focus");
+    expect(await page.evaluate(() => window.appHarness.nodeClasses("r-pdf-notes"))).toContain("is-out-of-focus");
+    // The map is locked while a scene plays.
+    await expect(page.locator("#graph")).toHaveClass(/is-scene-playing/);
+    await expect.poll(() => page.evaluate(() => window.appHarness.nodeClasses("r-cite-unit"))).toContain("sandbox-echo-hit");
+    await expect(hud.locator(".scene-hud-summary")).toContainText("地图上 1 个");
+
+    // Settle: HUD gone, dim and lock cleared, camera back where it was.
+    await expect(hud).toBeHidden({ timeout: 8000 });
+    await expect(page.locator("#graph")).not.toHaveClass(/is-scene-playing/);
+    expect(await page.evaluate(() => window.appHarness.nodeClasses("r-pdf-notes"))).not.toContain("is-out-of-focus");
+    await expect.poll(() => page.evaluate(() => window.appHarness.viewport())).toEqual(viewBefore);
+
+    // Per-step replay from the process card.
+    const agent = dock.locator(".sandbox-line.role-agent").last();
+    await expect(agent.locator(".sandbox-turn-status")).toHaveText("已完成");
+    await agent.locator(".sandbox-process-summary").click();
+    const stepReplay = agent.locator(".sandbox-step-replay");
+    await expect(stepReplay).toHaveCount(1);
+    await expect(stepReplay).toBeEnabled();
+    await stepReplay.click();
+    await expect(hud).toBeVisible();
+    await expect(hud.locator(".scene-hud-title")).toHaveText("查看节点 · 引理 1.4");
+    await expect(hud.locator(".scene-hud-step")).toBeHidden();
+    await expect.poll(() => page.evaluate(() => window.appHarness.nodeClasses("r-cite-unit"))).toContain("sandbox-echo-hit");
+    await expect(hud).toBeHidden({ timeout: 8000 });
+
+    // Whole-turn replay; 停止 ends it at once and restores the camera.
+    const all = agent.locator(".sandbox-process-replay");
+    await expect(all).toHaveText("▶ 回放全部");
+    await all.click();
+    await expect(hud).toBeVisible();
+    await expect(page.locator("#graph")).toHaveClass(/is-scene-playing/);
+    await hud.getByRole("button", { name: "停止" }).click();
+    await expect(hud).toBeHidden();
+    await expect(page.locator("#graph")).not.toHaveClass(/is-scene-playing/);
+    expect(await page.evaluate(() => window.appHarness.nodeClasses("r-pdf-notes"))).not.toContain("is-out-of-focus");
+    expect(await page.evaluate(() => window.appHarness.viewport())).toEqual(viewBefore);
+
+    await page.evaluate(() => { Object.assign(window.appHarness.sandboxRound, { cite: false, gapMs: 0 }); });
+  });
 });
 

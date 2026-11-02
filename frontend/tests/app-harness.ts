@@ -277,6 +277,8 @@ const appHarness = {
   nodeClasses: (id: string) => { const node = core().getElementById(id); return node.empty() ? null : node.classes(); },
   citeUnitId,
   panTo: (x: number, y: number) => { core().pan({ x, y }); },
+  /** Rounded zoom/pan, to check the scene player restores the camera. */
+  viewport: () => { const cy = core(), pan = cy.pan(); return { zoom: Math.round(cy.zoom() * 1000) / 1000, x: Math.round(pan.x), y: Math.round(pan.y) }; },
 };
 declare global { interface Window { appHarness: typeof appHarness } }
 window.appHarness = appHarness;
