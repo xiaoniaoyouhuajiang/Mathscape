@@ -76,7 +76,7 @@ test.describe("S1 sandbox shell", () => {
       window.appHarness.sandboxRound.delayMs = 40;
       window.appHarness.sandboxRound.gapMs = 1200;
     });
-    await dock.locator("textarea").fill("紧集在哪？");
+    await dock.locator(".sandbox-dock-input").fill("紧集在哪？");
     await dock.getByRole("button", { name: "发送" }).click();
     await expect(dock.locator(".sandbox-line.role-user")).toHaveText(/紧集在哪？/);
     const live = dock.locator(".sandbox-line.is-live");
@@ -239,7 +239,7 @@ test.describe("S1 sandbox shell", () => {
     await expect(effortSelect.locator("option", { hasText: "ultra" })).toHaveCount(0);
 
     await page.evaluate(() => { window.appHarness.sandboxRound.delayMs = 1500; });
-    await dock.locator("textarea").fill("紧集在哪？");
+    await dock.locator(".sandbox-dock-input").fill("紧集在哪？");
     await dock.getByRole("button", { name: "发送" }).click();
     await expect(effortSelect).toBeDisabled();
     await expect(modelSelect).toBeDisabled();
@@ -258,7 +258,7 @@ test.describe("S1 sandbox shell", () => {
     const unitId = await page.evaluate(() => window.appHarness.citeUnitId);
     await page.evaluate(() => { Object.assign(window.appHarness.sandboxRound, { cite: true, delayMs: 30, gapMs: 1200 }); });
 
-    await dock.locator("textarea").fill(`看看 ${unitId} 和 $x^2$`);
+    await dock.locator(".sandbox-dock-input").fill(`看看 ${unitId} 和 $x^2$`);
     await dock.getByRole("button", { name: "发送" }).click();
 
     // tool_call: the seed lights up on the map while the call runs.
@@ -298,6 +298,90 @@ test.describe("S1 sandbox shell", () => {
     await page.evaluate(() => { Object.assign(window.appHarness.sandboxRound, { cite: false, gapMs: 0 }); });
   });
 
+  test("Composer chips: known ids chip in the input, send expands them, unknown ids stay text", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    const unitId = await page.evaluate(() => window.appHarness.citeUnitId);
+    const stranger = `mathscape:source-unit/${"f".repeat(64)}`;
+    const input = dock.locator(".sandbox-dock-input");
+    await expect(input).toHaveClass(/is-empty/);
+
+    // Paste: the landscape-known id becomes a short-label chip, the unknown one stays text.
+    await input.click();
+    await input.evaluate((el, text) => {
+      const data = new DataTransfer();
+      data.setData("text/plain", text);
+      el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    }, `看看 ${unitId} 和 ${stranger}`);
+    const chip = input.locator(".sandbox-composer-chip");
+    await expect(chip).toHaveCount(1);
+    await expect(chip).toHaveText("引理 1.4");
+    await expect(chip).toHaveAttribute("data-cite-id", unitId);
+    await expect(chip).toHaveAttribute("contenteditable", "false");
+    await expect(input).toContainText(stranger);
+    await expect(input).not.toContainText(unitId);
+
+    // Copy puts the full ids on the clipboard.
+    const copied = await input.evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      const data = new DataTransfer();
+      el.dispatchEvent(new ClipboardEvent("copy", { clipboardData: data, bubbles: true, cancelable: true }));
+      return data.getData("text/plain");
+    });
+    expect(copied).toBe(`看看 ${unitId} 和 ${stranger}`);
+
+    // Clicking the chip jumps the map to its node.
+    await chip.click();
+    await expect.poll(() => page.evaluate(() => window.appHarness.nodeView("r-cite-unit")?.selected)).toBe(true);
+
+    // Typing: an id is chipped once a delimiter follows it.
+    await input.evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    await page.keyboard.type(` 再看 ${unitId}`);
+    await expect(chip).toHaveCount(1);
+    await page.keyboard.type(" ");
+    await expect(chip).toHaveCount(2);
+
+    // Backspace removes a chip whole (caret right after the second chip, past the space).
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Backspace");
+    await expect(chip).toHaveCount(1);
+    await page.keyboard.type("。");
+    // Shift+Enter is a line break, not a send.
+    await page.keyboard.press("Shift+Enter");
+    await page.keyboard.type("第二行");
+
+    // Double-click turns a chip back into its raw id for editing.
+    await chip.first().dblclick();
+    await expect(chip).toHaveCount(0);
+    await expect(input).toContainText(unitId);
+    // Leaving the composer chips it again.
+    await dock.locator(".sandbox-dock-status").click();
+    await expect(chip).toHaveCount(1);
+
+    await page.keyboard.press("Tab");
+    await input.focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => page.evaluate(() => window.appHarness.sandboxCalls.filter((c) => c.command === "send").map((c) => c.args.text)))
+      .toEqual([`看看 ${unitId} 和 ${stranger} 再看 。\n第二行`]);
+    await expect(input).toHaveClass(/is-empty/);
+    await expect(input.locator(".sandbox-composer-chip")).toHaveCount(0);
+    // The sent bubble renders the full id as a reply-style chip.
+    await expect(dock.locator(".sandbox-line.role-user").last().locator("button.sandbox-cite.is-map")).toHaveText("引理 1.4");
+  });
+
   test("Map Scene Player: live HUD + isolate, settle restores, per-step and whole-turn replay", async ({ page }) => {
     await page.locator("#sandbox-button").click();
     page.once("dialog", (dialog) => void dialog.accept());
@@ -309,7 +393,7 @@ test.describe("S1 sandbox shell", () => {
     await page.evaluate(() => { Object.assign(window.appHarness.sandboxRound, { cite: true, delayMs: 30, gapMs: 1200 }); });
     const viewBefore = await page.evaluate(() => window.appHarness.viewport());
 
-    await dock.locator("textarea").fill(`看看 ${unitId}`);
+    await dock.locator(".sandbox-dock-input").fill(`看看 ${unitId}`);
     await dock.getByRole("button", { name: "发送" }).click();
 
     // Announce: HUD on the map with the Chinese title (map label while running).
@@ -373,7 +457,7 @@ test.describe("S1 sandbox shell", () => {
 
   test("Scene Act: workspace.search types the query in the HUD, then hits land", async ({ page }) => {
     const dock = await sandboxDock(page, { act: "search", delayMs: 30, gapMs: 2500 });
-    await dock.locator("textarea").fill("搜一下紧集");
+    await dock.locator(".sandbox-dock-input").fill("搜一下紧集");
     await dock.getByRole("button", { name: "发送" }).click();
     const hud = page.locator(".canvas-panel .scene-hud");
     const typed = hud.locator(".scene-hud-type");
@@ -406,7 +490,7 @@ test.describe("S1 sandbox shell", () => {
     const positions = () => page.evaluate(({ unit, pdf }) => ({ unit: window.appHarness.nodePosition(unit)!, pdf: window.appHarness.nodePosition(pdf)! }), { unit, pdf });
     const viewBefore = await page.evaluate(() => window.appHarness.viewport());
 
-    await dock.locator("textarea").fill("搜一下紧集");
+    await dock.locator(".sandbox-dock-input").fill("搜一下紧集");
     await dock.getByRole("button", { name: "发送" }).click();
     const hud = page.locator(".canvas-panel .scene-hud");
     await expect.poll(() => page.evaluate(() => window.appHarness.nodeClasses("r-cite-unit")), { timeout: 6000 }).toContain("sandbox-echo-hit");
@@ -434,7 +518,7 @@ test.describe("S1 sandbox shell", () => {
 
   test("Scene Act: pdf.outline opens a 目录 window beside the PDF; settle closes it; replay reopens it", async ({ page }) => {
     const dock = await sandboxDock(page, { act: "outline", delayMs: 30, gapMs: 400 });
-    await dock.locator("textarea").fill("看看目录");
+    await dock.locator(".sandbox-dock-input").fill("看看目录");
     await dock.getByRole("button", { name: "发送" }).click();
     const hud = page.locator(".canvas-panel .scene-hud");
     await expect(hud.locator(".scene-hud-title")).toHaveText("PDF 目录 · notes.pdf");
@@ -464,7 +548,7 @@ test.describe("S1 sandbox shell", () => {
 
   test("Sync ensure: a scanned-page material.read waiting on Marker plays as 解析中 until the body lands", async ({ page }) => {
     const dock = await sandboxDock(page, { act: "parsing", delayMs: 30, gapMs: 6500 });
-    await dock.locator("textarea").fill("读第 3–4 页");
+    await dock.locator(".sandbox-dock-input").fill("读第 3–4 页");
     await dock.getByRole("button", { name: "发送" }).click();
     const hud = page.locator(".canvas-panel .scene-hud");
     await expect(hud.locator(".scene-hud-title")).toHaveText("阅读材料 · notes.pdf · 第 3–4 页");
@@ -486,7 +570,7 @@ test.describe("S1 sandbox shell", () => {
 
   test("Scene Act: ink.page_image shows the page image at the stage corner (note is not a map node)", async ({ page }) => {
     const dock = await sandboxDock(page, { act: "page_image", delayMs: 30, gapMs: 400 });
-    await dock.locator("textarea").fill("看看手稿");
+    await dock.locator(".sandbox-dock-input").fill("看看手稿");
     await dock.getByRole("button", { name: "发送" }).click();
     const hud = page.locator(".canvas-panel .scene-hud");
     await expect(hud.locator(".scene-hud-title")).toHaveText("手稿页图 · 手稿 A · 第 1/3 页");
@@ -506,7 +590,7 @@ test.describe("S1 sandbox shell", () => {
 
   test("Scene Act: ink.page_image without image bytes degrades to text meta", async ({ page }) => {
     const dock = await sandboxDock(page, { act: "page_image_meta", delayMs: 30, gapMs: 400 });
-    await dock.locator("textarea").fill("看看手稿");
+    await dock.locator(".sandbox-dock-input").fill("看看手稿");
     await dock.getByRole("button", { name: "发送" }).click();
     const hud = page.locator(".canvas-panel .scene-hud");
     await expect(hud.locator(".scene-hud-summary")).toContainText("仅元数据（无页图）");

@@ -1037,6 +1037,35 @@ button.sandbox-cite:focus-visible {
   line-height: 1.5;
 }
 
+/* Composer chips: a plain-text contenteditable with atomic cite chips. */
+.sandbox-composer {
+  max-height: 40vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
+.sandbox-composer.is-empty::before {
+  content: attr(data-placeholder);
+  color: #6f7d87;
+  pointer-events: none;
+}
+
+.sandbox-composer .sandbox-composer-chip {
+  max-width: 24em;
+  cursor: default;
+}
+
+.sandbox-composer .sandbox-composer-chip[data-cite-node] {
+  cursor: pointer;
+}
+
+.sandbox-composer .sandbox-composer-chip[data-cite-node]:hover {
+  border-color: #4fc3d9;
+  background: #1c3d4a;
+}
+
 .sandbox-dock.is-running .sandbox-dock-heading strong::after {
   content: " · 进行中";
   color: #e6c98a;
