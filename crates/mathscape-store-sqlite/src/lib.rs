@@ -3,6 +3,7 @@
 //! Artifact bytes remain in the managed filesystem pool. This crate owns only
 //! authoritative metadata and provenance transactions.
 
+mod canonical_ensure;
 mod canonical_markdown;
 mod discovery;
 mod ink;
@@ -34,6 +35,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
+pub use canonical_ensure::{
+    CanonicalEnsureClaim, CanonicalEnsureClaimOutcome, CanonicalEnsureLease, CanonicalEnsureLimits,
+    CanonicalEnsureOutcome, CanonicalEnsureReceipt, unix_millis_now,
+};
 pub use canonical_markdown::project_canonical_markdown;
 pub use discovery::{
     AcceptedRegistrationPlanRecord, DiscoveryAttemptCheckpoint, DiscoveryCheckpointStatus,
@@ -96,7 +101,9 @@ const INK_MIGRATION: &str = include_str!("../../../migrations/0013_ink_p1.sql");
 const INK_SNAPSHOT_MIGRATION: &str = include_str!("../../../migrations/0014_ink_snapshots_p2.sql");
 const CANONICAL_MARKDOWN_MIGRATION: &str =
     include_str!("../../../migrations/0021_canonical_markdown.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 21;
+const CANONICAL_MARKDOWN_ENSURE_MIGRATION: &str =
+    include_str!("../../../migrations/0022_canonical_markdown_ensure.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 22;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -343,9 +350,15 @@ pub struct LandscapeSnapshot {
     ink_snapshot_labels: std::collections::BTreeMap<String, String>,
     /// Persisted canonical markdown views. Empty until a registry sync.
     canonical_markdown: Vec<mathscape_domain::CanonicalMarkdownView>,
+    /// Live canonical markdown ensures (「解析中」).
+    canonical_ensures: Vec<CanonicalEnsureLease>,
 }
 
 impl LandscapeSnapshot {
+    pub fn canonical_ensures(&self) -> &[CanonicalEnsureLease] {
+        &self.canonical_ensures
+    }
+
     pub fn artifacts(&self) -> &ArtifactCatalogSnapshot {
         &self.artifacts
     }
@@ -398,6 +411,7 @@ impl SqliteArtifactStore {
         ink_evidence::validate_schema(&connection)?;
         ink_lan::validate_schema(&connection)?;
         ink_note::validate_schema(&connection)?;
+        canonical_ensure::validate_schema(&connection)?;
         validate_registration_schema(&connection)?;
         Ok(Self { connection })
     }
@@ -647,7 +661,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=21 => {
+            6..=22 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -818,6 +832,20 @@ impl SqliteArtifactStore {
                 connection.pragma_update(None, "user_version", 21)?;
             }
         }
+        if version < 22 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 22",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                connection.execute_batch(CANONICAL_MARKDOWN_ENSURE_MIGRATION)?;
+            } else {
+                connection.pragma_update(None, "user_version", 22)?;
+            }
+        }
         validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -832,6 +860,7 @@ impl SqliteArtifactStore {
         ink_note::validate_schema(&connection)?;
         ink_link::validate_schema(&connection)?;
         ink_snapshot_label::validate_schema(&connection)?;
+        canonical_ensure::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -1218,6 +1247,80 @@ impl SqliteArtifactStore {
         canonical_markdown::replace_canonical_markdown(&mut self.connection, &views, recorded_at)
     }
 
+    /// Rebuilds the registry rows of one source PDF from the current catalog.
+    /// Other PDFs' rows are untouched. Returns that PDF's views.
+    pub fn sync_canonical_markdown_for_pdf(
+        &mut self,
+        source_pdf_artifact_id: &StableId,
+        recorded_at: &Timestamp,
+    ) -> Result<Vec<mathscape_domain::CanonicalMarkdownView>, SqliteStoreError> {
+        let views = self.project_canonical_markdown()?;
+        canonical_markdown::replace_canonical_markdown_for_pdf(
+            &mut self.connection,
+            source_pdf_artifact_id,
+            &views,
+            recorded_at,
+        )
+    }
+
+    /// Claims the per-PDF ensure lock, a global Marker slot and page budget in
+    /// one `BEGIN IMMEDIATE` transaction. Expired leases become `abandoned`.
+    pub fn claim_canonical_ensure(
+        &mut self,
+        claim: &CanonicalEnsureClaim,
+        limits: CanonicalEnsureLimits,
+        now_ms: i64,
+    ) -> Result<CanonicalEnsureClaimOutcome, SqliteStoreError> {
+        canonical_ensure::claim(&mut self.connection, claim, limits, now_ms)
+    }
+
+    /// Writes the terminal receipt of a claimed ensure and releases its lock.
+    pub fn finish_canonical_ensure(
+        &mut self,
+        ensure_id: &str,
+        outcome: CanonicalEnsureOutcome,
+        conversion_id: Option<&str>,
+        markdown_artifact_id: Option<&str>,
+        error: Option<&str>,
+        now_ms: i64,
+    ) -> Result<(), SqliteStoreError> {
+        canonical_ensure::finish(
+            &self.connection,
+            ensure_id,
+            outcome,
+            conversion_id,
+            markdown_artifact_id,
+            error,
+            now_ms,
+        )
+    }
+
+    /// Heartbeat for a claimed ensure: extends its lease deadline. False when
+    /// the lease is gone (finished, abandoned or already expired).
+    pub fn renew_canonical_ensure(
+        &mut self,
+        ensure_id: &str,
+        lease_expires_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<bool, SqliteStoreError> {
+        canonical_ensure::renew(&self.connection, ensure_id, lease_expires_at_ms, now_ms)
+    }
+
+    /// Live (`running`, unexpired) ensures: the 「解析中」 signal.
+    pub fn active_canonical_ensures(
+        &self,
+        now_ms: i64,
+    ) -> Result<Vec<CanonicalEnsureLease>, SqliteStoreError> {
+        canonical_ensure::live_leases(&self.connection, now_ms)
+    }
+
+    pub fn canonical_ensure_receipt(
+        &self,
+        ensure_id: &str,
+    ) -> Result<Option<CanonicalEnsureReceipt>, SqliteStoreError> {
+        canonical_ensure::receipt(&self.connection, ensure_id)
+    }
+
     pub fn landscape_snapshot(&self) -> Result<LandscapeSnapshot, SqliteStoreError> {
         let transaction = self.connection.unchecked_transaction()?;
         let snapshot = LandscapeSnapshot {
@@ -1225,6 +1328,10 @@ impl SqliteArtifactStore {
             sources: source_map::source_map_snapshot(&transaction)?,
             ink_snapshot_labels: ink::snapshot_labels_by_artifact(&transaction)?,
             canonical_markdown: canonical_markdown::list_canonical_markdown(&transaction)?,
+            canonical_ensures: canonical_ensure::live_leases(
+                &transaction,
+                canonical_ensure::unix_millis_now(),
+            )?,
         };
         transaction.commit()?;
         Ok(snapshot)

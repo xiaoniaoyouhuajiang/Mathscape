@@ -27,8 +27,10 @@ pub(crate) const APPROVAL_TIMEOUT_MESSAGE: &str = "等待审批已超时";
 /// `granular`, `never`. `onRequest` is rejected as an unknown variant.
 pub(crate) const SANDBOX_APPROVAL_POLICY: &str = "on-request";
 
-/// The seven Phase1 read-only Mathscape tools. Duplicated so the adapter can
-/// whitelist them without depending on `mathscape-mcp`.
+/// The seven Mathscape tools. Duplicated so the adapter can whitelist them
+/// without depending on `mathscape-mcp`. All are read-only except that
+/// `material.read` may run a bounded Marker ensure that adds an immutable
+/// parse-cache snapshot (never rewrites or deletes data).
 pub(crate) const MATHSCAPE_READ_ONLY_TOOLS: [&str; 7] = [
     "workspace.search",
     "material.read",

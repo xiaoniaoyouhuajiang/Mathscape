@@ -4,12 +4,16 @@
 //!   `expand.before/after` are bytes. The returned range is widened to UTF-8
 //!   character boundaries and echoed back as the actual locator.
 //! - PDF (`application/pdf`) by `pdf_pages` (1-based, closed), using the
-//!   text layer extracted by `mathscape-pdf`. Pages without a text layer are
-//!   never OCRed here: when no requested page has text, the tool returns
-//!   `capability_unavailable` with the Marker CapabilityProbe in `details`.
-//!   Marker itself is not invoked. If a canonical markdown snapshot already
-//!   covers the request, that immutable snapshot is returned instead and the
-//!   result carries `canonical_id`, `coverage` and `partial`.
+//!   text layer extracted by `mathscape-pdf`. When no requested page has
+//!   text, an immutable canonical markdown snapshot whose pages fully contain
+//!   the request is served. If none does, a bounded internal ensure
+//!   (`super::ensure`) may run Marker on exactly the requested range, promote
+//!   a new snapshot and serve it in the same call (synchronous: the call
+//!   waits for Marker, and a concurrent read of the same PDF queues behind
+//!   the running parse). Otherwise the tool returns `capability_unavailable`
+//!   with the Marker CapabilityProbe and `details.ensure`
+//!   (`blocked_budget|capability_unavailable|failed`). Results carry
+//!   `canonical_id`, `coverage` and `partial` when a view exists.
 //!
 //! Every successful read is capped at [`MAX_READ_BYTES`] of UTF-8 text;
 //! a capped read returns `status: "truncated"` and `truncated: true`.
@@ -26,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::canonical::CanonicalIndex;
+use super::ensure::{self, EnsureReport, EnsureStatus};
 use super::material::{
     self, MARKDOWN_MEDIA_TYPE, Material, PDF_MEDIA_TYPE, find_material, managed_path_failure,
 };
@@ -40,7 +45,7 @@ pub const MAX_READ_BYTES: usize = 32 * 1024;
 const PDF_PAGE_BATCH: u32 = 8;
 const PAGE_SEPARATOR: &str = "\n\n";
 
-const DESCRIPTION: &str = "Read part of one workspace material by locator. Markdown: locator md_byte_range {start,end} in bytes, half-open; optional expand {before,after} in bytes. PDF: locator pdf_pages {from,to}, 1-based and inclusive, text layer only. Returns the actual locator read; text is capped at 32 KiB (status truncated, truncated true). When a canonical markdown view exists, the result includes canonical_id, coverage and partial (partial true means this request or the book is not fully covered). A scanned PDF with no text layer is served from an existing immutable snapshot when one covers the request; this tool never runs Marker. A canonical id may be passed as artifact_id with md_byte_range to read its head snapshot. Read-only.";
+const DESCRIPTION: &str = "Read part of one workspace material by locator. Markdown: locator md_byte_range {start,end} in bytes, half-open; optional expand {before,after} in bytes. PDF: locator pdf_pages {from,to}, 1-based and inclusive. Returns the actual locator read; text is capped at 32 KiB (status truncated, truncated true). When a canonical markdown view exists, the result includes canonical_id, coverage and partial (partial true means this request or the book is not fully covered). Scanned PDF pages (no text layer) are served from an existing immutable markdown snapshot only when one snapshot contains every requested page. If none does, this call runs Marker OCR locally on exactly the requested pages and waits for it (synchronous, can take minutes; at most 12 pages per call, rolling page budget, one Marker run per workspace slot), adds a new immutable snapshot to the workspace parse cache and returns its markdown in the same result. A concurrent read of a PDF that is already being parsed waits for that parse instead of failing. The result is ok or truncated with the text, or capability_unavailable with details.ensure.status blocked_budget, capability_unavailable (Marker missing) or failed (Marker error or the sync time limit; nothing is left running). Do not poll or re-read to wait for parsing. It never modifies or deletes existing materials and never contacts the network. Keep scanned-PDF page ranges small. A canonical id may be passed as artifact_id with md_byte_range to read its head snapshot.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -493,9 +498,50 @@ fn read_pdf(
             returned_to,
             page_count,
             diagnostics.clone(),
+            None,
         )? {
             return Ok(served);
         }
+        let Some(request) = requested else {
+            return capability_unavailable(
+                workspace,
+                material,
+                from,
+                returned_to,
+                page_count,
+                diagnostics,
+                None,
+            );
+        };
+        // Synchronous: returns only after Marker finished (or failed, or the
+        // sync deadline passed) and no lease of this call is left running.
+        let mut report = ensure::ensure(workspace, &material.id, &path, request, page_count);
+        let reloaded;
+        let index = if matches!(report.status, EnsureStatus::Expanded | EnsureStatus::Reused) {
+            reloaded = CanonicalIndex::load(workspace)?;
+            if let Some(served) = serve_canonical_snapshot(
+                workspace,
+                pool,
+                material,
+                args,
+                &reloaded,
+                from,
+                returned_to,
+                page_count,
+                diagnostics.clone(),
+                Some(&report),
+            )? {
+                return Ok(served);
+            }
+            report.status = EnsureStatus::Failed;
+            report.message = format!(
+                "{}; but no snapshot containing pages {from}–{returned_to} could be served",
+                report.message
+            );
+            &reloaded
+        } else {
+            index
+        };
         let unavailable = capability_unavailable(
             workspace,
             material,
@@ -503,6 +549,7 @@ fn read_pdf(
             returned_to,
             page_count,
             diagnostics,
+            Some(&report),
         )?;
         return annotate_view(
             unavailable,
@@ -514,7 +561,7 @@ fn read_pdf(
     if !empty_pages.is_empty() {
         diagnostics.push(json!({
             "code": "pdf_pages_without_text",
-            "message": "some pages have no text layer; OCR (Marker) is not run by material.read",
+            "message": "some pages have no text layer; Marker ensure runs only when every requested page lacks text. Request the empty pages alone to parse them",
             "pages": empty_pages,
         }));
     }
@@ -635,6 +682,7 @@ fn read_canonical_view(
     annotate_view(value, Some(view), None, Some(head.id.as_str()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn serve_canonical_snapshot(
     workspace: &McpWorkspace,
     pool: &ArtifactPool,
@@ -645,29 +693,44 @@ fn serve_canonical_snapshot(
     to: u32,
     page_count: u32,
     mut diagnostics: Vec<Value>,
+    ensured: Option<&EnsureReport>,
 ) -> Result<Option<Value>, ToolError> {
     let Some(request) = InclusivePageRange::new(from, to).ok() else {
         return Ok(None);
     };
-    let Some(view) = index.for_pdf(material.id.as_str(), Some(request)) else {
-        return Ok(None);
-    };
-    let Some(segment) = choose_segment(view, request) else {
-        return Ok(None);
-    };
-    let Some(served) = find_material(workspace, &segment.markdown_artifact_id)? else {
-        return Ok(None);
-    };
-    match require_managed_path(pool, args, &served.id) {
-        Ok(_) => {}
-        Err(Ok(_)) => return Ok(None),
-        Err(Err(error)) => return Err(error),
+    let mut chosen = None;
+    for view in index.all_for_pdf(material.id.as_str(), Some(request)) {
+        let Some(segment) = choose_segment(view, request) else {
+            continue;
+        };
+        let Some(served) = find_material(workspace, &segment.markdown_artifact_id)? else {
+            continue;
+        };
+        match require_managed_path(pool, args, &served.id) {
+            Ok(_) => {}
+            Err(Ok(_)) => continue,
+            Err(Err(error)) => return Err(error),
+        }
+        chosen = Some((view, served));
+        break;
     }
+    let Some((view, served)) = chosen else {
+        return Ok(None);
+    };
     let (text, truncated) = read_markdown_prefix(pool, &served)?;
-    diagnostics.push(diagnostic(
-        "served_canonical_markdown",
-        "requested pages have no text layer; returned the immutable canonical markdown snapshot that covers every requested page. Marker was not run",
-    ));
+    diagnostics.push(match ensured {
+        None => diagnostic(
+            "served_canonical_markdown",
+            "requested pages have no text layer; returned the immutable canonical markdown snapshot that covers every requested page. Marker was not run",
+        ),
+        Some(report) => diagnostic(
+            report.status.diagnostic_code(),
+            format!(
+                "requested pages had no text layer and no snapshot contained them; {}",
+                report.message
+            ),
+        ),
+    });
     let value = result(ReadResult {
         status: if truncated {
             ToolStatus::Truncated
@@ -683,7 +746,9 @@ fn serve_canonical_snapshot(
         total_pages: Some(page_count),
         page_spans: None,
         revision: Some(material.revision.clone()),
-        details: None,
+        details: ensured
+            .map(|report| ensure_details(report, &material.id, None))
+            .transpose()?,
         diagnostics,
     })?;
     annotate_view(value, Some(view), Some(request), Some(served.id.as_str())).map(Some)
@@ -791,25 +856,28 @@ fn capability_unavailable(
     to: u32,
     page_count: u32,
     mut diagnostics: Vec<Value>,
+    report: Option<&EnsureReport>,
 ) -> Result<Value, ToolError> {
-    let probe = probe_capability(workspace.capability_runner(), Capability::Marker);
-    if probe.state == CapabilityState::Available {
-        diagnostics.push(diagnostic(
-            "marker_not_wired",
-            "requested pages have no text layer; Marker is installed but material.read does not run OCR in Phase1",
-        ));
-    } else {
+    let probe = match report.and_then(|report| report.probe.clone()) {
+        Some(probe) => probe,
+        None => probe_capability(workspace.capability_runner(), Capability::Marker),
+    };
+    if probe.state != CapabilityState::Available {
         diagnostics.push(diagnostic(
             "pdf_no_text_layer",
             "requested pages have no text layer; install Marker to convert scanned PDFs",
         ));
     }
-    let details = serde_json::to_value(&probe).map_err(|error| {
-        ToolError::new(
-            ToolErrorCode::Internal,
-            format!("failed to serialize capability probe: {error}"),
-        )
-    })?;
+    if let Some(report) = report {
+        diagnostics.push(diagnostic(
+            report.status.diagnostic_code(),
+            report.message.clone(),
+        ));
+    }
+    let details = match report {
+        Some(report) => ensure_details(report, &material.id, Some(&probe))?,
+        None => to_json(&probe, "capability probe")?,
+    };
     result(ReadResult {
         status: ToolStatus::CapabilityUnavailable,
         artifact_id: material.id.to_string(),
@@ -823,6 +891,36 @@ fn capability_unavailable(
         revision: Some(material.revision.clone()),
         details: Some(details),
         diagnostics,
+    })
+}
+
+/// `details` for an ensured read: the probe fields (when known) plus
+/// `ensure` and, when this call blocked on a Marker parse of this PDF,
+/// `map_signal` (「解析中」 with how it ended, for the scene player).
+fn ensure_details(
+    report: &EnsureReport,
+    pdf: &StableId,
+    probe: Option<&mathscape_agent::CapabilityProbe>,
+) -> Result<Value, ToolError> {
+    let mut details = match probe {
+        Some(probe) => to_json(probe, "capability probe")?,
+        None => json!({}),
+    };
+    if let Some(object) = details.as_object_mut() {
+        object.insert("ensure".into(), to_json(report, "ensure report")?);
+        if let Some(signal) = report.map_signal(pdf) {
+            object.insert("map_signal".into(), signal);
+        }
+    }
+    Ok(details)
+}
+
+fn to_json(value: &impl Serialize, what: &str) -> Result<Value, ToolError> {
+    serde_json::to_value(value).map_err(|error| {
+        ToolError::new(
+            ToolErrorCode::Internal,
+            format!("failed to serialize {what}: {error}"),
+        )
     })
 }
 

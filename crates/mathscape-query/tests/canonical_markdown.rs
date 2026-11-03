@@ -293,6 +293,27 @@ fn one_canonical_markdown_node_per_pdf_after_registry_sync() {
     assert_eq!(canonical_node.label(), "source · 规范解析正文");
     assert_eq!(canonical_node.kind(), EntityKind::SourceArtifact);
     assert!(canonical_node.summary_ref().unwrap().contains("partial"));
+    // Desktop 「阅读文件」 opens the head snapshot, not the logical canonical id.
+    assert_eq!(canonical_node.openable_artifact_id(), Some(late.stable_id()));
+    let incidence = mathscape_graph::IncidenceGraph::project(&landscape);
+    let wire = serde_json::to_value(&incidence).unwrap();
+    let wire_node = wire["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["domain_id"] == canonical.as_str())
+        .unwrap();
+    assert_eq!(wire_node["openable_artifact_id"], late.stable_id().as_str());
+    let source_wire = wire["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["domain_id"] == source.stable_id().as_str())
+        .unwrap();
+    assert!(
+        source_wire.get("openable_artifact_id").is_none(),
+        "physical artifacts open by domain_id; the field is omitted"
+    );
 
     let late_relation = landscape
         .relations()

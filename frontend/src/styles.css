@@ -1289,6 +1289,36 @@ code {
   border-color: #a5524a;
 }
 
+.scene-hud.is-parsing {
+  border-color: #c9a227;
+}
+
+/* Sync ensure: a material.read waiting on Marker (shares the type row). */
+.scene-hud-parsing {
+  grid-area: type;
+  justify-self: start;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgb(201 162 39 / 22%);
+  color: #f2d06b;
+  font-size: 11px;
+  line-height: 18px;
+  animation: scene-parsing-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.scene-hud-parsing[hidden] {
+  display: none;
+}
+
+@keyframes scene-parsing-pulse {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-hud-parsing { animation: none; }
+}
+
 .scene-hud-tag {
   grid-area: tag;
   padding: 1px 6px;

@@ -3,6 +3,7 @@
 //! prompt caches stay stable. Change them only together with the contract.
 
 mod canonical;
+mod ensure;
 mod graph;
 mod grep;
 mod ink;
@@ -17,6 +18,7 @@ use serde_json::{Map, Value, json};
 
 use crate::McpWorkspace;
 
+pub use ensure::{ENSURE_POLICY_VERSION, EnsurePolicy};
 pub use graph::{
     DEFAULT_EDGE_TYPES, DEFAULT_MAX_EDGES, DEFAULT_MAX_NODES, MAX_DEPTH, MAX_EDGES, MAX_NODES,
     MAX_SEEDS, MAX_VISITED, RELATION_TYPES,
@@ -51,13 +53,13 @@ pub const TOOL_NAMES: [&str; 7] = [
     INK_PAGE_IMAGE,
 ];
 
-/// MCP `annotations` for this read-only catalog.
+/// MCP `annotations` for the read-only tools.
 ///
 /// Codex treats a missing `readOnlyHint` as destructive (`destructiveHint`
 /// defaults to true). Under `approvalPolicy: never` that becomes
 /// "MCP tool call requires approval, but approval policy is never" and the
-/// call never runs. Every tool in [`TOOL_NAMES`] is read-only; a future write
-/// tool must not reuse this object.
+/// call never runs. Every tool in [`TOOL_NAMES`] except `material.read` is
+/// read-only; see [`material_read_annotations`].
 pub fn read_only_annotations() -> Value {
     json!({
         "readOnlyHint": true,
@@ -66,9 +68,28 @@ pub fn read_only_annotations() -> Value {
     })
 }
 
-fn with_read_only_annotations(mut definition: Value) -> Value {
+/// `material.read` may run a bounded Marker ensure on a scanned PDF and add a
+/// new immutable snapshot to the workspace parse cache, so it is honestly not
+/// read-only. It never rewrites or deletes existing data
+/// (`destructiveHint: false`), repeating a call reuses the snapshot
+/// (`idempotentHint: true`) and Marker runs locally (`openWorldHint: false`).
+pub fn material_read_annotations() -> Value {
+    json!({
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+    })
+}
+
+fn with_annotations(mut definition: Value) -> Value {
+    let annotations = if definition.get("name").and_then(Value::as_str) == Some(MATERIAL_READ) {
+        material_read_annotations()
+    } else {
+        read_only_annotations()
+    };
     if let Some(object) = definition.as_object_mut() {
-        object.insert("annotations".into(), read_only_annotations());
+        object.insert("annotations".into(), annotations);
     }
     definition
 }
@@ -85,7 +106,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ink::definition(),
     ]
     .into_iter()
-    .map(with_read_only_annotations)
+    .map(with_annotations)
     .collect()
 }
 

@@ -60,6 +60,9 @@ export interface IncidenceNode {
   lifecycle: string | null;
   parent: string | null;
   boundary: boolean;
+  /** Physical artifact to open when `domain_id` is logical (folded canonical
+   * markdown → head snapshot). Omitted when `domain_id` itself opens. */
+  openable_artifact_id?: string | null;
 }
 
 export interface IncidenceEdge {

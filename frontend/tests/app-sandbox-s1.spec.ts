@@ -462,6 +462,28 @@ test.describe("S1 sandbox shell", () => {
     await expect(win).toHaveCount(0);
   });
 
+  test("Sync ensure: a scanned-page material.read waiting on Marker plays as 解析中 until the body lands", async ({ page }) => {
+    const dock = await sandboxDock(page, { act: "parsing", delayMs: 30, gapMs: 6500 });
+    await dock.locator("textarea").fill("读第 3–4 页");
+    await dock.getByRole("button", { name: "发送" }).click();
+    const hud = page.locator(".canvas-panel .scene-hud");
+    await expect(hud.locator(".scene-hud-title")).toHaveText("阅读材料 · notes.pdf · 第 3–4 页");
+    // The map PDF node says 解析中 → the in-flight read becomes a parsing block.
+    const chip = hud.locator(".scene-hud-parsing");
+    await expect(chip).toBeVisible({ timeout: 6000 });
+    await expect(chip).toHaveText("解析中");
+    await expect(hud).toHaveClass(/is-parsing/);
+    await expect(hud.locator(".scene-hud-summary")).toContainText("解析中 第3–4页 · 等待 Marker 完成");
+    expect(await page.evaluate(() => window.appHarness.nodeClasses("r-pdf-notes"))).toContain("scene-parsing");
+    await expect(dock.locator(".sandbox-step-title").filter({ hasText: "解析中" })).toHaveCount(1);
+    // The result lands: the chip goes, the result frame records the parse.
+    await expect(hud.locator(".scene-hud-summary")).toContainText("解析完成 第3–4页", { timeout: 8000 });
+    await expect(chip).toBeHidden();
+    await expect(dock.locator(".sandbox-step-title").filter({ hasText: "解析中" })).toHaveCount(0);
+    await expect(hud).toBeHidden({ timeout: 10000 });
+    expect(await page.evaluate(() => window.appHarness.nodeClasses("r-pdf-notes"))).not.toContain("scene-parsing");
+  });
+
   test("Scene Act: ink.page_image shows the page image at the stage corner (note is not a map node)", async ({ page }) => {
     const dock = await sandboxDock(page, { act: "page_image", delayMs: 30, gapMs: 400 });
     await dock.locator("textarea").fill("看看手稿");

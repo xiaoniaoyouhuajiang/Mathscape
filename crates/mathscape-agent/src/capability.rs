@@ -248,6 +248,28 @@ const MARKER_VERSION_SCRIPT: &str =
 /// `$MATHSCAPE_MARKER_EXECUTABLE`, `$MATHSCAPE_MARKER_VENV/bin`, the default
 /// venv used by `scripts/install/marker.sh`, then `marker_single` on `PATH`.
 fn probe_marker(runner: &dyn CommandRunner) -> Option<Found> {
+    let dir = marker_bin_dir(runner)?;
+    let python = ["python", "python3"]
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|candidate| runner.is_file(candidate));
+    let version = python.and_then(|python| {
+        runner
+            .run(&python, &["-c", MARKER_VERSION_SCRIPT])
+            .ok()
+            .filter(|output| output.success)
+            .and_then(|output| extract_version(&output.stdout))
+    });
+    Some(Found { version })
+}
+
+/// The `marker_single` the Marker probe would report, in the same candidate
+/// order. Lets a caller run exactly the installation it probed.
+pub fn locate_marker_executable(runner: &dyn CommandRunner) -> Option<PathBuf> {
+    marker_bin_dir(runner).map(|dir| dir.join("marker_single"))
+}
+
+fn marker_bin_dir(runner: &dyn CommandRunner) -> Option<PathBuf> {
     let mut bin_dirs = Vec::new();
     if let Some(executable) = runner.env_var("MATHSCAPE_MARKER_EXECUTABLE")
         && let Some(parent) = Path::new(&executable).parent()
@@ -263,25 +285,9 @@ fn probe_marker(runner: &dyn CommandRunner) -> Option<Found> {
     if let Some(path) = runner.env_var("PATH") {
         bin_dirs.extend(std::env::split_paths(&path));
     }
-
-    for dir in bin_dirs {
-        if !runner.is_file(&dir.join("marker_single")) {
-            continue;
-        }
-        let python = ["python", "python3"]
-            .iter()
-            .map(|name| dir.join(name))
-            .find(|candidate| runner.is_file(candidate));
-        let version = python.and_then(|python| {
-            runner
-                .run(&python, &["-c", MARKER_VERSION_SCRIPT])
-                .ok()
-                .filter(|output| output.success)
-                .and_then(|output| extract_version(&output.stdout))
-        });
-        return Some(Found { version });
-    }
-    None
+    bin_dirs
+        .into_iter()
+        .find(|dir| runner.is_file(&dir.join("marker_single")))
 }
 
 /// `$XDG_DATA_HOME/mathscape/marker/venv` or `~/.local/share/mathscape/marker/venv`.

@@ -6,7 +6,7 @@ use mathscape_graph::{
     GraphProjection, GraphProjectionError, IncidenceDirection, ProjectionEndpoint, ProjectionLens,
     ProjectionNode, ProjectionRelation, ProjectionRelationKind, ViewLayer,
 };
-use mathscape_store_sqlite::ArtifactCatalogSnapshot;
+use mathscape_store_sqlite::{ArtifactCatalogSnapshot, CanonicalEnsureLease};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
@@ -27,7 +27,7 @@ pub fn project_artifact_catalog(
     catalog: &ArtifactCatalogSnapshot,
     lens: ProjectionLens,
 ) -> Result<GraphProjection, ArtifactGraphProjectionError> {
-    project_artifact_catalog_labeled(catalog, lens, None, &[])
+    project_artifact_catalog_labeled(catalog, lens, None, &[], &[])
 }
 
 /// Like [`project_artifact_catalog`], with N3d snapshot names (snapshot
@@ -37,6 +37,7 @@ pub(crate) fn project_artifact_catalog_labeled(
     lens: ProjectionLens,
     snapshot_labels: Option<&BTreeMap<String, String>>,
     canonical: &[CanonicalMarkdownView],
+    parsing: &[CanonicalEnsureLease],
 ) -> Result<GraphProjection, ArtifactGraphProjectionError> {
     if !matches!(lens, ProjectionLens::Source | ProjectionLens::Provenance) {
         return Err(ArtifactGraphProjectionError::UnsupportedLens(lens));
@@ -116,6 +117,10 @@ pub(crate) fn project_artifact_catalog_labeled(
                 contexts.iter().cloned().collect::<Vec<_>>().join("；")
             ));
         }
+        if let Some(signal) = parsing_signal(parsing, header.stable_id()) {
+            summary.push_str(" · ");
+            summary.push_str(&signal);
+        }
         nodes.push(
             ProjectionNode::new(
                 header.stable_id().clone(),
@@ -182,6 +187,22 @@ pub(crate) fn project_artifact_catalog_labeled(
 
     let (nodes, relations) = collapse_canonical_markdown(nodes, relations, canonical, &names)?;
     GraphProjection::new(lens, vec![], nodes, relations).map_err(Into::into)
+}
+
+/// 「解析中 第a–b页」 for a PDF with a live canonical markdown ensure.
+pub(crate) fn parsing_signal(parsing: &[CanonicalEnsureLease], pdf: &StableId) -> Option<String> {
+    let ranges: Vec<_> = parsing
+        .iter()
+        .filter(|lease| &lease.source_pdf_artifact_id == pdf)
+        .map(|lease| {
+            if lease.pages.from == lease.pages.to {
+                format!("第{}页", lease.pages.from)
+            } else {
+                format!("第{}–{}页", lease.pages.from, lease.pages.to)
+            }
+        })
+        .collect();
+    (!ranges.is_empty()).then(|| format!("解析中 {}", ranges.join("、")))
 }
 
 /// Markdown artifact id → canonical id, for fragments a registry entry replaces.
@@ -253,11 +274,10 @@ fn collapse_canonical_markdown(
             .map(String::as_str)
             .unwrap_or("PDF");
         let coverage = view.coverage(None);
-        let head = view
-            .head_artifact_id
-            .as_ref()
-            .map(StableId::to_string)
-            .unwrap_or_default();
+        let Some(head_id) = view.head_artifact_id.clone() else {
+            continue;
+        };
+        let head = head_id.to_string();
         let mut summary = format!(
             "text/markdown · canonical {} · head {head} · {}",
             view.canonical_id,
@@ -286,7 +306,9 @@ fn collapse_canonical_markdown(
                 format!("{pdf_label} · 规范解析正文"),
             )?
             .summary(summary)?
-            .lifecycle(mathscape_domain::LifecycleStatus::Active),
+            .lifecycle(mathscape_domain::LifecycleStatus::Active)
+            // The canonical id is logical; readers open the head snapshot.
+            .openable_artifact(head_id),
         );
     }
     let mut rewritten = Vec::with_capacity(relations.len());

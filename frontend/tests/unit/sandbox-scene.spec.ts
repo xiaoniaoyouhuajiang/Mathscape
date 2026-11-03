@@ -4,7 +4,10 @@ import {
   compileRoundScenes,
   compileSceneAct,
   compileToolScene,
+  isParsingSummary,
   parseArgsSummary,
+  parsingScene,
+  readPdfPages,
   resolveScene,
   resultImage,
   resultPayload,
@@ -279,5 +282,43 @@ describe("Act overlays (第二刀)", () => {
   it("other tools carry no act", () => {
     const { call, done } = step("graph.get", { node_id: UNIT }, { status: "ok", node: { id: UNIT, label: "x" } });
     expect(compileSceneAct(call, done)).toBeUndefined();
+  });
+
+  it("material.read after a sync ensure: parsing act done + 解析完成 summary", () => {
+    const { call, done } = step("material.read", { artifact_id: ART, locator: { pdf_pages: { from: 3, to: 4 } } }, {
+      status: "ok", artifact_id: ART, content_type: "markdown", total_pages: 12,
+      details: { ensure: { status: "expanded" }, map_signal: { kind: "parsing", label: "解析中", node_id: ART, pages: { from: 3, to: 4 }, phase: "done", waited_ms: 0 } },
+    });
+    expect(compileSceneAct(call, done)).toMatchObject({ kind: "parsing", label: "解析中", phase: "done", pages: { from: 3, to: 4 } });
+    const scene = resolveScene(compileToolScene(call, done)!, resolver());
+    expect(scene.summary).toMatch(/^解析完成 第3–4页/);
+  });
+
+  it("material.read whose ensure failed: parsing act failed + 解析失败 reason", () => {
+    const { call, done } = step("material.read", { artifact_id: ART, locator: { pdf_pages: { from: 3, to: 4 } } }, {
+      status: "capability_unavailable", artifact_id: ART,
+      details: { ensure: { status: "failed", message: "Marker 超时", timed_out: true }, map_signal: { kind: "parsing", label: "解析中", node_id: ART, pages: { from: 3, to: 4 }, phase: "failed", waited_ms: 0 } },
+    });
+    expect(compileSceneAct(call, done)).toMatchObject({ kind: "parsing", phase: "failed" });
+    const scene = resolveScene(compileToolScene(call, done)!, resolver());
+    expect(scene.summary).toContain("解析失败 第3–4页");
+    expect(scene.summary).toContain("Marker 超时");
+  });
+
+  it("material.read without map_signal (covered page / text PDF) carries no act", () => {
+    const { call, done } = step("material.read", { artifact_id: ART, locator: { pdf_pages: { from: 1, to: 1 } } }, { status: "ok", artifact_id: ART, total_pages: 2 });
+    expect(compileSceneAct(call, done)).toBeUndefined();
+  });
+
+  it("an in-flight read becomes a running parsing block when the map says 解析中", () => {
+    const { call } = step("material.read", { artifact_id: ART, locator: { pdf_pages: { from: 5 } } });
+    expect(readPdfPages(call)).toEqual({ from: 5, to: 5 });
+    expect(readPdfPages(step("material.grep", { artifact_ids: [ART], pattern: "x" }).call)).toBeUndefined();
+    expect(isParsingSummary("PDF · 解析中 第5–5页")).toBe(true);
+    expect(isParsingSummary("PDF · 12 页")).toBe(false);
+    expect(isParsingSummary(undefined)).toBe(false);
+    const draft = parsingScene(compileToolScene(call)!, { from: 5, to: 6 });
+    expect(draft.summary).toBe("解析中 第5–6页 · 等待 Marker 完成…");
+    expect(draft.act).toEqual({ kind: "parsing", label: "解析中", phase: "running", pages: { from: 5, to: 6 } });
   });
 });

@@ -62,6 +62,11 @@ pub struct IncidenceNode {
     lifecycle: Option<LifecycleStatus>,
     parent: Option<RenderElementId>,
     boundary: bool,
+    /// Physical artifact to open when `domain_id` is logical (a folded
+    /// canonical markdown view → head snapshot). Omitted when `domain_id`
+    /// itself is openable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    openable_artifact_id: Option<StableId>,
 }
 
 impl IncidenceNode {
@@ -107,6 +112,10 @@ impl IncidenceNode {
 
     pub const fn is_boundary(&self) -> bool {
         self.boundary
+    }
+
+    pub fn openable_artifact_id(&self) -> Option<&StableId> {
+        self.openable_artifact_id.as_ref()
     }
 }
 
@@ -182,6 +191,7 @@ impl IncidenceGraph {
                 lifecycle: None,
                 parent: group.parent().map(RenderElementId::group),
                 boundary: false,
+                openable_artifact_id: None,
             });
         }
         for node in projection.nodes() {
@@ -197,6 +207,7 @@ impl IncidenceGraph {
                 lifecycle: node.lifecycle_status(),
                 parent: node.group_ref().map(RenderElementId::group),
                 boundary: node.is_boundary(),
+                openable_artifact_id: node.openable_artifact_id().cloned(),
             });
         }
 
@@ -215,6 +226,7 @@ impl IncidenceGraph {
                 lifecycle: relation.lifecycle_status(),
                 parent: relation.group_ref().map(RenderElementId::group),
                 boundary: relation.is_boundary(),
+                openable_artifact_id: None,
             });
             for endpoint in relation.endpoints() {
                 let entity_node = RenderElementId::entity(endpoint.node());

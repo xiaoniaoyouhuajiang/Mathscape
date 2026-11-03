@@ -169,6 +169,11 @@ pub struct ProjectionNode {
     lifecycle: Option<LifecycleStatus>,
     group: Option<ProjectionGroupId>,
     boundary: bool,
+    /// Physical artifact a reader opens for this node when its `entity_id` is
+    /// a logical id (e.g. a folded canonical markdown view → its head
+    /// snapshot). `None` means the entity id itself is the physical id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    openable_artifact: Option<StableId>,
 }
 
 impl ProjectionNode {
@@ -187,7 +192,18 @@ impl ProjectionNode {
             lifecycle: None,
             group: None,
             boundary: false,
+            openable_artifact: None,
         })
+    }
+
+    /// Marks the physical artifact a reader should open for this logical node.
+    pub fn openable_artifact(mut self, artifact: StableId) -> Self {
+        self.openable_artifact = Some(artifact);
+        self
+    }
+
+    pub fn openable_artifact_id(&self) -> Option<&StableId> {
+        self.openable_artifact.as_ref()
     }
 
     pub fn summary(mut self, summary: impl Into<String>) -> Result<Self, GraphProjectionError> {

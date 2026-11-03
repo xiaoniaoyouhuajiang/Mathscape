@@ -7,7 +7,8 @@ use mathscape_graph::{
     ViewLayer,
 };
 use mathscape_store_sqlite::{
-    ArtifactCatalogSnapshot, LandscapeSnapshot, SourceMapSnapshot, StoredMapObject,
+    ArtifactCatalogSnapshot, CanonicalEnsureLease, LandscapeSnapshot, SourceMapSnapshot,
+    StoredMapObject,
 };
 use sha2::Digest;
 use thiserror::Error;
@@ -31,6 +32,7 @@ pub struct LandscapeProjectionInput<'a> {
     source_map: &'a SourceMapSnapshot,
     ink_snapshot_labels: Option<&'a BTreeMap<String, String>>,
     canonical_markdown: &'a [CanonicalMarkdownView],
+    canonical_ensures: &'a [CanonicalEnsureLease],
 }
 
 impl<'a> LandscapeProjectionInput<'a> {
@@ -40,7 +42,15 @@ impl<'a> LandscapeProjectionInput<'a> {
             source_map,
             ink_snapshot_labels: None,
             canonical_markdown: &[],
+            canonical_ensures: &[],
         }
+    }
+
+    /// Live canonical markdown ensures: the PDF node summary gains
+    /// 「解析中 第a–b页」 while Marker runs.
+    pub fn with_canonical_ensures(mut self, leases: &'a [CanonicalEnsureLease]) -> Self {
+        self.canonical_ensures = leases;
+        self
     }
 
     /// Registry rows that collapse physical markdown fragments into one node.
@@ -60,6 +70,7 @@ impl<'a> LandscapeProjectionInput<'a> {
         Self::new(snapshot.artifacts(), snapshot.sources())
             .with_ink_snapshot_labels(snapshot.ink_snapshot_labels())
             .with_canonical_markdown(snapshot.canonical_markdown())
+            .with_canonical_ensures(snapshot.canonical_ensures())
     }
 }
 
@@ -310,6 +321,7 @@ pub fn project_landscape(
         ProjectionLens::Source,
         input.ink_snapshot_labels,
         input.canonical_markdown,
+        input.canonical_ensures,
     )
     .map_err(|error| SourceGraphProjectionError::Material(error.to_string()))?;
     let canonical_aliases =

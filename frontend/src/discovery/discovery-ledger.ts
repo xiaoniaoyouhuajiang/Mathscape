@@ -4,6 +4,7 @@ import { textElement } from "../core/dom";
 import { eventBus } from "../core/events";
 import { errorMessage } from "../core/ipc";
 import { openDiscoveryPatchReview } from "../reader/selection";
+import { findSourceArtifactNode } from "../reader/openable";
 import { openReviewWorkspace } from "../review/workspace";
 import {
   discoveryRunStatusLabel,
@@ -49,9 +50,8 @@ export class DiscoveryLedgerController {
 
   getArtifactDisplayName(artifactId: string, fallbackName?: string | null): string {
     const snapshot = this.delegate.getSnapshot();
-    const node = snapshot?.landscape_graph.nodes.find(
-      (n) => n.domain_kind === "SourceArtifact" && n.domain_id === artifactId,
-    );
+    // A head snapshot folded into a canonical node is labeled by that node.
+    const node = findSourceArtifactNode(snapshot?.landscape_graph.nodes ?? [], artifactId);
     if (node?.label) {
       return node.label;
     }

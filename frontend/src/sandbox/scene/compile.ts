@@ -9,6 +9,10 @@
  * Second slice: three tools also carry an Act overlay (`SceneDraft.act`):
  * `workspace.search` types its query in the HUD, `pdf.outline` opens a 目录
  * mini-window, `ink.page_image` opens a page-image mini-window.
+ *
+ * `material.read` on scanned pages blocks while Marker parses them: a live
+ * call gets a `parsing` act via `parsingScene` (the map said 「解析中」), and
+ * a result carrying `details.map_signal` records the parse (done / failed).
  */
 import { shortStableId } from "../../core/stable-id";
 import type { AgentEventLike } from "../format";
@@ -17,7 +21,9 @@ import {
   OUTLINE_ROWS_CAP,
   SCENE_FOCUS_CAP,
   SCENE_TOOLS,
+  PARSING_LABEL,
   type OutlineRow,
+  type ParsingAct,
   type SceneAct,
   type SceneDraft,
   type SceneResolve,
@@ -201,7 +207,15 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
     const pages = num(payload?.total_pages);
     const bytes = num(payload?.total_bytes);
     const size = pages !== undefined ? `共 ${pages} 页` : bytes !== undefined ? `共 ${bytes} 字节` : "";
-    const done = [str(payload?.content_type), size, payload?.truncated ? "已截断" : ""].filter(Boolean).join(" · ");
+    const parsed = parsingSignal(payload);
+    const done = [
+      parsed?.phase === "done" ? `解析完成${pagesLabel(parsed.pages)}` : "",
+      str(payload?.content_type),
+      size,
+      payload?.truncated ? "已截断" : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
     return {
       verb: "阅读材料",
       subjectId: artifact,
@@ -328,8 +342,61 @@ function outlineRows(entries: unknown[]): OutlineRow[] {
 const hasDiagnostic = (payload: Json | undefined, code: string): boolean =>
   list(payload?.diagnostics).some((item) => isObject(item) && item.code === code);
 
-/** Act overlays: only these three tools have one (others stay unchanged). */
+const pagesLabel = (pages: ParsingAct["pages"]): string =>
+  pages ? (pages.from === pages.to ? ` 第${pages.from}页` : ` 第${pages.from}–${pages.to}页`) : "";
+
+/** `material.read` result `details.map_signal` (sync ensure record), if any. */
+function parsingSignal(payload: Json | undefined): ParsingAct | undefined {
+  const details = isObject(payload?.details) ? payload.details : undefined;
+  const signal = isObject(details?.map_signal) ? details.map_signal : undefined;
+  if (!signal || signal.kind !== "parsing") return undefined;
+  const range = isObject(signal.pages) ? signal.pages : undefined;
+  const from = num(range?.from);
+  const to = num(range?.to) ?? from;
+  return {
+    kind: "parsing",
+    label: PARSING_LABEL,
+    phase: signal.phase === "failed" ? "failed" : "done",
+    ...(from !== undefined && to !== undefined ? { pages: { from, to } } : {}),
+  };
+}
+
+/** `解析失败 第a–b页：{ensure message}` (falls back to the generic error). */
+function parseFailure(act: ParsingAct, payload: Json | undefined, fallback: string): string {
+  const details = isObject(payload?.details) ? payload.details : undefined;
+  const ensure = isObject(details?.ensure) ? details.ensure : undefined;
+  const reason = str(ensure?.message) ?? fallback.replace(/^调用失败：?/, "");
+  return `解析失败${pagesLabel(act.pages)}${reason ? `：${reason}` : ""}`;
+}
+
+/** Requested `pdf_pages` of a `material.read` call (1-based), if any. */
+export function readPdfPages(call: AgentEventLike | undefined): { from: number; to: number } | undefined {
+  if (sceneToolName(call?.payload?.tool ?? rawOf(call)?.tool) !== "material.read") return undefined;
+  const locator = callArgs(call).locator;
+  const pages = isObject(locator) && isObject(locator.pdf_pages) ? locator.pdf_pages : undefined;
+  const from = num(pages?.from);
+  if (from === undefined) return undefined;
+  return { from, to: num(pages?.to) ?? from };
+}
+
+/** A map summary that says the PDF is being parsed right now. */
+export const isParsingSummary = (summary: string | undefined): boolean => !!summary?.includes(PARSING_LABEL);
+
+/**
+ * A still-running `material.read` draft as a parsing block: the map showed
+ * 「解析中」 for its PDF, so the call is waiting on Marker (sync ensure).
+ */
+export function parsingScene(draft: SceneDraft, pages?: { from: number; to: number }): SceneDraft {
+  return {
+    ...draft,
+    summary: `${PARSING_LABEL}${pagesLabel(pages)} · 等待 Marker 完成…`,
+    act: { kind: "parsing", label: PARSING_LABEL, phase: "running", ...(pages ? { pages } : {}) },
+  };
+}
+
+/** Act overlays: only these tools have one (others stay unchanged). */
 const ACTS: Partial<Record<SceneToolName, ActCompiler>> = {
+  "material.read": (_args, payload, status) => (status === "running" ? undefined : parsingSignal(payload)),
   "workspace.search": (args, payload) => {
     const text = str(args.query) ?? str(payload?.query);
     return text ? { kind: "typewriter", text } : undefined;
@@ -397,7 +464,12 @@ export function compileToolScene(call: AgentEventLike | undefined, result?: Agen
     tool,
     status,
     ...parts,
-    summary: status === "error" ? errorSummary(result, payload) : parts.summary,
+    summary:
+      status === "error"
+        ? act?.kind === "parsing" && act.phase === "failed"
+          ? parseFailure(act, payload, errorSummary(result, payload))
+          : errorSummary(result, payload)
+        : parts.summary,
     ...(act ? { act } : {}),
   };
 }

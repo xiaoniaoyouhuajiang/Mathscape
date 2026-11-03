@@ -1226,7 +1226,6 @@ async fn tablet_and_desktop_renames_use_revisions_and_reach_each_other() {
     f.cleanup().await;
 }
 
-
 #[tokio::test]
 async fn n3a_push_to_an_offline_tablet_falls_back_without_issuing_a_token() {
     let f = Fixture::new("push-offline").await;
@@ -1309,7 +1308,12 @@ async fn n3a_push_to_a_connected_tablet_sends_switch_offer_and_audits_desktop_pu
         .send()
         .await
         .unwrap();
-    assert_eq!(claimed.status(), 200, "{}", claimed.text().await.unwrap_or_default());
+    assert_eq!(
+        claimed.status(),
+        200,
+        "{}",
+        claimed.text().await.unwrap_or_default()
+    );
 
     // Replay of the same token must fail.
     let replay = f

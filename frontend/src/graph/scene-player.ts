@@ -30,6 +30,12 @@
  * ink-note satellites follow their endpoints; edges follow on their own.
  * Single-node focus: no-op. Kill-switch: `SCENE_CLUMP.enabled`.
  *
+ * Parsing (sync ensure): a `material.read` that waits on Marker carries a
+ * `parsing` act. While `running`, the HUD shows a 「解析中」 chip, the PDF
+ * node gets `scene-parsing`, and the segment holds (up to `parsingHoldMs`,
+ * ending early once the next segment — normally the result — is queued).
+ * Repeated running segments for one call replace each other in the queue.
+ *
  * Animation state only: the landscape graph is never touched; clumped
  * coordinates live in Cytoscape for the duration of the scene and are never
  * written to the graph model or storage.
@@ -37,7 +43,7 @@
 import type { BoundingBox12, Core, NodeCollection, NodeSingular } from "cytoscape";
 import { OUT_OF_FOCUS_CLASS, applyFocusScope } from "./cytoscape";
 import { SCENE_CLUMP, clumpTargets, ease, lerp, satelliteShift, type Point } from "./scene-clump";
-import type { OutlineAct, PageImageAct, SceneAct, ToolScene } from "../sandbox/scene/types";
+import type { OutlineAct, PageImageAct, ParsingAct, SceneAct, ToolScene } from "../sandbox/scene/types";
 
 export type ScenePart = "call" | "result" | "full";
 
@@ -61,7 +67,13 @@ interface Visual {
   focus: Set<string>;
   seeds: string[];
   layers: string[][];
+  /** Seeds being parsed (sync ensure): `scene-parsing`. */
+  parsing?: boolean;
 }
+
+type WindowAct = Exclude<SceneAct, { kind: "typewriter" } | ParsingAct>;
+
+const isParsingRun = (scene: ToolScene): boolean => scene.act?.kind === "parsing" && scene.act.phase === "running";
 
 export interface ScenePlayerHost {
   core: () => Core | null;
@@ -92,6 +104,8 @@ export const SCENE_TIMING = {
   typeHoldMs: 450,
   /** How long an Act mini-window (目录 / 页图) stays up. */
   actMs: 2200,
+  /** A running parse segment holds this long unless something is queued. */
+  parsingHoldMs: 4500,
 };
 const ACT_GAP = 18;
 const ACT_MARGIN = 8;
@@ -99,7 +113,7 @@ const FIT_PADDING = 64;
 const FIT_MAX_ZOOM = 1.6;
 /** Nodes that hang off entities and follow them when they move. */
 const SATELLITE_SELECTOR = '[elementKind = "junction"], .ink-note-node';
-const SCENE_CLASSES = "sandbox-echo-seed sandbox-echo-hit sandbox-echo-fade sandbox-echo-edge";
+const SCENE_CLASSES = "sandbox-echo-seed sandbox-echo-hit sandbox-echo-fade sandbox-echo-edge scene-parsing";
 
 export class ScenePlayer {
   private queue: Segment[] = [];
@@ -116,6 +130,7 @@ export class ScenePlayer {
   private readonly hudStep: HTMLElement;
   private readonly hudType: HTMLElement;
   private readonly hudTypeText: HTMLElement;
+  private readonly hudParsing: HTMLElement;
   /** Clump: original model positions of every node moved this session. */
   private origin = new Map<string, Point>();
   /** Clump: the focus the current segment clumped (re-applied after render). */
@@ -157,7 +172,11 @@ export class ScenePlayer {
     stop.textContent = "停止";
     stop.title = "停止回放并恢复视角";
     stop.onclick = () => this.cancel();
-    this.hud.append(tag, this.hudTitle, this.hudStep, this.hudType, this.hudSummary, stop);
+    this.hudParsing = document.createElement("span");
+    this.hudParsing.className = "scene-hud-parsing";
+    this.hudParsing.textContent = "解析中";
+    this.hudParsing.hidden = true;
+    this.hud.append(tag, this.hudTitle, this.hudStep, this.hudParsing, this.hudType, this.hudSummary, stop);
     host.hudHost.append(this.hud);
   }
 
@@ -168,6 +187,10 @@ export class ScenePlayer {
   /** Live tool event: queue behind whatever is playing. */
   live(scene: ToolScene, part: "call" | "result"): void {
     if (!this.host.canPlay()) return;
+    // One pending 「解析中」 segment per call: a newer one replaces it.
+    if (isParsingRun(scene)) {
+      this.queue = this.queue.filter((queued) => !(queued.scene.callId === scene.callId && isParsingRun(queued.scene)));
+    }
     this.queue.push({ scene, part });
     void this.pump();
   }
@@ -264,7 +287,9 @@ export class ScenePlayer {
     const act = scene.act;
     const typed = act?.kind === "typewriter" ? act.text : undefined;
     // 目录 / 页图 windows need the result: never on a bare call segment.
-    const windowAct = act && act.kind !== "typewriter" && part !== "call" ? act : undefined;
+    const windowAct: WindowAct | undefined =
+      act && act.kind !== "typewriter" && act.kind !== "parsing" && part !== "call" ? act : undefined;
+    const parsing = !!scene.act && isParsingRun(scene);
     if (typed === undefined) this.setTyped(null);
     else if (part === "result") this.setTyped(typed, true);
     else if (!(await this.typewrite(typed, token))) return;
@@ -283,11 +308,15 @@ export class ScenePlayer {
         await this.wait(Math.max(SCENE_TIMING.hudOnlyMs, SCENE_TIMING.actMs), token);
         return;
       }
+      if (parsing) {
+        await this.holdParsing(token);
+        return;
+      }
       await this.wait(typed !== undefined && part === "call" ? SCENE_TIMING.typeHoldMs : SCENE_TIMING.hudOnlyMs, token);
       return;
     }
     // Isolate the seeds first; each result layer then joins the focus.
-    const visual: Visual = { focus: new Set(seeds), seeds, layers: [] };
+    const visual: Visual = { focus: new Set(seeds), seeds, layers: [], ...(parsing ? { parsing } : {}) };
     if (seeds.length > 0 || layers.length === 0) this.paint(visual);
     // Clump and fit move together; the camera aims at where nodes will be.
     this.clumpFocus = nodes.map((node) => node.id());
@@ -305,7 +334,16 @@ export class ScenePlayer {
       if (!(await this.wait(SCENE_TIMING.layerMs, token))) return;
     }
     if (windowAct) await this.wait(SCENE_TIMING.actMs, token);
+    else if (parsing) await this.holdParsing(token);
     else if (layers.length > 0) await this.wait(SCENE_TIMING.holdMs, token);
+  }
+
+  /** Hold a 「解析中」 frame until the next segment arrives (or the hold ends). */
+  private async holdParsing(token: number): Promise<void> {
+    const until = Date.now() + SCENE_TIMING.parsingHoldMs;
+    while (Date.now() < until && this.queue.length === 0) {
+      if (!(await this.wait(Math.min(200, until - Date.now()), token))) return;
+    }
   }
 
   /** HUD typewriter line: `null` hides it; `done` shows the text at once. */
@@ -332,7 +370,7 @@ export class ScenePlayer {
   }
 
   /** Open the Act mini-window beside `anchor` (else the stage corner). */
-  private openAct(act: Exclude<SceneAct, { kind: "typewriter" }>, anchor: string | null): void {
+  private openAct(act: WindowAct, anchor: string | null): void {
     this.closeAct();
     const win = document.createElement("section");
     win.className = "scene-act";
@@ -398,6 +436,11 @@ export class ScenePlayer {
     this.hudSummary.textContent = scene.summary;
     this.hudStep.textContent = segment.total ? `${segment.step}/${segment.total}` : "";
     this.hudStep.hidden = !segment.total;
+    const parsing = isParsingRun(scene);
+    this.hudParsing.hidden = !parsing;
+    this.hud.classList.toggle("is-parsing", parsing);
+    if (parsing) this.hud.dataset.act = "parsing";
+    else delete this.hud.dataset.act;
   }
 
   /** Dim out-of-focus elements, mark seeds / layers / edges between them. */
@@ -414,6 +457,7 @@ export class ScenePlayer {
         const nodes = collect(core, layer).addClass("sandbox-echo-hit");
         if (index < visual.layers.length - 1) nodes.addClass("sandbox-echo-fade");
       });
+      if (visual.parsing) collect(core, visual.seeds).addClass("scene-parsing");
       // Edges (and semantic-mode junction edges) whose ends are both in focus.
       core.edges().not(`.${OUT_OF_FOCUS_CLASS}`).addClass("sandbox-echo-edge");
     });
@@ -586,6 +630,8 @@ export class ScenePlayer {
     this.session = null;
     this.visual = null;
     this.hud.hidden = true;
+    this.hudParsing.hidden = true;
+    this.hud.classList.remove("is-parsing");
     this.setTyped(null);
     this.closeAct();
     this.host.canvas.classList.remove("is-scene-playing");

@@ -233,7 +233,10 @@ enum Control {
     /// N3a: push a one-time switch_offer to every connected tablet.
     SwitchOffer(Value),
     /// N3b: primary-link problem card for one document (or clear).
-    ProblemCard { document_id: String, payload: Value },
+    ProblemCard {
+        document_id: String,
+        payload: Value,
+    },
 }
 /// Old pads only fence on known codes. Trash therefore reuses
 /// `writer_revoked` and adds a `reason` that new pads show specifically (D7).
@@ -707,8 +710,17 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
     let mut full = json!({"type":"session_context","protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease,"note":document.note,"document":document.document,"head_seq":document.head_seq,"limits":{"operation_bytes":INK_LAN_OPERATION_BYTES,"document_bytes":INK_LAN_DOCUMENT_BYTES,"queue_bytes":INK_LAN_DOCUMENT_BYTES}});
     // N3b: primary-link card for this authorized note only (§10).
     match state.service.ink_problem_card(&lease.document_id) {
-        Ok(card) => { full.as_object_mut().unwrap().insert("problem_card".into(), serde_json::to_value(card).unwrap_or(Value::Null)); }
-        Err(_) => { full.as_object_mut().unwrap().insert("problem_card".into(), Value::Null); }
+        Ok(card) => {
+            full.as_object_mut().unwrap().insert(
+                "problem_card".into(),
+                serde_json::to_value(card).unwrap_or(Value::Null),
+            );
+        }
+        Err(_) => {
+            full.as_object_mut()
+                .unwrap()
+                .insert("problem_card".into(), Value::Null);
+        }
     }
     if full.to_string().len() > INK_LAN_DOCUMENT_BYTES {
         send(
@@ -1343,7 +1355,9 @@ impl DesktopService {
     /// N3b: push the current primary-link card (or clear) to tablets on this note.
     pub(crate) fn ink_problem_card_changed(&self, document_id: &str) {
         let payload = match self.ink_problem_card(document_id) {
-            Ok(Some(card)) => crate::ink_problem_card::InkProblemCard::wire_push(document_id, &card),
+            Ok(Some(card)) => {
+                crate::ink_problem_card::InkProblemCard::wire_push(document_id, &card)
+            }
             Ok(None) => crate::ink_problem_card::InkProblemCard::wire_clear(document_id),
             Err(_) => crate::ink_problem_card::InkProblemCard::wire_clear(document_id),
         };

@@ -1,14 +1,16 @@
-//! Workspace handle shared by the read-only tools.
+//! Workspace handle shared by the material tools.
 //!
 //! The workspace manifest and catalog are validated once at startup; every
 //! tool call then opens a fresh catalog connection, like the desktop
 //! commands do, so results reflect concurrent edits from the desktop app.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mathscape_agent::{CommandRunner, SystemCommandRunner, ToolError, ToolErrorCode};
 use mathscape_artifact::{ArtifactPool, ArtifactPoolError, WorkspaceRoot};
 use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
+
+use crate::tools::EnsurePolicy;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceOpenError {
@@ -22,6 +24,7 @@ pub struct McpWorkspace {
     root: WorkspaceRoot,
     round: Option<String>,
     capability_runner: Box<dyn CommandRunner>,
+    ensure_policy: EnsurePolicy,
 }
 
 impl McpWorkspace {
@@ -34,6 +37,7 @@ impl McpWorkspace {
             root,
             round: None,
             capability_runner: Box::new(SystemCommandRunner::default()),
+            ensure_policy: EnsurePolicy::default(),
         })
     }
 
@@ -48,6 +52,20 @@ impl McpWorkspace {
     pub fn with_capability_runner(mut self, runner: Box<dyn CommandRunner>) -> Self {
         self.capability_runner = runner;
         self
+    }
+
+    /// Replaces ensure budgets, locks and waits (tests, desktop overrides).
+    pub fn with_ensure_policy(mut self, policy: EnsurePolicy) -> Self {
+        self.ensure_policy = policy;
+        self
+    }
+
+    pub(crate) fn ensure_policy(&self) -> EnsurePolicy {
+        self.ensure_policy
+    }
+
+    pub(crate) fn database_path(&self) -> PathBuf {
+        self.root.database_path()
     }
 
     pub fn path(&self) -> &Path {
