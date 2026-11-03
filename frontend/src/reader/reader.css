@@ -91,3 +91,14 @@
 .ink-block-marker:hover { background: #e3d7f5; }
 .source-block.is-ink-menu-target { background: #efe8fa; border-left-color: #8a6fb5; }
 .ink-patch-hint { margin: 6px 0; padding: 6px 10px; border-left: 3px solid #8a6fb5; color: #4b3473; background: #f4effb; font-size: 13px; }
+
+/* 规范解析正文 unified read-only view (docs/canonical-markdown.md §统一阅读投影). */
+.canonical-segment { margin: 0 0 8px; }
+.canonical-segment-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 16px 0 6px; padding: 4px 10px;
+  border-left: 3px solid #4f7a8c; color: #3f5560; background: #eef4f6; font-size: 12px;
+}
+.canonical-gap {
+  margin: 16px 0; padding: 14px 12px; border: 1px dashed #c08a3e; border-radius: 4px;
+  color: #7a5420; background: #fbf4e8; font-size: 13px; text-align: center;
+}

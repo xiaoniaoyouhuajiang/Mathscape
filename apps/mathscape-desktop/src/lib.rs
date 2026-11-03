@@ -1,4 +1,5 @@
 mod backlink;
+mod canonical_reader;
 mod content;
 mod discovery;
 mod discovery_view;
@@ -26,6 +27,7 @@ mod search;
 pub use registration::RegistrationSourceContext;
 mod workspace_settings;
 pub use backlink::{SourceBacklink, SourceBacklinkRequest};
+pub use canonical_reader::{CanonicalReaderPiece, CanonicalReaderProjection};
 pub use content::{ArtifactContentInfo, ContentContext, SourceNodeDetail};
 pub use discovery::{
     AcceptDiscoveryRequest, ActiveDiscoveryPhase, ActiveDiscoveryTask, DesktopDiscoveryAcceptance,
@@ -897,6 +899,7 @@ pub fn run() {
             content::get_artifact_content_info,
             content::get_source_node_detail,
             content::read_artifact_bytes,
+            canonical_reader::get_canonical_reader_projection,
             backlink::get_source_backlink,
             llm_settings::get_llm_settings,
             llm_settings::set_default_llm_profile,

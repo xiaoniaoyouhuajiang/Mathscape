@@ -174,11 +174,31 @@ MCP 进程在 Marker 运行中退出时，工作线程随之终止，心跳停�
 
 Map Scene：前端把进行中的 `material.read`（带 `pdf_pages`）视为可能的解析阻塞。调用开始约 2.5 秒后仍未返回时刷新地图；该 PDF 节点摘要出现「解析中」，就播放一个 `parsing` 幕：Scene HUD 标签显示「解析中」，PDF 节点加 `scene-parsing` 高亮；过程卡里正在运行的步骤标题追加「· 解析中」。工具结果到达后信号随下一幕/收尾清除，结果幕按 `map_signal.phase` 显示「解析完成 第a–b页」或失败原因。
 
+## 统一阅读投影（Desktop）
+
+地图上的「… · 规范解析正文」节点点「阅读文件」时，阅读器打开 **一个** 连续视图：按页序拼接注册表里该 canonical 的全部覆盖段，而不是只打开 head 快照。这是只读投影：不写新的 Artifact、不写台账、不改任何快照字节；每段文字都从原物理快照现读。
+
+- 后端：Tauri 命令 `get_canonical_reader_projection(canonical_id)`（`apps/mathscape-desktop/src/canonical_reader.rs`）。只读已登记的注册表（`list_canonical_markdown`），未 sync 的 canonical 返回「规范解析正文未登记」。`get_artifact_content_info` / `read_artifact_bytes` 仍只接受物理 id；MCP 契约不变。
+- 规划：`mathscape_domain::plan_canonical_reader`（纯函数，有单测）。
+- 前端：`readerTargetId(node)` 对折叠节点返回 canonical id，`ArtifactReader` 识别该前缀后走统一视图。手写批注、cite chip、发现记录仍用物理 head（`openableArtifactId`）。
+
+**拼接 / 重叠策略**（确定性）：
+
+1. 覆盖段按 `from` 升序；同 `from` 时更宽的段（`to` 大）优先，再 head 优先，再按 artifact id、conversion id。相同 artifact 且同页的重复段去重。
+2. 从第 1 页起扫描游标：段的 `to` 小于游标 → 该段被前文完全覆盖，列入 `skipped`，不显示；段的 `from` 大于游标 → 先插入缺口 `gap {游标..from-1}`；否则该段贡献 `max(from, 游标)..to`，与前文重叠的头部记为 `overlap`。
+3. `total_pages` 已知时，末尾未覆盖页也作为缺口；未知时不猜。
+4. 有重叠时，在快照中找 Marker 页标记 `{N}----------------`（N 是 0 基绝对 PDF 页号）里 `N = 贡献起页 - 1` 的那一行，从那里开始显示（`overlap_trimmed: true`，`byte_start` 为该字节偏移）。若快照没有页标记、任一页标记落在该段声明页范围外（防止相对页号误裁），或找不到目标标记，就整段显示并标注「与前文重叠（重复显示）」（`overlap_trimmed: false`）——宁可重复，不丢文字。
+5. 没有任何带页码的段但有 head 时，head 整段显示（页码未知），其后整本标为缺口。
+
+即「先到先得」：已显示的页不会因为后来补解析的段而改变，新段只追加它带来的新页。缺口显示为明显的占位框「第 x–y 页尚未解析」，不补写任何内容。拼接后正文上限 16 MiB（与单个 Markdown 阅读上限相同）。
+
+统一视图不提供原文块选择、发现记录和手写批注（这些需要物理字节坐标）；每段标题旁的「打开此快照」以物理快照打开，功能照旧。
+
 ## 非目标
 
 本切片明确不做：
 
-- 把多段快照拼成一份新的全书 Markdown，或原地改 Artifact 字节
+- 把多段快照拼成一份新的全书 Markdown **Artifact**，或原地改 Artifact 字节（Desktop 的统一阅读视图只是读时投影，见上节）
 - 旧 SourceSpan / discovery 的 supersede、redirect、重挂
 - 新的解析工具（ensure 只在 `material.read` 内部）
 - grep / search 触发 ensure

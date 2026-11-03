@@ -25,7 +25,7 @@ import {
   type UserChangeRequest,
 } from "../map-edit";
 import { sourceNodeDetail } from "../reader/content";
-import { openableArtifactId, tryOpenableArtifactId } from "../reader/openable";
+import { readerTargetId, tryOpenableArtifactId } from "../reader/openable";
 import { markdownRenderer } from "../reader/markdown";
 import type { ReaderFocus } from "../reader/reader";
 import type { InkReaderFocus } from "../ink/snapshot-reader";
@@ -143,10 +143,10 @@ export class InspectorController {
     if (node.domain_kind === "SourceArtifact" && node.domain_id !== null) {
       const read = textElement("button", "parse-button", "阅读文件");
       read.type = "button";
-      // A folded canonical node's domain_id is logical: open its head snapshot.
+      // A folded canonical node opens its unified, page-ordered read-only view.
       read.onclick = () => {
         let artifactId: string;
-        try { artifactId = openableArtifactId(node); } catch (error) { this.delegate.showToast(errorMessage(error), "error"); return; }
+        try { artifactId = readerTargetId(node); } catch (error) { this.delegate.showToast(errorMessage(error), "error"); return; }
         this.delegate.onOpenReader(artifactId, node.label);
       };
       actions.append(read);

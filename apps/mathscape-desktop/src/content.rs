@@ -24,8 +24,8 @@ pub struct ContentContext {
 #[derive(Debug, Serialize)]
 pub struct ArtifactContentInfo {
     artifact_id: String,
-    media_type: String,
-    byte_size: u64,
+    pub(crate) media_type: String,
+    pub(crate) byte_size: u64,
     content_hash: ContentHash,
     contexts: Vec<ContentContext>,
     #[serde(skip_serializing_if = "Option::is_none")]

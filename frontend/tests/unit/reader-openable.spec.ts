@@ -3,6 +3,7 @@ import type { IncidenceNode } from "../../src/graph/projection";
 import {
   findSourceArtifactNode,
   openableArtifactId,
+  readerTargetId,
   splitSourceItemsFrom,
   tryOpenableArtifactId,
 } from "../../src/reader/openable";
@@ -45,6 +46,23 @@ describe("openableArtifactId", () => {
   });
 });
 
+describe("readerTargetId", () => {
+  it("opens a folded canonical node as its unified view, not one fragment", () => {
+    expect(readerTargetId(canonical)).toBe(CANONICAL);
+    // Ink notes / cite / discovery still use the physical head.
+    expect(openableArtifactId(canonical)).toBe(HEAD);
+  });
+
+  it("keeps physical artifacts on their own id", () => {
+    expect(readerTargetId(pdf)).toBe(PDF);
+    expect(readerTargetId(md)).toBe(MD);
+  });
+
+  it("still fails clearly for a headless canonical node", () => {
+    expect(() => readerTargetId(node("n-x", CANONICAL, "x · 规范解析正文"))).toThrow(/head/);
+  });
+});
+
 describe("findSourceArtifactNode", () => {
   it("finds a node by domain_id, or the canonical node that folded a head snapshot", () => {
     const nodes = [pdf, canonical, md];
@@ -56,12 +74,12 @@ describe("findSourceArtifactNode", () => {
 });
 
 describe("split source picker", () => {
-  it("lists the head snapshot, never the canonical id, and skips headless canonical nodes", () => {
+  it("lists the unified canonical view under the node label and skips headless canonical nodes", () => {
     const headless = node("n-x", `${CANONICAL}-other`, "other · 规范解析正文");
     const items = splitSourceItemsFrom([{ artifact_id: PDF, filename: "book.pdf" }], [pdf, canonical, headless, md]);
     expect(items).toEqual([
       { artifactId: PDF, label: "book.pdf" },
-      { artifactId: HEAD, label: "book.pdf · 规范解析正文" },
+      { artifactId: CANONICAL, label: "book.pdf · 规范解析正文" },
       { artifactId: MD, label: "notes.md" },
     ]);
   });

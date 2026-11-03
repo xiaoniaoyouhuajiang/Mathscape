@@ -4,6 +4,8 @@ import { ArtifactPdfTransport } from "./pdf-transport";
 import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import { contentInfo, readRange, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
 import { markdownRenderer } from "./markdown";
+import { canonicalReaderProjection, gapLabel, projectionSummary, segmentLabel, splitByPageMarkers, type CanonicalReaderSegment } from "./canonical";
+import { isCanonicalMarkdownId } from "./openable";
 import { markdownDocument, MarkdownSelection, type PatchReviewMode } from "./selection";
 import { ReaderInkLinks } from "./ink-links";
 import { eventBus } from "../core/events";
@@ -80,6 +82,15 @@ export class ArtifactReader {
     const status = element("p", "正在读取…");
     this.host.append(heading, status);
     try {
+      if (isCanonicalMarkdownId(id)) {
+        // Logical canonical id: a stitched read-only view, never content_info.
+        await this.canonical(id, title, generation);
+        if (generation !== this.generation) return false;
+        status.remove();
+        this.state = "ready";
+        this.lastOpen = { id, title, options: { ...options } };
+        return true;
+      }
       const info = await contentInfo(id);
       if (generation !== this.generation) return false;
       if (info.ink_snapshot_id) {
@@ -397,6 +408,86 @@ export class ArtifactReader {
       }
     };
     if (items) add(items, outline);
+  }
+
+  /**
+   * 「规范解析正文」 unified view: every coverage segment in page order with
+   * gaps marked. Read-only — block selection, discoveries and ink stay on the
+   * physical snapshot, reachable through each segment's 「打开此快照」.
+   */
+  private async canonical(id: string, title: string, generation: number): Promise<void> {
+    const projection = await canonicalReaderProjection(id);
+    if (generation !== this.generation) return;
+    const controls = element("div"); controls.className = "reader-controls";
+    controls.append(element("span", projectionSummary(projection)));
+    const article = element("article"); article.className = "markdown-body canonical-reader";
+    article.dataset.canonicalId = projection.canonical_id;
+    this.host.append(controls, article);
+    const md = markdownRenderer();
+    const segments: Array<{ segment: CanonicalReaderSegment; body: HTMLElement }> = [];
+    for (const piece of projection.pieces) {
+      if (piece.kind === "gap") {
+        const gap = element("div", gapLabel(piece));
+        gap.className = "canonical-gap";
+        gap.setAttribute("role", "note");
+        gap.dataset.pages = `${piece.pages.from}-${piece.pages.to}`;
+        article.append(gap);
+        continue;
+      }
+      const section = element("section"); section.className = "canonical-segment";
+      section.dataset.artifactId = piece.artifact_id;
+      const header = element("div"); header.className = "canonical-segment-header";
+      const open = element("button", "打开此快照");
+      open.title = "以物理快照打开，可选择原文块、记录发现或手写批注";
+      open.onclick = () => void this.open(piece.artifact_id, title + " · " + segmentLabel(piece));
+      header.append(element("span", segmentLabel(piece)), open);
+      const body = element("div");
+      for (const chunk of splitByPageMarkers(piece.markdown)) {
+        if (chunk.kind === "page") {
+          const marker = element("div"); marker.className = "source-block source-page-marker";
+          marker.append(element("span", `PDF 第 ${chunk.pageId + 1} 页`));
+          body.append(marker);
+          continue;
+        }
+        const block = element("div"); block.className = "source-block";
+        block.innerHTML = md.render(chunk.text, {});
+        if (!block.innerHTML.trim()) block.append(element("pre", chunk.text));
+        body.append(block);
+      }
+      section.append(header, body);
+      article.append(section);
+      segments.push({ segment: piece, body });
+    }
+    if (!projection.pieces.length) article.append(element("p", "规范解析正文暂无可读快照。"));
+    article.querySelectorAll("a").forEach(link => { link.removeAttribute("href"); link.title = "链接导航尚未启用"; });
+    for (const { segment, body } of segments) {
+      const placeholders = body.querySelectorAll<HTMLElement>("[data-image-ref]");
+      if (!placeholders.length) continue;
+      let info: ContentInfo | undefined;
+      try { info = await contentInfo(segment.artifact_id); } catch { /* shown per image */ }
+      if (generation !== this.generation) return;
+      const context = info?.contexts.find(c => c.conversion_id === segment.conversion_id) ?? info?.contexts[0];
+      const bases = context?.paths.filter(p => p.artifact_id === segment.artifact_id) ?? [];
+      for (const placeholder of placeholders) {
+        try {
+          const candidates = new Set<string>();
+          for (const base of bases) {
+            const path = resolveProductPath(base.path, placeholder.dataset.imageRef ?? "");
+            context?.paths.filter(p => p.path === path).forEach(p => candidates.add(p.artifact_id));
+          }
+          if (candidates.size !== 1) throw new Error("图片映射缺失或不明确");
+          const imageInfo = await contentInfo([...candidates][0]);
+          if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(imageInfo.media_type)) throw new Error("不支持的图片类型");
+          const data = await readSmallFile(imageInfo);
+          if (generation !== this.generation) return;
+          const img = element("img"); img.alt = placeholder.textContent ?? "";
+          img.src = this.blobUrl(data, imageInfo.media_type);
+          placeholder.replaceWith(img);
+        } catch (error) {
+          placeholder.textContent = "[" + String(error) + "]";
+        }
+      }
+    }
   }
 
   private async markdown(info: ContentInfo, generation: number, focus?: ReaderFocus, patch?: ReaderOpenOptions["patch"], conversionId?: string | null): Promise<void> {

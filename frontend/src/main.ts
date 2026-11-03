@@ -22,7 +22,7 @@ import {
 } from "./ink/links";
 import { ArtifactReader, type ReaderOpenOptions } from "./reader/reader";
 import { sourceNodeDetail } from "./reader/content";
-import { findSourceArtifactNode, openableArtifactId, splitSourceItemsFrom } from "./reader/openable";
+import { findSourceArtifactNode, readerTargetId, splitSourceItemsFrom } from "./reader/openable";
 import { mountReviewWorkspace } from "./review/workspace";
 import { AppShell } from "./shell/app-shell";
 import {
@@ -135,7 +135,7 @@ async function openSplitReader(target: SplitReaderTarget): Promise<void> {
     if (target.kind === "source_object") {
       const node = currentSnapshot?.landscape_graph.nodes.find(item => item.domain_id === target.id);
       if (node?.domain_kind === "SourceArtifact") {
-        artifactId = openableArtifactId(node);
+        artifactId = readerTargetId(node);
       } else {
         // Units/spans/relations are anchors, not files. Reuse the inspector's locator.
         const detail = await sourceNodeDetail(target.id);
@@ -674,7 +674,7 @@ async function openMapReader(target: SplitReaderTarget, current: () => boolean):
     if (target.kind === "source_object") {
       const node = currentSnapshot?.landscape_graph.nodes.find(item => item.domain_id === target.id);
       if (node?.domain_kind === "SourceArtifact") {
-        artifactId = openableArtifactId(node);
+        artifactId = readerTargetId(node);
       } else {
         const detail = await sourceNodeDetail(target.id);
         if (!current() || inkOpen) return;
