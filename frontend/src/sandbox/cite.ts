@@ -119,6 +119,10 @@ export function buildCiteIndex(nodes: readonly IncidenceNode[]): CiteIndex {
   for (const node of best.values()) {
     const target: CiteTarget = { nodeId: node.id, domainId: node.domain_id!, domainKind: node.domain_kind, label: node.label };
     for (const key of citeKeys(node.domain_id!)) push(index, key, target, sameTarget);
+    // A folded canonical markdown node also answers for its head snapshot id
+    // (folded away from the map), unless that id is still its own node.
+    const head = node.openable_artifact_id;
+    if (head && !best.has(head)) for (const key of citeKeys(head)) push(index, key, target, sameTarget);
   }
   return index;
 }

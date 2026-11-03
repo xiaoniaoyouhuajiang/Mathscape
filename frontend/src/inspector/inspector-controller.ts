@@ -25,6 +25,7 @@ import {
   type UserChangeRequest,
 } from "../map-edit";
 import { sourceNodeDetail } from "../reader/content";
+import { openableArtifactId, tryOpenableArtifactId } from "../reader/openable";
 import { markdownRenderer } from "../reader/markdown";
 import type { ReaderFocus } from "../reader/reader";
 import type { InkReaderFocus } from "../ink/snapshot-reader";
@@ -142,7 +143,12 @@ export class InspectorController {
     if (node.domain_kind === "SourceArtifact" && node.domain_id !== null) {
       const read = textElement("button", "parse-button", "阅读文件");
       read.type = "button";
-      read.onclick = () => this.delegate.onOpenReader(node.domain_id!, node.label);
+      // A folded canonical node's domain_id is logical: open its head snapshot.
+      read.onclick = () => {
+        let artifactId: string;
+        try { artifactId = openableArtifactId(node); } catch (error) { this.delegate.showToast(errorMessage(error), "error"); return; }
+        this.delegate.onOpenReader(artifactId, node.label);
+      };
       actions.append(read);
     }
 
@@ -217,7 +223,10 @@ export class InspectorController {
       actions.append(create);
     }
     try {
-      const notes = await listInkLinksToTarget(unit ? "source_object" : "markdown", objectId);
+      // Markdown ink links point at the physical snapshot (head for a canonical node).
+      const target = unit ? objectId : tryOpenableArtifactId(node);
+      if (target === undefined) { host.remove(); return; }
+      const notes = await listInkLinksToTarget(unit ? "source_object" : "markdown", target);
       if (this.selectedNode?.domain_id !== objectId || !host.isConnected) return;
       if (!notes.length && !unit) { host.remove(); return; }
       const list = document.createElement("ul");

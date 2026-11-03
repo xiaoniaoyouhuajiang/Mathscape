@@ -274,11 +274,10 @@ fn collapse_canonical_markdown(
             .map(String::as_str)
             .unwrap_or("PDF");
         let coverage = view.coverage(None);
-        let head = view
-            .head_artifact_id
-            .as_ref()
-            .map(StableId::to_string)
-            .unwrap_or_default();
+        let Some(head_id) = view.head_artifact_id.clone() else {
+            continue;
+        };
+        let head = head_id.to_string();
         let mut summary = format!(
             "text/markdown · canonical {} · head {head} · {}",
             view.canonical_id,
@@ -307,7 +306,9 @@ fn collapse_canonical_markdown(
                 format!("{pdf_label} · 规范解析正文"),
             )?
             .summary(summary)?
-            .lifecycle(mathscape_domain::LifecycleStatus::Active),
+            .lifecycle(mathscape_domain::LifecycleStatus::Active)
+            // The canonical id is logical; readers open the head snapshot.
+            .openable_artifact(head_id),
         );
     }
     let mut rewritten = Vec::with_capacity(relations.len());

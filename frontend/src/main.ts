@@ -22,6 +22,7 @@ import {
 } from "./ink/links";
 import { ArtifactReader, type ReaderOpenOptions } from "./reader/reader";
 import { sourceNodeDetail } from "./reader/content";
+import { findSourceArtifactNode, openableArtifactId, splitSourceItemsFrom } from "./reader/openable";
 import { mountReviewWorkspace } from "./review/workspace";
 import { AppShell } from "./shell/app-shell";
 import {
@@ -91,19 +92,7 @@ function restoreReaderHome(opts: { hide: boolean }): void {
 }
 
 function splitSourceItems(): SplitSourceItem[] {
-  const items: SplitSourceItem[] = [];
-  const seen = new Set<string>();
-  for (const pdf of currentSnapshot?.pdf_artifacts ?? []) {
-    if (seen.has(pdf.artifact_id)) continue;
-    seen.add(pdf.artifact_id);
-    items.push({ artifactId: pdf.artifact_id, label: pdf.filename || pdf.artifact_id });
-  }
-  for (const node of currentSnapshot?.landscape_graph.nodes ?? []) {
-    if (node.domain_kind !== "SourceArtifact" || !node.domain_id || seen.has(node.domain_id)) continue;
-    seen.add(node.domain_id);
-    items.push({ artifactId: node.domain_id, label: node.label || node.domain_id });
-  }
-  return items;
+  return splitSourceItemsFrom(currentSnapshot?.pdf_artifacts ?? [], currentSnapshot?.landscape_graph.nodes ?? []);
 }
 
 function primaryIsOpenable(link: InkNoteLink | undefined): boolean {
@@ -145,7 +134,9 @@ async function openSplitReader(target: SplitReaderTarget): Promise<void> {
     let options: ReaderOpenOptions = target.kind === "artifact" ? target.options ?? {} : {};
     if (target.kind === "source_object") {
       const node = currentSnapshot?.landscape_graph.nodes.find(item => item.domain_id === target.id);
-      if (node?.domain_kind !== "SourceArtifact") {
+      if (node?.domain_kind === "SourceArtifact") {
+        artifactId = openableArtifactId(node);
+      } else {
         // Units/spans/relations are anchors, not files. Reuse the inspector's locator.
         const detail = await sourceNodeDetail(target.id);
         if (!stillSplit()) return;
@@ -560,7 +551,7 @@ eventBus.on("open-ink-link-target", ({ link }) => {
       inspectorController.selectNodeById(node.id);
       return;
     }
-    const artifact = nodes.find((item) => item.domain_kind === "SourceArtifact" && item.domain_id === target.artifact_id);
+    const artifact = findSourceArtifactNode(nodes, target.artifact_id);
     el.readerHost.hidden = false;
     void reader.open(target.artifact_id, artifact?.label ?? link.target_label, {
       focus: { start: target.start, end: target.end, blockIds: target.block_ids },
@@ -611,7 +602,10 @@ function selectMapNode(nodeId: string): void {
 /** Select + center a map node by domain id. Leaves 手稿 first if needed. */
 async function locateOnMap(domainId: string, current: () => boolean): Promise<boolean> {
   if (!await showMap(current)) return false;
-  const node = currentSnapshot?.landscape_graph.nodes.find(item => item.domain_id === domainId && item.element_kind === "entity");
+  const nodes = currentSnapshot?.landscape_graph.nodes ?? [];
+  // A head markdown snapshot is folded into its canonical node on the map.
+  const node = nodes.find(item => item.domain_id === domainId && item.element_kind === "entity")
+    ?? findSourceArtifactNode(nodes.filter(item => item.element_kind === "entity"), domainId);
   if (!node) { shell.showToast("该结果不在当前地图中，请刷新后重试。", "error"); return false; }
   selectMapNode(node.id);
   return true;
@@ -679,7 +673,9 @@ async function openMapReader(target: SplitReaderTarget, current: () => boolean):
     let options: ReaderOpenOptions = target.kind === "artifact" ? target.options ?? {} : {};
     if (target.kind === "source_object") {
       const node = currentSnapshot?.landscape_graph.nodes.find(item => item.domain_id === target.id);
-      if (node?.domain_kind !== "SourceArtifact") {
+      if (node?.domain_kind === "SourceArtifact") {
+        artifactId = openableArtifactId(node);
+      } else {
         const detail = await sourceNodeDetail(target.id);
         if (!current() || inkOpen) return;
         if (!detail.artifact_id) throw new Error("该来源对象没有可打开的原文");
