@@ -5,6 +5,7 @@
 //! must cross before data can enter the canonical map.
 
 mod canonical_markdown;
+mod canonical_reader;
 mod discovery;
 mod discovery_proposal;
 mod entity;
@@ -23,6 +24,7 @@ mod staged_discovery;
 mod trust;
 
 pub use canonical_markdown::*;
+pub use canonical_reader::*;
 pub use discovery::*;
 pub use discovery_proposal::*;
 pub use entity::{

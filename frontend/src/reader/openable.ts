@@ -40,6 +40,19 @@ export function tryOpenableArtifactId(node: OpenableNode): string | undefined {
 }
 
 /**
+ * What 「阅读文件」 / 并排阅读 open for a SourceArtifact node. A folded canonical
+ * node opens its unified read-only view under the logical canonical id
+ * (`ArtifactReader` stitches every coverage segment in page order; see
+ * docs/canonical-markdown.md §「统一阅读投影」). Physical nodes open by
+ * domain_id. Ink notes, cite chips and discoveries keep using the physical
+ * {@link openableArtifactId}.
+ */
+export function readerTargetId(node: OpenableNode): string {
+  const physical = openableArtifactId(node);
+  return isCanonicalMarkdownId(node.domain_id!) ? node.domain_id! : physical;
+}
+
+/**
  * The map node standing for a physical artifact: the node itself, or the
  * folded canonical node whose head it is. Used for labels and 「在地图中定位」.
  */
@@ -51,8 +64,9 @@ export function findSourceArtifactNode<T extends OpenableNode>(nodes: readonly T
 
 /**
  * 并排阅读 source picker: PDFs first, then every openable SourceArtifact node.
- * Folded canonical nodes list their head snapshot under the node label; a
- * canonical node without a head is left out rather than listed unopenable.
+ * Folded canonical nodes list their unified view (canonical id) under the node
+ * label; a canonical node without a head is left out rather than listed
+ * unopenable.
  */
 export function splitSourceItemsFrom(
   pdfs: readonly { artifact_id: string; filename?: string | null }[],
@@ -67,8 +81,9 @@ export function splitSourceItemsFrom(
   }
   for (const node of nodes) {
     if (node.domain_kind !== "SourceArtifact" || !node.domain_id) continue;
-    const artifactId = tryOpenableArtifactId(node);
-    if (artifactId === undefined || seen.has(artifactId)) continue;
+    let artifactId: string;
+    try { artifactId = readerTargetId(node); } catch { continue; }
+    if (seen.has(artifactId)) continue;
     seen.add(artifactId);
     items.push({ artifactId, label: node.label || node.domain_id });
   }
