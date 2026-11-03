@@ -93,7 +93,7 @@ Head 选择：在该 lineage 的成功 / `partial`、输出为 `text/markdown` �
 扫描版 PDF（请求页都没有文本层）：
 
 - 已有一份快照的页区间 **完全包含** 请求：返回该快照的 Markdown 字节（包含请求的 head 优先，否则取最新的包含快照；会在该 PDF 的所有 lineage 中找），`content_type` 为 `markdown`，`served_artifact_id` 指向物理快照。不按页切开字节；区间以 `coverage` 为准。超出 32KiB 仍是 `truncated`。只与请求相交的快照不会被返回。
-- 没有任何快照完全包含请求：进入下面的内部 ensure。ensure 成功后重新加载视图，按同一条完全包含规则返回新快照；否则返回 `capability_unavailable`，`details` 里带 Marker 的 CapabilityProbe 与 `ensure` 结果。
+- 没有任何快照完全包含请求：进入下面的内部 ensure，**在同一次调用里同步等待** Marker 完成。ensure 成功后重新加载视图，按同一条完全包含规则返回新快照（`status: ok`）；否则返回 `capability_unavailable`，`details` 里带 Marker 的 CapabilityProbe 与 `ensure` 结果（`failed` 带明确原因）。没有「已启动，稍后再读」的中间态，Agent 不需要也不应轮询。
 
 部分页有文本层、部分页没有的请求不会触发 ensure，仍返回文本层并带 `pdf_pages_without_text` 诊断；单独请求那些空页才会解析。有文本层的 PDF 仍返回文本层，只附加覆盖字段。
 
@@ -115,8 +115,8 @@ ensure 是 `material.read` 的内部步骤，不是 Agent 可调用的工具。�
 
 1. 规划：已有单份快照完全包含请求 → `reused`，不跑 Marker。
 2. 探测 Marker（与 CapabilityProbe 同一候选顺序：`MATHSCAPE_MARKER_EXECUTABLE`、`MATHSCAPE_MARKER_VENV`、默认 venv、`PATH`）。不可用 → `capability_unavailable`。
-3. 加锁：SQLite `BEGIN IMMEDIATE` 内，先把租约过期的 `running` 行标为 `abandoned`，再依次检查本 PDF 的活租约（每 PDF 互斥）、全局运行数（Marker 信号量，默认 1）、滚动页预算（默认每小时 96 页，统计窗口内 running / succeeded / failed 的页数）。都通过才插入 `running` 行。
-4. 运行 Marker（后台线程，进程超时默认 30 分钟，租约 = 超时 + 5 分钟）。
+3. 加锁：SQLite `BEGIN IMMEDIATE` 内，先把租约过期的 `running` 行标为 `abandoned`，再依次检查本 PDF 的活租约（每 PDF 互斥）、全局运行数（Marker 信号量，默认 1）、滚动页预算（默认每小时 96 页，统计窗口内 running / succeeded / failed 的页数）。都通过才插入 `running` 行。被本 PDF 或全局槽占住时 **排队**：每 `poll_interval`（默认 500ms）查一次活租约，租约结束后回到第 1 步重新规划（对方已覆盖请求 → `reused`，否则再抢锁）。排队和运行共用同一个同步截止时间。
+4. 运行 Marker（工作线程；调用方阻塞等待）。租约很短（`lease_ttl` 默认 60 秒），等待期间每 `heartbeat`（默认 15 秒）续一次；持有者进程消失后续约停止，租约最多一个 TTL 后过期，被下一次加锁标为 `abandoned`。Marker 进程超时 = min(`marker_timeout`, 剩余同步时间)。
 5. 校验产物清单（`is_promotable`），失败即 `failed`。
 6. promotion：写入新的内容寻址 Artifact 与 `ConversionRun`（记录 `page_range`、`marker_profile`）。
 7. 只对该 PDF 做 `sync_canonical_markdown_for_pdf`，更新注册表与 head。
@@ -130,7 +130,7 @@ ensure 是 `material.read` 的内部步骤，不是 Agent 可调用的工具。�
 {pdf_artifact_id}|{canonical_id}|{from}-{to}|{parser_profile}|{parser_policy_version}|ensure-v1
 ```
 
-重复请求先经过第 1 步的包含检查；台账 + head + 注册表决定是否已有结果，所以已覆盖的请求不会再跑 Marker。同一 PDF 并发的第二个请求在第 3 步得到 `blocked_lock`。
+重复请求先经过第 1 步的包含检查；台账 + head + 注册表决定是否已有结果，所以已覆盖的请求不会再跑 Marker。同一 PDF 并发的第二个请求在第 3 步排队等第一个跑完，然后在第 1 步得到 `reused`（`waited_for` 记录等过的租约），整个过程只跑一次 Marker。
 
 ### 状态
 
@@ -140,21 +140,25 @@ ensure 是 `material.read` 的内部步骤，不是 Agent 可调用的工具。�
 | --- | --- | --- |
 | `reused` | 已有单份快照包含请求 | 直接返回快照 |
 | `expanded` | 本次 Marker 成功，新快照已登记 | `status: ok`，返回新快照 |
-| `started` | Marker 已启动，等待期（默认 50 秒）内未完成 | `capability_unavailable`，稍后再读 |
 | `blocked_budget` | 请求页数或滚动预算超限 | `capability_unavailable`，不跑 Marker |
-| `blocked_lock` | 本 PDF 或全局 Marker 槽被占 | `capability_unavailable`，`lease` 给出占用的页 |
 | `capability_unavailable` | Marker 未安装或版本不支持 | `capability_unavailable`，附 probe |
-| `failed` | Marker、清单校验或 promotion 失败 | `capability_unavailable`，回执记录错误 |
+| `failed` | Marker、清单校验、promotion 失败，或超过同步截止时间（`timed_out: true`） | `capability_unavailable`，回执记录错误，租约已清除 |
 
-同时会有 `canonical_ensure_{status}` 诊断；Marker 缺失时仍保留 `pdf_no_text_layer`。`details.ensure` 还带 `requested`、`missing`、`marker_range`、`ensure_id`、`idempotency_key`、`canonical_id`、`conversion_id`、`markdown_artifact_id`。
+同时会有 `canonical_ensure_{status}` 诊断；Marker 缺失时仍保留 `pdf_no_text_layer`。`details.ensure` 还带 `requested`、`missing`、`marker_range`、`ensure_id`、`idempotency_key`、`canonical_id`、`conversion_id`、`markdown_artifact_id`，排过队时带 `waited_for`（等过的租约）与 `waited_ms`。
+
+顶层 `status` 只在调用结束时给出：解析进行中调用仍在阻塞，因此不会出现「解析中却 `capability_unavailable`」。顶层 `ToolStatus` 没有 `failed` 变体（契约枚举不变），失败以 `capability_unavailable` + `details.ensure.status = failed` 表达。
+
+### 同步时限
+
+`sync_timeout` 默认 15 分钟，覆盖排队 + Marker。到点后取消 Marker（`MarkerCancellation`），给 10 秒收尾；仍未结束就把本次 ensure 记为 `failed`（`timed_out: true`）并清除租约，返回 `capability_unavailable`。只在排队阶段超时则不会写台账行。Codex 侧 `tool_timeout_sec = 960`（16 分钟），比同步时限多出收尾余量。
 
 ### 副作用与工具注解
 
-`material.read` 因此不再是只读：可能写入工作区 parse cache（新 Artifact、`ConversionRun`、注册表行、ensure 台账），可能在本机运行 Marker。注解为 `readOnlyHint: false`、`destructiveHint: false`、`idempotentHint: true`、`openWorldHint: false`。其余六个工具仍是只读注解。Codex 侧 `mcp_servers.mathscape.tool_timeout_sec = 120`，并把 `MATHSCAPE_MARKER_EXECUTABLE`、`MATHSCAPE_MARKER_VENV`、`XDG_DATA_HOME` 转发给 MCP 进程，让 ensure 找到与桌面端相同的 Marker。
+`material.read` 因此不再是只读：可能写入工作区 parse cache（新 Artifact、`ConversionRun`、注册表行、ensure 台账），可能在本机运行 Marker。注解为 `readOnlyHint: false`、`destructiveHint: false`、`idempotentHint: true`、`openWorldHint: false`。其余六个工具仍是只读注解。Codex 侧 `mcp_servers.mathscape.tool_timeout_sec = 960`，并把 `MATHSCAPE_MARKER_EXECUTABLE`、`MATHSCAPE_MARKER_VENV`、`XDG_DATA_HOME` 转发给 MCP 进程，让 ensure 找到与桌面端相同的 Marker。
 
 ### 已知残留
 
-MCP 进程在 Marker 运行中退出时，后台线程随之终止，`running` 行保留到租约过期，再被下一次加锁标为 `abandoned`。在此之前同一 PDF 会得到 `blocked_lock`。
+MCP 进程在 Marker 运行中退出时，工作线程随之终止，心跳停止，`running` 行最多保留一个 `lease_ttl`（默认 60 秒）后过期，再被下一次加锁标为 `abandoned`。在此之前同一 PDF 的读取会排队等待（不报错）。被遗弃的 Marker 子进程可能仍在运行到自身超时。
 
 ## 地图
 
@@ -164,7 +168,11 @@ MCP 进程在 Marker 运行中退出时，后台线程随之终止，`running` �
 
 未 sync 的历史转换保持原图：每个物理 Markdown 仍是独立节点。
 
-「解析中」信号：`LandscapeSnapshot.canonical_ensures` 是未过期的 `running` 租约。投影时，有活租约的 PDF 节点摘要追加 ` · 解析中 第a–b页`；租约结束后信号消失。`material.read` 在 `started` 和本 PDF 的 `blocked_lock` 时还返回 `details.map_signal = { kind: "parsing", label: "解析中", node_id, pages }`。前端 Map Scene 的专门样式尚未接入，目前依赖节点摘要文本。
+「解析中」信号：`LandscapeSnapshot.canonical_ensures` 是未过期的 `running` 租约。投影时，有活租约的 PDF 节点摘要追加 ` · 解析中 第a–b页`；租约结束后信号消失。心跳续约让信号在整个同步等待期间保持。
+
+`material.read` 结束时，若本次调用跑了 Marker 或排队等过本 PDF 的解析，结果带 `details.map_signal = { kind: "parsing", label: "解析中", node_id, pages, phase: "done" | "failed", waited_ms }`，作为事后的场景记录。
+
+Map Scene：前端把进行中的 `material.read`（带 `pdf_pages`）视为可能的解析阻塞。调用开始约 2.5 秒后仍未返回时刷新地图；该 PDF 节点摘要出现「解析中」，就播放一个 `parsing` 幕：Scene HUD 标签显示「解析中」，PDF 节点加 `scene-parsing` 高亮；过程卡里正在运行的步骤标题追加「· 解析中」。工具结果到达后信号随下一幕/收尾清除，结果幕按 `map_signal.phase` 显示「解析完成 第a–b页」或失败原因。
 
 ## 非目标
 

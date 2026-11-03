@@ -8,11 +8,12 @@
 //!   text, an immutable canonical markdown snapshot whose pages fully contain
 //!   the request is served. If none does, a bounded internal ensure
 //!   (`super::ensure`) may run Marker on exactly the requested range, promote
-//!   a new snapshot and serve it. Otherwise the tool returns
-//!   `capability_unavailable` with the Marker CapabilityProbe and
-//!   `details.ensure` (`reused|expanded|started|blocked_budget|blocked_lock|
-//!   capability_unavailable|failed`). Results carry `canonical_id`,
-//!   `coverage` and `partial` when a view exists.
+//!   a new snapshot and serve it in the same call (synchronous: the call
+//!   waits for Marker, and a concurrent read of the same PDF queues behind
+//!   the running parse). Otherwise the tool returns `capability_unavailable`
+//!   with the Marker CapabilityProbe and `details.ensure`
+//!   (`blocked_budget|capability_unavailable|failed`). Results carry
+//!   `canonical_id`, `coverage` and `partial` when a view exists.
 //!
 //! Every successful read is capped at [`MAX_READ_BYTES`] of UTF-8 text;
 //! a capped read returns `status: "truncated"` and `truncated: true`.
@@ -44,7 +45,7 @@ pub const MAX_READ_BYTES: usize = 32 * 1024;
 const PDF_PAGE_BATCH: u32 = 8;
 const PAGE_SEPARATOR: &str = "\n\n";
 
-const DESCRIPTION: &str = "Read part of one workspace material by locator. Markdown: locator md_byte_range {start,end} in bytes, half-open; optional expand {before,after} in bytes. PDF: locator pdf_pages {from,to}, 1-based and inclusive. Returns the actual locator read; text is capped at 32 KiB (status truncated, truncated true). When a canonical markdown view exists, the result includes canonical_id, coverage and partial (partial true means this request or the book is not fully covered). Scanned PDF pages (no text layer) are served from an existing immutable markdown snapshot only when one snapshot contains every requested page. If none does, this tool may run Marker OCR locally on exactly the requested pages (at most 12 pages per call, rolling page budget, one run per PDF and per workspace slot), add a new immutable snapshot to the workspace parse cache and serve it; details.ensure reports reused, expanded, started (still parsing, read again later), blocked_budget, blocked_lock, capability_unavailable or failed. It never modifies or deletes existing materials and never contacts the network. Keep scanned-PDF page ranges small. A canonical id may be passed as artifact_id with md_byte_range to read its head snapshot.";
+const DESCRIPTION: &str = "Read part of one workspace material by locator. Markdown: locator md_byte_range {start,end} in bytes, half-open; optional expand {before,after} in bytes. PDF: locator pdf_pages {from,to}, 1-based and inclusive. Returns the actual locator read; text is capped at 32 KiB (status truncated, truncated true). When a canonical markdown view exists, the result includes canonical_id, coverage and partial (partial true means this request or the book is not fully covered). Scanned PDF pages (no text layer) are served from an existing immutable markdown snapshot only when one snapshot contains every requested page. If none does, this call runs Marker OCR locally on exactly the requested pages and waits for it (synchronous, can take minutes; at most 12 pages per call, rolling page budget, one Marker run per workspace slot), adds a new immutable snapshot to the workspace parse cache and returns its markdown in the same result. A concurrent read of a PDF that is already being parsed waits for that parse instead of failing. The result is ok or truncated with the text, or capability_unavailable with details.ensure.status blocked_budget, capability_unavailable (Marker missing) or failed (Marker error or the sync time limit; nothing is left running). Do not poll or re-read to wait for parsing. It never modifies or deletes existing materials and never contacts the network. Keep scanned-PDF page ranges small. A canonical id may be passed as artifact_id with md_byte_range to read its head snapshot.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -512,14 +513,9 @@ fn read_pdf(
                 None,
             );
         };
-        let mut report = ensure::ensure(
-            workspace,
-            &material.id,
-            &path,
-            &index.all_for_pdf(material.id.as_str(), requested),
-            request,
-            page_count,
-        );
+        // Synchronous: returns only after Marker finished (or failed, or the
+        // sync deadline passed) and no lease of this call is left running.
+        let mut report = ensure::ensure(workspace, &material.id, &path, request, page_count);
         let reloaded;
         let index = if matches!(report.status, EnsureStatus::Expanded | EnsureStatus::Reused) {
             reloaded = CanonicalIndex::load(workspace)?;
@@ -728,7 +724,7 @@ fn serve_canonical_snapshot(
             "requested pages have no text layer; returned the immutable canonical markdown snapshot that covers every requested page. Marker was not run",
         ),
         Some(report) => diagnostic(
-            "canonical_ensure_expanded",
+            report.status.diagnostic_code(),
             format!(
                 "requested pages had no text layer and no snapshot contained them; {}",
                 report.message
@@ -873,16 +869,10 @@ fn capability_unavailable(
         ));
     }
     if let Some(report) = report {
-        let code = match report.status {
-            EnsureStatus::Reused => "canonical_ensure_reused",
-            EnsureStatus::Expanded => "canonical_ensure_expanded",
-            EnsureStatus::Started => "canonical_ensure_started",
-            EnsureStatus::BlockedBudget => "canonical_ensure_blocked_budget",
-            EnsureStatus::BlockedLock => "canonical_ensure_blocked_lock",
-            EnsureStatus::CapabilityUnavailable => "canonical_ensure_capability_unavailable",
-            EnsureStatus::Failed => "canonical_ensure_failed",
-        };
-        diagnostics.push(diagnostic(code, report.message.clone()));
+        diagnostics.push(diagnostic(
+            report.status.diagnostic_code(),
+            report.message.clone(),
+        ));
     }
     let details = match report {
         Some(report) => ensure_details(report, &material.id, Some(&probe))?,
@@ -905,7 +895,8 @@ fn capability_unavailable(
 }
 
 /// `details` for an ensured read: the probe fields (when known) plus
-/// `ensure` and, while Marker runs for this PDF, `map_signal` (「解析中」).
+/// `ensure` and, when this call blocked on a Marker parse of this PDF,
+/// `map_signal` (「解析中」 with how it ended, for the scene player).
 fn ensure_details(
     report: &EnsureReport,
     pdf: &StableId,

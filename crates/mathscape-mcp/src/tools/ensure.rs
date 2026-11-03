@@ -1,11 +1,18 @@
 //! Canonical markdown ensure: the internal path behind `material.read` on a
 //! scanned PDF. Not an MCP tool.
 //!
+//! Synchronous: the `material.read` call that needs Marker waits for it.
 //! Order: plan → probe Marker → claim lease (per-PDF lock + global slot +
 //! rolling page budget, one SQLite `BEGIN IMMEDIATE`) → Marker on one
-//! contiguous range → validate inventory → promote new immutable artifacts →
-//! scoped registry sync for this PDF → terminal receipt. Artifact bytes are
-//! never rewritten; a new snapshot is a new content-addressed artifact.
+//! contiguous range (lease renewed on a heartbeat) → validate inventory →
+//! promote new immutable artifacts → scoped registry sync for this PDF →
+//! terminal receipt → the same call serves the new snapshot. A read that
+//! finds the PDF (or every Marker slot) busy queues behind the live lease,
+//! re-plans when it is released (usually `reused`) and never answers
+//! "read again later". Every wait is bounded by [`EnsurePolicy::sync_timeout`];
+//! past it the ensure is failed, its lease cleared and the read fails.
+//! Artifact bytes are never rewritten; a new snapshot is a new
+//! content-addressed artifact.
 //!
 //! No stitching: a request is served only by one snapshot whose pages fully
 //! contain it, so the Marker range is the whole request, never just its gaps.
@@ -15,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mathscape_agent::{
     Capability, CapabilityProbe, CapabilityState, locate_marker_executable, probe_capability,
@@ -38,15 +45,20 @@ use mathscape_tool_marker::{
 };
 use serde::Serialize;
 
+use super::canonical::CanonicalIndex;
 use crate::McpWorkspace;
 
 /// Bumped when the ensure planning rules change; part of the idempotency key.
 pub const ENSURE_POLICY_VERSION: &str = "ensure-v1";
 const ENSURE_PROFILE: MarkerProfile = MarkerProfile::MathOcrV1;
 const ENSURE_ACTOR: &str = "mathscape-mcp-ensure";
+/// After the deadline the worker gets this long to stop Marker and write its
+/// receipt before the read gives up on it and fails the lease itself.
+const CANCEL_GRACE: Duration = Duration::from_secs(10);
 
 /// Budgets, locks and waits for ensure. Defaults are conservative: one Marker
-/// at a time per workspace, at most 12 pages per request, 96 pages per hour.
+/// at a time per workspace, at most 12 pages per request, 96 pages per hour,
+/// and one `material.read` waits at most 15 minutes end to end.
 #[derive(Clone, Copy, Debug)]
 pub struct EnsurePolicy {
     /// Largest request (pages) a single read may ensure.
@@ -56,11 +68,19 @@ pub struct EnsurePolicy {
     pub budget_window: Duration,
     /// Global Marker semaphore (live ensures per workspace).
     pub max_running: u32,
-    /// How long `material.read` waits for Marker before answering `started`.
-    pub wait: Duration,
-    /// Marker process timeout. The lease lasts this plus `lease_margin`.
+    /// Wall-clock bound of one synchronous ensure: queueing behind another
+    /// lease plus the Marker run. Past it the ensure fails and its lease is
+    /// cleared. Keep it below the agent's MCP tool timeout.
+    pub sync_timeout: Duration,
+    /// Upper bound of one Marker process (also capped by what is left of
+    /// `sync_timeout`).
     pub marker_timeout: Duration,
-    pub lease_margin: Duration,
+    /// Lease TTL. The owner renews it every `heartbeat`, so a crashed MCP
+    /// process stops holding the PDF (and showing 「解析中」) within one TTL.
+    pub lease_ttl: Duration,
+    pub heartbeat: Duration,
+    /// How often a queued read re-checks the lease it waits behind.
+    pub poll_interval: Duration,
 }
 
 impl Default for EnsurePolicy {
@@ -70,9 +90,11 @@ impl Default for EnsurePolicy {
             window_pages: 96,
             budget_window: Duration::from_secs(60 * 60),
             max_running: 1,
-            wait: Duration::from_secs(50),
-            marker_timeout: Duration::from_secs(30 * 60),
-            lease_margin: Duration::from_secs(5 * 60),
+            sync_timeout: Duration::from_secs(15 * 60),
+            marker_timeout: Duration::from_secs(15 * 60),
+            lease_ttl: Duration::from_secs(60),
+            heartbeat: Duration::from_secs(15),
+            poll_interval: Duration::from_millis(500),
         }
     }
 }
@@ -80,20 +102,31 @@ impl Default for EnsurePolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum EnsureStatus {
-    /// An existing snapshot already contains the request. Marker not run.
+    /// An existing snapshot already contains the request (possibly one that
+    /// another read's ensure promoted while this read waited). Marker not run.
     Reused,
-    /// Marker ran and a new snapshot containing the request was promoted.
+    /// Marker ran in this call and a new snapshot containing the request was
+    /// promoted.
     Expanded,
-    /// Marker was launched but is still running after the wait.
-    Started,
     /// The request or the rolling budget is too large.
     BlockedBudget,
-    /// This PDF (or every global Marker slot) is busy with another ensure.
-    BlockedLock,
     /// Marker is not installed or not usable.
     CapabilityUnavailable,
-    /// Marker, inventory validation or promotion failed.
+    /// Marker, inventory validation, promotion or the sync deadline failed.
+    /// The lease is released (or failed) before the read returns.
     Failed,
+}
+
+impl EnsureStatus {
+    pub(super) fn diagnostic_code(self) -> &'static str {
+        match self {
+            Self::Reused => "canonical_ensure_reused",
+            Self::Expanded => "canonical_ensure_expanded",
+            Self::BlockedBudget => "canonical_ensure_blocked_budget",
+            Self::CapabilityUnavailable => "canonical_ensure_capability_unavailable",
+            Self::Failed => "canonical_ensure_failed",
+        }
+    }
 }
 
 /// Structured ensure outcome, embedded in `material.read` `details.ensure`.
@@ -101,7 +134,8 @@ pub(super) enum EnsureStatus {
 pub(super) struct EnsureReport {
     pub status: EnsureStatus,
     pub requested: InclusivePageRange,
-    /// Requested pages no snapshot covers (union of every lineage).
+    /// Requested pages no snapshot covers (union of every lineage), as
+    /// planned before this call parsed or waited.
     pub missing: Vec<InclusivePageRange>,
     /// The one contiguous range given to Marker (always the whole request).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -116,8 +150,14 @@ pub(super) struct EnsureReport {
     pub conversion_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub markdown_artifact_id: Option<String>,
+    /// The live lease this read queued behind (same PDF or global slot).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub lease: Option<CanonicalEnsureLease>,
+    pub waited_for: Option<CanonicalEnsureLease>,
+    /// Wall-clock milliseconds this call spent queued plus parsing.
+    pub waited_ms: u64,
+    /// True when `sync_timeout` ran out (queued or parsing).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub timed_out: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_pages_per_request: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,20 +177,29 @@ impl EnsureReport {
             canonical_id: None,
             conversion_id: None,
             markdown_artifact_id: None,
-            lease: None,
+            waited_for: None,
+            waited_ms: 0,
+            timed_out: false,
             max_pages_per_request: None,
             probe: None,
             message: message.into(),
         }
     }
 
-    /// The 「解析中」 map/tool signal while Marker runs for this PDF.
+    /// Post-hoc 「解析中」 record for the scene player: this call blocked on a
+    /// Marker parse of this PDF (its own or one it queued behind). `phase` is
+    /// how the block ended. The live signal during the call is the landscape
+    /// node summary (running lease), since MCP results cannot stream.
     pub(super) fn map_signal(&self, pdf: &StableId) -> Option<serde_json::Value> {
-        let pages = match (self.status, &self.lease) {
-            (EnsureStatus::Started, _) => self.marker_range?,
-            (EnsureStatus::BlockedLock, Some(lease)) if &lease.source_pdf_artifact_id == pdf => {
-                lease.pages
-            }
+        let pages = self.marker_range.or_else(|| {
+            self.waited_for
+                .as_ref()
+                .filter(|lease| &lease.source_pdf_artifact_id == pdf)
+                .map(|lease| lease.pages)
+        })?;
+        let phase = match self.status {
+            EnsureStatus::Expanded | EnsureStatus::Reused => "done",
+            EnsureStatus::Failed => "failed",
             _ => return None,
         };
         Some(serde_json::json!({
@@ -158,6 +207,8 @@ impl EnsureReport {
             "label": "解析中",
             "node_id": pdf.as_str(),
             "pages": pages,
+            "phase": phase,
+            "waited_ms": self.waited_ms,
         }))
     }
 }
@@ -232,53 +283,267 @@ pub(super) fn idempotency_key(key: &CanonicalMarkdownKey, range: InclusivePageRa
     )
 }
 
-/// Runs ensure for one PDF request. Never returns a call error for Marker
-/// problems; they become `capability_unavailable` or `failed`.
+/// Marker found usable for this workspace (probed once per ensure call).
+struct MarkerReady {
+    installation: MarkerInstallation,
+    version: String,
+}
+
+/// Runs ensure for one PDF request synchronously. Never returns a call
+/// error for Marker problems; they become `capability_unavailable` or
+/// `failed`. Never returns while a lease it holds is still `running`.
 pub(super) fn ensure(
     workspace: &McpWorkspace,
     pdf: &StableId,
     pdf_path: &Path,
-    views: &[&CanonicalMarkdownView],
     requested: InclusivePageRange,
     total_pages: u32,
 ) -> EnsureReport {
     let policy = workspace.ensure_policy();
-    let plan = plan_ensure(views, requested, total_pages, policy.max_pages_per_request);
-    let range = match plan.action {
-        PlanAction::Reuse => {
-            return EnsureReport::new(
-                EnsureStatus::Reused,
-                &plan,
-                "an existing immutable snapshot contains every requested page",
-            );
+    let started = Instant::now();
+    let deadline = started + policy.sync_timeout;
+    let mut first_plan: Option<EnsurePlan> = None;
+    let mut waited_for: Option<CanonicalEnsureLease> = None;
+    let mut marker: Option<MarkerReady> = None;
+    loop {
+        let plan = match CanonicalIndex::load(workspace) {
+            Ok(index) => plan_ensure(
+                &index.all_for_pdf(pdf.as_str(), Some(requested)),
+                requested,
+                total_pages,
+                policy.max_pages_per_request,
+            ),
+            Err(error) => {
+                let plan = first_plan.unwrap_or_else(|| EnsurePlan {
+                    requested,
+                    missing: vec![requested],
+                    action: PlanAction::Run(requested),
+                });
+                let mut report = EnsureReport::new(
+                    EnsureStatus::Failed,
+                    &plan,
+                    format!("failed to load the canonical registry: {}", error.message),
+                );
+                report.waited_for = waited_for;
+                report.waited_ms = elapsed_ms(started);
+                return report;
+            }
+        };
+        // Report what was missing when the call started, not after a wait.
+        let shown = first_plan.get_or_insert_with(|| plan.clone()).clone();
+        let finish = |mut report: EnsureReport, waited_for: Option<CanonicalEnsureLease>| {
+            report.waited_for = waited_for;
+            report.waited_ms = elapsed_ms(started);
+            report
+        };
+        let range = match plan.action {
+            PlanAction::Reuse => {
+                let message = if waited_for.is_some() {
+                    "waited for the running parse of this PDF; its new immutable snapshot contains every requested page"
+                } else {
+                    "an existing immutable snapshot contains every requested page"
+                };
+                return finish(
+                    EnsureReport::new(EnsureStatus::Reused, &shown, message),
+                    waited_for,
+                );
+            }
+            PlanAction::OverBudget => {
+                let mut report = EnsureReport::new(
+                    EnsureStatus::BlockedBudget,
+                    &shown,
+                    format!(
+                        "request spans {} pages; ensure parses at most {} pages per read. Narrow pdf_pages",
+                        requested.page_count(),
+                        policy.max_pages_per_request
+                    ),
+                );
+                report.max_pages_per_request = Some(policy.max_pages_per_request);
+                return finish(report, waited_for);
+            }
+            PlanAction::Run(range) => range,
+        };
+
+        let ready = match marker.take() {
+            Some(ready) => ready,
+            None => match probe_marker(workspace) {
+                Ok(ready) => ready,
+                Err((message, probe)) => {
+                    let mut report =
+                        EnsureReport::new(EnsureStatus::CapabilityUnavailable, &shown, message);
+                    report.probe = Some(probe);
+                    return finish(report, waited_for);
+                }
+            },
+        };
+        let key = match CanonicalMarkdownKey::new(
+            pdf.clone(),
+            ENSURE_PROFILE.id(),
+            parser_policy_from_tool_version(Some(&ready.version)),
+        ) {
+            Ok(key) => key,
+            Err(error) => {
+                return finish(
+                    EnsureReport::new(EnsureStatus::Failed, &shown, error.to_string()),
+                    waited_for,
+                );
+            }
+        };
+        let ensure_id = new_ensure_id();
+        let claim = CanonicalEnsureClaim {
+            ensure_id: ensure_id.clone(),
+            idempotency_key: idempotency_key(&key, range),
+            source_pdf_artifact_id: pdf.clone(),
+            canonical_id: key.canonical_id(),
+            parser_profile: key.parser_profile().to_owned(),
+            parser_policy_version: key.parser_policy_version().to_owned(),
+            pages: range,
+            owner: format!("{ENSURE_ACTOR}/{}", std::process::id()),
+        };
+        let mut report = EnsureReport::new(EnsureStatus::Failed, &shown, "");
+        report.marker_range = Some(range);
+        report.idempotency_key = Some(claim.idempotency_key.clone());
+        report.canonical_id = Some(claim.canonical_id.to_string());
+
+        let limits = CanonicalEnsureLimits {
+            max_running: policy.max_running,
+            window_pages: policy.window_pages,
+            window_ms: millis(policy.budget_window),
+            lease_ms: millis(policy.lease_ttl),
+        };
+        let outcome = workspace
+            .store()
+            .map_err(|error| error.message)
+            .and_then(|mut store| {
+                store
+                    .claim_canonical_ensure(&claim, limits, unix_millis_now())
+                    .map_err(|error| error.to_string())
+            });
+        let busy = match outcome {
+            Err(error) => {
+                report.message = format!("failed to claim the ensure lease: {error}");
+                return finish(report, waited_for);
+            }
+            Ok(CanonicalEnsureClaimOutcome::BudgetExhausted {
+                used_pages,
+                window_pages,
+            }) => {
+                report.status = EnsureStatus::BlockedBudget;
+                report.marker_range = None;
+                report.message = format!(
+                    "rolling ensure budget used {used_pages} of {window_pages} pages in the last {} minutes; wait for the window or read pages that are already parsed",
+                    policy.budget_window.as_secs() / 60
+                );
+                return finish(report, waited_for);
+            }
+            Ok(CanonicalEnsureClaimOutcome::PdfBusy(lease)) => Some(lease),
+            Ok(CanonicalEnsureClaimOutcome::SlotsBusy { .. }) => None,
+            Ok(CanonicalEnsureClaimOutcome::Acquired) => {
+                report.ensure_id = Some(ensure_id.clone());
+                let job = EnsureJob {
+                    workspace_root: workspace.path().to_owned(),
+                    database: workspace.database_path(),
+                    pdf: pdf.clone(),
+                    pdf_path: pdf_path.to_owned(),
+                    total_pages,
+                    range,
+                    installation: ready.installation,
+                    marker_version: ready.version,
+                    marker_timeout: policy
+                        .marker_timeout
+                        .min(deadline.saturating_duration_since(Instant::now()))
+                        .max(Duration::from_secs(1)),
+                    ensure_id,
+                    cancellation: MarkerCancellation::new(),
+                };
+                let lineage_had_segments = CanonicalIndex::load(workspace).is_ok_and(|index| {
+                    index.all_for_pdf(pdf.as_str(), None).iter().any(|view| {
+                        view.canonical_id == claim.canonical_id && !view.segments.is_empty()
+                    })
+                });
+                run_owned(job, &policy, deadline, &mut report, lineage_had_segments);
+                return finish(report, waited_for);
+            }
+        };
+
+        // Queue: the PDF or every Marker slot is busy. Wait for the lease to
+        // go away (finished, failed or expired), then re-plan.
+        let what = match &busy {
+            Some(lease) => format!(
+                "this PDF is being parsed (pages {}–{})",
+                lease.pages.from, lease.pages.to
+            ),
+            None => "every Marker slot in this workspace is busy".to_owned(),
+        };
+        if let Some(lease) = busy.clone() {
+            waited_for = Some(lease);
+        } else if waited_for.is_none() {
+            waited_for = live_lease(workspace);
         }
-        PlanAction::OverBudget => {
+        marker = Some(ready);
+        if Instant::now() >= deadline {
             let mut report = EnsureReport::new(
-                EnsureStatus::BlockedBudget,
-                &plan,
+                EnsureStatus::Failed,
+                &shown,
                 format!(
-                    "request spans {} pages; ensure parses at most {} pages per read. Narrow pdf_pages",
-                    requested.page_count(),
-                    policy.max_pages_per_request
+                    "{what}; gave up after waiting {}s (sync ensure deadline). Nothing of this read is left running",
+                    policy.sync_timeout.as_secs()
                 ),
             );
-            report.max_pages_per_request = Some(policy.max_pages_per_request);
-            return report;
+            report.timed_out = true;
+            return finish(report, waited_for);
         }
-        PlanAction::Run(range) => range,
-    };
+        wait_for_release(workspace, busy.as_ref(), &policy, deadline);
+    }
+}
 
+/// Sleeps in `poll_interval` steps until no live lease blocks this read (or
+/// the deadline). Expired leases stop counting as soon as they lapse.
+fn wait_for_release(
+    workspace: &McpWorkspace,
+    lease: Option<&CanonicalEnsureLease>,
+    policy: &EnsurePolicy,
+    deadline: Instant,
+) {
+    while Instant::now() < deadline {
+        thread::sleep(
+            policy
+                .poll_interval
+                .min(deadline.saturating_duration_since(Instant::now())),
+        );
+        let Ok(store) = workspace.store() else {
+            return;
+        };
+        let Ok(live) = store.active_canonical_ensures(unix_millis_now()) else {
+            return;
+        };
+        let still = match lease {
+            Some(lease) => live.iter().any(|other| other.ensure_id == lease.ensure_id),
+            None => u32::try_from(live.len()).unwrap_or(u32::MAX) >= policy.max_running,
+        };
+        if !still {
+            return;
+        }
+    }
+}
+
+fn live_lease(workspace: &McpWorkspace) -> Option<CanonicalEnsureLease> {
+    workspace
+        .store()
+        .ok()?
+        .active_canonical_ensures(unix_millis_now())
+        .ok()?
+        .into_iter()
+        .next()
+}
+
+fn probe_marker(workspace: &McpWorkspace) -> Result<MarkerReady, (String, CapabilityProbe)> {
     let probe = probe_capability(workspace.capability_runner(), Capability::Marker);
-    let unavailable = |message: String, probe: CapabilityProbe| {
-        let mut report = EnsureReport::new(EnsureStatus::CapabilityUnavailable, &plan, message);
-        report.probe = Some(probe);
-        report
-    };
     if probe.state != CapabilityState::Available {
-        return unavailable(
+        return Err((
             "Marker is not installed or its version is unsupported".into(),
             probe,
-        );
+        ));
     }
     let installation = match locate_marker_executable(workspace.capability_runner())
         .map(absolute)
@@ -286,104 +551,31 @@ pub(super) fn ensure(
         .and_then(|exe| installation_for(&exe))
     {
         Ok(installation) => installation,
-        Err(message) => return unavailable(message, probe),
+        Err(message) => return Err((message, probe)),
     };
-    let marker_version = match MarkerRunner::default().probe(&installation) {
-        Ok(found) => found.version().raw().to_owned(),
-        Err(error) => return unavailable(format!("Marker probe failed: {error}"), probe),
-    };
-
-    let key = match CanonicalMarkdownKey::new(
-        pdf.clone(),
-        ENSURE_PROFILE.id(),
-        parser_policy_from_tool_version(Some(&marker_version)),
-    ) {
-        Ok(key) => key,
-        Err(error) => {
-            return EnsureReport::new(EnsureStatus::Failed, &plan, error.to_string());
-        }
-    };
-    let ensure_id = new_ensure_id();
-    let claim = CanonicalEnsureClaim {
-        ensure_id: ensure_id.clone(),
-        idempotency_key: idempotency_key(&key, range),
-        source_pdf_artifact_id: pdf.clone(),
-        canonical_id: key.canonical_id(),
-        parser_profile: key.parser_profile().to_owned(),
-        parser_policy_version: key.parser_policy_version().to_owned(),
-        pages: range,
-        owner: format!("{ENSURE_ACTOR}/{}", std::process::id()),
-    };
-    let lineage_had_segments = views
-        .iter()
-        .any(|view| view.canonical_id == claim.canonical_id && !view.segments.is_empty());
-    let mut report = EnsureReport::new(EnsureStatus::Started, &plan, "");
-    report.marker_range = Some(range);
-    report.idempotency_key = Some(claim.idempotency_key.clone());
-    report.canonical_id = Some(claim.canonical_id.to_string());
-
-    let limits = CanonicalEnsureLimits {
-        max_running: policy.max_running,
-        window_pages: policy.window_pages,
-        window_ms: millis(policy.budget_window),
-        lease_ms: millis(policy.marker_timeout).saturating_add(millis(policy.lease_margin)),
-    };
-    let outcome = workspace
-        .store()
-        .map_err(|error| error.to_string())
-        .and_then(|mut store| {
-            store
-                .claim_canonical_ensure(&claim, limits, unix_millis_now())
-                .map_err(|error| error.to_string())
-        });
-    match outcome {
-        Err(error) => {
-            report.status = EnsureStatus::Failed;
-            report.message = format!("failed to claim the ensure lease: {error}");
-            return report;
-        }
-        Ok(CanonicalEnsureClaimOutcome::PdfBusy(lease)) => {
-            report.status = EnsureStatus::BlockedLock;
-            report.message = format!(
-                "this PDF is already being parsed (pages {}–{}); read again later",
-                lease.pages.from, lease.pages.to
-            );
-            report.lease = Some(lease);
-            return report;
-        }
-        Ok(CanonicalEnsureClaimOutcome::SlotsBusy { running }) => {
-            report.status = EnsureStatus::BlockedLock;
-            report.message = format!(
-                "{running} Marker run(s) already active in this workspace; read again later"
-            );
-            return report;
-        }
-        Ok(CanonicalEnsureClaimOutcome::BudgetExhausted {
-            used_pages,
-            window_pages,
-        }) => {
-            report.status = EnsureStatus::BlockedBudget;
-            report.message = format!(
-                "rolling ensure budget used {used_pages} of {window_pages} pages; read again later"
-            );
-            return report;
-        }
-        Ok(CanonicalEnsureClaimOutcome::Acquired) => {}
+    match MarkerRunner::default().probe(&installation) {
+        Ok(found) => Ok(MarkerReady {
+            installation,
+            version: found.version().raw().to_owned(),
+        }),
+        Err(error) => Err((format!("Marker probe failed: {error}"), probe)),
     }
-    report.ensure_id = Some(ensure_id.clone());
+}
 
-    let job = EnsureJob {
-        workspace_root: workspace.path().to_owned(),
-        database: workspace.database_path(),
-        pdf: pdf.clone(),
-        pdf_path: pdf_path.to_owned(),
-        total_pages,
-        range,
-        installation,
-        marker_version,
-        marker_timeout: policy.marker_timeout,
-        ensure_id,
-    };
+/// Runs a claimed job on a worker thread while this thread renews the lease
+/// every heartbeat. On the deadline: cancel Marker, give the worker
+/// [`CANCEL_GRACE`] to write its failed receipt, else fail the lease here.
+fn run_owned(
+    job: EnsureJob,
+    policy: &EnsurePolicy,
+    deadline: Instant,
+    report: &mut EnsureReport,
+    lineage_had_segments: bool,
+) {
+    let database = job.database.clone();
+    let ensure_id = job.ensure_id.clone();
+    let cancellation = job.cancellation.clone();
+    let range = job.range;
     let (sender, receiver) = mpsc::channel();
     let spawned = thread::Builder::new()
         .name("mathscape-ensure".into())
@@ -392,38 +584,105 @@ pub(super) fn ensure(
             let _ = sender.send(result);
         });
     if let Err(error) = spawned {
+        fail_lease(&database, &ensure_id, "failed to start the ensure worker");
         report.status = EnsureStatus::Failed;
         report.message = format!("failed to start the ensure worker: {error}");
-        return report;
+        return;
     }
-    match receiver.recv_timeout(policy.wait) {
-        Ok(Ok(done)) => {
+    let ttl = millis(policy.lease_ttl);
+    let mut cancelled_at: Option<Instant> = None;
+    let result = loop {
+        let now = Instant::now();
+        let wake = match cancelled_at {
+            Some(at) => at + CANCEL_GRACE,
+            None => deadline,
+        };
+        let step = policy
+            .heartbeat
+            .min(wake.saturating_duration_since(now))
+            .max(Duration::from_millis(10));
+        match receiver.recv_timeout(step) {
+            Ok(result) => break Some(result),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break Some(Err("the ensure worker stopped without a result".into()));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        let now = Instant::now();
+        match cancelled_at {
+            None if now >= deadline => {
+                cancellation.cancel();
+                cancelled_at = Some(now);
+            }
+            Some(at) if now >= at + CANCEL_GRACE => break None,
+            _ => {}
+        }
+        // Heartbeat (also while cancelling, so the lock stays ours until the
+        // receipt is written).
+        if let Ok(mut store) = SqliteArtifactStore::open(&database) {
+            let now_ms = unix_millis_now();
+            let _ = store.renew_canonical_ensure(&ensure_id, now_ms.saturating_add(ttl), now_ms);
+        }
+    };
+    let timed_out = cancelled_at.is_some();
+    match result {
+        // A run that lands inside the cancel grace still counts.
+        Some(Ok(done)) => {
             report.status = EnsureStatus::Expanded;
             report.conversion_id = Some(done.conversion_id);
             report.markdown_artifact_id = Some(done.markdown_artifact_id);
             report.message = if lineage_had_segments {
-                "Marker parsed the requested pages; a new immutable snapshot was added to the canonical markdown".into()
+                "Marker parsed the requested pages in this call; a new immutable snapshot was added to the canonical markdown".into()
             } else {
-                "Marker parsed the requested pages; the first snapshot of this canonical markdown was promoted".into()
+                "Marker parsed the requested pages in this call; the first snapshot of this canonical markdown was promoted".into()
             };
         }
-        Ok(Err(error)) => {
+        None => {
+            // The worker did not answer within the cancel grace: fail the
+            // lease here so nothing stays `running`.
+            fail_lease(&database, &ensure_id, "sync ensure deadline exceeded");
             report.status = EnsureStatus::Failed;
-            report.message = error;
+            report.timed_out = true;
+            report.message = timeout_message(range, policy);
         }
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            report.status = EnsureStatus::Started;
-            report.message = format!(
-                "Marker is parsing pages {}–{} (解析中); read again later",
-                range.from, range.to
-            );
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
+        Some(Err(error)) => {
+            fail_lease(&database, &ensure_id, &error);
             report.status = EnsureStatus::Failed;
-            report.message = "the ensure worker stopped without a result".into();
+            report.timed_out = timed_out;
+            report.message = if timed_out {
+                format!("{}: {error}", timeout_message(range, policy))
+            } else {
+                error
+            };
         }
     }
-    report
+}
+
+fn timeout_message(range: InclusivePageRange, policy: &EnsurePolicy) -> String {
+    format!(
+        "Marker did not finish pages {}–{} within the {}s sync ensure limit; the run was stopped and its lease cleared. Request fewer pages",
+        range.from,
+        range.to,
+        policy.sync_timeout.as_secs()
+    )
+}
+
+/// Idempotent: marks a still-`running` (or `abandoned`) lease `failed`.
+fn fail_lease(database: &Path, ensure_id: &str, error: &str) {
+    if let Ok(mut store) = SqliteArtifactStore::open(database) {
+        let _ = store.finish_canonical_ensure(
+            ensure_id,
+            CanonicalEnsureOutcome::Failed,
+            None,
+            None,
+            Some(error),
+            unix_millis_now(),
+        );
+    }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 struct EnsureJob {
@@ -437,6 +696,7 @@ struct EnsureJob {
     marker_version: String,
     marker_timeout: Duration,
     ensure_id: String,
+    cancellation: MarkerCancellation,
 }
 
 struct EnsureDone {
@@ -501,12 +761,7 @@ impl EnsureJob {
         let options =
             MarkerExecutionOptions::new(self.marker_timeout).map_err(|error| error.to_string())?;
         let run = MarkerRunner::new(options)
-            .execute(
-                &self.installation,
-                &request,
-                &staging,
-                &MarkerCancellation::new(),
-            )
+            .execute(&self.installation, &request, &staging, &self.cancellation)
             .map_err(|error| format!("Marker could not run: {error}"))?;
         if run.status() != MarkerRunStatus::Succeeded {
             let detail = run.stderr().preview_lossy();

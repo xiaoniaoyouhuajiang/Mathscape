@@ -267,6 +267,56 @@ fn ensure_claims_lock_per_pdf_share_one_global_slot_and_expire() {
 }
 
 #[test]
+fn ensure_heartbeat_renews_a_live_lease_and_a_silent_owner_expires() {
+    let (directory, _database, mut store) = open();
+    let first = claim("h1", "mathscape:artifact/a", 1, 2);
+    assert_eq!(
+        store.claim_canonical_ensure(&first, LIMITS, 100).unwrap(),
+        CanonicalEnsureClaimOutcome::Acquired
+    );
+    // Heartbeats keep the lock past the original deadline (1_100).
+    assert!(store.renew_canonical_ensure("h1", 1_900, 900).unwrap());
+    assert_eq!(store.active_canonical_ensures(1_500).unwrap().len(), 1);
+    assert!(matches!(
+        store
+            .claim_canonical_ensure(&claim("h2", "mathscape:artifact/a", 1, 2), LIMITS, 1_500)
+            .unwrap(),
+        CanonicalEnsureClaimOutcome::PdfBusy(_)
+    ));
+    // The owner goes silent: the lease lapses and cannot be renewed late.
+    assert!(!store.renew_canonical_ensure("h1", 3_000, 2_000).unwrap());
+    assert!(store.active_canonical_ensures(2_000).unwrap().is_empty());
+    assert_eq!(
+        store
+            .claim_canonical_ensure(&claim("h3", "mathscape:artifact/a", 1, 2), LIMITS, 2_000)
+            .unwrap(),
+        CanonicalEnsureClaimOutcome::Acquired
+    );
+    assert_eq!(
+        store
+            .canonical_ensure_receipt("h1")
+            .unwrap()
+            .unwrap()
+            .status,
+        "abandoned"
+    );
+    // A finished lease is not renewable either.
+    store
+        .finish_canonical_ensure(
+            "h3",
+            CanonicalEnsureOutcome::Failed,
+            None,
+            None,
+            Some("x"),
+            2_100,
+        )
+        .unwrap();
+    assert!(!store.renew_canonical_ensure("h3", 4_000, 2_200).unwrap());
+    drop(store);
+    fs::remove_dir_all(directory).ok();
+}
+
+#[test]
 fn ensure_claims_respect_the_rolling_page_budget() {
     let (directory, _database, mut store) = open();
     let limits = CanonicalEnsureLimits {

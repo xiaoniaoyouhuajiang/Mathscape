@@ -18,8 +18,8 @@ use mathscape_domain::{
 };
 use mathscape_mcp::{EnsurePolicy, McpServer, McpWorkspace};
 use mathscape_store_sqlite::{
-    CanonicalEnsureClaim, CanonicalEnsureClaimOutcome, CanonicalEnsureLimits, SqliteArtifactStore,
-    unix_millis_now,
+    CanonicalEnsureClaim, CanonicalEnsureClaimOutcome, CanonicalEnsureLimits,
+    CanonicalEnsureOutcome, SqliteArtifactStore, unix_millis_now,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -37,7 +37,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 echo "$page_range" >> "$here/calls.log"
-if [ -f "$here/slow" ]; then sleep 2; fi
+if [ -f "$here/slow" ]; then sleep "$(cat "$here/slow")"; fi
 if [ -f "$here/fail" ]; then echo 'fake marker failure' >&2; exit 3; fi
 source_name="${source_path##*/}"
 source_stem="${source_name%.*}"
@@ -155,10 +155,42 @@ fn harness() -> Harness {
 
 fn test_policy() -> EnsurePolicy {
     EnsurePolicy {
-        wait: Duration::from_secs(30),
+        sync_timeout: Duration::from_secs(30),
         marker_timeout: Duration::from_secs(20),
+        // Short lease + fast heartbeat: a parse outlives several TTLs.
+        lease_ttl: Duration::from_millis(800),
+        heartbeat: Duration::from_millis(150),
+        poll_interval: Duration::from_millis(50),
         ..EnsurePolicy::default()
     }
+}
+
+fn server_at(root: &Path, executable: Option<PathBuf>, policy: EnsurePolicy) -> McpServer {
+    McpServer::new(
+        McpWorkspace::open(root)
+            .unwrap()
+            .with_capability_runner(Box::new(FakeMarkerEnv {
+                executable,
+                inner: SystemCommandRunner::default(),
+            }))
+            .with_ensure_policy(policy),
+    )
+}
+
+fn pdf_summary(h: &Harness) -> String {
+    let landscape = h.store().landscape_snapshot().unwrap();
+    let projection = mathscape_query::project_landscape(
+        mathscape_query::LandscapeProjectionInput::from_snapshot(&landscape),
+    )
+    .unwrap();
+    projection
+        .nodes()
+        .iter()
+        .find(|node| node.entity_id().as_str() == h.pdf)
+        .expect("pdf node in the landscape")
+        .summary_ref()
+        .unwrap_or("")
+        .to_owned()
 }
 
 impl Harness {
@@ -167,15 +199,14 @@ impl Harness {
     }
 
     fn server_with(&self, executable: Option<PathBuf>, policy: EnsurePolicy) -> McpServer {
-        McpServer::new(
-            McpWorkspace::open(&self.root)
-                .unwrap()
-                .with_capability_runner(Box::new(FakeMarkerEnv {
-                    executable,
-                    inner: SystemCommandRunner::default(),
-                }))
-                .with_ensure_policy(policy),
-        )
+        server_at(&self.root, executable, policy)
+    }
+
+    fn no_live_lease(&self) -> bool {
+        self.store()
+            .active_canonical_ensures(unix_millis_now())
+            .unwrap()
+            .is_empty()
     }
 
     fn marker_calls(&self) -> Vec<String> {
@@ -189,19 +220,6 @@ impl Harness {
     fn store(&self) -> SqliteArtifactStore {
         let pool = ArtifactPool::open(&self.root).unwrap();
         SqliteArtifactStore::open(&pool.workspace().database_path()).unwrap()
-    }
-
-    fn wait_until_idle(&self) {
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while !self
-            .store()
-            .active_canonical_ensures(unix_millis_now())
-            .unwrap()
-            .is_empty()
-        {
-            assert!(Instant::now() < deadline, "ensure never finished");
-            std::thread::sleep(Duration::from_millis(50));
-        }
     }
 
     fn object_bytes(&self, id: &str) -> Vec<u8> {
@@ -280,7 +298,13 @@ fn uncovered_scanned_read_ensures_then_serves_and_covered_reads_never_rerun() {
         )
     );
     assert_eq!(first["served_artifact_id"], ensure["markdown_artifact_id"]);
-    assert!(first["details"].get("map_signal").is_none());
+    // Post-hoc scene record: this call blocked on parsing pages 3–4.
+    assert_eq!(first["details"]["map_signal"]["label"], "解析中");
+    assert_eq!(first["details"]["map_signal"]["phase"], "done");
+    assert_eq!(
+        first["details"]["map_signal"]["pages"],
+        json!({ "from": 3, "to": 4 })
+    );
     assert!(codes(&first).contains(&"canonical_ensure_expanded".to_owned()));
     assert_eq!(h.marker_calls(), ["2-3"]);
 
@@ -425,110 +449,203 @@ fn foreign_claim(pdf: &str, id: &str, from: u32, to: u32) -> CanonicalEnsureClai
     }
 }
 
-#[test]
-fn live_leases_block_the_same_pdf_and_the_global_marker_slot() {
-    let h = harness();
+fn claim_foreign(h: &Harness, pdf: &str, id: &str, pages: (u32, u32), lease_ms: i64) {
     let limits = CanonicalEnsureLimits {
         max_running: 1,
         window_pages: 1000,
         window_ms: 3_600_000,
-        lease_ms: 600_000,
+        lease_ms,
     };
     let outcome = h
         .store()
         .claim_canonical_ensure(
-            &foreign_claim(&h.pdf, "held", 7, 8),
+            &foreign_claim(pdf, id, pages.0, pages.1),
             limits,
             unix_millis_now(),
         )
         .unwrap();
     assert_eq!(outcome, CanonicalEnsureClaimOutcome::Acquired);
-    let server = h.server(test_policy());
-
-    let same_pdf = read(&server, &h.pdf, 1, 1);
-    assert_eq!(same_pdf["status"], "capability_unavailable", "{same_pdf}");
-    assert_eq!(same_pdf["details"]["ensure"]["status"], "blocked_lock");
-    assert_eq!(
-        same_pdf["details"]["ensure"]["lease"]["pages"],
-        json!({ "from": 7, "to": 8 })
-    );
-    assert_eq!(
-        same_pdf["details"]["map_signal"],
-        json!({ "kind": "parsing", "label": "解析中", "node_id": h.pdf, "pages": { "from": 7, "to": 8 } })
-    );
-
-    let other_pdf = read(&server, &h.other_pdf, 1, 1);
-    assert_eq!(
-        other_pdf["details"]["ensure"]["status"], "blocked_lock",
-        "{other_pdf}"
-    );
-    assert!(other_pdf["details"].get("map_signal").is_none());
-    assert!(h.marker_calls().is_empty());
 }
 
 #[test]
-fn slow_marker_reports_started_then_locks_then_serves() {
+fn a_read_queues_behind_a_live_lease_on_the_same_pdf_then_parses_in_the_same_call() {
     let h = harness();
-    fs::write(h.bin.join("slow"), b"").unwrap();
+    claim_foreign(&h, &h.pdf, "held", (7, 8), 600_000);
+    // The other owner finishes (without covering pages 1–1) after a moment.
+    let database = ArtifactPool::open(&h.root)
+        .unwrap()
+        .workspace()
+        .database_path();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(700));
+        SqliteArtifactStore::open(&database)
+            .unwrap()
+            .finish_canonical_ensure(
+                "held",
+                CanonicalEnsureOutcome::Failed,
+                None,
+                None,
+                Some("other owner gave up"),
+                unix_millis_now(),
+            )
+            .unwrap();
+    });
+    let server = h.server(test_policy());
+    let started = Instant::now();
+    let result = read(&server, &h.pdf, 1, 1);
+    releaser.join().unwrap();
+    assert!(
+        started.elapsed() >= Duration::from_millis(600),
+        "the read waited"
+    );
+    // Never blocked_lock / started: one call, one ok body.
+    assert_eq!(result["status"], "ok", "{result}");
+    let text = result["text"].as_str().unwrap();
+    assert!(text.contains("扫描页 0"), "{text}");
+    let ensure = &result["details"]["ensure"];
+    assert_eq!(ensure["status"], "expanded", "{ensure}");
+    assert_eq!(ensure["waited_for"]["ensure_id"], "held");
+    assert_eq!(ensure["waited_for"]["pages"], json!({ "from": 7, "to": 8 }));
+    assert!(ensure["waited_ms"].as_u64().unwrap() >= 600);
+    assert_eq!(h.marker_calls(), ["0"]);
+    assert!(h.no_live_lease());
+}
+
+#[test]
+fn a_dead_owner_lease_expires_and_a_read_on_another_pdf_takes_the_slot() {
+    let h = harness();
+    // Another process claimed the only Marker slot and died (no heartbeat).
+    claim_foreign(&h, &h.pdf, "dead", (7, 8), 600);
+    let server = h.server(test_policy());
+    let result = read(&server, &h.other_pdf, 1, 1);
+    assert_eq!(result["status"], "ok", "{result}");
+    let ensure = &result["details"]["ensure"];
+    assert_eq!(ensure["status"], "expanded", "{ensure}");
+    assert_eq!(ensure["waited_for"]["ensure_id"], "dead");
+    // A slot wait on another PDF is not a parse of this PDF.
+    assert_eq!(
+        result["details"]["map_signal"]["pages"],
+        json!({ "from": 1, "to": 1 })
+    );
+    assert_eq!(
+        h.store()
+            .canonical_ensure_receipt("dead")
+            .unwrap()
+            .unwrap()
+            .status,
+        "abandoned"
+    );
+    assert!(h.no_live_lease());
+}
+
+#[test]
+fn queueing_past_the_sync_deadline_fails_without_leaving_a_lease() {
+    let h = harness();
+    claim_foreign(&h, &h.pdf, "held", (7, 8), 600_000);
     let server = h.server(EnsurePolicy {
-        wait: Duration::ZERO,
+        sync_timeout: Duration::from_millis(600),
         ..test_policy()
     });
-    let started = read(&server, &h.pdf, 9, 10);
-    assert_eq!(started["status"], "capability_unavailable", "{started}");
-    assert_eq!(started["details"]["ensure"]["status"], "started");
-    assert_eq!(
-        started["details"]["map_signal"],
-        json!({ "kind": "parsing", "label": "解析中", "node_id": h.pdf, "pages": { "from": 9, "to": 10 } })
-    );
-    let leases = h
+    let result = read(&server, &h.pdf, 1, 1);
+    assert_eq!(result["status"], "capability_unavailable", "{result}");
+    let ensure = &result["details"]["ensure"];
+    assert_eq!(ensure["status"], "failed", "{ensure}");
+    assert_eq!(ensure["timed_out"], true);
+    assert!(ensure.get("ensure_id").is_none(), "nothing was claimed");
+    assert!(codes(&result).contains(&"canonical_ensure_failed".to_owned()));
+    assert_eq!(result["details"]["map_signal"]["phase"], "failed");
+    assert!(h.marker_calls().is_empty());
+    // Only the other owner's lease is live; this read left none behind.
+    let live = h
         .store()
         .active_canonical_ensures(unix_millis_now())
         .unwrap();
-    assert_eq!(leases.len(), 1);
-    assert_eq!(leases[0].pages, InclusivePageRange::new(9, 10).unwrap());
-    let landscape = h.store().landscape_snapshot().unwrap();
-    assert_eq!(landscape.canonical_ensures().len(), 1);
-    // Map signal: the PDF node of the landscape projection says 「解析中」.
-    let projection = mathscape_query::project_landscape(
-        mathscape_query::LandscapeProjectionInput::from_snapshot(&landscape),
-    )
-    .unwrap();
-    let pdf_node = projection
-        .nodes()
-        .iter()
-        .find(|node| node.entity_id().as_str() == h.pdf)
-        .expect("pdf node in the landscape");
-    assert!(
-        pdf_node.summary_ref().unwrap().contains("解析中 第9–10页"),
-        "{:?}",
-        pdf_node.summary_ref()
-    );
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].ensure_id, "held");
+}
 
-    let locked = read(&server, &h.pdf, 9, 10);
+#[test]
+fn concurrent_reads_of_one_pdf_share_one_parse_and_the_map_says_parsing_meanwhile() {
+    let h = harness();
+    fs::write(h.bin.join("slow"), b"2").unwrap();
+    let spawn_read = |delay: Duration| {
+        let root = h.root.clone();
+        let exe = h.bin.join("marker_single");
+        let pdf = h.pdf.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            let server = server_at(&root, Some(exe), test_policy());
+            read(&server, &pdf, 9, 10)
+        })
+    };
+    let first = spawn_read(Duration::ZERO);
+    // While Marker runs (and heartbeats keep an 800 ms lease alive for 2 s),
+    // the landscape PDF node says 「解析中」.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while h.no_live_lease() {
+        assert!(Instant::now() < deadline, "ensure never claimed");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        pdf_summary(&h).contains("解析中 第9–10页"),
+        "{}",
+        pdf_summary(&h)
+    );
+    let second = spawn_read(Duration::ZERO);
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(
+        pdf_summary(&h).contains("解析中 第9–10页"),
+        "the heartbeat keeps the signal past the lease TTL"
+    );
+    let first = first.join().unwrap();
+    let second = second.join().unwrap();
+    for result in [&first, &second] {
+        assert_eq!(result["status"], "ok", "{result}");
+        assert!(result["text"].as_str().unwrap().contains("扫描页 8-9"));
+        assert_eq!(result["details"]["map_signal"]["phase"], "done");
+    }
+    assert_eq!(first["details"]["ensure"]["status"], "expanded");
+    // The second read queued on the same lease and reused its snapshot.
+    let waited = &second["details"]["ensure"];
+    assert_eq!(waited["status"], "reused", "{waited}");
     assert_eq!(
-        locked["details"]["ensure"]["status"], "blocked_lock",
-        "{locked}"
+        waited["waited_for"]["ensure_id"],
+        first["details"]["ensure"]["ensure_id"]
     );
-    assert_eq!(locked["details"]["map_signal"]["label"], "解析中");
+    assert!(codes(&second).contains(&"canonical_ensure_reused".to_owned()));
+    assert_eq!(second["served_artifact_id"], first["served_artifact_id"]);
+    assert_eq!(h.marker_calls(), ["8-9"], "one Marker run for both reads");
+    assert!(h.no_live_lease());
+    assert!(!pdf_summary(&h).contains("解析中"), "the signal clears");
+}
 
-    h.wait_until_idle();
-    let idle = h.store().landscape_snapshot().unwrap();
-    let projection = mathscape_query::project_landscape(
-        mathscape_query::LandscapeProjectionInput::from_snapshot(&idle),
-    )
-    .unwrap();
+#[test]
+fn marker_past_the_sync_deadline_is_stopped_failed_and_unlocked() {
+    let h = harness();
+    fs::write(h.bin.join("slow"), b"20").unwrap();
+    let server = h.server(EnsurePolicy {
+        sync_timeout: Duration::from_secs(1),
+        ..test_policy()
+    });
+    let started = Instant::now();
+    let result = read(&server, &h.pdf, 1, 2);
     assert!(
-        projection
-            .nodes()
-            .iter()
-            .all(|node| !node.summary_ref().unwrap_or("").contains("解析中")),
-        "the signal clears when the lease is released"
+        started.elapsed() < Duration::from_secs(15),
+        "the call is bounded: {:?}",
+        started.elapsed()
     );
-    let served = read(&server, &h.pdf, 9, 10);
-    assert_eq!(served["status"], "ok", "{served}");
-    assert!(codes(&served).contains(&"served_canonical_markdown".to_owned()));
-    assert_eq!(h.marker_calls(), ["8-9"]);
+    assert_eq!(result["status"], "capability_unavailable", "{result}");
+    let ensure = &result["details"]["ensure"];
+    assert_eq!(ensure["status"], "failed", "{ensure}");
+    assert_eq!(ensure["timed_out"], true, "{ensure}");
+    let receipt = h
+        .store()
+        .canonical_ensure_receipt(ensure["ensure_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.status, "failed");
+    assert!(h.no_live_lease(), "no stuck running lease");
+    assert!(!pdf_summary(&h).contains("解析中"));
 }
 
 #[test]
@@ -541,6 +658,8 @@ fn marker_failure_is_reported_and_recorded_without_new_artifacts() {
     assert_eq!(failed["status"], "capability_unavailable", "{failed}");
     let ensure = &failed["details"]["ensure"];
     assert_eq!(ensure["status"], "failed");
+    assert!(ensure.get("timed_out").is_none());
+    assert_eq!(failed["details"]["map_signal"]["phase"], "failed");
     assert!(codes(&failed).contains(&"canonical_ensure_failed".to_owned()));
     let receipt = h
         .store()

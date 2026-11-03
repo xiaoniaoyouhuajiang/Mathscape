@@ -925,9 +925,11 @@ const MCP_FORWARDED_ENV_VARS: [&str; 3] = [
     "XDG_DATA_HOME",
 ];
 
-/// Per-call MCP tool timeout. Covers `material.read`'s bounded ensure wait
-/// (see `mathscape-mcp` ensure policy) with margin.
-const MCP_TOOL_TIMEOUT_SEC: u64 = 120;
+/// Per-call MCP tool timeout. `material.read` on a scanned PDF waits for
+/// Marker synchronously, bounded by the ensure `sync_timeout` (15 min in
+/// `mathscape-mcp`); this leaves one minute of margin so the tool, not Codex,
+/// reports the timeout and clears its lease.
+const MCP_TOOL_TIMEOUT_SEC: u64 = 16 * 60;
 
 pub(crate) fn thread_start_message(
     id: u64,
@@ -959,7 +961,7 @@ pub(crate) fn thread_start_message(
             "mcp_servers.mathscape.enabled_tools": enabled_tools(&request.tools_allow),
             // material.read may run a bounded Marker ensure on a scanned PDF:
             // forward only the Marker lookup variables (no secrets) and allow
-            // the ensure wait plus margin.
+            // the synchronous ensure wait plus margin.
             "mcp_servers.mathscape.env_vars": MCP_FORWARDED_ENV_VARS,
             "mcp_servers.mathscape.tool_timeout_sec": MCP_TOOL_TIMEOUT_SEC
         }
@@ -1303,7 +1305,7 @@ mod tests {
                 "XDG_DATA_HOME"
             ])
         );
-        assert_eq!(config["mcp_servers.mathscape.tool_timeout_sec"], 120);
+        assert_eq!(config["mcp_servers.mathscape.tool_timeout_sec"], 960);
         assert_eq!(
             config["mcp_servers.mathscape.args"],
             json!([

@@ -4,7 +4,8 @@
 //! index) and the map's 「解析中」 signal. Live `running` rows across the
 //! workspace are the global Marker slots. A lease whose deadline passed is
 //! marked `abandoned` before a new claim, so a crashed MCP process cannot hold
-//! a PDF forever. Nothing here reads or writes artifact bytes.
+//! a PDF forever. The owner renews its lease on a short heartbeat while
+//! Marker runs, so a dead owner stops being 「解析中」 within one lease TTL. Nothing here reads or writes artifact bytes.
 
 use mathscape_domain::{InclusivePageRange, StableId};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -177,6 +178,23 @@ pub(super) fn finish(
         ],
     )?;
     Ok(())
+}
+
+/// Heartbeat: pushes a live lease's deadline to `lease_expires_at_ms`.
+/// Returns false when the row is no longer `running` (finished, abandoned or
+/// expired at `now_ms`); the caller has lost its lock.
+pub(super) fn renew(
+    connection: &Connection,
+    ensure_id: &str,
+    lease_expires_at_ms: i64,
+    now_ms: i64,
+) -> Result<bool, SqliteStoreError> {
+    let changed = connection.execute(
+        "UPDATE canonical_markdown_ensure SET lease_expires_at_ms = ?2
+         WHERE ensure_id = ?1 AND status = 'running' AND lease_expires_at_ms > ?3",
+        params![ensure_id, lease_expires_at_ms, now_ms],
+    )?;
+    Ok(changed > 0)
 }
 
 fn expire(connection: &Connection, now_ms: i64) -> Result<(), SqliteStoreError> {

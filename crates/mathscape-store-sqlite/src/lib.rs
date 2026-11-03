@@ -1295,6 +1295,17 @@ impl SqliteArtifactStore {
         )
     }
 
+    /// Heartbeat for a claimed ensure: extends its lease deadline. False when
+    /// the lease is gone (finished, abandoned or already expired).
+    pub fn renew_canonical_ensure(
+        &mut self,
+        ensure_id: &str,
+        lease_expires_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<bool, SqliteStoreError> {
+        canonical_ensure::renew(&self.connection, ensure_id, lease_expires_at_ms, now_ms)
+    }
+
     /// Live (`running`, unexpired) ensures: the 「解析中」 signal.
     pub fn active_canonical_ensures(
         &self,
