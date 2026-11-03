@@ -8,6 +8,15 @@
  * final empty line visible. `value` reads that back with every chip expanded
  * to its full id, which is what `send` hands the agent.
  *
+ * Caret anchors: WebKit (the Tauri WebView on macOS) cannot paint a caret at
+ * an element-level position next to a `contenteditable=false` chip (e.g.
+ * root offset right after a trailing chip): the selection is right but the
+ * caret is drawn at the start of the line. So the caret is always parked in
+ * a text node, and a chip with no text after it gets a one-character anchor
+ * text node (U+FEFF, `ANCHOR`). Anchors are invisible to `value`, offsets
+ * and signatures; U+FEFF is stripped from inserted text so the DOM only
+ * ever holds it as an anchor.
+ *
  * Offsets are measured in that expanded text, so re-chipping never moves the
  * caret relative to what the user typed. Typing keeps an id that ends at the
  * caret as text (it may still be growing); paste, drop, blur and a landscape
@@ -20,6 +29,30 @@ import { tokenizeComposer, type ComposerChip, type ComposerSegment } from "./com
 
 const CHIP_SELECTOR = "[data-cite-id]";
 const TAIL_ATTR = "data-composer-tail";
+/** Zero-width caret anchor after a chip (see header). Never part of `value`. */
+const ANCHOR = "\uFEFF";
+const ANCHORS = /\uFEFF/g;
+
+/** A text node's content as `value` sees it (anchors removed). */
+function logicalText(raw: string | null | undefined): string {
+  return (raw ?? "").replace(ANCHORS, "");
+}
+
+/** Only anchors (or nothing) in `raw`. */
+function blank(raw: string | null | undefined): boolean {
+  return logicalText(raw) === "";
+}
+
+/** DOM offset in `raw` of logical offset `logical` (after any anchors there). */
+function domOffset(raw: string, logical: number): number {
+  let seen = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    if (raw[i] === ANCHOR) continue;
+    if (seen === logical) return i;
+    seen += 1;
+  }
+  return raw.length;
+}
 
 function isChip(node: Node | null | undefined): node is HTMLElement {
   return node instanceof HTMLElement && node.matches(CHIP_SELECTOR);
@@ -36,7 +69,7 @@ export function expandNodes(root: Node): string {
   let out = "";
   const walk = (node: Node, first: boolean) => {
     if (node.nodeType === Node.TEXT_NODE) {
-      out += node.nodeValue ?? "";
+      out += logicalText(node.nodeValue);
       return;
     }
     if (!(node instanceof Element)) {
@@ -67,7 +100,7 @@ function expandedOffset(root: Node, container: Node, offset: number): number {
   const walk = (node: Node): boolean => {
     if (node === container) {
       if (node.nodeType === Node.TEXT_NODE) {
-        found = count + offset;
+        found = count + logicalText(node.nodeValue?.slice(0, offset)).length;
         return true;
       }
       for (let i = 0; i < node.childNodes.length; i += 1) {
@@ -81,7 +114,7 @@ function expandedOffset(root: Node, container: Node, offset: number): number {
       return true;
     }
     if (node.nodeType === Node.TEXT_NODE) {
-      count += node.nodeValue?.length ?? 0;
+      count += logicalText(node.nodeValue).length;
       return false;
     }
     if (isChip(node) || node.nodeName === "BR") {
@@ -115,7 +148,7 @@ function domSignature(root: HTMLElement): string | null {
   const parts: string[] = [];
   let text = "";
   for (const node of Array.from(root.childNodes)) {
-    if (node.nodeType === Node.TEXT_NODE) text += node.nodeValue ?? "";
+    if (node.nodeType === Node.TEXT_NODE) text += logicalText(node.nodeValue);
     else if (isChip(node)) {
       if (text) parts.push(`t:${text}`);
       text = "";
@@ -237,47 +270,68 @@ export class ChipComposer {
     return expandedOffset(this.element, range.startContainer, range.startOffset);
   }
 
+  /**
+   * Put a collapsed caret at expanded offset `offset`, always inside a text
+   * node: an element-level position beside a chip is where WebKit paints the
+   * caret at the start of the line (see header), so one gets an anchor.
+   */
   private setCaret(offset: number): void {
     const root = this.element;
     const selection = root.ownerDocument.getSelection();
     if (!selection) return;
-    const range = root.ownerDocument.createRange();
     let rest = offset;
-    let placed = false;
+    let at: { node: Node; offset: number } | null = null;
+    let index: number | null = null; // root child index when no text node holds the offset
     const children = Array.from(root.childNodes);
-    for (let i = 0; i < children.length && !placed; i += 1) {
+    for (let i = 0; i < children.length && !at && index === null; i += 1) {
       const node = children[i];
       if (isTail(node)) break;
       if (node.nodeType === Node.TEXT_NODE) {
-        const len = node.nodeValue?.length ?? 0;
-        if (rest <= len) {
-          range.setStart(node, rest);
-          placed = true;
-        } else rest -= len;
+        const raw = node.nodeValue ?? "";
+        const len = logicalText(raw).length;
+        if (!raw) continue;
+        if (rest <= len) at = { node, offset: rest === len ? raw.length : domOffset(raw, rest) };
+        else rest -= len;
       } else if (isChip(node)) {
         const len = (node.dataset.citeId ?? "").length;
-        if (rest === 0) {
-          range.setStart(root, i);
-          placed = true;
-        } else if (rest <= len) {
-          range.setStart(root, i + 1);
-          placed = true;
-        } else rest -= len;
+        if (rest === 0) index = i;
+        else if (rest <= len) index = i + 1;
+        else rest -= len;
       }
     }
-    if (!placed) {
-      const end = root.lastChild && isTail(root.lastChild) ? root.childNodes.length - 1 : root.childNodes.length;
-      range.setStart(root, end);
+    if (!at) {
+      if (index === null) index = root.lastChild && isTail(root.lastChild) ? children.length - 1 : children.length;
+      at = this.caretAnchor(children, index);
     }
+    const range = root.ownerDocument.createRange();
+    range.setStart(at.node, at.offset);
     range.collapse(true);
     selection.removeAllRanges();
     selection.addRange(range);
   }
 
+  /** A text position equivalent to root child index `index` (creating an anchor if needed). */
+  private caretAnchor(children: readonly ChildNode[], index: number): { node: Node; offset: number } {
+    const next = children[index];
+    if (next?.nodeType === Node.TEXT_NODE && next.nodeValue) return { node: next, offset: domOffset(next.nodeValue, 0) };
+    const prev = children[index - 1];
+    if (prev?.nodeType === Node.TEXT_NODE && prev.nodeValue) return { node: prev, offset: prev.nodeValue.length };
+    const anchor = document.createTextNode(ANCHOR);
+    this.element.insertBefore(anchor, next ?? null);
+    return { node: anchor, offset: 1 };
+  }
+
   private render(segments: readonly ComposerSegment[], caret: number | null): void {
-    const nodes: Node[] = segments.map((segment) =>
-      segment.kind === "text" ? document.createTextNode(segment.text) : chipElement(segment.chip),
-    );
+    const nodes: Node[] = [];
+    segments.forEach((segment, i) => {
+      if (segment.kind === "text") {
+        nodes.push(document.createTextNode(segment.text));
+        return;
+      }
+      nodes.push(chipElement(segment.chip));
+      // A caret right after this chip needs a text node to live in (WebKit).
+      if (segments[i + 1]?.kind !== "text") nodes.push(document.createTextNode(ANCHOR));
+    });
     if (needsTail(segments)) {
       // Keeps a trailing empty line visible and gives the caret a place after a final chip.
       const tail = document.createElement("br");
@@ -315,7 +369,10 @@ export class ChipComposer {
     this.element.classList.toggle("is-empty", this.value === "");
   }
 
-  private insertText(text: string): void {
+  private insertText(raw: string): void {
+    // U+FEFF in the DOM always means a caret anchor; never let input add one.
+    const text = raw.replace(ANCHORS, "");
+    if (!text) return;
     const selection = this.element.ownerDocument.getSelection();
     let range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
     if (!range || !this.element.contains(range.startContainer)) {
@@ -326,7 +383,9 @@ export class ChipComposer {
     range.deleteContents();
     const node = document.createTextNode(text);
     range.insertNode(node);
-    range.setStartAfter(node);
+    // Inside the new text node, not after it: an element-level caret beside
+    // a chip is painted at line start in WebKit.
+    range.setStart(node, text.length);
     range.collapse(true);
     selection?.removeAllRanges();
     selection?.addRange(range);
@@ -366,14 +425,15 @@ export class ChipComposer {
     if (!this.element.contains(node)) return null;
     let candidate: Node | null = null;
     if (node.nodeType === Node.TEXT_NODE) {
-      const len = node.nodeValue?.length ?? 0;
-      if (side === "before" && offset === 0) candidate = node.previousSibling;
-      if (side === "after" && offset === len) candidate = node.nextSibling;
+      // Anchors are invisible: a caret beside only anchors is beside the node edge.
+      const raw = node.nodeValue ?? "";
+      if (side === "before" && blank(raw.slice(0, offset))) candidate = node.previousSibling;
+      if (side === "after" && blank(raw.slice(offset))) candidate = node.nextSibling;
     } else {
       candidate = side === "before" ? node.childNodes[offset - 1] ?? null : node.childNodes[offset] ?? null;
     }
-    // Skip empty text nodes left behind by edits.
-    while (candidate && candidate.nodeType === Node.TEXT_NODE && !candidate.nodeValue) {
+    // Skip empty (or anchor-only) text nodes left behind by edits.
+    while (candidate && candidate.nodeType === Node.TEXT_NODE && blank(candidate.nodeValue)) {
       candidate = side === "before" ? candidate.previousSibling : candidate.nextSibling;
     }
     if (candidate && !isChip(candidate) && candidate instanceof Element) {

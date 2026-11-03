@@ -382,6 +382,70 @@ test.describe("S1 sandbox shell", () => {
     await expect(dock.locator(".sandbox-line.role-user").last().locator("button.sandbox-cite.is-map")).toHaveText("引理 1.4");
   });
 
+  test("Composer chips: the caret lands after a pasted chip", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    const unitId = await page.evaluate(() => window.appHarness.citeUnitId);
+    const input = dock.locator(".sandbox-dock-input");
+    const chip = input.locator(".sandbox-composer-chip");
+    // Where the caret is: a text-node position (an element-level one beside a
+    // chip is painted at line start in WebKit) and its x versus the chips.
+    const caretInfo = () => input.evaluate((el) => {
+      const range = window.getSelection()!.getRangeAt(0);
+      const rect = range.getClientRects()[0] ?? null;
+      const chips = Array.from(el.querySelectorAll(".sandbox-composer-chip")).map((c) => c.getBoundingClientRect());
+      return {
+        inText: range.collapsed && range.startContainer.nodeType === Node.TEXT_NODE && el.contains(range.startContainer),
+        x: rect ? rect.left : null,
+        chipLeft: chips.map((c) => c.left),
+        chipRight: chips.map((c) => c.right),
+      };
+    });
+    const paste = (text: string) => input.evaluate((el, text) => {
+      const data = new DataTransfer();
+      data.setData("text/plain", text);
+      el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    }, text);
+
+    // Paste an id alone, then with text before it: the chip is last, caret after it.
+    for (const text of [unitId, `看看 ${unitId}`]) {
+      await input.click();
+      await input.evaluate((el) => el.replaceChildren());
+      await paste(text);
+      await expect(chip).toHaveCount(1);
+      const info = await caretInfo();
+      expect(info.inText).toBe(true);
+      expect(info.x).not.toBeNull();
+      expect(info.x!).toBeGreaterThanOrEqual(info.chipRight[0] - 1);
+    }
+    // Typing continues right after the chip; the anchor never reaches the text.
+    await page.keyboard.type(" 好");
+    await expect(chip).toHaveCount(1);
+    await expect.poll(() => input.evaluate((el) => (el.textContent ?? "").replace(/\uFEFF/g, ""))).toBe("看看 引理 1.4 好");
+
+    // Two chips back to back: the caret still sits after the second one.
+    await input.evaluate((el) => el.replaceChildren());
+    await paste(`${unitId} ${unitId}`);
+    await expect(chip).toHaveCount(2);
+    const two = await caretInfo();
+    expect(two.inText).toBe(true);
+    expect(two.x!).toBeGreaterThanOrEqual(two.chipRight[1] - 1);
+
+    // Backspace removes the chip before the caret and keeps the caret in text after the first.
+    await page.keyboard.press("Backspace");
+    await expect(chip).toHaveCount(1);
+    const after = await caretInfo();
+    expect(after.inText).toBe(true);
+    expect(after.x!).toBeGreaterThanOrEqual(after.chipRight[0] - 1);
+
+    await page.keyboard.press("Enter");
+    await expect.poll(() => page.evaluate(() => window.appHarness.sandboxCalls.filter((c) => c.command === "send").map((c) => c.args.text)))
+      .toEqual([unitId]); // send trims
+  });
+
   test("Map Scene Player: live HUD + isolate, settle restores, per-step and whole-turn replay", async ({ page }) => {
     await page.locator("#sandbox-button").click();
     page.once("dialog", (dialog) => void dialog.accept());
