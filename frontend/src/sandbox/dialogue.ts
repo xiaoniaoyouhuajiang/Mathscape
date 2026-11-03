@@ -53,7 +53,14 @@ import {
   type CiteIndex,
   type CiteResolver,
 } from "./cite";
-import { compileRoundScenes, compileToolScene, resolveScene } from "./scene/compile";
+import {
+  compileRoundScenes,
+  compileToolScene,
+  isParsingSummary,
+  parsingScene,
+  readPdfPages,
+  resolveScene,
+} from "./scene/compile";
 import type { SceneDraft, SceneResolve, ToolScene } from "./scene/types";
 import {
   clampSidebarWidth,
@@ -125,7 +132,16 @@ export interface CiteContext {
     live: (scene: ToolScene, part: "call" | "result") => void;
     replay: (scenes: ToolScene[]) => void;
   };
+  /**
+   * Sync ensure (「解析中」): read a map node's current summary from a fresh
+   * snapshot (re-rendering the map only if it changed). A long-running
+   * scanned-PDF `material.read` polls this to tell parsing from reading.
+   */
+  probeSummary?: (nodeId: string) => Promise<string | null>;
 }
+
+/** First 「解析中」 probe after a scanned-page read starts, then every … */
+export const PARSING_PROBE = { firstMs: 2500, everyMs: 3000 };
 
 /** Cite resolver → scene resolver: unique map hits only (no wrong flash). */
 function sceneResolve(resolve: CiteResolver): SceneResolve {
@@ -270,6 +286,10 @@ export class SandboxDialogueDock {
   private layoutKey = "none";
   private cite: CiteContext | null = null;
   private citeIndexCache: { nodes: readonly IncidenceNode[]; index: CiteIndex } | null = null;
+  /** In-flight scanned-page `material.read` calls → probe timer. */
+  private readonly parseWatch = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Calls the map currently shows as 「解析中」 (process card label). */
+  private readonly parsingCalls = new Set<string>();
 
   constructor(
     host: HTMLElement,
@@ -428,6 +448,9 @@ export class SandboxDialogueDock {
     this.root.hidden = false;
     this.root.classList.remove("is-collapsed");
     if (this.sessionId !== sessionId) {
+      for (const timer of this.parseWatch.values()) clearTimeout(timer);
+      this.parseWatch.clear();
+      this.parsingCalls.clear();
       this.sessionId = sessionId;
       this.transcript = [];
       this.events = [];
@@ -894,6 +917,76 @@ export class SandboxDialogueDock {
     const resolve = this.resolvers()(event.round_id);
     if (!draft || !resolve) return;
     scenes.live(resolveScene(draft, sceneResolve(resolve)), event.type === "tool_call" ? "call" : "result");
+    if (event.type === "tool_call" && readPdfPages(call)) this.watchParsing(callId);
+    if (event.type === "tool_result") this.stopParsing(callId);
+  }
+
+  /**
+   * A scanned-page `material.read` blocks while Marker parses (sync ensure).
+   * Until its result arrives, probe the PDF node: once the map says 「解析中」
+   * the call plays as a parsing block (HUD chip + process-card label).
+   */
+  private watchParsing(callId: string): void {
+    if (!this.cite?.probeSummary || this.parseWatch.has(callId)) return;
+    this.parseWatch.set(callId, setTimeout(() => void this.probeParsing(callId), PARSING_PROBE.firstMs));
+  }
+
+  private stopParsing(callId: string): void {
+    clearTimeout(this.parseWatch.get(callId));
+    this.parseWatch.delete(callId);
+    if (this.parsingCalls.delete(callId)) {
+      this.renderLog(false);
+      // The lease is gone: let the map drop its 「解析中」 summary.
+      const node = this.parsingNode(callId);
+      if (node) void this.cite?.probeSummary?.(node).catch(() => null);
+    }
+  }
+
+  private inFlightRead(callId: string): AgentEventLike | undefined {
+    const step = this.events.filter((item) => item.payload?.call_id === callId);
+    if (step.some((item) => item.type === "tool_result")) return undefined;
+    return step.find((item) => item.type === "tool_call");
+  }
+
+  /** Map node of the PDF an in-flight read targets (its first seed). */
+  private parsingNode(callId: string): string | undefined {
+    const call = this.events.find((item) => item.type === "tool_call" && item.payload?.call_id === callId);
+    const draft = compileToolScene(call);
+    const resolve = this.resolvers()(call?.round_id);
+    const seed = draft?.seeds[0];
+    if (!seed || !resolve) return undefined;
+    return sceneResolve(resolve)(seed)?.nodeId;
+  }
+
+  private async probeParsing(callId: string): Promise<void> {
+    if (!this.parseWatch.has(callId)) return;
+    const call = this.inFlightRead(callId);
+    const node = this.parsingNode(callId);
+    const probe = this.cite?.probeSummary;
+    if (!call || !node || !probe) {
+      this.stopParsing(callId);
+      return;
+    }
+    let summary: string | null = null;
+    try {
+      summary = await probe(node);
+    } catch {
+      /* transient: try again next tick */
+    }
+    // The result may have landed (or the session changed) while probing.
+    if (!this.parseWatch.has(callId) || !this.inFlightRead(callId)) return;
+    const parsing = isParsingSummary(summary ?? undefined);
+    if (parsing !== this.parsingCalls.has(callId)) {
+      if (parsing) this.parsingCalls.add(callId);
+      else this.parsingCalls.delete(callId);
+      this.renderLog(false);
+    }
+    const draft = compileToolScene(call);
+    const resolve = this.resolvers()(call.round_id);
+    if (parsing && draft && resolve && this.cite?.scenes) {
+      this.cite.scenes.live(resolveScene(parsingScene(draft, readPdfPages(call)), sceneResolve(resolve)), "call");
+    }
+    this.parseWatch.set(callId, setTimeout(() => void this.probeParsing(callId), PARSING_PROBE.everyMs));
   }
 
   private replay(drafts: SceneDraft[], resolve: CiteResolver | undefined): void {
@@ -975,7 +1068,7 @@ export class SandboxDialogueDock {
 
   private renderLog(stick = true): void {
     const nearBottom = this.log.scrollHeight - this.log.scrollTop - this.log.clientHeight < 48;
-    const rows = dialogueRows(this.transcript, this.events, this.activeRoundId);
+    const rows = dialogueRows(this.transcript, this.events, this.activeRoundId, undefined, this.parsingCalls);
     if (rows.length === 0) {
       this.log.replaceChildren(
         el("li", "sandbox-empty", "还没有对话。Agent 只能读写这个沙箱的隔离副本；检查点不会被修改。"),

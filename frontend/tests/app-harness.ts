@@ -26,6 +26,11 @@ const citeNode = { id: "r-cite-unit", element_kind: "entity", domain_id: citeUni
 extraCommands.set("get_desktop_snapshot", () => {
   const value = structuredClone(snapshot);
   if (sessionStorage.getItem("harness.sandbox") === "1") value.landscape_graph.nodes.push(structuredClone(citeNode));
+  // Sync ensure: while the harness "Marker" runs, the PDF node says 解析中.
+  if (sandboxRound.parsingNow) {
+    const pdf = value.landscape_graph.nodes.find((node: { id: string }) => node.id === "r-pdf-notes");
+    if (pdf) (pdf as { summary: string | null }).summary = "PDF · 解析中 第3–4页";
+  }
   return value;
 });
 for (const command of ["list_discovery_runs", "list_parse_jobs", "list_review_items"]) extraCommands.set(command, () => []);
@@ -204,8 +209,8 @@ extraCommands.set("sandbox_set_effort", (args) => {
  * with its id plus LaTeX (A-PR3 chips / echo / KaTeX). */
 /** `act` (Map Scene Player second slice): the round instead runs one
  * Act tool — search typewriter, pdf.outline 目录 window, ink.page_image 页图 window. */
-type SandboxAct = "" | "search" | "outline" | "outline_empty" | "page_image" | "page_image_meta";
-const sandboxRound: { delayMs: number; gapMs: number; cite: boolean; act: SandboxAct } = { delayMs: 30, gapMs: 0, cite: false, act: "" };
+type SandboxAct = "" | "search" | "outline" | "outline_empty" | "page_image" | "page_image_meta" | "parsing";
+const sandboxRound: { delayMs: number; gapMs: number; cite: boolean; act: SandboxAct; parsingNow: boolean } = { delayMs: 30, gapMs: 0, cite: false, act: "", parsingNow: false };
 /** 1×1 PNG for the page-image window. */
 const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 function actStep(act: Exclude<SandboxAct, "">): { tool: string; args: Record<string, unknown>; result: Record<string, unknown> } {
@@ -225,6 +230,17 @@ function actStep(act: Exclude<SandboxAct, "">): { tool: string; args: Record<str
       ] : [];
       const structured = { status: "ok", artifact_id: "pdf-notes", entries, total_entries: entries.length, total_pages: 2 };
       return { tool: "pdf.outline", args: { artifact_id: "pdf-notes" }, result: { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured, isError: false } };
+    }
+    case "parsing": {
+      // Scanned pages: material.read blocks while Marker parses (sync ensure).
+      const structured = {
+        status: "ok", artifact_id: "pdf-notes", content_type: "markdown", total_pages: 12,
+        details: {
+          ensure: { status: "expanded", requested: { from: 3, to: 4 }, marker_range: { from: 3, to: 4 } },
+          map_signal: { kind: "parsing", label: "解析中", node_id: "pdf-notes", pages: { from: 3, to: 4 }, phase: "done", waited_ms: 0 },
+        },
+      };
+      return { tool: "material.read", args: { artifact_id: "pdf-notes", locator: { pdf_pages: { from: 3, to: 4 } } }, result: { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured, isError: false } };
     }
     case "page_image":
     case "page_image_meta": {
@@ -259,6 +275,7 @@ extraCommands.set("sandbox_send_message", (args) => {
     if (sandboxRound.act) {
       const { tool, args } = actStep(sandboxRound.act);
       const raw = { type: "mcpToolCall", id: "c1", server: "mathscape", tool, arguments: args };
+      if (sandboxRound.act === "parsing") sandboxRound.parsingNow = true;
       event(3, "tool_call", { call_id: "c1", tool, server: "mathscape", args_summary: "", raw });
     } else if (sandboxRound.cite) {
       const raw = { type: "mcpToolCall", id: "c1", server: "mathscape", tool: "graph.get", arguments: { node_id: citeUnitId } };
@@ -271,6 +288,7 @@ extraCommands.set("sandbox_send_message", (args) => {
     if (sandboxRound.act) {
       const { tool, args, result } = actStep(sandboxRound.act);
       const raw = { type: "mcpToolCall", id: "c1", server: "mathscape", tool, arguments: args, status: "completed", result };
+      sandboxRound.parsingNow = false;
       event(4, "tool_result", { call_id: "c1", status: "ok", duration_ms: 12, raw });
     } else if (sandboxRound.cite) {
       const result = { structuredContent: { status: "ok", node: { id: citeUnitId, kind: "source_unit", label: "引理 1.4", content_ref: null } }, isError: false };

@@ -12,6 +12,10 @@
  *   (`raw.mcp` = server status, tools listed, expected, missing). It renders
  *   as one `mcp` step titled 「MCP 工具 4/7」 or 「MCP 启动失败：…」 and is
  *   not counted as a work step.
+ *
+ * `options.parsing` names tool calls the map shows as 「解析中」 (a scanned-PDF
+ * `material.read` waiting on Marker): while running their title gets
+ * ` · 解析中`, and so does the 「正在调用 …」 header.
  */
 import type { AgentEventLike } from "./format";
 
@@ -380,9 +384,17 @@ function applyApproval(steps: ToolStep[], event: AgentEventLike, approval: Appro
   });
 }
 
+const PARSING_SUFFIX = "解析中";
+
 export function buildTurnProcess(
   events: AgentEventLike[],
-  options: { running?: boolean; nowMs?: number; outcome?: string; roundId?: string } = {},
+  options: {
+    running?: boolean;
+    nowMs?: number;
+    outcome?: string;
+    roundId?: string;
+    parsing?: ReadonlySet<string>;
+  } = {},
 ): TurnView {
   const steps: ToolStep[] = [];
   let outcome = options.outcome;
@@ -497,6 +509,9 @@ export function buildTurnProcess(
   }
 
   const ended = events.some((event) => event.type === "turn_end");
+  for (const step of steps) {
+    if (step.status === "running" && options.parsing?.has(step.id)) step.title = `${step.title} · ${PARSING_SUFFIX}`;
+  }
   const running = options.running === true && !ended;
   const durationMs = elapsedMs(events, running, options.nowMs ?? Date.now());
   const header = headerText(steps, running, outcome);
@@ -588,6 +603,7 @@ export function dialogueRows(
   events: AgentEventLike[],
   activeRoundId: string | null,
   nowMs?: number,
+  parsing?: ReadonlySet<string>,
 ): DialogueRow[] {
   const rows: DialogueRow[] = [];
   const consumed = new Set<string>();
@@ -607,6 +623,7 @@ export function dialogueRows(
           nowMs,
           outcome: entry.outcome,
           roundId,
+          parsing,
         });
       }
     }
@@ -621,6 +638,7 @@ export function dialogueRows(
         running: true,
         nowMs,
         roundId: activeRoundId,
+        parsing,
       }),
     });
   }

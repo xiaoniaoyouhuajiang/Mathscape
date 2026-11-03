@@ -548,6 +548,11 @@ const styles: StylesheetJson = [
   { selector: "node.sandbox-echo-seed", style: { "overlay-color": "#f2b84b" } },
   { selector: "node.sandbox-echo-hit", style: { "overlay-color": "#4fc3d9" } },
   { selector: "node.sandbox-echo-fade", style: { "overlay-opacity": 0.1 } },
+  // Sync ensure: the PDF a waiting material.read is parsing (「解析中」).
+  {
+    selector: "node.scene-parsing",
+    style: { "overlay-color": "#c9a227", "overlay-opacity": 0.34, "border-style": "dashed" },
+  },
   {
     selector: "edge.sandbox-echo-edge",
     style: { "overlay-color": "#4fc3d9", "overlay-opacity": 0.22, "overlay-padding": 3 },

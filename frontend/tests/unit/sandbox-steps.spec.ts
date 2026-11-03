@@ -235,3 +235,20 @@ describe("dialogueRows", () => {
     });
   });
 });
+
+describe("parsing (sync ensure)", () => {
+  it("marks a running material.read the map shows as 解析中, and drops it once done", () => {
+    const events = [
+      event(0, "turn_start", { input_ref: "x" }),
+      event(1, "tool_call", { call_id: "c1", tool: "material.read", args_summary: "pdf_pages=3-4" }),
+    ];
+    const parsing = new Set(["c1"]);
+    const running = buildTurnProcess(events, { running: true, parsing });
+    expect(running.steps[0]).toMatchObject({ id: "c1", status: "running", title: "material.read · 解析中" });
+    expect(running.header).toContain("解析中");
+    const plain = buildTurnProcess(events, { running: true });
+    expect(plain.steps[0].title).toBe("material.read");
+    const done = buildTurnProcess([...events, event(2, "tool_result", { call_id: "c1", status: "ok", duration_ms: 9000 })], { running: true, parsing });
+    expect(done.steps[0].title).toBe("material.read");
+  });
+});

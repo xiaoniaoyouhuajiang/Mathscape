@@ -129,7 +129,24 @@ export interface PageImageAct {
   height?: number;
 }
 
-export type SceneAct = TypewriterAct | OutlineAct | PageImageAct;
+/**
+ * `material.read` on scanned PDF pages: the call blocks while Marker parses
+ * the pages (synchronous ensure). `running` = still waiting (live, seen on
+ * the map summary 「解析中」); `done` / `failed` = the result's post-hoc
+ * `details.map_signal`.
+ */
+export interface ParsingAct {
+  kind: "parsing";
+  label: "解析中";
+  phase: "running" | "done" | "failed";
+  /** 1-based inclusive pages being parsed, when known. */
+  pages?: { from: number; to: number };
+}
+
+export type SceneAct = TypewriterAct | OutlineAct | PageImageAct | ParsingAct;
+
+/** Map PDF node summary while its canonical-markdown lease is running. */
+export const PARSING_LABEL = "解析中";
 
 /** At most this many outline rows are drawn in the mini-window. */
 export const OUTLINE_ROWS_CAP = 60;

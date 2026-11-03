@@ -646,6 +646,15 @@ sandboxDock.setCiteContext({
       sandboxEcho.pulse("hit", [nodeId]);
     })();
   },
+  // Sync ensure 「解析中」: fresh summary of one node; re-render only on change.
+  probeSummary: async (nodeId) => {
+    const snapshot = await invoke<DesktopSnapshot>("get_desktop_snapshot");
+    const summaryOf = (from: DesktopSnapshot | undefined) =>
+      from?.landscape_graph.nodes.find(node => node.id === nodeId)?.summary ?? null;
+    const summary = summaryOf(snapshot);
+    if (summary !== summaryOf(currentSnapshot)) renderSnapshot(snapshot);
+    return summary;
+  },
   scenes: {
     live: (scene, part) => player.live(scene, part),
     replay: (scenes) => {
