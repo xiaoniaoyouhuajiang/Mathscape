@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IncidenceNode } from "../../src/graph/projection";
 import { buildCiteIndex, buildRoundCiteIndex, citeChipHtml, citeChipParts, citeResolver, resolveCite } from "../../src/sandbox/cite";
-import { composerChip, expandComposer, mentionSuggestions, mentionTargets, mentionTrigger, tokenizeComposer } from "../../src/sandbox/composer-chips";
+import { chipSpans, composerChip, expandComposer, mentionSuggestions, mentionTargets, mentionTrigger, spaceAfterChip, tokenizeComposer } from "../../src/sandbox/composer-chips";
 
 const H1 = "a".repeat(64);
 const H2 = "b".repeat(64);
@@ -89,6 +89,35 @@ describe("expand on send", () => {
     const parts = citeChipParts(resolveCite(UNIT, undefined, index));
     expect(parts).toMatchObject({ statusClass: "is-map", text: "定理 3.2", jumpNode: "r-unit" });
     expect(citeChipHtml(resolveCite(UNIT, undefined, index))).toContain(`title="${parts.title}"`);
+  });
+});
+
+describe("chip token model", () => {
+  it("measures chip spans in expanded offsets", () => {
+    const text = `看看 ${UNIT} 和 ${ART}`;
+    const spans = chipSpans(tokenizeComposer(text, resolve));
+    expect(spans).toEqual([[3, 3 + UNIT.length], [3 + UNIT.length + 3, text.length]]);
+    expect(spans.map(([a, b]) => text.slice(a, b))).toEqual([UNIT, ART]);
+  });
+
+  it("adds one trailing space after a chip that ends at the caret and moves the caret past it", () => {
+    const text = `看看 ${UNIT}`;
+    const spans = chipSpans(tokenizeComposer(text, resolve));
+    expect(spaceAfterChip(text, text.length, spans)).toEqual({ text: `${text} `, caret: text.length + 1 });
+  });
+
+  it("reuses an existing space and puts one before following text or a line break", () => {
+    const spaced = `${UNIT} 好`;
+    expect(spaceAfterChip(spaced, UNIT.length, chipSpans(tokenizeComposer(spaced, resolve)))).toEqual({ text: spaced, caret: UNIT.length + 1 });
+    const broken = `${UNIT}\n第二行`;
+    expect(spaceAfterChip(broken, UNIT.length, chipSpans(tokenizeComposer(broken, resolve)))).toEqual({ text: `${UNIT} \n第二行`, caret: UNIT.length + 1 });
+  });
+
+  it("leaves text alone when no chip ends at the caret", () => {
+    const text = `看看 ${STRANGER}`;
+    expect(spaceAfterChip(text, text.length, chipSpans(tokenizeComposer(text, resolve)))).toEqual({ text, caret: text.length });
+    const mid = `${UNIT} 好`;
+    expect(spaceAfterChip(mid, mid.length, chipSpans(tokenizeComposer(mid, resolve)))).toEqual({ text: mid, caret: mid.length });
   });
 });
 

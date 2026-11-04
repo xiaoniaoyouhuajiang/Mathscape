@@ -1066,6 +1066,19 @@ button.sandbox-cite:focus-visible {
   background: #1c3d4a;
 }
 
+/* A chip selected as a whole token (←/→): clear highlight, no native
+   per-glyph selection painted inside it. */
+.sandbox-composer .sandbox-composer-chip.is-selected {
+  border-color: #7fe0f0;
+  background: #2a5a6c;
+  box-shadow: 0 0 0 2px rgba(79, 195, 217, 0.55);
+}
+
+.sandbox-composer .sandbox-composer-chip.is-selected::selection,
+.sandbox-composer .sandbox-composer-chip.is-selected *::selection {
+  background: transparent;
+}
+
 /* Composer @ mentions: fixed overlay above the caret. */
 .sandbox-composer-menu {
   position: fixed;

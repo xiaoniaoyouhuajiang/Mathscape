@@ -382,7 +382,7 @@ test.describe("S1 sandbox shell", () => {
     await expect(dock.locator(".sandbox-line.role-user").last().locator("button.sandbox-cite.is-map")).toHaveText("引理 1.4");
   });
 
-  test("Composer chips: the caret lands after a pasted chip", async ({ page }) => {
+  test("Composer chips: token model — trailing space, ←/→ select the chip, Backspace/Delete remove it whole", async ({ page }) => {
     await page.locator("#sandbox-button").click();
     page.once("dialog", (dialog) => void dialog.accept());
     await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
@@ -391,17 +391,22 @@ test.describe("S1 sandbox shell", () => {
     const unitId = await page.evaluate(() => window.appHarness.citeUnitId);
     const input = dock.locator(".sandbox-dock-input");
     const chip = input.locator(".sandbox-composer-chip");
-    // Where the caret is: a text-node position (an element-level one beside a
-    // chip is painted at line start in WebKit) and its x versus the chips.
+    const selected = input.locator(".sandbox-composer-chip.is-selected");
+    // Where the caret is: collapsed in a text node (an element-level position
+    // right after a chip is painted at line start in WebKit), its x versus
+    // the chips, the visible text, and whether any U+FEFF anchor is in the DOM.
     const caretInfo = () => input.evaluate((el) => {
       const range = window.getSelection()!.getRangeAt(0);
-      const rect = range.getClientRects()[0] ?? null;
+      const rect = range.collapsed ? range.getClientRects()[0] ?? null : null;
       const chips = Array.from(el.querySelectorAll(".sandbox-composer-chip")).map((c) => c.getBoundingClientRect());
       return {
+        collapsed: range.collapsed,
         inText: range.collapsed && range.startContainer.nodeType === Node.TEXT_NODE && el.contains(range.startContainer),
         x: rect ? rect.left : null,
         chipLeft: chips.map((c) => c.left),
         chipRight: chips.map((c) => c.right),
+        text: el.textContent ?? "",
+        anchors: ((el.textContent ?? "").match(/\uFEFF/g) ?? []).length,
       };
     });
     const paste = (text: string) => input.evaluate((el, text) => {
@@ -409,37 +414,115 @@ test.describe("S1 sandbox shell", () => {
       data.setData("text/plain", text);
       el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
     }, text);
-
-    // Paste an id alone, then with text before it: the chip is last, caret after it.
-    for (const text of [unitId, `看看 ${unitId}`]) {
-      await input.click();
+    const reset = async () => {
       await input.evaluate((el) => el.replaceChildren());
-      await paste(text);
-      await expect(chip).toHaveCount(1);
+      await input.focus();
+    };
+    /** Caret collapsed in text right of chip `i` (and no anchor needed for it). */
+    const expectAfter = async (i: number) => {
       const info = await caretInfo();
+      expect(info.collapsed).toBe(true);
       expect(info.inText).toBe(true);
       expect(info.x).not.toBeNull();
-      expect(info.x!).toBeGreaterThanOrEqual(info.chipRight[0] - 1);
-    }
-    // Typing continues right after the chip; the anchor never reaches the text.
-    await page.keyboard.type(" 好");
-    await expect(chip).toHaveCount(1);
-    await expect.poll(() => input.evaluate((el) => (el.textContent ?? "").replace(/\uFEFF/g, ""))).toBe("看看 引理 1.4 好");
+      expect(info.x!).toBeGreaterThanOrEqual(info.chipRight[i] - 1);
+      return info;
+    };
 
-    // Two chips back to back: the caret still sits after the second one.
-    await input.evaluate((el) => el.replaceChildren());
+    // Paste an id alone, then with text before it: chip + one space, caret after the space, no anchors.
+    await input.click();
+    for (const text of [unitId, `看看 ${unitId}`]) {
+      await reset();
+      await paste(text);
+      await expect(chip).toHaveCount(1);
+      const info = await expectAfter(0);
+      expect(info.text).toBe(text === unitId ? "引理 1.4 " : "看看 引理 1.4 ");
+      expect(info.anchors).toBe(0);
+      expect(info.x!).toBeGreaterThan(info.chipRight[0] + 1); // past the space
+    }
+    // Typing continues after the space.
+    await page.keyboard.type("好");
+    await expect.poll(async () => (await caretInfo()).text).toBe("看看 引理 1.4 好");
+
+    // ← from after the space: caret right after the chip, then the chip selected, then before it.
+    await reset();
+    await paste(`看看 ${unitId}`);
+    await page.keyboard.press("ArrowLeft");
+    const justAfter = await expectAfter(0);
+    expect(justAfter.x!).toBeLessThanOrEqual(justAfter.chipRight[0] + 2);
+    await expect(selected).toHaveCount(0);
+    await page.keyboard.press("ArrowLeft");
+    await expect(selected).toHaveCount(1);
+    expect((await caretInfo()).collapsed).toBe(false);
+    await page.keyboard.press("ArrowLeft");
+    await expect(selected).toHaveCount(0);
+    const before = await caretInfo();
+    expect(before.collapsed).toBe(true);
+    expect(before.x!).toBeLessThanOrEqual(before.chipLeft[0] + 1);
+    // → mirrors: select, then right after the chip, then past the space (native).
+    await page.keyboard.press("ArrowRight");
+    await expect(selected).toHaveCount(1);
+    await page.keyboard.press("ArrowRight");
+    await expect(selected).toHaveCount(0);
+    const back = await expectAfter(0);
+    expect(back.x!).toBeLessThanOrEqual(back.chipRight[0] + 2);
+    await page.keyboard.press("ArrowRight");
+    expect((await expectAfter(0)).x!).toBeGreaterThan(back.x! + 1);
+
+    // Backspace on the selected chip removes it whole; re-pasting lands after the chip again.
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    await expect(selected).toHaveCount(1);
+    await page.keyboard.press("Backspace");
+    await expect(chip).toHaveCount(0);
+    await expect.poll(async () => (await caretInfo()).text).toBe("看看  ");
+    await paste(unitId);
+    await expect(chip).toHaveCount(1);
+    const repasted = await expectAfter(0);
+    expect(repasted.text).toBe("看看 引理 1.4 "); // the existing space is reused
+    expect(repasted.anchors).toBe(0);
+
+    // Delete everything, then paste again: the caret is after the new chip, not at line start.
+    await reset();
+    await paste(unitId);
+    await page.keyboard.press("Backspace"); // the space
+    await page.keyboard.press("Backspace"); // the chip, whole
+    await expect(chip).toHaveCount(0);
+    expect((await caretInfo()).text).toBe("");
+    await paste(unitId);
+    await expect(chip).toHaveCount(1);
+    expect((await expectAfter(0)).text).toBe("引理 1.4 ");
+    await paste(unitId);
+    await expect(chip).toHaveCount(2);
+    await expectAfter(1);
+
+    // Delete with the caret right before a chip removes it whole.
+    await reset();
+    await paste(unitId);
+    for (let i = 0; i < 3; i += 1) await page.keyboard.press("ArrowLeft"); // after → selected → before
+    await expect(selected).toHaveCount(0);
+    await page.keyboard.press("Delete");
+    await expect(chip).toHaveCount(0);
+    expect((await caretInfo()).text).toBe(" ");
+
+    // Typing over a selected chip replaces it.
+    await reset();
+    await paste(`看看 ${unitId}`);
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    await expect(selected).toHaveCount(1);
+    await page.keyboard.type("它");
+    await expect(chip).toHaveCount(0);
+    await expect.poll(async () => (await caretInfo()).text).toBe("看看 它 ");
+
+    // Two chips: the caret follows the second; Backspace ×2 removes its space then the chip whole.
+    await reset();
     await paste(`${unitId} ${unitId}`);
     await expect(chip).toHaveCount(2);
-    const two = await caretInfo();
-    expect(two.inText).toBe(true);
-    expect(two.x!).toBeGreaterThanOrEqual(two.chipRight[1] - 1);
-
-    // Backspace removes the chip before the caret and keeps the caret in text after the first.
+    await expectAfter(1);
+    await page.keyboard.press("Backspace");
     await page.keyboard.press("Backspace");
     await expect(chip).toHaveCount(1);
-    const after = await caretInfo();
-    expect(after.inText).toBe(true);
-    expect(after.x!).toBeGreaterThanOrEqual(after.chipRight[0] - 1);
+    await expectAfter(0);
 
     await page.keyboard.press("Enter");
     await expect.poll(() => page.evaluate(() => window.appHarness.sandboxCalls.filter((c) => c.command === "send").map((c) => c.args.text)))

@@ -8,19 +8,34 @@
  * final empty line visible. `value` reads that back with every chip expanded
  * to its full id, which is what `send` hands the agent.
  *
- * Caret anchors: WebKit (the Tauri WebView on macOS) cannot paint a caret at
- * an element-level position next to a `contenteditable=false` chip (e.g.
- * root offset right after a trailing chip): the selection is right but the
- * caret is drawn at the start of the line. So the caret is always parked in
- * a text node, and a chip with no text after it gets a one-character anchor
- * text node (U+FEFF, `ANCHOR`). Anchors are invisible to `value`, offsets
- * and signatures; U+FEFF is stripped from inserted text so the DOM only
- * ever holds it as an anchor.
+ * Token model (Slack-style token field): a chip is one atomic token.
+ * - Inserting a chip (paste, drop, `@` pick) ensures one visible space after
+ *   it and puts the caret after that space (`spaceAfterChip`), so the caret
+ *   after a chip normally lives in a real text node.
+ * - Plain ←/→ next to a chip go caret-after ↔ chip selected ↔ caret-before:
+ *   the first press towards a chip selects it whole (a Range around the chip
+ *   element, highlighted with `is-selected`), the next one collapses to its
+ *   far side. Shift/Alt/Ctrl/Meta arrows and IME composition stay native.
+ * - Backspace/Delete on a selected chip, or with the caret right after
+ *   (Backspace) / right before (Delete) one, remove the whole chip by
+ *   re-rendering the expanded text, so no stray DOM (anchors, empty nodes)
+ *   survives a deletion.
+ *
+ * Caret anchors (last resort): WebKit (the Tauri WebView on macOS) cannot
+ * paint a caret at an element-level position right after a
+ * `contenteditable=false` chip: the selection is right but the caret is
+ * drawn at the start of the line. With the trailing space a chip normally
+ * has text after it; only a chip with no text after it (its space deleted,
+ * an id chipped on blur at the very end, two chips back to back) gets a
+ * one-character anchor text node (U+FEFF, `ANCHOR`). Anchors are invisible
+ * to `value`, offsets and signatures; U+FEFF is stripped from inserted text
+ * so the DOM only ever holds it as an anchor. A caret with no chip on its
+ * left (empty composer, line start before a chip) needs no anchor.
  *
  * Offsets are measured in that expanded text, so re-chipping never moves the
  * caret relative to what the user typed. Typing keeps an id that ends at the
  * caret as text (it may still be growing); paste, drop, blur and a landscape
- * refresh chip everything. Backspace/Delete remove a chip whole, copy/cut
+ * refresh chip everything. Copy/cut
  * put the full ids on the clipboard, double-click turns a chip back into its
  * raw id for editing, and a click on a chip with a map target jumps there.
  *
@@ -32,10 +47,11 @@
  * Shift+Enter still breaks the line. Picking replaces `@query` with the
  * node's full domain_id plus one space (none if a space already follows)
  * and re-chips, so the chip is the same one a paste makes and the caret
- * lands in text after it. The menu is a fixed overlay on `document.body`.
+ * lands after that space. The menu is a fixed overlay on `document.body`.
  */
 import type { CiteResolver, CiteTarget } from "./cite";
 import {
+  chipSpans,
   mentionSuggestions,
   mentionTrigger,
   tokenizeComposer,
@@ -43,10 +59,13 @@ import {
   type ComposerSegment,
   type MentionSuggestion,
   type MentionTrigger,
+  spaceAfterChip,
 } from "./composer-chips";
 
 const CHIP_SELECTOR = "[data-cite-id]";
 const TAIL_ATTR = "data-composer-tail";
+/** Class on the chip a ←/→ press selected as a whole token. */
+const SELECTED_CLASS = "is-selected";
 /** Zero-width caret anchor after a chip (see header). Never part of `value`. */
 const ANCHOR = "\uFEFF";
 const ANCHORS = /\uFEFF/g;
@@ -54,11 +73,6 @@ const ANCHORS = /\uFEFF/g;
 /** A text node's content as `value` sees it (anchors removed). */
 function logicalText(raw: string | null | undefined): string {
   return (raw ?? "").replace(ANCHORS, "");
-}
-
-/** Only anchors (or nothing) in `raw`. */
-function blank(raw: string | null | undefined): boolean {
-  return logicalText(raw) === "";
 }
 
 /** DOM offset in `raw` of logical offset `logical` (after any anchors there). */
@@ -303,12 +317,13 @@ export class ChipComposer {
     root.addEventListener("drop", (event) => this.onDrop(event));
     root.addEventListener("click", (event) => this.onClick(event));
     root.addEventListener("dblclick", (event) => this.onDoubleClick(event));
+    const doc = root.ownerDocument;
+    // Caret moves (arrows, clicks) re-evaluate the selected chip and the `@` under the caret.
+    doc.addEventListener("selectionchange", () => {
+      this.syncSelectedChip();
+      if (options.mentions && doc.activeElement === root) this.updateMention();
+    });
     if (options.mentions) {
-      const doc = root.ownerDocument;
-      // Caret moves (arrows, clicks) re-evaluate the `@` under the caret.
-      doc.addEventListener("selectionchange", () => {
-        if (doc.activeElement === root) this.updateMention();
-      });
       doc.addEventListener("mousedown", (event) => {
         const target = event.target instanceof Node ? event.target : null;
         if (this.mention && target && !menu.contains(target) && !root.contains(target)) this.closeMention();
@@ -357,9 +372,10 @@ export class ChipComposer {
   }
 
   /**
-   * Put a collapsed caret at expanded offset `offset`, always inside a text
-   * node: an element-level position beside a chip is where WebKit paints the
-   * caret at the start of the line (see header), so one gets an anchor.
+   * Put a collapsed caret at expanded offset `offset`, inside a text node
+   * when one holds it. An element-level position right after a chip is where
+   * WebKit paints the caret at the start of the line (see header), so only
+   * that case gets an anchor.
    */
   private setCaret(offset: number): void {
     const root = this.element;
@@ -396,12 +412,15 @@ export class ChipComposer {
     selection.addRange(range);
   }
 
-  /** A text position equivalent to root child index `index` (creating an anchor if needed). */
+  /** A caret position equivalent to root child index `index` (an anchor only right after a chip). */
   private caretAnchor(children: readonly ChildNode[], index: number): { node: Node; offset: number } {
     const next = children[index];
     if (next?.nodeType === Node.TEXT_NODE && next.nodeValue) return { node: next, offset: domOffset(next.nodeValue, 0) };
     const prev = children[index - 1];
     if (prev?.nodeType === Node.TEXT_NODE && prev.nodeValue) return { node: prev, offset: prev.nodeValue.length };
+    // Nothing on the left (empty composer, a chip at the start): an
+    // element-level caret is at line start anyway, where WebKit paints it.
+    if (!isChip(prev)) return { node: this.element, offset: Math.min(index, this.element.childNodes.length) };
     const anchor = document.createTextNode(ANCHOR);
     this.element.insertBefore(anchor, next ?? null);
     return { node: anchor, offset: 1 };
@@ -415,7 +434,8 @@ export class ChipComposer {
         return;
       }
       nodes.push(chipElement(segment.chip));
-      // A caret right after this chip needs a text node to live in (WebKit).
+      // Last resort: a caret right after this chip needs a text node to live
+      // in (WebKit). Inserted chips get a real space instead (see header).
       if (segments[i + 1]?.kind !== "text") nodes.push(document.createTextNode(ANCHOR));
     });
     if (needsTail(segments)) {
@@ -478,7 +498,8 @@ export class ChipComposer {
   }
 
   private onKeyDown(event: KeyboardEvent): void {
-    if (event.isComposing) return;
+    // IME: keys belong to the composition (229 = Safari/WebKit's composing keyCode).
+    if (event.isComposing || this.composing || event.keyCode === 229) return;
     if (this.mention && this.onMentionKey(event)) return;
     if (event.key === "Enter") {
       event.preventDefault();
@@ -491,43 +512,119 @@ export class ChipComposer {
       }
       return;
     }
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      if (this.onArrowKey(event)) event.preventDefault();
+      return;
+    }
     if (event.key === "Backspace" || event.key === "Delete") {
-      const chip = this.adjacentChip(event.key === "Backspace" ? "before" : "after");
+      const chip = this.selectedChip() ?? this.adjacentChip(event.key === "Backspace" ? "before" : "after");
       if (chip) {
         event.preventDefault();
-        const caret = this.caret() ?? 0;
-        const at = event.key === "Backspace" ? caret - (chip.dataset.citeId ?? "").length : caret;
-        chip.remove();
-        this.chipify(false);
-        this.setCaret(Math.max(0, at));
+        this.removeChip(chip);
       }
     }
   }
 
-  /** The chip right before/after a collapsed caret, if any. */
+  /**
+   * Plain ←/→ around a chip (token model, see header): towards a chip the
+   * first press selects it whole, the next collapses to its far side; a
+   * selected chip collapses to the side of the arrow. True when handled.
+   */
+  private onArrowKey(event: KeyboardEvent): boolean {
+    if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false;
+    const left = event.key === "ArrowLeft";
+    const selected = this.selectedChip();
+    if (selected) {
+      const entry = this.chipEntries().find((item) => item.chip === selected);
+      if (!entry) return false;
+      this.setCaret(left ? entry.start : entry.end);
+      this.syncSelectedChip();
+      return true;
+    }
+    const chip = this.adjacentChip(left ? "before" : "after");
+    if (!chip) return false;
+    this.selectChip(chip);
+    return true;
+  }
+
+  /** Select `chip` as a whole token (a Range around the element). */
+  private selectChip(chip: HTMLElement): void {
+    const selection = this.element.ownerDocument.getSelection();
+    if (!selection) return;
+    const range = this.element.ownerDocument.createRange();
+    range.setStartBefore(chip);
+    range.setEndAfter(chip);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    this.syncSelectedChip();
+  }
+
+  /** The chip the selection covers exactly (nothing more, anchors aside), if any. */
+  private selectedChip(): HTMLElement | null {
+    const selection = this.element.ownerDocument.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+    const range = selection.getRangeAt(0);
+    if (!this.element.contains(range.startContainer) || !this.element.contains(range.endContainer)) return null;
+    const start = expandedOffset(this.element, range.startContainer, range.startOffset);
+    const end = expandedOffset(this.element, range.endContainer, range.endOffset);
+    return this.chipEntries().find((item) => item.start === start && item.end === end)?.chip ?? null;
+  }
+
+  /** Highlight the chip the selection covers (and only that one). */
+  private syncSelectedChip(): void {
+    const selected = this.element.ownerDocument.activeElement === this.element ? this.selectedChip() : null;
+    for (const chip of Array.from(this.element.querySelectorAll<HTMLElement>(CHIP_SELECTOR))) {
+      chip.classList.toggle(SELECTED_CLASS, chip === selected);
+    }
+  }
+
+  /**
+   * The chip whose end (`before`) or start (`after`) is the collapsed caret,
+   * measured in expanded offsets, so anchors and empty text nodes between
+   * the caret and the chip do not matter.
+   */
   private adjacentChip(side: "before" | "after"): HTMLElement | null {
     const selection = this.element.ownerDocument.getSelection();
     if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return null;
-    const { startContainer: node, startOffset: offset } = selection.getRangeAt(0);
-    if (!this.element.contains(node)) return null;
-    let candidate: Node | null = null;
-    if (node.nodeType === Node.TEXT_NODE) {
-      // Anchors are invisible: a caret beside only anchors is beside the node edge.
-      const raw = node.nodeValue ?? "";
-      if (side === "before" && blank(raw.slice(0, offset))) candidate = node.previousSibling;
-      if (side === "after" && blank(raw.slice(offset))) candidate = node.nextSibling;
-    } else {
-      candidate = side === "before" ? node.childNodes[offset - 1] ?? null : node.childNodes[offset] ?? null;
+    const caret = this.caret();
+    if (caret === null) return null;
+    return this.chipEntries().find((item) => (side === "before" ? item.end : item.start) === caret)?.chip ?? null;
+  }
+
+  /**
+   * Remove a chip whole: re-render the expanded text without it (so no
+   * anchor or empty node is left behind) and put the caret where it was.
+   */
+  private removeChip(chip: HTMLElement): void {
+    const entry = this.chipEntries().find((item) => item.chip === chip);
+    if (!entry) return;
+    const text = this.value;
+    this.render(tokenizeComposer(text.slice(0, entry.start) + text.slice(entry.end), this.options.resolver()), entry.start);
+    this.updateMention();
+  }
+
+  /** Every chip in the DOM with its expanded [start, end). */
+  private chipEntries(): { chip: HTMLElement; start: number; end: number }[] {
+    return Array.from(this.element.querySelectorAll<HTMLElement>(CHIP_SELECTOR)).map((chip) => {
+      const start = expandedOffset(this.element, chip.parentNode!, Array.prototype.indexOf.call(chip.parentNode!.childNodes, chip));
+      return { chip, start, end: start + (chip.dataset.citeId ?? "").length };
+    });
+  }
+
+  /**
+   * After a paste or drop: chip everything, and when the inserted text ends
+   * in a chip give it its trailing space with the caret after it.
+   */
+  private chipifyInserted(): void {
+    const caret = this.caret();
+    if (caret === null) {
+      this.chipify(false);
+      return;
     }
-    // Skip empty (or anchor-only) text nodes left behind by edits.
-    while (candidate && candidate.nodeType === Node.TEXT_NODE && blank(candidate.nodeValue)) {
-      candidate = side === "before" ? candidate.previousSibling : candidate.nextSibling;
-    }
-    if (candidate && !isChip(candidate) && candidate instanceof Element) {
-      const inner = candidate.closest(CHIP_SELECTOR);
-      return inner instanceof HTMLElement ? inner : null;
-    }
-    return isChip(candidate) ? candidate : null;
+    const resolver = this.options.resolver();
+    const text = this.value;
+    const next = spaceAfterChip(text, caret, chipSpans(tokenizeComposer(text, resolver)));
+    this.render(tokenizeComposer(next.text, resolver), next.caret);
   }
 
   private onInput(event: InputEvent): void {
@@ -543,10 +640,7 @@ export class ChipComposer {
 
   /** Expanded [start, end) of every chip (a mention query never spans one). */
   private chipRanges(): [number, number][] {
-    return Array.from(this.element.querySelectorAll<HTMLElement>(CHIP_SELECTOR)).map((chip) => {
-      const start = expandedOffset(this.element, chip.parentNode!, Array.prototype.indexOf.call(chip.parentNode!.childNodes, chip));
-      return [start, start + (chip.dataset.citeId ?? "").length];
-    });
+    return this.chipEntries().map((item) => [item.start, item.end]);
   }
 
   /** Open, refilter or close the menu for the `@` before the caret. */
@@ -687,14 +781,15 @@ export class ChipComposer {
     const { start, query } = state.trigger;
     const text = this.value;
     const id = item.target.domainId;
-    const rest = text.slice(start + 1 + query.length);
-    const space = /^\s/.test(rest) ? "" : " ";
-    const caret = start + id.length + (rest.startsWith(" ") || space ? 1 : 0);
+    const resolver = this.options.resolver();
+    const joined = text.slice(0, start) + id + text.slice(start + 1 + query.length);
+    // Token rule: one space after the chip (reused if present), caret after it.
+    const next = spaceAfterChip(joined, start + id.length, chipSpans(tokenizeComposer(joined, resolver)));
     this.closeMention();
     this.dismissedAt = null;
-    this.render(tokenizeComposer(text.slice(0, start) + id + space + rest, this.options.resolver()), null);
+    this.render(tokenizeComposer(next.text, resolver), null);
     this.element.focus();
-    this.setCaret(caret);
+    this.setCaret(next.caret);
   }
 
   private onPaste(event: ClipboardEvent): void {
@@ -702,7 +797,7 @@ export class ChipComposer {
     const text = event.clipboardData?.getData("text/plain") ?? "";
     if (!text) return;
     this.insertText(text.replace(/\r\n?/g, "\n"));
-    this.chipify(false);
+    this.chipifyInserted();
   }
 
   private onDrop(event: DragEvent): void {
@@ -717,7 +812,7 @@ export class ChipComposer {
       selection?.addRange(range);
     }
     this.insertText(text);
-    this.chipify(false);
+    this.chipifyInserted();
   }
 
   private onCopy(event: ClipboardEvent, cut: boolean): void {
