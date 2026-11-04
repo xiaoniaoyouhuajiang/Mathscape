@@ -56,8 +56,10 @@ import {
   citeTextHtml,
   type CiteIndex,
   type CiteResolver,
+  type CiteTarget,
 } from "./cite";
 import { ChipComposer } from "./composer";
+import { mentionTargets } from "./composer-chips";
 import {
   compileRoundScenes,
   compileToolScene,
@@ -295,6 +297,7 @@ export class SandboxDialogueDock {
   private cite: CiteContext | null = null;
   private citeIndexCache: { nodes: readonly IncidenceNode[]; index: CiteIndex } | null = null;
   /** Composer resolver: map index + every tool id this session has seen. */
+  private mentionCache: { index: CiteIndex | null; targets: CiteTarget[] } | null = null;
   private composerCache: { index: CiteIndex; events: number; session: string | null; resolve: CiteResolver } | null = null;
   /** In-flight scanned-page `material.read` calls → probe timer. */
   private readonly parseWatch = new Map<string, ReturnType<typeof setTimeout>>();
@@ -372,6 +375,7 @@ export class SandboxDialogueDock {
       resolver: () => this.composerResolver(),
       onJump: (nodeId) => this.cite?.jump(nodeId),
       onSubmit: () => void this.send(),
+      mentions: () => this.mentionTargets(),
     });
     const actions = el("div", "sandbox-actions");
     this.cancelButton = el("button", "sandbox-btn sandbox-btn-quiet", "取消本轮");
@@ -885,6 +889,13 @@ export class SandboxDialogueDock {
     const nodes = this.cite.nodes();
     if (this.citeIndexCache?.nodes !== nodes) this.citeIndexCache = { nodes, index: buildCiteIndex(nodes) };
     return this.citeIndexCache.index;
+  }
+
+  /** `@` menu source: the current landscape's nodes (same index as cite chips). */
+  private mentionTargets(): CiteTarget[] {
+    const index = this.citeIndex();
+    if (this.mentionCache?.index !== index) this.mentionCache = { index, targets: mentionTargets(index) };
+    return this.mentionCache.targets;
   }
 
   /** Composer chips: the map plus every round's tool ids and labels (the

@@ -23,9 +23,12 @@ const unexpected: string[] = [];
 // stable id, so cite chips and the read-path echo have something to hit.
 const citeUnitId = "mathscape:source-unit/" + "ab12".repeat(16);
 const citeNode = { id: "r-cite-unit", element_kind: "entity", domain_id: citeUnitId, domain_kind: "SourceSemanticUnit", relation_kind: null, layer: "source", label: "引理 1.4", summary: null, lifecycle: "active", parent: null, boundary: false };
+// Composer @ mentions: a second canonical node so the menu has something to filter.
+const citeArtId = "mathscape:artifact/" + "cd34".repeat(16);
+const citeArtNode = { id: "r-cite-art", element_kind: "entity", domain_id: citeArtId, domain_kind: "SourceArtifact", relation_kind: null, layer: "source", label: "紧集讲义.pdf", summary: null, lifecycle: "active", parent: null, boundary: false };
 extraCommands.set("get_desktop_snapshot", () => {
   const value = structuredClone(snapshot);
-  if (sessionStorage.getItem("harness.sandbox") === "1") value.landscape_graph.nodes.push(structuredClone(citeNode));
+  if (sessionStorage.getItem("harness.sandbox") === "1") value.landscape_graph.nodes.push(structuredClone(citeNode), structuredClone(citeArtNode));
   // Sync ensure: while the harness "Marker" runs, the PDF node says 解析中.
   if (sandboxRound.parsingNow) {
     const pdf = value.landscape_graph.nodes.find((node: { id: string }) => node.id === "r-pdf-notes");
@@ -334,6 +337,7 @@ const appHarness = {
   selectNode: (id: string) => { core().getElementById(id).emit("tap"); },
   nodeClasses: (id: string) => { const node = core().getElementById(id); return node.empty() ? null : node.classes(); },
   citeUnitId,
+  citeArtId,
   panTo: (x: number, y: number) => { core().pan({ x, y }); },
   /** Model position (rounded), to check the scene clump moves and restores nodes. */
   nodePosition: (id: string) => { const node = core().getElementById(id); if (node.empty()) return null; const p = node.position(); return { x: Math.round(p.x), y: Math.round(p.y) }; },

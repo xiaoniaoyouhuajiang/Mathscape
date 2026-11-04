@@ -446,6 +446,138 @@ test.describe("S1 sandbox shell", () => {
       .toEqual([unitId]); // send trims
   });
 
+  test("Composer @ mentions: @ opens landscape suggestions, keywords filter, picking inserts a full-id chip", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    const { unitId, artId } = await page.evaluate(() => ({ unitId: window.appHarness.citeUnitId, artId: window.appHarness.citeArtId }));
+    const input = dock.locator(".sandbox-dock-input");
+    const chip = input.locator(".sandbox-composer-chip");
+    const menu = page.locator(".sandbox-composer-menu");
+    const options = menu.getByRole("option");
+    const sends = () => page.evaluate(() => window.appHarness.sandboxCalls.filter((c) => c.command === "send").map((c) => c.args.text));
+    const caretInfo = () => input.evaluate((el) => {
+      const range = window.getSelection()!.getRangeAt(0);
+      const rect = range.getClientRects()[0] ?? null;
+      const chips = Array.from(el.querySelectorAll(".sandbox-composer-chip")).map((c) => c.getBoundingClientRect());
+      return {
+        inText: range.collapsed && range.startContainer.nodeType === Node.TEXT_NODE && el.contains(range.startContainer),
+        x: rect ? rect.left : null,
+        chipRight: chips.map((c) => c.right),
+      };
+    });
+
+    await input.click();
+    await expect(menu).toHaveCount(0);
+    // Only canonical-id nodes are offered (the harness's plain ids would not chip).
+    await page.keyboard.type("看看 @");
+    await expect(menu).toBeVisible();
+    await expect(options).toHaveCount(2);
+    await expect(input).toHaveAttribute("aria-expanded", "true");
+    // Filter by label, by type (中文 kind label) and by short id.
+    await page.keyboard.type("紧集");
+    await expect(options).toHaveCount(1);
+    await expect(options.first().locator(".sandbox-composer-menu-label")).toHaveText("紧集讲义.pdf");
+    await expect(options.first().locator(".sandbox-composer-menu-meta")).toHaveText(/材料文件 · artifact\/cd34cd34…/);
+    for (let i = 0; i < 2; i += 1) await page.keyboard.press("Backspace");
+    await expect(options).toHaveCount(2);
+    await page.keyboard.type("内容单元");
+    await expect(options).toHaveCount(1);
+    await expect(options.first()).toHaveAttribute("data-domain-id", unitId);
+    for (let i = 0; i < 4; i += 1) await page.keyboard.press("Backspace");
+    await page.keyboard.type("ab12ab");
+    await expect(options).toHaveCount(1);
+    await expect(options.first()).toHaveAttribute("data-domain-id", unitId);
+    await page.keyboard.type("zz");
+    await expect(menu).toHaveCount(0);
+    for (let i = 0; i < 8; i += 1) await page.keyboard.press("Backspace");
+    await expect(options).toHaveCount(2);
+
+    // ↑/↓ move the active option (wrapping); Enter picks it and does not send.
+    await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ArrowDown");
+    await expect(options.nth(1)).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ArrowDown");
+    await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowUp");
+    await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.type("引理");
+    await expect(options).toHaveCount(1);
+    await page.keyboard.press("Enter");
+    await expect(menu).toHaveCount(0);
+    await expect(chip).toHaveCount(1);
+    await expect(chip).toHaveText("引理 1.4");
+    await expect(chip).toHaveAttribute("data-cite-id", unitId);
+    await expect(chip).toHaveAttribute("data-cite-node", "r-cite-unit");
+    expect(await sends()).toEqual([]);
+    // The caret sits in text after the chip (and the space the pick added).
+    const info = await caretInfo();
+    expect(info.inText).toBe(true);
+    expect(info.x!).toBeGreaterThanOrEqual(info.chipRight[0] - 1);
+    await page.keyboard.type("好");
+    await expect.poll(() => input.evaluate((el) => (el.textContent ?? "").replace(/\uFEFF/g, ""))).toBe("看看 引理 1.4 好");
+
+    // Tab picks too; a CJK character right before @ still opens the menu.
+    await page.keyboard.type(" 和@讲义");
+    await expect(options).toHaveCount(1);
+    await page.keyboard.press("Tab");
+    await expect(chip).toHaveCount(2);
+    await expect(chip.nth(1)).toHaveAttribute("data-cite-id", artId);
+    await expect(input).toBeFocused();
+    const second = await caretInfo();
+    expect(second.inText).toBe(true);
+    expect(second.x!).toBeGreaterThanOrEqual(second.chipRight[1] - 1);
+
+    // A mouse pick keeps focus in the composer.
+    await page.keyboard.type("@");
+    await options.filter({ hasText: "引理 1.4" }).click();
+    await expect(chip).toHaveCount(3);
+    await expect(chip.nth(2)).toHaveAttribute("data-cite-id", unitId);
+    await expect(input).toBeFocused();
+
+    // An email-ish @ does not open the menu.
+    await page.keyboard.type("a@b");
+    await expect(menu).toHaveCount(0);
+    for (let i = 0; i < 3; i += 1) await page.keyboard.press("Backspace");
+
+    // Click-away dismisses.
+    await page.keyboard.type("@");
+    await expect(menu).toBeVisible();
+    await dock.locator(".sandbox-dock-status").click();
+    await expect(menu).toHaveCount(0);
+    // Esc dismisses (without closing the dock) and that @ stays closed while typing on.
+    await input.evaluate((el) => {
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    await expect(menu).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(dock).toBeVisible();
+    await page.keyboard.type("引");
+    await expect(menu).toHaveCount(0);
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Backspace");
+
+    // Paste chipify and Backspace-deletes-chip still work alongside mentions.
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Backspace");
+    await expect(chip).toHaveCount(2);
+    await page.keyboard.type(" ");
+
+    // Send expands every chip back to its full id.
+    await page.keyboard.press("Enter");
+    await expect.poll(sends).toEqual([`看看 ${unitId} 好 和${artId}`]);
+    await expect(input).toHaveClass(/is-empty/);
+  });
+
   test("Map Scene Player: live HUD + isolate, settle restores, per-step and whole-turn replay", async ({ page }) => {
     await page.locator("#sandbox-button").click();
     page.once("dialog", (dialog) => void dialog.accept());

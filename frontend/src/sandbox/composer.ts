@@ -23,9 +23,27 @@
  * refresh chip everything. Backspace/Delete remove a chip whole, copy/cut
  * put the full ids on the clipboard, double-click turns a chip back into its
  * raw id for editing, and a click on a chip with a map target jumps there.
+ *
+ * `@` mentions: typing `@` (at the start, after whitespace or after CJK
+ * text, not inside an email-ish word) opens a menu of current landscape
+ * nodes filtered by the keywords after it (label / short id / type, see
+ * `mentionSuggestions`). ↑/↓ move, Enter or Tab pick, Esc or a click
+ * elsewhere dismisses (Esc keeps that `@` closed until it is retyped),
+ * Shift+Enter still breaks the line. Picking replaces `@query` with the
+ * node's full domain_id plus one space (none if a space already follows)
+ * and re-chips, so the chip is the same one a paste makes and the caret
+ * lands in text after it. The menu is a fixed overlay on `document.body`.
  */
-import type { CiteResolver } from "./cite";
-import { tokenizeComposer, type ComposerChip, type ComposerSegment } from "./composer-chips";
+import type { CiteResolver, CiteTarget } from "./cite";
+import {
+  mentionSuggestions,
+  mentionTrigger,
+  tokenizeComposer,
+  type ComposerChip,
+  type ComposerSegment,
+  type MentionSuggestion,
+  type MentionTrigger,
+} from "./composer-chips";
 
 const CHIP_SELECTOR = "[data-cite-id]";
 const TAIL_ATTR = "data-composer-tail";
@@ -208,10 +226,26 @@ export interface ChipComposerOptions {
   onJump?: (nodeId: string) => void;
   /** Enter without Shift (not while composing). */
   onSubmit: () => void;
+  /** Landscape nodes the `@` menu offers (omit to disable mentions). */
+  mentions?: () => readonly CiteTarget[];
 }
+
+interface MentionState {
+  trigger: MentionTrigger;
+  items: MentionSuggestion[];
+  active: number;
+}
+
+let menuSeq = 0;
 
 export class ChipComposer {
   readonly element: HTMLDivElement;
+  /** `@` suggestion list (fixed overlay, attached to body while open). */
+  readonly menu: HTMLDivElement;
+  private mention: MentionState | null = null;
+  /** `@` offset the user dismissed with Esc (stays closed until retyped). */
+  private dismissedAt: number | null = null;
+  private composing = false;
 
   constructor(private readonly options: ChipComposerOptions) {
     const root = document.createElement("div");
@@ -225,16 +259,66 @@ export class ChipComposer {
     root.dataset.placeholder = options.placeholder;
     root.classList.add("is-empty");
 
+    const menu = document.createElement("div");
+    this.menu = menu;
+    menuSeq += 1;
+    menu.id = `sandbox-composer-menu-${menuSeq}`;
+    menu.className = "sandbox-composer-menu";
+    menu.setAttribute("role", "listbox");
+    menu.setAttribute("aria-label", "引用地图节点");
+    menu.hidden = true;
+    // Keep focus (and the caret) in the composer while picking with the mouse.
+    menu.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      const option = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-mention-index]") : null;
+      if (option) this.pickMention(Number(option.dataset.mentionIndex));
+    });
+    menu.addEventListener("mousemove", (event) => {
+      const option = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-mention-index]") : null;
+      if (option && this.mention) this.setActive(Number(option.dataset.mentionIndex), false);
+    });
+    if (options.mentions) {
+      root.setAttribute("aria-autocomplete", "list");
+      root.setAttribute("aria-controls", menu.id);
+      root.setAttribute("aria-expanded", "false");
+    }
+
     root.addEventListener("keydown", (event) => this.onKeyDown(event));
     root.addEventListener("input", (event) => this.onInput(event as InputEvent));
-    root.addEventListener("compositionend", () => this.chipify(true));
-    root.addEventListener("blur", () => this.chipify(false));
+    root.addEventListener("compositionstart", () => {
+      this.composing = true;
+    });
+    root.addEventListener("compositionend", () => {
+      this.composing = false;
+      this.chipify(true);
+      this.updateMention();
+    });
+    root.addEventListener("blur", () => {
+      this.closeMention();
+      this.chipify(false);
+    });
     root.addEventListener("paste", (event) => this.onPaste(event));
     root.addEventListener("copy", (event) => this.onCopy(event, false));
     root.addEventListener("cut", (event) => this.onCopy(event, true));
     root.addEventListener("drop", (event) => this.onDrop(event));
     root.addEventListener("click", (event) => this.onClick(event));
     root.addEventListener("dblclick", (event) => this.onDoubleClick(event));
+    if (options.mentions) {
+      const doc = root.ownerDocument;
+      // Caret moves (arrows, clicks) re-evaluate the `@` under the caret.
+      doc.addEventListener("selectionchange", () => {
+        if (doc.activeElement === root) this.updateMention();
+      });
+      doc.addEventListener("mousedown", (event) => {
+        const target = event.target instanceof Node ? event.target : null;
+        if (this.mention && target && !menu.contains(target) && !root.contains(target)) this.closeMention();
+      }, true);
+    }
+  }
+
+  /** The `@` menu is open. */
+  get mentionOpen(): boolean {
+    return this.mention !== null;
   }
 
   /** Composer text with every chip expanded to its full id. */
@@ -247,6 +331,8 @@ export class ChipComposer {
   }
 
   clear(): void {
+    this.closeMention();
+    this.dismissedAt = null;
     this.element.replaceChildren();
     this.syncEmpty();
   }
@@ -393,6 +479,7 @@ export class ChipComposer {
 
   private onKeyDown(event: KeyboardEvent): void {
     if (event.isComposing) return;
+    if (this.mention && this.onMentionKey(event)) return;
     if (event.key === "Enter") {
       event.preventDefault();
       if (event.shiftKey) {
@@ -448,6 +535,166 @@ export class ChipComposer {
     // A single typed character may still be extending an id at the caret.
     const typing = event.inputType === "insertText" && (event.data?.length ?? 0) <= 1;
     this.chipify(typing || event.inputType.startsWith("delete"));
+    this.updateMention();
+  }
+
+  // -------------------------------------------------------------------------
+  // @ mentions
+
+  /** Expanded [start, end) of every chip (a mention query never spans one). */
+  private chipRanges(): [number, number][] {
+    return Array.from(this.element.querySelectorAll<HTMLElement>(CHIP_SELECTOR)).map((chip) => {
+      const start = expandedOffset(this.element, chip.parentNode!, Array.prototype.indexOf.call(chip.parentNode!.childNodes, chip));
+      return [start, start + (chip.dataset.citeId ?? "").length];
+    });
+  }
+
+  /** Open, refilter or close the menu for the `@` before the caret. */
+  private updateMention(): void {
+    const source = this.options.mentions;
+    const selection = this.element.ownerDocument.getSelection();
+    if (!source || this.composing || this.element.ownerDocument.activeElement !== this.element || !selection?.isCollapsed) {
+      this.closeMention();
+      return;
+    }
+    const caret = this.caret();
+    const trigger = caret === null ? null : mentionTrigger(this.value, caret, this.chipRanges());
+    if (!trigger) {
+      this.dismissedAt = null;
+      this.closeMention();
+      return;
+    }
+    if (this.dismissedAt !== null && this.dismissedAt !== trigger.start) this.dismissedAt = null;
+    if (this.dismissedAt === trigger.start) {
+      this.closeMention();
+      return;
+    }
+    const previous = this.mention;
+    if (previous && previous.trigger.start === trigger.start && previous.trigger.query === trigger.query) {
+      this.positionMenu();
+      return;
+    }
+    const items = mentionSuggestions(source(), trigger.query);
+    if (!items.length) {
+      this.closeMention();
+      return;
+    }
+    this.mention = { trigger, items, active: 0 };
+    this.renderMenu();
+  }
+
+  private renderMenu(): void {
+    const state = this.mention;
+    if (!state) return;
+    const menu = this.menu;
+    menu.replaceChildren(
+      ...state.items.map((item, i) => {
+        const option = document.createElement("div");
+        option.className = "sandbox-composer-menu-item";
+        option.id = `${menu.id}-${i}`;
+        option.setAttribute("role", "option");
+        option.dataset.mentionIndex = String(i);
+        option.dataset.domainId = item.target.domainId;
+        option.title = item.target.domainId;
+        const label = document.createElement("span");
+        label.className = "sandbox-composer-menu-label";
+        label.textContent = item.label;
+        const meta = document.createElement("span");
+        meta.className = "sandbox-composer-menu-meta";
+        meta.textContent = [item.kind, item.shortId].filter(Boolean).join(" · ");
+        option.append(label, meta);
+        return option;
+      }),
+    );
+    if (!menu.isConnected) this.element.ownerDocument.body.append(menu);
+    menu.hidden = false;
+    this.element.setAttribute("aria-expanded", "true");
+    this.setActive(state.active, true);
+    this.positionMenu();
+  }
+
+  private setActive(index: number, scroll: boolean): void {
+    const state = this.mention;
+    if (!state) return;
+    state.active = index;
+    Array.from(this.menu.children).forEach((option, i) => {
+      option.classList.toggle("is-active", i === index);
+      option.setAttribute("aria-selected", i === index ? "true" : "false");
+      if (i === index && scroll) (option as HTMLElement).scrollIntoView?.({ block: "nearest" });
+    });
+    this.element.setAttribute("aria-activedescendant", `${this.menu.id}-${index}`);
+  }
+
+  /** Above the caret (the composer sits at the bottom of the dock), below if no room. */
+  private positionMenu(): void {
+    if (this.menu.hidden) return;
+    const selection = this.element.ownerDocument.getSelection();
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    let rect: DOMRect | null = range?.getClientRects()[0] ?? null;
+    if (!rect || (rect.width === 0 && rect.height === 0 && rect.left === 0 && rect.top === 0)) rect = this.element.getBoundingClientRect();
+    const view = this.element.ownerDocument.defaultView ?? window;
+    const menu = this.menu;
+    const width = menu.offsetWidth;
+    const height = menu.offsetHeight;
+    const left = Math.max(8, Math.min(rect.left, view.innerWidth - width - 8));
+    const top = rect.top - height - 6 >= 8 ? rect.top - height - 6 : Math.min(rect.bottom + 6, view.innerHeight - height - 8);
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(Math.max(8, top))}px`;
+  }
+
+  private closeMention(): void {
+    if (!this.mention && this.menu.hidden) return;
+    this.mention = null;
+    this.menu.hidden = true;
+    this.menu.replaceChildren();
+    this.menu.remove();
+    this.element.removeAttribute("aria-activedescendant");
+    if (this.options.mentions) this.element.setAttribute("aria-expanded", "false");
+  }
+
+  /** Menu keys; true when the key was consumed. */
+  private onMentionKey(event: KeyboardEvent): boolean {
+    const state = this.mention!;
+    const count = state.items.length;
+    switch (event.key) {
+      case "ArrowDown":
+      case "ArrowUp":
+        event.preventDefault();
+        this.setActive((state.active + (event.key === "ArrowDown" ? 1 : count - 1)) % count, true);
+        return true;
+      case "Enter":
+      case "Tab":
+        if (event.shiftKey) return false;
+        event.preventDefault();
+        this.pickMention(state.active);
+        return true;
+      case "Escape":
+        event.preventDefault();
+        event.stopPropagation();
+        this.dismissedAt = state.trigger.start;
+        this.closeMention();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /** Replace `@query` with the node's full id (+ a space) and chip it. */
+  private pickMention(index: number): void {
+    const state = this.mention;
+    const item = state?.items[index];
+    if (!state || !item) return;
+    const { start, query } = state.trigger;
+    const text = this.value;
+    const id = item.target.domainId;
+    const rest = text.slice(start + 1 + query.length);
+    const space = /^\s/.test(rest) ? "" : " ";
+    const caret = start + id.length + (rest.startsWith(" ") || space ? 1 : 0);
+    this.closeMention();
+    this.dismissedAt = null;
+    this.render(tokenizeComposer(text.slice(0, start) + id + space + rest, this.options.resolver()), null);
+    this.element.focus();
+    this.setCaret(caret);
   }
 
   private onPaste(event: ClipboardEvent): void {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IncidenceNode } from "../../src/graph/projection";
 import { buildCiteIndex, buildRoundCiteIndex, citeChipHtml, citeChipParts, citeResolver, resolveCite } from "../../src/sandbox/cite";
-import { composerChip, expandComposer, tokenizeComposer } from "../../src/sandbox/composer-chips";
+import { composerChip, expandComposer, mentionSuggestions, mentionTargets, mentionTrigger, tokenizeComposer } from "../../src/sandbox/composer-chips";
 
 const H1 = "a".repeat(64);
 const H2 = "b".repeat(64);
@@ -89,5 +89,59 @@ describe("expand on send", () => {
     const parts = citeChipParts(resolveCite(UNIT, undefined, index));
     expect(parts).toMatchObject({ statusClass: "is-map", text: "定理 3.2", jumpNode: "r-unit" });
     expect(citeChipHtml(resolveCite(UNIT, undefined, index))).toContain(`title="${parts.title}"`);
+  });
+});
+
+describe("composer @ mentions", () => {
+  const H3 = "c".repeat(64);
+  const LEMMA = `mathscape:source-unit/${H3}`;
+  const mapIndex = buildCiteIndex([
+    node("r-unit", UNIT, "SourceSemanticUnit", "定理 3.2"),
+    node("r-art", ART, "SourceArtifact", "notes.md"),
+    node("r-lemma", LEMMA, "SourceSemanticUnit", "引理 1.4"),
+    node("r-plain", "unit-plain", "SourceSemanticUnit", "定理 9（非稳定 id）"),
+  ]);
+
+  it("offers one entry per map node whose id would chip", () => {
+    const ids = mentionTargets(mapIndex).map((t) => t.domainId).sort();
+    expect(ids).toEqual([ART, UNIT, LEMMA].sort());
+    expect(mentionTargets(null)).toEqual([]);
+  });
+
+  it("filters by label, short id and type, every keyword must hit", () => {
+    const targets = mentionTargets(mapIndex);
+    const ids = (query: string) => mentionSuggestions(targets, query).map((s) => s.target.domainId);
+    expect(ids("")).toHaveLength(3);
+    expect(ids("引理")).toEqual([LEMMA]);
+    expect(ids("NOTES")).toEqual([ART]);
+    expect(ids("cccc")).toEqual([LEMMA]);
+    expect(ids("artifact")).toEqual([ART]);
+    expect(ids("内容单元").sort()).toEqual([UNIT, LEMMA].sort());
+    expect(ids("内容单元 3.2")).toEqual([UNIT]);
+    expect(ids("zzz")).toEqual([]);
+    const [first] = mentionSuggestions(targets, "定理");
+    expect(first).toMatchObject({ label: "定理 3.2", kind: "内容单元", shortId: "source-unit/aaaaaaaa…aaaaaa" });
+  });
+
+  it("ranks label prefix hits before substring and id hits", () => {
+    const targets = mentionTargets(buildCiteIndex([
+      node("r1", `mathscape:source-unit/${"1".repeat(64)}`, "SourceSemanticUnit", "推论 紧集"),
+      node("r2", `mathscape:source-unit/${"2".repeat(64)}`, "SourceSemanticUnit", "紧集定义"),
+    ]));
+    expect(mentionSuggestions(targets, "紧集").map((s) => s.label)).toEqual(["紧集定义", "推论 紧集"]);
+  });
+
+  it("finds the @ under the caret, not inside emails, chips or across lines", () => {
+    expect(mentionTrigger("@", 1)).toEqual({ start: 0, query: "" });
+    expect(mentionTrigger("看看 @引理 1", 8)).toEqual({ start: 3, query: "引理 1" });
+    expect(mentionTrigger("看看@引理", 5)).toEqual({ start: 2, query: "引理" });
+    expect(mentionTrigger("mail a@b.com", 12)).toBeNull();
+    expect(mentionTrigger("@a\nb", 4)).toBeNull();
+    expect(mentionTrigger("@a  b", 5)).toBeNull();
+    expect(mentionTrigger("no at", 5)).toBeNull();
+    // A chip between the @ and the caret closes the mention.
+    expect(mentionTrigger(`@x ${UNIT} y`, 6 + UNIT.length, [[3, 3 + UNIT.length]])).toBeNull();
+    // Caret before the @: nothing.
+    expect(mentionTrigger("ab @c", 2)).toBeNull();
   });
 });

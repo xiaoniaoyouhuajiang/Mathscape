@@ -332,7 +332,7 @@ function chipLabel(label: string): string {
 }
 
 /** Hover text: kind · short id (full id kept in data-cite-id). */
-function shortCite(id: string): string {
+export function shortCite(id: string): string {
   const parsed = parseMathscapeId(id);
   return parsed ? `${parsed.kind}/${shortStableId(parsed.hash, { max: 20, head: 8, tail: 6 })}` : shortStableId(id, { max: 20, head: 8, tail: 6 });
 }

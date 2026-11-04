@@ -10,7 +10,8 @@
  * plus the per-round tool-context index. No NLP or fuzzy matching. An id
  * that resolves to nothing (`unknown`) stays plain text in the composer.
  */
-import { citeChipParts, scanIds, type CiteResolver, type CiteStatus } from "./cite";
+import { domainKindLabel } from "../graph/taxonomy";
+import { citeChipParts, scanIds, shortCite, type CiteIndex, type CiteResolver, type CiteStatus, type CiteTarget } from "./cite";
 
 export interface ComposerChip {
   /** Full id as written (what the agent receives). */
@@ -75,4 +76,98 @@ export function tokenizeComposer(text: string, resolve: CiteResolver | undefined
 /** What `send` hands the agent: chips expanded back to their full ids. */
 export function expandComposer(segments: readonly ComposerSegment[]): string {
   return segments.map((segment) => (segment.kind === "chip" ? segment.chip.id : segment.text)).join("");
+}
+
+// ---------------------------------------------------------------------------
+// @ mentions: suggestions from the current landscape
+
+/** The map nodes the `@` menu offers: one per domain id, and only ids
+ * `scanIds` recognizes (canonical `mathscape:` or bare 32/64 hex), because
+ * the inserted id has to chip exactly like a pasted one. */
+export function mentionTargets(index: CiteIndex | null | undefined): CiteTarget[] {
+  if (!index) return [];
+  const seen = new Map<string, CiteTarget>();
+  for (const targets of index.values()) {
+    for (const target of targets) {
+      if (seen.has(target.domainId)) continue;
+      const hits = scanIds(target.domainId);
+      if (hits.length === 1 && hits[0].start === 0 && hits[0].end === target.domainId.length) seen.set(target.domainId, target);
+    }
+  }
+  return [...seen.values()];
+}
+
+export interface MentionSuggestion {
+  target: CiteTarget;
+  /** Visible label (falls back to the short id). */
+  label: string;
+  /** Type label (中文 kind) for the second line. */
+  kind: string;
+  /** `kind/head…tail`, the same short id chips show on hover. */
+  shortId: string;
+}
+
+/**
+ * Filter and rank `targets` for the text typed after `@`. Every
+ * whitespace-separated keyword must hit the label, the short or full id, or
+ * the type (raw `domain_kind` or its 中文 label), case-insensitively. Label
+ * prefix hits rank first, then label substring, type, id; ties by label.
+ */
+export function mentionSuggestions(targets: readonly CiteTarget[], query: string, limit = 20): MentionSuggestion[] {
+  const keywords = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const scored: { item: MentionSuggestion; score: number }[] = [];
+  for (const target of targets) {
+    const item: MentionSuggestion = {
+      target,
+      label: target.label || shortCite(target.domainId),
+      kind: target.domainKind ? domainKindLabel(target.domainKind) : "",
+      shortId: shortCite(target.domainId),
+    };
+    const label = item.label.toLowerCase();
+    const kinds = `${target.domainKind ?? ""} ${item.kind}`.toLowerCase();
+    const ids = `${item.shortId} ${target.domainId}`.toLowerCase();
+    let score = 0;
+    let ok = true;
+    for (const word of keywords) {
+      if (label.startsWith(word)) score += 0;
+      else if (label.includes(word)) score += 1;
+      else if (kinds.includes(word)) score += 2;
+      else if (ids.includes(word)) score += 3;
+      else {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) scored.push({ item, score });
+  }
+  scored.sort((a, b) => a.score - b.score || a.item.label.localeCompare(b.item.label, "zh-Hans-CN") || a.item.target.domainId.localeCompare(b.item.target.domainId));
+  return scored.slice(0, limit).map((entry) => entry.item);
+}
+
+/** An open `@` mention: the `@` at `start` and the query up to the caret. */
+export interface MentionTrigger {
+  start: number;
+  query: string;
+}
+
+const MENTION_QUERY_MAX = 40;
+
+/**
+ * The `@` mention the caret is in, given the composer's expanded text and
+ * caret offset. The `@` must start the text or follow a character that is
+ * not part of an email-ish word (so `a@b.com` does not open the menu; `看看@`
+ * does). The query runs to the caret, stays on one line, has no other `@`,
+ * does not span a chip (`blocked` = expanded ranges of chips) and is short.
+ */
+export function mentionTrigger(text: string, caret: number, blocked: readonly [number, number][] = []): MentionTrigger | null {
+  if (caret < 1 || caret > text.length) return null;
+  const from = Math.max(0, caret - MENTION_QUERY_MAX - 1);
+  const start = text.lastIndexOf("@", caret - 1);
+  if (start < from || start < 0) return null;
+  const query = text.slice(start + 1, caret);
+  if (/[\n@]/.test(query) || /\s\s/.test(query)) return null;
+  const before = start > 0 ? text[start - 1] : "";
+  if (before && /[A-Za-z0-9._%+-]/.test(before)) return null;
+  if (blocked.some(([a, b]) => a < caret && b > start)) return null;
+  return { start, query };
 }
