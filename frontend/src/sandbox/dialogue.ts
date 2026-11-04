@@ -19,6 +19,10 @@
  * bubbles and in process-card args/results become cite chips (cite.ts) that
  * select the node on the map through `setCiteContext().jump`.
  *
+ * Composer chips: the input (composer.ts) shows the same chips for ids the
+ * landscape or this session's tool results know; sending expands them back
+ * to the full ids, so the agent receives exactly what was pasted or typed.
+ *
  * Map Scene Player (first slice): every live tool_call / tool_result compiles
  * to a map scene (scene/compile.ts) played through `setCiteContext().scenes`;
  * process cards replay one step (▶ per step) or the whole turn (回放全部),
@@ -52,7 +56,10 @@ import {
   citeTextHtml,
   type CiteIndex,
   type CiteResolver,
+  type CiteTarget,
 } from "./cite";
+import { ChipComposer } from "./composer";
+import { mentionTargets } from "./composer-chips";
 import {
   compileRoundScenes,
   compileToolScene,
@@ -141,6 +148,9 @@ export interface CiteContext {
 }
 
 /** First 「解析中」 probe after a scanned-page read starts, then every … */
+/** The old textarea's maxLength, now checked on send (chips expand). */
+const COMPOSER_MAX_LENGTH = 20_000;
+
 export const PARSING_PROBE = { firstMs: 2500, everyMs: 3000 };
 
 /** Cite resolver → scene resolver: unique map hits only (no wrong flash). */
@@ -257,7 +267,7 @@ export class SandboxDialogueDock {
   private readonly effortRow: HTMLElement;
   private readonly effortSelect: HTMLSelectElement;
   private readonly log: HTMLElement;
-  private readonly input: HTMLTextAreaElement;
+  private readonly input: ChipComposer;
   private readonly sendButton: HTMLButtonElement;
   private readonly cancelButton: HTMLButtonElement;
   private readonly collapseButton: HTMLButtonElement;
@@ -286,6 +296,9 @@ export class SandboxDialogueDock {
   private layoutKey = "none";
   private cite: CiteContext | null = null;
   private citeIndexCache: { nodes: readonly IncidenceNode[]; index: CiteIndex } | null = null;
+  /** Composer resolver: map index + every tool id this session has seen. */
+  private mentionCache: { index: CiteIndex | null; targets: CiteTarget[] } | null = null;
+  private composerCache: { index: CiteIndex; events: number; session: string | null; resolve: CiteResolver } | null = null;
   /** In-flight scanned-page `material.read` calls → probe timer. */
   private readonly parseWatch = new Map<string, ReturnType<typeof setTimeout>>();
   /** Calls the map currently shows as 「解析中」 (process card label). */
@@ -356,15 +369,13 @@ export class SandboxDialogueDock {
     this.log.addEventListener("click", (event) => this.onLogClick(event));
 
     const composer = el("form", "sandbox-dock-composer");
-    this.input = el("textarea", "sandbox-input sandbox-dock-input");
-    this.input.rows = 3;
-    this.input.maxLength = 20_000;
-    this.input.placeholder = "向沙箱里的 Agent 提问（Enter 发送，Shift+Enter 换行）";
-    this.input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-        event.preventDefault();
-        void this.send();
-      }
+    this.input = new ChipComposer({
+      placeholder: "向沙箱里的 Agent 提问（Enter 发送，Shift+Enter 换行）",
+      ariaLabel: "向沙箱里的 Agent 提问",
+      resolver: () => this.composerResolver(),
+      onJump: (nodeId) => this.cite?.jump(nodeId),
+      onSubmit: () => void this.send(),
+      mentions: () => this.mentionTargets(),
     });
     const actions = el("div", "sandbox-actions");
     this.cancelButton = el("button", "sandbox-btn sandbox-btn-quiet", "取消本轮");
@@ -373,7 +384,7 @@ export class SandboxDialogueDock {
     this.sendButton = el("button", "sandbox-btn sandbox-btn-primary", "发送");
     this.sendButton.type = "submit";
     actions.append(el("span", "sandbox-actions-spacer"), this.cancelButton, this.sendButton);
-    composer.append(this.input, actions);
+    composer.append(this.input.element, actions);
     composer.addEventListener("submit", (event) => {
       event.preventDefault();
       void this.send();
@@ -868,6 +879,8 @@ export class SandboxDialogueDock {
   /** The landscape changed: re-resolve chips against the new map. */
   refreshCites(): void {
     this.citeIndexCache = null;
+    this.composerCache = null;
+    this.input.refresh();
     if (!this.root.hidden && this.sessionId) this.renderLog(false);
   }
 
@@ -876,6 +889,27 @@ export class SandboxDialogueDock {
     const nodes = this.cite.nodes();
     if (this.citeIndexCache?.nodes !== nodes) this.citeIndexCache = { nodes, index: buildCiteIndex(nodes) };
     return this.citeIndexCache.index;
+  }
+
+  /** `@` menu source: the current landscape's nodes (same index as cite chips). */
+  private mentionTargets(): CiteTarget[] {
+    const index = this.citeIndex();
+    if (this.mentionCache?.index !== index) this.mentionCache = { index, targets: mentionTargets(index) };
+    return this.mentionCache.targets;
+  }
+
+  /** Composer chips: the map plus every round's tool ids and labels (the
+   * user cites what the agent showed them anywhere in this session). */
+  private composerResolver(): CiteResolver | undefined {
+    const index = this.citeIndex();
+    if (!index) return undefined;
+    const cached = this.composerCache;
+    if (cached && cached.index === index && cached.events === this.events.length && cached.session === this.sessionId) {
+      return cached.resolve;
+    }
+    const resolve = citeResolver(index, buildRoundCiteIndex(this.events));
+    this.composerCache = { index, events: this.events.length, session: this.sessionId, resolve };
+    return resolve;
   }
 
   /** Resolver per round: the map plus that round's tool ids and labels. */
@@ -1012,6 +1046,8 @@ export class SandboxDialogueDock {
       case "round_finished":
         if (this.activeRoundId === update.round_id) this.activeRoundId = null;
         this.syncControls();
+        // Ids this round's tools returned can now chip in the composer.
+        this.input.refresh();
         // Replay buttons unlock once the round is over.
         this.renderLog(false);
         break;
@@ -1019,9 +1055,14 @@ export class SandboxDialogueDock {
   }
 
   private async send(): Promise<void> {
+    // Chips expand to their full ids: the agent gets the exact id strings.
     const text = this.input.value.trim();
     const sessionId = this.sessionId;
     if (!text || !sessionId || this.sending || this.activeRoundId) return;
+    if (text.length > COMPOSER_MAX_LENGTH) {
+      this.toast(`消息过长（${text.length} / ${COMPOSER_MAX_LENGTH} 字符）`, "error");
+      return;
+    }
     this.sending = true;
     this.syncControls();
     try {
@@ -1031,7 +1072,7 @@ export class SandboxDialogueDock {
         if (!this.transcript.some((entry) => sameEntry(entry, outcome.userEntry))) {
           this.transcript.push(outcome.userEntry);
         }
-        this.input.value = "";
+        this.input.clear();
       }
     } catch (error) {
       this.toast(errorMessage(error), "error");

@@ -332,29 +332,53 @@ function chipLabel(label: string): string {
 }
 
 /** Hover text: kind · short id (full id kept in data-cite-id). */
-function shortCite(id: string): string {
+export function shortCite(id: string): string {
   const parsed = parseMathscapeId(id);
   return parsed ? `${parsed.kind}/${shortStableId(parsed.hash, { max: 20, head: 8, tail: 6 })}` : shortStableId(id, { max: 20, head: 8, tail: 6 });
 }
 
-export function citeChipHtml(cite: CiteResolution): string {
+/** Presentation of one cite chip, shared by reply bubbles (HTML strings) and
+ * the composer (DOM chips). `jumpNode` is set only when a click can select a
+ * map node (`map`, or the preferred candidate of `ambiguous`). */
+export interface CiteChipParts {
+  /** `is-map` / `is-ambiguous` / `is-label` / `is-unknown`. */
+  statusClass: string;
+  /** Visible text (short label, or kind/short id). */
+  text: string;
+  /** Hover text; the full id stays in `data-cite-id`. */
+  title: string;
+  jumpNode?: string;
+  ambiguous: boolean;
+}
+
+export function citeChipParts(cite: CiteResolution): CiteChipParts {
   const kind = cite.kind ? domainKindLabel(cite.kind) : "";
   const idText = shortCite(cite.target?.domainId ?? cite.raw);
-  const attrs = (cls: string, title: string) =>
-    `class="sandbox-cite ${cls}" data-cite-id="${escapeHtml(cite.raw)}" title="${escapeHtml(title)}"`;
   if ((cite.status === "map" || cite.status === "ambiguous") && cite.target) {
     const head = [kind, idText].filter(Boolean).join(" · ");
     const more = cite.status === "ambiguous"
       ? `\n歧义：${cite.candidates.length} 个候选，点击定位第一个\n${cite.candidates.map((item) => `· ${item.label || shortCite(item.domainId)}`).join("\n")}`
       : "\n点击在地图上定位";
-    const flag = cite.status === "ambiguous" ? `<span class="sandbox-cite-flag">歧义</span>` : "";
-    return `<button type="button" ${attrs(`is-${cite.status}`, head + more)} data-cite-node="${escapeHtml(cite.target.nodeId)}">${escapeHtml(chipLabel(cite.label || idText))}${flag}</button>`;
+    return {
+      statusClass: `is-${cite.status}`, text: chipLabel(cite.label || idText), title: head + more,
+      jumpNode: cite.target.nodeId, ambiguous: cite.status === "ambiguous",
+    };
   }
   if (cite.status === "label" && cite.label) {
     const title = [kind, idText].filter(Boolean).join(" · ") + "\n不在当前地图上";
-    return `<span ${attrs("is-label", title)}>${escapeHtml(chipLabel(cite.label))}</span>`;
+    return { statusClass: "is-label", text: chipLabel(cite.label), title, ambiguous: false };
   }
-  return `<span ${attrs("is-unknown", `${cite.raw}\n未在地图或本轮工具结果中找到`)}>${escapeHtml(idText)}</span>`;
+  return { statusClass: "is-unknown", text: idText, title: `${cite.raw}\n未在地图或本轮工具结果中找到`, ambiguous: false };
+}
+
+export function citeChipHtml(cite: CiteResolution): string {
+  const parts = citeChipParts(cite);
+  const attrs = `class="sandbox-cite ${parts.statusClass}" data-cite-id="${escapeHtml(cite.raw)}" title="${escapeHtml(parts.title)}"`;
+  if (parts.jumpNode) {
+    const flag = parts.ambiguous ? `<span class="sandbox-cite-flag">歧义</span>` : "";
+    return `<button type="button" ${attrs} data-cite-node="${escapeHtml(parts.jumpNode)}">${escapeHtml(parts.text)}${flag}</button>`;
+  }
+  return `<span ${attrs}>${escapeHtml(parts.text)}</span>`;
 }
 
 /** Plain text → escaped HTML with every id replaced by a chip. */
