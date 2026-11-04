@@ -14,7 +14,10 @@ import type { IncidenceNode } from "../graph/projection";
  */
 export const CANONICAL_MARKDOWN_ID_PREFIX = "mathscape:canonical-markdown/";
 
-type OpenableNode = Pick<IncidenceNode, "domain_kind" | "domain_id"> & { openable_artifact_id?: string | null };
+type OpenableNode = Pick<IncidenceNode, "domain_kind" | "domain_id"> & {
+  openable_artifact_id?: string | null;
+  aliased_artifact_ids?: readonly string[] | null;
+};
 
 export class NotOpenableError extends Error {}
 
@@ -53,13 +56,27 @@ export function readerTargetId(node: OpenableNode): string {
 }
 
 /**
- * The map node standing for a physical artifact: the node itself, or the
- * folded canonical node whose head it is. Used for labels and 「在地图中定位」.
+ * Physical artifact ids a map node also answers for — the one physical →
+ * canonical alias story shared by locate, cite chips, @ mentions and search.
+ * A folded canonical markdown node answers for its head and every non-head
+ * folded snapshot; other nodes answer for nothing extra.
+ */
+export function aliasIdsOf(node: Pick<OpenableNode, "openable_artifact_id" | "aliased_artifact_ids">): string[] {
+  const ids = new Set<string>();
+  if (node.openable_artifact_id) ids.add(node.openable_artifact_id);
+  for (const id of node.aliased_artifact_ids ?? []) if (id) ids.add(id);
+  return [...ids];
+}
+
+/**
+ * The map node standing for an artifact id: the node itself, or the folded
+ * canonical node that any of its physical snapshots (head or not) alias onto.
+ * Used for labels and 「在地图中定位」.
  */
 export function findSourceArtifactNode<T extends OpenableNode>(nodes: readonly T[], artifactId: string): T | undefined {
   const sources = nodes.filter(node => node.domain_kind === "SourceArtifact");
   return sources.find(node => node.domain_id === artifactId)
-    ?? sources.find(node => node.openable_artifact_id === artifactId);
+    ?? sources.find(node => aliasIdsOf(node).includes(artifactId));
 }
 
 /**

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IncidenceNode } from "../../src/graph/projection";
 import {
+  aliasIdsOf,
   findSourceArtifactNode,
   openableArtifactId,
   readerTargetId,
@@ -13,6 +14,7 @@ const PDF = `mathscape:artifact/${"a".repeat(64)}`;
 const HEAD = `mathscape:artifact/${"b".repeat(64)}`;
 const MD = `mathscape:artifact/${"c".repeat(64)}`;
 const CANONICAL = `mathscape:canonical-markdown/v1/marker-markdown/marker-1.10.2/${PDF}`;
+const EARLY = `mathscape:artifact/${"d".repeat(64)}`;
 
 function node(id: string, domainId: string, label: string, extra: Partial<IncidenceNode> = {}): IncidenceNode {
   return {
@@ -21,7 +23,10 @@ function node(id: string, domainId: string, label: string, extra: Partial<Incide
   } as IncidenceNode;
 }
 
-const canonical = node("n-canon", CANONICAL, "book.pdf · 规范解析正文", { openable_artifact_id: HEAD });
+const canonical = node("n-canon", CANONICAL, "book.pdf · 规范解析正文", {
+  openable_artifact_id: HEAD,
+  aliased_artifact_ids: [EARLY, HEAD],
+});
 const pdf = node("n-pdf", PDF, "book.pdf");
 const md = node("n-md", MD, "notes.md");
 
@@ -71,6 +76,22 @@ describe("findSourceArtifactNode", () => {
     expect(findSourceArtifactNode(nodes, HEAD)).toBe(canonical);
     expect(findSourceArtifactNode(nodes, "mathscape:artifact/missing")).toBeUndefined();
   });
+
+  it("locates a non-head folded snapshot on its canonical node (no 「不在当前地图中」)", () => {
+    expect(findSourceArtifactNode([pdf, canonical, md], EARLY)).toBe(canonical);
+  });
+
+  it("keeps a still-mapped physical node ahead of the canonical alias", () => {
+    const early = node("n-early", EARLY, "early.md");
+    expect(findSourceArtifactNode([canonical, early], EARLY)).toBe(early);
+  });
+});
+
+describe("aliasIdsOf", () => {
+  it("lists head and every folded snapshot once; physical nodes alias nothing", () => {
+    expect(aliasIdsOf(canonical).sort()).toEqual([EARLY, HEAD].sort());
+    expect(aliasIdsOf(pdf)).toEqual([]);
+  });
 });
 
 describe("split source picker", () => {
@@ -90,5 +111,10 @@ describe("cite index", () => {
     const index = buildCiteIndex([pdf, canonical]);
     expect(resolveCite(HEAD, undefined, index).target?.nodeId).toBe("n-canon");
     expect(resolveCite(CANONICAL, undefined, index).target?.nodeId).toBe("n-canon");
+  });
+
+  it("jumps a non-head folded snapshot id to its canonical node too", () => {
+    const index = buildCiteIndex([pdf, canonical]);
+    expect(resolveCite(EARLY, undefined, index).target?.nodeId).toBe("n-canon");
   });
 });

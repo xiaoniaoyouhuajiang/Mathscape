@@ -14,6 +14,9 @@ pub const CANONICAL_MARKDOWN_ID_PREFIX: &str = "mathscape:canonical-markdown/v1"
 
 /// Profile used when a Marker run did not record `marker_profile`.
 pub const UNSPECIFIED_PARSER_PROFILE: &str = "mathscape.marker.unspecified";
+/// Profile the current Marker promotion and `material.read` ensure write.
+/// Lineages with this profile are preferred as a PDF's current lineage.
+pub const DEFAULT_PARSER_PROFILE: &str = "mathscape.marker.math-ocr.v1";
 
 /// Policy used when a conversion has no tool version.
 pub const UNVERSIONED_PARSER_POLICY: &str = "unversioned";

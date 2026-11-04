@@ -10,6 +10,8 @@ use mathscape_store_sqlite::{ArtifactCatalogSnapshot, CanonicalEnsureLease};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+use crate::canonical_alias::CanonicalAliasTable;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ArtifactGraphProjector;
 
@@ -207,47 +209,23 @@ pub(crate) fn parsing_signal(parsing: &[CanonicalEnsureLease], pdf: &StableId) -
 
 /// Markdown artifact id → canonical id, for fragments a registry entry replaces.
 ///
-/// A physical markdown artifact that several canonical views claim (shared
-/// across lineages) is ambiguous: folding it into whichever view came first
-/// would rewire its edges to the wrong canonical node. Such artifacts are left
-/// out of the map so they stay as their own uncollapsed node.
+/// See [`CanonicalAliasTable`]: snapshots claimed by several lineages are
+/// conflicts and stay their own uncollapsed node.
 pub(crate) fn canonical_markdown_aliases(
     views: &[CanonicalMarkdownView],
 ) -> BTreeMap<StableId, StableId> {
-    resolve_canonical_markdown_aliases(views).0
+    CanonicalAliasTable::from_views(views).aliases().clone()
 }
 
-/// Returns `(aliases, conflicts)`: conflicts map each refused artifact to
-/// every distinct canonical id that claimed it.
+#[cfg(test)]
 fn resolve_canonical_markdown_aliases(
     views: &[CanonicalMarkdownView],
 ) -> (
     BTreeMap<StableId, StableId>,
     BTreeMap<StableId, BTreeSet<StableId>>,
 ) {
-    let mut claims: BTreeMap<StableId, BTreeSet<StableId>> = BTreeMap::new();
-    for view in views {
-        if view.head_artifact_id.is_none() {
-            continue;
-        }
-        for id in view.collapsed_markdown_ids() {
-            claims
-                .entry(id)
-                .or_default()
-                .insert(view.canonical_id.clone());
-        }
-    }
-    let mut aliases = BTreeMap::new();
-    let mut conflicts = BTreeMap::new();
-    for (artifact, canonical_ids) in claims {
-        if canonical_ids.len() == 1 {
-            let canonical = canonical_ids.into_iter().next().expect("one claim");
-            aliases.insert(artifact, canonical);
-        } else {
-            conflicts.insert(artifact, canonical_ids);
-        }
-    }
-    (aliases, conflicts)
+    let table = CanonicalAliasTable::from_views(views);
+    (table.aliases().clone(), table.conflicts().clone())
 }
 
 fn collapse_canonical_markdown(
@@ -256,10 +234,11 @@ fn collapse_canonical_markdown(
     views: &[CanonicalMarkdownView],
     names: &BTreeMap<StableId, String>,
 ) -> Result<(Vec<ProjectionNode>, Vec<ProjectionRelation>), ArtifactGraphProjectionError> {
-    let (aliases, conflicts) = resolve_canonical_markdown_aliases(views);
-    if aliases.is_empty() && conflicts.is_empty() {
+    let table = CanonicalAliasTable::from_views(views);
+    if table.is_empty() {
         return Ok((nodes, relations));
     }
+    let aliases = table.aliases();
     let mut nodes: Vec<_> = nodes
         .into_iter()
         .filter(|node| !aliases.contains_key(node.entity_id()))
@@ -287,10 +266,13 @@ fn collapse_canonical_markdown(
                 "partial"
             }
         );
-        let shared = conflicts
-            .values()
-            .filter(|claimants| claimants.contains(&view.canonical_id))
-            .count();
+        if !table.is_current(&view.canonical_id) {
+            summary.push_str(&format!(
+                " · 旧版 lineage {} / {}",
+                view.parser_profile, view.parser_policy_version
+            ));
+        }
+        let shared = table.conflict_count(&view.canonical_id);
         if shared > 0 {
             // Diagnostic: these snapshots are claimed by several canonical
             // views, so they are not folded into this node.
@@ -303,12 +285,14 @@ fn collapse_canonical_markdown(
                 view.canonical_id.clone(),
                 EntityKind::SourceArtifact,
                 ViewLayer::Source,
-                format!("{pdf_label} · 规范解析正文"),
+                table.title(view, pdf_label),
             )?
             .summary(summary)?
             .lifecycle(mathscape_domain::LifecycleStatus::Active)
             // The canonical id is logical; readers open the head snapshot.
-            .openable_artifact(head_id),
+            .openable_artifact(head_id)
+            // Every folded physical snapshot locates / cites onto this node.
+            .aliased_artifacts(table.members(&view.canonical_id).to_vec()),
         );
     }
     let mut rewritten = Vec::with_capacity(relations.len());

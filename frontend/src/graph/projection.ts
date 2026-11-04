@@ -63,6 +63,10 @@ export interface IncidenceNode {
   /** Physical artifact to open when `domain_id` is logical (folded canonical
    * markdown → head snapshot). Omitted when `domain_id` itself opens. */
   openable_artifact_id?: string | null;
+  /** Every physical snapshot folded into this node (folded canonical
+   * markdown: head and non-head segments). Locate / cite / chip resolve any
+   * of them onto this node. Omitted when empty. */
+  aliased_artifact_ids?: string[];
 }
 
 export interface IncidenceEdge {

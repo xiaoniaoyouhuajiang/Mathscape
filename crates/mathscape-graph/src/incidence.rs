@@ -67,6 +67,10 @@ pub struct IncidenceNode {
     /// itself is openable.
     #[serde(skip_serializing_if = "Option::is_none")]
     openable_artifact_id: Option<StableId>,
+    /// Physical artifacts folded into this node (canonical markdown lineage
+    /// snapshots). Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    aliased_artifact_ids: Vec<StableId>,
 }
 
 impl IncidenceNode {
@@ -116,6 +120,10 @@ impl IncidenceNode {
 
     pub fn openable_artifact_id(&self) -> Option<&StableId> {
         self.openable_artifact_id.as_ref()
+    }
+
+    pub fn aliased_artifact_ids(&self) -> &[StableId] {
+        &self.aliased_artifact_ids
     }
 }
 
@@ -192,6 +200,7 @@ impl IncidenceGraph {
                 parent: group.parent().map(RenderElementId::group),
                 boundary: false,
                 openable_artifact_id: None,
+                aliased_artifact_ids: Vec::new(),
             });
         }
         for node in projection.nodes() {
@@ -208,6 +217,7 @@ impl IncidenceGraph {
                 parent: node.group_ref().map(RenderElementId::group),
                 boundary: node.is_boundary(),
                 openable_artifact_id: node.openable_artifact_id().cloned(),
+                aliased_artifact_ids: node.aliased_artifact_ids().to_vec(),
             });
         }
 
@@ -227,6 +237,7 @@ impl IncidenceGraph {
                 parent: relation.group_ref().map(RenderElementId::group),
                 boundary: relation.is_boundary(),
                 openable_artifact_id: None,
+                aliased_artifact_ids: Vec::new(),
             });
             for endpoint in relation.endpoints() {
                 let entity_node = RenderElementId::entity(endpoint.node());

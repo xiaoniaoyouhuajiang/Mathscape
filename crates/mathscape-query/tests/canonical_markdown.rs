@@ -294,7 +294,10 @@ fn one_canonical_markdown_node_per_pdf_after_registry_sync() {
     assert_eq!(canonical_node.kind(), EntityKind::SourceArtifact);
     assert!(canonical_node.summary_ref().unwrap().contains("partial"));
     // Desktop 「阅读文件」 opens the head snapshot, not the logical canonical id.
-    assert_eq!(canonical_node.openable_artifact_id(), Some(late.stable_id()));
+    assert_eq!(
+        canonical_node.openable_artifact_id(),
+        Some(late.stable_id())
+    );
     let incidence = mathscape_graph::IncidenceGraph::project(&landscape);
     let wire = serde_json::to_value(&incidence).unwrap();
     let wire_node = wire["nodes"]
@@ -304,6 +307,16 @@ fn one_canonical_markdown_node_per_pdf_after_registry_sync() {
         .find(|node| node["domain_id"] == canonical.as_str())
         .unwrap();
     assert_eq!(wire_node["openable_artifact_id"], late.stable_id().as_str());
+    // Every folded physical snapshot (head and non-head) aliases onto the
+    // canonical node: locate / cite / chip share this one list.
+    let aliased: Vec<&str> = wire_node["aliased_artifact_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert!(aliased.contains(&late.stable_id().as_str()), "{aliased:?}");
+    assert!(aliased.contains(&early.stable_id().as_str()), "{aliased:?}");
     let source_wire = wire["nodes"]
         .as_array()
         .unwrap()
@@ -389,9 +402,19 @@ fn one_canonical_markdown_node_per_pdf_after_registry_sync() {
     drop(pool);
 
     let mut store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
-    let views = store
-        .sync_canonical_markdown_from_catalog(&recorded_at)
-        .unwrap();
+    // Silent normalization (desktop open / landscape load): stale registry
+    // rebuilds once, then is a no-op.
+    assert!(
+        store
+            .sync_canonical_markdown_if_stale(&recorded_at)
+            .unwrap()
+    );
+    assert!(
+        !store
+            .sync_canonical_markdown_if_stale(&recorded_at)
+            .unwrap()
+    );
+    let views = store.list_canonical_markdown().unwrap();
     assert_eq!(views.len(), 2);
     let other_id =
         CanonicalMarkdownKey::new(source.stable_id().clone(), other_profile, "marker-2.0.0")
@@ -412,7 +435,19 @@ fn one_canonical_markdown_node_per_pdf_after_registry_sync() {
             .iter()
             .filter(|node| node.label().contains("规范解析正文"))
             .count(),
-        2
+        1,
+        "only the current default lineage keeps the 规范解析正文 name"
+    );
+    let demoted = landscape
+        .nodes()
+        .iter()
+        .find(|node| node.entity_id() == &other_id)
+        .unwrap();
+    assert!(demoted.label().contains("旧版"), "{}", demoted.label());
+    assert!(
+        demoted.label().contains("fast-native.v1"),
+        "{}",
+        demoted.label()
     );
 
     drop(store);
