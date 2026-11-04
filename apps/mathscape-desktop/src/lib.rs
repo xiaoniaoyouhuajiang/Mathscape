@@ -173,7 +173,13 @@ impl DesktopService {
         let workspace_id = pool.workspace().workspace_id().as_str().to_owned();
         drop(pool);
 
-        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        // Silent normalization: keep the canonical markdown registry in step
+        // with the catalog so every lineage folds on the map / in search with
+        // no button. A failure must not block opening the sandbox.
+        if let Err(error) = store.sync_canonical_markdown_if_stale(&canonical_sync_timestamp()) {
+            eprintln!("mathscape: canonical markdown registry sync skipped: {error}");
+        }
         let landscape = store.landscape_snapshot()?;
         let catalog = landscape.artifacts();
         let artifact_count = catalog.artifacts().len();
@@ -1054,4 +1060,16 @@ fn bounded_diagnostics(value: String) -> String {
         .skip(character_count - MAXIMUM_CHARACTERS)
         .collect::<String>();
     format!("…{tail}")
+}
+
+fn canonical_sync_timestamp() -> mathscape_domain::Timestamp {
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    mathscape_domain::Timestamp::parse(format!(
+        "unix:{}.{}",
+        duration.as_secs(),
+        duration.subsec_nanos()
+    ))
+    .expect("unix timestamp")
 }

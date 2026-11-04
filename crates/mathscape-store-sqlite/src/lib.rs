@@ -1247,6 +1247,29 @@ impl SqliteArtifactStore {
         canonical_markdown::replace_canonical_markdown(&mut self.connection, &views, recorded_at)
     }
 
+    /// Silent normalization on open / landscape load: rebuilds the registry
+    /// only when it differs from the catalog projection (ignoring live-only
+    /// fields such as `finished_at`). Returns whether a rebuild happened.
+    /// Idempotent; never runs Marker or touches artifact bytes.
+    pub fn sync_canonical_markdown_if_stale(
+        &mut self,
+        recorded_at: &Timestamp,
+    ) -> Result<bool, SqliteStoreError> {
+        let projected = self.project_canonical_markdown()?;
+        let registered = self.list_canonical_markdown()?;
+        if canonical_markdown::registry_key(&projected)
+            == canonical_markdown::registry_key(&registered)
+        {
+            return Ok(false);
+        }
+        canonical_markdown::replace_canonical_markdown(
+            &mut self.connection,
+            &projected,
+            recorded_at,
+        )?;
+        Ok(true)
+    }
+
     /// Rebuilds the registry rows of one source PDF from the current catalog.
     /// Other PDFs' rows are untouched. Returns that PDF's views.
     pub fn sync_canonical_markdown_for_pdf(
