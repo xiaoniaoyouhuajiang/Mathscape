@@ -23,6 +23,10 @@ pub struct SearchCorpus {
     pub snapshots: Vec<SearchSnapshotRow>,
     pub artifacts: Vec<SearchArtifactRow>,
     pub source_units: Vec<SearchSourceUnitRow>,
+    /// Registered canonical markdown lineages (the same rows the map folds),
+    /// so the material provider collapses folded snapshots into one hit.
+    #[serde(default)]
+    pub canonical_markdown: Vec<mathscape_domain::CanonicalMarkdownView>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -223,6 +227,7 @@ impl SqliteArtifactStore {
             snapshots: snapshots(&transaction)?,
             artifacts: artifacts(&transaction)?,
             source_units: source_units(&transaction)?,
+            canonical_markdown: crate::canonical_markdown::list_canonical_markdown(&transaction)?,
         };
         transaction.commit()?;
         Ok(corpus)

@@ -80,6 +80,7 @@ fn corpus() -> SearchCorpus {
                 source_labels: vec![],
             },
         ],
+        canonical_markdown: vec![],
     }
 }
 
@@ -266,4 +267,141 @@ fn registry_accepts_new_providers() {
     let json = serde_json::to_value(&response).unwrap();
     assert_eq!(json["groups"][0]["hits"][0]["target"]["kind"], "map_node");
     assert_eq!(json["groups"][0]["kind"], "source_unit");
+}
+
+fn canonical_corpus() -> SearchCorpus {
+    use mathscape_domain::{CanonicalMarkdownView, CanonicalSegment, InclusivePageRange, StableId};
+    let id = |value: &str| StableId::parse(value).unwrap();
+    let pdf = "mathscape:artifact/pdf-1";
+    let markdown = |value: &str, origin: &str| SearchArtifactRow {
+        artifact_id: value.into(),
+        media_type: "text/markdown".into(),
+        original_filename: Some(format!("{}.md", "b".repeat(64))),
+        lifecycle: "active".into(),
+        origin_filenames: vec![origin.into()],
+    };
+    let lineage = |canonical: &str, policy: &str, snapshots: &[&str]| CanonicalMarkdownView {
+        canonical_id: id(canonical),
+        source_pdf_artifact_id: id(pdf),
+        parser_profile: "mathscape.marker.math-ocr.v1".into(),
+        parser_policy_version: policy.into(),
+        head_artifact_id: snapshots.last().map(|value| id(value)),
+        head_revision: None,
+        total_pages: Some(20),
+        segments: snapshots
+            .iter()
+            .enumerate()
+            .map(|(index, value)| CanonicalSegment {
+                conversion_id: id(&format!("mathscape:conversion/{policy}-{index}")),
+                markdown_artifact_id: id(value),
+                pages: Some(
+                    InclusivePageRange::new(index as u32 * 5 + 1, index as u32 * 5 + 5).unwrap(),
+                ),
+                finished_at: None,
+            })
+            .collect(),
+    };
+    SearchCorpus {
+        artifacts: vec![
+            SearchArtifactRow {
+                artifact_id: pdf.into(),
+                media_type: "application/pdf".into(),
+                original_filename: Some("实分析.pdf".into()),
+                lifecycle: "active".into(),
+                origin_filenames: vec![],
+            },
+            markdown("mathscape:artifact/md-1", "实分析.pdf"),
+            markdown("mathscape:artifact/md-2", "实分析.pdf"),
+            markdown("mathscape:artifact/md-3", "实分析.pdf"),
+            markdown("mathscape:artifact/md-old", "实分析.pdf"),
+            markdown("mathscape:artifact/md-loose", "其他.pdf"),
+        ],
+        canonical_markdown: vec![
+            lineage(
+                "mathscape:canonical-markdown/v1/mathscape.marker.math-ocr.v1/2/mathscape:artifact/pdf-1",
+                "2",
+                &[
+                    "mathscape:artifact/md-1",
+                    "mathscape:artifact/md-2",
+                    "mathscape:artifact/md-3",
+                ],
+            ),
+            lineage(
+                "mathscape:canonical-markdown/v1/mathscape.marker.math-ocr.v1/1/mathscape:artifact/pdf-1",
+                "1",
+                &["mathscape:artifact/md-old"],
+            ),
+        ],
+        ..SearchCorpus::default()
+    }
+}
+
+#[test]
+fn folded_markdown_snapshots_collapse_into_one_canonical_hit() {
+    let response = search(
+        &SearchRegistry::with_defaults(),
+        &canonical_corpus(),
+        &SearchQuery {
+            text: "实分析".into(),
+            ..SearchQuery::default()
+        },
+    );
+    let materials = &response
+        .groups
+        .iter()
+        .find(|group| group.kind == SearchKind::Material)
+        .unwrap()
+        .hits;
+    let current =
+        "mathscape:canonical-markdown/v1/mathscape.marker.math-ocr.v1/2/mathscape:artifact/pdf-1";
+    let old =
+        "mathscape:canonical-markdown/v1/mathscape.marker.math-ocr.v1/1/mathscape:artifact/pdf-1";
+    let mut found: Vec<&str> = materials.iter().map(|hit| hit.id.as_str()).collect();
+    found.sort();
+    // PDF stays its own row; three physical snapshots → one canonical row;
+    // the old lineage is a separate, clearly labeled row.
+    let mut expected = vec![current, old, "mathscape:artifact/pdf-1"];
+    expected.sort();
+    assert_eq!(found, expected);
+    let canonical = materials.iter().find(|hit| hit.id == current).unwrap();
+    assert_eq!(canonical.title, "实分析 · 规范解析正文");
+    assert_eq!(
+        canonical.target,
+        SearchTarget::Artifact {
+            artifact_id: current.into()
+        }
+    );
+    let subtitle = canonical.subtitle.as_deref().unwrap();
+    assert!(
+        subtitle.starts_with("规范解析正文 · 覆盖第 1–15 页"),
+        "{subtitle}"
+    );
+    assert!(subtitle.contains("合并 3 份快照"), "{subtitle}");
+    let demoted = materials.iter().find(|hit| hit.id == old).unwrap();
+    assert!(demoted.title.contains("旧版"), "{}", demoted.title);
+    assert!(!demoted.title.contains("规范解析正文"), "{}", demoted.title);
+    assert_eq!(
+        materials
+            .iter()
+            .filter(|hit| hit.title.contains("规范解析正文"))
+            .count(),
+        1
+    );
+
+    // Unfolded markdown is untouched.
+    let loose = search(
+        &SearchRegistry::with_defaults(),
+        &canonical_corpus(),
+        &SearchQuery {
+            text: "其他".into(),
+            ..SearchQuery::default()
+        },
+    );
+    assert!(
+        loose
+            .groups
+            .iter()
+            .flat_map(|group| &group.hits)
+            .any(|hit| hit.id == "mathscape:artifact/md-loose")
+    );
 }
