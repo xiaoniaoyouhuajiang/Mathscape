@@ -1,10 +1,13 @@
 //! Built-in N3d search providers. Each maps light corpus rows to candidates;
 //! see the module docs of `search` for adding semantic-layer providers.
 
-use mathscape_store_sqlite::{SearchCorpus, source_unit_kind_name};
+use std::collections::{BTreeMap, BTreeSet};
+
+use mathscape_store_sqlite::{SearchArtifactRow, SearchCorpus, source_unit_kind_name};
 
 use super::{SearchCandidate, SearchKind, SearchProvider, SearchTarget};
 use crate::artifact_graph::{product_label, readable_filename};
+use crate::canonical_alias::{CANONICAL_MARKDOWN_TITLE, CanonicalAliasTable};
 
 /// Retired map objects are hidden on the map, so they are not searchable.
 fn retired(lifecycle: &str) -> bool {
@@ -97,7 +100,9 @@ impl SearchProvider for SnapshotProvider {
 
 /// Materials (PDF, Markdown, text) by file name. Parsed images, metadata
 /// JSON and snapshot artifacts are left out: images and JSON are noise, and
-/// snapshots have their own provider.
+/// snapshots have their own provider. Markdown snapshots folded into a
+/// registered canonical lineage collapse into one 「规范解析正文」 hit whose
+/// id and target are the canonical id (the PDF keeps its own hit).
 pub struct MaterialProvider;
 
 fn searchable_media(media: &str) -> bool {
@@ -115,54 +120,137 @@ impl SearchProvider for MaterialProvider {
         SearchKind::Material
     }
     fn candidates(&self, corpus: &SearchCorpus) -> Vec<SearchCandidate> {
-        corpus
+        // Same alias table as the map fold: every folded snapshot of a
+        // registered lineage collapses into ONE 「规范解析正文」 hit.
+        let table = CanonicalAliasTable::from_views(&corpus.canonical_markdown);
+        let folded: BTreeMap<String, String> = table
+            .aliases()
+            .iter()
+            .map(|(artifact, canonical)| (artifact.to_string(), canonical.to_string()))
+            .collect();
+        let mut folded_titles: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut out = Vec::new();
+        for artifact in corpus.artifacts.iter().filter(|artifact| {
+            searchable_media(&artifact.media_type) && !retired(&artifact.lifecycle)
+        }) {
+            let candidate = material_candidate(artifact);
+            if let Some(canonical) = folded.get(&artifact.artifact_id) {
+                // Keep the physical names searchable as aliases of the fold.
+                let titles = folded_titles.entry(canonical.clone()).or_default();
+                titles.push(candidate.title);
+                titles.extend(candidate.aliases);
+                continue;
+            }
+            out.push(candidate);
+        }
+        let pdf_names: BTreeMap<&str, String> = corpus
             .artifacts
             .iter()
-            .filter(|artifact| {
-                searchable_media(&artifact.media_type) && !retired(&artifact.lifecycle)
-            })
+            .filter(|artifact| artifact.media_type == "application/pdf")
             .map(|artifact| {
-                let kind = product_label(&artifact.media_type);
-                let readable =
-                    readable_filename(artifact.original_filename.as_deref(), &artifact.media_type);
-                let origins: Vec<&str> = artifact
-                    .origin_filenames
-                    .iter()
-                    .map(|name| stem(name))
-                    .collect();
-                // Hash-named conversion outputs read as "<source> · 解析正文".
-                let title = if readable == kind && !origins.is_empty() {
-                    format!("{} · {kind}", origins.join("、"))
-                } else {
-                    readable
-                };
-                let mut aliases = Vec::new();
-                if let Some(filename) = &artifact.original_filename
-                    && readable_filename(Some(filename), &artifact.media_type) != kind
-                {
-                    push_alias(&mut aliases, &title, filename);
-                }
-                for origin in &origins {
-                    push_alias(&mut aliases, &title, origin);
-                }
-                let subtitle = if origins.is_empty() {
-                    kind.to_owned()
-                } else {
-                    format!("{kind} · 来自 {}", origins.join("、"))
-                };
-                SearchCandidate {
-                    id: artifact.artifact_id.clone(),
-                    title,
-                    aliases,
-                    subtitle: Some(subtitle),
-                    target: SearchTarget::Artifact {
-                        artifact_id: artifact.artifact_id.clone(),
-                    },
-                    trashed: false,
-                    recency: 0,
-                }
+                (
+                    artifact.artifact_id.as_str(),
+                    readable_filename(artifact.original_filename.as_deref(), &artifact.media_type),
+                )
             })
-            .collect()
+            .collect();
+        let mut seen = BTreeSet::new();
+        for view in &corpus.canonical_markdown {
+            let canonical = view.canonical_id.to_string();
+            if view.head_artifact_id.is_none() || !seen.insert(canonical.clone()) {
+                continue;
+            }
+            let pdf_label = pdf_names
+                .get(view.source_pdf_artifact_id.as_str())
+                .cloned()
+                .unwrap_or_else(|| "PDF".to_owned());
+            let title = table.title(view, &pdf_label);
+            let mut aliases = Vec::new();
+            push_alias(&mut aliases, &title, &pdf_label);
+            for value in folded_titles.get(&canonical).into_iter().flatten() {
+                push_alias(&mut aliases, &title, value);
+            }
+            let coverage = view.coverage(None);
+            let pages = coverage
+                .covered
+                .iter()
+                .map(|range| {
+                    if range.from == range.to {
+                        format!("{}", range.from)
+                    } else {
+                        format!("{}–{}", range.from, range.to)
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mut subtitle = if table.is_current(&view.canonical_id) {
+                CANONICAL_MARKDOWN_TITLE.to_owned()
+            } else {
+                "解析正文（旧版）".to_owned()
+            };
+            if !pages.is_empty() {
+                subtitle.push_str(&format!(" · 覆盖第 {} 页", pages.join("、")));
+            }
+            let snapshots = table.members(&view.canonical_id).len();
+            if snapshots > 1 {
+                subtitle.push_str(&format!(" · 合并 {snapshots} 份快照"));
+            }
+            subtitle.push_str(&format!(" · 来自 {pdf_label}"));
+            out.push(SearchCandidate {
+                id: canonical.clone(),
+                title,
+                aliases,
+                subtitle: Some(subtitle),
+                // Locate / open the canonical node (reader opens the
+                // unified view for a canonical id).
+                target: SearchTarget::Artifact {
+                    artifact_id: canonical,
+                },
+                trashed: false,
+                recency: 0,
+            });
+        }
+        out
+    }
+}
+
+fn material_candidate(artifact: &SearchArtifactRow) -> SearchCandidate {
+    let kind = product_label(&artifact.media_type);
+    let readable = readable_filename(artifact.original_filename.as_deref(), &artifact.media_type);
+    let origins: Vec<&str> = artifact
+        .origin_filenames
+        .iter()
+        .map(|name| stem(name))
+        .collect();
+    // Hash-named conversion outputs read as "<source> · 解析正文".
+    let title = if readable == kind && !origins.is_empty() {
+        format!("{} · {kind}", origins.join("、"))
+    } else {
+        readable
+    };
+    let mut aliases = Vec::new();
+    if let Some(filename) = &artifact.original_filename
+        && readable_filename(Some(filename), &artifact.media_type) != kind
+    {
+        push_alias(&mut aliases, &title, filename);
+    }
+    for origin in &origins {
+        push_alias(&mut aliases, &title, origin);
+    }
+    let subtitle = if origins.is_empty() {
+        kind.to_owned()
+    } else {
+        format!("{kind} · 来自 {}", origins.join("、"))
+    };
+    SearchCandidate {
+        id: artifact.artifact_id.clone(),
+        title,
+        aliases,
+        subtitle: Some(subtitle),
+        target: SearchTarget::Artifact {
+            artifact_id: artifact.artifact_id.clone(),
+        },
+        trashed: false,
+        recency: 0,
     }
 }
 

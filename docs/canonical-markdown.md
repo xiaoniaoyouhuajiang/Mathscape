@@ -168,6 +168,12 @@ MCP 进程在 Marker 运行中退出时，工作线程随之终止，心跳停�
 
 未 sync 的历史转换保持原图：每个物理 Markdown 仍是独立节点。
 
+**静默同步**：Desktop 每次打开沙箱 / 加载地图（`DesktopService::snapshot`）前调用 `sync_canonical_markdown_if_stale`：比较注册表与目录投影（忽略 `finished_at` 等仅活投影才有的字段），不一致才整表重建；一致则什么都不写。没有按钮，失败只记日志、不阻塞打开。因此 Desktop 自己跑完的解析、以及升级前的历史数据，都会在下次加载时自动折叠。
+
+**物理 → 规范 alias 表**（`mathscape_query::CanonicalAliasTable`，唯一来源）：每条 lineage 的 head 与全部有页码的快照都映射到它的 `canonical_id`；同一快照被两条 lineage 认领时记为冲突：该快照不折叠（仍是独立节点 / 命中），认领方节点带诊断——这是唯一会被看见的规范化问题。地图节点在线上带 `aliased_artifact_ids`（head + 非 head），前端 `aliasIdsOf(node)` 是定位（`findSourceArtifactNode`）、cite 索引（`buildCiteIndex`）、chip 与 @ 共用的同一份 alias；搜索折叠用同一张表。
+
+**旧 lineage 降级**：每个 PDF 只有一条「当前」lineage 叫「规范解析正文」——默认 profile（`mathscape.marker.math-ocr.v1`）优先，再按 policy 版本自然序取最新，再按覆盖页数。其余 lineage 改名为「{pdf} · 解析正文（旧版 · {profile} · {policy}）」，摘要追加「旧版 lineage」，因此地图上不会出现两个同名「规范解析正文」节点。仍可阅读、定位、引用，只是不再冒充当前版本。
+
 「解析中」信号：`LandscapeSnapshot.canonical_ensures` 是未过期的 `running` 租约。投影时，有活租约的 PDF 节点摘要追加 ` · 解析中 第a–b页`；租约结束后信号消失。心跳续约让信号在整个同步等待期间保持。
 
 `material.read` 结束时，若本次调用跑了 Marker 或排队等过本 PDF 的解析，结果带 `details.map_signal = { kind: "parsing", label: "解析中", node_id, pages, phase: "done" | "failed", waited_ms }`，作为事后的场景记录。
@@ -194,6 +200,15 @@ Map Scene：前端把进行中的 `material.read`（带 `pdf_pages`）视为可�
 
 统一视图不提供原文块选择、发现记录和手写批注（这些需要物理字节坐标）；每段标题旁的「打开此快照」以物理快照打开，功能照旧。
 
+## 搜索（Desktop / MCP）
+
+Desktop 搜索框与 `workspace.search` 共用 `MaterialProvider`。搜索语料（`read_search_corpus`）在同一读事务里带上注册表行，用上面的 alias 表折叠：
+
+- 同一 lineage 的 N 个「… · 解析正文」物理快照 → **一个** 命中，`id` / `target.artifact_id` 都是 `canonical_id`，标题「{pdf} · 规范解析正文」，副标题「规范解析正文 · 覆盖第 a–b 页 · 合并 N 份快照 · 来自 {pdf}」。被折叠快照的标题、文件名仍作为别名参与匹配。
+- PDF 本身仍是独立的一行；旧 lineage 是单独一行，标题带「旧版」。
+- 「定位」直接选中地图上的规范节点；「打开」用 canonical id 走统一阅读视图。
+- 未注册（未 sync）的快照照旧逐个列出。MCP 对折叠命中用 `by_id` 补上 `canonical_id` / `coverage` / `partial`，对 PDF 与未折叠快照的行为不变。
+
 ## 非目标
 
 本切片明确不做：
@@ -202,5 +217,6 @@ Map Scene：前端把进行中的 `material.read`（带 `pdf_pages`）视为可�
 - 旧 SourceSpan / discovery 的 supersede、redirect、重挂
 - 新的解析工具（ensure 只在 `material.read` 内部）
 - grep / search 触发 ensure
-- 搜索索引改写（搜索仍可能列出物理快照，但会带上 `canonical_id`）
+- ~~搜索索引改写~~：已纳入范围，Desktop 与 MCP 搜索按 lineage 折叠（见「搜索」）
+- 把 agent 日常读取从 `material.read pdf_pages` 改成别的工具；删除或改写任何物理快照字节
 - 沙箱 composer 的解析 chip、Map Scene 的专门「解析中」样式

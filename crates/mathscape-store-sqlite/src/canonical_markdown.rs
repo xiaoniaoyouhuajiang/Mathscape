@@ -458,3 +458,40 @@ fn sqlite_page(value: i64) -> Result<u32, SqliteStoreError> {
         value: value.unsigned_abs(),
     })
 }
+
+/// Comparable shape of a set of views, for deciding whether the registry is
+/// stale against the catalog projection. Order-insensitive; drops
+/// `finished_at`, which only a live projection carries.
+pub(super) fn registry_key(views: &[CanonicalMarkdownView]) -> Vec<String> {
+    let mut keys: Vec<String> = views
+        .iter()
+        .map(|view| {
+            let mut segments: Vec<String> = view
+                .segments
+                .iter()
+                .map(|segment| {
+                    format!(
+                        "{}|{}|{:?}",
+                        segment.conversion_id.as_str(),
+                        segment.markdown_artifact_id.as_str(),
+                        segment.pages.map(|range| (range.from, range.to))
+                    )
+                })
+                .collect();
+            segments.sort();
+            format!(
+                "{}|{}|{}|{}|{:?}|{:?}|{:?}|{}",
+                view.canonical_id.as_str(),
+                view.source_pdf_artifact_id.as_str(),
+                view.parser_profile,
+                view.parser_policy_version,
+                view.head_artifact_id.as_ref().map(|id| id.as_str()),
+                view.head_revision,
+                view.total_pages,
+                segments.join(";")
+            )
+        })
+        .collect();
+    keys.sort();
+    keys
+}

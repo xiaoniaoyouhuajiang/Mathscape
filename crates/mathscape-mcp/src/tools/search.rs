@@ -95,8 +95,10 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
     let index = CanonicalIndex::load(workspace)?;
     for group in &mut response.groups {
         for hit in &mut group.hits {
+            // Folded 「规范解析正文」 hits carry the canonical id itself.
             let view = index
-                .for_pdf(&hit.id, None)
+                .by_id(&hit.id)
+                .or_else(|| index.for_pdf(&hit.id, None))
                 .or_else(|| index.for_markdown(&hit.id));
             if let Some(view) = view {
                 let coverage = view.coverage(None);

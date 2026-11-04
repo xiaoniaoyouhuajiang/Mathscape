@@ -24,6 +24,7 @@ import type MarkdownIt from "markdown-it";
 import type { IncidenceNode } from "../graph/projection";
 import { domainKindLabel } from "../graph/taxonomy";
 import { parseMathscapeId, shortStableId } from "../core/stable-id";
+import { aliasIdsOf } from "../reader/openable";
 import type { AgentEventLike } from "./format";
 
 /** One map node a cite can jump to. */
@@ -65,7 +66,12 @@ export type CiteResolver = (raw: string) => CiteResolution;
 // ---------------------------------------------------------------------------
 // Scan
 
-const ID_PATTERN = /mathscape:[a-z0-9-]+\/[A-Za-z0-9._/-]+|(?<![A-Za-z0-9_])(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{32})(?![A-Za-z0-9_])/g;
+// A canonical id nests a whole artifact id
+// (`mathscape:canonical-markdown/v1/<profile>/<policy>/mathscape:artifact/…`),
+// so the path may contain a literal nested `mathscape:` — but no other `:`,
+// so prose like `mathscape:artifact/x:` still stops before the colon. The
+// nested alternative must come first so the loop takes it at that `m`.
+const ID_PATTERN = /mathscape:[a-z0-9-]+\/(?:mathscape:|[A-Za-z0-9._/-])+|(?<![A-Za-z0-9_])(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{32})(?![A-Za-z0-9_])/g;
 
 export interface IdMatch {
   start: number;
@@ -119,10 +125,12 @@ export function buildCiteIndex(nodes: readonly IncidenceNode[]): CiteIndex {
   for (const node of best.values()) {
     const target: CiteTarget = { nodeId: node.id, domainId: node.domain_id!, domainKind: node.domain_kind, label: node.label };
     for (const key of citeKeys(node.domain_id!)) push(index, key, target, sameTarget);
-    // A folded canonical markdown node also answers for its head snapshot id
-    // (folded away from the map), unless that id is still its own node.
-    const head = node.openable_artifact_id;
-    if (head && !best.has(head)) for (const key of citeKeys(head)) push(index, key, target, sameTarget);
+    // A folded canonical markdown node also answers for every snapshot folded
+    // into it (head and non-head, folded away from the map), unless that id
+    // is still its own node. Same alias list as 「在地图中定位」.
+    for (const alias of aliasIdsOf(node)) {
+      if (!best.has(alias)) for (const key of citeKeys(alias)) push(index, key, target, sameTarget);
+    }
   }
   return index;
 }

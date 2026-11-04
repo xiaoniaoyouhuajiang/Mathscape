@@ -22,6 +22,11 @@ export interface SearchHit {
   highlights: [number, number][];
   trashed: boolean;
   target: SearchTarget;
+  /** Folded 「规范解析正文」 lineage this hit belongs to (MCP sets it; a
+   * collapsed desktop hit already uses the canonical id as `id`/target). */
+  canonical_id?: string | null;
+  coverage?: unknown;
+  partial?: boolean | null;
 }
 
 export interface SearchGroup {

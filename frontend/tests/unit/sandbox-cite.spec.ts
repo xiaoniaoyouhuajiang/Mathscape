@@ -57,6 +57,22 @@ describe("scanIds", () => {
     expect(scanIds(text).map((hit) => hit.raw)).toEqual([UNIT, DOC, H2]);
   });
 
+  it("chipifies a full canonical id with its nested mathscape:artifact/… as one id", () => {
+    const canonical = `mathscape:canonical-markdown/v1/mathscape.marker.math-ocr.v1/marker-1.10.2/${ART}`;
+    const text = `打开 ${canonical}。再看 ${UNIT}`;
+    const hits = scanIds(text);
+    expect(hits.map((hit) => hit.raw)).toEqual([canonical, UNIT]);
+    expect(text.slice(hits[0].start, hits[0].end)).toBe(canonical);
+    expect(scanIds(`${canonical}.`).map((hit) => hit.raw)).toEqual([canonical]);
+    const index = buildCiteIndex([node("r-canon", canonical, "SourceArtifact", "book · 规范解析正文")]);
+    expect(resolveCite(canonical, undefined, index).target?.nodeId).toBe("r-canon");
+  });
+
+  it("does not swallow other colons or treat e-mail addresses as ids", () => {
+    expect(scanIds(`${ART}: 见上`).map((hit) => hit.raw)).toEqual([ART]);
+    expect(scanIds("联系 a@b.com 或 user@mathscape.dev")).toEqual([]);
+  });
+
   it("ignores hex of other lengths and hex inside words", () => {
     expect(scanIds("abc " + "d".repeat(40) + " x" + "e".repeat(32))).toEqual([]);
   });

@@ -174,6 +174,10 @@ pub struct ProjectionNode {
     /// snapshot). `None` means the entity id itself is the physical id.
     #[serde(skip_serializing_if = "Option::is_none")]
     openable_artifact: Option<StableId>,
+    /// Physical artifacts folded into this logical node (every snapshot of a
+    /// canonical markdown lineage). Locate / cite resolve them to this node.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    aliased_artifacts: Vec<StableId>,
 }
 
 impl ProjectionNode {
@@ -193,6 +197,7 @@ impl ProjectionNode {
             group: None,
             boundary: false,
             openable_artifact: None,
+            aliased_artifacts: Vec::new(),
         })
     }
 
@@ -204,6 +209,18 @@ impl ProjectionNode {
 
     pub fn openable_artifact_id(&self) -> Option<&StableId> {
         self.openable_artifact.as_ref()
+    }
+
+    /// Marks the physical artifacts folded into this logical node.
+    pub fn aliased_artifacts(mut self, mut artifacts: Vec<StableId>) -> Self {
+        artifacts.sort();
+        artifacts.dedup();
+        self.aliased_artifacts = artifacts;
+        self
+    }
+
+    pub fn aliased_artifact_ids(&self) -> &[StableId] {
+        &self.aliased_artifacts
     }
 
     pub fn summary(mut self, summary: impl Into<String>) -> Result<Self, GraphProjectionError> {
