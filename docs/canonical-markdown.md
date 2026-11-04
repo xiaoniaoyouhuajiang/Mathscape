@@ -90,16 +90,16 @@ Head 选择：在该 lineage 的成功 / `partial`、输出为 `text/markdown` �
 - `workspace.search`
 - `pdf.outline`
 
-扫描版 PDF（请求页都没有文本层）：
+PDF 的 `pdf_pages` 精读（无论请求页有没有原生文本层，正文都只来自 canonical Marker Markdown）：
 
 - 已有一份快照的页区间 **完全包含** 请求：返回该快照的 Markdown 字节（包含请求的 head 优先，否则取最新的包含快照；会在该 PDF 的所有 lineage 中找），`content_type` 为 `markdown`，`served_artifact_id` 指向物理快照。不按页切开字节；区间以 `coverage` 为准。超出 32KiB 仍是 `truncated`。只与请求相交的快照不会被返回。
 - 没有任何快照完全包含请求：进入下面的内部 ensure，**在同一次调用里同步等待** Marker 完成。ensure 成功后重新加载视图，按同一条完全包含规则返回新快照（`status: ok`）；否则返回 `capability_unavailable`，`details` 里带 Marker 的 CapabilityProbe 与 `ensure` 结果（`failed` 带明确原因）。没有「已启动，稍后再读」的中间态，Agent 不需要也不应轮询。
 
-部分页有文本层、部分页没有的请求不会触发 ensure，仍返回文本层并带 `pdf_pages_without_text` 诊断；单独请求那些空页才会解析。有文本层的 PDF 仍返回文本层，只附加覆盖字段。
+精读永不静默回退到 pdf crate 原生文本层：有文本层的页同样走「快照完全包含 → 否则同步 ensure → 否则 `capability_unavailable`」。失败路径上只对前 8 个请求页做一次文本层探测，仅用于诊断：有文本的页给出 `pdf_text_layer_not_served`（附 `pages_with_text`），全无文本且 Marker 不可用时给出 `pdf_no_text_layer`。`content_type` 恒为 `markdown`，不再返回 `page_spans`。
 
 用 canonical id 调用 `material.read`（`md_byte_range`）或 `material.grep` 时，解析到 head 快照再读。这不是 artifact 重定向：旧的物理 artifact id 照常可读，并带上同一个 `canonical_id`。
 
-`material.grep`、`workspace.search`、`pdf.outline` 永不触发 ensure。grep / search 在带明确页范围的入口出现之前都不接入 ensure。
+`material.grep`、`workspace.search`、`pdf.outline` 永不触发 ensure。`material.grep` 接受 PDF id 做粗定位：逐页扫描原生文本层（字面子串，不跨页），命中带 `surface: "pdf_text_layer"` 与 `pdf_pages {from,to}`（均为命中页），若该页已有 canonical 视图则附带 `canonical_id`/`coverage`/`partial`；snippet 不是规范正文，引用前须用该 locator 调 `material.read`。grep 仍不把 PDF id 优先解析到 canonical head（后续切片）。
 
 ## Ensure（`material.read` 内部路径）
 

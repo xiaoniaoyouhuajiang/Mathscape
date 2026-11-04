@@ -1,40 +1,56 @@
-//! `material.grep`: linear scan of markdown bodies.
+//! `material.grep`: coarse literal location inside named materials.
 //!
-//! This slice searches only `text/markdown`, and only the artifacts named in
-//! a non-empty `artifact_ids` list (no workspace-wide grep). `pattern` is a
-//! case-sensitive literal substring, not a regular expression; `terms` is
-//! not accepted. Matches do not overlap: the next search starts at the end
-//! of the previous match.
+//! Searches only the artifacts named in a non-empty `artifact_ids` list (no
+//! workspace-wide grep). `pattern` is a case-sensitive literal substring, not
+//! a regular expression; `terms` is not accepted. Matches do not overlap: the
+//! next search starts at the end of the previous match.
 //!
-//! Each hit's [`Locator`] is an `md_byte_range` covering that match, so a
-//! follow-up `material.read` quotes it. `snippet` is a verbatim window of
-//! the surrounding line (capped), not a second locator. `score` is always
-//! [`LITERAL_SCORE`] — this scan does not rank.
+//! - `text/markdown` (and canonical markdown ids, resolved to their head
+//!   snapshot): the body is scanned; each hit's [`Locator`] is an
+//!   `md_byte_range` covering that match, so a follow-up `material.read`
+//!   quotes it.
+//! - `application/pdf`: the native text layer extracted by `mathscape-pdf`
+//!   (the same engine `pdf.outline` uses; never Marker) is scanned page by
+//!   page. Each hit's locator is `pdf_pages` with `from == to ==` the page of
+//!   the match, and `surface: "pdf_text_layer"`. The snippet is for
+//!   localization only; the careful quote comes from `material.read` on that
+//!   page, which serves canonical markdown. Matches spanning a page break are
+//!   not found.
 //!
-//! A missing id is business `not_found` with no partial hits. Non-markdown
-//! media is `invalid_arg` (PDF text and OCR are out of scope). More matches
-//! than `max_hits`, or a file longer than [`MAX_SCAN_BYTES`], is business
-//! `truncated`.
+//! `snippet` is a verbatim window of the surrounding line (capped), not a
+//! second locator. `score` is always [`LITERAL_SCORE`] — this scan does not
+//! rank.
+//!
+//! A missing id is business `not_found` with no partial hits. Other media is
+//! `invalid_arg`. More matches than `max_hits`, or more than
+//! [`MAX_SCAN_BYTES`] of one file's text, is business `truncated`.
 
 use std::collections::HashSet;
 
 use mathscape_agent::{Locator, ToolError, ToolErrorCode, ToolStatus};
 use mathscape_artifact::{ArtifactPool, ArtifactPoolError};
-use mathscape_domain::{MarkdownCoverage, StableId};
+use mathscape_domain::{InclusivePageRange, MarkdownCoverage, StableId};
+use mathscape_pdf::{PdfEngine, PdfOpenOptions, PdfPageIndex, PdfSelection};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::canonical::CanonicalIndex;
 use super::material::{
-    self, MARKDOWN_MEDIA_TYPE, ManagedPathFailure, Material, find_materials, managed_path_failure,
+    self, MARKDOWN_MEDIA_TYPE, ManagedPathFailure, Material, PDF_MEDIA_TYPE, find_materials,
+    managed_path_failure,
 };
 use super::{MATERIAL_GREP, diagnostic, parse_args, to_object};
 use crate::McpWorkspace;
 
 /// Default and hard maximum number of hits.
 pub const MAX_GREP_HITS: usize = 50;
-/// Bytes of each markdown file that this slice will scan.
+/// Bytes of each material's text (markdown body or PDF text layer) that one
+/// call will scan.
 pub const MAX_SCAN_BYTES: u64 = 1024 * 1024;
+/// PDF pages are extracted in batches so a large PDF stops at the byte cap.
+const PDF_SCAN_BATCH: u32 = 32;
+/// Value of [`GrepHit::surface`] for hits found in the native PDF text layer.
+pub const PDF_TEXT_LAYER_SURFACE: &str = "pdf_text_layer";
 /// `pattern` longer than this (in Unicode scalar values) is `invalid_arg`.
 pub const MAX_PATTERN_CHARS: usize = 200;
 /// Maximum ids in one call.
@@ -44,7 +60,7 @@ pub const SNIPPET_MAX_BYTES: usize = 512;
 
 const LITERAL_SCORE: u32 = 1;
 
-const DESCRIPTION: &str = "Search the markdown body of specific materials for a case-sensitive literal substring (not a regular expression). artifact_ids is required and non-empty; this tool does not scan the whole workspace. Only text/markdown is searched (PDF text and OCR are out of scope). A canonical markdown id is resolved to its head snapshot. Hits on a canonical snapshot include canonical_id, coverage and partial. Each hit locator is an md_byte_range of that match and can be passed to material.read. A missing artifact_id yields status not_found and no partial hits. Stops at max_hits (default and maximum 50) or after the first 1 MiB of a file; either limit returns status truncated and truncated true. This tool never runs Marker. Read-only.";
+const DESCRIPTION: &str = "Coarse locate: search specific materials for a case-sensitive literal substring (not a regular expression). artifact_ids is required and non-empty; this tool does not scan the whole workspace. text/markdown: the body is searched and each hit locator is an md_byte_range of that match. A canonical markdown id is resolved to its head snapshot; hits on a canonical snapshot include canonical_id, coverage and partial. application/pdf: the native PDF text layer is searched page by page (fast, no OCR; scanned pages without a text layer never match, nor do matches across a page break); each hit has surface pdf_text_layer and a pdf_pages locator {from,to} of the page of the match, plus canonical_id, coverage and partial for that page when a canonical view exists. Text-layer snippets are for localization only and are not canonical text: pass the hit locator to material.read to read that page as canonical markdown before quoting. A missing artifact_id yields status not_found and no partial hits. Stops at max_hits (default and maximum 50) or after the first 1 MiB of one material's text; either limit returns status truncated and truncated true. This tool never runs Marker. Read-only.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,6 +96,10 @@ struct GrepHit {
     coverage: Option<MarkdownCoverage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     partial: Option<bool>,
+    /// `pdf_text_layer` for PDF hits: the snippet is native extract, not
+    /// canonical markdown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    surface: Option<&'static str>,
 }
 
 struct RawHit {
@@ -100,7 +120,7 @@ pub(super) fn definition() -> Value {
                     "minItems": 1,
                     "maxItems": MAX_ARTIFACT_IDS,
                     "items": { "type": "string" },
-                    "description": "Stable ids to scan, in order. Required and non-empty. Duplicates are rejected. Every id must be text/markdown.",
+                    "description": "Stable ids to scan, in order. Required and non-empty. Duplicates are rejected. Every id must be text/markdown, a canonical markdown id, or application/pdf (its native text layer is scanned).",
                 },
                 "pattern": {
                     "type": "string",
@@ -140,7 +160,7 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
         return not_found("artifact_not_found", "no artifact with this id", missing);
     }
     let materials = materials.found;
-    ensure_markdown(&materials)?;
+    ensure_supported(&materials)?;
 
     let pool = workspace.pool()?;
     let mut hits = Vec::new();
@@ -148,6 +168,60 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
     let mut hit_limited = false;
     let mut scan_capped = false;
     for material in &materials {
+        let room = max_hits - hits.len();
+        if material.media_type == PDF_MEDIA_TYPE {
+            let scan = match scan_pdf(&pool, material, &args.pattern, room)? {
+                PdfScan::Scanned(scan) => scan,
+                PdfScan::Finished(value) => return Ok(value),
+            };
+            if let Some(capped) = scan.capped {
+                scan_capped = true;
+                diagnostics.push(json!({
+                    "code": "scan_capped",
+                    "message": format!(
+                        "scanned the text layer of pages 1–{} ({} bytes); later pages were not searched",
+                        capped.scanned_to, capped.scanned_bytes
+                    ),
+                    "artifact_id": material.id.to_string(),
+                    "scanned_pages": { "from": 1, "to": capped.scanned_to },
+                    "scanned_bytes": capped.scanned_bytes,
+                    "total_pages": scan.total_pages,
+                }));
+            }
+            if !scan.hits.is_empty() {
+                diagnostics.push(json!({
+                    "code": "pdf_text_layer_hits",
+                    "message": "hits come from the native PDF text layer (coarse locate, not canonical text); read the hit's pdf_pages with material.read for canonical markdown before quoting",
+                    "artifact_id": material.id.to_string(),
+                }));
+            }
+            for (page, found) in scan.hits {
+                let pages = InclusivePageRange::new(page, page).ok();
+                let attachment = index.for_pdf(material.id.as_str(), pages).map(|view| {
+                    let coverage = view.coverage(pages);
+                    (view.canonical_id.to_string(), coverage.partial, coverage)
+                });
+                hits.push(GrepHit {
+                    artifact_id: material.id.to_string(),
+                    locator: Locator::PdfPages {
+                        from: page,
+                        to: page,
+                    },
+                    snippet: found.snippet,
+                    score: LITERAL_SCORE,
+                    revision: material.revision.clone(),
+                    canonical_id: attachment.as_ref().map(|(id, _, _)| id.clone()),
+                    partial: attachment.as_ref().map(|(_, partial, _)| *partial),
+                    coverage: attachment.map(|(_, _, coverage)| coverage),
+                    surface: Some(PDF_TEXT_LAYER_SURFACE),
+                });
+            }
+            if scan.limited {
+                hit_limited = true;
+                break;
+            }
+            continue;
+        }
         let (text, capped) = match load_text(&pool, material)? {
             Loaded::Text { text, capped } => (text, capped),
             Loaded::Finished(value) => return Ok(value),
@@ -165,7 +239,6 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
                 "total_bytes": material.byte_size,
             }));
         }
-        let room = max_hits - hits.len();
         let (found, limited) = scan_text(&text, &args.pattern, room);
         let attachment = index.for_markdown(material.id.as_str()).map(|view| {
             let coverage = view.coverage(None);
@@ -184,6 +257,7 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
                 canonical_id: attachment.as_ref().map(|(id, _, _)| id.clone()),
                 partial: attachment.as_ref().map(|(_, partial, _)| *partial),
                 coverage: attachment.as_ref().map(|(_, _, coverage)| coverage.clone()),
+                surface: None,
             });
         }
         if limited {
@@ -303,10 +377,12 @@ fn load_materials(
     })
 }
 
-fn ensure_markdown(materials: &[Material]) -> Result<(), ToolError> {
+fn ensure_supported(materials: &[Material]) -> Result<(), ToolError> {
     let unsupported: Vec<Value> = materials
         .iter()
-        .filter(|material| material.media_type != MARKDOWN_MEDIA_TYPE)
+        .filter(|material| {
+            material.media_type != MARKDOWN_MEDIA_TYPE && material.media_type != PDF_MEDIA_TYPE
+        })
         .map(|material| {
             json!({
                 "artifact_id": material.id.to_string(),
@@ -319,12 +395,115 @@ fn ensure_markdown(materials: &[Material]) -> Result<(), ToolError> {
     }
     Err(ToolError::new(
         ToolErrorCode::InvalidArg,
-        format!("material.grep only scans {MARKDOWN_MEDIA_TYPE} in this slice"),
+        format!("material.grep only scans {MARKDOWN_MEDIA_TYPE} and {PDF_MEDIA_TYPE}"),
     )
     .with_details(json!({
-        "supported_media_types": [MARKDOWN_MEDIA_TYPE],
+        "supported_media_types": [MARKDOWN_MEDIA_TYPE, PDF_MEDIA_TYPE],
         "artifacts": unsupported,
     })))
+}
+
+/// Text-layer scan of one PDF, or a finished business result (content missing).
+enum PdfScan {
+    Scanned(PdfScanned),
+    Finished(Value),
+}
+
+struct PdfScanned {
+    /// `(1-based page, hit)` in page order.
+    hits: Vec<(u32, RawHit)>,
+    limited: bool,
+    capped: Option<PdfScanCap>,
+    total_pages: u32,
+}
+
+struct PdfScanCap {
+    scanned_to: u32,
+    scanned_bytes: u64,
+}
+
+fn pdf_error(error: mathscape_pdf::PdfError) -> ToolError {
+    ToolError::new(
+        ToolErrorCode::Internal,
+        format!("failed to read PDF text layer: {error}"),
+    )
+}
+
+/// Scans the native text layer page by page (never Marker). Stops at
+/// `room` hits (then only checks whether another match exists) or once
+/// [`MAX_SCAN_BYTES`] of page text have been scanned.
+fn scan_pdf(
+    pool: &ArtifactPool,
+    material: &Material,
+    pattern: &str,
+    room: usize,
+) -> Result<PdfScan, ToolError> {
+    let path = match material::open_managed_path(pool, &material.id) {
+        Ok(path) => path,
+        Err(error) => {
+            return match fail_load(material, error)? {
+                Loaded::Finished(value) => Ok(PdfScan::Finished(value)),
+                Loaded::Text { .. } => unreachable!("fail_load never yields text"),
+            };
+        }
+    };
+    let engine = PdfEngine;
+    let options = PdfOpenOptions::new();
+    let total_pages = engine
+        .probe(&path, &options)
+        .map_err(pdf_error)?
+        .page_count();
+    let mut hits = Vec::new();
+    let mut scanned_bytes: u64 = 0;
+    let mut batch_from = 1;
+    while batch_from <= total_pages {
+        let batch_to = batch_from
+            .saturating_add(PDF_SCAN_BATCH - 1)
+            .min(total_pages);
+        let selection = PdfSelection::inclusive_range(
+            total_pages,
+            PdfPageIndex::new(batch_from - 1),
+            PdfPageIndex::new(batch_to - 1),
+        )
+        .map_err(pdf_error)?;
+        let pages = engine
+            .extract_positioned_text(&path, &selection, &options)
+            .map_err(pdf_error)?
+            .page_texts();
+        for (index, page_text) in pages {
+            let page = index.get() + 1;
+            if scanned_bytes + page_text.len() as u64 > MAX_SCAN_BYTES && scanned_bytes > 0 {
+                return Ok(PdfScan::Scanned(PdfScanned {
+                    hits,
+                    limited: false,
+                    capped: Some(PdfScanCap {
+                        scanned_to: page - 1,
+                        scanned_bytes,
+                    }),
+                    total_pages,
+                }));
+            }
+            scanned_bytes += page_text.len() as u64;
+            let left = room.saturating_sub(hits.len());
+            let (found, limited) = scan_text(&page_text, pattern, left);
+            hits.extend(found.into_iter().map(|hit| (page, hit)));
+            if limited {
+                return Ok(PdfScan::Scanned(PdfScanned {
+                    hits,
+                    limited: true,
+                    capped: None,
+                    total_pages,
+                }));
+            }
+        }
+        batch_from = batch_to + 1;
+    }
+    Ok(PdfScan::Scanned(PdfScanned {
+        hits,
+        limited: false,
+        capped: None,
+        total_pages,
+    }))
 }
 
 /// Scanned text, or a finished business result (content missing).

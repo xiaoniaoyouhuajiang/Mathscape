@@ -3,22 +3,28 @@
 //! - Markdown (`text/markdown`) by `md_byte_range` (bytes, half-open).
 //!   `expand.before/after` are bytes. The returned range is widened to UTF-8
 //!   character boundaries and echoed back as the actual locator.
-//! - PDF (`application/pdf`) by `pdf_pages` (1-based, closed), using the
-//!   text layer extracted by `mathscape-pdf`. When no requested page has
-//!   text, an immutable canonical markdown snapshot whose pages fully contain
-//!   the request is served. If none does, a bounded internal ensure
+//! - PDF (`application/pdf`) by `pdf_pages` (1-based, closed). A careful
+//!   read of a PDF always serves canonical Marker markdown (规范解析正文),
+//!   never the native text layer: an immutable canonical markdown snapshot
+//!   whose pages fully contain the request is served, whether or not the
+//!   pages have a text layer. If none does, a bounded internal ensure
 //!   (`super::ensure`) may run Marker on exactly the requested range, promote
 //!   a new snapshot and serve it in the same call (synchronous: the call
 //!   waits for Marker, and a concurrent read of the same PDF queues behind
 //!   the running parse). Otherwise the tool returns `capability_unavailable`
 //!   with the Marker CapabilityProbe and `details.ensure`
-//!   (`blocked_budget|capability_unavailable|failed`). Results carry
-//!   `canonical_id`, `coverage` and `partial` when a view exists.
+//!   (`blocked_budget|capability_unavailable|failed`); it never falls back
+//!   to the `mathscape-pdf` text layer. That text layer is only probed on
+//!   this failure path, to tell a scanned page (`pdf_no_text_layer`) from a
+//!   page whose text layer is deliberately not served
+//!   (`pdf_text_layer_not_served`). Coarse location over the text layer is
+//!   `material.grep`'s job. Results carry `canonical_id`, `coverage` and
+//!   `partial` when a view exists.
 //!
 //! Every successful read is capped at [`MAX_READ_BYTES`] of UTF-8 text;
 //! a capped read returns `status: "truncated"` and `truncated: true`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use mathscape_agent::{
     Capability, CapabilityState, Locator, ToolError, ToolErrorCode, ToolStatus, probe_capability,
@@ -40,12 +46,11 @@ use crate::McpWorkspace;
 /// Hard cap for returned text, in UTF-8 bytes (contract §2.2: 32KiB).
 pub const MAX_READ_BYTES: usize = 32 * 1024;
 
-/// PDF pages are extracted in small batches so a huge `pdf_pages` range
-/// stops as soon as the cap is reached.
-const PDF_PAGE_BATCH: u32 = 8;
-const PAGE_SEPARATOR: &str = "\n\n";
+/// At most this many requested pages are probed for a text layer when a
+/// careful PDF read cannot be served (diagnostics only, never the body).
+const TEXT_LAYER_PROBE_PAGES: u32 = 8;
 
-const DESCRIPTION: &str = "Read part of one workspace material by locator. Markdown: locator md_byte_range {start,end} in bytes, half-open; optional expand {before,after} in bytes. PDF: locator pdf_pages {from,to}, 1-based and inclusive. Returns the actual locator read; text is capped at 32 KiB (status truncated, truncated true). When a canonical markdown view exists, the result includes canonical_id, coverage and partial (partial true means this request or the book is not fully covered). Scanned PDF pages (no text layer) are served from an existing immutable markdown snapshot only when one snapshot contains every requested page. If none does, this call runs Marker OCR locally on exactly the requested pages and waits for it (synchronous, can take minutes; at most 12 pages per call, rolling page budget, one Marker run per workspace slot), adds a new immutable snapshot to the workspace parse cache and returns its markdown in the same result. A concurrent read of a PDF that is already being parsed waits for that parse instead of failing. The result is ok or truncated with the text, or capability_unavailable with details.ensure.status blocked_budget, capability_unavailable (Marker missing) or failed (Marker error or the sync time limit; nothing is left running). Do not poll or re-read to wait for parsing. It never modifies or deletes existing materials and never contacts the network. Keep scanned-PDF page ranges small. A canonical id may be passed as artifact_id with md_byte_range to read its head snapshot.";
+const DESCRIPTION: &str = "Careful read of part of one workspace material by locator. Markdown: locator md_byte_range {start,end} in bytes, half-open; optional expand {before,after} in bytes. PDF: locator pdf_pages {from,to}, 1-based and inclusive; the body is always canonical Marker markdown (content_type markdown), never the raw PDF text layer, even when the pages have one. Returns the actual locator read; text is capped at 32 KiB (status truncated, truncated true). When a canonical markdown view exists, the result includes canonical_id, coverage and partial (partial true means this request or the book is not fully covered). PDF pages are served from an existing immutable markdown snapshot only when one snapshot contains every requested page. If none does, this call runs Marker locally on exactly the requested pages and waits for it (synchronous, can take minutes; at most 12 pages per call, rolling page budget, one Marker run per workspace slot), adds a new immutable snapshot to the workspace parse cache and returns its markdown in the same result. A concurrent read of a PDF that is already being parsed waits for that parse instead of failing. The result is ok or truncated with the text, or capability_unavailable with details.ensure.status blocked_budget, capability_unavailable (Marker missing) or failed (Marker error or the sync time limit; nothing is left running); it never falls back to the PDF text layer. Do not poll or re-read to wait for parsing. To locate a phrase in a PDF quickly use material.grep (text-layer hits with a pdf_pages locator), then read that page here. It never modifies or deletes existing materials and never contacts the network. Keep PDF page ranges small. A canonical id may be passed as artifact_id with md_byte_range to read its head snapshot.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,21 +85,11 @@ struct ReadResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     total_pages: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    page_spans: Option<Vec<PageSpan>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     details: Option<Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     diagnostics: Vec<Value>,
-}
-
-/// Where each returned PDF page lives inside `text` (byte offsets, half-open).
-#[derive(Clone, Copy, Debug, Serialize)]
-struct PageSpan {
-    page: u32,
-    start: usize,
-    end: usize,
 }
 
 pub(super) fn definition() -> Value {
@@ -226,7 +221,8 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
 fn not_found(args: &ReadArgs, reason: &str, message: &str) -> Result<Value, ToolError> {
     let content_type = match args.locator {
         Locator::MdByteRange { .. } => "markdown",
-        Locator::PdfPages { .. } => "pdf_text",
+        // A careful PDF read only ever serves canonical markdown.
+        Locator::PdfPages { .. } => "markdown",
     };
     result(ReadResult {
         status: ToolStatus::NotFound,
@@ -237,7 +233,6 @@ fn not_found(args: &ReadArgs, reason: &str, message: &str) -> Result<Value, Tool
         truncated: None,
         total_bytes: None,
         total_pages: None,
-        page_spans: None,
         revision: None,
         details: Some(json!({ "reason": reason })),
         diagnostics: vec![diagnostic(reason, message)],
@@ -388,7 +383,6 @@ fn read_markdown(
         truncated: Some(truncated),
         total_bytes: Some(size),
         total_pages: None,
-        page_spans: None,
         revision: Some(material.revision.clone()),
         details: None,
         diagnostics,
@@ -443,152 +437,77 @@ fn read_pdf(
         ));
     }
 
-    let mut text = String::new();
-    let mut spans = Vec::new();
-    let mut empty_pages = Vec::new();
-    let mut truncated = false;
-    let mut batch_from = from;
-    'batches: while batch_from <= to {
-        let batch_to = batch_from.saturating_add(PDF_PAGE_BATCH - 1).min(to);
-        let selection = PdfSelection::inclusive_range(
-            page_count,
-            PdfPageIndex::new(batch_from - 1),
-            PdfPageIndex::new(batch_to - 1),
-        )
-        .map_err(pdf_error)?;
-        let pages = engine
-            .extract_positioned_text(&path, &selection, &options)
-            .map_err(pdf_error)?
-            .page_texts();
-        for (index, page_text) in pages {
-            let page = index.get() + 1;
-            // The separator is atomic: a one-byte remainder must not become a lone `\n`.
-            if !spans.is_empty() && !push_page_separator(&mut text) {
-                truncated = true;
-                break 'batches;
-            }
-            if page_text.trim().is_empty() {
-                empty_pages.push(page);
-            }
-            let start = text.len();
-            let complete = push_capped(&mut text, &page_text);
-            spans.push(PageSpan {
-                page,
-                start,
-                end: text.len(),
-            });
-            if !complete {
-                truncated = true;
-                break 'batches;
-            }
-        }
-        batch_from = batch_to + 1;
+    // Careful reads serve canonical markdown only: a covering snapshot first,
+    // whether or not these pages have a native text layer.
+    if let Some(served) = serve_canonical_snapshot(
+        workspace,
+        pool,
+        material,
+        args,
+        index,
+        from,
+        to,
+        page_count,
+        diagnostics.clone(),
+        None,
+    )? {
+        return Ok(served);
     }
-
-    let returned_to = spans.last().map_or(from, |span| span.page);
-    let requested = InclusivePageRange::new(from, returned_to).ok();
-    if !truncated && empty_pages.len() == spans.len() {
+    let requested = InclusivePageRange::new(from, to).ok();
+    let Some(request) = requested else {
+        return capability_unavailable(
+            workspace,
+            material,
+            &path,
+            from,
+            to,
+            page_count,
+            diagnostics,
+            None,
+        );
+    };
+    // Synchronous: returns only after Marker finished (or failed, or the
+    // sync deadline passed) and no lease of this call is left running.
+    let mut report = ensure::ensure(workspace, &material.id, &path, request, page_count);
+    let reloaded;
+    let index = if matches!(report.status, EnsureStatus::Expanded | EnsureStatus::Reused) {
+        reloaded = CanonicalIndex::load(workspace)?;
         if let Some(served) = serve_canonical_snapshot(
             workspace,
             pool,
             material,
             args,
-            index,
+            &reloaded,
             from,
-            returned_to,
+            to,
             page_count,
             diagnostics.clone(),
-            None,
+            Some(&report),
         )? {
             return Ok(served);
         }
-        let Some(request) = requested else {
-            return capability_unavailable(
-                workspace,
-                material,
-                from,
-                returned_to,
-                page_count,
-                diagnostics,
-                None,
-            );
-        };
-        // Synchronous: returns only after Marker finished (or failed, or the
-        // sync deadline passed) and no lease of this call is left running.
-        let mut report = ensure::ensure(workspace, &material.id, &path, request, page_count);
-        let reloaded;
-        let index = if matches!(report.status, EnsureStatus::Expanded | EnsureStatus::Reused) {
-            reloaded = CanonicalIndex::load(workspace)?;
-            if let Some(served) = serve_canonical_snapshot(
-                workspace,
-                pool,
-                material,
-                args,
-                &reloaded,
-                from,
-                returned_to,
-                page_count,
-                diagnostics.clone(),
-                Some(&report),
-            )? {
-                return Ok(served);
-            }
-            report.status = EnsureStatus::Failed;
-            report.message = format!(
-                "{}; but no snapshot containing pages {from}–{returned_to} could be served",
-                report.message
-            );
-            &reloaded
-        } else {
-            index
-        };
-        let unavailable = capability_unavailable(
-            workspace,
-            material,
-            from,
-            returned_to,
-            page_count,
-            diagnostics,
-            Some(&report),
-        )?;
-        return annotate_view(
-            unavailable,
-            index.for_pdf(material.id.as_str(), requested),
-            requested,
-            None,
+        report.status = EnsureStatus::Failed;
+        report.message = format!(
+            "{}; but no snapshot containing pages {from}–{to} could be served",
+            report.message
         );
-    }
-    if !empty_pages.is_empty() {
-        diagnostics.push(json!({
-            "code": "pdf_pages_without_text",
-            "message": "some pages have no text layer; Marker ensure runs only when every requested page lacks text. Request the empty pages alone to parse them",
-            "pages": empty_pages,
-        }));
-    }
-
-    let value = result(ReadResult {
-        status: if truncated {
-            ToolStatus::Truncated
-        } else {
-            ToolStatus::Ok
-        },
-        artifact_id: material.id.to_string(),
-        content_type: "pdf_text",
-        text: Some(text),
-        locator: Locator::PdfPages {
-            from,
-            to: returned_to,
-        },
-        truncated: Some(truncated),
-        total_bytes: None,
-        total_pages: Some(page_count),
-        page_spans: Some(spans),
-        revision: Some(material.revision.clone()),
-        details: None,
+        &reloaded
+    } else {
+        index
+    };
+    // No silent fallback to the native text layer.
+    let unavailable = capability_unavailable(
+        workspace,
+        material,
+        &path,
+        from,
+        to,
+        page_count,
         diagnostics,
-    })?;
+        Some(&report),
+    )?;
     annotate_view(
-        value,
+        unavailable,
         index.for_pdf(material.id.as_str(), requested),
         requested,
         None,
@@ -602,30 +521,32 @@ fn args_to(args: &ReadArgs) -> u32 {
     }
 }
 
-/// Appends [`PAGE_SEPARATOR`] only when both bytes fit under [`MAX_READ_BYTES`].
-/// Returns whether it was written. Never stores a partial separator.
-fn push_page_separator(text: &mut String) -> bool {
-    if text.len() + PAGE_SEPARATOR.len() > MAX_READ_BYTES {
-        return false;
+/// Diagnostic-only probe of the native text layer on the first
+/// [`TEXT_LAYER_PROBE_PAGES`] requested pages: `(probed_to, pages_with_text)`.
+/// `None` when the probe itself fails; the read result does not depend on it.
+fn probe_text_layer(path: &Path, page_count: u32, from: u32, to: u32) -> Option<(u32, Vec<u32>)> {
+    let probe_to = to
+        .min(from.saturating_add(TEXT_LAYER_PROBE_PAGES - 1))
+        .min(page_count);
+    if from == 0 || probe_to < from {
+        return None;
     }
-    text.push_str(PAGE_SEPARATOR);
-    true
-}
-
-/// Appends as much of `piece` as fits under [`MAX_READ_BYTES`], cutting at a
-/// character boundary. Returns whether all of it fit.
-fn push_capped(text: &mut String, piece: &str) -> bool {
-    let room = MAX_READ_BYTES.saturating_sub(text.len());
-    if piece.len() <= room {
-        text.push_str(piece);
-        return true;
-    }
-    let mut cut = room;
-    while !piece.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    text.push_str(&piece[..cut]);
-    false
+    let selection = PdfSelection::inclusive_range(
+        page_count,
+        PdfPageIndex::new(from - 1),
+        PdfPageIndex::new(probe_to - 1),
+    )
+    .ok()?;
+    let pages = PdfEngine
+        .extract_positioned_text(path, &selection, &PdfOpenOptions::new())
+        .ok()?
+        .page_texts();
+    let with_text = pages
+        .into_iter()
+        .filter(|(_, text)| !text.trim().is_empty())
+        .map(|(index, _)| index.get() + 1)
+        .collect();
+    Some((probe_to, with_text))
 }
 
 fn read_canonical_view(
@@ -721,12 +642,12 @@ fn serve_canonical_snapshot(
     diagnostics.push(match ensured {
         None => diagnostic(
             "served_canonical_markdown",
-            "requested pages have no text layer; returned the immutable canonical markdown snapshot that covers every requested page. Marker was not run",
+            "returned the immutable canonical markdown snapshot that covers every requested page (careful PDF reads never serve the native text layer). Marker was not run",
         ),
         Some(report) => diagnostic(
             report.status.diagnostic_code(),
             format!(
-                "requested pages had no text layer and no snapshot contained them; {}",
+                "no canonical markdown snapshot contained the requested pages; {}",
                 report.message
             ),
         ),
@@ -744,7 +665,6 @@ fn serve_canonical_snapshot(
         truncated: Some(truncated),
         total_bytes: None,
         total_pages: Some(page_count),
-        page_spans: None,
         revision: Some(material.revision.clone()),
         details: ensured
             .map(|report| ensure_details(report, &material.id, None))
@@ -849,9 +769,11 @@ fn annotate_view(
     Ok(value)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capability_unavailable(
     workspace: &McpWorkspace,
     material: &Material,
+    path: &Path,
     from: u32,
     to: u32,
     page_count: u32,
@@ -862,11 +784,18 @@ fn capability_unavailable(
         Some(probe) => probe,
         None => probe_capability(workspace.capability_runner(), Capability::Marker),
     };
-    if probe.state != CapabilityState::Available {
-        diagnostics.push(diagnostic(
+    match probe_text_layer(path, page_count, from, to) {
+        Some((probed_to, with_text)) if !with_text.is_empty() => diagnostics.push(json!({
+            "code": "pdf_text_layer_not_served",
+            "message": "these pages have a native PDF text layer, but material.read serves only canonical Marker markdown for careful reading and does not fall back to it. Use material.grep to locate text in the text layer; quote only from canonical markdown",
+            "probed_pages": { "from": from, "to": probed_to },
+            "pages_with_text": with_text,
+        })),
+        _ if probe.state != CapabilityState::Available => diagnostics.push(diagnostic(
             "pdf_no_text_layer",
             "requested pages have no text layer; install Marker to convert scanned PDFs",
-        ));
+        )),
+        _ => {}
     }
     if let Some(report) = report {
         diagnostics.push(diagnostic(
@@ -881,13 +810,12 @@ fn capability_unavailable(
     result(ReadResult {
         status: ToolStatus::CapabilityUnavailable,
         artifact_id: material.id.to_string(),
-        content_type: "pdf_text",
+        content_type: "markdown",
         text: None,
         locator: Locator::PdfPages { from, to },
         truncated: None,
         total_bytes: None,
         total_pages: Some(page_count),
-        page_spans: None,
         revision: Some(material.revision.clone()),
         details: Some(details),
         diagnostics,
@@ -936,19 +864,6 @@ mod tests {
             "locator": { "md_byte_range": { "start": 0, "end": 1 } },
         }))
         .unwrap()
-    }
-
-    #[test]
-    fn page_separator_is_not_split_at_the_byte_cap() {
-        let mut one_byte_short = "x".repeat(MAX_READ_BYTES - 1);
-        assert!(!push_page_separator(&mut one_byte_short));
-        assert_eq!(one_byte_short.len(), MAX_READ_BYTES - 1);
-        assert!(!one_byte_short.ends_with('\n'));
-
-        let mut exact = "x".repeat(MAX_READ_BYTES - PAGE_SEPARATOR.len());
-        assert!(push_page_separator(&mut exact));
-        assert_eq!(exact.len(), MAX_READ_BYTES);
-        assert!(exact.ends_with(PAGE_SEPARATOR));
     }
 
     #[test]
