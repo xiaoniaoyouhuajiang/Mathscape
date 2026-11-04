@@ -78,6 +78,31 @@ export function expandComposer(segments: readonly ComposerSegment[]): string {
   return segments.map((segment) => (segment.kind === "chip" ? segment.chip.id : segment.text)).join("");
 }
 
+/** Expanded [start, end) of every chip segment, in order. */
+export function chipSpans(segments: readonly ComposerSegment[]): [number, number][] {
+  const out: [number, number][] = [];
+  let at = 0;
+  for (const segment of segments) {
+    const len = segment.kind === "chip" ? segment.chip.id.length : segment.text.length;
+    if (segment.kind === "chip") out.push([at, at + len]);
+    at += len;
+  }
+  return out;
+}
+
+/**
+ * Token rule for inserting a chip (paste, drop, `@` pick): a chip that ends
+ * exactly at `caret` is followed by one visible space and the caret goes
+ * after it, so typing continues to the right of the token. An existing
+ * space is reused (never doubled); any other following character (text,
+ * "\n") gets a space in front of it. No chip at the caret: unchanged.
+ */
+export function spaceAfterChip(text: string, caret: number, spans: readonly [number, number][]): { text: string; caret: number } {
+  if (!spans.some(([, end]) => end === caret)) return { text, caret };
+  if (text[caret] === " ") return { text, caret: caret + 1 };
+  return { text: `${text.slice(0, caret)} ${text.slice(caret)}`, caret: caret + 1 };
+}
+
 // ---------------------------------------------------------------------------
 // @ mentions: suggestions from the current landscape
 
