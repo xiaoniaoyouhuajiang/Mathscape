@@ -12,7 +12,7 @@
  * Second slice (Act): a scene may carry an Act overlay. `workspace.search`
  * types its query in a HUD line before its hits land (a result segment that
  * follows a typed call shows the full query at once); `pdf.outline` and
- * `ink.page_image` open a temporary mini-window beside the focused node (or
+ * `ink.page_image` / `pdf.page_image` open a temporary mini-window beside the focused node (or
  * at the map stage's corner when nothing is on the map). The window closes
  * with the next segment and on Settle / 停止; nothing is persisted.
  * Ink pad open = the whole scene is skipped (same `canPlay` rule), so the page
@@ -717,14 +717,14 @@ function fillOutline(win: HTMLElement, act: OutlineAct): void {
 
 /** 页图 window: the PNG when returned, else text meta only. */
 function fillPageImage(win: HTMLElement, act: PageImageAct): void {
-  actHead(win, act.noteTitle ?? "手稿页图", act.pageLabel);
+  actHead(win, act.noteTitle ?? "页图", act.pageLabel);
   const empty = () => element("p", "scene-act-empty", "未取得页图（仅元数据）");
   if (!act.src) {
     win.append(empty());
     return;
   }
   const img = element("img", "scene-act-image");
-  img.alt = [act.noteTitle ?? "手稿页图", act.pageLabel].filter(Boolean).join(" · ");
+  img.alt = [act.noteTitle ?? "页图", act.pageLabel].filter(Boolean).join(" · ");
   if (act.width && act.height) {
     img.width = act.width;
     img.height = act.height;

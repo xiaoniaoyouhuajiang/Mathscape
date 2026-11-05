@@ -259,6 +259,38 @@ describe("Act overlays (第二刀)", () => {
     expect(compileToolScene(bare.call, bare.done)!.summary).toContain("仅元数据");
   });
 
+  it("pdf.page_image: 1-based page, artifact seed, PNG act; meta-only when no image", () => {
+    const PDF_META = {
+      status: "ok", artifact_id: ART, page: 2, page_count: 5,
+      page_size: { width: 612, height: 792, unit: "pt", rotation: 0 },
+      image: { format: "png", width: 800, height: 1000, scale: 1, bytes: 12, sha256: "abc" },
+      renderer: "hayro-0.8",
+    };
+    const { call, done } = step("pdf.page_image", { artifact_id: ART, page: 2 }, PDF_META, { text: true, image: { data: PNG } });
+    const draft = compileToolScene(call, done)!;
+    expect(draft.verb).toBe("PDF 页图");
+    expect(draft.detail).toBe("第 2/5 页");
+    expect(draft.seeds).toEqual([ART]);
+    expect(draft.summary).toContain("已取得页图");
+    expect(compileSceneAct(call, done)).toEqual({
+      kind: "page_image", src: `data:image/png;base64,${PNG}`, noteTitle: "PDF 页图", pageLabel: "第 2/5 页", width: 800, height: 1000,
+    });
+    const scene = resolveScene(draft, resolver());
+    expect(scene.title).toBe(`PDF 页图 · L:${ART.slice(-4)} · 第 2/5 页`);
+    expect(scene.seeds).toEqual([`n:${ART}`]);
+    expect(scene.anchor).toBe(`n:${ART}`);
+
+    const bare = step("pdf.page_image", { artifact_id: ART, page: 2 }, PDF_META, { text: true, image: null });
+    expect(compileSceneAct(bare.call, bare.done)).toMatchObject({ kind: "page_image", noteTitle: "PDF 页图", pageLabel: "第 2/5 页" });
+    expect(compileSceneAct(bare.call, bare.done)).not.toHaveProperty("src");
+    expect(compileToolScene(bare.call, bare.done)!.summary).toContain("仅元数据");
+
+    const cropped = step("pdf.page_image", { artifact_id: ART, page: 2, crop: { left: 0.1, top: 0.2, right: 0.9, bottom: 0.8 } }, {
+      ...PDF_META, crop: { left: 0.1, top: 0.2, right: 0.9, bottom: 0.8 },
+    }, { text: true, image: { data: PNG } });
+    expect(compileToolScene(cropped.call, cropped.done)!.detail).toBe("第 2/5 页 · 裁剪");
+  });
+
   it("resultImage rejects non-image mime types and non-base64 data", () => {
     expect(resultImage(step("ink.page_image", {}, INK_META, { text: true, image: { data: PNG, mimeType: "text/html" } }).done)).toBeUndefined();
     expect(resultImage(step("ink.page_image", {}, INK_META, { text: true, image: { data: "<svg onload=x>" } }).done)).toBeUndefined();

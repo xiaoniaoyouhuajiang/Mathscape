@@ -38,7 +38,7 @@ test.describe("S1 sandbox shell", () => {
     await banner.getByRole("button", { name: "对话" }).click();
     const dock = page.getByRole("complementary", { name: "沙箱对话" });
     await expect(dock).toBeVisible();
-    await expect(dock.locator(".sandbox-dock-status")).toHaveText("本机 Codex 0.124.0 · 7 个 Mathscape 工具");
+    await expect(dock.locator(".sandbox-dock-status")).toHaveText("本机 Codex 0.124.0 · 8 个 Mathscape 工具");
     const modelSelect = dock.locator(".sandbox-dock-model-select");
     await expect(modelSelect).toBeVisible();
     await expect(modelSelect).toHaveValue("gpt-test");
@@ -82,7 +82,7 @@ test.describe("S1 sandbox shell", () => {
     const live = dock.locator(".sandbox-line.is-live");
     await expect(live.locator(".sandbox-turn-status")).toHaveText("正在调用 workspace.search");
     await expect(live.locator(".sandbox-step.is-running .sandbox-step-badge")).toHaveText("进行中");
-    await expect(live.locator(".sandbox-step-title")).toHaveText(["MCP 工具 7/7", "workspace.search"]);
+    await expect(live.locator(".sandbox-step-title")).toHaveText(["MCP 工具 8/8", "workspace.search"]);
     const agent = dock.locator(".sandbox-line.role-agent");
     await expect(agent.locator(".sandbox-line-text")).toHaveText(/定理 3\.2/);
     await expect(agent.locator(".sandbox-turn-status")).toHaveText("已完成");
@@ -91,7 +91,7 @@ test.describe("S1 sandbox shell", () => {
     await expect(summary).toContainText("120/30 tokens");
     await expect(agent.locator(".sandbox-step")).toHaveCount(0);
     await summary.click();
-    await expect(agent.locator(".sandbox-step-title")).toHaveText(["MCP 工具 7/7", "workspace.search"]);
+    await expect(agent.locator(".sandbox-step-title")).toHaveText(["MCP 工具 8/8", "workspace.search"]);
     await expect(agent.locator(".sandbox-process-usage")).toHaveText("用量：输入 120 · 输出 30");
     await agent.locator(".sandbox-step-head").nth(1).click();
     await expect(agent.locator(".sandbox-step-pre").first()).toContainText("query=紧集");
@@ -878,5 +878,36 @@ test.describe("S1 sandbox shell", () => {
     await expect(win.locator(".scene-act-empty")).toHaveText("未取得页图（仅元数据）");
     await expect(win.locator("img")).toHaveCount(0);
   });
+
+  test("Scene Act: pdf.page_image shows the page image beside the PDF node", async ({ page }) => {
+    const dock = await sandboxDock(page, { act: "pdf_page_image", delayMs: 30, gapMs: 400 });
+    await dock.locator(".sandbox-dock-input").fill("看看 PDF 页");
+    await dock.getByRole("button", { name: "发送" }).click();
+    const hud = page.locator(".canvas-panel .scene-hud");
+    await expect(hud.locator(".scene-hud-title")).toContainText("PDF 页图");
+    await expect(hud.locator(".scene-hud-title")).toContainText("第 2/5 页");
+    const win = page.locator(".canvas-panel .scene-act[data-act='page_image']");
+    await expect(win).toBeVisible();
+    await expect(win.locator(".scene-act-title")).toHaveText("PDF 页图");
+    await expect(win.locator(".scene-act-meta")).toHaveText("第 2/5 页");
+    const img = win.locator("img.scene-act-image");
+    await expect(img).toHaveAttribute("src", /^data:image\/png;base64,/);
+    await expect.poll(() => img.evaluate((node: HTMLImageElement) => node.naturalWidth)).toBe(1);
+    await expect(hud).toBeHidden({ timeout: 10000 });
+    await expect(win).toHaveCount(0);
+  });
+
+  test("Scene Act: pdf.page_image without image bytes degrades to text meta", async ({ page }) => {
+    const dock = await sandboxDock(page, { act: "pdf_page_image_meta", delayMs: 30, gapMs: 400 });
+    await dock.locator(".sandbox-dock-input").fill("看看 PDF 页");
+    await dock.getByRole("button", { name: "发送" }).click();
+    const hud = page.locator(".canvas-panel .scene-hud");
+    await expect(hud.locator(".scene-hud-summary")).toContainText("仅元数据（无页图）");
+    const win = page.locator(".canvas-panel .scene-act[data-act='page_image']");
+    await expect(win).toBeVisible();
+    await expect(win.locator(".scene-act-empty")).toHaveText("未取得页图（仅元数据）");
+    await expect(win.locator("img")).toHaveCount(0);
+  });
+
 });
 
