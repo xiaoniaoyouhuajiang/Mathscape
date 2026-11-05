@@ -1767,8 +1767,9 @@ fn scanned_pdf_read_reports_canonical_coverage_without_running_marker() {
         "{via_canonical}"
     );
 
-    // A PDF id with a current canonical head greps the head markdown, not the
-    // (empty) text layer, and never runs Marker.
+    // A PDF id with a current canonical head greps its snapshots' markdown for
+    // covered pages, the (empty) text layer only for the rest, and never runs
+    // Marker.
     let via_pdf = grep(&server, json!({ "artifact_ids": [pdf], "pattern": "扫描" }));
     assert_eq!(via_pdf["status"], "ok", "{via_pdf}");
     let hit = &via_pdf["hits"][0];
@@ -1786,6 +1787,13 @@ fn scanned_pdf_read_reports_canonical_coverage_without_running_marker() {
     assert_eq!(resolved["artifact_id"], pdf);
     assert_eq!(resolved["canonical_id"], canonical.canonical_id().as_str());
     assert_eq!(resolved["searched_pages"], json!([{ "from": 1, "to": 1 }]));
+    // The uncovered page 2 is searched in its (empty) text layer, honestly.
+    assert_eq!(
+        resolved["text_layer_pages"],
+        json!([{ "from": 2, "to": 2 }])
+    );
+    assert_eq!(resolved["unsearched_pages"], json!([]));
+    assert_eq!(via_pdf["hits"].as_array().unwrap().len(), 1, "{via_pdf}");
     let round_trip = read(
         &server,
         json!({ "artifact_id": hit["artifact_id"], "locator": hit["locator"] }),

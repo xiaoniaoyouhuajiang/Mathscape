@@ -10,35 +10,47 @@
 //!   `md_byte_range` covering that match, so a follow-up `material.read`
 //!   quotes it.
 //! - `application/pdf` with a current-lineage canonical head (the lineage the
-//!   map and search fold call 「规范解析正文」) whose managed markdown copy is
-//!   readable: that head markdown is scanned exactly like a markdown id. Hits
-//!   carry `artifact_id` = the head snapshot, an `md_byte_range` locator into
-//!   it, plus `canonical_id`, `coverage` and `partial`; a
-//!   `pdf_resolved_to_canonical` diagnostic names the PDF, the head and the
-//!   pages the head covers (pages outside `coverage.head_covered` were not
-//!   searched). Neither Marker nor the text layer is run for that PDF.
-//! - `application/pdf` without a usable canonical head (no lineage with a
-//!   head, head not in the catalog / not markdown / no managed copy): the
-//!   native text layer extracted by `mathscape-pdf` (the same engine
-//!   `pdf.outline` uses; never Marker) is scanned page by page. Each hit's
-//!   locator is `pdf_pages` with `from == to ==` the page of the match, and
-//!   `surface: "pdf_text_layer"`. The snippet is for localization only; the
-//!   careful quote comes from `material.read` on that page, which serves
-//!   canonical markdown. Matches spanning a page break are not found.
+//!   map and search fold call 「规范解析正文」, chosen by
+//!   [`CanonicalAliasTable`](mathscape_query::CanonicalAliasTable)) whose
+//!   managed markdown copy is readable: every markdown snapshot in that
+//!   lineage's coverage ledger is scanned, not only the head — the head
+//!   first, then the newest snapshots that add pages the chosen ones do not
+//!   cover yet (a snapshot that adds nothing is skipped, so overlapping
+//!   re-parses are not scanned twice). Hits carry `artifact_id` = the
+//!   physical snapshot that matched, an `md_byte_range` locator into it, plus
+//!   `canonical_id`, `coverage` and `partial` (exactly as when that markdown
+//!   id is grepped directly, so the pair goes to `material.read` unchanged).
+//!   A `pdf_resolved_to_canonical` diagnostic lists the scanned snapshots,
+//!   `searched_pages` (their page union), `text_layer_pages` and
+//!   `unsearched_pages`.
+//! - Pages of that PDF outside the snapshot union, and every page when no
+//!   usable canonical head exists (no lineage with a head, head not in the
+//!   catalog / not markdown / no managed copy): the native text layer
+//!   extracted by `mathscape-pdf` (the same engine `pdf.outline` uses; never
+//!   Marker) is scanned page by page. Each hit's locator is `pdf_pages` with
+//!   `from == to ==` the page of the match, and `surface: "pdf_text_layer"`;
+//!   the two locator shapes are never merged into one hit. The snippet is for
+//!   localization only; the careful quote comes from `material.read` on that
+//!   page, which serves canonical markdown. Matches spanning a page break are
+//!   not found.
 //!
-//! `snippet` is a verbatim window of the surrounding line (capped), not a
-//! second locator. `score` is always [`LITERAL_SCORE`] — this scan does not
-//! rank.
+//! A grep hit is a location, never quotable body text. `snippet` is a
+//! verbatim window of the surrounding line (capped), not a second locator.
+//! `score` is always [`LITERAL_SCORE`] — this scan does not rank.
 //!
 //! A missing id is business `not_found` with no partial hits. Other media is
 //! `invalid_arg`. More matches than `max_hits`, or more than
-//! [`MAX_SCAN_BYTES`] of one file's text, is business `truncated`.
+//! [`MAX_SCAN_BYTES`] of one markdown snapshot's text or of one PDF's text
+//! layer, is business `truncated`.
 
 use std::collections::HashSet;
 
 use mathscape_agent::{Locator, ToolError, ToolErrorCode, ToolStatus};
 use mathscape_artifact::{ArtifactPool, ArtifactPoolError};
-use mathscape_domain::{CanonicalMarkdownView, InclusivePageRange, MarkdownCoverage, StableId};
+use mathscape_domain::{
+    CanonicalMarkdownView, InclusivePageRange, MarkdownCoverage, StableId, covers_range,
+    merge_page_ranges, missing_pages,
+};
 use mathscape_pdf::{PdfEngine, PdfOpenOptions, PdfPageIndex, PdfSelection};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -53,8 +65,8 @@ use crate::McpWorkspace;
 
 /// Default and hard maximum number of hits.
 pub const MAX_GREP_HITS: usize = 50;
-/// Bytes of each material's text (markdown body or PDF text layer) that one
-/// call will scan.
+/// Bytes of one markdown snapshot's text, or of one PDF's text layer, that
+/// one call will scan.
 pub const MAX_SCAN_BYTES: u64 = 1024 * 1024;
 /// PDF pages are extracted in batches so a large PDF stops at the byte cap.
 const PDF_SCAN_BATCH: u32 = 32;
@@ -69,7 +81,7 @@ pub const SNIPPET_MAX_BYTES: usize = 512;
 
 const LITERAL_SCORE: u32 = 1;
 
-const DESCRIPTION: &str = "Coarse locate: search specific materials for a case-sensitive literal substring (not a regular expression). artifact_ids is required and non-empty; this tool does not scan the whole workspace. text/markdown: the body is searched and each hit locator is an md_byte_range of that match. A canonical markdown id is resolved to its head snapshot; hits on a canonical snapshot include canonical_id, coverage and partial. application/pdf: when the PDF has a current canonical markdown head, that head markdown is searched instead (canonical first): hits have artifact_id = the head snapshot, an md_byte_range locator into it (pass both to material.read unchanged), plus canonical_id, coverage and partial, and a pdf_resolved_to_canonical diagnostic; pages outside coverage.head_covered were not searched (partial true), read them with material.read pdf_pages to parse them first. Only when no usable canonical head exists, the native PDF text layer is searched page by page (fast, no OCR; scanned pages without a text layer never match, nor do matches across a page break); each such hit has surface pdf_text_layer and a pdf_pages locator {from,to} of the page of the match. Text-layer snippets are for localization only and are not canonical text: pass the hit locator to material.read to read that page as canonical markdown before quoting. A missing artifact_id yields status not_found and no partial hits. Stops at max_hits (default and maximum 50) or after the first 1 MiB of one material's text; either limit returns status truncated and truncated true. This tool never runs Marker. Read-only.";
+const DESCRIPTION: &str = "Coarse locate: search specific materials for a case-sensitive literal substring (not a regular expression). artifact_ids is required and non-empty; this tool does not scan the whole workspace. text/markdown: the body is searched and each hit locator is an md_byte_range of that match. A canonical markdown id is resolved to its head snapshot; hits on a canonical snapshot include canonical_id, coverage and partial. application/pdf, canonical first: when the PDF has a current canonical markdown head, every markdown snapshot in that lineage's coverage is searched (the union of coverage.covered, not only the head): each such hit has artifact_id = the physical snapshot that matched and an md_byte_range locator into it (pass both to material.read unchanged), plus canonical_id, coverage and partial; a pdf_resolved_to_canonical diagnostic lists the searched snapshots, searched_pages, text_layer_pages and unsearched_pages. Pages outside that union, or every page when there is no usable canonical head, are searched in the native PDF text layer page by page (fast, no OCR; scanned pages without a text layer never match, nor do matches across a page break); each such hit has surface pdf_text_layer and a pdf_pages locator {from,to} of the page of the match, never an md_byte_range. A grep hit is a location, not quotable body text: snippets (text-layer ones especially) are for localization only; to quote or build nodes, call material.read with the hit's artifact_id and locator (a pdf_pages read serves canonical markdown, parsing those pages first when needed). A missing artifact_id yields status not_found and no partial hits. Stops at max_hits (default and maximum 50), after the first 1 MiB of one markdown snapshot's text, or after 1 MiB of one PDF's text layer; either limit returns status truncated and truncated true. This tool never runs Marker. Read-only.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -129,7 +141,7 @@ pub(super) fn definition() -> Value {
                     "minItems": 1,
                     "maxItems": MAX_ARTIFACT_IDS,
                     "items": { "type": "string" },
-                    "description": "Stable ids to scan, in order. Required and non-empty. Duplicates are rejected. Every id must be text/markdown, a canonical markdown id, or application/pdf (its current canonical markdown head is scanned when one exists, otherwise its native text layer).",
+                    "description": "Stable ids to scan, in order. Required and non-empty. Duplicates are rejected. Every id must be text/markdown, a canonical markdown id, or application/pdf (the markdown snapshots of its current canonical lineage are scanned, covering every page in that lineage's coverage, plus the native text layer of the pages they do not cover; without a usable canonical head, the whole native text layer).",
                 },
                 "pattern": {
                     "type": "string",
@@ -172,142 +184,40 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
     ensure_supported(&materials)?;
 
     let pool = workspace.pool()?;
-    let mut hits = Vec::new();
-    let mut diagnostics = Vec::new();
+    let mut out = HitSink {
+        pattern: &args.pattern,
+        hits: Vec::new(),
+        diagnostics: Vec::new(),
+    };
     let mut hit_limited = false;
     let mut scan_capped = false;
     for material in &materials {
-        let room = max_hits - hits.len();
-        if material.media_type == PDF_MEDIA_TYPE {
-            match canonical_head(workspace, &pool, &index, material)? {
-                CanonicalHead::Usable { view, head } => {
-                    let coverage = view.coverage(None);
-                    diagnostics.push(json!({
-                        "code": "pdf_resolved_to_canonical",
-                        "message": if coverage.head_covered.is_empty() {
-                            "searched the canonical markdown head of this PDF instead of its text layer".to_owned()
-                        } else {
-                            format!(
-                                "searched the canonical markdown head of this PDF (pages {}) instead of its text layer; other pages were not searched",
-                                ranges_label(&coverage.head_covered)
-                            )
-                        },
-                        "artifact_id": material.id.to_string(),
-                        "canonical_id": view.canonical_id.to_string(),
-                        "head_artifact_id": head.id.to_string(),
-                        "searched_pages": coverage.head_covered,
-                        "partial": coverage.partial,
-                    }));
-                    let attachment = (view.canonical_id.to_string(), coverage.partial, coverage);
-                    match scan_markdown(
-                        &pool,
-                        &head,
-                        Some(attachment),
-                        &args.pattern,
-                        room,
-                        &mut hits,
-                        &mut diagnostics,
-                    )? {
-                        MarkdownScan::Scanned { limited, capped } => {
-                            scan_capped |= capped;
-                            if limited {
-                                hit_limited = true;
-                                break;
-                            }
-                        }
-                        MarkdownScan::Finished(value) => return Ok(value),
-                    }
-                    continue;
-                }
-                CanonicalHead::Unusable {
-                    canonical_id,
-                    reason,
-                } => {
-                    diagnostics.push(json!({
-                        "code": "canonical_head_unavailable",
-                        "message": "the PDF's canonical markdown head is not readable; fell back to the native text layer",
-                        "artifact_id": material.id.to_string(),
-                        "canonical_id": canonical_id,
-                        "reason": reason,
-                    }));
-                }
-                CanonicalHead::None => {}
-            }
-            let scan = match scan_pdf(&pool, material, &args.pattern, room)? {
-                PdfScan::Scanned(scan) => scan,
-                PdfScan::Finished(value) => return Ok(value),
-            };
-            if let Some(capped) = scan.capped {
-                scan_capped = true;
-                diagnostics.push(json!({
-                    "code": "scan_capped",
-                    "message": format!(
-                        "scanned the text layer of pages 1–{} ({} bytes); later pages were not searched",
-                        capped.scanned_to, capped.scanned_bytes
-                    ),
-                    "artifact_id": material.id.to_string(),
-                    "scanned_pages": { "from": 1, "to": capped.scanned_to },
-                    "scanned_bytes": capped.scanned_bytes,
-                    "total_pages": scan.total_pages,
-                }));
-            }
-            if !scan.hits.is_empty() {
-                diagnostics.push(json!({
-                    "code": "pdf_text_layer_hits",
-                    "message": "hits come from the native PDF text layer (coarse locate, not canonical text); read the hit's pdf_pages with material.read for canonical markdown before quoting",
-                    "artifact_id": material.id.to_string(),
-                }));
-            }
-            for (page, found) in scan.hits {
-                let pages = InclusivePageRange::new(page, page).ok();
-                let attachment = index.for_pdf(material.id.as_str(), pages).map(|view| {
-                    let coverage = view.coverage(pages);
-                    (view.canonical_id.to_string(), coverage.partial, coverage)
-                });
-                hits.push(GrepHit {
-                    artifact_id: material.id.to_string(),
-                    locator: Locator::PdfPages {
-                        from: page,
-                        to: page,
-                    },
-                    snippet: found.snippet,
-                    score: LITERAL_SCORE,
-                    revision: material.revision.clone(),
-                    canonical_id: attachment.as_ref().map(|(id, _, _)| id.clone()),
-                    partial: attachment.as_ref().map(|(_, partial, _)| *partial),
-                    coverage: attachment.map(|(_, _, coverage)| coverage),
-                    surface: Some(PDF_TEXT_LAYER_SURFACE),
-                });
-            }
-            if scan.limited {
-                hit_limited = true;
-                break;
-            }
-            continue;
-        }
-        let attachment = index.for_markdown(material.id.as_str()).map(|view| {
-            let coverage = view.coverage(None);
-            (view.canonical_id.to_string(), coverage.partial, coverage)
-        });
-        match scan_markdown(
-            &pool,
-            material,
-            attachment,
-            &args.pattern,
-            room,
-            &mut hits,
-            &mut diagnostics,
-        )? {
-            MarkdownScan::Scanned { limited, capped } => {
+        let room = max_hits - out.hits.len();
+        let scan = if material.media_type == PDF_MEDIA_TYPE {
+            grep_pdf(workspace, &pool, &index, material, room, &mut out)?
+        } else {
+            let attachment = index.for_markdown(material.id.as_str()).map(|view| {
+                let coverage = view.coverage(None);
+                (view.canonical_id.to_string(), coverage.partial, coverage)
+            });
+            scan_markdown(&pool, material, attachment, room, &mut out)?
+        };
+        match scan {
+            Scan::Scanned { limited, capped } => {
                 scan_capped |= capped;
                 if limited {
                     hit_limited = true;
                     break;
                 }
             }
-            MarkdownScan::Finished(value) => return Ok(value),
+            Scan::Finished(value) => return Ok(value),
         }
     }
+    let HitSink {
+        hits,
+        mut diagnostics,
+        ..
+    } = out;
     if hit_limited {
         diagnostics.push(diagnostic(
             "hit_limit",
@@ -330,29 +240,34 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
 
 type Attachment = (String, bool, MarkdownCoverage);
 
-/// Outcome of scanning one markdown body.
-enum MarkdownScan {
+/// Pattern plus the hits and diagnostics accumulated across materials.
+struct HitSink<'p> {
+    pattern: &'p str,
+    hits: Vec<GrepHit>,
+    diagnostics: Vec<Value>,
+}
+
+/// Outcome of scanning one material (or one surface of it).
+enum Scan {
     Scanned { limited: bool, capped: bool },
     Finished(Value),
 }
 
-/// Scans one markdown material (a markdown id, or a PDF's canonical head)
-/// and appends `md_byte_range` hits on that material.
+/// Scans one markdown material (a markdown id, or a snapshot of a PDF's
+/// canonical lineage) and appends `md_byte_range` hits on that material.
 fn scan_markdown(
     pool: &ArtifactPool,
     material: &Material,
     attachment: Option<Attachment>,
-    pattern: &str,
     room: usize,
-    hits: &mut Vec<GrepHit>,
-    diagnostics: &mut Vec<Value>,
-) -> Result<MarkdownScan, ToolError> {
+    out: &mut HitSink<'_>,
+) -> Result<Scan, ToolError> {
     let (text, capped) = match load_text(pool, material)? {
         Loaded::Text { text, capped } => (text, capped),
-        Loaded::Finished(value) => return Ok(MarkdownScan::Finished(value)),
+        Loaded::Finished(value) => return Ok(Scan::Finished(value)),
     };
     if capped {
-        diagnostics.push(json!({
+        out.diagnostics.push(json!({
             "code": "scan_capped",
             "message": format!(
                 "scanned the first {} bytes of this markdown; the remainder was not searched",
@@ -363,9 +278,9 @@ fn scan_markdown(
             "total_bytes": material.byte_size,
         }));
     }
-    let (found, limited) = scan_text(&text, pattern, room);
+    let (found, limited) = scan_text(&text, out.pattern, room);
     for found in found {
-        hits.push(GrepHit {
+        out.hits.push(GrepHit {
             artifact_id: material.id.to_string(),
             locator: Locator::MdByteRange {
                 start: found.start,
@@ -380,15 +295,296 @@ fn scan_markdown(
             surface: None,
         });
     }
-    Ok(MarkdownScan::Scanned { limited, capped })
+    Ok(Scan::Scanned { limited, capped })
 }
 
-/// Whether a PDF id can be served from its current canonical markdown head.
-enum CanonicalHead<'a> {
-    Usable {
-        view: &'a CanonicalMarkdownView,
-        head: Material,
-    },
+/// A PDF id: its current canonical lineage's snapshots, then the native
+/// text layer of every page those snapshots do not cover. Without a usable
+/// canonical head, the whole text layer.
+fn grep_pdf(
+    workspace: &McpWorkspace,
+    pool: &ArtifactPool,
+    index: &CanonicalIndex,
+    material: &Material,
+    room: usize,
+    out: &mut HitSink<'_>,
+) -> Result<Scan, ToolError> {
+    match canonical_plan(workspace, pool, index, material)? {
+        CanonicalPlan::Usable(plan) => grep_canonical_pdf(pool, &plan, material, room, out),
+        CanonicalPlan::Unusable {
+            canonical_id,
+            reason,
+        } => {
+            out.diagnostics.push(json!({
+                "code": "canonical_head_unavailable",
+                "message": "the PDF's canonical markdown head is not readable; fell back to the native text layer",
+                "artifact_id": material.id.to_string(),
+                "canonical_id": canonical_id,
+                "reason": reason,
+            }));
+            grep_whole_text_layer(pool, index, material, room, out)
+        }
+        CanonicalPlan::None => grep_whole_text_layer(pool, index, material, room, out),
+    }
+}
+
+/// Every page's text layer (no usable canonical head). A missing managed PDF
+/// copy is the call's business `not_found`, as before.
+fn grep_whole_text_layer(
+    pool: &ArtifactPool,
+    index: &CanonicalIndex,
+    material: &Material,
+    room: usize,
+    out: &mut HitSink<'_>,
+) -> Result<Scan, ToolError> {
+    let scan = match scan_pdf(pool, material, out.pattern, room, &[])? {
+        PdfScan::Scanned(scan) => scan,
+        PdfScan::Finished(value) => return Ok(Scan::Finished(value)),
+    };
+    let capped = scan.capped.is_some();
+    let limited = scan.limited;
+    if let Some(cap) = &scan.capped {
+        out.diagnostics.push(text_layer_capped(
+            material,
+            &scan.scanned_pages,
+            cap,
+            scan.total_pages,
+        ));
+    }
+    push_text_layer_hits(
+        material,
+        scan.hits,
+        |page| {
+            let pages = InclusivePageRange::new(page, page).ok();
+            index.for_pdf(material.id.as_str(), pages).map(|view| {
+                let coverage = view.coverage(pages);
+                (view.canonical_id.to_string(), coverage.partial, coverage)
+            })
+        },
+        out,
+    );
+    Ok(Scan::Scanned { limited, capped })
+}
+
+fn grep_canonical_pdf(
+    pool: &ArtifactPool,
+    plan: &LineagePlan<'_>,
+    material: &Material,
+    room: usize,
+    out: &mut HitSink<'_>,
+) -> Result<Scan, ToolError> {
+    let view = plan.view;
+    let coverage = view.coverage(None);
+    let partial = coverage.partial;
+    let attachment: Attachment = (view.canonical_id.to_string(), partial, coverage);
+    let base = out.hits.len();
+    let left = |out: &HitSink<'_>| room.saturating_sub(out.hits.len() - base);
+    // Filled in once both surfaces are known, ahead of per-surface notes.
+    let slot = out.diagnostics.len();
+    out.diagnostics.push(Value::Null);
+
+    let mut searched = Vec::new();
+    let mut searched_snapshots = Vec::new();
+    let mut capped = false;
+    let mut limited = false;
+    for snapshot in &plan.snapshots {
+        match scan_markdown(
+            pool,
+            &snapshot.material,
+            Some(attachment.clone()),
+            left(out),
+            out,
+        )? {
+            Scan::Scanned {
+                limited: snapshot_limited,
+                capped: snapshot_capped,
+            } => {
+                capped |= snapshot_capped;
+                searched.extend(snapshot.pages.iter().copied());
+                searched_snapshots.push(json!({
+                    "artifact_id": snapshot.material.id.to_string(),
+                    "pages": snapshot.pages,
+                    "head": snapshot.material.id == plan.head_id,
+                }));
+                if snapshot_limited {
+                    limited = true;
+                    break;
+                }
+            }
+            Scan::Finished(value) => return Ok(Scan::Finished(value)),
+        }
+    }
+    let searched = merge_page_ranges(searched);
+
+    // Text layer of the pages no scanned snapshot covers. Failing to read it
+    // must not discard the canonical hits, so problems become a diagnostic.
+    let mut total_pages = view.total_pages;
+    let mut text_layer_pages = Vec::new();
+    let mut text_layer_unavailable = None;
+    let gap_unknown_or_open =
+        total_pages.is_none_or(|total| !missing_pages(total, &searched).is_empty());
+    if !limited && gap_unknown_or_open {
+        match scan_pdf(pool, material, out.pattern, left(out), &searched) {
+            Ok(PdfScan::Scanned(scan)) => {
+                total_pages = Some(scan.total_pages);
+                if let Some(cap) = &scan.capped {
+                    capped = true;
+                    out.diagnostics.push(text_layer_capped(
+                        material,
+                        &scan.scanned_pages,
+                        cap,
+                        scan.total_pages,
+                    ));
+                }
+                limited |= scan.limited;
+                text_layer_pages = scan.scanned_pages;
+                push_text_layer_hits(
+                    material,
+                    scan.hits,
+                    |page| {
+                        let pages = InclusivePageRange::new(page, page).ok();
+                        let coverage = view.coverage(pages);
+                        Some((view.canonical_id.to_string(), coverage.partial, coverage))
+                    },
+                    out,
+                );
+            }
+            Ok(PdfScan::Finished(_)) => {
+                text_layer_unavailable = Some("content_unavailable".to_owned());
+            }
+            Err(error) if error.code == ToolErrorCode::Internal => {
+                text_layer_unavailable = Some(error.message);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let reached = merge_page_ranges(searched.iter().chain(&text_layer_pages).copied());
+    let unsearched = total_pages.map_or_else(Vec::new, |total| missing_pages(total, &reached));
+
+    let mut message = if searched.is_empty() {
+        format!(
+            "searched {} canonical markdown snapshot(s) of this PDF (no recorded page range)",
+            searched_snapshots.len()
+        )
+    } else {
+        format!(
+            "searched {} canonical markdown snapshot(s) of this PDF covering pages {}",
+            searched_snapshots.len(),
+            ranges_label(&searched)
+        )
+    };
+    if !text_layer_pages.is_empty() {
+        message.push_str(&format!(
+            "; pages {} have no canonical markdown and were searched in the native text layer (locate only, read them with material.read pdf_pages before quoting)",
+            ranges_label(&text_layer_pages)
+        ));
+    }
+    if text_layer_unavailable.is_some() {
+        message.push_str("; the native text layer could not be read");
+    }
+    if !unsearched.is_empty() {
+        message.push_str(&format!(
+            "; pages {} were not searched",
+            ranges_label(&unsearched)
+        ));
+    }
+    let mut resolved = json!({
+        "code": "pdf_resolved_to_canonical",
+        "message": message,
+        "artifact_id": material.id.to_string(),
+        "canonical_id": view.canonical_id.to_string(),
+        "head_artifact_id": plan.head_id.to_string(),
+        "searched_pages": searched,
+        "searched_snapshots": searched_snapshots,
+        "text_layer_pages": text_layer_pages,
+        "unsearched_pages": unsearched,
+        "partial": partial,
+    });
+    if !plan.skipped.is_empty() {
+        resolved["skipped_snapshots"] = Value::Array(plan.skipped.clone());
+    }
+    if let Some(reason) = text_layer_unavailable {
+        resolved["text_layer_unavailable"] = json!(reason);
+    }
+    out.diagnostics[slot] = resolved;
+    Ok(Scan::Scanned { limited, capped })
+}
+
+fn text_layer_capped(
+    material: &Material,
+    scanned_pages: &[InclusivePageRange],
+    cap: &PdfScanCap,
+    total_pages: u32,
+) -> Value {
+    json!({
+        "code": "scan_capped",
+        "message": format!(
+            "scanned the text layer of pages {} ({} bytes); later pages were not searched",
+            ranges_label(scanned_pages),
+            cap.scanned_bytes
+        ),
+        "artifact_id": material.id.to_string(),
+        "scanned_pages": scanned_pages,
+        "scanned_bytes": cap.scanned_bytes,
+        "total_pages": total_pages,
+    })
+}
+
+/// Appends `pdf_pages` + `surface: pdf_text_layer` hits (never an
+/// `md_byte_range`), and the locate-only diagnostic when there are any.
+fn push_text_layer_hits(
+    material: &Material,
+    found: Vec<(u32, RawHit)>,
+    attachment_for: impl Fn(u32) -> Option<Attachment>,
+    out: &mut HitSink<'_>,
+) {
+    if found.is_empty() {
+        return;
+    }
+    out.diagnostics.push(json!({
+        "code": "pdf_text_layer_hits",
+        "message": "hits come from the native PDF text layer (coarse locate, not canonical text); read the hit's pdf_pages with material.read for canonical markdown before quoting",
+        "artifact_id": material.id.to_string(),
+    }));
+    for (page, found) in found {
+        let attachment = attachment_for(page);
+        out.hits.push(GrepHit {
+            artifact_id: material.id.to_string(),
+            locator: Locator::PdfPages {
+                from: page,
+                to: page,
+            },
+            snippet: found.snippet,
+            score: LITERAL_SCORE,
+            revision: material.revision.clone(),
+            canonical_id: attachment.as_ref().map(|(id, _, _)| id.clone()),
+            partial: attachment.as_ref().map(|(_, partial, _)| *partial),
+            coverage: attachment.map(|(_, _, coverage)| coverage),
+            surface: Some(PDF_TEXT_LAYER_SURFACE),
+        });
+    }
+}
+
+/// One physical markdown snapshot of the current lineage to scan.
+struct PlannedSnapshot {
+    material: Material,
+    /// Merged 1-based pages this snapshot records (empty when none).
+    pages: Vec<InclusivePageRange>,
+}
+
+struct LineagePlan<'a> {
+    view: &'a CanonicalMarkdownView,
+    head_id: StableId,
+    /// In page order (a head without a recorded range first).
+    snapshots: Vec<PlannedSnapshot>,
+    /// Snapshots that would add pages but cannot be read; their pages fall
+    /// back to the text layer.
+    skipped: Vec<Value>,
+}
+
+/// Whether a PDF id can be served from its current canonical lineage.
+enum CanonicalPlan<'a> {
+    Usable(LineagePlan<'a>),
     /// A current lineage exists, but its head cannot be scanned.
     Unusable {
         canonical_id: String,
@@ -397,37 +593,110 @@ enum CanonicalHead<'a> {
     None,
 }
 
-fn canonical_head<'a>(
+/// Head first, then the newest snapshots (finished last) that add pages not
+/// covered by those already chosen. A snapshot whose pages are already
+/// covered is not scanned, so overlapping re-parses do not double hits.
+fn canonical_plan<'a>(
     workspace: &McpWorkspace,
     pool: &ArtifactPool,
     index: &'a CanonicalIndex,
     pdf: &Material,
-) -> Result<CanonicalHead<'a>, ToolError> {
+) -> Result<CanonicalPlan<'a>, ToolError> {
     let Some(view) = index.current_for_pdf(pdf.id.as_str()) else {
-        return Ok(CanonicalHead::None);
+        return Ok(CanonicalPlan::None);
     };
-    let unusable = |reason| {
-        Ok(CanonicalHead::Unusable {
-            canonical_id: view.canonical_id.to_string(),
-            reason,
-        })
+    let Some(head_id) = view.head_artifact_id.clone() else {
+        return Ok(CanonicalPlan::None);
     };
-    let Some(head_id) = view.head_artifact_id.as_ref() else {
-        return Ok(CanonicalHead::None);
+    let head = match snapshot_material(workspace, pool, &head_id)? {
+        Ok(head) => head,
+        Err(reason) => {
+            return Ok(CanonicalPlan::Unusable {
+                canonical_id: view.canonical_id.to_string(),
+                reason: match reason {
+                    "not_in_catalog" => "head_not_in_catalog",
+                    "not_markdown" => "head_not_markdown",
+                    other => other,
+                },
+            });
+        }
     };
-    let Some(head) = find_material(workspace, head_id)? else {
-        return unusable("head_not_in_catalog");
+    let pages_of = |id: &StableId| {
+        merge_page_ranges(
+            view.segments
+                .iter()
+                .filter(|segment| &segment.markdown_artifact_id == id)
+                .filter_map(|segment| segment.pages),
+        )
     };
-    if head.media_type != MARKDOWN_MEDIA_TYPE {
-        return unusable("head_not_markdown");
+    let mut union = pages_of(&head_id);
+    let mut snapshots = vec![PlannedSnapshot {
+        material: head,
+        pages: union.clone(),
+    }];
+    let mut others: Vec<_> = view
+        .segments
+        .iter()
+        .filter(|segment| segment.pages.is_some() && segment.markdown_artifact_id != head_id)
+        .collect();
+    others.sort_by(|left, right| {
+        right
+            .finished_at
+            .cmp(&left.finished_at)
+            .then_with(|| right.conversion_id.cmp(&left.conversion_id))
+    });
+    let mut seen = HashSet::from([head_id.clone()]);
+    let mut skipped = Vec::new();
+    for segment in others {
+        let id = &segment.markdown_artifact_id;
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let pages = pages_of(id);
+        if pages.iter().all(|range| covers_range(&union, *range)) {
+            continue;
+        }
+        match snapshot_material(workspace, pool, id)? {
+            Ok(material) => {
+                union = merge_page_ranges(union.iter().chain(&pages).copied());
+                snapshots.push(PlannedSnapshot { material, pages });
+            }
+            Err(reason) => skipped.push(json!({
+                "artifact_id": id.to_string(),
+                "pages": pages,
+                "reason": reason,
+            })),
+        }
     }
-    if let Err(error) = material::open_managed_path(pool, &head.id) {
+    snapshots.sort_by_key(|snapshot| snapshot.pages.first().map(|range| (range.from, range.to)));
+    Ok(CanonicalPlan::Usable(LineagePlan {
+        view,
+        head_id,
+        snapshots,
+        skipped,
+    }))
+}
+
+/// A readable markdown snapshot, or why it cannot be scanned. An unsafe or
+/// unreadable managed path is still a call error.
+fn snapshot_material(
+    workspace: &McpWorkspace,
+    pool: &ArtifactPool,
+    id: &StableId,
+) -> Result<Result<Material, &'static str>, ToolError> {
+    let Some(snapshot) = find_material(workspace, id)? else {
+        return Ok(Err("not_in_catalog"));
+    };
+    if snapshot.media_type != MARKDOWN_MEDIA_TYPE {
+        return Ok(Err("not_markdown"));
+    }
+    if let Err(error) = material::open_managed_path(pool, &snapshot.id) {
         return match managed_path_failure(&error) {
-            ManagedPathFailure::NotFound => unusable("content_unavailable"),
-            _ => fail_load(&head, error).map(|_| CanonicalHead::None),
+            ManagedPathFailure::NotFound => Ok(Err("content_unavailable")),
+            _ => fail_load(&snapshot, error).map(|_| Err("content_unavailable")),
         };
     }
-    Ok(CanonicalHead::Usable { view, head })
+    Ok(Ok(snapshot))
 }
 
 /// `"1–3, 5"` for diagnostics.
@@ -575,10 +844,11 @@ struct PdfScanned {
     limited: bool,
     capped: Option<PdfScanCap>,
     total_pages: u32,
+    /// Merged pages whose text layer was actually scanned.
+    scanned_pages: Vec<InclusivePageRange>,
 }
 
 struct PdfScanCap {
-    scanned_to: u32,
     scanned_bytes: u64,
 }
 
@@ -589,14 +859,16 @@ fn pdf_error(error: mathscape_pdf::PdfError) -> ToolError {
     )
 }
 
-/// Scans the native text layer page by page (never Marker). Stops at
-/// `room` hits (then only checks whether another match exists) or once
+/// Scans the native text layer page by page (never Marker), skipping the
+/// 1-based pages in `skip` (already served from canonical markdown). Stops
+/// at `room` hits (then only checks whether another match exists) or once
 /// [`MAX_SCAN_BYTES`] of page text have been scanned.
 fn scan_pdf(
     pool: &ArtifactPool,
     material: &Material,
     pattern: &str,
     room: usize,
+    skip: &[InclusivePageRange],
 ) -> Result<PdfScan, ToolError> {
     let path = match material::open_managed_path(pool, &material.id) {
         Ok(path) => path,
@@ -614,56 +886,51 @@ fn scan_pdf(
         .map_err(pdf_error)?
         .page_count();
     let mut hits = Vec::new();
+    let mut scanned = Vec::new();
     let mut scanned_bytes: u64 = 0;
-    let mut batch_from = 1;
-    while batch_from <= total_pages {
-        let batch_to = batch_from
-            .saturating_add(PDF_SCAN_BATCH - 1)
-            .min(total_pages);
-        let selection = PdfSelection::inclusive_range(
+    let finish = |hits, limited, capped, scanned: Vec<InclusivePageRange>| {
+        Ok(PdfScan::Scanned(PdfScanned {
+            hits,
+            limited,
+            capped,
             total_pages,
-            PdfPageIndex::new(batch_from - 1),
-            PdfPageIndex::new(batch_to - 1),
-        )
-        .map_err(pdf_error)?;
-        let pages = engine
-            .extract_positioned_text(&path, &selection, &options)
-            .map_err(pdf_error)?
-            .page_texts();
-        for (index, page_text) in pages {
-            let page = index.get() + 1;
-            if scanned_bytes + page_text.len() as u64 > MAX_SCAN_BYTES && scanned_bytes > 0 {
-                return Ok(PdfScan::Scanned(PdfScanned {
-                    hits,
-                    limited: false,
-                    capped: Some(PdfScanCap {
-                        scanned_to: page - 1,
-                        scanned_bytes,
-                    }),
-                    total_pages,
-                }));
+            scanned_pages: merge_page_ranges(scanned),
+        }))
+    };
+    for target in missing_pages(total_pages, skip) {
+        let mut batch_from = target.from;
+        while batch_from <= target.to {
+            let batch_to = batch_from.saturating_add(PDF_SCAN_BATCH - 1).min(target.to);
+            let selection = PdfSelection::inclusive_range(
+                total_pages,
+                PdfPageIndex::new(batch_from - 1),
+                PdfPageIndex::new(batch_to - 1),
+            )
+            .map_err(pdf_error)?;
+            let pages = engine
+                .extract_positioned_text(&path, &selection, &options)
+                .map_err(pdf_error)?
+                .page_texts();
+            for (index, page_text) in pages {
+                let page = index.get() + 1;
+                if scanned_bytes + page_text.len() as u64 > MAX_SCAN_BYTES && scanned_bytes > 0 {
+                    return finish(hits, false, Some(PdfScanCap { scanned_bytes }), scanned);
+                }
+                scanned_bytes += page_text.len() as u64;
+                if let Ok(range) = InclusivePageRange::new(page, page) {
+                    scanned.push(range);
+                }
+                let left = room.saturating_sub(hits.len());
+                let (found, limited) = scan_text(&page_text, pattern, left);
+                hits.extend(found.into_iter().map(|hit| (page, hit)));
+                if limited {
+                    return finish(hits, true, None, scanned);
+                }
             }
-            scanned_bytes += page_text.len() as u64;
-            let left = room.saturating_sub(hits.len());
-            let (found, limited) = scan_text(&page_text, pattern, left);
-            hits.extend(found.into_iter().map(|hit| (page, hit)));
-            if limited {
-                return Ok(PdfScan::Scanned(PdfScanned {
-                    hits,
-                    limited: true,
-                    capped: None,
-                    total_pages,
-                }));
-            }
+            batch_from = batch_to + 1;
         }
-        batch_from = batch_to + 1;
     }
-    Ok(PdfScan::Scanned(PdfScanned {
-        hits,
-        limited: false,
-        capped: None,
-        total_pages,
-    }))
+    finish(hits, false, None, scanned)
 }
 
 /// Scanned text, or a finished business result (content missing).
