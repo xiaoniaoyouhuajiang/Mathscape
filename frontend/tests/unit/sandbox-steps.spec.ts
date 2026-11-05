@@ -81,32 +81,32 @@ describe("buildTurnProcess", () => {
       event(1, "tool_call", { call_id: "mcp-startup", tool: "mcp.startup", server: "codex", args_summary: "mathscape", raw: { mcp: raw } }),
       event(2, "tool_result", { call_id: "mcp-startup", status, raw: { mcp: raw } }),
     ];
-    const seven = ["workspace.search", "material.read", "material.grep", "pdf.outline", "graph.get", "graph.neighborhood", "ink.page_image"];
+    const eight = ["workspace.search", "material.read", "material.grep", "pdf.outline", "graph.get", "graph.neighborhood", "ink.page_image", "pdf.page_image"];
     const ok = buildTurnProcess(
       [
         event(0, "turn_start", {}),
-        ...mcp("ok", { server: "mathscape", status: "ready", tools: seven, expected: seven, missing: [] }),
+        ...mcp("ok", { server: "mathscape", status: "ready", tools: eight, expected: eight, missing: [] }),
         event(3, "tool_call", { call_id: "c1", tool: "workspace.search" }),
         event(4, "tool_result", { call_id: "c1", status: "ok", duration_ms: 3 }),
         event(5, "turn_end", { outcome: "completed" }),
       ],
       { running: false },
     );
-    expect(ok.steps[0]).toMatchObject({ kind: "mcp", title: "MCP 工具 7/7", status: "completed" });
+    expect(ok.steps[0]).toMatchObject({ kind: "mcp", title: "MCP 工具 8/8", status: "completed" });
     expect(ok.summary).toMatch(/^已完成 1 步/);
     expect(ok.mcpAlert).toBeUndefined();
     expect(ok.headerTone).toBe("ok");
 
     const partial = buildTurnProcess(
       [
-        ...mcp("error", { server: "mathscape", status: "ready", tools: seven.slice(0, 4), expected: seven, missing: seven.slice(4) }),
+        ...mcp("error", { server: "mathscape", status: "ready", tools: eight.slice(0, 4), expected: eight, missing: eight.slice(4) }),
         event(3, "turn_end", { outcome: "completed" }),
       ],
       { running: false },
     );
-    expect(partial.steps[0]).toMatchObject({ kind: "mcp", title: "MCP 工具 4/7", status: "error" });
-    expect(partial.steps[0].rawOutput).toContain("缺少：graph.get、graph.neighborhood、ink.page_image");
-    expect(partial.summary).toBe("已完成 · MCP 工具 4/7");
+    expect(partial.steps[0]).toMatchObject({ kind: "mcp", title: "MCP 工具 4/8", status: "error" });
+    expect(partial.steps[0].rawOutput).toContain("缺少：graph.get、graph.neighborhood、ink.page_image、pdf.page_image");
+    expect(partial.summary).toBe("已完成 · MCP 工具 4/8");
     expect(partial.headerTone).toBe("warn");
 
     const failed = buildTurnProcess(

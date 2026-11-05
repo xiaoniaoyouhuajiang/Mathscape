@@ -1,14 +1,14 @@
 /**
  * Tool events → `SceneDraft` → `ToolScene` (Map Scene Player, first slice).
  *
- * Pure: no DOM, no Cytoscape. Each of the seven tools is compiled from its
+ * Pure: no DOM, no Cytoscape. Each of the eight tools is compiled from its
  * own argument/result fields (not a blind id walk), so seeds and result
  * layers mean what the tool meant: a `graph.neighborhood` result lights
  * depth by depth, a grep lights only the materials that matched, and so on.
  *
- * Second slice: three tools also carry an Act overlay (`SceneDraft.act`):
+ * Second slice: four tools also carry an Act overlay (`SceneDraft.act`):
  * `workspace.search` types its query in the HUD, `pdf.outline` opens a 目录
- * mini-window, `ink.page_image` opens a page-image mini-window.
+ * mini-window, `ink.page_image` / `pdf.page_image` open a page-image mini-window.
  *
  * `material.read` on scanned pages blocks while Marker parses them: a live
  * call gets a `parsing` act via `parsingScene` (the map said 「解析中」), and
@@ -112,7 +112,7 @@ export function resultPayload(result: AgentEventLike | undefined): Json | undefi
 const IMAGE_MIME = /^image\/(png|jpeg|webp|gif)$/;
 const BASE64 = /^[A-Za-z0-9+/=\s]+$/;
 
-/** The result's image block as a `data:` URL (ink.page_image), if any. */
+/** The result's image block as a `data:` URL (ink/pdf.page_image), if any. */
 export function resultImage(result: AgentEventLike | undefined): string | undefined {
   let value: unknown = rawOf(result)?.result;
   if (typeof value === "string") value = parseJson(value);
@@ -318,6 +318,28 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
       layers: [],
     };
   },
+  "pdf.page_image": (args, payload, status) => {
+    const artifactId = str(args.artifact_id) ?? str(payload?.artifact_id);
+    const page = num(payload?.page) ?? num(args.page);
+    const count = num(payload?.page_count);
+    const crop = isObject(args.crop) ? args.crop : isObject(payload?.crop) ? payload.crop : undefined;
+    const cropDetail =
+      crop &&
+      ["left", "top", "right", "bottom"].every((key) => typeof crop[key] === "number")
+        ? ` · 裁剪`
+        : "";
+    return {
+      verb: "PDF 页图",
+      subjectId: artifactId,
+      detail:
+        page !== undefined
+          ? `第 ${page}${count !== undefined ? `/${count}` : ""} 页${cropDetail}`
+          : cropDetail || undefined,
+      summary: status === "running" ? "正在渲染 PDF 页…" : "已取得页图",
+      seeds: artifactId ? [artifactId] : [],
+      layers: [],
+    };
+  },
 };
 
 type ActCompiler = (args: Json, payload: Json | undefined, status: SceneStatus, result: AgentEventLike | undefined) => SceneAct | undefined;
@@ -433,6 +455,21 @@ const ACTS: Partial<Record<SceneToolName, ActCompiler>> = {
       height: num(image.height),
     };
   },
+  "pdf.page_image": (args, payload, status, result) => {
+    if (status !== "ok") return undefined;
+    const image = isObject(payload?.image) ? payload.image : {};
+    const page = num(payload?.page) ?? num(args.page);
+    const count = num(payload?.page_count);
+    const src = resultImage(result);
+    return {
+      kind: "page_image",
+      ...(src ? { src } : {}),
+      noteTitle: "PDF 页图",
+      pageLabel: page !== undefined ? `第 ${page}${count !== undefined ? `/${count}` : ""} 页` : undefined,
+      width: num(image.width),
+      height: num(image.height),
+    };
+  },
 };
 
 /** One tool step's Act overlay (exported for tests). */
@@ -455,7 +492,7 @@ export function compileToolScene(call: AgentEventLike | undefined, result?: Agen
   const status = resultStatus(result, payload);
   const parts = COMPILERS[tool](args, payload, status);
   const act = ACTS[tool]?.(args, payload, status, result);
-  if (tool === "ink.page_image" && act?.kind === "page_image" && !act.src && status === "ok") {
+  if ((tool === "ink.page_image" || tool === "pdf.page_image") && act?.kind === "page_image" && !act.src && status === "ok") {
     parts.summary = "仅元数据（无页图）";
   }
   return {

@@ -84,7 +84,7 @@ describe("S1 event strip and switch prompts", () => {
 
 
 describe("S1 agent status line", () => {
-  const base = { backend: "codex", codexProgram: "codex", tools: ["a", "b", "c", "d", "e", "f", "g"] };
+  const base = { backend: "codex", codexProgram: "codex", tools: ["a", "b", "c", "d", "e", "f", "g", "h"] };
   it("shows version, model, and tool count when Codex is available without a picker", () => {
     expect(
       agentStatusLine({
@@ -93,7 +93,7 @@ describe("S1 agent status line", () => {
         model: "gpt-6.1-sol",
         probes: [{ capability: "codex", state: "available", found_version: "0.124.0" }],
       }),
-    ).toBe("本机 Codex 0.124.0 · gpt-6.1-sol · 7 个 Mathscape 工具");
+    ).toBe("本机 Codex 0.124.0 · gpt-6.1-sol · 8 个 Mathscape 工具");
   });
   it("omits the model segment when the dock shows a model picker", () => {
     expect(
@@ -105,12 +105,12 @@ describe("S1 agent status line", () => {
         models: [{ id: "gpt-6.1-sol" }],
         probes: [{ capability: "codex", state: "available", found_version: "0.124.0" }],
       }),
-    ).toBe("本机 Codex 0.124.0 · 7 个 Mathscape 工具");
+    ).toBe("本机 Codex 0.124.0 · 8 个 Mathscape 工具");
   });
   it("omits the model segment when Codex has no default model recorded", () => {
     expect(
       agentStatusLine({ ...base, available: true, probes: [{ capability: "codex", state: "available", found_version: "0.124.0" }] }),
-    ).toBe("本机 Codex 0.124.0 · 7 个 Mathscape 工具");
+    ).toBe("本机 Codex 0.124.0 · 8 个 Mathscape 工具");
   });
   it("names the program and the install hint when it is missing", () => {
     expect(

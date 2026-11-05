@@ -169,7 +169,7 @@ const agentStatus = () => {
     backend: "codex",
     codexProgram: "codex",
     mcpProgram: "mathscape",
-    tools: ["1", "2", "3", "4", "5", "6", "7"],
+    tools: ["1", "2", "3", "4", "5", "6", "7", "8"],
     probes: [{ capability: "codex", state: "available", found_version: "0.124.0", required: null, install_hint: null }],
     available: true,
     model: harnessModel,
@@ -211,8 +211,8 @@ extraCommands.set("sandbox_set_effort", (args) => {
 /** `cite`: the round reads the canonical unit with graph.get and answers
  * with its id plus LaTeX (A-PR3 chips / echo / KaTeX). */
 /** `act` (Map Scene Player second slice): the round instead runs one
- * Act tool — search typewriter, pdf.outline 目录 window, ink.page_image 页图 window. */
-type SandboxAct = "" | "search" | "outline" | "outline_empty" | "page_image" | "page_image_meta" | "parsing";
+ * Act tool — search typewriter, pdf.outline 目录 window, ink/pdf.page_image 页图 window. */
+type SandboxAct = "" | "search" | "outline" | "outline_empty" | "page_image" | "page_image_meta" | "pdf_page_image" | "pdf_page_image_meta" | "parsing";
 const sandboxRound: { delayMs: number; gapMs: number; cite: boolean; act: SandboxAct; parsingNow: boolean } = { delayMs: 30, gapMs: 0, cite: false, act: "", parsingNow: false };
 /** 1×1 PNG for the page-image window. */
 const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -252,6 +252,13 @@ function actStep(act: Exclude<SandboxAct, "">): { tool: string; args: Record<str
       if (act === "page_image") content.push({ type: "image", data: tinyPng, mimeType: "image/png" });
       return { tool: "ink.page_image", args: { node_id: "ink-doc-1", page_index: 0 }, result: { content, isError: false } };
     }
+    case "pdf_page_image":
+    case "pdf_page_image_meta": {
+      const meta = { status: "ok", truncated: false, artifact_id: "pdf-notes", page: 2, page_count: 5, page_size: { width: 612, height: 792, unit: "pt", rotation: 0 }, image: { format: "png", width: 1, height: 1, scale: 1, bytes: 68, sha256: "x" }, renderer: "hayro-0.8" };
+      const content: unknown[] = [{ type: "text", text: JSON.stringify(meta) }];
+      if (act === "pdf_page_image") content.push({ type: "image", data: tinyPng, mimeType: "image/png" });
+      return { tool: "pdf.page_image", args: { artifact_id: "pdf-notes", page: 2 }, result: { content, isError: false } };
+    }
   }
 }
 extraCommands.set("sandbox_session_dialogue", (args) => ({ sandboxSessionId: String(args.sandboxSessionId), transcript: structuredClone(transcript), events: structuredClone(sandboxEvents), activeRoundId: null }));
@@ -270,7 +277,7 @@ extraCommands.set("sandbox_send_message", (args) => {
   };
   const gap = sandboxRound.gapMs > 0 ? sandboxRound.gapMs : Math.min(400, Math.max(80, sandboxRound.delayMs));
   setTimeout(() => {
-    const tools = ["workspace.search", "material.read", "material.grep", "pdf.outline", "graph.get", "graph.neighborhood", "ink.page_image"];
+    const tools = ["workspace.search", "material.read", "material.grep", "pdf.outline", "graph.get", "graph.neighborhood", "ink.page_image", "pdf.page_image"];
     const mcp = { mcp: { server: "mathscape", status: "ready", tools, expected: tools, missing: [], error: null } };
     event(0, "turn_start", { input_ref: "x" });
     event(1, "tool_call", { call_id: "mcp-startup", tool: "mcp.startup", server: "codex", args_summary: "mathscape", raw: mcp });

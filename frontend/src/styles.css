@@ -1416,7 +1416,7 @@ code {
   50% { opacity: 0; }
 }
 
-/* Act mini-windows: 目录 (pdf.outline) and 页图 (ink.page_image). */
+/* Act mini-windows: 目录 (pdf.outline) and 页图 (ink/pdf.page_image). */
 .scene-act {
   position: absolute;
   z-index: 3;

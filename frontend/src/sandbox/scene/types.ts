@@ -12,7 +12,7 @@
  * (`sandbox_session_dialogue`), so replay recompiles from those events.
  */
 
-/** The seven read-only Mathscape MCP tools (bare names). */
+/** The eight read-only Mathscape MCP tools (bare names). */
 export const SCENE_TOOLS = [
   "workspace.search",
   "material.read",
@@ -21,6 +21,7 @@ export const SCENE_TOOLS = [
   "graph.get",
   "graph.neighborhood",
   "ink.page_image",
+  "pdf.page_image",
 ] as const;
 
 export type SceneToolName = (typeof SCENE_TOOLS)[number];
@@ -117,7 +118,7 @@ export interface OutlineAct {
   totalPages?: number;
 }
 
-/** `ink.page_image`: a temporary page-image mini-window. */
+/** `ink.page_image` / `pdf.page_image`: a temporary page-image mini-window. */
 export interface PageImageAct {
   kind: "page_image";
   /** `data:image/…;base64,…` of the returned image block, when present. */
