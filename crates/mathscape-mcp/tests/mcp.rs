@@ -464,7 +464,8 @@ fn tools_list_order_and_text_are_fixed() {
             "pdf.outline",
             "graph.get",
             "graph.neighborhood",
-            "ink.page_image"
+            "ink.page_image",
+            "pdf.page_image"
         ]
     );
     for tool in tools {
@@ -538,6 +539,21 @@ fn tools_list_order_and_text_are_fixed() {
     assert_eq!(
         tools[6]["inputSchema"]["properties"]["crop"]["enum"],
         json!(["page", "strokes", "selection"])
+    );
+    // The 8th tool is appended after ink.page_image; earlier names keep their order.
+    assert_eq!(tools[7]["name"], "pdf.page_image");
+    assert_eq!(
+        tools[7]["inputSchema"]["required"],
+        json!(["artifact_id", "page"])
+    );
+    assert_eq!(
+        tools[7]["inputSchema"]["properties"]["format"]["enum"],
+        json!(["png"])
+    );
+    let page_image_description = tools[7]["description"].as_str().unwrap();
+    assert!(
+        page_image_description.contains("1-based"),
+        "{page_image_description}"
     );
     let second = request(&f.server, 2, "tools/list", json!({}));
     assert_eq!(
@@ -1749,6 +1765,42 @@ fn scanned_pdf_read_reports_canonical_coverage_without_running_marker() {
             .iter()
             .any(|item| item["code"] == "canonical_id_resolved"),
         "{via_canonical}"
+    );
+
+    // A PDF id with a current canonical head greps its snapshots' markdown for
+    // covered pages, the (empty) text layer only for the rest, and never runs
+    // Marker.
+    let via_pdf = grep(&server, json!({ "artifact_ids": [pdf], "pattern": "扫描" }));
+    assert_eq!(via_pdf["status"], "ok", "{via_pdf}");
+    let hit = &via_pdf["hits"][0];
+    assert_eq!(hit["artifact_id"], markdown, "{via_pdf}");
+    assert_eq!(hit["canonical_id"], canonical.canonical_id().as_str());
+    assert_eq!(hit["partial"], true);
+    assert!(hit.get("surface").is_none(), "{hit}");
+    assert_eq!(hit["locator"]["md_byte_range"]["start"], 0, "{hit}");
+    let resolved = via_pdf["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "pdf_resolved_to_canonical")
+        .unwrap_or_else(|| panic!("missing pdf_resolved_to_canonical: {via_pdf}"));
+    assert_eq!(resolved["artifact_id"], pdf);
+    assert_eq!(resolved["canonical_id"], canonical.canonical_id().as_str());
+    assert_eq!(resolved["searched_pages"], json!([{ "from": 1, "to": 1 }]));
+    // The uncovered page 2 is searched in its (empty) text layer, honestly.
+    assert_eq!(
+        resolved["text_layer_pages"],
+        json!([{ "from": 2, "to": 2 }])
+    );
+    assert_eq!(resolved["unsearched_pages"], json!([]));
+    assert_eq!(via_pdf["hits"].as_array().unwrap().len(), 1, "{via_pdf}");
+    let round_trip = read(
+        &server,
+        json!({ "artifact_id": hit["artifact_id"], "locator": hit["locator"] }),
+    );
+    assert!(
+        round_trip["text"].as_str().unwrap().contains("扫描"),
+        "{round_trip}"
     );
 
     let hits = grep(

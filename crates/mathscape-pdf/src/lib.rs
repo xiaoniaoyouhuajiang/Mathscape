@@ -8,6 +8,7 @@ mod coordinates;
 mod error;
 mod inspection;
 mod outline;
+mod render;
 mod selection;
 mod text;
 
@@ -18,5 +19,8 @@ pub use inspection::{
     PdfEngine, PdfOpenOptions, PdfProbe, ScanCoverage,
 };
 pub use outline::{PdfOutline, PdfOutlineEntry};
+pub use render::{
+    MAX_RENDER_EDGE_PX, MIN_RENDER_EDGE_PX, PDF_RENDERER, PdfPageBox, PdfPagePng, PdfPageRender,
+};
 pub use selection::{PdfPageIndex, PdfPageRange, PdfSelection};
 pub use text::{PdfTextItem, PdfTextItemKind, TextExtraction};

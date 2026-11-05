@@ -799,16 +799,193 @@ fn text_layer_pdf_read_serves_canonical_markdown_and_grep_never_runs_marker() {
     assert!(page.get("page_spans").is_none());
     assert_eq!(h.marker_calls(), ["1"]);
 
-    // A covered re-read reuses the snapshot; grep now reports the view.
+    // A covered re-read reuses the snapshot.
     let again = read(&server, &text, 2, 2);
     assert!(codes(&again).contains(&"served_canonical_markdown".to_owned()));
     assert_eq!(h.marker_calls(), ["1"]);
-    let located = grep(&server, &text, "monotone");
+
+    // Now that a canonical head exists, grep on the PDF id searches the head
+    // markdown (canonical first), not the text layer: hits are md_byte_range
+    // into the head snapshot, and the text-layer phrase no longer matches.
+    let located = grep(&server, &text, "扫描页");
+    assert_eq!(located["status"], "ok", "{located}");
+    let hit = &located["hits"][0];
+    assert!(hit.get("surface").is_none(), "{hit}");
+    assert!(hit["locator"]["md_byte_range"].is_object(), "{hit}");
+    assert_eq!(hit["artifact_id"], page["served_artifact_id"], "{hit}");
+    assert!(hit["canonical_id"].is_string());
+    assert_eq!(hit["partial"], true);
     assert_eq!(
-        located["hits"][0]["coverage"]["covered"],
+        hit["coverage"]["covered"],
         json!([{ "from": 2, "to": 2 }]),
         "{located}"
     );
-    assert!(located["hits"][0]["canonical_id"].is_string());
+    assert!(codes(&located).contains(&"pdf_resolved_to_canonical".to_owned()));
+    let quoted = grep(&server, &text, "monotone");
+    assert_eq!(quoted["hits"], json!([]), "{quoted}");
+
+    // Pages outside the canonical coverage still hit through the text layer,
+    // as page-only locators carrying the lineage's coverage.
+    for (pattern, page) in [("Alpha", 1), ("Omega", 3)] {
+        let located = grep(&server, &text, pattern);
+        assert_eq!(located["status"], "ok", "{located}");
+        let hits = located["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 1, "{located}");
+        assert_eq!(hits[0]["surface"], "pdf_text_layer", "{located}");
+        assert_eq!(
+            hits[0]["locator"],
+            json!({ "pdf_pages": { "from": page, "to": page } })
+        );
+        assert!(hits[0]["locator"].get("md_byte_range").is_none());
+        assert_eq!(hits[0]["artifact_id"], text.as_str());
+        assert!(hits[0]["canonical_id"].is_string(), "{located}");
+        assert_eq!(hits[0]["partial"], true);
+        let codes = codes(&located);
+        assert!(
+            codes.contains(&"pdf_text_layer_hits".to_owned()),
+            "{codes:?}"
+        );
+        let resolved = located["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "pdf_resolved_to_canonical")
+            .unwrap();
+        assert_eq!(resolved["searched_pages"], json!([{ "from": 2, "to": 2 }]));
+        assert_eq!(
+            resolved["text_layer_pages"],
+            json!([{ "from": 1, "to": 1 }, { "from": 3, "to": 3 }])
+        );
+        assert_eq!(resolved["unsearched_pages"], json!([]));
+    }
     assert_eq!(h.marker_calls(), ["1"]);
+}
+
+fn read_bytes(server: &McpServer, artifact_id: &str, locator: &Value) -> Value {
+    let response = server
+        .handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "material.read",
+                "arguments": { "artifact_id": artifact_id, "locator": locator },
+            },
+        }))
+        .unwrap();
+    let result = &response["result"];
+    assert_eq!(result["isError"], false, "{response}");
+    result["structuredContent"].clone()
+}
+
+#[test]
+fn pdf_grep_searches_every_snapshot_in_coverage_and_the_text_layer_of_the_gaps() {
+    let h = harness();
+    let mut pool = ArtifactPool::open(&h.root).unwrap();
+    let text = import_pdf(
+        &mut pool,
+        text_pdf(&[
+            "Alpha text layer",
+            "Bounded monotone text layer",
+            "Gamma page",
+            "Omega",
+        ]),
+        "four-pages.pdf",
+        4,
+    );
+    drop(pool);
+    let server = h.server(test_policy());
+
+    // Two disjoint snapshots: page 1, then page 3 (the newer one is the head).
+    let first = read(&server, &text, 1, 1);
+    assert_eq!(first["status"], "ok", "{first}");
+    let third = read(&server, &text, 3, 3);
+    assert_eq!(third["status"], "ok", "{third}");
+    let first_id = first["served_artifact_id"].as_str().unwrap().to_owned();
+    let third_id = third["served_artifact_id"].as_str().unwrap().to_owned();
+    assert_ne!(first_id, third_id);
+    assert_eq!(h.marker_calls(), ["0", "2"]);
+
+    // A string that exists only in the non-head snapshot (page 1).
+    let located = grep(&server, &text, "扫描页 0");
+    assert_eq!(located["status"], "ok", "{located}");
+    let hits = located["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 1, "{located}");
+    let hit = &hits[0];
+    assert_eq!(hit["artifact_id"], first_id.as_str(), "{hit}");
+    assert!(hit.get("surface").is_none(), "{hit}");
+    assert!(hit["locator"]["md_byte_range"].is_object(), "{hit}");
+    assert!(hit["canonical_id"].is_string());
+    assert_eq!(hit["partial"], true);
+    assert_eq!(
+        hit["coverage"]["covered"],
+        json!([{ "from": 1, "to": 1 }, { "from": 3, "to": 3 }])
+    );
+    let resolved = located["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "pdf_resolved_to_canonical")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        resolved["head_artifact_id"],
+        third_id.as_str(),
+        "{resolved}"
+    );
+    assert_eq!(
+        resolved["searched_pages"],
+        json!([{ "from": 1, "to": 1 }, { "from": 3, "to": 3 }])
+    );
+    let snapshots: Vec<_> = resolved["searched_snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["artifact_id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(snapshots, [first_id.clone(), third_id.clone()]);
+    assert_eq!(
+        resolved["text_layer_pages"],
+        json!([{ "from": 2, "to": 2 }, { "from": 4, "to": 4 }])
+    );
+    assert_eq!(resolved["unsearched_pages"], json!([]));
+    let message = resolved["message"].as_str().unwrap();
+    assert!(message.contains("1, 3"), "{message}");
+    assert!(!message.contains("head_covered"), "{message}");
+
+    // The hit goes to material.read unchanged.
+    let quoted = read_bytes(&server, &first_id, &hit["locator"]);
+    assert_eq!(quoted["status"], "ok", "{quoted}");
+    assert_eq!(quoted["text"], "扫描页 0", "{quoted}");
+    assert!(quoted["canonical_id"].is_string(), "{quoted}");
+
+    // Both snapshots are searched.
+    let both = grep(&server, &text, "扫描页");
+    let ids: Vec<_> = both["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|hit| hit["artifact_id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(ids, [first_id.clone(), third_id.clone()], "{both}");
+
+    // Uncovered pages: text layer, page-only locators.
+    for (pattern, page) in [("monotone", 2), ("Omega", 4)] {
+        let located = grep(&server, &text, pattern);
+        let hits = located["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 1, "{located}");
+        assert_eq!(hits[0]["surface"], "pdf_text_layer");
+        assert_eq!(
+            hits[0]["locator"],
+            json!({ "pdf_pages": { "from": page, "to": page } })
+        );
+        assert_eq!(hits[0]["artifact_id"], text.as_str());
+    }
+    // Covered pages are served from markdown only: their text layer is not
+    // scanned, so raw text-layer phrases there do not match.
+    for pattern in ["Gamma", "Alpha"] {
+        let located = grep(&server, &text, pattern);
+        assert_eq!(located["hits"], json!([]), "{located}");
+    }
+    assert_eq!(h.marker_calls(), ["0", "2"], "grep must never run Marker");
 }

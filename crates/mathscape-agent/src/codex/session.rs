@@ -1342,7 +1342,14 @@ mod tests {
         assert!(instructions.contains("fixed read-only tool list"));
         assert!(!instructions.contains("Call only these"));
         let tools = &message["params"]["config"]["mcp_servers.mathscape.enabled_tools"];
-        assert_eq!(tools.as_array().map(Vec::len), Some(7));
+        assert_eq!(tools.as_array().map(Vec::len), Some(8));
+        assert!(
+            tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool == "pdf.page_image")
+        );
         assert!(
             tools
                 .as_array()

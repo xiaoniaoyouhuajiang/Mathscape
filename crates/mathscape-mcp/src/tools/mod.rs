@@ -9,6 +9,7 @@ mod grep;
 mod ink;
 mod material;
 mod outline;
+mod pdf_image;
 mod read;
 mod search;
 
@@ -41,9 +42,10 @@ pub const PDF_OUTLINE: &str = "pdf.outline";
 pub const GRAPH_GET: &str = "graph.get";
 pub const GRAPH_NEIGHBORHOOD: &str = "graph.neighborhood";
 pub const INK_PAGE_IMAGE: &str = "ink.page_image";
+pub const PDF_PAGE_IMAGE: &str = "pdf.page_image";
 
 /// Stable `tools/list` order. New tools are appended; existing entries stay put.
-pub const TOOL_NAMES: [&str; 7] = [
+pub const TOOL_NAMES: [&str; 8] = [
     WORKSPACE_SEARCH,
     MATERIAL_READ,
     MATERIAL_GREP,
@@ -51,6 +53,7 @@ pub const TOOL_NAMES: [&str; 7] = [
     GRAPH_GET,
     GRAPH_NEIGHBORHOOD,
     INK_PAGE_IMAGE,
+    PDF_PAGE_IMAGE,
 ];
 
 /// MCP `annotations` for the read-only tools.
@@ -104,6 +107,7 @@ pub fn tool_definitions() -> Vec<Value> {
         graph::get_definition(),
         graph::neighborhood_definition(),
         ink::definition(),
+        pdf_image::definition(),
     ]
     .into_iter()
     .map(with_annotations)
@@ -118,8 +122,9 @@ pub enum ToolOutput {
     Structured(Value),
     /// Same envelope with a pre-serialized text block (field order kept).
     Text { text: String, structured: Value },
-    /// `ink.page_image` success (contract Phase1d §3.4): a metadata text
-    /// block, then one image block, and **no** `structuredContent`.
+    /// `ink.page_image` / `pdf.page_image` success (contract Phase1d §3.4):
+    /// a metadata text block, then one image block, and **no**
+    /// `structuredContent`.
     Image {
         text: String,
         png: Vec<u8>,
@@ -144,6 +149,7 @@ pub fn call(
         GRAPH_GET => structured(graph::call_get(workspace, arguments)),
         GRAPH_NEIGHBORHOOD => structured(graph::call_neighborhood(workspace, arguments)),
         INK_PAGE_IMAGE => Some(ink::call(workspace, arguments)),
+        PDF_PAGE_IMAGE => Some(pdf_image::call(workspace, arguments)),
         _ => None,
     }
 }

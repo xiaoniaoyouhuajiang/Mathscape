@@ -27,11 +27,11 @@ pub(crate) const APPROVAL_TIMEOUT_MESSAGE: &str = "等待审批已超时";
 /// `granular`, `never`. `onRequest` is rejected as an unknown variant.
 pub(crate) const SANDBOX_APPROVAL_POLICY: &str = "on-request";
 
-/// The seven Mathscape tools. Duplicated so the adapter can whitelist them
+/// The eight Mathscape tools. Duplicated so the adapter can whitelist them
 /// without depending on `mathscape-mcp`. All are read-only except that
 /// `material.read` may run a bounded Marker ensure that adds an immutable
 /// parse-cache snapshot (never rewrites or deletes data).
-pub(crate) const MATHSCAPE_READ_ONLY_TOOLS: [&str; 7] = [
+pub(crate) const MATHSCAPE_READ_ONLY_TOOLS: [&str; 8] = [
     "workspace.search",
     "material.read",
     "material.grep",
@@ -39,6 +39,7 @@ pub(crate) const MATHSCAPE_READ_ONLY_TOOLS: [&str; 7] = [
     "graph.get",
     "graph.neighborhood",
     "ink.page_image",
+    "pdf.page_image",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -565,8 +566,9 @@ mod tests {
     #[test]
     fn empty_allow_list_still_whitelists_the_read_only_catalog() {
         let tools = enabled_tools(&[]);
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 8);
         assert!(tools.iter().any(|tool| tool == "workspace.search"));
+        assert!(tools.iter().any(|tool| tool == "pdf.page_image"));
         assert!(!tools.iter().any(|tool| tool == "shell"));
         let plan = approval_plan(
             "mcpServer/elicitation/request",

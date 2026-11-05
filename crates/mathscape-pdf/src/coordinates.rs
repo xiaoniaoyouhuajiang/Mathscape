@@ -81,6 +81,31 @@ pub struct NormalizedRect {
 }
 
 impl NormalizedRect {
+    /// The whole displayed page.
+    pub const FULL: Self = Self {
+        left: 0.0,
+        top: 0.0,
+        right: 1.0,
+        bottom: 1.0,
+    };
+
+    /// Validated constructor for caller-supplied rectangles: every edge in
+    /// `[0, 1]`, `left < right` and `top < bottom`.
+    pub fn try_new(left: f32, top: f32, right: f32, bottom: f32) -> Result<Self, PdfError> {
+        let in_unit = |value: f32| value.is_finite() && (0.0..=1.0).contains(&value);
+        if ![left, top, right, bottom].into_iter().all(in_unit) {
+            return Err(PdfError::InvalidRectangle(
+                "normalized coordinates must be finite and within [0, 1]",
+            ));
+        }
+        if left >= right || top >= bottom {
+            return Err(PdfError::InvalidRectangle(
+                "normalized rectangle must satisfy left < right and top < bottom",
+            ));
+        }
+        Ok(Self::new(left, top, right, bottom))
+    }
+
     fn new(left: f32, top: f32, right: f32, bottom: f32) -> Self {
         Self {
             left,

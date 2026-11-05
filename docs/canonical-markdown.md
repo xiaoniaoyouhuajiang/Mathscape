@@ -99,7 +99,13 @@ PDF 的 `pdf_pages` 精读（无论请求页有没有原生文本层，正文都
 
 用 canonical id 调用 `material.read`（`md_byte_range`）或 `material.grep` 时，解析到 head 快照再读。这不是 artifact 重定向：旧的物理 artifact id 照常可读，并带上同一个 `canonical_id`。
 
-`material.grep`、`workspace.search`、`pdf.outline` 永不触发 ensure。`material.grep` 接受 PDF id 做粗定位：逐页扫描原生文本层（字面子串，不跨页），命中带 `surface: "pdf_text_layer"` 与 `pdf_pages {from,to}`（均为命中页），若该页已有 canonical 视图则附带 `canonical_id`/`coverage`/`partial`；snippet 不是规范正文，引用前须用该 locator 调 `material.read`。grep 仍不把 PDF id 优先解析到 canonical head（后续切片）。
+`material.grep`、`workspace.search`、`pdf.outline`、`pdf.page_image` 永不触发 ensure。`material.grep` 接受 PDF id，**canonical 优先**：
+- 该 PDF 有当前 lineage（与 `CanonicalAliasTable` 同一规则：默认 profile 优先，其次 policy 自然序最新，再次页数最多）的 head，且 head 在 catalog 中、是 markdown、有受管副本：扫描该 lineage 覆盖账本里的**全部** markdown 快照（页并集 = `coverage.covered`，不只是 head）。先选 head，再按 `finished_at` 由新到旧加入还能补上新页的快照；页已被已选快照完全覆盖的快照不扫，避免重叠重解析重复命中；不在 catalog、不是 markdown 或没有受管副本的快照记入 `skipped_snapshots`（附 `reason`），其页不算已搜。命中的 `artifact_id` 为**命中所在的物理快照**，locator 为该快照内的 `md_byte_range`，并附 `canonical_id`/`coverage`/`partial`（与直接 grep 该 markdown id 一致，可原样交给 `material.read`）。其他 lineage 不扫描。
+- 并集之外的页（或 `total_pages` 未知时 head 未记录页区间的情况）：用 `mathscape-pdf` 逐页扫描原生文本层（字面子串，不跨页），沿用 1MiB 文本层预算；命中带 `surface: "pdf_text_layer"` 与 `pdf_pages {from,to}`（均为命中页），并附当前 lineage 对该页的 `canonical_id`/`coverage`/`partial`。同一条命中永不同时带两种 locator。文本层读不了（受管 PDF 缺失或解析失败）不丢弃 markdown 命中，只在诊断里给 `text_layer_unavailable`。
+- 诊断 `pdf_resolved_to_canonical` 如实给出：`canonical_id`、`head_artifact_id`、`searched_pages`（markdown 快照页并集）、`searched_snapshots`（每项 `artifact_id`/`pages`/`head`）、`text_layer_pages`（实际扫了文本层的页）、`unsearched_pages`（两者都没搜到的页，例如命中上限或 1MiB 上限后）与 `partial`；有文本层命中时另给 `pdf_text_layer_hits`。文本层上限的 `scan_capped` 诊断里 `scanned_pages` 为页区间数组。
+- 没有可用 head：逐页扫描整份原生文本层，命中形状同上；若该页已有 canonical 视图则附带 `canonical_id`/`coverage`/`partial`。head 存在但不可读（`head_not_in_catalog`/`head_not_markdown`/`content_unavailable`）时另给诊断 `canonical_head_unavailable`。
+- grep 命中只是定位，不是可引用正文：snippet（尤其文本层的）只用于定位；引用或建节点一律用命中的 `artifact_id` + locator 调 `material.read`（`pdf_pages` 精读会按需先解析）。
+- 以上路径都不运行 Marker。
 
 ## Ensure（`material.read` 内部路径）
 
