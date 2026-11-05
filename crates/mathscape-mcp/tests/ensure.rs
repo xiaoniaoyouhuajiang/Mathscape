@@ -119,6 +119,57 @@ fn scanned_pdf(pages: usize) -> Vec<u8> {
     bytes
 }
 
+/// One line of text per page: every page has a native text layer.
+fn text_pdf(lines: &[&str]) -> Vec<u8> {
+    use lopdf::content::Operation;
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let font_id = document.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+    });
+    let resources_id = document.add_object(dictionary! {
+        "Font" => dictionary! { "F1" => font_id },
+    });
+    let mut kids = Vec::new();
+    for line in lines {
+        let content = Content {
+            operations: vec![
+                Operation::new("BT", vec![]),
+                Operation::new("Tf", vec!["F1".into(), 18.into()]),
+                Operation::new("Td", vec![72.into(), 700.into()]),
+                Operation::new("Tj", vec![Object::string_literal(*line)]),
+                Operation::new("ET", vec![]),
+            ],
+        };
+        let content_id =
+            document.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "Resources" => resources_id,
+        });
+        kids.push(page_id.into());
+    }
+    let count = kids.len() as i64;
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => kids,
+            "Count" => count,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    document.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
 fn import_pdf(pool: &mut ArtifactPool, bytes: Vec<u8>, name: &str, pages: u32) -> String {
     let metadata = ArtifactMetadata::new(
         None,
@@ -692,4 +743,72 @@ fn search_never_triggers_ensure() {
         .unwrap();
     assert_eq!(response["result"]["isError"], false, "{response}");
     assert!(h.marker_calls().is_empty(), "search must never run Marker");
+}
+
+fn grep(server: &McpServer, artifact_id: &str, pattern: &str) -> Value {
+    let response = server
+        .handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "material.grep",
+                "arguments": { "artifact_ids": [artifact_id], "pattern": pattern },
+            },
+        }))
+        .unwrap();
+    let result = &response["result"];
+    assert_eq!(result["isError"], false, "{response}");
+    result["structuredContent"].clone()
+}
+
+#[test]
+fn text_layer_pdf_read_serves_canonical_markdown_and_grep_never_runs_marker() {
+    let h = harness();
+    let mut pool = ArtifactPool::open(&h.root).unwrap();
+    let text = import_pdf(
+        &mut pool,
+        text_pdf(&["Alpha text layer", "Bounded monotone text layer", "Omega"]),
+        "text-book.pdf",
+        3,
+    );
+    drop(pool);
+    let server = h.server(test_policy());
+
+    // Coarse locate on the text layer: page hit, no Marker run.
+    let located = grep(&server, &text, "monotone");
+    assert_eq!(located["status"], "ok", "{located}");
+    let hit = &located["hits"][0];
+    assert_eq!(hit["surface"], "pdf_text_layer");
+    assert_eq!(
+        hit["locator"],
+        json!({ "pdf_pages": { "from": 2, "to": 2 } })
+    );
+    assert!(hit.get("canonical_id").is_none(), "{hit}");
+    assert!(h.marker_calls().is_empty(), "grep must never run Marker");
+
+    // Careful read of that page: canonical Marker markdown even though the
+    // page has a text layer; never the raw extract.
+    let page = read(&server, &text, 2, 2);
+    assert_eq!(page["status"], "ok", "{page}");
+    assert_eq!(page["content_type"], "markdown");
+    let body = page["text"].as_str().unwrap();
+    assert!(body.contains("扫描页 1"), "{body}");
+    assert!(!body.contains("Bounded monotone"), "{body}");
+    assert_eq!(page["details"]["ensure"]["status"], "expanded");
+    assert!(page.get("page_spans").is_none());
+    assert_eq!(h.marker_calls(), ["1"]);
+
+    // A covered re-read reuses the snapshot; grep now reports the view.
+    let again = read(&server, &text, 2, 2);
+    assert!(codes(&again).contains(&"served_canonical_markdown".to_owned()));
+    assert_eq!(h.marker_calls(), ["1"]);
+    let located = grep(&server, &text, "monotone");
+    assert_eq!(
+        located["hits"][0]["coverage"]["covered"],
+        json!([{ "from": 2, "to": 2 }]),
+        "{located}"
+    );
+    assert!(located["hits"][0]["canonical_id"].is_string());
+    assert_eq!(h.marker_calls(), ["1"]);
 }

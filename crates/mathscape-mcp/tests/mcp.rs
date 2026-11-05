@@ -721,57 +721,65 @@ fn read_not_found_and_invalid_args() {
 }
 
 #[test]
-fn read_pdf_text_layer_pages() {
+fn read_pdf_text_layer_pages_never_serve_the_text_layer() {
+    // Careful reads only serve canonical Marker markdown. Marker is missing
+    // here and no snapshot exists, so even pages with a text layer are
+    // capability_unavailable instead of returning raw extract.
     let f = fixture();
     let result = read(
         &f.server,
         json!({ "artifact_id": f.pdf, "locator": { "pdf_pages": { "from": 1, "to": 9 } } }),
     );
-    assert_eq!(result["status"], "ok");
-    assert_eq!(result["content_type"], "pdf_text");
-    assert_eq!(result["truncated"], false);
+    assert_eq!(result["status"], "capability_unavailable", "{result}");
+    assert_eq!(result["content_type"], "markdown");
+    assert!(result.get("text").is_none(), "{result}");
     assert_eq!(result["total_pages"], 3);
     assert_eq!(
         result["locator"],
         json!({ "pdf_pages": { "from": 1, "to": 3 } })
     );
-    let text = result["text"].as_str().unwrap();
-    let spans = result["page_spans"].as_array().unwrap();
-    assert_eq!(spans.len(), 3);
-    let page = |index: usize| {
-        let start = spans[index]["start"].as_u64().unwrap() as usize;
-        let end = spans[index]["end"].as_u64().unwrap() as usize;
-        &text[start..end]
-    };
-    let first: Vec<_> = page(0).lines().map(str::trim).collect();
-    assert_eq!(first, ["First text run", "Second text run"]);
-    assert_eq!(page(1), "");
-    assert_eq!(page(2).trim(), "Third page text");
+    assert!(result.get("page_spans").is_none(), "{result}");
     let codes: Vec<_> = result["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
         .map(|d| d["code"].as_str().unwrap())
         .collect();
-    assert_eq!(codes, ["range_clamped", "pdf_pages_without_text"]);
-    let without_text = result["diagnostics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|d| d["code"] == "pdf_pages_without_text")
-        .unwrap();
-    assert_eq!(without_text["pages"], json!([2]));
+    assert_eq!(
+        codes,
+        [
+            "range_clamped",
+            "pdf_text_layer_not_served",
+            "canonical_ensure_capability_unavailable",
+        ]
+    );
+    let not_served = &result["diagnostics"][1];
+    assert_eq!(not_served["pages_with_text"], json!([1, 3]));
+    assert_eq!(not_served["probed_pages"], json!({ "from": 1, "to": 3 }));
+    assert!(
+        !result.to_string().contains("First text run"),
+        "text layer leaked into a careful read: {result}"
+    );
+    assert_eq!(
+        result["details"]["ensure"]["status"],
+        "capability_unavailable"
+    );
 
     let single = read(
         &f.server,
         json!({ "artifact_id": f.pdf, "locator": { "pdf_pages": { "from": 3, "to": 3 } }, "expand": { "before": 1 } }),
     );
-    assert_eq!(single["text"].as_str().unwrap().trim(), "Third page text");
+    assert_eq!(single["status"], "capability_unavailable");
+    assert!(single.get("text").is_none(), "{single}");
     assert_eq!(
         single["locator"],
         json!({ "pdf_pages": { "from": 3, "to": 3 } })
     );
     assert_eq!(single["diagnostics"][0]["code"], "expand_not_applicable");
+    assert_eq!(
+        single["diagnostics"][1]["code"],
+        "pdf_text_layer_not_served"
+    );
 }
 
 #[test]
@@ -973,12 +981,15 @@ fn outline_entries_are_zero_based_and_drive_material_read() {
             "locator": { "pdf_pages": { "from": page, "to": page } },
         }),
     );
-    assert_eq!(body["status"], "ok");
-    assert!(
-        body["text"].as_str().unwrap().contains("Section page"),
-        "{}",
-        body["text"]
+    // The outline page drives the read locator; without Marker the careful
+    // read is capability_unavailable rather than the raw text layer.
+    assert_eq!(body["status"], "capability_unavailable", "{body}");
+    assert_eq!(
+        body["locator"],
+        json!({ "pdf_pages": { "from": page, "to": page } })
     );
+    assert!(body.get("text").is_none(), "{body}");
+    assert_eq!(body["diagnostics"][0]["code"], "pdf_text_layer_not_served");
 }
 
 #[test]
@@ -1362,9 +1373,8 @@ fn grep_rejects_empty_ids_and_bad_args() {
         json!({ "artifact_ids": [f.markdown], "pattern": "Lemma", "max_hits": 0 }),
         json!({ "artifact_ids": [f.markdown], "pattern": "Lemma", "max_hits": MAX_GREP_HITS + 1 }),
         json!({ "artifact_ids": [f.markdown], "pattern": "a".repeat(201) }),
-        json!({ "artifact_ids": [f.pdf], "pattern": "First" }),
-        json!({ "artifact_ids": [f.markdown, f.pdf], "pattern": "Lemma" }),
         json!({ "artifact_ids": [f.plain_text], "pattern": "plain" }),
+        json!({ "artifact_ids": [f.markdown, f.plain_text], "pattern": "Lemma" }),
         json!("Lemma"),
     ];
     for arguments in invalid {
@@ -1377,19 +1387,90 @@ fn grep_rejects_empty_ids_and_bad_args() {
         empty["message"].as_str().unwrap().contains("non-empty"),
         "{empty}"
     );
-    let pdf = grep_error(
+    let plain = grep_error(
         &f.server,
-        json!({ "artifact_ids": [f.pdf], "pattern": "First" }),
+        json!({ "artifact_ids": [f.markdown, f.plain_text], "pattern": "plain" }),
     );
     assert!(
-        pdf["message"].as_str().unwrap().contains("text/markdown"),
-        "{pdf}"
+        plain["message"].as_str().unwrap().contains("text/markdown"),
+        "{plain}"
     );
-    assert_eq!(pdf["details"]["artifacts"][0]["artifact_id"], f.pdf);
     assert_eq!(
-        pdf["details"]["artifacts"][0]["media_type"],
-        "application/pdf"
+        plain["details"]["supported_media_types"],
+        json!(["text/markdown", "application/pdf"])
     );
+    assert_eq!(plain["details"]["artifacts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        plain["details"]["artifacts"][0]["artifact_id"],
+        f.plain_text
+    );
+}
+
+#[test]
+fn grep_pdf_text_layer_hits_locate_pages_only() {
+    let f = fixture();
+    let result = grep(
+        &f.server,
+        json!({ "artifact_ids": [f.markdown, f.pdf, f.scanned_pdf], "pattern": "text" }),
+    );
+    assert_eq!(result["status"], "ok", "{result}");
+    let hits = result["hits"].as_array().unwrap();
+    let pages: Vec<_> = hits
+        .iter()
+        .map(|hit| hit["locator"]["pdf_pages"].clone())
+        .collect();
+    assert_eq!(
+        pages,
+        [
+            json!({ "from": 1, "to": 1 }),
+            json!({ "from": 1, "to": 1 }),
+            json!({ "from": 3, "to": 3 }),
+        ]
+    );
+    for hit in hits {
+        assert_eq!(hit["artifact_id"], f.pdf);
+        assert_eq!(hit["surface"], "pdf_text_layer");
+        assert!(hit.get("canonical_id").is_none(), "{hit}");
+    }
+    assert!(
+        hits[2]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("Third page text")
+    );
+    let codes: Vec<_> = result["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(codes, ["pdf_text_layer_hits"]);
+
+    // Markdown hits keep md_byte_range and no surface marker.
+    let md = grep(
+        &f.server,
+        json!({ "artifact_ids": [f.markdown, f.pdf], "pattern": "Lemma" }),
+    );
+    assert_eq!(md["hits"].as_array().unwrap().len(), 1);
+    assert!(md["hits"][0]["locator"]["md_byte_range"].is_object());
+    assert!(md["hits"][0].get("surface").is_none());
+
+    // max_hits applies across PDF pages.
+    let limited = grep(
+        &f.server,
+        json!({ "artifact_ids": [f.pdf], "pattern": "text", "max_hits": 2 }),
+    );
+    assert_eq!(limited["status"], "truncated");
+    assert_eq!(limited["truncated"], true);
+    assert_eq!(limited["hits"].as_array().unwrap().len(), 2);
+
+    // The locator feeds material.read, which never returns the text layer.
+    let page = read(
+        &f.server,
+        json!({ "artifact_id": f.pdf, "locator": hits[2]["locator"] }),
+    );
+    assert_eq!(page["status"], "capability_unavailable");
+    assert!(page.get("text").is_none(), "{page}");
 }
 
 #[test]
