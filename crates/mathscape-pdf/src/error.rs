@@ -30,6 +30,8 @@ pub enum PdfError {
     UnsupportedRotation(i64),
     #[error("page {page} has no inherited {attribute} attribute")]
     MissingPageAttribute { page: u32, attribute: &'static str },
+    #[error("failed to render PDF page: {0}")]
+    Render(String),
     #[error("text item is on page {item_page}, but geometry belongs to page {geometry_page}")]
     GeometryPageMismatch { item_page: u32, geometry_page: u32 },
 }

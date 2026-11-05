@@ -9,13 +9,22 @@
 //!   snapshot): the body is scanned; each hit's [`Locator`] is an
 //!   `md_byte_range` covering that match, so a follow-up `material.read`
 //!   quotes it.
-//! - `application/pdf`: the native text layer extracted by `mathscape-pdf`
-//!   (the same engine `pdf.outline` uses; never Marker) is scanned page by
-//!   page. Each hit's locator is `pdf_pages` with `from == to ==` the page of
-//!   the match, and `surface: "pdf_text_layer"`. The snippet is for
-//!   localization only; the careful quote comes from `material.read` on that
-//!   page, which serves canonical markdown. Matches spanning a page break are
-//!   not found.
+//! - `application/pdf` with a current-lineage canonical head (the lineage the
+//!   map and search fold call 「规范解析正文」) whose managed markdown copy is
+//!   readable: that head markdown is scanned exactly like a markdown id. Hits
+//!   carry `artifact_id` = the head snapshot, an `md_byte_range` locator into
+//!   it, plus `canonical_id`, `coverage` and `partial`; a
+//!   `pdf_resolved_to_canonical` diagnostic names the PDF, the head and the
+//!   pages the head covers (pages outside `coverage.head_covered` were not
+//!   searched). Neither Marker nor the text layer is run for that PDF.
+//! - `application/pdf` without a usable canonical head (no lineage with a
+//!   head, head not in the catalog / not markdown / no managed copy): the
+//!   native text layer extracted by `mathscape-pdf` (the same engine
+//!   `pdf.outline` uses; never Marker) is scanned page by page. Each hit's
+//!   locator is `pdf_pages` with `from == to ==` the page of the match, and
+//!   `surface: "pdf_text_layer"`. The snippet is for localization only; the
+//!   careful quote comes from `material.read` on that page, which serves
+//!   canonical markdown. Matches spanning a page break are not found.
 //!
 //! `snippet` is a verbatim window of the surrounding line (capped), not a
 //! second locator. `score` is always [`LITERAL_SCORE`] — this scan does not
@@ -29,15 +38,15 @@ use std::collections::HashSet;
 
 use mathscape_agent::{Locator, ToolError, ToolErrorCode, ToolStatus};
 use mathscape_artifact::{ArtifactPool, ArtifactPoolError};
-use mathscape_domain::{InclusivePageRange, MarkdownCoverage, StableId};
+use mathscape_domain::{CanonicalMarkdownView, InclusivePageRange, MarkdownCoverage, StableId};
 use mathscape_pdf::{PdfEngine, PdfOpenOptions, PdfPageIndex, PdfSelection};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::canonical::CanonicalIndex;
 use super::material::{
-    self, MARKDOWN_MEDIA_TYPE, ManagedPathFailure, Material, PDF_MEDIA_TYPE, find_materials,
-    managed_path_failure,
+    self, MARKDOWN_MEDIA_TYPE, ManagedPathFailure, Material, PDF_MEDIA_TYPE, find_material,
+    find_materials, managed_path_failure,
 };
 use super::{MATERIAL_GREP, diagnostic, parse_args, to_object};
 use crate::McpWorkspace;
@@ -60,7 +69,7 @@ pub const SNIPPET_MAX_BYTES: usize = 512;
 
 const LITERAL_SCORE: u32 = 1;
 
-const DESCRIPTION: &str = "Coarse locate: search specific materials for a case-sensitive literal substring (not a regular expression). artifact_ids is required and non-empty; this tool does not scan the whole workspace. text/markdown: the body is searched and each hit locator is an md_byte_range of that match. A canonical markdown id is resolved to its head snapshot; hits on a canonical snapshot include canonical_id, coverage and partial. application/pdf: the native PDF text layer is searched page by page (fast, no OCR; scanned pages without a text layer never match, nor do matches across a page break); each hit has surface pdf_text_layer and a pdf_pages locator {from,to} of the page of the match, plus canonical_id, coverage and partial for that page when a canonical view exists. Text-layer snippets are for localization only and are not canonical text: pass the hit locator to material.read to read that page as canonical markdown before quoting. A missing artifact_id yields status not_found and no partial hits. Stops at max_hits (default and maximum 50) or after the first 1 MiB of one material's text; either limit returns status truncated and truncated true. This tool never runs Marker. Read-only.";
+const DESCRIPTION: &str = "Coarse locate: search specific materials for a case-sensitive literal substring (not a regular expression). artifact_ids is required and non-empty; this tool does not scan the whole workspace. text/markdown: the body is searched and each hit locator is an md_byte_range of that match. A canonical markdown id is resolved to its head snapshot; hits on a canonical snapshot include canonical_id, coverage and partial. application/pdf: when the PDF has a current canonical markdown head, that head markdown is searched instead (canonical first): hits have artifact_id = the head snapshot, an md_byte_range locator into it (pass both to material.read unchanged), plus canonical_id, coverage and partial, and a pdf_resolved_to_canonical diagnostic; pages outside coverage.head_covered were not searched (partial true), read them with material.read pdf_pages to parse them first. Only when no usable canonical head exists, the native PDF text layer is searched page by page (fast, no OCR; scanned pages without a text layer never match, nor do matches across a page break); each such hit has surface pdf_text_layer and a pdf_pages locator {from,to} of the page of the match. Text-layer snippets are for localization only and are not canonical text: pass the hit locator to material.read to read that page as canonical markdown before quoting. A missing artifact_id yields status not_found and no partial hits. Stops at max_hits (default and maximum 50) or after the first 1 MiB of one material's text; either limit returns status truncated and truncated true. This tool never runs Marker. Read-only.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -120,7 +129,7 @@ pub(super) fn definition() -> Value {
                     "minItems": 1,
                     "maxItems": MAX_ARTIFACT_IDS,
                     "items": { "type": "string" },
-                    "description": "Stable ids to scan, in order. Required and non-empty. Duplicates are rejected. Every id must be text/markdown, a canonical markdown id, or application/pdf (its native text layer is scanned).",
+                    "description": "Stable ids to scan, in order. Required and non-empty. Duplicates are rejected. Every id must be text/markdown, a canonical markdown id, or application/pdf (its current canonical markdown head is scanned when one exists, otherwise its native text layer).",
                 },
                 "pattern": {
                     "type": "string",
@@ -170,6 +179,60 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
     for material in &materials {
         let room = max_hits - hits.len();
         if material.media_type == PDF_MEDIA_TYPE {
+            match canonical_head(workspace, &pool, &index, material)? {
+                CanonicalHead::Usable { view, head } => {
+                    let coverage = view.coverage(None);
+                    diagnostics.push(json!({
+                        "code": "pdf_resolved_to_canonical",
+                        "message": if coverage.head_covered.is_empty() {
+                            "searched the canonical markdown head of this PDF instead of its text layer".to_owned()
+                        } else {
+                            format!(
+                                "searched the canonical markdown head of this PDF (pages {}) instead of its text layer; other pages were not searched",
+                                ranges_label(&coverage.head_covered)
+                            )
+                        },
+                        "artifact_id": material.id.to_string(),
+                        "canonical_id": view.canonical_id.to_string(),
+                        "head_artifact_id": head.id.to_string(),
+                        "searched_pages": coverage.head_covered,
+                        "partial": coverage.partial,
+                    }));
+                    let attachment = (view.canonical_id.to_string(), coverage.partial, coverage);
+                    match scan_markdown(
+                        &pool,
+                        &head,
+                        Some(attachment),
+                        &args.pattern,
+                        room,
+                        &mut hits,
+                        &mut diagnostics,
+                    )? {
+                        MarkdownScan::Scanned { limited, capped } => {
+                            scan_capped |= capped;
+                            if limited {
+                                hit_limited = true;
+                                break;
+                            }
+                        }
+                        MarkdownScan::Finished(value) => return Ok(value),
+                    }
+                    continue;
+                }
+                CanonicalHead::Unusable {
+                    canonical_id,
+                    reason,
+                } => {
+                    diagnostics.push(json!({
+                        "code": "canonical_head_unavailable",
+                        "message": "the PDF's canonical markdown head is not readable; fell back to the native text layer",
+                        "artifact_id": material.id.to_string(),
+                        "canonical_id": canonical_id,
+                        "reason": reason,
+                    }));
+                }
+                CanonicalHead::None => {}
+            }
             let scan = match scan_pdf(&pool, material, &args.pattern, room)? {
                 PdfScan::Scanned(scan) => scan,
                 PdfScan::Finished(value) => return Ok(value),
@@ -222,47 +285,27 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
             }
             continue;
         }
-        let (text, capped) = match load_text(&pool, material)? {
-            Loaded::Text { text, capped } => (text, capped),
-            Loaded::Finished(value) => return Ok(value),
-        };
-        if capped {
-            scan_capped = true;
-            diagnostics.push(json!({
-                "code": "scan_capped",
-                "message": format!(
-                    "scanned the first {} bytes of this markdown; the remainder was not searched",
-                    text.len()
-                ),
-                "artifact_id": material.id.to_string(),
-                "scanned_bytes": text.len(),
-                "total_bytes": material.byte_size,
-            }));
-        }
-        let (found, limited) = scan_text(&text, &args.pattern, room);
         let attachment = index.for_markdown(material.id.as_str()).map(|view| {
             let coverage = view.coverage(None);
             (view.canonical_id.to_string(), coverage.partial, coverage)
         });
-        for found in found {
-            hits.push(GrepHit {
-                artifact_id: material.id.to_string(),
-                locator: Locator::MdByteRange {
-                    start: found.start,
-                    end: found.end,
-                },
-                snippet: found.snippet,
-                score: LITERAL_SCORE,
-                revision: material.revision.clone(),
-                canonical_id: attachment.as_ref().map(|(id, _, _)| id.clone()),
-                partial: attachment.as_ref().map(|(_, partial, _)| *partial),
-                coverage: attachment.as_ref().map(|(_, _, coverage)| coverage.clone()),
-                surface: None,
-            });
-        }
-        if limited {
-            hit_limited = true;
-            break;
+        match scan_markdown(
+            &pool,
+            material,
+            attachment,
+            &args.pattern,
+            room,
+            &mut hits,
+            &mut diagnostics,
+        )? {
+            MarkdownScan::Scanned { limited, capped } => {
+                scan_capped |= capped;
+                if limited {
+                    hit_limited = true;
+                    break;
+                }
+            }
+            MarkdownScan::Finished(value) => return Ok(value),
         }
     }
     if hit_limited {
@@ -283,6 +326,123 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
         details: None,
         diagnostics,
     })
+}
+
+type Attachment = (String, bool, MarkdownCoverage);
+
+/// Outcome of scanning one markdown body.
+enum MarkdownScan {
+    Scanned { limited: bool, capped: bool },
+    Finished(Value),
+}
+
+/// Scans one markdown material (a markdown id, or a PDF's canonical head)
+/// and appends `md_byte_range` hits on that material.
+fn scan_markdown(
+    pool: &ArtifactPool,
+    material: &Material,
+    attachment: Option<Attachment>,
+    pattern: &str,
+    room: usize,
+    hits: &mut Vec<GrepHit>,
+    diagnostics: &mut Vec<Value>,
+) -> Result<MarkdownScan, ToolError> {
+    let (text, capped) = match load_text(pool, material)? {
+        Loaded::Text { text, capped } => (text, capped),
+        Loaded::Finished(value) => return Ok(MarkdownScan::Finished(value)),
+    };
+    if capped {
+        diagnostics.push(json!({
+            "code": "scan_capped",
+            "message": format!(
+                "scanned the first {} bytes of this markdown; the remainder was not searched",
+                text.len()
+            ),
+            "artifact_id": material.id.to_string(),
+            "scanned_bytes": text.len(),
+            "total_bytes": material.byte_size,
+        }));
+    }
+    let (found, limited) = scan_text(&text, pattern, room);
+    for found in found {
+        hits.push(GrepHit {
+            artifact_id: material.id.to_string(),
+            locator: Locator::MdByteRange {
+                start: found.start,
+                end: found.end,
+            },
+            snippet: found.snippet,
+            score: LITERAL_SCORE,
+            revision: material.revision.clone(),
+            canonical_id: attachment.as_ref().map(|(id, _, _)| id.clone()),
+            partial: attachment.as_ref().map(|(_, partial, _)| *partial),
+            coverage: attachment.as_ref().map(|(_, _, coverage)| coverage.clone()),
+            surface: None,
+        });
+    }
+    Ok(MarkdownScan::Scanned { limited, capped })
+}
+
+/// Whether a PDF id can be served from its current canonical markdown head.
+enum CanonicalHead<'a> {
+    Usable {
+        view: &'a CanonicalMarkdownView,
+        head: Material,
+    },
+    /// A current lineage exists, but its head cannot be scanned.
+    Unusable {
+        canonical_id: String,
+        reason: &'static str,
+    },
+    None,
+}
+
+fn canonical_head<'a>(
+    workspace: &McpWorkspace,
+    pool: &ArtifactPool,
+    index: &'a CanonicalIndex,
+    pdf: &Material,
+) -> Result<CanonicalHead<'a>, ToolError> {
+    let Some(view) = index.current_for_pdf(pdf.id.as_str()) else {
+        return Ok(CanonicalHead::None);
+    };
+    let unusable = |reason| {
+        Ok(CanonicalHead::Unusable {
+            canonical_id: view.canonical_id.to_string(),
+            reason,
+        })
+    };
+    let Some(head_id) = view.head_artifact_id.as_ref() else {
+        return Ok(CanonicalHead::None);
+    };
+    let Some(head) = find_material(workspace, head_id)? else {
+        return unusable("head_not_in_catalog");
+    };
+    if head.media_type != MARKDOWN_MEDIA_TYPE {
+        return unusable("head_not_markdown");
+    }
+    if let Err(error) = material::open_managed_path(pool, &head.id) {
+        return match managed_path_failure(&error) {
+            ManagedPathFailure::NotFound => unusable("content_unavailable"),
+            _ => fail_load(&head, error).map(|_| CanonicalHead::None),
+        };
+    }
+    Ok(CanonicalHead::Usable { view, head })
+}
+
+/// `"1–3, 5"` for diagnostics.
+fn ranges_label(ranges: &[InclusivePageRange]) -> String {
+    ranges
+        .iter()
+        .map(|range| {
+            if range.from == range.to {
+                range.from.to_string()
+            } else {
+                format!("{}–{}", range.from, range.to)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn validated_max_hits(max_hits: Option<usize>) -> Result<usize, ToolError> {

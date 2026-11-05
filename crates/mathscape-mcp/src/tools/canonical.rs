@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use mathscape_agent::{ToolError, ToolErrorCode};
 use mathscape_domain::{CanonicalMarkdownView, InclusivePageRange, StableId};
+use mathscape_query::CanonicalAliasTable;
 use mathscape_store_sqlite::project_canonical_markdown;
 
 use crate::McpWorkspace;
@@ -83,6 +84,26 @@ impl CanonicalIndex {
                 .then_with(|| left.canonical_id.cmp(&right.canonical_id))
         });
         matches
+    }
+
+    /// The PDF's *current* lineage with a head (default profile, newest
+    /// policy, most pages — the same order the map and search fold use via
+    /// [`CanonicalAliasTable`]). `None` when no lineage has a head.
+    pub(super) fn current_for_pdf(&self, pdf_id: &str) -> Option<&CanonicalMarkdownView> {
+        let lineages: Vec<CanonicalMarkdownView> = self
+            .views
+            .iter()
+            .filter(|view| {
+                view.source_pdf_artifact_id.as_str() == pdf_id && view.head_artifact_id.is_some()
+            })
+            .cloned()
+            .collect();
+        let table = CanonicalAliasTable::from_views(&lineages);
+        self.views.iter().find(|view| {
+            view.source_pdf_artifact_id.as_str() == pdf_id
+                && view.head_artifact_id.is_some()
+                && table.is_current(&view.canonical_id)
+        })
     }
 
     pub(super) fn for_markdown(&self, artifact_id: &str) -> Option<&CanonicalMarkdownView> {

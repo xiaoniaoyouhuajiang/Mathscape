@@ -9,7 +9,9 @@
 //! - `workspace.search` wraps [`mathscape_query::search::SearchRegistry`];
 //! - `material.read` reads Markdown by `md_byte_range` and text-layer PDFs by
 //!   `pdf_pages` (1-based), capped at [`tools::MAX_READ_BYTES`];
-//! - `material.grep` linearly scans markdown bodies of the given artifact ids;
+//! - `material.grep` linearly scans markdown bodies of the given artifact ids
+//!   (a PDF id scans its current canonical markdown head when one exists,
+//!   otherwise its native text layer);
 //! - `pdf.outline` returns a PDF's embedded bookmarks. `pdf_page_index` is
 //!   0-based and is not written back to the workspace;
 //! - `graph.get` / `graph.neighborhood` (Phase1c, `docs/phase1c-graph-contract.md`)
@@ -20,7 +22,11 @@
 //! - `ink.page_image` (Phase1d-b) renders one ink page — a note's live head,
 //!   an ink snapshot, or the snapshot behind an ink evidence span — to a PNG
 //!   with [`mathscape_ink_raster`]. Image results carry a text metadata block
-//!   plus an `image` block and omit `structuredContent`.
+//!   plus an `image` block and omit `structuredContent`;
+//! - `pdf.page_image` renders one PDF page (1-based, like `pdf_pages`) or a
+//!   normalized crop of it to a PNG with the pure-Rust rasterizer behind
+//!   [`mathscape_pdf::PdfEngine::render_page`], with the same image result
+//!   shape. Read-only: no Marker, no markdown write, no PDF mutation.
 //!
 //! Wire envelope follows `docs/phase0-contract.md` §2 and reuses the DTOs of
 //! `mathscape-agent` ([`mathscape_agent::ToolStatus`], [`mathscape_agent::Locator`],

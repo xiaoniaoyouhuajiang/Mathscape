@@ -2,8 +2,8 @@ use lopdf::{
     Bookmark, Document, Object, ObjectId, Stream, content::Content, content::Operation, dictionary,
 };
 use mathscape_pdf::{
-    ClassificationMode, PdfContentKind, PdfEngine, PdfError, PdfOpenOptions, PdfPageIndex,
-    PdfSelection, ScanCoverage,
+    ClassificationMode, NormalizedRect, PDF_RENDERER, PdfContentKind, PdfEngine, PdfError,
+    PdfOpenOptions, PdfPageIndex, PdfSelection, ScanCoverage,
 };
 
 fn write_pdf(path: &std::path::Path, with_text: bool) {
@@ -610,4 +610,116 @@ fn write_duplicate_title_pdf(path: &std::path::Path) {
     );
     embed_bookmarks(&mut document);
     document.save(path).expect("save duplicate-title PDF");
+}
+
+/// Decodes a PNG and counts pixels that are not white.
+fn decode_ink(png_bytes: &[u8]) -> (u32, u32, usize) {
+    let decoder = png::Decoder::new(png_bytes);
+    let mut reader = decoder.read_info().expect("png header");
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buffer).expect("png frame");
+    let channels = info.color_type.samples();
+    let dark = buffer[..info.buffer_size()]
+        .chunks(channels)
+        .filter(|pixel| pixel.iter().take(3).any(|&value| value < 200))
+        .count();
+    (info.width, info.height, dark)
+}
+
+#[test]
+fn renders_rotated_page_and_crop_read_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("text.pdf");
+    write_pdf(&path, true);
+    let before = std::fs::read(&path).unwrap();
+    let engine = PdfEngine;
+    assert_eq!(PDF_RENDERER, "hayro-0.8");
+
+    // Rotate 90: displayed page is 792 x 612 pt, longest edge 512 px.
+    let full = engine
+        .render_page(&path, PdfPageIndex::new(0), None, 512, 1 << 20)
+        .unwrap();
+    assert_eq!(full.page_box.page_count, 1);
+    assert_eq!(full.page_box.rotation_degrees, 90);
+    assert_eq!(
+        (full.page_box.width_pt, full.page_box.height_pt),
+        (792.0, 612.0)
+    );
+    assert_eq!(
+        engine.page_box(&path, PdfPageIndex::new(0)).unwrap(),
+        full.page_box
+    );
+    assert_eq!(full.crop, NormalizedRect::FULL);
+    let image = full.image.expect("fits the byte budget");
+    assert_eq!((image.width, image.height), (512, 396));
+    let (width, height, dark) = decode_ink(&image.png);
+    assert_eq!((width, height), (512, 396));
+    assert!(dark > 0, "the text layer must be painted");
+
+    let top_half = NormalizedRect::try_new(0.0, 0.0, 1.0, 0.5).unwrap();
+    let cropped = engine
+        .render_page(&path, PdfPageIndex::new(0), Some(top_half), 512, 1 << 20)
+        .unwrap();
+    let image = cropped.image.unwrap();
+    assert_eq!((image.width, image.height), (512, 198));
+    assert_eq!(cropped.crop, top_half);
+
+    let blank_path = directory.path().join("blank.pdf");
+    write_pdf(&blank_path, false);
+    let blank = engine
+        .render_page(&blank_path, PdfPageIndex::new(0), None, 256, 1 << 20)
+        .unwrap();
+    assert_eq!(decode_ink(&blank.image.unwrap().png).2, 0);
+
+    assert!(matches!(
+        engine.render_page(
+            directory.path().join("missing.pdf"),
+            PdfPageIndex::new(0),
+            None,
+            512,
+            1 << 20
+        ),
+        Err(PdfError::Io(_))
+    ));
+    let text_path = directory.path().join("plain.txt");
+    std::fs::write(&text_path, b"not a pdf").unwrap();
+    assert!(matches!(
+        engine.render_page(&text_path, PdfPageIndex::new(0), None, 512, 1 << 20),
+        Err(PdfError::NotPdf(_))
+    ));
+    assert!(matches!(
+        engine.render_page(&path, PdfPageIndex::new(1), None, 512, 1 << 20),
+        Err(PdfError::PageOutOfBounds {
+            index: 1,
+            page_count: 1
+        })
+    ));
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "rendering is read-only"
+    );
+}
+
+#[test]
+fn render_downscales_to_the_byte_budget_or_returns_no_image() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("text.pdf");
+    write_pdf(&path, true);
+    let render = PdfEngine
+        .render_page(&path, PdfPageIndex::new(0), None, 1024, 64)
+        .unwrap();
+    assert!(render.image.is_none());
+    assert_eq!(render.requested_edge_px, 1024);
+    assert!(render.returned_edge_px < 1024 && render.returned_edge_px >= 256);
+    assert!(render.last_bytes > 64);
+}
+
+#[test]
+fn normalized_rect_rejects_out_of_range_or_empty_crops() {
+    assert!(NormalizedRect::try_new(0.0, 0.0, 1.0, 1.0).is_ok());
+    assert!(NormalizedRect::try_new(-0.1, 0.0, 1.0, 1.0).is_err());
+    assert!(NormalizedRect::try_new(0.5, 0.0, 0.5, 1.0).is_err());
+    assert!(NormalizedRect::try_new(0.0, 0.6, 1.0, 0.2).is_err());
+    assert!(NormalizedRect::try_new(0.0, 0.0, f32::NAN, 1.0).is_err());
 }

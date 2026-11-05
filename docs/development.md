@@ -2,7 +2,7 @@
 
 ## 环境与启动
 
-命令均在 `mathscape/` 根执行。Rust 最低版本由 [Cargo.toml](../Cargo.toml) 指定（当前 1.88，edition 2024）；使用 Node/npm 和 [Tauri](../apps/mathscape-desktop/tauri.conf.json) 所需的平台构建环境。依赖版本以 Cargo.lock、前端 package-lock.json 为准。
+命令均在 `mathscape/` 根执行。Rust 最低版本由 [Cargo.toml](../Cargo.toml) 指定（当前 1.92，edition 2024；`pdf.page_image` 的渲染依赖 hayro 0.8 需要 1.92）；使用 Node/npm 和 [Tauri](../apps/mathscape-desktop/tauri.conf.json) 所需的平台构建环境。依赖版本以 Cargo.lock、前端 package-lock.json 为准。
 
 ```sh
 npm --prefix frontend install

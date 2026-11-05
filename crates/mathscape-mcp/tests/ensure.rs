@@ -799,16 +799,29 @@ fn text_layer_pdf_read_serves_canonical_markdown_and_grep_never_runs_marker() {
     assert!(page.get("page_spans").is_none());
     assert_eq!(h.marker_calls(), ["1"]);
 
-    // A covered re-read reuses the snapshot; grep now reports the view.
+    // A covered re-read reuses the snapshot.
     let again = read(&server, &text, 2, 2);
     assert!(codes(&again).contains(&"served_canonical_markdown".to_owned()));
     assert_eq!(h.marker_calls(), ["1"]);
-    let located = grep(&server, &text, "monotone");
+
+    // Now that a canonical head exists, grep on the PDF id searches the head
+    // markdown (canonical first), not the text layer: hits are md_byte_range
+    // into the head snapshot, and the text-layer phrase no longer matches.
+    let located = grep(&server, &text, "扫描页");
+    assert_eq!(located["status"], "ok", "{located}");
+    let hit = &located["hits"][0];
+    assert!(hit.get("surface").is_none(), "{hit}");
+    assert!(hit["locator"]["md_byte_range"].is_object(), "{hit}");
+    assert_eq!(hit["artifact_id"], page["served_artifact_id"], "{hit}");
+    assert!(hit["canonical_id"].is_string());
+    assert_eq!(hit["partial"], true);
     assert_eq!(
-        located["hits"][0]["coverage"]["covered"],
+        hit["coverage"]["covered"],
         json!([{ "from": 2, "to": 2 }]),
         "{located}"
     );
-    assert!(located["hits"][0]["canonical_id"].is_string());
+    assert!(codes(&located).contains(&"pdf_resolved_to_canonical".to_owned()));
+    let quoted = grep(&server, &text, "monotone");
+    assert_eq!(quoted["hits"], json!([]), "{quoted}");
     assert_eq!(h.marker_calls(), ["1"]);
 }

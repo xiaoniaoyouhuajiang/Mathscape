@@ -99,7 +99,10 @@ PDF 的 `pdf_pages` 精读（无论请求页有没有原生文本层，正文都
 
 用 canonical id 调用 `material.read`（`md_byte_range`）或 `material.grep` 时，解析到 head 快照再读。这不是 artifact 重定向：旧的物理 artifact id 照常可读，并带上同一个 `canonical_id`。
 
-`material.grep`、`workspace.search`、`pdf.outline` 永不触发 ensure。`material.grep` 接受 PDF id 做粗定位：逐页扫描原生文本层（字面子串，不跨页），命中带 `surface: "pdf_text_layer"` 与 `pdf_pages {from,to}`（均为命中页），若该页已有 canonical 视图则附带 `canonical_id`/`coverage`/`partial`；snippet 不是规范正文，引用前须用该 locator 调 `material.read`。grep 仍不把 PDF id 优先解析到 canonical head（后续切片）。
+`material.grep`、`workspace.search`、`pdf.outline`、`pdf.page_image` 永不触发 ensure。`material.grep` 接受 PDF id，**canonical 优先**：
+- 该 PDF 有当前 lineage（与 `CanonicalAliasTable` 同一规则：默认 profile 优先，其次 policy 自然序最新，再次页数最多）的 head，且 head 在 catalog 中、是 markdown、有受管副本：只扫描 head markdown，命中的 `artifact_id` 为 head 快照，locator 为 `md_byte_range`，并附 `canonical_id`/`coverage`/`partial`（与直接 grep 该 markdown id 一致，可原样交给 `material.read`）。诊断 `pdf_resolved_to_canonical` 给出 PDF、`canonical_id`、`head_artifact_id`、`searched_pages`（= `coverage.head_covered`）与 `partial`。head 未覆盖的页、其他 lineage、非 head 快照都**不**扫描，也不对未覆盖页回退文本层；要搜这些页先用 `material.read` 的 `pdf_pages` 解析。
+- 没有可用 head：回退到逐页扫描原生文本层（字面子串，不跨页），命中带 `surface: "pdf_text_layer"` 与 `pdf_pages {from,to}`（均为命中页），若该页已有 canonical 视图则附带 `canonical_id`/`coverage`/`partial`；snippet 不是规范正文，引用前须用该 locator 调 `material.read`。head 存在但不可读（`head_not_in_catalog`/`head_not_markdown`/`content_unavailable`）时另给诊断 `canonical_head_unavailable`。
+- 两条路径都不运行 Marker。
 
 ## Ensure（`material.read` 内部路径）
 
