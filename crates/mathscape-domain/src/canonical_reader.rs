@@ -177,6 +177,130 @@ pub fn plan_canonical_reader(view: &CanonicalMarkdownView) -> CanonicalReaderPla
     plan
 }
 
+/// One snapshot chosen to serve part of a careful page read
+/// ([`plan_page_cover`]).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PageCoverPiece {
+    /// Index into the `views` slice given to [`plan_page_cover`].
+    pub view_index: usize,
+    pub conversion_id: StableId,
+    pub markdown_artifact_id: StableId,
+    /// The snapshot's own ledger range.
+    pub snapshot_pages: InclusivePageRange,
+    /// Requested pages this snapshot supplies (inside `snapshot_pages`).
+    pub pages: InclusivePageRange,
+    pub is_head: bool,
+}
+
+/// How registered snapshots cover one requested page range.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PageCover {
+    /// In page order, non-overlapping; together with `gaps` they tile the
+    /// request exactly.
+    pub pieces: Vec<PageCoverPiece>,
+    /// Requested pages no snapshot of any given view covers.
+    pub gaps: Vec<InclusivePageRange>,
+}
+
+impl PageCover {
+    pub fn is_complete(&self) -> bool {
+        self.gaps.is_empty() && !self.pieces.is_empty()
+    }
+
+    /// The contiguous range from the first to the last gap (covered pages
+    /// between gaps included), if any. Ensure does not parse it: it runs
+    /// Marker once per gap; the hull only summarizes where parsing happened.
+    pub fn gap_hull(&self) -> Option<InclusivePageRange> {
+        let first = self.gaps.first()?;
+        let last = self.gaps.last()?;
+        Some(InclusivePageRange {
+            from: first.from,
+            to: last.to,
+        })
+    }
+}
+
+/// Plans which immutable snapshots serve `request`, across every lineage in
+/// `views` (best-ranked first). Greedy interval cover with a cursor at the
+/// first requested page not yet supplied: among snapshots that contain the
+/// cursor page, the one reaching furthest into the request wins; ties prefer the better-ranked
+/// view, then its head, then the newest `finished_at`, then ids. Fewest
+/// pieces for a contiguous request; deterministic for a given ledger.
+/// Pages no snapshot contains become `gaps` (never invented text).
+pub fn plan_page_cover(views: &[&CanonicalMarkdownView], request: InclusivePageRange) -> PageCover {
+    let mut candidates = Vec::new();
+    for (view_index, view) in views.iter().enumerate() {
+        let head = view.head_artifact_id.as_ref();
+        for segment in &view.segments {
+            let Some(pages) = segment.pages else {
+                continue;
+            };
+            if !pages.overlaps(request) {
+                continue;
+            }
+            candidates.push((
+                view_index,
+                segment,
+                pages,
+                head == Some(&segment.markdown_artifact_id),
+            ));
+        }
+    }
+    let better =
+        |left: &(usize, &crate::CanonicalSegment, InclusivePageRange, bool),
+         right: &(usize, &crate::CanonicalSegment, InclusivePageRange, bool)| {
+            let reach = |pages: InclusivePageRange| pages.to.min(request.to);
+            reach(left.2)
+                .cmp(&reach(right.2))
+                .then_with(|| right.0.cmp(&left.0))
+                .then_with(|| left.3.cmp(&right.3))
+                .then_with(|| left.1.finished_at.cmp(&right.1.finished_at))
+                .then_with(|| {
+                    right
+                        .1
+                        .markdown_artifact_id
+                        .cmp(&left.1.markdown_artifact_id)
+                })
+                .then_with(|| right.1.conversion_id.cmp(&left.1.conversion_id))
+        };
+    let mut cover = PageCover::default();
+    let mut cursor = request.from;
+    while cursor <= request.to {
+        let best = candidates
+            .iter()
+            .filter(|(_, _, pages, _)| pages.from <= cursor && cursor <= pages.to)
+            .max_by(|left, right| better(left, right));
+        match best {
+            Some((view_index, segment, pages, is_head)) => {
+                let to = pages.to.min(request.to);
+                cover.pieces.push(PageCoverPiece {
+                    view_index: *view_index,
+                    conversion_id: segment.conversion_id.clone(),
+                    markdown_artifact_id: segment.markdown_artifact_id.clone(),
+                    snapshot_pages: *pages,
+                    pages: InclusivePageRange { from: cursor, to },
+                    is_head: *is_head,
+                });
+                cursor = to.saturating_add(1);
+            }
+            None => {
+                let next = candidates
+                    .iter()
+                    .map(|(_, _, pages, _)| pages.from)
+                    .filter(|from| *from > cursor)
+                    .min();
+                let to = next.map_or(request.to, |from| (from - 1).min(request.to));
+                cover.gaps.push(InclusivePageRange { from: cursor, to });
+                cursor = to.saturating_add(1);
+            }
+        }
+        if cursor == 0 {
+            break;
+        }
+    }
+    cover
+}
+
 /// Marker page id (0-based) of a `{N}------…` page-marker line, if `line` is one.
 pub fn marker_page_id(line: &str) -> Option<u32> {
     let line = line.trim();
@@ -395,6 +519,91 @@ mod tests {
                 .pieces
                 .is_empty()
         );
+    }
+
+    fn cover_desc(cover: &PageCover) -> Vec<String> {
+        let mut out: Vec<String> = cover
+            .pieces
+            .iter()
+            .map(|piece| {
+                format!(
+                    "{}:{} {}-{}",
+                    piece.view_index,
+                    piece
+                        .markdown_artifact_id
+                        .as_str()
+                        .trim_start_matches("mathscape:artifact/"),
+                    piece.pages.from,
+                    piece.pages.to
+                )
+            })
+            .collect();
+        out.extend(
+            cover
+                .gaps
+                .iter()
+                .map(|g| format!("gap {}-{}", g.from, g.to)),
+        );
+        out
+    }
+
+    #[test]
+    fn page_cover_stitches_adjacent_snapshots_without_gaps() {
+        // The 2026-11-06 sandbox case: 1-4, 5-10, 11-14 already parsed.
+        let lineage = view(
+            Some(14),
+            Some("c"),
+            vec![
+                segment("a", Some((1, 4))),
+                segment("b", Some((5, 10))),
+                segment("c", Some((11, 14))),
+            ],
+        );
+        let cover = plan_page_cover(&[&lineage], range(1, 8));
+        assert_eq!(cover_desc(&cover), ["0:a 1-4", "0:b 5-8"]);
+        assert!(cover.is_complete());
+        let cover = plan_page_cover(&[&lineage], range(9, 14));
+        assert_eq!(cover_desc(&cover), ["0:b 9-10", "0:c 11-14"]);
+        assert_eq!(cover.gap_hull(), None);
+    }
+
+    #[test]
+    fn page_cover_prefers_the_furthest_reach_then_better_view() {
+        let current = view(Some(30), Some("n"), vec![segment("n", Some((1, 6)))]);
+        let old = view(
+            Some(30),
+            None,
+            vec![segment("o1", Some((1, 9))), segment("o2", Some((3, 6)))],
+        );
+        // o1 reaches further than n: one piece instead of two.
+        assert_eq!(
+            cover_desc(&plan_page_cover(&[&current, &old], range(2, 8))),
+            ["1:o1 2-8"]
+        );
+        // Same reach: the better-ranked (current) view wins.
+        assert_eq!(
+            cover_desc(&plan_page_cover(&[&current, &old], range(2, 5))),
+            ["0:n 2-5"]
+        );
+    }
+
+    #[test]
+    fn page_cover_reports_gaps_and_their_hull() {
+        let lineage = view(
+            Some(30),
+            None,
+            vec![segment("a", Some((1, 3))), segment("b", Some((6, 7)))],
+        );
+        let cover = plan_page_cover(&[&lineage], range(2, 9));
+        assert_eq!(
+            cover_desc(&cover),
+            ["0:a 2-3", "0:b 6-7", "gap 4-5", "gap 8-9"]
+        );
+        assert!(!cover.is_complete());
+        assert_eq!(cover.gap_hull(), Some(range(4, 9)));
+        let empty = plan_page_cover(&[], range(5, 6));
+        assert_eq!(cover_desc(&empty), ["gap 5-6"]);
+        assert_eq!(empty.gap_hull(), Some(range(5, 6)));
     }
 
     #[test]

@@ -42,7 +42,17 @@ if [ -f "$here/fail" ]; then echo 'fake marker failure' >&2; exit 3; fi
 source_name="${source_path##*/}"
 source_stem="${source_name%.*}"
 mkdir -p "$output_root/$source_stem"
-printf '{0}----------------\n\n# 扫描页 %s\n' "$page_range" > "$output_root/$source_stem/$source_stem.md"
+# Like real Marker with --paginate_output: one `{N}----` marker per page,
+# N = 0-based absolute PDF page index.
+first="${page_range%-*}"
+last="${page_range#*-}"
+out="$output_root/$source_stem/$source_stem.md"
+: > "$out"
+page="$first"
+while [ "$page" -le "$last" ]; do
+    printf '{%s}----------------\n\n# 扫描页 %s 第%s页\n\n' "$page" "$page_range" "$((page + 1))" >> "$out"
+    page=$((page + 1))
+done
 printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_stem}_meta.json"
 "#;
 
@@ -333,12 +343,12 @@ fn uncovered_scanned_read_ensures_then_serves_and_covered_reads_never_rerun() {
     assert_eq!(ensure["status"], "expanded", "{first}");
     assert_eq!(ensure["requested"], json!({ "from": 3, "to": 4 }));
     assert_eq!(ensure["missing"], json!([{ "from": 3, "to": 4 }]));
-    assert_eq!(ensure["marker_range"], json!({ "from": 3, "to": 4 }));
+    assert_eq!(ensure["marker_ranges"], json!([{ "from": 3, "to": 4 }]));
     assert!(
         ensure["idempotency_key"]
             .as_str()
             .unwrap()
-            .ends_with("|3-4|mathscape.marker.math-ocr.v1|marker-2.1.0|ensure-v1"),
+            .ends_with("|3-4|mathscape.marker.math-ocr.v1|marker-2.1.0|ensure-v3"),
         "{ensure}"
     );
     assert_eq!(
@@ -400,8 +410,8 @@ fn uncovered_scanned_read_ensures_then_serves_and_covered_reads_never_rerun() {
         "covered reads must not rerun Marker"
     );
 
-    // Overlap-only coverage (3–4 vs request 4–5) is not served; the whole
-    // request is parsed again as one new snapshot (no stitching).
+    // Partly covered (3–4 vs request 4–5): Marker parses only page 5, and
+    // the read stitches the old snapshot (page 4) with the new one (page 5).
     let overlap = read(&server, &h.pdf, 4, 5);
     assert_eq!(overlap["status"], "ok", "{overlap}");
     assert_eq!(overlap["details"]["ensure"]["status"], "expanded");
@@ -410,11 +420,20 @@ fn uncovered_scanned_read_ensures_then_serves_and_covered_reads_never_rerun() {
         json!([{ "from": 5, "to": 5 }])
     );
     assert_eq!(
-        overlap["details"]["ensure"]["marker_range"],
-        json!({ "from": 4, "to": 5 })
+        overlap["details"]["ensure"]["marker_ranges"],
+        json!([{ "from": 5, "to": 5 }])
     );
-    assert_ne!(overlap["served_artifact_id"], first["served_artifact_id"]);
-    assert_eq!(h.marker_calls(), ["2-3", "3-4"]);
+    assert!(overlap.get("served_artifact_id").is_none(), "{overlap}");
+    let segments = overlap["details"]["served_segments"].as_array().unwrap();
+    assert_eq!(segments.len(), 2, "{overlap}");
+    assert_eq!(segments[0]["artifact_id"], first["served_artifact_id"]);
+    assert_eq!(segments[0]["pages"], json!({ "from": 4, "to": 4 }));
+    assert_eq!(segments[1]["pages"], json!({ "from": 5, "to": 5 }));
+    let text = overlap["text"].as_str().unwrap();
+    assert!(!text.contains("第3页"), "trimmed to the request: {text}");
+    assert!(text.find("第4页").unwrap() < text.find("第5页").unwrap());
+    assert!(codes(&overlap).contains(&"served_stitched_canonical_markdown".to_owned()));
+    assert_eq!(h.marker_calls(), ["2-3", "4"]);
 
     // The old snapshot is still served for its own range; PDF bytes untouched.
     let old = read(&server, &h.pdf, 3, 4);
@@ -426,6 +445,124 @@ fn uncovered_scanned_read_ensures_then_serves_and_covered_reads_never_rerun() {
         String::from_utf8(h.object_bytes(first_md))
             .unwrap()
             .contains("扫描页 2-3")
+    );
+}
+
+#[test]
+fn reads_spanning_parsed_snapshots_are_stitched_without_rerunning_marker() {
+    // Sandbox sbx-20261101T235040-bc83e994: pages 1–4, 5–10, 11–14 were
+    // parsed, then reads of 1–8 and 9–14 re-ran Marker on the whole request.
+    let h = harness();
+    let server = h.server(test_policy());
+    for (from, to) in [(1, 4), (5, 10), (11, 14)] {
+        assert_eq!(read(&server, &h.pdf, from, to)["status"], "ok");
+    }
+    assert_eq!(h.marker_calls(), ["0-3", "4-9", "10-13"]);
+
+    for (from, to, pieces) in [(1, 8, 2), (9, 14, 2), (1, 12, 3)] {
+        let result = read(&server, &h.pdf, from, to);
+        assert_eq!(result["status"], "ok", "{result}");
+        assert!(result["details"].get("ensure").is_none(), "{result}");
+        let segments = result["details"]["served_segments"].as_array().unwrap();
+        assert_eq!(segments.len(), pieces, "{result}");
+        assert!(segments.iter().all(|s| s["trimmed_to_pages"] == true));
+        let text = result["text"].as_str().unwrap();
+        let positions: Vec<usize> = (from..=to)
+            .map(|page| {
+                text.find(&format!("第{page}页"))
+                    .unwrap_or_else(|| panic!("page {page} missing: {text}"))
+            })
+            .collect();
+        assert!(
+            positions.windows(2).all(|w| w[0] < w[1]),
+            "page order: {text}"
+        );
+        assert!(!text.contains(&format!("第{}页", to + 1)), "{text}");
+        // `partial` stays true: pages 15–20 of the book are not parsed yet.
+    }
+    assert_eq!(h.marker_calls(), ["0-3", "4-9", "10-13"], "no re-parse");
+
+    // Only the uncovered tail is parsed, then stitched with 11–14.
+    let tail = read(&server, &h.pdf, 13, 16);
+    assert_eq!(tail["status"], "ok", "{tail}");
+    assert_eq!(
+        tail["details"]["ensure"]["marker_ranges"],
+        json!([{ "from": 15, "to": 16 }])
+    );
+    assert_eq!(
+        tail["details"]["served_segments"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(h.marker_calls(), ["0-3", "4-9", "10-13", "14-15"]);
+}
+
+#[test]
+fn separated_gaps_get_one_marker_run_each_and_covered_pages_between_are_not_reparsed() {
+    let h = harness();
+    let server = h.server(test_policy());
+    assert_eq!(read(&server, &h.pdf, 3, 6)["status"], "ok");
+    assert_eq!(h.marker_calls(), ["2-5"]);
+
+    // Request 1–8 has two gaps (1–2 and 7–8) around the covered 3–6.
+    let result = read(&server, &h.pdf, 1, 8);
+    assert_eq!(result["status"], "ok", "{result}");
+    let ensure = &result["details"]["ensure"];
+    assert_eq!(ensure["status"], "expanded", "{ensure}");
+    assert_eq!(
+        ensure["missing"],
+        json!([{ "from": 1, "to": 2 }, { "from": 7, "to": 8 }])
+    );
+    assert_eq!(
+        ensure["marker_ranges"],
+        json!([{ "from": 1, "to": 2 }, { "from": 7, "to": 8 }])
+    );
+    let runs = ensure["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2, "{ensure}");
+    assert!(
+        runs.iter()
+            .all(|run| run["markdown_artifact_id"].is_string())
+    );
+    assert_ne!(runs[0]["idempotency_key"], runs[1]["idempotency_key"]);
+    assert_eq!(ensure["ensure_id"], runs[1]["ensure_id"]);
+    assert_eq!(
+        h.marker_calls(),
+        ["2-5", "0-1", "6-7"],
+        "3–6 is never re-parsed"
+    );
+    // Scene record spans the parse of this call.
+    assert_eq!(
+        result["details"]["map_signal"]["pages"],
+        json!({ "from": 1, "to": 8 })
+    );
+
+    let segments = result["details"]["served_segments"].as_array().unwrap();
+    let pages: Vec<_> = segments.iter().map(|s| s["pages"].clone()).collect();
+    assert_eq!(
+        pages,
+        [
+            json!({ "from": 1, "to": 2 }),
+            json!({ "from": 3, "to": 6 }),
+            json!({ "from": 7, "to": 8 })
+        ]
+    );
+    let text = result["text"].as_str().unwrap();
+    for page in 1..=8 {
+        assert_eq!(text.matches(&format!("第{page}页")).count(), 1, "{text}");
+    }
+    // Both receipts succeeded and no lease is left.
+    let store = h.store();
+    for run in runs {
+        let receipt = store
+            .canonical_ensure_receipt(run["ensure_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(receipt.status, "succeeded");
+    }
+    assert!(
+        store
+            .active_canonical_ensures(unix_millis_now())
+            .unwrap()
+            .is_empty()
     );
 }
 
