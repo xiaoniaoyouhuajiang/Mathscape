@@ -500,6 +500,7 @@
 }
 
 .sandbox-dock-model-select,
+.sandbox-dock-thread-select,
 .sandbox-dock-effort-select {
   flex: 1 1 auto;
   min-width: 0;
@@ -527,6 +528,7 @@
 
 .sandbox-dock-model,
 .sandbox-dock-model-select,
+.sandbox-dock-thread-select,
 .sandbox-dock-effort-select {
   cursor: pointer;
 }
@@ -1188,4 +1190,36 @@ button.sandbox-cite:focus-visible {
 
 .sandbox-step.has-replay > .sandbox-step-detail {
   grid-column: 1 / -1;
+}
+
+/* Dialogue threads (docs/sandbox-flow.md §3.5): one copy, fresh agent context. */
+.sandbox-dock-threads {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sandbox-dock-threads > .sandbox-dock-model {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sandbox-dock-new-thread {
+  margin-top: 0.35rem;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+.sandbox-dock-readonly {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  color: var(--muted, #6b7280);
+}
+
+.sandbox-dock-readonly[hidden] {
+  display: none;
 }

@@ -137,6 +137,8 @@ const workspaceStatus = () => {
   };
 };
 const transcript: Array<Record<string, unknown>> = [];
+// Dialogue threads share the one sandbox copy; only the active one takes messages.
+const dialogueThreads = { threads: [{ thread_id: "d1", created_at: "2026-10-31T09:00:00+08:00" }], active: "d1", rounds: 0 };
 const sandboxEvents: Array<Record<string, unknown>> = [];
 const emitDialogue = (payload: Record<string, unknown>) => {
   const internals = (window as unknown as { __TAURI_INTERNALS__: { runCallback: (id: number, data: unknown) => void } }).__TAURI_INTERNALS__;
@@ -261,17 +263,30 @@ function actStep(act: Exclude<SandboxAct, "">): { tool: string; args: Record<str
     }
   }
 }
-extraCommands.set("sandbox_session_dialogue", (args) => ({ sandboxSessionId: String(args.sandboxSessionId), transcript: structuredClone(transcript), events: structuredClone(sandboxEvents), activeRoundId: null }));
+const sessionDialogue = (args: Record<string, unknown>) => ({ sandboxSessionId: String(args.sandboxSessionId), transcript: structuredClone(transcript), events: structuredClone(sandboxEvents), activeRoundId: null, threads: structuredClone(dialogueThreads.threads), activeThreadId: dialogueThreads.active });
+extraCommands.set("sandbox_session_dialogue", sessionDialogue);
+extraCommands.set("sandbox_new_dialogue_thread", (args) => {
+  sandboxCalls.push({ command: "new_thread", args });
+  const used = transcript.some((entry) => entry.thread_id === dialogueThreads.active && entry.role === "user");
+  if (used) {
+    const id = `d${dialogueThreads.threads.length + 1}`;
+    dialogueThreads.threads.push({ thread_id: id, created_at: new Date().toISOString() });
+    dialogueThreads.active = id;
+  }
+  return sessionDialogue(args);
+});
 extraCommands.set("sandbox_send_message", (args) => {
   sandboxCalls.push({ command: "send", args });
   const id = String(args.sandboxSessionId);
-  const userEntry = { ts: new Date().toISOString(), role: "user", text: String(args.text), round_id: "r1" };
+  const rid = `r${++dialogueThreads.rounds}`;
+  const thread = dialogueThreads.active;
+  const userEntry = { ts: new Date().toISOString(), role: "user", text: String(args.text), round_id: rid, thread_id: thread };
   transcript.push(userEntry);
   // Stream the round after the command resolves, as the Rust pump does.
   // The tool call lands first so the dialogue can show an in-progress card
   // before the answer.
   const event = (seq: number, type: string, payload: Record<string, unknown>) => {
-    const value = { round_id: "r1", turn_id: "t1", seq, ts: "2026-10-31T09:01:00+08:00", backend: "codex", type, payload };
+    const value = { round_id: rid, turn_id: "t1", seq, ts: "2026-10-31T09:01:00+08:00", backend: "codex", type, payload };
     sandboxEvents.push(value);
     emitDialogue({ kind: "agent_event", sandbox_session_id: id, event: value });
   };
@@ -312,12 +327,12 @@ extraCommands.set("sandbox_send_message", (args) => {
     const text = sandboxRound.cite
       ? `依据 ${citeUnitId}，有 $\\sum_{n=1}^{\\infty} a_n < \\infty$。未知对象 ${"f".repeat(64)}。`
       : "找到 1 条：定理 3.2。";
-    const reply = { ts: new Date().toISOString(), role: "agent", text, round_id: "r1", outcome: "completed" };
+    const reply = { ts: new Date().toISOString(), role: "agent", text, round_id: rid, outcome: "completed", thread_id: thread };
     transcript.push(reply);
     emitDialogue({ kind: "transcript", sandbox_session_id: id, entry: reply });
-    emitDialogue({ kind: "round_finished", sandbox_session_id: id, round_id: "r1" });
+    emitDialogue({ kind: "round_finished", sandbox_session_id: id, round_id: rid });
   }, sandboxRound.delayMs + gap);
-  return { roundId: "r1", userEntry };
+  return { roundId: rid, userEntry };
 });
 extraCommands.set("sandbox_cancel_round", () => false);
 

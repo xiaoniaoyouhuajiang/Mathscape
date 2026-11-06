@@ -463,13 +463,14 @@ fn dialogue_prompt_replays_recent_history_without_system_lines() {
         text: text.into(),
         round_id: None,
         outcome: None,
+        thread_id: None,
     };
     let history = vec![
         entry(TranscriptRole::User, "第一问"),
         entry(TranscriptRole::Agent, "第一答"),
         entry(TranscriptRole::System, "本轮已取消"),
     ];
-    let prompt = build_dialogue_prompt(&history, "  第二问 ");
+    let prompt = build_dialogue_prompt(&history, "  第二问 ", false);
     assert!(
         prompt.contains("[用户] 第一问\n[助手] 第一答\n"),
         "{prompt}"
@@ -478,7 +479,114 @@ fn dialogue_prompt_replays_recent_history_without_system_lines() {
     assert!(prompt.ends_with("用户本轮消息：\n第二问"));
 
     let long = "长".repeat(13_000);
-    let prompt = build_dialogue_prompt(&[entry(TranscriptRole::User, &long)], "q");
+    let prompt = build_dialogue_prompt(&[entry(TranscriptRole::User, &long)], "q", false);
     assert!(!prompt.contains("此前的对话"));
-    assert!(build_dialogue_prompt(&[], "q").ends_with("q"));
+    assert!(build_dialogue_prompt(&[], "q", false).ends_with("q"));
+    assert!(!build_dialogue_prompt(&[], "q", false).contains("新开的一条对话"));
+    let later = build_dialogue_prompt(&[], "q", true);
+    assert!(later.contains("新开的一条对话"), "{later}");
+    assert!(later.ends_with("q"));
+}
+
+// ---------------------------------------------------------------- dialogue threads
+
+#[test]
+fn new_thread_shares_copy_and_resets_only_history() {
+    let (_tmp, home, checkpoint) = setup();
+    let before = snapshot_tree(&checkpoint);
+    let ckpt = home.register_checkpoint(&checkpoint, None).unwrap();
+    let session = home.start_session(&ckpt.checkpoint_id).unwrap();
+    let id = session.sandbox_session_id.clone();
+    let workspace = session.workspace_root.unwrap();
+
+    let threads = home.dialogue_threads(&id).unwrap();
+    assert_eq!(threads.active_thread_id, FIRST_THREAD_ID);
+    assert_eq!(threads.threads.len(), 1);
+    // Empty active thread: opening a new one is a no-op.
+    assert_eq!(home.start_dialogue_thread(&id).unwrap(), threads);
+
+    home.append_transcript(&id, TranscriptRole::User, "调试 A", None, None)
+        .unwrap();
+    home.append_transcript(
+        &id,
+        TranscriptRole::Agent,
+        "A 的回复",
+        Some("r1"),
+        Some("completed"),
+    )
+    .unwrap();
+    // Side effect on the shared copy made during thread d1.
+    fs::write(workspace.join("from-d1.txt"), "state").unwrap();
+
+    let threads = home.start_dialogue_thread(&id).unwrap();
+    assert_eq!(threads.active_thread_id, "d2");
+    assert_eq!(threads.threads.len(), 2);
+    // Same session, same copy: state carries over.
+    assert_eq!(home.session_workspace(&id), workspace);
+    assert!(workspace.join("from-d1.txt").is_file());
+    assert!(home.read_thread_transcript(&id, "d2").unwrap().is_empty());
+
+    // Old thread is read-only history; late lines for it are refused.
+    assert!(matches!(
+        home.append_thread_transcript(
+            &id,
+            FIRST_THREAD_ID,
+            TranscriptRole::Agent,
+            "late",
+            None,
+            None
+        ),
+        Err(SandboxError::InactiveThread { .. })
+    ));
+    let entry = home
+        .append_transcript(&id, TranscriptRole::User, "调试 B", None, None)
+        .unwrap();
+    assert_eq!(entry.thread(), "d2");
+    assert_eq!(
+        home.read_thread_transcript(&id, FIRST_THREAD_ID)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(home.read_transcript(&id).unwrap().len(), 3);
+
+    // Export / discard still act on the whole session.
+    let outcome = home.export_session(&id, None, None).unwrap();
+    assert_eq!(outcome.manifest.transcript_entries, 3);
+    assert_eq!(outcome.manifest.dialogue_threads, 2);
+    assert_eq!(home.dialogue_threads(&id).unwrap().active_thread_id, "d2");
+    home.discard_session(&id).unwrap();
+    assert!(!home.session_dir(&id).exists());
+    assert_eq!(snapshot_tree(&checkpoint), before);
+}
+
+#[test]
+fn legacy_session_without_threads_reads_as_first_thread() {
+    let (_tmp, home, checkpoint) = setup();
+    let ckpt = home.register_checkpoint(&checkpoint, None).unwrap();
+    let id = home
+        .start_session(&ckpt.checkpoint_id)
+        .unwrap()
+        .sandbox_session_id;
+    // A pre-thread transcript line has no `thread_id`.
+    fs::write(
+        home.transcript_path(&id),
+        "{\"ts\":\"2026-11-01T00:00:00.000+08:00\",\"role\":\"user\",\"text\":\"旧消息\"}\n",
+    )
+    .unwrap();
+    let session_json = fs::read_to_string(home.session_dir(&id).join(SESSION_FILE)).unwrap();
+    assert!(!session_json.contains("dialogue_threads"));
+
+    let old = home.read_thread_transcript(&id, FIRST_THREAD_ID).unwrap();
+    assert_eq!(old.len(), 1);
+    assert_eq!(old[0].thread_id, None);
+    let threads = home.start_dialogue_thread(&id).unwrap();
+    assert_eq!(
+        threads
+            .threads
+            .iter()
+            .map(|t| t.thread_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![FIRST_THREAD_ID, "d2"]
+    );
 }
