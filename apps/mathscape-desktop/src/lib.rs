@@ -1007,6 +1007,7 @@ pub fn run() {
             sandbox_dialogue::sandbox_set_model,
             sandbox_dialogue::sandbox_set_effort,
             sandbox_dialogue::sandbox_session_dialogue,
+            sandbox_dialogue::sandbox_new_dialogue_thread,
             sandbox_dialogue::sandbox_send_message,
             sandbox_dialogue::sandbox_cancel_round
         ])

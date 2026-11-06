@@ -101,17 +101,27 @@ const MIN_WIDTH = 320;
 const MIN_HEIGHT = 280;
 const HANDLE_SIZE = 48;
 
-interface TranscriptEntry {
+export interface TranscriptEntry {
   ts: string;
   role: TranscriptRole;
   text: string;
   round_id?: string;
   outcome?: string;
+  /** Absent on lines written before dialogue threads existed (= "d1"). */
+  thread_id?: string;
+}
+
+interface DialogueThread {
+  thread_id: string;
+  created_at: string;
 }
 
 interface SessionDialogue {
   sandboxSessionId: string;
+  /** Every thread's lines; the dock filters by the viewed thread. */
   transcript: TranscriptEntry[];
+  threads: DialogueThread[];
+  activeThreadId: string;
   events: AgentEventLike[];
   activeRoundId: string | null;
 }
@@ -150,6 +160,8 @@ export interface CiteContext {
 /** First 「解析中」 probe after a scanned-page read starts, then every … */
 /** The old textarea's maxLength, now checked on send (chips expand). */
 const COMPOSER_MAX_LENGTH = 20_000;
+/** Implicit first dialogue thread (mirrors `mathscape_sandbox::FIRST_THREAD_ID`). */
+const FIRST_THREAD_ID = "d1";
 
 export const PARSING_PROBE = { firstMs: 2500, everyMs: 3000 };
 
@@ -275,6 +287,10 @@ export class SandboxDialogueDock {
   private readonly resizeHandle: HTMLElement;
   private readonly sideResizeHandle: HTMLElement;
   private readonly modeButton: HTMLButtonElement;
+  private readonly threadRow: HTMLElement;
+  private readonly threadSelect: HTMLSelectElement;
+  private readonly newThreadButton: HTMLButtonElement;
+  private readonly readonlyNote: HTMLElement;
   /** Element that gives the map pane room for the sidebar (`.shell`). */
   private readonly layoutHost: HTMLElement;
 
@@ -282,6 +298,12 @@ export class SandboxDialogueDock {
   private transcript: TranscriptEntry[] = [];
   private events: AgentEventLike[] = [];
   private activeRoundId: string | null = null;
+  /** Dialogue threads on this session's one isolated copy (§3.3). */
+  private threads: DialogueThread[] = [];
+  private activeThreadId: string = FIRST_THREAD_ID;
+  /** Thread on screen; anything but the active one is read-only history. */
+  private viewThreadId: string = FIRST_THREAD_ID;
+  private switchingThread = false;
   private sending = false;
   private unlisten: Promise<UnlistenFn> | null = null;
   /** User override for a round's process section. Absent means follow running/done. */
@@ -335,6 +357,22 @@ export class SandboxDialogueDock {
     this.effortSelect.disabled = true;
     this.effortSelect.onchange = () => void this.onEffortChange();
     this.effortRow.append(this.effortSelect);
+    // Dialogue threads: same sandbox copy, fresh agent context per thread.
+    this.threadRow = el("div", "sandbox-dock-threads");
+    const threadLabel = el("label", "sandbox-dock-model");
+    threadLabel.append(el("span", "sandbox-dock-model-label", "对话"));
+    this.threadSelect = el("select", "sandbox-dock-thread-select");
+    this.threadSelect.setAttribute("aria-label", "查看本沙箱的对话");
+    this.threadSelect.onchange = () => {
+      this.viewThreadId = this.threadSelect.value;
+      this.renderAll();
+    };
+    threadLabel.append(this.threadSelect);
+    this.newThreadButton = el("button", "sandbox-btn sandbox-btn-quiet sandbox-dock-new-thread", "新对话");
+    this.newThreadButton.type = "button";
+    this.newThreadButton.title = "开一条新对话：Agent 上下文清空，沙箱副本里的状态保留";
+    this.newThreadButton.onclick = () => void this.newThread();
+    this.threadRow.append(threadLabel, this.newThreadButton);
     const pickers = el("div", "sandbox-dock-pickers");
     pickers.append(this.modelRow, this.effortRow);
     this.modelHint = el("span", "sandbox-dock-model-hint");
@@ -343,6 +381,7 @@ export class SandboxDialogueDock {
       el("span", "settings-eyebrow", "SANDBOX · S1"),
       this.title,
       this.status,
+      this.threadRow,
       pickers,
       this.modelHint,
     );
@@ -384,7 +423,17 @@ export class SandboxDialogueDock {
     this.sendButton = el("button", "sandbox-btn sandbox-btn-primary", "发送");
     this.sendButton.type = "submit";
     actions.append(el("span", "sandbox-actions-spacer"), this.cancelButton, this.sendButton);
-    composer.append(this.input.element, actions);
+    this.readonlyNote = el("p", "sandbox-dock-readonly", "");
+    this.readonlyNote.hidden = true;
+    const backToActive = el("button", "sandbox-btn sandbox-btn-quiet", "回到当前对话");
+    backToActive.type = "button";
+    backToActive.onclick = () => {
+      this.viewThreadId = this.activeThreadId;
+      this.renderAll();
+      this.input.focus();
+    };
+    this.readonlyNote.append(el("span", "", "这是只读的历史对话，不会再发给 Agent。"), backToActive);
+    composer.append(this.readonlyNote, this.input.element, actions);
     composer.addEventListener("submit", (event) => {
       event.preventDefault();
       void this.send();
@@ -466,6 +515,9 @@ export class SandboxDialogueDock {
       this.transcript = [];
       this.events = [];
       this.activeRoundId = null;
+      this.threads = [];
+      this.activeThreadId = FIRST_THREAD_ID;
+      this.viewThreadId = FIRST_THREAD_ID;
     }
     this.title.textContent = `沙箱对话 · ${sessionId}`;
     this.floatHandle.textContent = "对话";
@@ -474,9 +526,7 @@ export class SandboxDialogueDock {
     try {
       const dialogue = await invoke<SessionDialogue>("sandbox_session_dialogue", { sandboxSessionId: sessionId });
       if (this.sessionId !== sessionId) return;
-      this.transcript = dialogue.transcript;
-      this.events = dialogue.events;
-      this.activeRoundId = dialogue.activeRoundId;
+      this.adopt(dialogue, true);
     } catch (error) {
       this.toast(errorMessage(error), "error");
     }
@@ -1058,7 +1108,8 @@ export class SandboxDialogueDock {
     // Chips expand to their full ids: the agent gets the exact id strings.
     const text = this.input.value.trim();
     const sessionId = this.sessionId;
-    if (!text || !sessionId || this.sending || this.activeRoundId) return;
+    if (!text || !sessionId || this.sending || this.activeRoundId || this.switchingThread) return;
+    if (this.viewThreadId !== this.activeThreadId) return;
     if (text.length > COMPOSER_MAX_LENGTH) {
       this.toast(`消息过长（${text.length} / ${COMPOSER_MAX_LENGTH} 字符）`, "error");
       return;
@@ -1080,9 +1131,7 @@ export class SandboxDialogueDock {
       if (this.sessionId === sessionId) {
         try {
           const dialogue = await invoke<SessionDialogue>("sandbox_session_dialogue", { sandboxSessionId: sessionId });
-          this.transcript = dialogue.transcript;
-          this.events = dialogue.events;
-          this.activeRoundId = dialogue.activeRoundId;
+          if (this.sessionId === sessionId) this.adopt(dialogue, false);
         } catch {
           /* keep what we have */
         }
@@ -1090,6 +1139,39 @@ export class SandboxDialogueDock {
     } finally {
       this.sending = false;
       this.renderAll();
+    }
+  }
+
+  /** Take a backend snapshot; `follow` jumps the view to the active thread. */
+  private adopt(dialogue: SessionDialogue, follow: boolean): void {
+    const viewingActive = this.viewThreadId === this.activeThreadId;
+    this.transcript = dialogue.transcript;
+    this.events = dialogue.events;
+    this.activeRoundId = dialogue.activeRoundId;
+    this.threads = dialogue.threads ?? [];
+    this.activeThreadId = dialogue.activeThreadId ?? FIRST_THREAD_ID;
+    const known = this.threads.some((thread) => thread.thread_id === this.viewThreadId);
+    if (follow || viewingActive || !known) this.viewThreadId = this.activeThreadId;
+  }
+
+  /** 「新对话」: fresh agent context on the same isolated copy. */
+  private async newThread(): Promise<void> {
+    const sessionId = this.sessionId;
+    if (!sessionId || this.sending || this.activeRoundId || this.switchingThread) return;
+    this.switchingThread = true;
+    this.syncControls();
+    try {
+      const dialogue = await invoke<SessionDialogue>("sandbox_new_dialogue_thread", { sandboxSessionId: sessionId });
+      if (this.sessionId === sessionId) {
+        this.adopt(dialogue, true);
+        this.input.clear();
+      }
+    } catch (error) {
+      this.toast(errorMessage(error), "error");
+    } finally {
+      this.switchingThread = false;
+      this.renderAll();
+      this.input.focus();
     }
   }
 
@@ -1109,10 +1191,18 @@ export class SandboxDialogueDock {
 
   private renderLog(stick = true): void {
     const nearBottom = this.log.scrollHeight - this.log.scrollTop - this.log.clientHeight < 48;
-    const rows = dialogueRows(this.transcript, this.events, this.activeRoundId, undefined, this.parsingCalls);
+    const view = threadView(this.transcript, this.events, this.viewThreadId, this.activeThreadId, this.activeRoundId);
+    const rows = dialogueRows(view.transcript, view.events, view.activeRoundId, undefined, this.parsingCalls);
     if (rows.length === 0) {
+      const continued = this.threads.length > 1 && this.viewThreadId === this.activeThreadId;
       this.log.replaceChildren(
-        el("li", "sandbox-empty", "还没有对话。Agent 只能读写这个沙箱的隔离副本；检查点不会被修改。"),
+        el(
+          "li",
+          "sandbox-empty",
+          continued
+            ? "新对话：Agent 不会看到之前对话的内容，但沙箱副本里的状态都还在。"
+            : "还没有对话。Agent 只能读写这个沙箱的隔离副本；检查点不会被修改。",
+        ),
       );
       return;
     }
@@ -1256,12 +1346,40 @@ export class SandboxDialogueDock {
     return detail;
   }
 
+  private renderThreadPicker(): void {
+    const threads = this.threads.length ? this.threads : [{ thread_id: FIRST_THREAD_ID, created_at: "" }];
+    const key = threads.map((t) => t.thread_id).join(",") + `|${this.activeThreadId}`;
+    if (this.threadSelect.dataset.key !== key) {
+      this.threadSelect.replaceChildren(
+        ...threads.map((thread) => {
+          const option = el(
+            "option",
+            "",
+            thread.thread_id === this.activeThreadId ? `${threadLabel(thread.thread_id)}（当前）` : `${threadLabel(thread.thread_id)}（只读）`,
+          );
+          option.value = thread.thread_id;
+          if (thread.created_at) option.title = `开始于 ${thread.created_at}`;
+          return option;
+        }),
+      );
+      this.threadSelect.dataset.key = key;
+    }
+    this.threadSelect.value = this.viewThreadId;
+    this.threadSelect.disabled = threads.length < 2;
+  }
+
   private syncControls(): void {
     const running = this.activeRoundId !== null;
+    const readonly = this.viewThreadId !== this.activeThreadId;
     this.root.classList.toggle("is-running", running || this.sending);
-    this.sendButton.disabled = running || this.sending || !this.sessionId;
+    this.root.classList.toggle("is-readonly-thread", readonly);
+    this.sendButton.disabled = running || this.sending || this.switchingThread || readonly || !this.sessionId;
     this.sendButton.textContent = running ? "进行中…" : "发送";
     this.cancelButton.hidden = !running;
+    this.readonlyNote.hidden = !readonly;
+    this.input.element.hidden = readonly;
+    this.renderThreadPicker();
+    this.newThreadButton.disabled = running || this.sending || this.switchingThread || !this.sessionId;
     if (!this.modelRow.hidden) {
       this.modelSelect.disabled = running || this.sending || this.modelSelect.options.length < 2;
     }
@@ -1269,6 +1387,40 @@ export class SandboxDialogueDock {
       this.effortSelect.disabled = running || this.sending || this.effortSelect.options.length < 2;
     }
   }
+}
+
+/** Thread id of a transcript line (legacy lines belong to the first thread). */
+export function threadOf(entry: { thread_id?: string }): string {
+  return entry.thread_id ?? FIRST_THREAD_ID;
+}
+
+/** Display label: d1 → 对话 1. */
+export function threadLabel(threadId: string): string {
+  const n = /^d(\d+)$/.exec(threadId)?.[1];
+  return n ? `对话 ${n}` : threadId;
+}
+
+/**
+ * Lines + events of one thread. Events belong to the rounds whose lines are
+ * in that thread; the live round (no reply line yet) only shows on the
+ * active thread.
+ */
+export function threadView<E extends { round_id?: string }>(
+  transcript: TranscriptEntry[],
+  events: E[],
+  viewThreadId: string,
+  activeThreadId: string,
+  activeRoundId: string | null,
+): { transcript: TranscriptEntry[]; events: E[]; activeRoundId: string | null } {
+  const lines = transcript.filter((entry) => threadOf(entry) === viewThreadId);
+  const rounds = new Set(lines.map((entry) => entry.round_id).filter((id): id is string => Boolean(id)));
+  const live = viewThreadId === activeThreadId ? activeRoundId : null;
+  if (live) rounds.add(live);
+  return {
+    transcript: lines,
+    events: events.filter((event) => event.round_id !== undefined && rounds.has(event.round_id)),
+    activeRoundId: live,
+  };
 }
 
 /** User/agent text as Markdown + KaTeX with cite chips; system lines and

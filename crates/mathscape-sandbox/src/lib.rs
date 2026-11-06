@@ -21,7 +21,7 @@
 //!   discarded.jsonl                  # tombstones: one line per discarded session id
 //!   sessions/<sandbox_session_id>/   # the whole isolation layer; discard deletes it
 //!     session.json
-//!     transcript.jsonl               # user / agent / system lines (S1)
+//!     transcript.jsonl               # user / agent / system lines (S1), tagged by dialogue thread
 //!     events.jsonl                   # raw agent_events v0 of every round (S1)
 //!     workspace/                     # full copy of the checkpoint workspace root
 //!   exports/                         # default export destination (survives discard)
@@ -33,7 +33,8 @@ mod dialogue;
 mod fingerprint;
 
 pub use dialogue::{
-    EVENTS_FILE, MAX_MESSAGE_CHARS, TranscriptEntry, TranscriptRole, build_dialogue_prompt,
+    DialogueThread, DialogueThreads, EVENTS_FILE, FIRST_THREAD_ID, MAX_MESSAGE_CHARS,
+    TranscriptEntry, TranscriptRole, build_dialogue_prompt,
 };
 
 pub use fingerprint::{
@@ -111,6 +112,11 @@ pub enum SandboxError {
     UnsupportedEntry { path: PathBuf, reason: &'static str },
     #[error("导出目标不能位于{zone}内：{path}")]
     ForbiddenExportDestination { path: PathBuf, zone: &'static str },
+    #[error("对话 {thread_id} 已不是当前对话（当前为 {active_thread_id}），只读")]
+    InactiveThread {
+        thread_id: String,
+        active_thread_id: String,
+    },
     #[error("参数无效：{0}")]
     Invalid(String),
     #[error("随机数生成失败：{0}")]
@@ -172,6 +178,14 @@ pub struct SessionRecord {
     pub tool_allowlist: Vec<String>,
     pub created_at: String,
     pub exports: Vec<ExportRecord>,
+    /// Dialogue threads sharing this session's isolated copy
+    /// (docs/sandbox-flow.md §3.5). Empty for sessions written before
+    /// threads existed: they implicitly hold one thread, [`FIRST_THREAD_ID`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dialogue_threads: Vec<DialogueThread>,
+    /// The only thread that may receive new messages; `None` = first thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_thread_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -220,6 +234,10 @@ pub struct ExportManifest {
     pub notes: Option<String>,
     pub isolation: String,
     pub transcript_entries: usize,
+    /// Dialogue threads in the exported transcript (≥ 1). Older packages
+    /// predate threads and read back as 0.
+    #[serde(default)]
+    pub dialogue_threads: usize,
     pub files: Vec<String>,
 }
 
@@ -405,6 +423,8 @@ impl SandboxHome {
                 tool_allowlist: Vec::new(),
                 created_at: now_rfc3339(),
                 exports: Vec::new(),
+                dialogue_threads: Vec::new(),
+                active_thread_id: None,
             };
             write_json_atomic(&staging.join(SESSION_FILE), &record)?;
             let target = self.session_dir(&session_id);
@@ -566,6 +586,7 @@ impl SandboxHome {
             notes,
             isolation: record.isolation.clone(),
             transcript_entries,
+            dialogue_threads: dialogue::effective_threads(&record).threads.len(),
             files: if events.is_empty() {
                 vec![MANIFEST_FILE.to_owned(), TRANSCRIPT_FILE.to_owned()]
             } else {

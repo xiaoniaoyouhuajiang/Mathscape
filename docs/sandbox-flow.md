@@ -62,7 +62,7 @@
 
 ### 3.2 Sandbox session [锁定]
 
-一场会话绑定：一个 `sandbox_session_id`、一个 checkpoint、一个（副本）工作区根、零或多条 round（Codex / AgentExecutor）。
+一场会话绑定：一个 `sandbox_session_id`、一个 checkpoint、一个（副本）工作区根、一到多条**对话线程**（§3.5），每条线程零或多条 round（Codex / AgentExecutor）。
 
 状态（最小）[本文提议]：
 
@@ -132,6 +132,20 @@ sandbox_export_<session_id>/
 | `notes` | 可选，用户一句话 |
 
 不要求导出可再导入为活会话（v0）；导出是**样本与对照**，不是迁移格式。若日后要「从导出恢复」，另开契约。
+
+v0 实现另带 `transcript_entries`（行数）与 `dialogue_threads`（线程数，≥1；线程出现前的旧包读回为 0）。`transcript.jsonl` 每行带 `thread_id`。
+
+### 3.5 对话线程：重置上下文，不重置状态 [锁定 2026-11-06]
+
+**场景**：一段对话是为调试某个功能展开的，迭代后希望之前给 Agent 的内容不再进入上下文，但沙箱副本里已经形成的状态继续用。
+
+- 一场会话可有多条对话线程（`d1`、`d2`…），**共享同一份隔离副本**。「新对话」只清空回放进 prompt 的历史，不动副本字节。
+- 同一时刻**只有一条活跃线程**可发消息；更早的线程是只读历史，可切过去看，不能续聊、不能并行。避免两条对话同时写一份副本、副作用归属不清。
+- 活跃线程仍在跑一轮时不能开新线程；跑在旧线程的迟到回复被拒写（不会混进新线程）。活跃线程还没有用户消息时，「新对话」幂等返回它本身。
+- 新线程（非首条）的 prompt 明确告诉 Agent：副本里可能有更早对话留下的状态，但更早的对话内容不在上下文中，以工具查到的当前状态为准。
+- **丢弃 / 导出仍作用于整场会话**（全部线程 + 副本），不按线程拆。要撤掉副作用 → 丢弃，或从同一 checkpoint 新开会话（§3.4）。
+- 兼容：线程出现前写下的 `session.json` 无线程字段、transcript 行无 `thread_id`，一律视为 `d1`。
+- **与 Phase2 的关系**（方向，不在沙箱实现）：沙箱副作用今天无用户审批。正式产品里「切换对话 / 开新任务前确认是否保存上一个状态」映射为 Phase2 待审提案的处理：上一条对话留下的 `staged` 提案在切换时让用户选择接受 / 丢弃 / 留待以后审（提案与对话结束脱钩，见 `phase2-write-contract.md`），不另立「保存状态」概念。该确认 UI 等 `propose_changes` 能暂存提案后再接。
 
 ---
 
@@ -245,3 +259,4 @@ PR 描述固定三节（用户体感调试约定，保持简单）：
 | 2026-11-04 | Composer chips（`mob/composer-chips`，接 A-PR3 #26）：对话输入框从 `<textarea>` 换成纯文本 `contenteditable`（`frontend/src/sandbox/composer.ts`），识别规则完全复用 A-PR3：`scanIds` 找 id，`CiteResolver`（当前景观静态索引 + 本会话所有轮次的工具结果索引）判定；能解析的 id（地图命中 / 歧义 / 仅标签）渲染为与回复气泡同款的原子 chip（`citeChipParts` 共享标签与悬停文案，完整 id 存 `data-cite-id`），解析不到的保持纯文本，不做 NLP 猜测。发送时 chip 逐个展开回原始完整 id（大小写、前缀变体原样），Agent 收到的字符串与粘贴/输入的一致。交互：粘贴、拖放、失焦、景观刷新、一轮结束时整体 chip 化；逐字输入时紧贴光标的 id 暂不 chip 化（可能还在变长，如 64 位 hash 的前 32 位），但已有 chip 不会因此被拆回；Backspace/Delete 整体删除 chip；复制/剪切写入完整 id 的纯文本；双击 chip 还原为原始 id 可编辑，离开后重新识别；有地图目标的 chip 单击跳转地图；Shift+Enter 换行、Enter 发送；20000 字符上限改为发送时按展开后长度校验。光标：chip 化重建 DOM 后光标按展开偏移恢复，且总落在文本节点内——WebKit（macOS Tauri WebView）对 chip 旁的元素级光标位置会画到行首，因此末尾/相邻 chip 后放一个零宽锚点 U+FEFF（不计入发送文本、偏移与签名，输入中的 U+FEFF 会被剔除）。仅前端，MCP / 物理契约未改。 |
 | 2026-11-04 | Composer `@` 补全（同 `mob/composer-chips`）：输入框里键入 `@`（行首、空白或中文之后；`a@b` 这类邮箱式不触发）弹出当前景观节点列表，候选与 chip 共用 A-PR3 静态索引，只列能 chip 化的规范 / hex id；`@` 后关键词（空格分隔、全部命中）匹配标签、短 id / 完整 id、类型（`domain_kind` 或中文类型名），标签前缀优先。↑/↓ 选择，Enter / Tab 确认（Shift+Enter 仍换行），Esc 关闭且该 `@` 不再自动弹出，点别处关闭。选中后 `@关键词` 替换为完整 `domain_id` + 一个空格（后面已有空白则不加），chip 与粘贴同款，光标落在 chip 之后的文本里。仅前端，MCP 契约未改。 |
 | 2026-11-04 | Composer chip 光标 / 选区「token 模型」（`mob/composer-chip-token-caret`，接 #33/#34）：chip 按 Slack 式 token 处理。插入 chip（粘贴、拖放、`@` 选中）时保证 chip 后有一个可见空格（已有空格则复用，不叠加；后面是文字或换行则补一个），光标落在空格之后；纯函数 `spaceAfterChip` / `chipSpans`（`composer-chips.ts`）。纯 ←/→（无 Shift/Alt/Ctrl/Meta，IME 组字中不拦截）：从 chip 之后按 ← 先选中整个 chip（Range 包住 chip 元素，`is-selected` 高亮），再按 ← 光标到 chip 之前；→ 对称（之前 → 选中 → 之后）；从空格之后按 ← 第一步是原生移动到「紧贴 chip 之后」。Backspace/Delete：chip 被选中，或光标紧贴 chip 之后（Backspace）/ 之前（Delete）时整体删除；删除改为按展开文本去掉该 chip 后整体重渲染并恢复光标，不再残留锚点或空节点（修复「删 chip 后再粘贴，光标画在行首」一类问题）。选中 chip 后直接输入则替换它。U+FEFF 锚点从首要手段降为兜底：只在 chip 后面没有任何文本时（空格被删、失焦时末尾 id 被 chip 化、两个 chip 紧挨）才放；光标左边不是 chip（空输入框、行首 chip 之前）用元素级位置，不再造锚点。单击 chip 仍是跳转地图。发送展开、`@` 菜单按键（Enter/Tab 选中不发送）不变。仅前端，MCP 契约未改。 |
+| 2026-11-06 | 对话线程（`mob/sandbox-dialogue-threads`，§3.5）：一场沙箱会话可开多条对话线程，共享同一隔离副本；「新对话」只清空 Agent 上下文（prompt 只回放活跃线程），不重置副本状态。仅一条活跃线程可发消息，旧线程只读；跑轮中禁止开新线程，迟到写入旧线程被拒（`InactiveThread`）。`session.json` 新增 `dialogue_threads` / `active_thread_id`（缺省 = `d1`），transcript 行新增 `thread_id`（缺省 = `d1`），导出 manifest 新增 `dialogue_threads`。Desktop：新命令 `sandbox_new_dialogue_thread`，`sandbox_session_dialogue` 返回 `threads` / `activeThreadId`；dock 顶栏「对话」下拉 + 「新对话」，旧线程只读提示 +「回到当前对话」。丢弃 / 导出仍按整场会话。正式产品的切换确认映射到 Phase2 待审提案，后置。 |

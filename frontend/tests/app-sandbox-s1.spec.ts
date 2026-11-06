@@ -110,6 +110,49 @@ test.describe("S1 sandbox shell", () => {
     await expect(page.locator(".sandbox-banner")).toHaveCount(0);
   });
 
+  test("new dialogue thread clears the agent context but keeps the sandbox copy", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    await page.evaluate(() => {
+      window.appHarness.sandboxRound.delayMs = 20;
+      window.appHarness.sandboxRound.gapMs = 0;
+    });
+    const threadSelect = dock.locator(".sandbox-dock-thread-select");
+    await expect(threadSelect).toBeDisabled();
+    await expect(threadSelect.locator("option")).toHaveText(["对话 1（当前）"]);
+
+    await dock.locator(".sandbox-dock-input").fill("调试旧功能");
+    await dock.getByRole("button", { name: "发送" }).click();
+    await expect(dock.locator(".sandbox-line.role-agent .sandbox-turn-status")).toHaveText("已完成");
+
+    await dock.getByRole("button", { name: "新对话" }).click();
+    await expect(threadSelect.locator("option")).toHaveText(["对话 1（只读）", "对话 2（当前）"]);
+    await expect(threadSelect).toHaveValue("d2");
+    await expect(dock.locator(".sandbox-line")).toHaveCount(0);
+    await expect(dock.locator(".sandbox-empty")).toContainText("沙箱副本里的状态都还在");
+
+    await dock.locator(".sandbox-dock-input").fill("新问题");
+    await dock.getByRole("button", { name: "发送" }).click();
+    await expect(dock.locator(".sandbox-line.role-agent .sandbox-turn-status")).toHaveText("已完成");
+    await expect(dock.locator(".sandbox-line.role-user")).toHaveText([/新问题/]);
+
+    // Old thread: read-only history, no composer.
+    await threadSelect.selectOption("d1");
+    await expect(dock.locator(".sandbox-line.role-user")).toHaveText([/调试旧功能/]);
+    await expect(dock.locator(".sandbox-dock-readonly")).toBeVisible();
+    await expect(dock.getByRole("button", { name: "发送" })).toBeDisabled();
+    await dock.getByRole("button", { name: "回到当前对话" }).click();
+    await expect(threadSelect).toHaveValue("d2");
+    await expect(dock.locator(".sandbox-dock-readonly")).toBeHidden();
+    await expect(dock.getByRole("button", { name: "发送" })).toBeEnabled();
+
+    const commands = await page.evaluate(() => window.appHarness.sandboxCalls.map((c) => c.command));
+    expect(commands.filter((c) => c === "new_thread")).toHaveLength(1);
+  });
+
   test("sidebar width and dock mode persist across reloads; floating still drags", async ({ page }) => {
     await page.locator("#sandbox-button").click();
     page.once("dialog", (dialog) => void dialog.accept());

@@ -7,8 +7,10 @@
 //! planner, no propose/accept and no write path (T2 read-only).
 //!
 //! Codex rounds are single-turn and ephemeral, so continuity comes from
-//! replaying recent transcript lines into each new round
-//! ([`build_dialogue_prompt`]). Everything the round produces stays inside the
+//! replaying recent transcript lines **of the active dialogue thread** into
+//! each new round ([`build_dialogue_prompt`]). 「新对话」 opens another thread
+//! on the same isolated copy: the agent context starts empty, workspace state
+//! carries over (docs/sandbox-flow.md §3.5). Everything the round produces stays inside the
 //! session directory: `transcript.jsonl` (user / agent / system lines) and
 //! `events.jsonl` (the raw event stream). The UI receives the same events
 //! live on [`DIALOGUE_EVENT`]; it never shows a reply that did not come from
@@ -27,7 +29,7 @@ use mathscape_agent::{
     CodexExecutor, EventPayload, RoundId, StartRoundRequest, TurnOutcome,
 };
 use mathscape_sandbox::{
-    MAX_MESSAGE_CHARS, SandboxError, SandboxHome, TranscriptEntry, TranscriptRole,
+    DialogueThread, MAX_MESSAGE_CHARS, SandboxError, SandboxHome, TranscriptEntry, TranscriptRole,
     build_dialogue_prompt,
 };
 use serde::Serialize;
@@ -112,7 +114,12 @@ pub struct AgentStatus {
 #[serde(rename_all = "camelCase")]
 pub struct SessionDialogue {
     pub sandbox_session_id: String,
+    /// Every thread's lines in write order (each carries `thread_id`).
     pub transcript: Vec<TranscriptEntry>,
+    /// Threads in creation order; all share the session's isolated copy.
+    pub threads: Vec<DialogueThread>,
+    /// The only thread that accepts new messages; others are read-only.
+    pub active_thread_id: String,
     pub events: Vec<Value>,
     /// Round currently streaming for this session, if any.
     pub active_round_id: Option<String>,
@@ -314,8 +321,11 @@ impl SandboxDialogueState {
             .active_round(&session_id)
             .map(|r| r.as_str().to_owned());
         with_home(home, move |home| {
+            let threads = home.dialogue_threads(&session_id)?;
             Ok(SessionDialogue {
                 transcript: home.read_transcript(&session_id)?,
+                threads: threads.threads,
+                active_thread_id: threads.active_thread_id,
                 events: home.read_events(&session_id)?,
                 sandbox_session_id: session_id,
                 active_round_id,
@@ -351,20 +361,33 @@ impl SandboxDialogueState {
             let (session_id, text, tools) = (session_id.clone(), text.clone(), tools.clone());
             with_home(&home, move |home| {
                 let view = home.live_session(&session_id)?;
-                let history = home.read_transcript(&session_id)?;
-                let entry =
-                    home.append_transcript(&session_id, TranscriptRole::User, &text, None, None)?;
+                let threads = home.dialogue_threads(&session_id)?;
+                let thread = threads.active_thread_id.clone();
+                let continues_session = threads
+                    .threads
+                    .first()
+                    .is_some_and(|first| first.thread_id != thread);
+                let history = home.read_thread_transcript(&session_id, &thread)?;
+                let entry = home.append_thread_transcript(
+                    &session_id,
+                    &thread,
+                    TranscriptRole::User,
+                    &text,
+                    None,
+                    None,
+                )?;
                 home.record_backend(&session_id, BACKEND_LABEL, &tools)?;
                 Ok((
-                    build_dialogue_prompt(&history, &text),
+                    build_dialogue_prompt(&history, &text, continues_session),
                     view.workspace_root
                         .unwrap_or_else(|| home.session_workspace(&session_id)),
                     entry,
+                    thread,
                 ))
             })
             .await
         };
-        let (prompt, workspace, user_entry) = match prepared {
+        let (prompt, workspace, user_entry, thread) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.release(&session_id, None);
@@ -396,10 +419,11 @@ impl SandboxDialogueState {
                 self.release(&session_id, None);
                 let message = format!("未能启动本机 Codex：{error}");
                 let note = message.clone();
-                let sid = session_id.clone();
+                let (sid, tid) = (session_id.clone(), thread.clone());
                 if let Ok(entry) = with_home(&home, move |home| {
-                    home.append_transcript(
+                    home.append_thread_transcript(
                         &sid,
+                        &tid,
                         TranscriptRole::System,
                         &note,
                         None,
@@ -422,6 +446,7 @@ impl SandboxDialogueState {
         let this = self.clone();
         let pump_round = round.clone();
         let pump_session = session_id.clone();
+        let pump_thread = thread;
         tauri::async_runtime::spawn(async move {
             let (session_id, round) = (pump_session, pump_round);
             let mut recording = true;
@@ -479,8 +504,16 @@ impl SandboxDialogueState {
             });
             if recording {
                 let (sid, rid) = (session_id.clone(), round.as_str().to_owned());
+                let tid = pump_thread.clone();
                 if let Ok(entry) = with_home(&home, move |home| {
-                    home.append_transcript(&sid, role, &text, Some(&rid), Some(outcome))
+                    home.append_thread_transcript(
+                        &sid,
+                        &tid,
+                        role,
+                        &text,
+                        Some(&rid),
+                        Some(outcome),
+                    )
                 })
                 .await
                 {
@@ -501,6 +534,28 @@ impl SandboxDialogueState {
             round_id: round.as_str().to_owned(),
             user_entry,
         })
+    }
+
+    /// 「新对话」: open a fresh thread on the same isolated copy. Refused
+    /// while a round streams; the round slot is held for the duration so a
+    /// concurrent send cannot start on the old thread mid-switch.
+    async fn new_thread(
+        &self,
+        home: &Arc<Mutex<SandboxHome>>,
+        session_id: String,
+    ) -> Result<SessionDialogue, String> {
+        {
+            let mut active = self.active();
+            if active.contains_key(&session_id) {
+                return Err("当前一轮还没结束，请等待或先取消再开新对话".into());
+            }
+            active.insert(session_id.clone(), None);
+        }
+        let sid = session_id.clone();
+        let opened = with_home(home, move |home| home.start_dialogue_thread(&sid)).await;
+        self.release(&session_id, None);
+        opened?;
+        self.dialogue(home, session_id).await
     }
 
     async fn cancel(&self, session_id: &str) -> Result<bool, String> {
@@ -549,6 +604,18 @@ pub async fn sandbox_session_dialogue(
     sandbox_session_id: String,
 ) -> Result<SessionDialogue, String> {
     dialogue.dialogue(&sandbox.home(), sandbox_session_id).await
+}
+
+/// Opens a new dialogue thread (fresh agent context, same isolated copy).
+#[tauri::command]
+pub async fn sandbox_new_dialogue_thread(
+    sandbox: State<'_, SandboxState>,
+    dialogue: State<'_, SandboxDialogueState>,
+    sandbox_session_id: String,
+) -> Result<SessionDialogue, String> {
+    dialogue
+        .new_thread(&sandbox.home(), sandbox_session_id)
+        .await
 }
 
 /// Starts one round; the reply arrives on [`DIALOGUE_EVENT`].
@@ -786,6 +853,53 @@ mod tests {
     }
 
     #[test]
+    fn new_thread_starts_empty_context_on_same_copy() {
+        let fx = fixture("thread");
+        let state = dialogue(&["app-server"]);
+        let (sink, updates) = channel_sink();
+        tauri::async_runtime::block_on(state.send(
+            Arc::clone(&fx.home),
+            fx.session_id.clone(),
+            "调试旧功能".into(),
+            Arc::clone(&sink),
+        ))
+        .unwrap();
+        wait_for(&updates, finished);
+
+        let view =
+            tauri::async_runtime::block_on(state.new_thread(&fx.home, fx.session_id.clone()))
+                .unwrap();
+        assert_eq!(view.active_thread_id, "d2");
+        assert_eq!(view.threads.len(), 2);
+        // Full history is still returned for read-only browsing.
+        assert_eq!(view.transcript.len(), 2);
+        let workspace = fx.home.lock().unwrap().session_workspace(&fx.session_id);
+
+        tauri::async_runtime::block_on(state.send(
+            Arc::clone(&fx.home),
+            fx.session_id.clone(),
+            "新问题".into(),
+            sink,
+        ))
+        .unwrap();
+        wait_for(&updates, finished);
+        let home = fx.home.lock().unwrap();
+        let d2 = home.read_thread_transcript(&fx.session_id, "d2").unwrap();
+        assert_eq!(d2.len(), 2, "{d2:?}");
+        // The fixture echoes the prompt: old thread content is not replayed,
+        // and the agent is told the copy may hold earlier state.
+        assert!(!d2[1].text.contains("调试旧功能"), "{}", d2[1].text);
+        assert!(d2[1].text.contains("新开的一条对话"), "{}", d2[1].text);
+        assert_eq!(home.session_workspace(&fx.session_id), workspace);
+        assert_eq!(
+            home.read_thread_transcript(&fx.session_id, "d1")
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
     fn cancel_ends_round_with_system_line_and_blocks_overlap() {
         let fx = fixture("cancel");
         let state = dialogue(&["--hold", "app-server"]);
@@ -808,6 +922,10 @@ mod tests {
             sink,
         ));
         assert!(overlap.unwrap_err().contains("上一轮还没结束"));
+        // No thread switch while a round streams.
+        let switch =
+            tauri::async_runtime::block_on(state.new_thread(&fx.home, fx.session_id.clone()));
+        assert!(switch.unwrap_err().contains("当前一轮还没结束"));
         assert!(tauri::async_runtime::block_on(state.cancel(&fx.session_id)).unwrap());
         wait_for(&updates, finished);
         assert!(!tauri::async_runtime::block_on(state.cancel(&fx.session_id)).unwrap());
