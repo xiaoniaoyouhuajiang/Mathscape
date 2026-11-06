@@ -207,8 +207,9 @@ impl PageCover {
         self.gaps.is_empty() && !self.pieces.is_empty()
     }
 
-    /// The one contiguous range spanning every gap (what a single Marker run
-    /// must parse so that the request becomes coverable), if any.
+    /// The contiguous range from the first to the last gap (covered pages
+    /// between gaps included), if any. Ensure does not parse it: it runs
+    /// Marker once per gap; the hull only summarizes where parsing happened.
     pub fn gap_hull(&self) -> Option<InclusivePageRange> {
         let first = self.gaps.first()?;
         let last = self.gaps.last()?;

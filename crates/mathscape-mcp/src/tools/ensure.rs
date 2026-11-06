@@ -6,7 +6,8 @@
 //! rolling page budget, one SQLite `BEGIN IMMEDIATE`) → Marker on one
 //! contiguous range (lease renewed on a heartbeat) → validate inventory →
 //! promote new immutable artifacts → scoped registry sync for this PDF →
-//! terminal receipt → the same call serves the new snapshot. A read that
+//! terminal receipt → re-plan (next gap, if any) → the same call serves the
+//! stitched snapshots. A read that
 //! finds the PDF (or every Marker slot) busy queues behind the live lease,
 //! re-plans when it is released (usually `reused`) and never answers
 //! "read again later". Every wait is bounded by [`EnsurePolicy::sync_timeout`];
@@ -17,8 +18,12 @@
 //! Gap-only parsing: a request whose pages are all covered by existing
 //! snapshots (one containing snapshot, or several stitched page by page,
 //! across every lineage of the PDF) never runs Marker. Otherwise Marker runs
-//! once on the contiguous hull of the uncovered pages (`missing`), not on the
-//! whole request, and `material.read` then stitches old and new snapshots.
+//! once per uncovered gap (`missing`), in page order, each run its own lease,
+//! budget charge, idempotency key and immutable snapshot, so covered pages
+//! between two gaps are never parsed again. `material.read` then stitches old
+//! and new snapshots. (Marker accepts a multi-range `--page_range`, but one
+//! conversion run is one contiguous coverage segment; per-gap runs keep that
+//! provenance intact at about the same wall time.)
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -51,7 +56,7 @@ use super::canonical::CanonicalIndex;
 use crate::McpWorkspace;
 
 /// Bumped when the ensure planning rules change; part of the idempotency key.
-pub const ENSURE_POLICY_VERSION: &str = "ensure-v2";
+pub const ENSURE_POLICY_VERSION: &str = "ensure-v3";
 const ENSURE_PROFILE: MarkerProfile = MarkerProfile::MathOcrV1;
 const ENSURE_ACTOR: &str = "mathscape-mcp-ensure";
 /// After the deadline the worker gets this long to stop Marker and write its
@@ -109,8 +114,9 @@ pub(super) enum EnsureStatus {
     /// that another read's ensure promoted while this read waited). Marker
     /// not run.
     Reused,
-    /// Marker ran in this call on the uncovered pages and a new snapshot was
-    /// promoted; together with existing snapshots it covers the request.
+    /// Marker ran in this call on every uncovered gap (one run per gap) and
+    /// the new snapshots were promoted; together with existing snapshots
+    /// they cover the request.
     Expanded,
     /// The request or the rolling budget is too large.
     BlockedBudget,
@@ -141,11 +147,14 @@ pub(super) struct EnsureReport {
     /// Requested pages no snapshot covers (union of every lineage), as
     /// planned before this call parsed or waited.
     pub missing: Vec<InclusivePageRange>,
-    /// The one contiguous range given to Marker: the hull of `missing`
-    /// (from the first to the last uncovered page), never already-covered
-    /// pages outside it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub marker_range: Option<InclusivePageRange>,
+    /// The ranges given to Marker in this call, one run each, in order: the
+    /// gaps of `missing` (re-planned before each run). Never a covered page.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub marker_ranges: Vec<InclusivePageRange>,
+    /// Every Marker run this call claimed, in order (successful ones carry
+    /// their snapshot). The singular fields below repeat the latest run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<EnsureRun>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ensure_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -177,7 +186,8 @@ impl EnsureReport {
             status,
             requested: plan.requested,
             missing: plan.missing.clone(),
-            marker_range: None,
+            marker_ranges: Vec::new(),
+            runs: Vec::new(),
             ensure_id: None,
             idempotency_key: None,
             canonical_id: None,
@@ -197,7 +207,12 @@ impl EnsureReport {
     /// how the block ended. The live signal during the call is the landscape
     /// node summary (running lease), since MCP results cannot stream.
     pub(super) fn map_signal(&self, pdf: &StableId) -> Option<serde_json::Value> {
-        let pages = self.marker_range.or_else(|| {
+        let hull = self
+            .marker_ranges
+            .first()
+            .zip(self.marker_ranges.last())
+            .and_then(|(first, last)| InclusivePageRange::new(first.from, last.to).ok());
+        let pages = hull.or_else(|| {
             self.waited_for
                 .as_ref()
                 .filter(|lease| &lease.source_pdf_artifact_id == pdf)
@@ -219,6 +234,18 @@ impl EnsureReport {
     }
 }
 
+/// One Marker run claimed by an ensure call.
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct EnsureRun {
+    pub marker_range: InclusivePageRange,
+    pub ensure_id: String,
+    pub idempotency_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversion_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown_artifact_id: Option<String>,
+}
+
 /// Pure planning result for one request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct EnsurePlan {
@@ -234,16 +261,17 @@ pub(super) enum PlanAction {
     /// No single segment contains the request, but existing segments cover
     /// every requested page; `material.read` stitches them by page.
     Stitch,
-    /// Run Marker once on this contiguous range.
+    /// Run Marker on this gap (the first uncovered gap); the caller re-plans
+    /// afterwards and runs the next gap the same way.
     Run(InclusivePageRange),
-    /// The pages Marker would have to parse exceed the per-request budget.
+    /// The uncovered pages (sum of the gaps) exceed the per-request budget.
     OverBudget,
 }
 
 /// Plans an ensure against every canonical lineage of the PDF (`views`,
 /// best-ranked first). Coverage is the page-by-page cover of
-/// [`plan_page_cover`]: covered pages are never parsed again; the Marker
-/// range is the contiguous hull of the gaps. `total_pages` bounds the
+/// [`plan_page_cover`]: covered pages are never parsed again; Marker runs
+/// on the gaps one at a time, first gap first. `total_pages` bounds the
 /// request upstream and is kept for the signature's callers.
 pub(super) fn plan_ensure(
     views: &[&CanonicalMarkdownView],
@@ -261,10 +289,11 @@ pub(super) fn plan_ensure(
     let action = if contained {
         PlanAction::Reuse
     } else {
-        match cover.gap_hull() {
+        let uncovered: u32 = missing.iter().map(|gap| gap.page_count()).sum();
+        match missing.first() {
             None => PlanAction::Stitch,
-            Some(hull) if hull.page_count() > max_pages_per_request => PlanAction::OverBudget,
-            Some(hull) => PlanAction::Run(hull),
+            Some(_) if uncovered > max_pages_per_request => PlanAction::OverBudget,
+            Some(gap) => PlanAction::Run(*gap),
         }
     };
     EnsurePlan {
@@ -309,6 +338,10 @@ pub(super) fn ensure(
     let mut first_plan: Option<EnsurePlan> = None;
     let mut waited_for: Option<CanonicalEnsureLease> = None;
     let mut marker: Option<MarkerReady> = None;
+    // Marker runs this call claimed, in order. Successful runs stay promoted
+    // even when a later gap fails.
+    let mut runs: Vec<EnsureRun> = Vec::new();
+    let mut canonical_id: Option<String> = None;
     loop {
         let plan = match CanonicalIndex::load(workspace) {
             Ok(index) => plan_ensure(
@@ -323,61 +356,76 @@ pub(super) fn ensure(
                     missing: vec![requested],
                     action: PlanAction::Run(requested),
                 });
-                let mut report = EnsureReport::new(
+                let report = EnsureReport::new(
                     EnsureStatus::Failed,
                     &plan,
                     format!("failed to load the canonical registry: {}", error.message),
                 );
-                report.waited_for = waited_for;
-                report.waited_ms = elapsed_ms(started);
-                return report;
+                return finish(report, started, waited_for, runs, canonical_id);
             }
         };
-        // Report what was missing when the call started, not after a wait.
+        // Report what was missing when the call started, not after a wait or
+        // an earlier gap's run.
         let shown = first_plan.get_or_insert_with(|| plan.clone()).clone();
-        let finish = |mut report: EnsureReport, waited_for: Option<CanonicalEnsureLease>| {
-            report.waited_for = waited_for;
-            report.waited_ms = elapsed_ms(started);
-            report
-        };
+        let parsed = runs
+            .iter()
+            .filter(|run| run.markdown_artifact_id.is_some())
+            .count();
         let range = match plan.action {
             PlanAction::Reuse | PlanAction::Stitch => {
-                let message = match (waited_for.is_some(), &plan.action) {
-                    (true, _) => {
-                        "waited for the running parse of this PDF; existing immutable snapshots now cover every requested page"
-                    }
-                    (false, PlanAction::Reuse) => {
-                        "an existing immutable snapshot contains every requested page"
-                    }
-                    _ => {
-                        "existing immutable snapshots together cover every requested page; they are stitched by page without running Marker"
-                    }
+                let report = if parsed > 0 {
+                    EnsureReport::new(
+                        EnsureStatus::Expanded,
+                        &shown,
+                        format!(
+                            "Marker parsed the {} uncovered gap(s) in this call, one run each; new immutable snapshots were added to the canonical markdown and are stitched with the existing ones",
+                            parsed
+                        ),
+                    )
+                } else {
+                    let message = match (waited_for.is_some(), &plan.action) {
+                        (true, _) => {
+                            "waited for the running parse of this PDF; existing immutable snapshots now cover every requested page"
+                        }
+                        (false, PlanAction::Reuse) => {
+                            "an existing immutable snapshot contains every requested page"
+                        }
+                        _ => {
+                            "existing immutable snapshots together cover every requested page; they are stitched by page without running Marker"
+                        }
+                    };
+                    EnsureReport::new(EnsureStatus::Reused, &shown, message)
                 };
-                return finish(
-                    EnsureReport::new(EnsureStatus::Reused, &shown, message),
-                    waited_for,
-                );
+                return finish(report, started, waited_for, runs, canonical_id);
             }
             PlanAction::OverBudget => {
+                let uncovered: u32 = plan.missing.iter().map(|gap| gap.page_count()).sum();
                 let mut report = EnsureReport::new(
                     EnsureStatus::BlockedBudget,
                     &shown,
                     format!(
-                        "the uncovered pages of this request span {} pages; ensure parses at most {} pages per read. Narrow pdf_pages",
-                        plan.missing.first().zip(plan.missing.last()).map_or(
-                            requested.page_count(),
-                            |(first, last)| {
-                                last.to.saturating_sub(first.from).saturating_add(1)
-                            }
-                        ),
+                        "this request has {uncovered} uncovered pages; ensure parses at most {} new pages per read. Narrow pdf_pages",
                         policy.max_pages_per_request
                     ),
                 );
                 report.max_pages_per_request = Some(policy.max_pages_per_request);
-                return finish(report, waited_for);
+                return finish(report, started, waited_for, runs, canonical_id);
             }
             PlanAction::Run(range) => range,
         };
+        if runs.iter().any(|run| run.marker_range == range) {
+            // A run of ours promoted this gap but the registry still reports
+            // it uncovered; never loop on Marker.
+            let report = EnsureReport::new(
+                EnsureStatus::Failed,
+                &shown,
+                format!(
+                    "Marker parsed pages {}–{} in this call but the canonical registry still reports them uncovered",
+                    range.from, range.to
+                ),
+            );
+            return finish(report, started, waited_for, runs, canonical_id);
+        }
 
         let ready = match marker.take() {
             Some(ready) => ready,
@@ -387,7 +435,7 @@ pub(super) fn ensure(
                     let mut report =
                         EnsureReport::new(EnsureStatus::CapabilityUnavailable, &shown, message);
                     report.probe = Some(probe);
-                    return finish(report, waited_for);
+                    return finish(report, started, waited_for, runs, canonical_id);
                 }
             },
         };
@@ -398,10 +446,8 @@ pub(super) fn ensure(
         ) {
             Ok(key) => key,
             Err(error) => {
-                return finish(
-                    EnsureReport::new(EnsureStatus::Failed, &shown, error.to_string()),
-                    waited_for,
-                );
+                let report = EnsureReport::new(EnsureStatus::Failed, &shown, error.to_string());
+                return finish(report, started, waited_for, runs, canonical_id);
             }
         };
         let ensure_id = new_ensure_id();
@@ -415,10 +461,7 @@ pub(super) fn ensure(
             pages: range,
             owner: format!("{ENSURE_ACTOR}/{}", std::process::id()),
         };
-        let mut report = EnsureReport::new(EnsureStatus::Failed, &shown, "");
-        report.marker_range = Some(range);
-        report.idempotency_key = Some(claim.idempotency_key.clone());
-        report.canonical_id = Some(claim.canonical_id.to_string());
+        canonical_id = Some(claim.canonical_id.to_string());
 
         let limits = CanonicalEnsureLimits {
             max_running: policy.max_running,
@@ -436,25 +479,30 @@ pub(super) fn ensure(
             });
         let busy = match outcome {
             Err(error) => {
-                report.message = format!("failed to claim the ensure lease: {error}");
-                return finish(report, waited_for);
+                let report = EnsureReport::new(
+                    EnsureStatus::Failed,
+                    &shown,
+                    format!("failed to claim the ensure lease: {error}"),
+                );
+                return finish(report, started, waited_for, runs, canonical_id);
             }
             Ok(CanonicalEnsureClaimOutcome::BudgetExhausted {
                 used_pages,
                 window_pages,
             }) => {
-                report.status = EnsureStatus::BlockedBudget;
-                report.marker_range = None;
-                report.message = format!(
-                    "rolling ensure budget used {used_pages} of {window_pages} pages in the last {} minutes; wait for the window or read pages that are already parsed",
-                    policy.budget_window.as_secs() / 60
+                let report = EnsureReport::new(
+                    EnsureStatus::BlockedBudget,
+                    &shown,
+                    format!(
+                        "rolling ensure budget used {used_pages} of {window_pages} pages in the last {} minutes; wait for the window or read pages that are already parsed",
+                        policy.budget_window.as_secs() / 60
+                    ),
                 );
-                return finish(report, waited_for);
+                return finish(report, started, waited_for, runs, canonical_id);
             }
             Ok(CanonicalEnsureClaimOutcome::PdfBusy(lease)) => Some(lease),
             Ok(CanonicalEnsureClaimOutcome::SlotsBusy { .. }) => None,
             Ok(CanonicalEnsureClaimOutcome::Acquired) => {
-                report.ensure_id = Some(ensure_id.clone());
                 let job = EnsureJob {
                     workspace_root: workspace.path().to_owned(),
                     database: workspace.database_path(),
@@ -462,22 +510,50 @@ pub(super) fn ensure(
                     pdf_path: pdf_path.to_owned(),
                     total_pages,
                     range,
-                    installation: ready.installation,
-                    marker_version: ready.version,
+                    installation: ready.installation.clone(),
+                    marker_version: ready.version.clone(),
                     marker_timeout: policy
                         .marker_timeout
                         .min(deadline.saturating_duration_since(Instant::now()))
                         .max(Duration::from_secs(1)),
-                    ensure_id,
+                    ensure_id: ensure_id.clone(),
                     cancellation: MarkerCancellation::new(),
                 };
-                let lineage_had_segments = CanonicalIndex::load(workspace).is_ok_and(|index| {
-                    index.all_for_pdf(pdf.as_str(), None).iter().any(|view| {
-                        view.canonical_id == claim.canonical_id && !view.segments.is_empty()
-                    })
-                });
-                run_owned(job, &policy, deadline, &mut report, lineage_had_segments);
-                return finish(report, waited_for);
+                let mut run = EnsureRun {
+                    marker_range: range,
+                    ensure_id,
+                    idempotency_key: claim.idempotency_key.clone(),
+                    conversion_id: None,
+                    markdown_artifact_id: None,
+                };
+                match run_owned(job, &policy, deadline) {
+                    Ok(done) => {
+                        run.conversion_id = Some(done.conversion_id);
+                        run.markdown_artifact_id = Some(done.markdown_artifact_id);
+                        runs.push(run);
+                        // Re-plan: the next gap, or stitch.
+                        marker = Some(ready);
+                        continue;
+                    }
+                    Err(failure) => {
+                        runs.push(run);
+                        let earlier = parsed;
+                        let mut report = EnsureReport::new(
+                            EnsureStatus::Failed,
+                            &shown,
+                            if earlier > 0 {
+                                format!(
+                                    "{} (the {earlier} gap(s) parsed earlier in this call stay promoted)",
+                                    failure.message
+                                )
+                            } else {
+                                failure.message
+                            },
+                        );
+                        report.timed_out = failure.timed_out;
+                        return finish(report, started, waited_for, runs, canonical_id);
+                    }
+                }
             }
         };
 
@@ -506,10 +582,38 @@ pub(super) fn ensure(
                 ),
             );
             report.timed_out = true;
-            return finish(report, waited_for);
+            return finish(report, started, waited_for, runs, canonical_id);
         }
         wait_for_release(workspace, busy.as_ref(), &policy, deadline);
     }
+}
+
+/// Attaches what the call did (waits, runs) to its terminal report.
+fn finish(
+    mut report: EnsureReport,
+    started: Instant,
+    waited_for: Option<CanonicalEnsureLease>,
+    runs: Vec<EnsureRun>,
+    canonical_id: Option<String>,
+) -> EnsureReport {
+    report.waited_for = waited_for;
+    report.waited_ms = elapsed_ms(started);
+    if let Some(last) = runs.last() {
+        report.ensure_id = Some(last.ensure_id.clone());
+        report.idempotency_key = Some(last.idempotency_key.clone());
+        report.canonical_id = canonical_id;
+    }
+    if let Some(done) = runs
+        .iter()
+        .rev()
+        .find(|run| run.markdown_artifact_id.is_some())
+    {
+        report.conversion_id = done.conversion_id.clone();
+        report.markdown_artifact_id = done.markdown_artifact_id.clone();
+    }
+    report.marker_ranges = runs.iter().map(|run| run.marker_range).collect();
+    report.runs = runs;
+    report
 }
 
 /// Sleeps in `poll_interval` steps until no live lease blocks this read (or
@@ -577,6 +681,12 @@ fn probe_marker(workspace: &McpWorkspace) -> Result<MarkerReady, (String, Capabi
     }
 }
 
+/// Why a claimed run did not produce a snapshot. Its lease is failed.
+struct RunFailure {
+    message: String,
+    timed_out: bool,
+}
+
 /// Runs a claimed job on a worker thread while this thread renews the lease
 /// every heartbeat. On the deadline: cancel Marker, give the worker
 /// [`CANCEL_GRACE`] to write its failed receipt, else fail the lease here.
@@ -584,9 +694,7 @@ fn run_owned(
     job: EnsureJob,
     policy: &EnsurePolicy,
     deadline: Instant,
-    report: &mut EnsureReport,
-    lineage_had_segments: bool,
-) {
+) -> Result<EnsureDone, RunFailure> {
     let database = job.database.clone();
     let ensure_id = job.ensure_id.clone();
     let cancellation = job.cancellation.clone();
@@ -600,9 +708,10 @@ fn run_owned(
         });
     if let Err(error) = spawned {
         fail_lease(&database, &ensure_id, "failed to start the ensure worker");
-        report.status = EnsureStatus::Failed;
-        report.message = format!("failed to start the ensure worker: {error}");
-        return;
+        return Err(RunFailure {
+            message: format!("failed to start the ensure worker: {error}"),
+            timed_out: false,
+        });
     }
     let ttl = millis(policy.lease_ttl);
     let mut cancelled_at: Option<Instant> = None;
@@ -642,33 +751,26 @@ fn run_owned(
     let timed_out = cancelled_at.is_some();
     match result {
         // A run that lands inside the cancel grace still counts.
-        Some(Ok(done)) => {
-            report.status = EnsureStatus::Expanded;
-            report.conversion_id = Some(done.conversion_id);
-            report.markdown_artifact_id = Some(done.markdown_artifact_id);
-            report.message = if lineage_had_segments {
-                "Marker parsed the uncovered pages in this call; a new immutable snapshot was added to the canonical markdown".into()
-            } else {
-                "Marker parsed the uncovered pages in this call; the first snapshot of this canonical markdown was promoted".into()
-            };
-        }
+        Some(Ok(done)) => Ok(done),
         None => {
             // The worker did not answer within the cancel grace: fail the
             // lease here so nothing stays `running`.
             fail_lease(&database, &ensure_id, "sync ensure deadline exceeded");
-            report.status = EnsureStatus::Failed;
-            report.timed_out = true;
-            report.message = timeout_message(range, policy);
+            Err(RunFailure {
+                message: timeout_message(range, policy),
+                timed_out: true,
+            })
         }
         Some(Err(error)) => {
             fail_lease(&database, &ensure_id, &error);
-            report.status = EnsureStatus::Failed;
-            report.timed_out = timed_out;
-            report.message = if timed_out {
-                format!("{}: {error}", timeout_message(range, policy))
-            } else {
-                error
-            };
+            Err(RunFailure {
+                message: if timed_out {
+                    format!("{}: {error}", timeout_message(range, policy))
+                } else {
+                    error
+                },
+                timed_out,
+            })
         }
     }
 }
@@ -913,13 +1015,19 @@ mod tests {
     }
 
     #[test]
-    fn partial_coverage_parses_only_the_hull_of_the_gaps() {
+    fn partial_coverage_runs_marker_on_each_gap_never_on_covered_pages() {
         let lineage = view(&[(1, 3), (6, 7)]);
         let plan = plan_ensure(&[&lineage], range(2, 8), 20, 12);
-        assert_eq!(plan.action, PlanAction::Run(range(4, 8)));
         assert_eq!(plan.missing, vec![range(4, 5), range(8, 8)]);
-        let plan = plan_ensure(&[&lineage], range(1, 5), 20, 12);
+        // First gap first; pages 6–7 between the gaps are never parsed.
         assert_eq!(plan.action, PlanAction::Run(range(4, 5)));
+        // After 4–5 is promoted the re-plan runs the second gap only.
+        let after = view(&[(1, 3), (6, 7), (4, 5)]);
+        let plan = plan_ensure(&[&after], range(2, 8), 20, 12);
+        assert_eq!(plan.action, PlanAction::Run(range(8, 8)));
+        let done = view(&[(1, 3), (6, 7), (4, 5), (8, 8)]);
+        let plan = plan_ensure(&[&done], range(2, 8), 20, 12);
+        assert_eq!(plan.action, PlanAction::Stitch);
     }
 
     #[test]
@@ -953,6 +1061,13 @@ mod tests {
         let lineage = view(&[(1, 14)]);
         let plan = plan_ensure(&[&lineage], range(1, 16), 20, 12);
         assert_eq!(plan.action, PlanAction::Run(range(15, 16)));
+        // Budget counts the gaps, not their hull: 1 + 1 uncovered pages
+        // around 17 covered ones stay within a budget of 2.
+        let lineage = view(&[(2, 18)]);
+        let plan = plan_ensure(&[&lineage], range(1, 19), 20, 2);
+        assert_eq!(plan.action, PlanAction::Run(range(1, 1)));
+        let plan = plan_ensure(&[&lineage], range(1, 20), 20, 2);
+        assert_eq!(plan.action, PlanAction::OverBudget);
     }
 
     #[test]
@@ -965,7 +1080,7 @@ mod tests {
         .unwrap();
         let text = idempotency_key(&key, range(2, 3));
         assert!(text.starts_with("mathscape:artifact/pdf|"));
-        assert!(text.contains("|2-3|mathscape.marker.math-ocr.v1|marker-2.1.0|ensure-v2"));
+        assert!(text.contains("|2-3|mathscape.marker.math-ocr.v1|marker-2.1.0|ensure-v3"));
         assert_eq!(text, idempotency_key(&key, range(2, 3)));
     }
 }

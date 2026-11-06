@@ -343,12 +343,12 @@ fn uncovered_scanned_read_ensures_then_serves_and_covered_reads_never_rerun() {
     assert_eq!(ensure["status"], "expanded", "{first}");
     assert_eq!(ensure["requested"], json!({ "from": 3, "to": 4 }));
     assert_eq!(ensure["missing"], json!([{ "from": 3, "to": 4 }]));
-    assert_eq!(ensure["marker_range"], json!({ "from": 3, "to": 4 }));
+    assert_eq!(ensure["marker_ranges"], json!([{ "from": 3, "to": 4 }]));
     assert!(
         ensure["idempotency_key"]
             .as_str()
             .unwrap()
-            .ends_with("|3-4|mathscape.marker.math-ocr.v1|marker-2.1.0|ensure-v2"),
+            .ends_with("|3-4|mathscape.marker.math-ocr.v1|marker-2.1.0|ensure-v3"),
         "{ensure}"
     );
     assert_eq!(
@@ -420,8 +420,8 @@ fn uncovered_scanned_read_ensures_then_serves_and_covered_reads_never_rerun() {
         json!([{ "from": 5, "to": 5 }])
     );
     assert_eq!(
-        overlap["details"]["ensure"]["marker_range"],
-        json!({ "from": 5, "to": 5 })
+        overlap["details"]["ensure"]["marker_ranges"],
+        json!([{ "from": 5, "to": 5 }])
     );
     assert!(overlap.get("served_artifact_id").is_none(), "{overlap}");
     let segments = overlap["details"]["served_segments"].as_array().unwrap();
@@ -486,14 +486,84 @@ fn reads_spanning_parsed_snapshots_are_stitched_without_rerunning_marker() {
     let tail = read(&server, &h.pdf, 13, 16);
     assert_eq!(tail["status"], "ok", "{tail}");
     assert_eq!(
-        tail["details"]["ensure"]["marker_range"],
-        json!({ "from": 15, "to": 16 })
+        tail["details"]["ensure"]["marker_ranges"],
+        json!([{ "from": 15, "to": 16 }])
     );
     assert_eq!(
         tail["details"]["served_segments"].as_array().unwrap().len(),
         2
     );
     assert_eq!(h.marker_calls(), ["0-3", "4-9", "10-13", "14-15"]);
+}
+
+#[test]
+fn separated_gaps_get_one_marker_run_each_and_covered_pages_between_are_not_reparsed() {
+    let h = harness();
+    let server = h.server(test_policy());
+    assert_eq!(read(&server, &h.pdf, 3, 6)["status"], "ok");
+    assert_eq!(h.marker_calls(), ["2-5"]);
+
+    // Request 1–8 has two gaps (1–2 and 7–8) around the covered 3–6.
+    let result = read(&server, &h.pdf, 1, 8);
+    assert_eq!(result["status"], "ok", "{result}");
+    let ensure = &result["details"]["ensure"];
+    assert_eq!(ensure["status"], "expanded", "{ensure}");
+    assert_eq!(
+        ensure["missing"],
+        json!([{ "from": 1, "to": 2 }, { "from": 7, "to": 8 }])
+    );
+    assert_eq!(
+        ensure["marker_ranges"],
+        json!([{ "from": 1, "to": 2 }, { "from": 7, "to": 8 }])
+    );
+    let runs = ensure["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2, "{ensure}");
+    assert!(
+        runs.iter()
+            .all(|run| run["markdown_artifact_id"].is_string())
+    );
+    assert_ne!(runs[0]["idempotency_key"], runs[1]["idempotency_key"]);
+    assert_eq!(ensure["ensure_id"], runs[1]["ensure_id"]);
+    assert_eq!(
+        h.marker_calls(),
+        ["2-5", "0-1", "6-7"],
+        "3–6 is never re-parsed"
+    );
+    // Scene record spans the parse of this call.
+    assert_eq!(
+        result["details"]["map_signal"]["pages"],
+        json!({ "from": 1, "to": 8 })
+    );
+
+    let segments = result["details"]["served_segments"].as_array().unwrap();
+    let pages: Vec<_> = segments.iter().map(|s| s["pages"].clone()).collect();
+    assert_eq!(
+        pages,
+        [
+            json!({ "from": 1, "to": 2 }),
+            json!({ "from": 3, "to": 6 }),
+            json!({ "from": 7, "to": 8 })
+        ]
+    );
+    let text = result["text"].as_str().unwrap();
+    for page in 1..=8 {
+        assert_eq!(text.matches(&format!("第{page}页")).count(), 1, "{text}");
+    }
+    // Both receipts succeeded and no lease is left.
+    let store = h.store();
+    for run in runs {
+        let receipt = store
+            .canonical_ensure_receipt(run["ensure_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(receipt.status, "succeeded");
+    }
+    assert!(
+        store
+            .active_canonical_ensures(unix_millis_now())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

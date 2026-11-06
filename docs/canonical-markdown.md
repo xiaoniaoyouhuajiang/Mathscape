@@ -114,14 +114,16 @@ ensure 是 `material.read` 的内部步骤，不是 Agent 可调用的工具。�
 
 ### 范围
 
-- 已解析的页永不重新解析。`details.ensure.missing` 是请求内、所有 lineage 并集都没覆盖的页；Marker 的 `--page_range`（`marker_range`）是这些缺口的**外包区间**（第一个缺口页到最后一个缺口页，一段连续区间）。缺口之间夹着的已覆盖页会被一起重解析，这是单次 Marker 只接受一段连续区间的代价；之后读取仍按页拼接，先到先得。
+- 已解析的页永不重新解析。`details.ensure.missing` 是请求内、所有 lineage 并集都没覆盖的页；Marker **每个缺口跑一次**（按页序，`details.ensure.marker_ranges` 依次列出），每次运行各自加锁、计预算、有幂等键、产出一份不可变快照；缺口之间夹着的已覆盖页不会被重解析。每跑完一段都回到第 1 步重新规划，所以排队期间别的读取补上的页也不会重跑。之后按页拼接返回。
+- 为什么不用一次多段：Marker 的 `--page_range` 支持 `0-1,3-4` 这类多段写法（2026-11-06 本地实测：输出只含这几页的页标，用时与分段运行相当），但一次转换运行（`ConversionRun.page_range`）在覆盖模型里是一段连续页；把一份多段输出拆成几份快照需要伪造运行记录，破坏来源链。逐段运行用时相当且不改覆盖模型。
+- `ensure-v2`（同日较早版本）用过「缺口外包区间」作为单一 Marker 范围，会重解析缺口之间的已覆盖页，已由 `ensure-v3` 取代。
 - 2026-11-06 之前的规则是「请求必须被单份快照完全包含，否则整段请求重跑」，会让跨两份快照的请求（例如已有 1–4、5–10 时读 1–8）在 `missing` 为空时仍整段重跑 Marker（沙箱 `sbx-20261101T235040-bc83e994` 实测）。
-- 单次最多新解析 `max_pages_per_request` 页（默认 12），按 `marker_range` 计，不按请求页数计。超过时返回 `blocked_budget`，不运行 Marker，提示缩小 `pdf_pages`。已全部覆盖的请求不受这个上限影响（返回仍受 32KiB 上限）。
+- 单次最多新解析 `max_pages_per_request` 页（默认 12），按各缺口页数之和计，不按请求页数或缺口外包区间计。超过时返回 `blocked_budget`，不运行 Marker，提示缩小 `pdf_pages`。已全部覆盖的请求不受这个上限影响（返回仍受 32KiB 上限）。
 - profile 固定为 `mathscape.marker.math-ocr.v1`；policy 为 `marker-{探测到的版本}`，所以 Marker 升级会开新 lineage。
 
 ### 写入顺序
 
-1. 规划：已有单份快照完全包含请求，或已有快照按页合起来覆盖请求 → `reused`，不跑 Marker；否则 Marker 范围为缺口外包区间。
+1. 规划：已有单份快照完全包含请求，或已有快照按页合起来覆盖请求 → `reused`，不跑 Marker；否则取第一个缺口为本次 Marker 范围；第 8 步之后回到这里，直到没有缺口（`expanded`）或某一段失败。
 2. 探测 Marker（与 CapabilityProbe 同一候选顺序：`MATHSCAPE_MARKER_EXECUTABLE`、`MATHSCAPE_MARKER_VENV`、默认 venv、`PATH`）。不可用 → `capability_unavailable`。
 3. 加锁：SQLite `BEGIN IMMEDIATE` 内，先把租约过期的 `running` 行标为 `abandoned`，再依次检查本 PDF 的活租约（每 PDF 互斥）、全局运行数（Marker 信号量，默认 1）、滚动页预算（默认每小时 96 页，统计窗口内 running / succeeded / failed 的页数）。都通过才插入 `running` 行。被本 PDF 或全局槽占住时 **排队**：每 `poll_interval`（默认 500ms）查一次活租约，租约结束后回到第 1 步重新规划（对方已覆盖请求 → `reused`，否则再抢锁）。排队和运行共用同一个同步截止时间。
 4. 运行 Marker（工作线程；调用方阻塞等待）。租约很短（`lease_ttl` 默认 60 秒），等待期间每 `heartbeat`（默认 15 秒）续一次；持有者进程消失后续约停止，租约最多一个 TTL 后过期，被下一次加锁标为 `abandoned`。Marker 进程超时 = min(`marker_timeout`, 剩余同步时间)。
@@ -135,10 +137,10 @@ ensure 是 `material.read` 的内部步骤，不是 Agent 可调用的工具。�
 幂等键：
 
 ```text
-{pdf_artifact_id}|{canonical_id}|{from}-{to}|{parser_profile}|{parser_policy_version}|ensure-v2
+{pdf_artifact_id}|{canonical_id}|{from}-{to}|{parser_profile}|{parser_policy_version}|ensure-v3
 ```
 
-`ensure-v2`（2026-11-06）起 `{from}-{to}` 是缺口外包区间而不是整段请求。重复请求先经过第 1 步的覆盖检查；台账 + head + 注册表决定是否已有结果，所以已覆盖的请求不会再跑 Marker。同一 PDF 并发的第二个请求在第 3 步排队等第一个跑完，然后在第 1 步得到 `reused`（`waited_for` 记录等过的租约），整个过程只跑一次 Marker。
+`ensure-v3`（2026-11-06）起 `{from}-{to}` 是单个缺口（`ensure-v2` 时是缺口外包区间，更早是整段请求）；一次读取有几个缺口就有几个键。重复请求先经过第 1 步的覆盖检查；台账 + head + 注册表决定是否已有结果，所以已覆盖的请求不会再跑 Marker。同一 PDF 并发的第二个请求在第 3 步排队等第一个跑完，然后在第 1 步得到 `reused`（`waited_for` 记录等过的租约），整个过程只跑一次 Marker。
 
 ### 状态
 
@@ -147,12 +149,12 @@ ensure 是 `material.read` 的内部步骤，不是 Agent 可调用的工具。�
 | 状态 | 含义 | 结果 |
 | --- | --- | --- |
 | `reused` | 已有快照覆盖请求（单份包含或按页拼接） | 直接返回快照或拼接结果 |
-| `expanded` | 本次 Marker 只解析了缺口，新快照已登记 | `status: ok`，返回新快照或与旧快照的拼接结果 |
+| `expanded` | 本次 Marker 逐个解析了全部缺口，新快照已登记 | `status: ok`，返回新快照或与旧快照的拼接结果 |
 | `blocked_budget` | 请求页数或滚动预算超限 | `capability_unavailable`，不跑 Marker |
 | `capability_unavailable` | Marker 未安装或版本不支持 | `capability_unavailable`，附 probe |
-| `failed` | Marker、清单校验、promotion 失败，或超过同步截止时间（`timed_out: true`） | `capability_unavailable`，回执记录错误，租约已清除 |
+| `failed` | Marker、清单校验、promotion 失败，或超过同步截止时间（`timed_out: true`）；多缺口时前面已成功的快照保留 | `capability_unavailable`，回执记录错误，租约已清除 |
 
-同时会有 `canonical_ensure_{status}` 诊断；Marker 缺失时仍保留 `pdf_no_text_layer`。`details.ensure` 还带 `requested`、`missing`、`marker_range`、`ensure_id`、`idempotency_key`、`canonical_id`、`conversion_id`、`markdown_artifact_id`，排过队时带 `waited_for`（等过的租约）与 `waited_ms`。
+同时会有 `canonical_ensure_{status}` 诊断；Marker 缺失时仍保留 `pdf_no_text_layer`。`details.ensure` 还带 `requested`、`missing`、`marker_ranges`（本次各次 Marker 范围）、`runs`（每次运行的 `marker_range` / `ensure_id` / `idempotency_key` / `conversion_id` / `markdown_artifact_id`）、`canonical_id`，以及最近一次运行的 `ensure_id`、`idempotency_key`、`conversion_id`、`markdown_artifact_id`，排过队时带 `waited_for`（等过的租约）与 `waited_ms`。
 
 顶层 `status` 只在调用结束时给出：解析进行中调用仍在阻塞，因此不会出现「解析中却 `capability_unavailable`」。顶层 `ToolStatus` 没有 `failed` 变体（契约枚举不变），失败以 `capability_unavailable` + `details.ensure.status = failed` 表达。
 
