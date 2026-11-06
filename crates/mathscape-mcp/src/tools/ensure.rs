@@ -14,9 +14,11 @@
 //! Artifact bytes are never rewritten; a new snapshot is a new
 //! content-addressed artifact.
 //!
-//! No stitching: a request is served only by one snapshot whose pages fully
-//! contain it, so the Marker range is the whole request, never just its gaps.
-//! The gaps are still reported as `missing`.
+//! Gap-only parsing: a request whose pages are all covered by existing
+//! snapshots (one containing snapshot, or several stitched page by page,
+//! across every lineage of the PDF) never runs Marker. Otherwise Marker runs
+//! once on the contiguous hull of the uncovered pages (`missing`), not on the
+//! whole request, and `material.read` then stitches old and new snapshots.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,7 +32,7 @@ use mathscape_agent::{
 use mathscape_artifact::ArtifactPool;
 use mathscape_domain::{
     ActorRef, CanonicalMarkdownKey, CanonicalMarkdownView, InclusivePageRange, StableId, Timestamp,
-    merge_page_ranges, missing_pages, parser_policy_from_tool_version,
+    parser_policy_from_tool_version, plan_page_cover,
 };
 use mathscape_orchestrator::promote_marker_inventory;
 use mathscape_pdf::{PdfPageIndex, PdfSelection};
@@ -49,7 +51,7 @@ use super::canonical::CanonicalIndex;
 use crate::McpWorkspace;
 
 /// Bumped when the ensure planning rules change; part of the idempotency key.
-pub const ENSURE_POLICY_VERSION: &str = "ensure-v1";
+pub const ENSURE_POLICY_VERSION: &str = "ensure-v2";
 const ENSURE_PROFILE: MarkerProfile = MarkerProfile::MathOcrV1;
 const ENSURE_ACTOR: &str = "mathscape-mcp-ensure";
 /// After the deadline the worker gets this long to stop Marker and write its
@@ -102,11 +104,13 @@ impl Default for EnsurePolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum EnsureStatus {
-    /// An existing snapshot already contains the request (possibly one that
-    /// another read's ensure promoted while this read waited). Marker not run.
+    /// Existing snapshots already cover every requested page: one contains
+    /// the request, or several are stitched by page (possibly including one
+    /// that another read's ensure promoted while this read waited). Marker
+    /// not run.
     Reused,
-    /// Marker ran in this call and a new snapshot containing the request was
-    /// promoted.
+    /// Marker ran in this call on the uncovered pages and a new snapshot was
+    /// promoted; together with existing snapshots it covers the request.
     Expanded,
     /// The request or the rolling budget is too large.
     BlockedBudget,
@@ -137,7 +141,9 @@ pub(super) struct EnsureReport {
     /// Requested pages no snapshot covers (union of every lineage), as
     /// planned before this call parsed or waited.
     pub missing: Vec<InclusivePageRange>,
-    /// The one contiguous range given to Marker (always the whole request).
+    /// The one contiguous range given to Marker: the hull of `missing`
+    /// (from the first to the last uncovered page), never already-covered
+    /// pages outside it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marker_range: Option<InclusivePageRange>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -225,32 +231,28 @@ pub(super) struct EnsurePlan {
 pub(super) enum PlanAction {
     /// A single existing segment contains the request.
     Reuse,
+    /// No single segment contains the request, but existing segments cover
+    /// every requested page; `material.read` stitches them by page.
+    Stitch,
     /// Run Marker once on this contiguous range.
     Run(InclusivePageRange),
-    /// The request exceeds the per-request page budget.
+    /// The pages Marker would have to parse exceed the per-request budget.
     OverBudget,
 }
 
-/// Plans an ensure against every canonical lineage of the PDF.
+/// Plans an ensure against every canonical lineage of the PDF (`views`,
+/// best-ranked first). Coverage is the page-by-page cover of
+/// [`plan_page_cover`]: covered pages are never parsed again; the Marker
+/// range is the contiguous hull of the gaps. `total_pages` bounds the
+/// request upstream and is kept for the signature's callers.
 pub(super) fn plan_ensure(
     views: &[&CanonicalMarkdownView],
     requested: InclusivePageRange,
-    total_pages: u32,
+    _total_pages: u32,
     max_pages_per_request: u32,
 ) -> EnsurePlan {
-    let covered = merge_page_ranges(
-        views
-            .iter()
-            .flat_map(|view| view.segments.iter().filter_map(|segment| segment.pages)),
-    );
-    let missing = missing_pages(total_pages, &covered)
-        .into_iter()
-        .filter_map(|gap| {
-            let from = gap.from.max(requested.from);
-            let to = gap.to.min(requested.to);
-            InclusivePageRange::new(from, to).ok()
-        })
-        .collect();
+    let cover = plan_page_cover(views, requested);
+    let missing = cover.gaps.clone();
     let contained = views.iter().any(|view| {
         view.segments
             .iter()
@@ -258,10 +260,12 @@ pub(super) fn plan_ensure(
     });
     let action = if contained {
         PlanAction::Reuse
-    } else if requested.page_count() > max_pages_per_request {
-        PlanAction::OverBudget
     } else {
-        PlanAction::Run(requested)
+        match cover.gap_hull() {
+            None => PlanAction::Stitch,
+            Some(hull) if hull.page_count() > max_pages_per_request => PlanAction::OverBudget,
+            Some(hull) => PlanAction::Run(hull),
+        }
     };
     EnsurePlan {
         requested,
@@ -337,11 +341,17 @@ pub(super) fn ensure(
             report
         };
         let range = match plan.action {
-            PlanAction::Reuse => {
-                let message = if waited_for.is_some() {
-                    "waited for the running parse of this PDF; its new immutable snapshot contains every requested page"
-                } else {
-                    "an existing immutable snapshot contains every requested page"
+            PlanAction::Reuse | PlanAction::Stitch => {
+                let message = match (waited_for.is_some(), &plan.action) {
+                    (true, _) => {
+                        "waited for the running parse of this PDF; existing immutable snapshots now cover every requested page"
+                    }
+                    (false, PlanAction::Reuse) => {
+                        "an existing immutable snapshot contains every requested page"
+                    }
+                    _ => {
+                        "existing immutable snapshots together cover every requested page; they are stitched by page without running Marker"
+                    }
                 };
                 return finish(
                     EnsureReport::new(EnsureStatus::Reused, &shown, message),
@@ -353,8 +363,13 @@ pub(super) fn ensure(
                     EnsureStatus::BlockedBudget,
                     &shown,
                     format!(
-                        "request spans {} pages; ensure parses at most {} pages per read. Narrow pdf_pages",
-                        requested.page_count(),
+                        "the uncovered pages of this request span {} pages; ensure parses at most {} pages per read. Narrow pdf_pages",
+                        plan.missing.first().zip(plan.missing.last()).map_or(
+                            requested.page_count(),
+                            |(first, last)| {
+                                last.to.saturating_sub(first.from).saturating_add(1)
+                            }
+                        ),
                         policy.max_pages_per_request
                     ),
                 );
@@ -632,9 +647,9 @@ fn run_owned(
             report.conversion_id = Some(done.conversion_id);
             report.markdown_artifact_id = Some(done.markdown_artifact_id);
             report.message = if lineage_had_segments {
-                "Marker parsed the requested pages in this call; a new immutable snapshot was added to the canonical markdown".into()
+                "Marker parsed the uncovered pages in this call; a new immutable snapshot was added to the canonical markdown".into()
             } else {
-                "Marker parsed the requested pages in this call; the first snapshot of this canonical markdown was promoted".into()
+                "Marker parsed the uncovered pages in this call; the first snapshot of this canonical markdown was promoted".into()
             };
         }
         None => {
@@ -898,26 +913,46 @@ mod tests {
     }
 
     #[test]
-    fn overlap_only_coverage_reruns_the_whole_request_and_reports_gaps() {
+    fn partial_coverage_parses_only_the_hull_of_the_gaps() {
         let lineage = view(&[(1, 3), (6, 7)]);
         let plan = plan_ensure(&[&lineage], range(2, 8), 20, 12);
-        assert_eq!(plan.action, PlanAction::Run(range(2, 8)));
+        assert_eq!(plan.action, PlanAction::Run(range(4, 8)));
         assert_eq!(plan.missing, vec![range(4, 5), range(8, 8)]);
+        let plan = plan_ensure(&[&lineage], range(1, 5), 20, 12);
+        assert_eq!(plan.action, PlanAction::Run(range(4, 5)));
     }
 
     #[test]
-    fn union_coverage_without_one_containing_segment_is_not_reuse() {
-        let lineage = view(&[(1, 3), (4, 6)]);
-        let plan = plan_ensure(&[&lineage], range(2, 5), 20, 12);
-        assert!(plan.missing.is_empty());
-        assert_eq!(plan.action, PlanAction::Run(range(2, 5)));
+    fn union_coverage_is_stitched_without_marker() {
+        // Sandbox sbx-20261101T235040-bc83e994: 1-4, 5-10, 11-14 were parsed,
+        // then reads of 1-8 and 9-14 re-ran Marker on the whole request.
+        let lineage = view(&[(1, 4), (5, 10), (11, 14)]);
+        for request in [range(1, 8), range(9, 14), range(1, 14)] {
+            let plan = plan_ensure(&[&lineage], request, 14, 12);
+            assert!(plan.missing.is_empty());
+            assert_eq!(plan.action, PlanAction::Stitch, "{request:?}");
+        }
     }
 
     #[test]
-    fn oversized_request_is_blocked_by_the_page_budget() {
+    fn coverage_from_another_lineage_counts() {
+        let old = view(&[(1, 6)]);
+        let current = view(&[(7, 9)]);
+        let plan = plan_ensure(&[&current, &old], range(5, 9), 20, 12);
+        assert_eq!(plan.action, PlanAction::Stitch);
+        let plan = plan_ensure(&[&current, &old], range(5, 11), 20, 12);
+        assert_eq!(plan.action, PlanAction::Run(range(10, 11)));
+    }
+
+    #[test]
+    fn budget_applies_to_the_pages_marker_would_parse() {
         let plan = plan_ensure(&[], range(1, 13), 20, 12);
         assert_eq!(plan.action, PlanAction::OverBudget);
         assert_eq!(plan.missing, vec![range(1, 13)]);
+        // 16 requested pages, only 2 uncovered: within budget.
+        let lineage = view(&[(1, 14)]);
+        let plan = plan_ensure(&[&lineage], range(1, 16), 20, 12);
+        assert_eq!(plan.action, PlanAction::Run(range(15, 16)));
     }
 
     #[test]
@@ -930,7 +965,7 @@ mod tests {
         .unwrap();
         let text = idempotency_key(&key, range(2, 3));
         assert!(text.starts_with("mathscape:artifact/pdf|"));
-        assert!(text.contains("|2-3|mathscape.marker.math-ocr.v1|marker-2.1.0|ensure-v1"));
+        assert!(text.contains("|2-3|mathscape.marker.math-ocr.v1|marker-2.1.0|ensure-v2"));
         assert_eq!(text, idempotency_key(&key, range(2, 3)));
     }
 }
