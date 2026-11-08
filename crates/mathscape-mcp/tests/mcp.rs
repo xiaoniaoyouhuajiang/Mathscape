@@ -465,7 +465,9 @@ fn tools_list_order_and_text_are_fixed() {
             "graph.get",
             "graph.neighborhood",
             "ink.page_image",
-            "pdf.page_image"
+            "pdf.page_image",
+            "mathlib.search",
+            "lean.check"
         ]
     );
     for tool in tools {
@@ -555,11 +557,59 @@ fn tools_list_order_and_text_are_fixed() {
         page_image_description.contains("1-based"),
         "{page_image_description}"
     );
+    assert_eq!(tools[8]["name"], "mathlib.search");
+    assert_eq!(
+        tools[8]["inputSchema"]["required"],
+        json!(["profile_id", "query"])
+    );
+    assert!(tools[8]["description"].as_str().unwrap().contains("Loogle"));
+    assert_eq!(tools[9]["name"], "lean.check");
+    assert_eq!(
+        tools[9]["inputSchema"]["required"],
+        json!(["profile_id", "source_text"])
+    );
+    assert!(
+        tools[9]["description"]
+            .as_str()
+            .unwrap()
+            .contains("receipt")
+    );
     let second = request(&f.server, 2, "tools/list", json!({}));
     assert_eq!(
         first["result"], second["result"],
         "tools/list is byte-stable"
     );
+}
+
+#[test]
+fn lean_tools_are_read_only_and_report_missing_managed_profiles() {
+    let f = fixture();
+    for (name, arguments) in [
+        (
+            "mathlib.search",
+            json!({ "profile_id": "missing-profile", "query": "add_comm" }),
+        ),
+        (
+            "lean.check",
+            json!({
+                "profile_id": "missing-profile",
+                "source_text": "import Mathlib\nexample : True := by trivial"
+            }),
+        ),
+    ] {
+        let (result, is_error) = call(&f.server, name, arguments);
+        assert!(!is_error, "{name} capability absence is a business result");
+        assert_eq!(result["status"], "capability_unavailable");
+        assert_eq!(result["profile_id"], "missing-profile");
+        assert!(result["diagnostics"].is_array());
+    }
+    let (result, is_error) = call(
+        &f.server,
+        "mathlib.search",
+        json!({ "profile_id": "missing-profile", "query": "add_comm", "extra": true }),
+    );
+    assert!(is_error);
+    assert_eq!(result["error"]["code"], "invalid_arg");
 }
 
 #[test]

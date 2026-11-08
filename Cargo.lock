@@ -3424,6 +3424,7 @@ dependencies = [
  "mathscape-pdf",
  "mathscape-query",
  "mathscape-store-sqlite",
+ "mathscape-tool-lean",
  "mathscape-tool-marker",
  "rusqlite",
  "serde",

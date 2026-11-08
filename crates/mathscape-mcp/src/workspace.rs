@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use mathscape_agent::{CommandRunner, SystemCommandRunner, ToolError, ToolErrorCode};
 use mathscape_artifact::{ArtifactPool, ArtifactPoolError, WorkspaceRoot};
 use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
+use mathscape_tool_lean::{LEAN_PROFILE_ROOT_ENV, LeanProfileStore};
 
 use crate::tools::EnsurePolicy;
 
@@ -25,6 +26,7 @@ pub struct McpWorkspace {
     round: Option<String>,
     capability_runner: Box<dyn CommandRunner>,
     ensure_policy: EnsurePolicy,
+    lean_profile_store: Option<LeanProfileStore>,
 }
 
 impl McpWorkspace {
@@ -38,6 +40,7 @@ impl McpWorkspace {
             round: None,
             capability_runner: Box::new(SystemCommandRunner::default()),
             ensure_policy: EnsurePolicy::default(),
+            lean_profile_store: None,
         })
     }
 
@@ -60,6 +63,14 @@ impl McpWorkspace {
         self
     }
 
+    /// Overrides the managed Lean profile store used by the Lean MCP tools.
+    /// Desktop and tests can use this to bind a workspace to an explicit
+    /// profile root without changing process-global environment variables.
+    pub fn with_lean_profile_store(mut self, store: LeanProfileStore) -> Self {
+        self.lean_profile_store = Some(store);
+        self
+    }
+
     pub(crate) fn ensure_policy(&self) -> EnsurePolicy {
         self.ensure_policy
     }
@@ -78,6 +89,48 @@ impl McpWorkspace {
 
     pub(crate) fn capability_runner(&self) -> &dyn CommandRunner {
         self.capability_runner.as_ref()
+    }
+
+    pub(crate) fn lean_profile_store(&self) -> Result<LeanProfileStore, ToolError> {
+        if let Some(store) = &self.lean_profile_store {
+            return Ok(store.clone());
+        }
+
+        // Prefer an explicit process configuration. When it is absent, also
+        // recognize the repository/workspace-local .mathscape root used by
+        // the managed profile installer before falling back to the platform
+        // data directory.
+        if std::env::var_os(LEAN_PROFILE_ROOT_ENV).is_some() {
+            return LeanProfileStore::from_env_or_default().map_err(|error| {
+                ToolError::new(
+                    ToolErrorCode::Internal,
+                    format!("failed to open configured Lean profile store: {error}"),
+                )
+            });
+        }
+        let mut candidates = vec![self.path().join(".mathscape/lean/profiles")];
+        if let Some(parent) = self.path().parent() {
+            candidates.push(parent.join(".mathscape/lean/profiles"));
+        }
+        if let Ok(current) = std::env::current_dir() {
+            candidates.push(current.join(".mathscape/lean/profiles"));
+        }
+        for candidate in candidates {
+            if candidate.is_dir() {
+                return LeanProfileStore::new(candidate).map_err(|error| {
+                    ToolError::new(
+                        ToolErrorCode::Internal,
+                        format!("failed to open workspace Lean profile store: {error}"),
+                    )
+                });
+            }
+        }
+        LeanProfileStore::from_env_or_default().map_err(|error| {
+            ToolError::new(
+                ToolErrorCode::Internal,
+                format!("failed to open default Lean profile store: {error}"),
+            )
+        })
     }
 
     pub(crate) fn store(&self) -> Result<SqliteArtifactStore, ToolError> {

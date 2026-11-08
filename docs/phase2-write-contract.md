@@ -2,7 +2,7 @@
 
 > 读者：Mob（实现）· 起草：2026-10-30（Asia/Shanghai）· 状态：**契约草案，用户决策已锁定（2026-10-30），待用户审阅本文后合并**
 > 依据：[Phase0 契约](phase0-contract.md)（下称 **Phase0**）、[Phase1c 图契约](phase1c-graph-contract.md)（**1c**）、[Phase1d 手稿契约](phase1d-ink-snapshot-contract.md)（**1d**）、[Foundations 扩展草案 v0.1](../proposals/core-workflow-foundations-extension-v0.1.md)（**FX**）、[登记撤回提案 v1](../proposals/discovery-registration-reversal-v1.md)（**REV**）、MCP 工具面草案 `/workspace/research/mathscape-tools-mcp-draft.md`（**MCP 草案**，仓库外，见 Phase0 头注）。
-> 版本：本文引入 `mcp_envelope v1` 与 `agent_events v1`（增量见 §4.5、§4.1.4）；Phase1 已有 7 个只读工具的语义与描述除 `scope` 一句外不变。
+> 版本：本文引入 `mcp_envelope v1` 与 `agent_events v1`（增量见 §4.5、§4.1.4）；Phase1 已有 10 个只读工具的语义与描述除 `scope` 一句外不变。Lean 工具契约另见 [`lean-tool-contract.md`](lean-tool-contract.md)。
 > 标签：**[锁定]** = 用户 2026-10-30 决策或由其直接推出；**[本文提议]** = 起草时为闭合契约补的细节，现有草案未写，实现 PR 可在不违背 [锁定] 的前提下微调（汇总见 §11）；**[待核]** = 真正未定（§10）。
 > 本 PR **只有文档**，不含任何 Rust / TS 实现。
 

@@ -316,7 +316,7 @@ impl CodexEventMapper {
     }
 
     /// Response to `mcpServerStatus/list`. `expected` is the round allow-list
-    /// (Desktop passes the fixed eight); empty = no expectation.
+    /// (Desktop passes the fixed read-only catalog); empty = no expectation.
     pub(crate) fn on_mcp_inventory(
         &mut self,
         response: &Value,

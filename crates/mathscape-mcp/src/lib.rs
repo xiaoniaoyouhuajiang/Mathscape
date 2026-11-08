@@ -27,6 +27,10 @@
 //!   normalized crop of it to a PNG with the pure-Rust rasterizer behind
 //!   [`mathscape_pdf::PdfEngine::render_page`], with the same image result
 //!   shape. Read-only: no Marker, no markdown write, no PDF mutation.
+//! - `mathlib.search` searches the managed local Loogle index and returns
+//!   fingerprinted declaration candidates;
+//! - `lean.check` checks a complete Lean source file and persists a profile-local
+//!   immutable verification receipt.
 //!
 //! Wire envelope follows `docs/phase0-contract.md` §2 and reuses the DTOs of
 //! `mathscape-agent` ([`mathscape_agent::ToolStatus`], [`mathscape_agent::Locator`],

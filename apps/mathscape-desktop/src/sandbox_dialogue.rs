@@ -1,7 +1,7 @@
 //! S1 dialogue shell over a sandbox session (docs/sandbox-flow.md §4.2, §5 S1).
 //!
 //! One user message = one `agent_events v0` round on the local Codex
-//! app-server ([`CodexExecutor`]), with the eight read-only Mathscape MCP
+//! app-server ([`CodexExecutor`]), with the ten read-only Mathscape MCP
 //! tools mounted against the session's *isolated copy* (never the checkpoint,
 //! never the mother workspace). Workflow is "diluted" to chat: there is no
 //! planner, no propose/accept and no write path (T2 read-only).
@@ -839,7 +839,7 @@ mod tests {
         let record = home.session(&fx.session_id).unwrap();
         assert_eq!(record.backend, "codex");
         assert_eq!(record.tool_allowlist, tool_allowlist());
-        assert_eq!(record.tool_allowlist.len(), 8);
+        assert_eq!(record.tool_allowlist.len(), 10);
         let export = home.export_session(&fx.session_id, None, None).unwrap();
         assert!(export.export_dir.join(EVENTS_FILE).is_file());
         drop(home);

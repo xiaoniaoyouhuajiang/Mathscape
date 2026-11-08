@@ -171,8 +171,8 @@ v0 实现另带 `transcript_entries`（行数）与 `dialogue_threads`（线程�
 ### 4.3 Agent 挂载 [锁定]
 
 - 本机 **Codex**（已有 `CodexExecutor`）+ `mathscape mcp --workspace <sandbox_copy> --round <round_id>`。
-- 工具面 v0 = Phase1 已有 **7 个只读工具**；allowlist 可配置，默认全开只读集。
-- Codex sandbox `read-only`、`ephemeral: true` 沿用 Phase0 附。`approvalPolicy` 用 `on-request`（本机 Codex 的 serde 枚举是 kebab-case：`untrusted` | `on-request` | `granular` | `never`；`onRequest` 会被拒绝为 unknown variant），**不用** `never`：缺少 `readOnlyHint` 的 MCP 工具会被 Codex 当成破坏性调用，`never` 会直接拒绝并报 `approval policy is never`。Mathscape 7 个只读工具在 `tools/list` 上带注解 `readOnlyHint: true`、`destructiveHint: false`、`openWorldHint: false`；`thread/start` 另设 `mcp_servers.mathscape.default_tools_approval_mode = "approve"` 与 `enabled_tools` 白名单。适配器接受白名单内的只读 MCP；shell、文件写入、额外权限、动态工具与打开外链一律拒绝。未能归类的审批最多等 60 秒，超时记「等待审批已超时」并拒绝。以上不得写入源 checkpoint。
+- 工具面 v0 = Phase1 已有 **10 个只读工具**；allowlist 可配置，默认全开只读集。
+- Codex sandbox `read-only`、`ephemeral: true` 沿用 Phase0 附。`approvalPolicy` 用 `on-request`（本机 Codex 的 serde 枚举是 kebab-case：`untrusted` | `on-request` | `granular` | `never`；`onRequest` 会被拒绝为 unknown variant），**不用** `never`：缺少 `readOnlyHint` 的 MCP 工具会被 Codex 当成破坏性调用，`never` 会直接拒绝并报 `approval policy is never`。Mathscape 10 个只读工具在 `tools/list` 上带注解 `readOnlyHint: true`、`destructiveHint: false`、`openWorldHint: false`；`thread/start` 另设 `mcp_servers.mathscape.default_tools_approval_mode = "approve"` 与 `enabled_tools` 白名单。适配器接受白名单内的只读 MCP；shell、文件写入、额外权限、动态工具与打开外链一律拒绝。未能归类的审批最多等 60 秒，超时记「等待审批已超时」并拒绝。以上不得写入源 checkpoint。
 
 ### 4.4 引用与视图信号（S2，薄）[锁定可后置 / 本文记方向]
 
