@@ -35,7 +35,7 @@ Mathscape 是面向数学学习者和研究者的本地优先桌面应用。当�
 
 依赖从应用指向上述能力模块，领域层不反向依赖应用。前端通过 Tauri 命令操作，不能直接访问 SQLite 或任意主机文件。实际依赖以各 crate 的 Cargo.toml 为准。
 
-`mathscape-tool-lean`、`mathscape-validation`、`mathscape-fixture` 目前只有模块占位；校验实际位于 domain、orchestrator 和 store 中。CLI 也是 scaffold，尚非完整操作入口。
+`mathscape-tool-lean` 已具备第一切片的项目配置、受管 Lean/mathlib profile、环境探测、环境指纹和 argv-safe runner；并已实现受 fingerprint 约束的声明 exporter 与本地 Loogle adapter。探测在缺少 `lake-manifest.json` 时不会调用可能创建 manifest 的 `lake env`，以保持用户工程只读。当前开发 profile 固定 Lean 4.33.1 与 mathlib v4.33.1，profile metadata 和编译缓存位于 Mathscape 管理目录。`lean.check`、证据回执及 MCP 接入仍未实现。`mathscape-validation`、`mathscape-fixture` 仍是模块占位；校验实际位于 domain、orchestrator 和 store 中。CLI 也是 scaffold，尚非完整操作入口。
 
 ## 当前主流程
 
