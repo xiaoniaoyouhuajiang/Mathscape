@@ -10,7 +10,7 @@
 
 ## 1. 状态 / 范围 / 不做什么
 
-**一句话**：Phase2 给 Agent 开一个、且只开一个写入口 `propose_changes`——它只**暂存**提案（`staged` / `blocked`），从不写正式图；正式写入只发生在用户在 Desktop **显式接受**某个 change_set 时，经现有 plan/commit 管线与短锁协调器提交。另补 `user.ask`（追问）、`get_change_set`（回读）和 `scope=investigation`（暂存投影）。
+**一句话**：Phase2 给 Agent 开一个、且只开一个**正式提案写入口** `propose_changes`——它只**暂存**提案（`staged` / `blocked`），从不写正式图；正式写入只发生在用户在 Desktop **显式接受**某个 change_set 时，经现有 plan/commit 管线与短锁协调器提交。文件字节的受控暂存由独立的 `artifact.stage` 负责；它只写当前 round 的 Workspace staging，不创建正式 Artifact、提案对象或图关系。另补 `user.ask`（追问）、`get_change_set`（回读）和 `scope=investigation`（暂存投影）。
 
 本契约锁定 [锁定]：
 1. 并发口径、写入口、校验失败处理、接受、两种回滚、侧车推迟、实现顺序（§2 决策表 1–8）。

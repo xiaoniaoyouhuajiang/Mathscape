@@ -41,7 +41,7 @@ MCP **不是**桌面实时同步通道；桌面不通过 MCP 订阅进度。两�
 - 工具名 `<domain>.<verb>`，小写 snake：`workspace.search`、`material.read`、`material.grep`……（清单见 MCP 草案 §2、附录 A）。
 - 对 harness 注册时 server 名为 `mathscape`；harness 侧显示为 `mathscape.workspace.search` 等，避免与 LeanExplore / lean-lsp-mcp 冲突（MCP 草案 §4）。
 - `tools/list` 顺序固定、描述文本固定，不随任务增减（缓存前缀稳定，调研 §4.5 第 1 层）。未来新增能力只能追加工具，并在自己的契约中固定追加位置；不得重排或复用既有工具名。
-- 启动形态：`mathscape mcp --workspace <path> --round <token>`（MCP 草案 §0.1、§4）。`--round` 在 Phase1 可为占位，只读工具不校验。
+- 启动形态：`mathscape mcp --workspace <path> --round <token>`（MCP 草案 §0.1、§4）。只读工具仍把 `--round` 当 opaque 上下文；`artifact.stage` 要求非空 token，并把它绑定到暂存记录。
 
 ### 2.2 结果状态 `status` [锁定]
 每个工具的 structured result 顶层带 `status`：
@@ -182,6 +182,7 @@ AgentExecutor 最小接口（语义，非具体签名）：
    - 不做 OCR、墨迹 grep、WebP/SVG，不写 workspace。
 9. [x] `pdf.page_image`（只读，把 PDF 的一页或其归一化裁剪渲染为 PNG），`tools/list` 现为 8 个工具，追加在 `ink.page_image` 之后；`material.grep` 的描述同期改为 PDF id canonical 优先（扫描当前 lineage 全部快照的页并集，并集之外的页扫原生文本层，见 [`canonical-markdown.md`](canonical-markdown.md)），其余描述不变。
 10. [x] Lean 工具追加 `mathlib.search` 与 `lean.check`，`tools/list` 现为 10 个工具；两者沿用只读注解，契约见 [`lean-tool-contract.md`](lean-tool-contract.md)。
+11. [x] `artifact.stage` 追加为第 11 个工具；它是绑定 round 的受限 staging 写入口，使用非只读注解，不写 ArtifactPool、地图或 accepted 图，契约见 [`artifact-staging-contract.md`](artifact-staging-contract.md)。
    - 渲染器为纯 Rust 的 `hayro` 0.8（`default-features = false`，开启 `embed-fonts`/`embed-cmaps`），位于 `crates/mathscape-pdf/src/render.rs`；为此 workspace MSRV 提到 1.92。不调用 Marker，不写 markdown，不改 PDF，不写 workspace。
    - 输入：`artifact_id`（`application/pdf`）、`page`（**1-based**，与 `material.read` 的 `pdf_pages` 一致；`pdf.outline` 的 `pdf_page_index` 为 0-based，需 +1）、可选 `crop {left,top,right,bottom}`（相对显示后页面的归一化坐标，原点左上，0..1，须 left<right、top<bottom）。`format` 仅 `png`；`max_edge_px`/`max_bytes`/`include_image` 与 `ink.page_image` 同范围、同默认、同降采样（×0.75 至多 3 次，诊断 `image_downscaled`；仍超出则 `truncated` + `image_too_large`，不返回图像）。
    - 输出：`page`、`page_count`、`page_size {width,height,unit:"pt",rotation}`（应用 `/Rotate` 后的显示尺寸）、`crop`、`image {format,width,height,scale,bytes,sha256}`、`renderer: "hayro-0.8"`。返回图像时为文本元数据 + `image` 块，不带 `structuredContent`；`include_image: false` 只给元数据（`bytes`/`sha256` 为 `null`）。

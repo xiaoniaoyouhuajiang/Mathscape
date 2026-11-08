@@ -1,8 +1,9 @@
 //! `mathscape` command-line entry point.
 //!
 //! Subcommands:
-//! - `mathscape mcp --workspace <path> [--round <token>]`: read-only MCP
-//!   server on stdio (Phase1). `--round` is an accepted placeholder.
+//! - `mathscape mcp --workspace <path> [--round <token>]`: MCP server on
+//!   stdio. The default catalog is read-only and has a round-bound staging
+//!   exception.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -14,7 +15,7 @@ use mathscape_mcp::{McpServer, McpWorkspace};
 /// Help text. The tool list comes from [`TOOL_NAMES`] so it cannot drift.
 fn usage() -> String {
     format!(
-        "用法：\n  mathscape mcp --workspace <path> [--round <token>]\n\n子命令：\n  mcp    以 stdio 运行只读 MCP 服务（{} 个工具：{}）",
+        "用法：\n  mathscape mcp --workspace <path> [--round <token>]\n\n子命令：\n  mcp    以 stdio 运行 Mathscape MCP 服务（{} 个工具：{}）",
         TOOL_NAMES.len(),
         TOOL_NAMES.join("、")
     )
@@ -141,7 +142,7 @@ mod tests {
     #[test]
     fn help_lists_every_mcp_tool() {
         let text = usage();
-        assert!(text.contains("10 个工具"), "{text}");
+        assert!(text.contains("11 个工具"), "{text}");
         for name in TOOL_NAMES {
             assert!(text.contains(name), "help is missing {name}: {text}");
         }

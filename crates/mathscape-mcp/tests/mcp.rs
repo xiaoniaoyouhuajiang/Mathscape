@@ -467,7 +467,8 @@ fn tools_list_order_and_text_are_fixed() {
             "ink.page_image",
             "pdf.page_image",
             "mathlib.search",
-            "lean.check"
+            "lean.check",
+            "artifact.stage"
         ]
     );
     for tool in tools {
@@ -484,6 +485,17 @@ fn tools_list_order_and_text_are_fixed() {
                     "openWorldHint": false,
                 }),
                 "material.read may run a bounded ensure and must say so"
+            );
+        } else if tool["name"] == "artifact.stage" {
+            assert_eq!(
+                tool["annotations"],
+                json!({
+                    "readOnlyHint": false,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false,
+                }),
+                "artifact.stage is a bounded write-like staging exception"
             );
         } else {
             assert_eq!(
@@ -574,6 +586,20 @@ fn tools_list_order_and_text_are_fixed() {
             .unwrap()
             .contains("receipt")
     );
+    assert_eq!(tools[10]["name"], "artifact.stage");
+    assert_eq!(
+        tools[10]["annotations"],
+        json!({
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+        })
+    );
+    assert_eq!(
+        tools[10]["inputSchema"]["required"],
+        json!(["request_id", "media_type", "name", "content"])
+    );
     let second = request(&f.server, 2, "tools/list", json!({}));
     assert_eq!(
         first["result"], second["result"],
@@ -610,6 +636,121 @@ fn lean_tools_are_read_only_and_report_missing_managed_profiles() {
     );
     assert!(is_error);
     assert_eq!(result["error"]["code"], "invalid_arg");
+}
+
+#[test]
+fn artifact_stage_requires_round_and_does_not_become_a_workspace_artifact() {
+    let f = fixture();
+    let (result, is_error) = call(
+        &f.server,
+        "artifact.stage",
+        json!({
+            "request_id": "stage-1",
+            "media_type": "text/markdown",
+            "name": "proof.md",
+            "content": "# Proof\n\nThis is a staged draft."
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["stage"]["status"], "staged");
+    let staged_id = result["stage"]["staged_artifact_id"].as_str().unwrap();
+    assert!(staged_id.starts_with("mathscape:staged-artifact/"));
+    assert_eq!(artifact_count(&f.root), 6);
+
+    let (retry, is_error) = call(
+        &f.server,
+        "artifact.stage",
+        json!({
+            "request_id": "stage-1",
+            "media_type": "text/markdown",
+            "name": "proof.md",
+            "content": "# Proof\n\nThis is a staged draft."
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(retry["stage"]["staged_artifact_id"], staged_id);
+
+    let (conflict, is_error) = call(
+        &f.server,
+        "artifact.stage",
+        json!({
+            "request_id": "stage-1",
+            "media_type": "text/markdown",
+            "name": "proof.md",
+            "content": "changed"
+        }),
+    );
+    assert!(is_error);
+    assert_eq!(conflict["error"]["code"], "invalid_arg");
+    assert_eq!(
+        conflict["error"]["details"]["reason"],
+        "idempotency_conflict"
+    );
+}
+
+#[test]
+fn artifact_stage_requires_round_and_blocks_unverified_validation_refs() {
+    let f = fixture();
+    let no_round = McpServer::new(McpWorkspace::open(&f.root).unwrap());
+    let (result, is_error) = call(
+        &no_round,
+        "artifact.stage",
+        json!({
+            "request_id": "without-round",
+            "media_type": "text/plain",
+            "name": "draft.txt",
+            "content": "draft"
+        }),
+    );
+    assert!(is_error);
+    assert_eq!(result["error"]["code"], "forbidden");
+    assert_eq!(result["error"]["details"]["reason"], "round_not_bound");
+
+    let (result, is_error) = call(
+        &f.server,
+        "artifact.stage",
+        json!({
+            "request_id": "unsupported-validator",
+            "media_type": "text/markdown",
+            "name": "proof.md",
+            "content": "# Draft",
+            "validation_refs": [{
+                "validator": "unknown.validator",
+                "receipt_id": "receipt-1"
+            }]
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["stage"]["status"], "blocked");
+    assert_eq!(result["stage"]["validation"][0]["state"], "not_run");
+    assert_eq!(
+        result["stage"]["validation"][0]["diagnostics"][0]["code"],
+        "validator_not_available"
+    );
+
+    let (result, is_error) = call(
+        &f.server,
+        "artifact.stage",
+        json!({
+            "request_id": "lean-validator-on-markdown",
+            "media_type": "text/markdown",
+            "name": "proof.md",
+            "content": "# Draft",
+            "validation_refs": [{
+                "validator": "lean.check",
+                "receipt_id": "receipt-1",
+                "profile_id": "profile-1"
+            }]
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(result["stage"]["status"], "blocked");
+    assert_eq!(
+        result["stage"]["validation"][0]["diagnostics"][0]["code"],
+        "validator_media_type_mismatch"
+    );
 }
 
 #[test]

@@ -174,7 +174,7 @@ fn initialize(params: &Value) -> Value {
     });
     if let Some(instructions) = result["instructions"].as_str() {
         result["instructions"] = json!(format!(
-            "{instructions} R8 for Lean, call mathlib.search with a profile_id to find local mathlib candidates, then call lean.check with the same profile_id and a complete source_text; the response includes the profile fingerprint and an immutable receipt. Lean results are profile-local and do not contact the network."
+            "{instructions} R8 for Lean, call mathlib.search with a profile_id to find local mathlib candidates, then call lean.check with the same profile_id and a complete source_text; the response includes the profile fingerprint and an immutable receipt. Lean results are profile-local and do not contact the network. R9 artifact.stage is the bounded round-local file staging exception: it requires a round token, accepts only text content, and never writes the ArtifactPool or map."
         ));
     }
     result

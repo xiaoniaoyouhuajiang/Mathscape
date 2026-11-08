@@ -44,8 +44,8 @@ impl McpWorkspace {
         })
     }
 
-    /// `--round <token>`: Phase1 keeps it as an opaque placeholder; read-only
-    /// tools do not validate it.
+    /// `--round <token>`: read-only tools keep it as an opaque placeholder;
+    /// write-like staging tools require a non-empty bound token.
     pub fn with_round(mut self, round: Option<String>) -> Self {
         self.round = round;
         self
