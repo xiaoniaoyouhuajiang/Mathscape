@@ -240,7 +240,7 @@ MCP 输入不接受 `loogle_executable`、`index_file`、shell 参数或任意�
 
 规则：
 
-1. `source_artifact_id` 必须指向由 Mathscape 管理的不可变源文件 artifact；仅保存 hash 而不保存源文件不足以复现。
+1. `source_artifact_id` 使用 Mathscape 的 `mathscape:artifact/sha256/<digest>` stable id，并必须指向由 Mathscape 管理的不可变源文件 artifact；当前工具切片先把源字节保存在 profile-local receipt store，后续接入 ArtifactPool 时沿用同一 id。
 2. `request_digest` 由契约版本、完整源文件 hash、profile fingerprint 和有效 runner 选项计算；它用于比较重复请求，`receipt_id` 仍是一次具体回执的身份。
 3. `checked` 只表示 Lean 检查通过。回执不得自动写入 `TrustRecord` 的 accepted/canonical 状态。
 4. 旧 profile、旧 source artifact 和旧回执不得被升级流程覆盖；新环境产生新回执。

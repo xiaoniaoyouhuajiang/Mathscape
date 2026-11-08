@@ -1,6 +1,8 @@
 use std::{env, fs, path::PathBuf, process::ExitCode};
 
-use mathscape_tool_lean::{LeanCancellation, LeanCheckRequest, LeanChecker, LeanProfileStore};
+use mathscape_tool_lean::{
+    LeanCancellation, LeanCheckRequest, LeanChecker, LeanProfileStore, LeanReceiptStore,
+};
 
 fn main() -> ExitCode {
     match run() {
@@ -38,7 +40,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let store = LeanProfileStore::new(PathBuf::from(store_root))?;
     let profile = store.open(&profile_id)?;
     let result = LeanChecker::new().check(&profile, &request, &LeanCancellation::new())?;
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    let receipt = LeanReceiptStore::for_profile(&profile)?.record(&request, &result)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "check": result,
+            "receipt": receipt,
+        }))?
+    );
     Ok(())
 }
 

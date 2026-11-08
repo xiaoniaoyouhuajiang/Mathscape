@@ -13,6 +13,7 @@ mod fingerprint;
 mod loogle;
 mod probe;
 mod profile;
+mod receipt;
 mod runner;
 
 pub use check::{
@@ -29,7 +30,7 @@ pub use config::{
 pub use declaration::{DECLARATION_SCHEMA_VERSION, DeclarationCandidate, DeclarationKind};
 pub use error::{
     LeanCheckError, LeanConfigError, LeanExportError, LeanFingerprintError, LeanLoogleError,
-    LeanProbeError, LeanProfileError, LeanRunnerError,
+    LeanProbeError, LeanProfileError, LeanReceiptError, LeanRunnerError,
 };
 pub use export::{DeclarationExportRequest, DeclarationExportResult, DeclarationExporter};
 pub use fingerprint::{
@@ -42,6 +43,10 @@ pub use profile::{
     DEFAULT_LEAN_TOOLCHAIN, DEFAULT_MATHLIB_REFERENCE, DEFAULT_PROFILE_ID, LEAN_PROFILE_ROOT_ENV,
     LEAN_PROFILE_SCHEMA_VERSION, LeanProfileState, LeanProfileStore, ManagedLeanProfile,
     ManagedLeanProfileMetadata, ManagedLeanProfileSpec,
+};
+pub use receipt::{
+    LEAN_RECEIPT_SCHEMA_VERSION, LEAN_RUNNER_SCHEMA_VERSION, LeanCheckReceipt, LeanCheckService,
+    LeanReceiptStore, LeanRunnerReceipt,
 };
 pub use runner::{
     CapturedOutput, LeanCancellation, LeanCommand, LeanRun, LeanRunStatus, LeanRunner,

@@ -244,6 +244,52 @@ pub enum LeanCheckError {
     Runner(#[from] LeanRunnerError),
 }
 
+/// Failure while persisting or validating a Lean check receipt.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum LeanReceiptError {
+    #[error("Lean receipt root must be absolute: {0:?}")]
+    RelativeRoot(PathBuf),
+    #[error("invalid Lean receipt id {0:?}")]
+    InvalidReceiptId(String),
+    #[error("invalid Lean source artifact id {0:?}")]
+    InvalidSourceArtifactId(String),
+    #[error("Lean receipt capability unavailable: {reason}")]
+    CapabilityUnavailable { reason: String },
+    #[error("Lean check result is inconsistent: {reason}")]
+    InconsistentResult { reason: &'static str },
+    #[error("Lean receipt {receipt_id:?} was not found")]
+    NotFound { receipt_id: String },
+    #[error("failed to access Lean receipt path {path:?}: {source}")]
+    Access {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to read Lean receipt path {path:?}: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to write Lean receipt path {path:?}: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("invalid Lean receipt JSON at {path:?}: {source}")]
+    InvalidJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("Lean receipt integrity check failed at {path:?}: {reason}")]
+    Integrity { path: PathBuf, reason: String },
+    #[error(transparent)]
+    Check(#[from] LeanCheckError),
+}
+
 /// Failure while querying a local Loogle binary.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
