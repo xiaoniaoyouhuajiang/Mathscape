@@ -35,7 +35,7 @@ Mathscape 是面向数学学习者和研究者的本地优先桌面应用。当�
 
 依赖从应用指向上述能力模块，领域层不反向依赖应用。前端通过 Tauri 命令操作，不能直接访问 SQLite 或任意主机文件。实际依赖以各 crate 的 Cargo.toml 为准。
 
-`mathscape-tool-lean` 已具备第一切片的项目配置、受管 Lean/mathlib profile、环境探测、环境指纹和 argv-safe runner；并已实现受 fingerprint 约束的声明 exporter 与本地 Loogle adapter。探测在缺少 `lake-manifest.json` 时不会调用可能创建 manifest 的 `lake env`，以保持用户工程只读。当前开发 profile 固定 Lean 4.33.1 与 mathlib v4.33.1，profile metadata 和编译缓存位于 Mathscape 管理目录。`lean.check`、证据回执及 MCP 接入仍未实现。`mathscape-validation`、`mathscape-fixture` 仍是模块占位；校验实际位于 domain、orchestrator 和 store 中。CLI 也是 scaffold，尚非完整操作入口。
+`mathscape-tool-lean` 已具备第一切片的项目配置、受管 Lean/mathlib profile、环境探测、环境指纹和 argv-safe runner；并已实现受 fingerprint 约束的声明 exporter、本地 Loogle adapter、隔离 scratch 上的 `lean.check` 核心和 profile-local 的不可变验收回执。回执中的源文件使用现有 `mathscape:artifact/sha256/<digest>` stable id，当前仍保存在 profile-local receipt store，尚未登记到 Workspace 的 ArtifactPool。`mathscape-mcp` 已追加 `mathlib.search`、`lean.check` 和绑定 round 的 `artifact.stage`；前两者是只读工具，`artifact.stage` 只写 Workspace staging，不写 ArtifactPool、地图或 accepted 图。通用文件暂存契约见 [`artifact-staging-contract.md`](artifact-staging-contract.md)。探测在缺少 `lake-manifest.json` 时不会调用可能创建 manifest 的 `lake env`，以保持用户工程只读。当前开发 profile 固定 Lean 4.33.1 与 mathlib v4.33.1，profile metadata、编译缓存和 Lean 回执位于 Mathscape 管理目录。Lean 工具契约已冻结于 [`lean-tool-contract.md`](lean-tool-contract.md)。`mathscape-validation`、`mathscape-fixture` 仍是模块占位；校验实际位于 domain、orchestrator 和 store 中。CLI 仍是基础操作入口，尚未接入完整 workflow。
 
 ## 当前主流程
 

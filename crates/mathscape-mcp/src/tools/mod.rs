@@ -7,11 +7,13 @@ mod ensure;
 mod graph;
 mod grep;
 mod ink;
+mod lean;
 mod material;
 mod outline;
 mod pdf_image;
 mod read;
 mod search;
+mod stage;
 
 use mathscape_agent::{ToolError, ToolErrorCode};
 use serde::de::DeserializeOwned;
@@ -43,9 +45,12 @@ pub const GRAPH_GET: &str = "graph.get";
 pub const GRAPH_NEIGHBORHOOD: &str = "graph.neighborhood";
 pub const INK_PAGE_IMAGE: &str = "ink.page_image";
 pub const PDF_PAGE_IMAGE: &str = "pdf.page_image";
+pub const MATHLIB_SEARCH: &str = "mathlib.search";
+pub const LEAN_CHECK: &str = "lean.check";
+pub const ARTIFACT_STAGE: &str = "artifact.stage";
 
 /// Stable `tools/list` order. New tools are appended; existing entries stay put.
-pub const TOOL_NAMES: [&str; 8] = [
+pub const TOOL_NAMES: [&str; 11] = [
     WORKSPACE_SEARCH,
     MATERIAL_READ,
     MATERIAL_GREP,
@@ -54,6 +59,9 @@ pub const TOOL_NAMES: [&str; 8] = [
     GRAPH_NEIGHBORHOOD,
     INK_PAGE_IMAGE,
     PDF_PAGE_IMAGE,
+    MATHLIB_SEARCH,
+    LEAN_CHECK,
+    ARTIFACT_STAGE,
 ];
 
 /// MCP `annotations` for the read-only tools.
@@ -61,8 +69,9 @@ pub const TOOL_NAMES: [&str; 8] = [
 /// Codex treats a missing `readOnlyHint` as destructive (`destructiveHint`
 /// defaults to true). Under `approvalPolicy: never` that becomes
 /// "MCP tool call requires approval, but approval policy is never" and the
-/// call never runs. Every tool in [`TOOL_NAMES`] except `material.read` is
-/// read-only; see [`material_read_annotations`].
+/// call never runs. The catalog is read-only except for the bounded
+/// `material.read` ensure and `artifact.stage` staging exception; see their
+/// specific annotations below.
 pub fn read_only_annotations() -> Value {
     json!({
         "readOnlyHint": true,
@@ -85,11 +94,15 @@ pub fn material_read_annotations() -> Value {
     })
 }
 
+pub fn artifact_stage_annotations() -> Value {
+    stage::annotations()
+}
+
 fn with_annotations(mut definition: Value) -> Value {
-    let annotations = if definition.get("name").and_then(Value::as_str) == Some(MATERIAL_READ) {
-        material_read_annotations()
-    } else {
-        read_only_annotations()
+    let annotations = match definition.get("name").and_then(Value::as_str) {
+        Some(MATERIAL_READ) => material_read_annotations(),
+        Some(ARTIFACT_STAGE) => artifact_stage_annotations(),
+        _ => read_only_annotations(),
     };
     if let Some(object) = definition.as_object_mut() {
         object.insert("annotations".into(), annotations);
@@ -108,6 +121,9 @@ pub fn tool_definitions() -> Vec<Value> {
         graph::neighborhood_definition(),
         ink::definition(),
         pdf_image::definition(),
+        lean::search_definition(),
+        lean::check_definition(),
+        stage::definition(),
     ]
     .into_iter()
     .map(with_annotations)
@@ -150,6 +166,9 @@ pub fn call(
         GRAPH_NEIGHBORHOOD => structured(graph::call_neighborhood(workspace, arguments)),
         INK_PAGE_IMAGE => Some(ink::call(workspace, arguments)),
         PDF_PAGE_IMAGE => Some(pdf_image::call(workspace, arguments)),
+        MATHLIB_SEARCH => structured(lean::search(workspace, arguments)),
+        LEAN_CHECK => structured(lean::check(workspace, arguments)),
+        ARTIFACT_STAGE => structured(stage::call(workspace, arguments)),
         _ => None,
     }
 }

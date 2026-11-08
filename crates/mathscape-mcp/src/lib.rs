@@ -1,4 +1,4 @@
-//! Read-only Mathscape MCP server (Phase1 vertical slice).
+//! Mathscape MCP server (Phase1 vertical slice plus bounded staging).
 //!
 //! `mathscape mcp --workspace <path> [--round <token>]` speaks a minimal
 //! stdio JSON-RPC 2.0 subset of MCP: `initialize`, `notifications/*`,
@@ -27,6 +27,12 @@
 //!   normalized crop of it to a PNG with the pure-Rust rasterizer behind
 //!   [`mathscape_pdf::PdfEngine::render_page`], with the same image result
 //!   shape. Read-only: no Marker, no markdown write, no PDF mutation.
+//! - `mathlib.search` searches the managed local Loogle index and returns
+//!   fingerprinted declaration candidates;
+//! - `lean.check` checks a complete Lean source file and persists a profile-local
+//!   immutable verification receipt.
+//! - `artifact.stage` stores one round-bound text snapshot in the isolated
+//!   staging area; it does not promote the file to the ArtifactPool or map.
 //!
 //! Wire envelope follows `docs/phase0-contract.md` §2 and reuses the DTOs of
 //! `mathscape-agent` ([`mathscape_agent::ToolStatus`], [`mathscape_agent::Locator`],

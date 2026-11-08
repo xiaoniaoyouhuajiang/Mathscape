@@ -109,6 +109,14 @@ impl ManagedLeanProfile {
     pub fn state(&self) -> LeanProfileState {
         self.metadata.state
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_parts(
+        metadata: ManagedLeanProfileMetadata,
+        probe: LeanEnvironmentProbe,
+    ) -> Self {
+        Self { metadata, probe }
+    }
 }
 
 /// Filesystem root for profiles managed by Mathscape. The store never runs
