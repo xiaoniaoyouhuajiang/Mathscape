@@ -40,7 +40,7 @@ MCP **不是**桌面实时同步通道；桌面不通过 MCP 订阅进度。两�
 ### 2.1 命名 [锁定]
 - 工具名 `<domain>.<verb>`，小写 snake：`workspace.search`、`material.read`、`material.grep`……（清单见 MCP 草案 §2、附录 A）。
 - 对 harness 注册时 server 名为 `mathscape`；harness 侧显示为 `mathscape.workspace.search` 等，避免与 LeanExplore / lean-lsp-mcp 冲突（MCP 草案 §4）。
-- `tools/list` 顺序固定、描述文本固定，不随任务增减（缓存前缀稳定，调研 §4.5 第 1 层）。
+- `tools/list` 顺序固定、描述文本固定，不随任务增减（缓存前缀稳定，调研 §4.5 第 1 层）。未来新增能力只能追加工具，并在自己的契约中固定追加位置；不得重排或复用既有工具名。
 - 启动形态：`mathscape mcp --workspace <path> --round <token>`（MCP 草案 §0.1、§4）。`--round` 在 Phase1 可为占位，只读工具不校验。
 
 ### 2.2 结果状态 `status` [锁定]

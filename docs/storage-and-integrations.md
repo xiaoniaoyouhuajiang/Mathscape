@@ -60,6 +60,6 @@ Profile 保存凭据引用；Desktop 使用系统钥匙串，API key 不进入 S
 
 Prompt、manifest 与 Schema 有独立版本和指纹；模型配置和生成参数也影响可重放性。旧 prompt 包因回放、比较和测试保留，不能因主文档精简而删除。
 
-Lean 当前已完成受管 Lean/mathlib profile、环境配置、Lean/Lake 探测、环境指纹、受限进程 runner、声明 exporter 和本地 Loogle adapter；`lean.check`、证书收集、MCP 注册及与 LLM 联动的应用实现仍未完成。未来形式有效性、来源翻译忠实性和人工审核须独立记录，不能把任一工具结果当作全局数学认证。
+Lean 当前已完成受管 Lean/mathlib profile、环境配置、Lean/Lake 探测、环境指纹、受限进程 runner、声明 exporter、本地 Loogle adapter 和隔离 scratch 上的 `lean.check` 核心；`mathlib.search` / `lean.check` 的工具契约与回执形状已冻结于 [`lean-tool-contract.md`](lean-tool-contract.md)，验证回执持久化、MCP 注册及与 LLM 联动的应用实现仍未完成。未来形式有效性、来源翻译忠实性和人工审核须独立记录，不能把任一工具结果当作全局数学认证。
 
 代码：[LLM](../crates/mathscape-llm/src/lib.rs)、[设置与凭据](../apps/mathscape-desktop/src/llm_settings.rs)、[版本化任务](../prompts/README.md)、[Lean 基础切片](../crates/mathscape-tool-lean/src/lib.rs)。

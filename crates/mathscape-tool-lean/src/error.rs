@@ -211,6 +211,39 @@ pub enum LeanExportError {
     Runner(#[from] LeanRunnerError),
 }
 
+/// Failure while checking a complete Lean source file in a managed profile.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum LeanCheckError {
+    #[error("invalid check option {field}: {reason}")]
+    InvalidOption {
+        field: &'static str,
+        reason: &'static str,
+    },
+    #[error("invalid Lean source: {reason}")]
+    InvalidSource { reason: &'static str },
+    #[error("Lean check capability unavailable: {reason}")]
+    CapabilityUnavailable { reason: String },
+    #[error("Lean profile fingerprint mismatch: expected {expected:?}, actual {actual:?}")]
+    ProfileFingerprintMismatch { expected: String, actual: String },
+    #[error("failed to access Lean check path {path:?}: {source}")]
+    Access {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to clean Lean check path {path:?}: {source}")]
+    Cleanup {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("Lean check output exceeded the capture limit")]
+    OutputTruncated,
+    #[error(transparent)]
+    Runner(#[from] LeanRunnerError),
+}
+
 /// Failure while querying a local Loogle binary.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
