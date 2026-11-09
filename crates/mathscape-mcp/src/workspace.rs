@@ -24,6 +24,7 @@ pub enum WorkspaceOpenError {
 pub struct McpWorkspace {
     root: WorkspaceRoot,
     round: Option<String>,
+    investigation: Option<String>,
     capability_runner: Box<dyn CommandRunner>,
     ensure_policy: EnsurePolicy,
     lean_profile_store: Option<LeanProfileStore>,
@@ -38,6 +39,9 @@ impl McpWorkspace {
         Ok(Self {
             root,
             round: None,
+            investigation: std::env::var("MATHSCAPE_INVESTIGATION_ID")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
             capability_runner: Box::new(SystemCommandRunner::default()),
             ensure_policy: EnsurePolicy::default(),
             lean_profile_store: None,
@@ -48,6 +52,14 @@ impl McpWorkspace {
     /// write-like staging tools require a non-empty bound token.
     pub fn with_round(mut self, round: Option<String>) -> Self {
         self.round = round;
+        self
+    }
+
+    /// Binds a round to a durable investigation identity. The round token is
+    /// still the one-shot execution authority; multiple rounds may share this
+    /// investigation when a dialogue thread continues.
+    pub fn with_investigation(mut self, investigation: Option<String>) -> Self {
+        self.investigation = investigation.filter(|value| !value.trim().is_empty());
         self
     }
 
@@ -85,6 +97,10 @@ impl McpWorkspace {
 
     pub fn round(&self) -> Option<&str> {
         self.round.as_deref()
+    }
+
+    pub fn investigation(&self) -> Option<&str> {
+        self.investigation.as_deref()
     }
 
     pub(crate) fn capability_runner(&self) -> &dyn CommandRunner {

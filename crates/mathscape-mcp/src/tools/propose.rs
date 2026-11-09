@@ -9,11 +9,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::Utc;
 use mathscape_agent::{ToolError, ToolErrorCode, ToolStatus};
 use mathscape_domain::{
-    ActorRef, SourceRelationChanges, SourceRelationDraft, SourceUnitChanges, SourceUnitDraft,
-    StableId, UserChangeOperation, UserChangeRequest,
+    ActorRef, ByteRange, ContentHash, LayoutKind, MarkdownLocator, SourceRelationChanges,
+    SourceRelationDraft, SourceSpanDraft, SourceUnitChanges, SourceUnitDraft, SpanGranularity,
+    StableId, TextByteRange, UserChangeOperation, UserChangeRequest,
 };
 use mathscape_orchestrator::map_edit::plan_map_change;
-use mathscape_store_sqlite::ProposedChangeRecord;
+use mathscape_orchestrator::{anchor_markdown, locator_matches, markdown_span_id, valid_temp_id};
+use mathscape_store_sqlite::{ChangeSetDependency, ProposedChangeRecord};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -80,6 +82,22 @@ struct ProposedObject {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+struct SourceSpanInput {
+    artifact_id: String,
+    md_byte_range: ByteRangeInput,
+    granularity: SpanGranularity,
+    quote: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ByteRangeInput {
+    start: u64,
+    end: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct ProposedRelation {
     local_ref: String,
     kind: String,
@@ -109,10 +127,19 @@ struct Diagnostic {
     local_ref: Option<String>,
 }
 
+impl Diagnostic {
+    fn is_error(&self) -> bool {
+        !matches!(
+            self.code.as_str(),
+            "bare_local_ref_deprecated" | "span_already_exists" | "span_granularity_ignored"
+        )
+    }
+}
+
 pub(super) fn definition() -> Value {
     json!({
         "name": PROPOSE_CHANGES,
-        "description": "Validate and persist a Phase2-0 source-layer proposal. It supports source_unit/source_relation create/edit only, returns staged or blocked, and never changes the accepted map. Requires a bound round token.",
+        "description": "Validate and persist a Phase2 source-layer proposal. It supports immutable source_span creation plus source_unit/source_relation create/edit, returns staged or blocked, and never changes the accepted map. Requires a bound round token.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -185,7 +212,12 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
     let args: ProposeArgs = super::parse_args(arguments)?;
     let round = required_round(workspace)?;
     validate_basic_args(&args)?;
-    let investigation_id = round.to_owned();
+    // A round is one execution authorization. The adapter may bind several
+    // rounds from the same dialogue thread to one durable investigation.
+    // Direct CLI callers without that binding retain the legacy round-scoped
+    // behavior for compatibility, but cannot accidentally expose it as a
+    // cross-investigation projection.
+    let investigation_id = workspace.investigation().unwrap_or(&round).to_owned();
     let proposal_fingerprint = proposal_fingerprint(&args)?;
     let request_fingerprint = request_fingerprint(&args)?;
     let mut store = workspace.store()?;
@@ -207,15 +239,26 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
     let (change_set_id, version, supersedes_version) =
         resolve_version(&store, &investigation_id, &args)?;
     let ids = allocate_ids(&change_set_id, &args)?;
+    let (dependencies, dependency_diagnostics) = resolve_staged_dependencies(
+        &store,
+        &investigation_id,
+        &change_set_id,
+        version,
+        &args,
+        &ids,
+    );
     let internal_request_id = request_id_for_planner(&round, &args.request_id);
-    let actor = ActorRef::parse("agent:custom").map_err(internal)?;
+    let actor = ActorRef::parse(agent_actor(workspace)).map_err(internal)?;
     let snapshot = store.map_edit_snapshot().map_err(internal)?;
     let base_commit = snapshot.base_commit.clone();
     let mut diagnostics = validate_refs(&args.existing_refs);
     diagnostics.extend(compile_diagnostics(&args, &ids));
+    diagnostics.extend(dependency_diagnostics);
+    let (span_drafts, span_diagnostics) = materialize_span_drafts(workspace, &args, &ids);
+    diagnostics.extend(span_diagnostics);
 
-    let operations = if diagnostics.is_empty() {
-        match compile_operations(&args, &ids) {
+    let operations = if !has_errors(&diagnostics) {
+        match compile_operations(&args, &ids, &span_drafts) {
             Ok(operations) => operations,
             Err(error) => {
                 diagnostics.push(Diagnostic {
@@ -229,13 +272,31 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
     } else {
         Vec::new()
     };
+    let compiled_operations = serde_json::to_value(&operations).map_err(internal)?;
 
-    if diagnostics.is_empty() {
+    if !has_errors(&diagnostics) {
+        let mut planned_operations = Vec::new();
+        for dependency in &dependencies {
+            if let Ok(Some((record, _))) = store.proposed_change(
+                &investigation_id,
+                &dependency.depends_on_change_set_id,
+                Some(dependency.depends_on_version),
+            ) && let Ok(mut operations) = serde_json::from_value::<Vec<UserChangeOperation>>(
+                record
+                    .result
+                    .get("compiled_operations")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+            ) {
+                planned_operations.append(&mut operations);
+            }
+        }
+        planned_operations.extend(operations.clone());
         let request = UserChangeRequest {
             request_id: internal_request_id,
             base_commit: base_commit.clone(),
             reason: args.rationale.clone(),
-            operations,
+            operations: planned_operations,
         };
         let planned = plan_map_change(&snapshot, &request, &actor);
         diagnostics.extend(
@@ -272,7 +333,7 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
             .map(|item| json!({ "kind": "unresolved", "value": item })),
     );
     debts.extend(agent_debts);
-    let status = if diagnostics.is_empty() {
+    let status = if !has_errors(&diagnostics) {
         ToolStatus::Staged
     } else {
         ToolStatus::Blocked
@@ -283,15 +344,21 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
         "version": version,
         "proposal_fingerprint": proposal_fingerprint,
         "base_commit": base_commit,
-        "staged_ids": if diagnostics.is_empty() { json!(ids) } else { Value::Null },
+        "staged_ids": if !has_errors(&diagnostics) { json!(ids) } else { Value::Null },
         "debts": debts,
         "diagnostics": diagnostics.iter().map(diagnostic_value).collect::<Vec<_>>(),
+        "compiled_operations": compiled_operations,
         "supersedes": args.supersedes.as_ref().map(|s| json!({
             "change_set_id": s.change_set_id,
             "version": s.version
-        }))
+        })),
+        "dependencies": dependencies.iter().map(|dependency| json!({
+            "change_set_id": dependency.depends_on_change_set_id,
+            "version": dependency.depends_on_version,
+            "referenced_ids": dependency.referenced_ids
+        })).collect::<Vec<_>>()
     });
-    let state = if diagnostics.is_empty() {
+    let state = if !has_errors(&diagnostics) {
         "staged"
     } else {
         "blocked"
@@ -309,6 +376,7 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
         state: state.to_owned(),
         base_commit,
         created_at: Utc::now().to_rfc3339(),
+        proposed_by: agent_actor(workspace).to_owned(),
     };
     store
         .insert_proposed_change(&record, supersedes_version)
@@ -320,12 +388,37 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
                     .with_details(json!({ "reason": "supersede_conflict" }))
             }
         })?;
+    store
+        .insert_change_set_dependencies(&dependencies)
+        .map_err(internal)?;
+    if let Some(old_version) = supersedes_version {
+        store
+            .retarget_dependencies(
+                &investigation_id,
+                &record.change_set_id,
+                old_version,
+                version,
+            )
+            .map_err(internal)?;
+    }
+    if state == "blocked" {
+        invalidate_dependents(
+            &mut store,
+            &investigation_id,
+            &record.change_set_id,
+            version,
+        )
+        .map_err(internal)?;
+    }
     Ok(result)
 }
 
 pub(super) fn get(workspace: &McpWorkspace, arguments: Value) -> Result<Value, ToolError> {
     let args: GetArgs = super::parse_args(arguments)?;
-    let Some(round) = workspace.round().filter(|value| !value.trim().is_empty()) else {
+    let Some(investigation) = workspace
+        .investigation()
+        .or_else(|| workspace.round().filter(|value| !value.trim().is_empty()))
+    else {
         return Ok(json!({
             "status": ToolStatus::NotFound,
             "change_set_id": args.change_set_id,
@@ -334,7 +427,7 @@ pub(super) fn get(workspace: &McpWorkspace, arguments: Value) -> Result<Value, T
     };
     let store = workspace.store()?;
     let Some((record, versions)) = store
-        .proposed_change(round, &args.change_set_id, args.version)
+        .proposed_change(investigation, &args.change_set_id, args.version)
         .map_err(internal)?
     else {
         return Ok(json!({
@@ -358,13 +451,13 @@ pub(super) fn get(workspace: &McpWorkspace, arguments: Value) -> Result<Value, T
             .get("proposal_fingerprint")
             .cloned()
             .unwrap_or(Value::Null),
-        "proposed_by": "agent:custom",
+        "proposed_by": record.proposed_by,
         "round_id": record.round_id,
         "proposal": record.proposal,
         "staged_ids": record.result.get("staged_ids").cloned().unwrap_or(Value::Null),
         "debts": record.result.get("debts").cloned().unwrap_or_else(|| json!([])),
         "diagnostics": record.result.get("diagnostics").cloned().unwrap_or_else(|| json!([])),
-        "decision": Value::Null
+        "decision": record.result.get("decision").cloned().unwrap_or(Value::Null)
     }))
 }
 
@@ -388,6 +481,13 @@ fn required_round(workspace: &McpWorkspace) -> Result<String, ToolError> {
             )
             .with_details(json!({ "reason": "round_not_bound" }))
         })
+}
+
+fn agent_actor(_workspace: &McpWorkspace) -> &'static str {
+    // The current Codex adapter is the only production writer. Keep the
+    // value server-authored even if a future adapter adds a backend label;
+    // the Agent cannot provide this field in tool input.
+    "agent:codex"
 }
 
 fn validate_basic_args(args: &ProposeArgs) -> Result<(), ToolError> {
@@ -451,10 +551,11 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
     let mut refs = BTreeSet::new();
     for object in &args.proposed_objects {
         check_local_ref(&mut result, &mut refs, &object.local_ref);
-        if object.kind != "source_unit" {
+        if !matches!(object.kind.as_str(), "source_unit" | "source_span") {
             result.push(Diagnostic {
                 code: "kind_not_supported".to_owned(),
-                message: "Phase2-0 only supports source_unit and source_relation".to_owned(),
+                message: "Phase2-0 only supports source_unit, source_span and source_relation"
+                    .to_owned(),
                 local_ref: Some(object.local_ref.clone()),
             });
         }
@@ -478,6 +579,22 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                     local_ref: Some(object.local_ref.clone()),
                 }),
             _ => {}
+        }
+        if object.kind == "source_span" {
+            if object.op != "create" {
+                result.push(Diagnostic {
+                    code: "operation_not_supported".to_owned(),
+                    message: "source_span only supports create".to_owned(),
+                    local_ref: Some(object.local_ref.clone()),
+                });
+            }
+            if object.payload.is_none() {
+                result.push(Diagnostic {
+                    code: "missing_payload".to_owned(),
+                    message: "source_span/create requires payload".to_owned(),
+                    local_ref: Some(object.local_ref.clone()),
+                });
+            }
         }
     }
     for relation in &args.proposed_relations {
@@ -535,13 +652,96 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
             });
         }
     }
+    let local_refs = args
+        .proposed_objects
+        .iter()
+        .map(|item| item.local_ref.as_str())
+        .chain(
+            args.proposed_relations
+                .iter()
+                .map(|item| item.local_ref.as_str()),
+        )
+        .collect::<BTreeSet<_>>();
+    let mut inspect = Vec::<(Option<String>, String)>::new();
+    for object in &args.proposed_objects {
+        if let Some(payload) = &object.payload {
+            inspect_refs(payload, Some(&object.local_ref), &mut inspect);
+        }
+        if let Some(changes) = &object.changes {
+            inspect_refs(changes, Some(&object.local_ref), &mut inspect);
+        }
+    }
+    for relation in &args.proposed_relations {
+        relation
+            .source
+            .iter()
+            .for_each(|value| inspect.push((Some(relation.local_ref.clone()), value.clone())));
+        relation
+            .target
+            .iter()
+            .for_each(|value| inspect.push((Some(relation.local_ref.clone()), value.clone())));
+        inspect.extend(
+            relation
+                .evidence_spans
+                .iter()
+                .map(|value| (Some(relation.local_ref.clone()), value.clone())),
+        );
+    }
+    for (owner, value) in inspect {
+        if let Some(local) = value.strip_prefix("$new:") {
+            if !local_refs.contains(local) {
+                result.push(Diagnostic {
+                    code: "dangling_new_ref".into(),
+                    message: format!("$new:{local} does not name an item in this version"),
+                    local_ref: owner,
+                });
+            }
+        } else if !value.starts_with("mathscape:") && !value.is_empty() {
+            result.push(Diagnostic {
+                code: "bare_local_ref_deprecated".into(),
+                message: "bare local_ref is accepted for compatibility; use $new:<local_ref>"
+                    .into(),
+                local_ref: owner,
+            });
+        }
+    }
     result
+}
+
+fn inspect_refs(value: &Value, owner: Option<&str>, output: &mut Vec<(Option<String>, String)>) {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map {
+                if matches!(key.as_str(), "parent" | "source" | "target")
+                    && value.as_str().is_some()
+                {
+                    output.push((owner.map(str::to_owned), value.as_str().unwrap().to_owned()));
+                } else if key == "source_spans" || key == "evidence_spans" {
+                    if let Some(values) = value.as_array() {
+                        output.extend(
+                            values
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(|value| (owner.map(str::to_owned), value.to_owned())),
+                        );
+                    }
+                } else {
+                    inspect_refs(value, owner, output);
+                }
+            }
+        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| inspect_refs(value, owner, output)),
+        _ => {}
+    }
 }
 
 fn check_local_ref(result: &mut Vec<Diagnostic>, refs: &mut BTreeSet<String>, local_ref: &str) {
     if local_ref.trim().is_empty()
         || local_ref.chars().count() > MAX_LOCAL_REF_CHARS
         || local_ref.chars().any(char::is_control)
+        || !valid_temp_id(local_ref)
         || !refs.insert(local_ref.to_owned())
     {
         result.push(Diagnostic {
@@ -552,13 +752,396 @@ fn check_local_ref(result: &mut Vec<Diagnostic>, refs: &mut BTreeSet<String>, lo
     }
 }
 
+/// Validate and materialize the server-owned SourceSpan fields. This reads
+/// only the immutable artifact pool and never writes the map.
+fn materialize_span_drafts(
+    workspace: &McpWorkspace,
+    args: &ProposeArgs,
+    ids: &BTreeMap<String, String>,
+) -> (BTreeMap<String, SourceSpanDraft>, Vec<Diagnostic>) {
+    let mut drafts = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    let store = match workspace.store() {
+        Ok(store) => store,
+        Err(error) => {
+            diagnostics.push(Diagnostic {
+                code: "snapshot_not_found".into(),
+                message: error.to_string(),
+                local_ref: None,
+            });
+            return (drafts, diagnostics);
+        }
+    };
+    let catalog = match store.read_catalog_snapshot() {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            diagnostics.push(Diagnostic {
+                code: "snapshot_not_found".into(),
+                message: error.to_string(),
+                local_ref: None,
+            });
+            return (drafts, diagnostics);
+        }
+    };
+    let canonical = store.list_canonical_markdown().unwrap_or_default();
+    let map_snapshot = store.map_edit_snapshot().ok();
+    let pool = match workspace.pool() {
+        Ok(pool) => pool,
+        Err(error) => {
+            diagnostics.push(Diagnostic {
+                code: "snapshot_not_found".into(),
+                message: error.to_string(),
+                local_ref: None,
+            });
+            return (drafts, diagnostics);
+        }
+    };
+
+    for object in &args.proposed_objects {
+        if object.kind != "source_span" || object.op != "create" {
+            continue;
+        }
+        let Some(payload) = object.payload.clone() else {
+            continue;
+        };
+        let input: SourceSpanInput = match serde_json::from_value(payload) {
+            Ok(input) => input,
+            Err(error) => {
+                diagnostics.push(Diagnostic {
+                    code: "invalid_span_locator".into(),
+                    message: format!("source_span payload is invalid: {error}"),
+                    local_ref: Some(object.local_ref.clone()),
+                });
+                continue;
+            }
+        };
+        let artifact = match StableId::parse(input.artifact_id.clone()) {
+            Ok(id) => id,
+            Err(error) => {
+                diagnostics.push(Diagnostic {
+                    code: "snapshot_not_found".into(),
+                    message: error.to_string(),
+                    local_ref: Some(object.local_ref.clone()),
+                });
+                continue;
+            }
+        };
+        let Some(record) = catalog
+            .artifacts()
+            .iter()
+            .find(|record| record.entity().header().stable_id() == &artifact)
+        else {
+            diagnostics.push(Diagnostic {
+                code: "snapshot_not_found".into(),
+                message: "artifact_id is not a registered immutable artifact".into(),
+                local_ref: Some(object.local_ref.clone()),
+            });
+            continue;
+        };
+        if record.entity().payload().media_type().as_str() != "text/markdown" {
+            diagnostics.push(Diagnostic {
+                code: "snapshot_not_immutable".into(),
+                message: "SourceSpan requires a text/markdown snapshot".into(),
+                local_ref: Some(object.local_ref.clone()),
+            });
+            continue;
+        }
+        let size = record.entity().payload().byte_size();
+        if size > 16 * 1024 * 1024 {
+            diagnostics.push(Diagnostic {
+                code: "snapshot_not_immutable".into(),
+                message: "Markdown snapshot exceeds the bounded locator validation size".into(),
+                local_ref: Some(object.local_ref.clone()),
+            });
+            continue;
+        }
+        if input.md_byte_range.start >= input.md_byte_range.end || input.md_byte_range.end > size {
+            diagnostics.push(Diagnostic {
+                code: "range_out_of_bounds".into(),
+                message: "md_byte_range must be a non-empty range inside the snapshot".into(),
+                local_ref: Some(object.local_ref.clone()),
+            });
+            continue;
+        }
+        let bytes = match pool.read_bytes(&artifact, 0, size.min(16 * 1024 * 1024) as u32) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                diagnostics.push(Diagnostic {
+                    code: "snapshot_not_found".into(),
+                    message: error.to_string(),
+                    local_ref: Some(object.local_ref.clone()),
+                });
+                continue;
+            }
+        };
+        let source = match String::from_utf8(bytes) {
+            Ok(source) => source,
+            Err(_) => {
+                diagnostics.push(Diagnostic {
+                    code: "snapshot_not_immutable".into(),
+                    message: "Markdown snapshot is not valid UTF-8".into(),
+                    local_ref: Some(object.local_ref.clone()),
+                });
+                continue;
+            }
+        };
+        let (start, end) = (
+            input.md_byte_range.start as usize,
+            input.md_byte_range.end as usize,
+        );
+        if !source.is_char_boundary(start) || !source.is_char_boundary(end) {
+            diagnostics.push(Diagnostic {
+                code: "invalid_utf8_boundary".into(),
+                message: "md_byte_range must start and end on UTF-8 boundaries".into(),
+                local_ref: Some(object.local_ref.clone()),
+            });
+            continue;
+        }
+        let selected = &source[start..end];
+        let matches = locator_matches(selected, &input.quote).0;
+        let normalized_matches = locator_matches(&source, &input.quote).0;
+        let quote_matches = selected == input.quote
+            || matches.iter().any(|(a, b)| *a == 0 && *b == selected.len())
+            || normalized_matches
+                .iter()
+                .any(|(a, b)| *a == start && *b == end);
+        if !quote_matches {
+            diagnostics.push(Diagnostic {
+                code: "quote_mismatch".into(),
+                message: "quote does not match the supplied byte range".into(),
+                local_ref: Some(object.local_ref.clone()),
+            });
+            continue;
+        }
+        let anchored = match anchor_markdown(artifact.clone(), None, source.clone()) {
+            Ok(anchored) => anchored,
+            Err(error) => {
+                diagnostics.push(Diagnostic {
+                    code: "snapshot_not_immutable".into(),
+                    message: error.to_string(),
+                    local_ref: Some(object.local_ref.clone()),
+                });
+                continue;
+            }
+        };
+        let block_ids = anchored
+            .blocks
+            .iter()
+            .filter(|block| {
+                block.range.start < input.md_byte_range.end
+                    && block.range.end > input.md_byte_range.start
+            })
+            .map(|block| block.id.clone())
+            .collect::<Vec<_>>();
+        if input.granularity == SpanGranularity::Block && block_ids.is_empty() {
+            diagnostics.push(Diagnostic {
+                code: "invalid_locator".into(),
+                message: "block granularity requires a canonical Markdown block".into(),
+                local_ref: Some(object.local_ref.clone()),
+            });
+            continue;
+        }
+        let page = if input.granularity == SpanGranularity::Page {
+            let marker_pages = anchored
+                .blocks
+                .iter()
+                .filter(|block| {
+                    block.kind == "page_marker" && block.range.start <= input.md_byte_range.start
+                })
+                .filter_map(|block| {
+                    let text = source.get(block.range.start as usize..block.range.end as usize)?;
+                    mathscape_orchestrator::page_marker_id(text)
+                })
+                .next_back();
+            let next_marker = anchored
+                .blocks
+                .iter()
+                .filter(|block| {
+                    block.kind == "page_marker"
+                        && block.range.start > input.md_byte_range.start
+                        && block.range.start < input.md_byte_range.end
+                })
+                .filter_map(|block| {
+                    let text = source.get(block.range.start as usize..block.range.end as usize)?;
+                    mathscape_orchestrator::page_marker_id(text)
+                })
+                .next();
+            let unique_marker =
+                marker_pages.filter(|page| next_marker.is_none_or(|next| next == *page));
+            let canonical_pdf = canonical
+                .iter()
+                .filter(|view| {
+                    view.segments
+                        .iter()
+                        .any(|segment| segment.markdown_artifact_id == artifact)
+                })
+                .filter_map(|view| {
+                    let segment = view
+                        .segments
+                        .iter()
+                        .find(|segment| segment.markdown_artifact_id == artifact)?;
+                    let pages = segment.pages?;
+                    (pages.from == pages.to)
+                        .then(|| (view.source_pdf_artifact_id.clone(), pages.from))
+                })
+                .collect::<Vec<_>>();
+            match (unique_marker, canonical_pdf.as_slice()) {
+                (Some(marker), [(pdf, _)]) => {
+                    mathscape_domain::PageCoordinate::new(pdf.clone(), marker, Some(marker), None)
+                        .ok()
+                }
+                (Some(_marker), []) => {
+                    diagnostics.push(Diagnostic {
+                        code: "page_mapping_ambiguous".into(),
+                        message: "Markdown page marker has no unique PDF mapping".into(),
+                        local_ref: Some(object.local_ref.clone()),
+                    });
+                    None
+                }
+                (None, [(pdf, page)]) => mathscape_domain::PageCoordinate::new(
+                    pdf.clone(),
+                    page.saturating_sub(1),
+                    Some(page.saturating_sub(1)),
+                    None,
+                )
+                .ok(),
+                _ => {
+                    diagnostics.push(Diagnostic {
+                        code: "page_mapping_ambiguous".into(),
+                        message: "page granularity requires one uniquely mapped PDF page".into(),
+                        local_ref: Some(object.local_ref.clone()),
+                    });
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if input.granularity == SpanGranularity::Page && page.is_none() {
+            continue;
+        }
+        let hash = ContentHash::parse(format!("sha256:{:x}", Sha256::digest(selected.as_bytes())))
+            .expect("sha256 is a valid ContentHash");
+        let draft = SourceSpanDraft {
+            granularity: input.granularity,
+            layout: LayoutKind::Other,
+            page,
+            bounding_boxes: vec![],
+            marker_block_ids: block_ids,
+            markdown: Some(MarkdownLocator::new(
+                artifact,
+                ByteRange::new(input.md_byte_range.start, input.md_byte_range.end)
+                    .expect("validated range"),
+                None,
+            )),
+            exact_text_artifact: None,
+            normalized_text_hash: Some(hash),
+        };
+        let span_id = ids.get(&object.local_ref).cloned().unwrap_or_default();
+        if let Some(existing) = map_snapshot.as_ref().and_then(|snapshot| {
+            snapshot
+                .objects
+                .iter()
+                .find(|candidate| candidate.object_id == span_id)
+        }) {
+            if existing.lifecycle != "active" {
+                diagnostics.push(Diagnostic {
+                    code: "span_inactive".into(),
+                    message: "同 id 的 SourceSpan 已退役；需要显式重新激活操作".into(),
+                    local_ref: Some(object.local_ref.clone()),
+                });
+                continue;
+            }
+            diagnostics.push(Diagnostic {
+                code: "span_already_exists".into(),
+                message: "SourceSpan 已存在，将作为已有证据引用".into(),
+                local_ref: Some(object.local_ref.clone()),
+            });
+            if existing.payload["payload"]["granularity"] != json!(input.granularity) {
+                diagnostics.push(Diagnostic {
+                    code: "span_granularity_ignored".into(),
+                    message: "已有 SourceSpan 的 granularity 优先于本次提议".into(),
+                    local_ref: Some(object.local_ref.clone()),
+                });
+            }
+        }
+        if let Some(id) = ids.get(&object.local_ref)
+            && StableId::parse(id.clone()).is_ok()
+        {
+            drafts.insert(object.local_ref.clone(), draft);
+        }
+    }
+    // A newly proposed span must have a consumer in this version. Existing
+    // spans may be referenced directly and therefore do not trigger this.
+    let referenced = collect_span_references(args);
+    for object in &args.proposed_objects {
+        if object.kind == "source_span"
+            && object.op == "create"
+            && !referenced.contains(&object.local_ref)
+        {
+            diagnostics.push(Diagnostic {
+                code: "unused_span".into(),
+                message: "new SourceSpan is not referenced by a unit or relation".into(),
+                local_ref: Some(object.local_ref.clone()),
+            });
+        }
+    }
+    (drafts, diagnostics)
+}
+
+fn collect_span_references(args: &ProposeArgs) -> BTreeSet<String> {
+    let mut refs = BTreeSet::new();
+    for object in &args.proposed_objects {
+        if object.kind != "source_unit" {
+            continue;
+        }
+        if let Some(payload) = &object.payload
+            && let Some(values) = payload.get("source_spans").and_then(Value::as_array)
+        {
+            refs.extend(
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter_map(reference_local_key),
+            );
+        }
+        if let Some(changes) = &object.changes
+            && let Some(values) = changes.get("source_spans").and_then(Value::as_array)
+        {
+            refs.extend(
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter_map(reference_local_key),
+            );
+        }
+    }
+    for relation in &args.proposed_relations {
+        refs.extend(
+            relation
+                .evidence_spans
+                .iter()
+                .filter_map(|value| reference_local_key(value)),
+        );
+    }
+    refs
+}
+
+fn reference_local_key(value: &str) -> Option<String> {
+    value
+        .strip_prefix("$new:")
+        .or(Some(value))
+        .map(str::to_owned)
+}
+
 fn compile_operations(
     args: &ProposeArgs,
     ids: &BTreeMap<String, String>,
+    span_drafts: &BTreeMap<String, SourceSpanDraft>,
 ) -> Result<Vec<UserChangeOperation>, String> {
     let mut operations = Vec::new();
     for object in &args.proposed_objects {
-        if object.kind != "source_unit" {
+        if !matches!(object.kind.as_str(), "source_unit" | "source_span") {
             continue;
         }
         let object_id = object
@@ -566,6 +1149,14 @@ fn compile_operations(
             .clone()
             .or_else(|| ids.get(&object.local_ref).cloned())
             .ok_or_else(|| format!("missing object id for {}", object.local_ref))?;
+        if object.kind == "source_span" {
+            let draft = span_drafts
+                .get(&object.local_ref)
+                .cloned()
+                .ok_or_else(|| format!("missing validated span for {}", object.local_ref))?;
+            operations.push(UserChangeOperation::CreateSourceSpan { object_id, draft });
+            continue;
+        }
         match object.op.as_str() {
             "create" => {
                 let mut payload = object.payload.clone().ok_or("missing payload")?;
@@ -607,7 +1198,11 @@ fn compile_operations(
                     relation: relation.relation.ok_or("missing relation")?,
                     source: resolve_ref(relation.source.as_deref().ok_or("missing source")?, ids)?,
                     target: resolve_ref(relation.target.as_deref().ok_or("missing target")?, ids)?,
-                    evidence_spans: relation.evidence_spans.clone(),
+                    evidence_spans: relation
+                        .evidence_spans
+                        .iter()
+                        .map(|value| resolve_ref(value, ids))
+                        .collect::<Result<Vec<_>, _>>()?,
                 },
             }),
             "edit" => {
@@ -636,6 +1231,15 @@ fn resolve_payload_refs(payload: &mut Value, ids: &BTreeMap<String, String>) -> 
     {
         *parent = Value::String(resolve_ref(value, ids)?);
     }
+    if let Some(spans) = payload.get_mut("source_spans")
+        && let Some(values) = spans.as_array_mut()
+    {
+        for value in values {
+            if let Some(text) = value.as_str() {
+                *value = Value::String(resolve_ref(text, ids)?);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -656,11 +1260,30 @@ fn resolve_change_refs(changes: &mut Value, ids: &BTreeMap<String, String>) -> R
             *value = Value::String(resolved);
         }
     }
+    if let Some(spans) = changes.get_mut("source_spans")
+        && let Some(values) = spans.as_array_mut()
+    {
+        for value in values {
+            if let Some(text) = value.as_str() {
+                *value = Value::String(resolve_ref(text, ids)?);
+            }
+        }
+    }
+    if let Some(spans) = changes.get_mut("evidence_spans")
+        && let Some(values) = spans.as_array_mut()
+    {
+        for value in values {
+            if let Some(text) = value.as_str() {
+                *value = Value::String(resolve_ref(text, ids)?);
+            }
+        }
+    }
     Ok(())
 }
 
 fn resolve_ref(value: &str, ids: &BTreeMap<String, String>) -> Result<String, String> {
-    if let Some(id) = ids.get(value) {
+    let local = value.strip_prefix("$new:").unwrap_or(value);
+    if let Some(id) = ids.get(local) {
         Ok(id.clone())
     } else {
         StableId::parse(value.to_owned())
@@ -679,6 +1302,21 @@ fn allocate_ids(
             object.target_id.clone().ok_or_else(|| {
                 ToolError::new(ToolErrorCode::InvalidArg, "edit requires target_id")
             })?
+        } else if object.kind == "source_span" {
+            object
+                .payload
+                .as_ref()
+                .and_then(|payload| serde_json::from_value::<SourceSpanInput>(payload.clone()).ok())
+                .and_then(|span| {
+                    let artifact = StableId::parse(span.artifact_id).ok()?;
+                    let range = TextByteRange {
+                        start: span.md_byte_range.start,
+                        end: span.md_byte_range.end,
+                    };
+                    (range.start < range.end)
+                        .then(|| markdown_span_id(&artifact, &range).to_string())
+                })
+                .unwrap_or_else(|| generated_id("source-span", change_set_id, &object.local_ref))
         } else {
             generated_id("source-unit", change_set_id, &object.local_ref)
         };
@@ -852,13 +1490,212 @@ fn collect_agent_debts(args: &ProposeArgs) -> Vec<Value> {
         .collect()
 }
 
+fn resolve_staged_dependencies(
+    store: &mathscape_store_sqlite::SqliteArtifactStore,
+    investigation_id: &str,
+    current_change_set_id: &str,
+    current_version: i64,
+    args: &ProposeArgs,
+    ids: &BTreeMap<String, String>,
+) -> (Vec<ChangeSetDependency>, Vec<Diagnostic>) {
+    let refs = proposal_reference_values(args);
+    let pending = match store.list_pending_change_sets(investigation_id) {
+        Ok(pending) => pending,
+        Err(error) => {
+            return (
+                vec![],
+                vec![Diagnostic {
+                    code: "dependency_lookup_failed".into(),
+                    message: error.to_string(),
+                    local_ref: None,
+                }],
+            );
+        }
+    };
+    let mut dependencies = BTreeMap::<String, (i64, BTreeSet<String>)>::new();
+    let mut diagnostics = Vec::new();
+    for value in refs {
+        if ids.values().any(|id| id == &value) {
+            continue;
+        }
+        let Some(target) = pending.iter().find(|candidate| {
+            candidate
+                .record
+                .result
+                .get("staged_ids")
+                .and_then(Value::as_object)
+                .is_some_and(|staged| {
+                    staged
+                        .values()
+                        .any(|id| id.as_str() == Some(value.as_str()))
+                })
+        }) else {
+            continue;
+        };
+        if target.record.change_set_id == current_change_set_id {
+            continue;
+        }
+        let entry = dependencies
+            .entry(target.record.change_set_id.clone())
+            .or_insert_with(|| (target.record.version, BTreeSet::new()));
+        entry.1.insert(value);
+        if target.record.state != "staged" {
+            diagnostics.push(Diagnostic {
+                code: "dependency_blocked".into(),
+                message: format!(
+                    "依赖的 change_set {} 当前不是 staged",
+                    target.record.change_set_id
+                ),
+                local_ref: None,
+            });
+        }
+    }
+    // A proposal may not introduce a cycle through an already staged version.
+    let existing = store.all_dependencies(investigation_id).unwrap_or_default();
+    for dependency_id in dependencies.keys() {
+        if depends_on(
+            existing.as_slice(),
+            dependency_id,
+            current_change_set_id,
+            &mut BTreeSet::new(),
+        ) {
+            diagnostics.push(Diagnostic {
+                code: "change_set_dependency_cycle".into(),
+                message: "change_set dependency graph contains a cycle".into(),
+                local_ref: None,
+            });
+        }
+    }
+    let dependencies = dependencies
+        .into_iter()
+        .map(
+            |(change_set_id, (version, referenced))| ChangeSetDependency {
+                dependent_change_set_id: current_change_set_id.to_owned(),
+                dependent_version: current_version,
+                depends_on_change_set_id: change_set_id,
+                depends_on_version: version,
+                investigation_id: investigation_id.to_owned(),
+                referenced_ids: referenced.into_iter().collect(),
+            },
+        )
+        .collect();
+    (dependencies, diagnostics)
+}
+
+fn depends_on(
+    edges: &[ChangeSetDependency],
+    start: &str,
+    target: &str,
+    visited: &mut BTreeSet<String>,
+) -> bool {
+    if start == target {
+        return true;
+    }
+    if !visited.insert(start.to_owned()) {
+        return false;
+    }
+    edges
+        .iter()
+        .filter(|edge| edge.dependent_change_set_id == start)
+        .any(|edge| depends_on(edges, &edge.depends_on_change_set_id, target, visited))
+}
+
+fn proposal_reference_values(args: &ProposeArgs) -> Vec<String> {
+    let mut refs = Vec::new();
+    for object in &args.proposed_objects {
+        object
+            .payload
+            .as_ref()
+            .into_iter()
+            .for_each(|value| collect_string_refs(value, &mut refs));
+        object
+            .changes
+            .as_ref()
+            .into_iter()
+            .for_each(|value| collect_string_refs(value, &mut refs));
+    }
+    for relation in &args.proposed_relations {
+        relation
+            .source
+            .iter()
+            .chain(relation.target.iter())
+            .for_each(|value| refs.push(value.clone()));
+        refs.extend(relation.evidence_spans.iter().cloned());
+    }
+    refs.into_iter()
+        .filter(|value| value.starts_with("mathscape:"))
+        .collect()
+}
+
+fn collect_string_refs(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map {
+                if matches!(key.as_str(), "parent" | "source" | "target")
+                    || key == "source_spans"
+                    || key == "evidence_spans"
+                {
+                    match value {
+                        Value::String(value) => output.push(value.clone()),
+                        Value::Array(values) => output
+                            .extend(values.iter().filter_map(Value::as_str).map(str::to_owned)),
+                        _ => {}
+                    }
+                } else {
+                    collect_string_refs(value, output);
+                }
+            }
+        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| collect_string_refs(value, output)),
+        _ => {}
+    }
+}
+
+fn invalidate_dependents(
+    store: &mut mathscape_store_sqlite::SqliteArtifactStore,
+    investigation_id: &str,
+    change_set_id: &str,
+    version: i64,
+) -> Result<(), mathscape_store_sqlite::SqliteStoreError> {
+    let pending = store.list_pending_change_sets(investigation_id)?;
+    for item in pending {
+        if item.dependencies.iter().any(|dependency| {
+            dependency.depends_on_change_set_id == change_set_id
+                && dependency.depends_on_version == version
+        }) {
+            let mut result = item.record.result.clone();
+            if let Some(debts) = result.get_mut("debts").and_then(Value::as_array_mut) {
+                debts.push(json!({
+                    "kind": "validation",
+                    "code": "dependency_blocked",
+                    "message": format!("依赖 {}@{} 当前 blocked", change_set_id, version)
+                }));
+            }
+            store.update_proposed_state(
+                investigation_id,
+                &item.record.change_set_id,
+                item.record.version,
+                "blocked",
+                Some(&result),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn diagnostic_value(item: &Diagnostic) -> Value {
     json!({
-        "level": "error",
+        "level": if item.is_error() { "error" } else if item.code.starts_with("info:") { "info" } else { "warn" },
         "code": item.code,
         "message": item.message,
         "local_ref": item.local_ref
     })
+}
+
+fn has_errors(diagnostics: &[Diagnostic]) -> bool {
+    diagnostics.iter().any(Diagnostic::is_error)
 }
 
 fn internal(error: impl std::fmt::Display) -> ToolError {

@@ -899,6 +899,140 @@ fn phase2_source_proposals_stage_and_read_back_without_changing_the_map() {
 }
 
 #[test]
+fn phase2_source_span_proposals_validate_ranges_and_use_content_identity() {
+    let f = fixture();
+    let end = "# 引理 Lemma".len() as u64;
+    let proposal = json!({
+        "request_id": "span-proposal",
+        "rationale": "以精确 Markdown 范围登记定理",
+        "proposed_objects": [
+            {"local_ref": "s1", "kind": "source_span", "op": "create", "payload": {
+                "artifact_id": f.markdown.clone(),
+                "md_byte_range": {"start": 0, "end": end},
+                "granularity": "block",
+                "quote": "# 引理 Lemma"
+            }},
+            {"local_ref": "u1", "kind": "source_unit", "op": "create", "payload": {
+                "kind": "statement", "display_title": "引理", "parent": null,
+                "source_spans": ["$new:s1"], "completeness": "complete"
+            }}
+        ]
+    });
+    let (result, is_error) = call(&f.server, "propose_changes", proposal);
+    assert!(!is_error, "{result}");
+    assert_eq!(result["status"], "staged", "{result}");
+    assert!(
+        result["staged_ids"]["s1"]
+            .as_str()
+            .unwrap()
+            .starts_with("mathscape:source-span/")
+    );
+    assert_eq!(
+        result["staged_ids"]["u1"]
+            .as_str()
+            .unwrap()
+            .starts_with("mathscape:source-unit/"),
+        true
+    );
+
+    let (blocked, is_error) = call(
+        &f.server,
+        "propose_changes",
+        json!({
+            "request_id": "span-bad-quote",
+            "rationale": "错误范围",
+            "proposed_objects": [{"local_ref": "s1", "kind": "source_span", "op": "create", "payload": {
+                "artifact_id": f.markdown, "md_byte_range": {"start": 0, "end": end},
+                "granularity": "inline", "quote": "不是这个范围"
+            }}]
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(blocked["diagnostics"][0]["code"], "quote_mismatch");
+}
+
+#[test]
+fn investigation_graph_reads_staged_nodes_without_changing_accepted_map() {
+    let f = fixture();
+    let server = McpServer::new(
+        McpWorkspace::open(&f.root)
+            .unwrap()
+            .with_round(Some("round-1".into()))
+            .with_investigation(Some("sandbox:session:thread".into())),
+    );
+    let (result, is_error) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "graph-staged",
+            "rationale": "显示未审批来源单元",
+            "proposed_objects": [{"local_ref": "u1", "kind": "source_unit", "op": "create", "payload": {
+                "kind": "statement", "display_title": "暂存定理", "parent": null,
+                "source_spans": [seed_source_span(&f.root, &f.markdown)], "completeness": "complete"
+            }}]
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(result["status"], "staged");
+    let staged_id = result["staged_ids"]["u1"].as_str().unwrap();
+    let (node, is_error) = call(
+        &server,
+        "graph.get",
+        json!({"node_id": staged_id, "scope": "investigation"}),
+    );
+    assert!(!is_error);
+    assert_eq!(node["status"], "ok");
+    assert_eq!(node["node"]["staged"], true);
+    assert_eq!(node["node"]["change_set_id"], result["change_set_id"]);
+}
+
+#[test]
+fn proposals_can_depend_on_another_staged_change_set_in_one_investigation() {
+    let f = fixture();
+    let span = seed_source_span(&f.root, &f.markdown);
+    let server = McpServer::new(
+        McpWorkspace::open(&f.root)
+            .unwrap()
+            .with_round(Some("round-a".into()))
+            .with_investigation(Some("investigation-deps".into())),
+    );
+    let (first, is_error) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "dep-a",
+            "rationale": "先登记父单元",
+            "proposed_objects": [{"local_ref": "a", "kind": "source_unit", "op": "create", "payload": {
+                "kind": "section", "display_title": "父", "parent": null,
+                "source_spans": [span.clone()], "completeness": "complete"
+            }}]
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(first["status"], "staged", "{first}");
+    let parent = first["staged_ids"]["a"].as_str().unwrap().to_owned();
+    let (second, is_error) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "dep-b",
+            "rationale": "再登记子单元",
+            "proposed_objects": [{"local_ref": "b", "kind": "source_unit", "op": "create", "payload": {
+                "kind": "statement", "display_title": "子", "parent": parent,
+                "source_spans": [span], "completeness": "complete"
+            }}]
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(second["status"], "staged", "{second}");
+    assert_eq!(
+        second["dependencies"][0]["change_set_id"],
+        first["change_set_id"]
+    );
+}
+
+#[test]
 fn search_matches_a_direct_search_registry_call() {
     let f = fixture();
     let corpus = SqliteArtifactStore::open(&f.root.join("mathscape.sqlite3"))

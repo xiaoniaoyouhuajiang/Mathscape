@@ -78,8 +78,8 @@ artifact.stage          implemented_round_bound
 
 在 Mathscape 桌面端的沙箱对话中，本轮的实际情况是：
 
-- **挂载的 mathscape 工具**：`workspace.search`、`material.read`、`material.grep`、`pdf.outline`、`graph.get`、`graph.neighborhood`、`ink.page_image`、`pdf.page_image`、`mathlib.search`、`lean.check`。
-- **未挂载**：`artifact.stage`、`propose_changes`、`get_change_set`。桌面端尚无提案接受界面，因此沙箱暂不开放提案；需要提交的内容写成 scratch 草稿，并在回复中标 `deferred_capability: propose_changes`。
+- **挂载的 mathscape 工具**：`workspace.search`、`material.read`、`material.grep`、`pdf.outline`、`graph.get`、`graph.neighborhood`、`ink.page_image`、`pdf.page_image`、`mathlib.search`、`lean.check`、`propose_changes`、`get_change_set`。提案工具只写当前沙箱副本的 staged/blocked 记录；接受和丢弃仍由 Desktop 审核命令完成。
+- **未挂载**：`artifact.stage`。文件草稿仍写入 scratch；需要登记来源时使用 `propose_changes`，不能把文件暂存冒充正式地图写入。
 - **harness 自带的文件与 shell 工具**：只能写会话 scratch 目录（路径见本轮 developer instructions）；工作区副本、本 skill 目录和 Lean profile 都是只读；网络关闭。scratch 中的文件是草稿，不是地图变更，也不会提升任何可信状态。
 - **Lean 草稿**：写在 scratch 中，用 `lean.check` 检查，不要直接运行 `lake build` 或修改 Lean profile 的依赖。编译通过只说明 Lean 接受了这段代码，不说明它忠实于原文或证明完整。
 - **本 skill**：只读，不要尝试修改；需要改动时在回复中提出。

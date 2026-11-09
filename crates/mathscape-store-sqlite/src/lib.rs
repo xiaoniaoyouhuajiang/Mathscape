@@ -76,6 +76,7 @@ pub use ink_snapshot_label::{
 };
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use proposals::ProposedChangeRecord;
+pub use proposals::{ChangeSetDecision, ChangeSetDependency, PendingChangeSet};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use search::{
     SearchArtifactRow, SearchCorpus, SearchNoteRow, SearchSnapshotRow, SearchSourceUnitRow,
@@ -107,7 +108,8 @@ const CANONICAL_MARKDOWN_ENSURE_MIGRATION: &str =
     include_str!("../../../migrations/0022_canonical_markdown_ensure.sql");
 const PROPOSED_CHANGE_SETS_MIGRATION: &str =
     include_str!("../../../migrations/0023_proposed_change_sets.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 23;
+const PHASE2_PR_B_MIGRATION: &str = include_str!("../../../migrations/0024_phase2_pr_b.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 24;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -666,7 +668,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=23 => {
+            6..=24 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -863,6 +865,20 @@ impl SqliteArtifactStore {
                 connection.execute_batch(PROPOSED_CHANGE_SETS_MIGRATION)?;
             } else {
                 connection.pragma_update(None, "user_version", 23)?;
+            }
+        }
+        if version < 24 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 24",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                connection.execute_batch(PHASE2_PR_B_MIGRATION)?;
+            } else {
+                connection.pragma_update(None, "user_version", 24)?;
             }
         }
         validate_registration_schema(&connection)?;
@@ -2357,9 +2373,17 @@ fn validate_proposed_change_schema(connection: &Connection) -> Result<(), Sqlite
     connection.prepare(
         "SELECT change_set_id, version, investigation_id, round_id, generation,
                 request_id, request_fingerprint, proposal_json, result_json,
-                state, base_commit, created_at
+                state, base_commit, created_at, proposed_by
          FROM proposed_change_set_versions LIMIT 0",
     )?;
+    for table in ["change_set_dependencies", "change_set_decisions"] {
+        if !schema_object_exists(connection, "table", table)? {
+            return Err(SqliteStoreError::MissingSchemaObject {
+                object_kind: "table",
+                name: table,
+            });
+        }
+    }
     Ok(())
 }
 

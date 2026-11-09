@@ -752,7 +752,7 @@ fn normalized_string(text: &str) -> String {
 }
 
 /// Shared matching policy for v3 quotes and staged single occurrences.
-pub(crate) fn locator_matches(text: &str, quote: &str) -> (Vec<(usize, usize)>, bool) {
+pub fn locator_matches(text: &str, quote: &str) -> (Vec<(usize, usize)>, bool) {
     let exact = overlapping_matches(text, quote)
         .into_iter()
         .map(|start| (start, start + quote.len()))

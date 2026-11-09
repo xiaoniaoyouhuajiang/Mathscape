@@ -705,13 +705,7 @@ pub fn plan_source_registration(
         if let Some(index) = span_by_range.get(&key).copied() {
             return spans[index].stable_id.clone();
         }
-        let identity = fingerprint(&(
-            "markdown-source-span-1",
-            &source.snapshot.artifact_id,
-            selector.range(),
-        ));
-        let stable_id = stable_hash_id("source-span", &identity)
-            .expect("a hash-derived StableId is always valid");
+        let stable_id = markdown_span_id(&source.snapshot.artifact_id, selector.range());
         let exact_text_hash = fingerprint(&selector.text());
         span_by_range.insert(key, spans.len());
         spans.push(PlannedSourceSpan {
@@ -928,7 +922,7 @@ pub fn plan_source_registration(
     })
 }
 
-fn stable_hash_id(
+pub fn stable_hash_id(
     kind: &str,
     fingerprint: &ContentHash,
 ) -> Result<StableId, SourceRegistrationPlanError> {
@@ -940,4 +934,12 @@ fn stable_hash_id(
             .unwrap_or(fingerprint.as_str())
     ))
     .map_err(|error| SourceRegistrationPlanError::InvalidIdentity(error.to_string()))
+}
+
+/// Deterministic identity shared by content discovery and Phase2 proposals.
+/// The identity intentionally contains the immutable Markdown artifact and
+/// half-open byte range, but no quote text or presentation metadata.
+pub fn markdown_span_id(artifact_id: &StableId, range: &TextByteRange) -> StableId {
+    let identity = fingerprint(&("markdown-source-span-1", artifact_id, range));
+    stable_hash_id("source-span", &identity).expect("hash-derived StableId is valid")
 }

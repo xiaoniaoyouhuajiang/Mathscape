@@ -1,5 +1,6 @@
 mod backlink;
 mod canonical_reader;
+mod change_sets;
 mod content;
 mod discovery;
 mod discovery_view;
@@ -1005,6 +1006,14 @@ pub fn run() {
             content::get_source_node_detail,
             content::read_artifact_bytes,
             canonical_reader::get_canonical_reader_projection,
+            change_sets::list_pending_change_sets,
+            change_sets::plan_change_set_accept,
+            change_sets::get_change_set_review,
+            change_sets::accept_change_set,
+            change_sets::discard_change_set,
+            change_sets::plan_change_set_batch,
+            change_sets::accept_change_set_batch,
+            change_sets::discard_change_set_batch,
             backlink::get_source_backlink,
             llm_settings::get_llm_settings,
             llm_settings::set_default_llm_profile,

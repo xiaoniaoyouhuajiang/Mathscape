@@ -25,6 +25,10 @@ pub enum UserChangeOperation {
         object_id: String,
         draft: SourceRelationDraft,
     },
+    CreateSourceSpan {
+        object_id: String,
+        draft: SourceSpanDraft,
+    },
     EditSourceUnit {
         object_id: String,
         expected_revision: String,
@@ -45,6 +49,7 @@ impl UserChangeOperation {
         match self {
             Self::CreateSourceUnit { object_id, .. }
             | Self::CreateSourceRelation { object_id, .. }
+            | Self::CreateSourceSpan { object_id, .. }
             | Self::EditSourceUnit { object_id, .. }
             | Self::EditSourceRelation { object_id, .. }
             | Self::RetireObject { object_id, .. } => object_id,
@@ -64,6 +69,22 @@ impl UserChangeOperation {
             _ => None,
         }
     }
+}
+
+/// Fully materialized, server-authored source evidence used by the proposal
+/// planner. Agents never send this structure directly: `propose_changes`
+/// validates a locator and fills the fields before creating the operation.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SourceSpanDraft {
+    pub granularity: SpanGranularity,
+    pub layout: LayoutKind,
+    pub page: Option<PageCoordinate>,
+    pub bounding_boxes: Vec<BoundingBox>,
+    pub marker_block_ids: Vec<String>,
+    pub markdown: Option<MarkdownLocator>,
+    pub exact_text_artifact: Option<StableId>,
+    pub normalized_text_hash: Option<ContentHash>,
 }
 
 // Explicit tagged changes avoid serde's missing/null ambiguity for Option<Option<T>>.

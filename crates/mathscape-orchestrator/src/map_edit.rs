@@ -147,6 +147,11 @@ pub fn plan_map_change(
             continue;
         }
         let current = original.get(id);
+        // SourceSpan identities are content-addressed. Re-proposing an
+        // already active span is an idempotent reference rather than a
+        // duplicate create operation.
+        let existing_active_span = matches!(op, UserChangeOperation::CreateSourceSpan { .. })
+            && current.is_some_and(|object| object.kind == "SourceSpan" && active(object));
         if let Some(expected) = op.expected_revision() {
             if !current.is_some_and(|o| o.revision == expected) {
                 conflicted = true;
@@ -161,11 +166,14 @@ pub fn plan_map_change(
                 diagnostics.push(error(id, "inactive_target", "已退役对象不可编辑"));
                 continue;
             }
-        } else if current.is_some() {
+        } else if current.is_some() && !existing_active_span {
             diagnostics.push(error(id, "existing_target", "创建目标已存在"));
             continue;
         }
         let result = (|| -> Result<MapEditObject, String> {
+            if existing_active_span {
+                return Ok(current.cloned().expect("checked above"));
+            }
             let mut out = current.cloned().unwrap_or(MapEditObject {
                 object_id: id.into(),
                 revision: String::new(),
@@ -240,6 +248,21 @@ pub fn plan_map_change(
                         SourceUnitRelation::new(draft.relation.into(), trust(actor)),
                     ))
                     .unwrap();
+                }
+                UserChangeOperation::CreateSourceSpan { draft, .. } => {
+                    let span = SourceSpan::new(
+                        draft.granularity,
+                        draft.layout,
+                        draft.page.clone(),
+                        draft.bounding_boxes.clone(),
+                        draft.marker_block_ids.clone(),
+                        draft.markdown.clone(),
+                        draft.exact_text_artifact.clone(),
+                        draft.normalized_text_hash.clone(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    out.kind = "SourceSpan".into();
+                    out.payload = serde_json::to_value(SourcePayload::Span(span)).unwrap();
                 }
                 UserChangeOperation::EditSourceUnit { changes, .. } => {
                     if out.kind != "SourceSemanticUnit" {

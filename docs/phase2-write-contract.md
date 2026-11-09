@@ -4,8 +4,8 @@
 > 依据：[Phase0 契约](phase0-contract.md)（下称 **Phase0**）、[Phase1c 图契约](phase1c-graph-contract.md)（**1c**）、[Phase1d 手稿契约](phase1d-ink-snapshot-contract.md)（**1d**）、[Foundations 扩展草案 v0.1](../proposals/core-workflow-foundations-extension-v0.1.md)（**FX**）、[登记撤回提案 v1](../proposals/discovery-registration-reversal-v1.md)（**REV**）、MCP 工具面草案 `/workspace/research/mathscape-tools-mcp-draft.md`（**MCP 草案**，仓库外，见 Phase0 头注）。
 > 版本：本文引入 `mcp_envelope v1` 与 `agent_events v1`（增量见 §4.5、§4.1.4）；Phase1 已有 10 个只读工具的语义与描述除 `scope` 一句外不变。Lean 工具契约另见 [`lean-tool-contract.md`](lean-tool-contract.md)。
 > 标签：**[锁定]** = 用户 2026-10-30 决策或由其直接推出；**[锁定·2026-11-09 用户改定]** = PR-B 讨论中用户改定的锁定项，原口径以「原口径」保留对照（汇总见 §2.1）；**[本文提议]** = 起草时为闭合契约补的细节，现有草案未写，实现 PR 可在不违背 [锁定] 的前提下微调（汇总见 §11）；**[待核]** = 真正未定（§10）。
-> P2-2 来源层暂存切片已在 `mathscape-mcp` / `mathscape-store-sqlite` 实现；Desktop 接受、投影、回滚和 `user.ask` 仍未实现。
-> **2026-11-09 修订（PR-B，`feat/pr-b-staged-proposals`）**：新增 SourceSpan 提案、`$new:` 临时引用、最终图依赖校验、跨 change set 引用与连带规则、暂存上图、会话切换 / 退出时的批量审核，以及沙箱接入（§2.1、§4.2.5–§4.2.8、§4.4.1、§5.5、§6.1、§9.1）。Loogle 加速不在本修订范围，推迟到下一个 PR。
+> P2-2 来源层暂存切片已在 `mathscape-mcp` / `mathscape-store-sqlite` 实现；PR-B 已接入 SourceSpan、调查级投影、Desktop 接受 / 丢弃 / 批量审核命令和沙箱提案白名单。`user.ask` 与已接受对象撤回仍是后续切片。
+> **2026-11-09 修订（PR-B，`feat/pr-b-staged-proposals`）**：新增 SourceSpan 提案、`$new:` 临时引用、最终图依赖校验、跨 change set 引用与连带规则、暂存上图、会话切换 / 退出时的批量审核，以及沙箱接入（§2.1、§4.2.5–§4.2.8、§4.4.1、§5.5、§6.1、§9.1）。用户随后锁定了退役 span、批量未勾选项、多 Markdown 快照分组、线程级 investigation 和依赖丢弃传播规则。Loogle 加速不在本修订范围，推迟到下一个 PR。
 
 ---
 
@@ -549,8 +549,8 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 | **P2-0** | 本契约 `docs/phase2-write-contract.md` + Phase0 §6 指针 | 本 PR（文档） |
 | **P2-1** `user.ask` | PendingQuestion 表与调查状态 / 写槽；MCP `user.ask`（非阻塞）；Codex `requestUserInput` 桥（替换现拒绝逻辑）；`agent_events v1` 的 `awaiting_user`；Desktop 待答问题 + 回答 UI；`--round` generation 校验 | 后续代码 PR |
 | **P2-2** propose（仅暂存） | 暂存表；`propose_changes` 校验器（§4.2.4）、幂等、`supersedes`、指纹；`get_change_set`；`mcp_envelope v1` `staged/blocked` | 已实现：`crates/mathscape-mcp/src/tools/propose.rs`、`crates/mathscape-store-sqlite/src/proposals.rs` |
-| **P2-2b** 投影 | `graph.get` / `graph.neighborhood` 的真实 `scope=investigation`（与 P2-2 同批或紧随）；随后 `workspace.search` 暂存命中 | PR-B（§9.1 B5）；`workspace.search` 暂存命中仍后续 |
-| **P2-3** 接受面板 | `plan_change_set_accept` / `accept_change_set` / `discard_change_set`（Desktop 专用）；协调器内同事务写 patch + 决定；面板展示 ImpactPlan + Debt | PR-B（§9.1 B6–B7，含 §5.5 批量审核） |
+| **P2-2b** 投影 | `graph.get` / `graph.neighborhood` 的调查级暂存节点投影；随后 `workspace.search` 暂存命中 | PR-B（§9.1 B5，graph.get 已接入；search 暂存命中后续） |
+| **P2-3** 接受面板 | `plan_change_set_accept` / `accept_change_set` / `discard_change_set`（Desktop 专用）；OCC 预览、单项 / 批量接受和依赖传播 | PR-B（§9.1 B6–B7，命令与审核面板已接入） |
 | **P2-4** 撤回 | `ChangeSetScoped` 退役计划 / 提交、悬挂检查、级联预览、审计 | 后续代码 PR |
 
 本 PR 锁定：§2 决策、§3 最小口径、§4 工具形状与语义、§5 接受绑定、§6 回滚矩阵、§7 并发规则。各代码 PR 可细化字段名 / 表名（[本文提议] 项），但不得违背 [锁定] 项；如需改变，先改本文。
@@ -605,10 +605,10 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 1. ~~**[待核] 暂存新建 SourceSpan**~~ **已定（2026-11-09 用户改定）**：见 §4.2.5。原文：Phase2-0 的 `source_unit/create` 只能引用已存在的 span id。若首个调查场景需要 Agent 从 `material.read` 的 locator 新建 span，需要另定「span 也作为暂存对象」的规则（涉及 artifact revision 绑定与登记管线）。
 2. **[风险] Codex 长时间持有 `requestUserInput`**：harness 是否容忍数小时挂起未实测；§4.1.3 已规定中断时降级为下一 turn 投递，实测后可能把原生通道也改为「立即降级」。
 3. **[风险] 投影成本**：`scope=investigation` 每次合并已接受快照与暂存；暂存规模大时需限额，诊断沿用 1c 截断惯例。2026-11-09 起 Desktop 地图也用这份投影（§4.4.1），依赖闭包试编排（§4.2.4 第 4 步）同样随暂存规模增长。
-4. **[待核] 同 id span 已退役**：§4.2.5 先按 `span_inactive` blocked；也可仿来源登记的重新激活（`reactivated_object_count`）在接受时重新激活。待用户定。
-5. **[待核] 批量审核中未勾选项**：§5.5 默认「保持 `staged`，可稍后再审」；另一选择是「未勾选 = 丢弃」。沙箱里若用户随后丢弃整场会话，未审项随副本一起物理删除。待用户定。
-6. **[待核] 多来源 change_set 的审核投影**：`SourceReviewProjection` 只有一个 `source`（单一 Markdown 快照）；一个 change_set 可含多个快照的单元（`validate_live_references` 只要求单元内部与父子同源）。建议审核投影按快照分组展示（`source` 改为 `sources[]` 或每组一份投影）；也可规定单个 change_set 只能涉及一个快照。待用户定。
-7. **[待核] 沙箱 investigation 的粒度**：沙箱 §4.3.1 建议「一条对话线程 = 一个 investigation」；也可「整场沙箱会话 = 一个 investigation」（新线程可继续引用旧线程未审的暂存）。见 sandbox-flow §3.5。
+4. ~~**[待核] 同 id span 已退役**~~：已定，`span_inactive` → `blocked`，不自动重新激活；重新激活必须是独立的显式操作。
+5. ~~**[待核] 批量审核中未勾选项**~~：已定，保持 `staged`，可稍后再审；沙箱副本整体丢弃时随副本物理删除。
+6. ~~**[待核] 多来源 change_set 的审核投影**~~：已定，一个 change_set 可涉及多个 Markdown 快照，审核面板按快照分组展示；每个 SourceSpan 保留自己的 artifact/range。
+7. ~~**[待核] 沙箱 investigation 的粒度**~~：已定，一条对话线程对应一个 investigation；同线程多个 round 共享，切换新线程前触发旧线程待审提案审核。
 
 ---
 

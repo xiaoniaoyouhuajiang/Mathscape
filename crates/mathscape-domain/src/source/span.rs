@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{ContentHash, DomainError, EntityKind, EntityPayload, StableId};
 
 use super::{ensure_non_blank, ensure_optional_non_blank};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpanGranularity {
     Page,
@@ -14,7 +15,7 @@ pub enum SpanGranularity {
     Inline,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutKind {
     Heading,
@@ -91,7 +92,9 @@ impl InkLocator {
 }
 
 /// A coordinate normalized to millionths of a page dimension.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(transparent)]
 pub struct NormalizedCoordinate(u32);
 
@@ -110,7 +113,7 @@ impl NormalizedCoordinate {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BoundingBox {
     x_min: NormalizedCoordinate,
     y_min: NormalizedCoordinate,
@@ -154,7 +157,7 @@ impl BoundingBox {
 }
 
 /// Three page-number systems that must never be implicitly conflated.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PageCoordinate {
     artifact: StableId,
     pdf_page_index: u32,
@@ -199,7 +202,7 @@ impl PageCoordinate {
 }
 
 /// Half-open UTF-8 byte range `[start, end)`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ByteRange {
     start: u64,
     end: u64,
@@ -227,7 +230,7 @@ impl ByteRange {
 }
 
 /// Inclusive, one-based displayed line range used only for human navigation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DisplayedLineRange {
     start: u32,
     end: u32,
@@ -254,7 +257,7 @@ impl DisplayedLineRange {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MarkdownLocator {
     artifact: StableId,
     byte_range: ByteRange,
