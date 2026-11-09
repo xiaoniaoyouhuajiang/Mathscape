@@ -6,6 +6,7 @@ import {
   showContextMenu,
   type ContextMenuItem,
 } from "./context-menu";
+import { applyStagedOverlay } from "./staged-overlay";
 import {
   applyFocusScope,
   mountCytoscapeGraph,
@@ -374,6 +375,7 @@ export class GraphController {
 
     this.focusScope = focusScope;
     applyFocusScope(this.graphCore, focusScope);
+    applyStagedOverlay(this.graphCore, this.delegate.getSnapshot()?.investigation);
     this.inkOverlayResult = applyInkOverlay(this.graphCore, this.inkOverlay, this.showInkNotes);
     this.renderInkToggle();
     this.renderLegend(this.graphCore);

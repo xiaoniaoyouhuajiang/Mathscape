@@ -1,3 +1,4 @@
+import { stagedMark } from "../graph/staged-overlay";
 import type {
   DesktopSnapshot,
   MarkerRuntimeStatus,
@@ -119,8 +120,19 @@ export class InspectorController {
     const actions = textElement("div", "detail-actions", "");
     const editSlot = textElement("div", "detail-edit-slot", "");
     this.nodeDetail.append(sourceSlot, actions, editSlot);
+    // Phase2: a staged (「未审批」) object is not in the accepted head; the
+    // formal edit entry points and head-based source detail do not apply.
+    const staged = stagedMark(this.delegate.getSnapshot()?.investigation, node.domain_id);
+    if (staged) {
+      sourceSlot.append(textElement(
+        "p",
+        "detail-staged-badge",
+        `未审批提案 · ${staged.change_set_id.slice(-12)}@v${staged.change_set_version}${staged.replaces_revision ? "（替换已接受版本）" : ""}。在「审核提案」中接受后才进入正式地图。`,
+      ));
+    }
 
     if (
+      !staged &&
       node.domain_id !== null &&
       (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceSpan")
     ) {
@@ -164,6 +176,7 @@ export class InspectorController {
     }
 
     if (
+      !staged &&
       node.domain_id !== null &&
       (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceUnitRelation" || node.domain_kind === "SourceSpan")
     ) {

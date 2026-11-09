@@ -41,6 +41,7 @@ import { listInkNoteLinks, type InkNoteLink } from "./ink/links";
 import { searchWorkspace, type SearchHit } from "./search/api";
 import { WorkspaceSearchPanel, installWorkspaceSearch, type SearchAction } from "./search/search-panel";
 import { installInkCloseGuard } from "./ink/close-guard";
+import { reviewBeforeLeaving } from "./review/change-sets";
 import "./styles.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -312,13 +313,25 @@ el.inkButton.addEventListener("click", () => {
 });
 // H5: the Tauri window close (and a browser unload) waits for the 手稿 save
 // and asks before discarding operations that are still pending.
+// Phase2: app exit is a review trigger for staged proposals. Tauri allows one
+// composed close guard, so the proposal review runs inside it after 手稿.
+async function reviewProposalsOnExit(): Promise<boolean> {
+  if (!await reviewBeforeLeaving(null, "exit", sandboxToast)) return false;
+  const docked = sandboxDock.currentSessionId;
+  if (docked && docked !== sandboxWindowSessionId) return reviewBeforeLeaving(docked, "exit", sandboxToast);
+  return true;
+}
 installInkCloseGuard({
   confirm: async () => {
     if (!inkOpen) {
-      if (!await inkWorkspace.unsavedAfterFlush()) return true;
-      await openInkWorkspaceFromButton(); // The prompt lives in the 手稿 workspace.
+      if (await inkWorkspace.unsavedAfterFlush()) {
+        await openInkWorkspaceFromButton(); // The prompt lives in the 手稿 workspace.
+        if (!await inkWorkspace.confirmLeave("window")) return false;
+      }
+    } else if (!await inkWorkspace.confirmLeave("window")) {
+      return false;
     }
-    return inkWorkspace.confirmLeave("window");
+    return reviewProposalsOnExit();
   },
   hasUnsavedHint: () => inkWorkspace.hasUnsavedHint(),
 });
@@ -347,7 +360,9 @@ const llmSettings = new LlmSettingsController(
 const sandboxToast = (msg: string, kind: "success" | "error") => shell.showToast(msg, kind);
 const sandboxDock = new SandboxDialogueDock(el.sandboxHost, sandboxToast);
 new SandboxPanelController(el.sandboxHost, el.sandboxButton, sandboxToast, sandboxDock);
-void mountSandboxChrome(el.shell, { toast: sandboxToast, openDialogue: (id) => void sandboxDock.open(id) });
+let sandboxWindowSessionId: string | null = null;
+void mountSandboxChrome(el.shell, { toast: sandboxToast, openDialogue: (id) => void sandboxDock.open(id) })
+  .then(status => { sandboxWindowSessionId = status?.sandbox?.sandboxSessionId ?? null; });
 
 let currentSnapshot: DesktopSnapshot | undefined;
 let inspectorController!: InspectorController;

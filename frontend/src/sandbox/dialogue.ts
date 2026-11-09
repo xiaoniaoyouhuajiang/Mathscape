@@ -84,7 +84,7 @@ import {
   type TurnUsage,
   type TurnView,
 } from "./steps";
-import { openChangeSetReview } from "../review/change-sets";
+import { openProposalReview, reviewBeforeLeaving } from "../review/change-sets";
 import "../review/change-sets.css";
 
 export const DIALOGUE_EVENT = "sandbox://dialogue";
@@ -509,7 +509,14 @@ export class SandboxDialogueDock {
     return this.sessionId;
   }
 
-  async open(sessionId: string): Promise<void> {
+  /**
+   * Show `sessionId`. Switching away from another session first runs the
+   * blocking batch review of that session's proposals; resolves `false`
+   * when the user cancels the switch.
+   */
+  async open(sessionId: string): Promise<boolean> {
+    const leaving = this.sessionId;
+    if (leaving && leaving !== sessionId && !await reviewBeforeLeaving(leaving, "switch_session", this.toast)) return false;
     this.ensureListening();
     this.floatHandle.hidden = true;
     this.root.hidden = false;
@@ -532,13 +539,14 @@ export class SandboxDialogueDock {
     void this.refreshStatus();
     try {
       const dialogue = await invoke<SessionDialogue>("sandbox_session_dialogue", { sandboxSessionId: sessionId });
-      if (this.sessionId !== sessionId) return;
+      if (this.sessionId !== sessionId) return true;
       this.adopt(dialogue, true);
     } catch (error) {
       this.toast(errorMessage(error), "error");
     }
     this.renderAll();
     this.input.focus();
+    return true;
   }
 
   close(): void {
@@ -1165,7 +1173,8 @@ export class SandboxDialogueDock {
   private async newThread(): Promise<void> {
     const sessionId = this.sessionId;
     if (!sessionId || this.sending || this.activeRoundId || this.switchingThread) return;
-    await openChangeSetReview(`sandbox:${sessionId}:${this.activeThreadId}`, this.toast);
+    // A thread is metadata of the session's investigation: switching threads
+    // keeps proposals staged and is not a review trigger.
     this.switchingThread = true;
     this.syncControls();
     try {
@@ -1185,7 +1194,7 @@ export class SandboxDialogueDock {
 
   private async reviewChanges(): Promise<void> {
     if (!this.sessionId) return;
-    await openChangeSetReview(`sandbox:${this.sessionId}:${this.activeThreadId}`, this.toast);
+    await openProposalReview(this.sessionId, this.toast);
   }
 
   private async cancel(): Promise<void> {
