@@ -25,12 +25,15 @@ use super::map::{
 };
 use crate::{
     AgentBackend, AgentError, AgentEvent, AgentExecutor, Capability, CapabilityProbe,
-    CommandRunner, ErrorCode, RoundId, StartRoundRequest, SystemCommandRunner, probe_program,
+    CommandRunner, ErrorCode, HarnessContext, RoundId, StartRoundRequest, SystemCommandRunner,
+    probe_program,
 };
 
 const INITIALIZE_ID: u64 = 1;
 const THREAD_START_ID: u64 = 2;
 const TURN_START_ID: u64 = 3;
+/// `skills/extraRoots/set`, sent before `thread/start` when the round has skills.
+const SKILL_ROOTS_ID: u64 = 4;
 const STDERR_TAIL: usize = 4 * 1024;
 /// Upper bound between SIGTERM and SIGKILL for the app-server process group.
 const TERM_GRACE: Duration = Duration::from_secs(2);
@@ -298,7 +301,7 @@ fn drive_child(
     mut ready: Ready,
 ) {
     let _finish = FinishBus(Arc::clone(&bus));
-    let mut child = match spawn_child(&config, &request.workspace) {
+    let mut child = match spawn_child(&config, &request.workspace, &request.harness.env) {
         Ok(child) => child,
         Err(error) => {
             ready.fail(error);
@@ -352,7 +355,7 @@ fn drive_child(
         handshake_timeout: config.handshake_timeout,
         interrupt_grace: config.interrupt_grace,
         stderr_tail,
-        next_id: TURN_START_ID,
+        next_id: SKILL_ROOTS_ID,
         thread_id: None,
         turn_id: None,
         interrupt_rpc: None,
@@ -448,6 +451,28 @@ impl Session {
         let deadline = Instant::now() + self.handshake_timeout;
         self.write_value(&initialize_message())?;
         self.write_value(&json!({"method": "initialized", "params": {}}))?;
+        if let Some(message) = skill_roots_message(SKILL_ROOTS_ID, &request.harness) {
+            self.write_value(&message)?;
+        }
+        // Collect `initialize` together with the skill registration so its
+        // response is never consumed and dropped while we wait.
+        let mut early = vec![INITIALIZE_ID];
+        if skill_roots_message(SKILL_ROOTS_ID, &request.harness).is_some() {
+            early.push(SKILL_ROOTS_ID);
+            let registered = self.collect_responses(&early, deadline, ready)?;
+            if let Some(message) = rpc_error_message(&registered[&INITIALIZE_ID]) {
+                return Err(harness(
+                    classify_codex_failure(&message),
+                    format!("initialize: {message}"),
+                ));
+            }
+            // Not fatal: developerInstructions still name the skill's stable
+            // path, so the agent can read it with its own file tools.
+            if let Some(message) = rpc_error_message(&registered[&SKILL_ROOTS_ID]) {
+                eprintln!("mathscape: skills/extraRoots/set failed: {message}");
+            }
+            early.clear();
+        }
         self.write_value(&thread_start_message(
             THREAD_START_ID,
             request,
@@ -455,8 +480,9 @@ impl Session {
             &self.mcp_program,
             self.model.as_deref(),
         ))?;
-        let opened = self.collect_responses(&[INITIALIZE_ID, THREAD_START_ID], deadline, ready)?;
-        if let Some(message) = rpc_error_message(&opened[&INITIALIZE_ID]) {
+        early.push(THREAD_START_ID);
+        let opened = self.collect_responses(&early, deadline, ready)?;
+        if let Some(message) = opened.get(&INITIALIZE_ID).and_then(rpc_error_message) {
             return Err(harness(
                 classify_codex_failure(&message),
                 format!("initialize: {message}"),
@@ -880,13 +906,20 @@ fn signal_group(signal: &str, group: &str) {
         .status();
 }
 
-fn spawn_child(config: &CodexConfig, workspace: &Path) -> Result<Child, AgentError> {
+fn spawn_child(
+    config: &CodexConfig,
+    workspace: &Path,
+    env: &[(String, String)],
+) -> Result<Child, AgentError> {
     let mut command = Command::new(&config.program);
     command
         .args(&config.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Round-scoped, non-secret paths (e.g. the Lean profile root resolved
+    // from the real checkpoint, which the sandbox copy cannot rediscover).
+    command.envs(env.iter().map(|(key, value)| (key, value)));
     if workspace.is_dir() {
         command.current_dir(workspace);
     }
@@ -897,7 +930,7 @@ fn spawn_child(config: &CodexConfig, workspace: &Path) -> Result<Child, AgentErr
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    // Inherit the environment unchanged. The Codex CLI reads its own login;
+    // Otherwise inherit the environment unchanged. The Codex CLI reads its own login;
     // Mathscape must not add OPENAI_API_KEY / ChatGPT tokens, and must not
     // call account/login.
     command.spawn().map_err(|error| {
@@ -918,12 +951,64 @@ fn spawn_child(config: &CodexConfig, workspace: &Path) -> Result<Child, AgentErr
 }
 
 /// Environment variables Codex forwards to the Mathscape MCP child so the
-/// Marker capability lookup matches the desktop. Names only; no credentials.
-const MCP_FORWARDED_ENV_VARS: [&str; 3] = [
+/// Marker and Lean profile lookups match the desktop. Names only; no
+/// credentials. `MATHSCAPE_LEAN_PROFILE_ROOT` matters most for sandbox
+/// rounds: the session copy has no parent `.mathscape/lean/profiles`.
+const MCP_FORWARDED_ENV_VARS: [&str; 4] = [
     "MATHSCAPE_MARKER_EXECUTABLE",
     "MATHSCAPE_MARKER_VENV",
     "XDG_DATA_HOME",
+    "MATHSCAPE_LEAN_PROFILE_ROOT",
 ];
+
+/// Name of the per-round Codex permission profile (`[permissions.<name>]`).
+pub(crate) const SESSION_PERMISSION_PROFILE: &str = "mathscape-session";
+
+fn forwarded_env_vars(harness: &HarnessContext) -> Vec<String> {
+    let mut names: Vec<String> = MCP_FORWARDED_ENV_VARS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    for (name, _) in &harness.env {
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+    names
+}
+
+/// `[permissions.mathscape-session.filesystem]`: read `:minimal`, the
+/// workspace, extra read roots and skills; write only the scratch dir. No
+/// `:root`, so everything else (home, `~/.codex`, other projects) stays
+/// unreadable to harness tools. Network is off by default in a profile.
+fn session_filesystem_permissions(workspace: &str, harness: &HarnessContext) -> Value {
+    let mut grants = serde_json::Map::new();
+    grants.insert(":minimal".to_owned(), json!("read"));
+    grants.insert(workspace.to_owned(), json!("read"));
+    for root in harness.read_roots.iter().chain(&harness.skill_roots) {
+        grants.insert(absolute_path(root).display().to_string(), json!("read"));
+    }
+    if let Some(scratch) = &harness.scratch_dir {
+        grants.insert(absolute_path(scratch).display().to_string(), json!("write"));
+    }
+    Value::Object(grants)
+}
+
+fn skill_roots_message(id: u64, harness: &HarnessContext) -> Option<Value> {
+    if harness.skill_roots.is_empty() {
+        return None;
+    }
+    let roots: Vec<String> = harness
+        .skill_roots
+        .iter()
+        .map(|root| absolute_path(root).display().to_string())
+        .collect();
+    Some(json!({
+        "method": "skills/extraRoots/set",
+        "id": id,
+        "params": { "extraRoots": roots }
+    }))
+}
 
 /// Per-call MCP tool timeout. `material.read` on a scanned PDF waits for
 /// Marker synchronously, bounded by the ensure `sync_timeout` (15 min in
@@ -943,10 +1028,9 @@ pub(crate) fn thread_start_message(
     let mut params = json!({
         "cwd": workspace,
         "approvalPolicy": SANDBOX_APPROVAL_POLICY,
-        "sandbox": "read-only",
         "ephemeral": true,
         "serviceName": "mathscape",
-        "developerInstructions": developer_instructions(round_id, &request.tools_allow),
+        "developerInstructions": developer_instructions(round_id, &request.tools_allow, &request.harness),
         "config": {
             "mcp_servers.mathscape.command": mcp_program.display().to_string(),
             "mcp_servers.mathscape.args": [
@@ -962,10 +1046,19 @@ pub(crate) fn thread_start_message(
             // material.read may run a bounded Marker ensure on a scanned PDF:
             // forward only the Marker lookup variables (no secrets) and allow
             // the synchronous ensure wait plus margin.
-            "mcp_servers.mathscape.env_vars": MCP_FORWARDED_ENV_VARS,
+            "mcp_servers.mathscape.env_vars": forwarded_env_vars(&request.harness),
             "mcp_servers.mathscape.tool_timeout_sec": MCP_TOOL_TIMEOUT_SEC
         }
     });
+    if request.harness.uses_permission_profile() {
+        // Do not also send `sandbox`: a legacy sandbox mode overrides the
+        // profile (thread/start then reports `activePermissionProfile: null`).
+        let grants = session_filesystem_permissions(&workspace, &request.harness);
+        params["config"]["default_permissions"] = json!(SESSION_PERMISSION_PROFILE);
+        params["config"][format!("permissions.{SESSION_PERMISSION_PROFILE}.filesystem")] = grants;
+    } else {
+        params["sandbox"] = json!("read-only");
+    }
     if let Some(model) = model.map(str::trim).filter(|id| !id.is_empty()) {
         params["model"] = json!(model);
     }
@@ -1014,7 +1107,11 @@ fn initialize_message() -> Value {
     })
 }
 
-fn developer_instructions(round_id: &RoundId, tools_allow: &[String]) -> String {
+fn developer_instructions(
+    round_id: &RoundId,
+    tools_allow: &[String],
+    harness: &HarnessContext,
+) -> String {
     let tools = if tools_allow.is_empty() {
         "The mathscape MCP server exposes a fixed read-only tool list; call those tools when they help.".to_owned()
     } else {
@@ -1023,9 +1120,25 @@ fn developer_instructions(round_id: &RoundId, tools_allow: &[String]) -> String 
             tools_allow.join(", ")
         )
     };
-    format!(
+    let mut text = format!(
         "This is Mathscape round {round_id}. {tools} Mathscape does not provide model credentials; use this Codex process's existing local login. Do not ask the user for an API key."
-    )
+    );
+    if let Some(scratch) = &harness.scratch_dir {
+        text.push_str(&format!(
+            " Your own file and shell tools may write only under {}; every other path is read-only and the network is off. Files there are drafts, not map changes: map changes go through mathscape proposals that the user accepts.",
+            absolute_path(scratch).display()
+        ));
+    }
+    if let Some(extra) = harness
+        .instructions
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        text.push_str("\n\n");
+        text.push_str(extra);
+    }
+    text
 }
 
 fn absolute_path(path: &Path) -> PathBuf {
@@ -1266,6 +1379,7 @@ mod tests {
             workspace: PathBuf::from("/tmp/mathscape-ws"),
             input_ref: "explain 紧集".into(),
             tools_allow: vec!["workspace.search".into(), "material.read".into()],
+            harness: HarnessContext::default(),
         }
     }
 
@@ -1302,9 +1416,11 @@ mod tests {
             json!([
                 "MATHSCAPE_MARKER_EXECUTABLE",
                 "MATHSCAPE_MARKER_VENV",
-                "XDG_DATA_HOME"
+                "XDG_DATA_HOME",
+                "MATHSCAPE_LEAN_PROFILE_ROOT"
             ])
         );
+        assert!(config.get("default_permissions").is_none());
         assert_eq!(config["mcp_servers.mathscape.tool_timeout_sec"], 960);
         assert_eq!(
             config["mcp_servers.mathscape.args"],
@@ -1325,6 +1441,72 @@ mod tests {
         assert!(instructions.contains("workspace.search"));
         assert!(instructions.contains("material.read"));
         assert!(instructions.contains("existing local login"));
+    }
+
+    #[test]
+    fn harness_grants_switch_to_session_permission_profile() {
+        let mut request = request(AgentBackend::Codex);
+        request.harness = HarnessContext {
+            skill_roots: vec![PathBuf::from("/tmp/repo/skills")],
+            read_roots: vec![PathBuf::from("/tmp/lean/profiles")],
+            scratch_dir: Some(PathBuf::from("/tmp/session/scratch")),
+            env: vec![(
+                "MATHSCAPE_LEAN_PROFILE_ROOT".into(),
+                "/tmp/lean/profiles".into(),
+            )],
+            instructions: Some("Skill index: mathscape-worknet v0.6".into()),
+        };
+        let message = thread_start_message(
+            2,
+            &request,
+            &RoundId::parse("codex-1").unwrap(),
+            Path::new("mathscape"),
+            None,
+        );
+        let params = &message["params"];
+        // A legacy sandbox mode would override the profile.
+        assert!(params.get("sandbox").is_none());
+        let config = &params["config"];
+        assert_eq!(config["default_permissions"], SESSION_PERMISSION_PROFILE);
+        let grants = &config["permissions.mathscape-session.filesystem"];
+        assert_eq!(grants[":minimal"], "read");
+        assert_eq!(grants["/tmp/mathscape-ws"], "read");
+        assert_eq!(grants["/tmp/repo/skills"], "read");
+        assert_eq!(grants["/tmp/lean/profiles"], "read");
+        assert_eq!(grants["/tmp/session/scratch"], "write");
+        assert!(grants.get(":root").is_none());
+        assert_eq!(
+            grants
+                .as_object()
+                .unwrap()
+                .values()
+                .filter(|v| *v == "write")
+                .count(),
+            1
+        );
+        let env_vars = config["mcp_servers.mathscape.env_vars"].as_array().unwrap();
+        assert_eq!(
+            env_vars
+                .iter()
+                .filter(|name| *name == "MATHSCAPE_LEAN_PROFILE_ROOT")
+                .count(),
+            1
+        );
+        let instructions = params["developerInstructions"].as_str().unwrap();
+        assert!(instructions.contains("/tmp/session/scratch"));
+        assert!(instructions.contains("mathscape-worknet v0.6"));
+    }
+
+    #[test]
+    fn skill_roots_are_registered_only_when_present() {
+        assert!(skill_roots_message(4, &HarnessContext::default()).is_none());
+        let harness = HarnessContext {
+            skill_roots: vec![PathBuf::from("/tmp/repo/skills")],
+            ..HarnessContext::default()
+        };
+        let message = skill_roots_message(4, &harness).unwrap();
+        assert_eq!(message["method"], "skills/extraRoots/set");
+        assert_eq!(message["params"]["extraRoots"], json!(["/tmp/repo/skills"]));
     }
 
     #[test]

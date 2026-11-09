@@ -32,6 +32,13 @@ use crate::{
 };
 
 pub const EVENTS_FILE: &str = "events.jsonl";
+/// One line per round: the harness context it ran with (skill version and
+/// hash, permission grants, Lean profile root). No secrets.
+pub const HARNESS_FILE: &str = "harness.jsonl";
+/// Per-session directory the harness may write (drafts, object cards, notes).
+/// Lives beside `workspace/`, so the workspace copy itself stays read-only to
+/// harness tools; discard deletes it with the session.
+pub const SCRATCH_DIR: &str = "scratch";
 /// Upper bound of one transcript message (user input or agent reply).
 pub const MAX_MESSAGE_CHARS: usize = 20_000;
 /// Implicit thread of every session (and of legacy untagged lines).
@@ -245,6 +252,28 @@ impl SandboxHome {
     pub fn append_event(&self, session_id: &str, event: &Value) -> Result<()> {
         self.session(session_id)?;
         append_json_line(&self.events_path(session_id), event)
+    }
+
+    pub fn harness_path(&self, session_id: &str) -> std::path::PathBuf {
+        self.session_dir(session_id).join(HARNESS_FILE)
+    }
+
+    pub fn append_harness_context(&self, session_id: &str, context: &Value) -> Result<()> {
+        self.session(session_id)?;
+        append_json_line(&self.harness_path(session_id), context)
+    }
+
+    pub fn read_harness_contexts(&self, session_id: &str) -> Result<Vec<Value>> {
+        self.session(session_id)?;
+        read_json_lines(&self.harness_path(session_id))
+    }
+
+    /// The session's harness-writable scratch dir, created on demand.
+    pub fn ensure_session_scratch(&self, session_id: &str) -> Result<std::path::PathBuf> {
+        self.session(session_id)?;
+        let path = self.session_dir(session_id).join(SCRATCH_DIR);
+        std::fs::create_dir_all(&path).map_err(|e| SandboxError::io(&path, e))?;
+        Ok(path)
     }
 
     pub fn read_events(&self, session_id: &str) -> Result<Vec<Value>> {

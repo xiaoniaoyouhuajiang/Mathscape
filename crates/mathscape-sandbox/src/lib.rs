@@ -23,6 +23,8 @@
 //!     session.json
 //!     transcript.jsonl               # user / agent / system lines (S1), tagged by dialogue thread
 //!     events.jsonl                   # raw agent_events v0 of every round (S1)
+//!     harness.jsonl                  # per-round harness context: skill version/hash, grants
+//!     scratch/                       # the only harness-writable dir (drafts)
 //!     workspace/                     # full copy of the checkpoint workspace root
 //!   exports/                         # default export destination (survives discard)
 //!   .staging/  .trash/               # internal; make create/discard atomic
@@ -33,8 +35,8 @@ mod dialogue;
 mod fingerprint;
 
 pub use dialogue::{
-    DialogueThread, DialogueThreads, EVENTS_FILE, FIRST_THREAD_ID, MAX_MESSAGE_CHARS,
-    TranscriptEntry, TranscriptRole, build_dialogue_prompt,
+    DialogueThread, DialogueThreads, EVENTS_FILE, FIRST_THREAD_ID, HARNESS_FILE, MAX_MESSAGE_CHARS,
+    SCRATCH_DIR, TranscriptEntry, TranscriptRole, build_dialogue_prompt,
 };
 
 pub use fingerprint::{
@@ -572,6 +574,12 @@ impl SandboxHome {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(SandboxError::io(&events_source, e)),
         };
+        let harness_source = self.harness_path(session_id);
+        let harness = match fs::read(&harness_source) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(SandboxError::io(&harness_source, e)),
+        };
 
         let exported_at = now_rfc3339();
         let manifest = ExportManifest {
@@ -587,14 +595,15 @@ impl SandboxHome {
             isolation: record.isolation.clone(),
             transcript_entries,
             dialogue_threads: dialogue::effective_threads(&record).threads.len(),
-            files: if events.is_empty() {
-                vec![MANIFEST_FILE.to_owned(), TRANSCRIPT_FILE.to_owned()]
-            } else {
-                vec![
-                    MANIFEST_FILE.to_owned(),
-                    TRANSCRIPT_FILE.to_owned(),
-                    EVENTS_FILE.to_owned(),
-                ]
+            files: {
+                let mut files = vec![MANIFEST_FILE.to_owned(), TRANSCRIPT_FILE.to_owned()];
+                if !events.is_empty() {
+                    files.push(EVENTS_FILE.to_owned());
+                }
+                if !harness.is_empty() {
+                    files.push(HARNESS_FILE.to_owned());
+                }
+                files
             },
         };
 
@@ -614,6 +623,10 @@ impl SandboxHome {
             if !events.is_empty() {
                 let path = partial.join(EVENTS_FILE);
                 fs::write(&path, &events).map_err(|e| SandboxError::io(&path, e))?;
+            }
+            if !harness.is_empty() {
+                let path = partial.join(HARNESS_FILE);
+                fs::write(&path, &harness).map_err(|e| SandboxError::io(&path, e))?;
             }
             fs::rename(&partial, &export_dir).map_err(|e| SandboxError::io(&export_dir, e))
         })();

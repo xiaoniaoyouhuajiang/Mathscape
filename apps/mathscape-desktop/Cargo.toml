@@ -28,6 +28,7 @@ mathscape-query.workspace = true
 mathscape-sandbox.workspace = true
 mathscape-store-sqlite.workspace = true
 mathscape-tool-marker.workspace = true
+mathscape-tool-lean.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 secrecy.workspace = true
@@ -47,6 +48,7 @@ rusqlite.workspace = true
 lopdf.workspace = true
 tokio.workspace = true
 wiremock.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true

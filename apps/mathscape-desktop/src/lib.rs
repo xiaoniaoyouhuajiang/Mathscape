@@ -24,6 +24,7 @@ mod registration;
 mod sandbox;
 mod sandbox_dialogue;
 mod search;
+mod skill_pack;
 pub use registration::RegistrationSourceContext;
 mod workspace_settings;
 pub use backlink::{SourceBacklink, SourceBacklinkRequest};
@@ -74,6 +75,10 @@ use mathscape_pdf::{
 };
 use mathscape_query::{LandscapeProjectionInput, LandscapeProjector, SourceGraphProjectionError};
 use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
+use mathscape_tool_lean::{
+    LEAN_PROFILE_ROOT_ENV, LeanFingerprintStatus, LeanProfileRootSource, LeanProfileState,
+    discover_profile_root, list_profiles,
+};
 use mathscape_tool_marker::{
     MarkerCancellation, MarkerExecutionError, MarkerInstallation, MarkerProductRole,
     MarkerProductScanError, MarkerProductScanner, MarkerProfile, MarkerRequest, MarkerRequestError,
@@ -210,6 +215,7 @@ impl DesktopService {
             artifact_count,
             conversion_count,
             marker: self.marker_status(),
+            lean: lean_runtime_status(&self.workspace_root),
             pdf_artifacts,
             landscape_graph,
         })
@@ -496,6 +502,7 @@ pub struct DesktopSnapshot {
     artifact_count: usize,
     conversion_count: usize,
     marker: MarkerRuntimeStatus,
+    lean: LeanRuntimeStatus,
     pdf_artifacts: Vec<PdfArtifactSummary>,
     landscape_graph: IncidenceGraph,
 }
@@ -523,6 +530,98 @@ impl DesktopSnapshot {
 
     pub fn landscape_graph(&self) -> &IncidenceGraph {
         &self.landscape_graph
+    }
+}
+
+/// Lean profiles visible to this workspace, shown in the source layer as an
+/// environment / external library. Read-only: reads `profile.json` records
+/// and never creates, builds, or re-probes a profile.
+#[derive(Clone, Debug, Serialize)]
+pub struct LeanRuntimeStatus {
+    root: Option<String>,
+    source: Option<LeanProfileRootSource>,
+    root_exists: bool,
+    profiles: Vec<LeanProfileSummary>,
+    problem: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct LeanProfileSummary {
+    id: String,
+    state: Option<LeanProfileState>,
+    lean_toolchain: Option<String>,
+    mathlib_reference: Option<String>,
+    detected_mathlib_revision: Option<String>,
+    fingerprint_status: Option<LeanFingerprintStatus>,
+    fingerprint_digest: Option<String>,
+    problem: Option<String>,
+}
+
+impl LeanRuntimeStatus {
+    pub fn profiles(&self) -> &[LeanProfileSummary] {
+        &self.profiles
+    }
+
+    pub fn problem(&self) -> Option<&str> {
+        self.problem.as_deref()
+    }
+}
+
+impl LeanProfileSummary {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn state(&self) -> Option<LeanProfileState> {
+        self.state
+    }
+}
+
+fn lean_runtime_status(workspace_root: &Path) -> LeanRuntimeStatus {
+    let Some(found) = discover_profile_root(Some(workspace_root)) else {
+        return LeanRuntimeStatus {
+            root: None,
+            source: None,
+            root_exists: false,
+            profiles: Vec::new(),
+            problem: Some(format!(
+                "未找到 Lean profile 目录（可设置 {LEAN_PROFILE_ROOT_ENV}）"
+            )),
+        };
+    };
+    let root_exists = found.root.is_dir();
+    let (profiles, problem) = if root_exists {
+        match list_profiles(&found.root) {
+            Ok(list) => (
+                list.into_iter()
+                    .map(|profile| {
+                        let meta = profile.metadata.as_ref();
+                        LeanProfileSummary {
+                            id: profile.id,
+                            state: meta.map(|m| m.state),
+                            lean_toolchain: meta.map(|m| m.lean_toolchain.clone()),
+                            mathlib_reference: meta.map(|m| m.mathlib_reference.clone()),
+                            detected_mathlib_revision: meta
+                                .and_then(|m| m.detected_mathlib_revision.clone()),
+                            fingerprint_status: meta.map(|m| m.fingerprint.status),
+                            fingerprint_digest: meta.map(|m| m.fingerprint.digest.clone()),
+                            problem: profile.problem,
+                        }
+                    })
+                    .collect(),
+                None,
+            ),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        }
+    } else {
+        (Vec::new(), Some("Lean profile 目录不存在".to_owned()))
+    };
+    LeanRuntimeStatus {
+        root: Some(found.root.display().to_string()),
+        source: Some(found.source),
+        root_exists,
+        profiles,
+        problem,
     }
 }
 

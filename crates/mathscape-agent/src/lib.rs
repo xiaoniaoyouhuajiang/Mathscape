@@ -35,7 +35,8 @@ pub use event::{
     ToolCall, ToolResult, ToolResultStatus, TurnEnd, TurnOutcome, TurnStart, Usage,
 };
 pub use executor::{
-    AgentEffort, AgentError, AgentExecutor, AgentModel, StartRoundRequest, UnimplementedExecutor,
+    AgentEffort, AgentError, AgentExecutor, AgentModel, HarnessContext, StartRoundRequest,
+    UnimplementedExecutor,
 };
 pub use fake::{FakeBackend, scripted_round};
 pub use id::{CallId, IdError, RoundId, TurnId};

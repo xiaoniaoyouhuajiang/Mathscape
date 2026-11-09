@@ -53,6 +53,7 @@ fn request() -> StartRoundRequest {
         workspace: std::env::temp_dir(),
         input_ref: "explain 紧集".into(),
         tools_allow: vec!["workspace.search".into(), "material.read".into()],
+        harness: mathscape_agent::HarnessContext::default(),
     }
 }
 
@@ -313,7 +314,7 @@ fn shell_approval_is_declined_and_named_in_the_event_stream() {
         matches!(
             &event.payload,
             EventPayload::Error(error)
-                if error.message.contains("审批策略拒绝了 shell") && !error.fatal
+                if error.message.contains("审批策略拒绝了需要越权的 shell 命令") && !error.fatal
         )
     });
     assert!(denied, "missing readable shell denial: {events:?}");
@@ -420,6 +421,7 @@ fn live_codex_app_server_round_trip() {
         workspace: std::env::temp_dir(),
         input_ref: "Reply with the single word pong. Do not call tools.".into(),
         tools_allow: vec![],
+        harness: mathscape_agent::HarnessContext::default(),
     };
     let round = block_on(executor.start_round(request)).expect("start live codex round");
     let events = collect_until(
@@ -551,4 +553,32 @@ fn effort_is_listed_persisted_and_forwarded_on_turn_start() {
         "{config}"
     );
     let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn skill_roots_handshake_still_reaches_turn_end() {
+    // Regression: waiting for the `skills/extraRoots/set` answer must not
+    // swallow the `initialize` response and stall the handshake.
+    let scratch = std::env::temp_dir().join(format!("mathscape-harness-{}", unique()));
+    let mut req = request();
+    req.harness = mathscape_agent::HarnessContext {
+        skill_roots: vec![std::env::temp_dir()],
+        scratch_dir: Some(scratch),
+        env: vec![("MATHSCAPE_LEAN_PROFILE_ROOT".into(), "/nonexistent".into())],
+        instructions: Some("skill index".into()),
+        ..Default::default()
+    };
+    let executor = fixture_executor(vec!["app-server".into()]);
+    let round = block_on(executor.start_round(req)).expect("start round with harness");
+    let events = collect_until(
+        executor.events(&round).unwrap(),
+        Duration::from_secs(5),
+        |event| event.type_name() == "turn_end",
+    );
+    assert!(
+        events
+            .last()
+            .is_some_and(|event| event.type_name() == "turn_end"),
+        "timed out waiting for turn_end: {events:?}"
+    );
 }

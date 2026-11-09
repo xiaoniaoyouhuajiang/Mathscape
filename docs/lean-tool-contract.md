@@ -55,6 +55,18 @@ Mathscape 内容/手稿证据
 
 profile 的现有字段、指纹算法和就绪状态以 `mathscape-tool-lean` 的 `ManagedLeanProfile` 为准；本文不重新定义其内部目录结构。
 
+### 2.1 Profile 根目录发现与转发
+
+profile 根目录按以下顺序解析（`mathscape_tool_lean::discover_profile_root`，只读、不创建目录）：
+
+1. 环境变量 `MATHSCAPE_LEAN_PROFILE_ROOT`（显式设置时即使目录不存在也以它为准，便于报错可见）；
+2. 工作区 `.mathscape/lean/profiles`；
+3. 工作区上级目录中的 `.mathscape/lean/profiles`；
+4. 当前目录 `.mathscape/lean/profiles`；
+5. 平台数据目录（`LeanProfileStore::from_env_or_default` 的默认位置）。
+
+Desktop 发起沙箱 round 时，用源 checkpoint 解析出的根目录设置 `MATHSCAPE_LEAN_PROFILE_ROOT`，经 Codex app-server 转发给 `mathscape mcp` 子进程（`MCP_FORWARDED_ENV_VARS`），因此副本工作区里也能找到同一套 profile；该目录同时以只读方式授予 harness。来源层「Lean Profile · 环境 / 外部库」卡片只读 `profile.json` 的记录状态，不重新构建或升级 profile；`ready` 且指纹 `verified` 才显示为可用。Lean 编译通过不代表证明忠实或完整。
+
 ## 3. `mathlib.search`
 
 ### 3.1 语义
@@ -197,12 +209,15 @@ MCP 输入不接受 `loogle_executable`、`index_file`、shell 参数或任意�
 {
   "severity": "error",
   "message": "…",
+  "code": "lean.unknownIdentifier",
   "line": 3,
   "column": 12,
   "end_line": 3,
   "end_column": 20
 }
 ```
+
+`code` 可选，来自 Lean 4.2x 起的 `error(lean.xxx):` 形式；旧形式 `error:` 不带 `code`。Lean 的诊断写在 stdout，解析同时读取 stdout 和 stderr；进程失败但没有可解析的诊断时，把两路输出合并成一条无位置的 error 诊断，不会返回空诊断。
 
 行列号以提交的 `source_text` 为准。诊断超过输出上限时保留已捕获内容，并标记 `diagnostics_truncated=true`；不得把截断后的结果报告为 `checked`。
 

@@ -296,6 +296,12 @@ pub enum LeanReceiptError {
 pub enum LeanLoogleError {
     #[error("invalid Loogle query: {0}")]
     InvalidQuery(String),
+    /// Loogle ran but rejected the query (for example an unknown bare identifier).
+    #[error("Loogle rejected the query: {message}")]
+    QueryRejected {
+        message: String,
+        suggestions: Vec<String>,
+    },
     #[error("Loogle capability unavailable: {reason}")]
     CapabilityUnavailable { reason: &'static str },
     #[error("failed to access Loogle path {path:?}: {source}")]

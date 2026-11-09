@@ -420,6 +420,12 @@ fn dialogue_lines_and_events_stay_inside_session_and_export() {
     assert_eq!(transcript[0].role, TranscriptRole::User);
     assert_eq!(transcript[1].round_id.as_deref(), Some("r1"));
     assert_eq!(home.read_events(&id).unwrap().len(), 1);
+    let scratch = home.ensure_session_scratch(&id).unwrap();
+    assert!(scratch.is_dir() && scratch.starts_with(home.session_dir(&id)));
+    assert!(!scratch.starts_with(home.session_workspace(&id)));
+    home.append_harness_context(&id, &serde_json::json!({"skill": "mathscape-worknet"}))
+        .unwrap();
+    assert_eq!(home.read_harness_contexts(&id).unwrap().len(), 1);
     assert!(home.events_path(&id).starts_with(home.session_dir(&id)));
 
     let outcome = home.export_session(&id, None, None).unwrap();
@@ -428,6 +434,8 @@ fn dialogue_lines_and_events_stay_inside_session_and_export() {
     assert_eq!(outcome.manifest.transcript_entries, 2);
     assert!(outcome.manifest.files.iter().any(|f| f == EVENTS_FILE));
     assert!(outcome.export_dir.join(EVENTS_FILE).is_file());
+    assert!(outcome.manifest.files.iter().any(|f| f == HARNESS_FILE));
+    assert!(outcome.export_dir.join(HARNESS_FILE).is_file());
 
     home.discard_session(&id).unwrap();
     assert!(!home.session_dir(&id).exists());

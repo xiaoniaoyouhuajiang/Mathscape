@@ -179,6 +179,12 @@ impl LoogleAdapter {
         command = command.arg(request.query.clone());
         let run = self.runner.run(&command, &LeanCancellation::new())?;
         if run.status() != LeanRunStatus::Succeeded {
+            // Loogle may report a rejected query as JSON even on a failing exit.
+            if !run.stdout().is_truncated()
+                && let Some(rejected) = parse_rejection(run.stdout().bytes())
+            {
+                return Err(rejected);
+            }
             return Err(LeanLoogleError::RunFailed {
                 status: format!("{:?}", run.status()),
                 stderr: run.stderr().lossy(),
@@ -187,8 +193,7 @@ impl LoogleAdapter {
         if run.stdout().is_truncated() {
             return Err(LeanLoogleError::OutputTruncated);
         }
-        let response: RawLoogleResponse =
-            serde_json::from_slice(run.stdout().bytes()).map_err(LeanLoogleError::InvalidJson)?;
+        let response = parse_response(run.stdout().bytes())?;
         let candidates = response
             .hits
             .into_iter()
@@ -244,6 +249,34 @@ fn hex(bytes: &[u8]) -> String {
     )
 }
 
+fn parse_response(bytes: &[u8]) -> Result<RawLoogleResponse, LeanLoogleError> {
+    if let Some(rejected) = parse_rejection(bytes) {
+        return Err(rejected);
+    }
+    serde_json::from_slice(bytes).map_err(LeanLoogleError::InvalidJson)
+}
+
+/// Recognizes Loogle's `{"error": ..., "suggestions": [...]}` reply.
+fn parse_rejection(bytes: &[u8]) -> Option<LeanLoogleError> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let message = value.get("error")?.as_str()?.trim().to_owned();
+    let suggestions = value
+        .get("suggestions")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(LeanLoogleError::QueryRejected {
+        message,
+        suggestions,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawLoogleResponse {
@@ -277,5 +310,49 @@ mod tests {
         assert_eq!(request.module, "Mathlib");
         assert_eq!(request.index_mode, LoogleIndexMode::None);
         assert!(request.index_file.is_none());
+    }
+
+    #[test]
+    fn error_reply_becomes_query_rejected_with_suggestions() {
+        let error = parse_response(
+            br#"{"error":"Unknown identifier 'klDiv'","header":"","heartbeats":12,"suggestions":["InformationTheory.klDiv"]}"#,
+        )
+        .unwrap_err();
+        match error {
+            LeanLoogleError::QueryRejected {
+                message,
+                suggestions,
+            } => {
+                assert_eq!(message, "Unknown identifier 'klDiv'");
+                assert_eq!(suggestions, vec!["InformationTheory.klDiv".to_owned()]);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn error_reply_without_suggestions_is_still_rejected() {
+        assert!(matches!(
+            parse_response(br#"{"error":"Cannot parse query"}"#),
+            Err(LeanLoogleError::QueryRejected { suggestions, .. }) if suggestions.is_empty()
+        ));
+    }
+
+    #[test]
+    fn hit_reply_still_parses() {
+        let response = parse_response(
+            br#"{"count":1,"header":"Found one","heartbeats":3,"hits":[{"name":"add_comm","module":"Mathlib.Algebra.Group.Defs","type":"forall a b, a + b = b + a","doc":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(response.count, 1);
+        assert_eq!(response.hits[0].name, "add_comm");
+    }
+
+    #[test]
+    fn unrelated_json_stays_invalid() {
+        assert!(matches!(
+            parse_response(br#"{"surprise":true}"#),
+            Err(LeanLoogleError::InvalidJson(_))
+        ));
     }
 }

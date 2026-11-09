@@ -193,6 +193,7 @@ code {
 .stat-card,
 .workspace-card,
 .marker-card,
+.lean-card,
 .import-card {
   border: 1px solid #2a3742;
   border-radius: 12px;
@@ -219,6 +220,7 @@ code {
 
 .workspace-card,
 .marker-card,
+.lean-card,
 .import-card {
   padding: 15px;
 }
@@ -260,9 +262,17 @@ code {
   margin-top: 14px;
 }
 
-.marker-card {
+.marker-card,
+.lean-card {
   margin-top: 14px;
 }
+
+.lean-profile-list { display: grid; gap: 6px; margin: 9px 0 0; padding: 0; list-style: none; }
+.lean-profile-item { padding: 7px 8px; border: 1px solid #344953; border-radius: 7px; background: #16242b; font-size: 10px; color: #a8b8bd; }
+.lean-profile-item strong { display: block; color: #d6ece5; font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
+.lean-profile-item span { display: block; margin-top: 3px; overflow-wrap: anywhere; }
+.lean-profile-item.is-ready strong { color: #a5d8cd; }
+.lean-profile-item .lean-fingerprint { font-family: ui-monospace, SFMono-Regular, monospace; color: #728b92; }
 
 .runtime-heading {
   display: flex;

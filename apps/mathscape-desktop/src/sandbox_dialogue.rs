@@ -4,7 +4,14 @@
 //! app-server ([`CodexExecutor`]), with the ten read-only Mathscape MCP
 //! tools mounted against the session's *isolated copy* (never the checkpoint,
 //! never the mother workspace). Workflow is "diluted" to chat: there is no
-//! planner, no propose/accept and no write path (T2 read-only).
+//! planner and no propose/accept; Mathscape MCP tools stay read-only (T2).
+//!
+//! The harness itself runs under a per-session permission profile
+//! ([`round_harness`]): it may read the workspace copy, the versioned skill
+//! pack and the managed Lean profile, and write only the session's
+//! `scratch/` (drafts). Network stays off. Each round's harness context
+//! (skill version + hash, grants, Lean profile root) is appended to the
+//! session's `harness.jsonl`.
 //!
 //! Codex rounds are single-turn and ephemeral, so continuity comes from
 //! replaying recent transcript lines **of the active dialogue thread** into
@@ -19,24 +26,26 @@
 use std::{
     collections::HashMap,
     env,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use futures::StreamExt;
 use mathscape_agent::{
     AgentBackend, AgentEffort, AgentExecutor, AgentModel, CapabilityProbe, CodexConfig,
-    CodexExecutor, EventPayload, RoundId, StartRoundRequest, TurnOutcome,
+    CodexExecutor, EventPayload, HarnessContext, RoundId, StartRoundRequest, TurnOutcome,
 };
 use mathscape_sandbox::{
     DialogueThread, MAX_MESSAGE_CHARS, SandboxError, SandboxHome, TranscriptEntry, TranscriptRole,
     build_dialogue_prompt,
 };
+use mathscape_tool_lean::{LEAN_PROFILE_ROOT_ENV, discover_profile_root};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::sandbox::SandboxState;
+use crate::skill_pack::{load_worknet_skill, locate_skills_root};
 
 /// Codex CLI used for dialogue rounds (default `codex` on `PATH`).
 pub(crate) const CODEX_PROGRAM_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_CODEX_PROGRAM";
@@ -145,7 +154,11 @@ struct Inner {
     active: Mutex<HashMap<String, Option<RoundId>>>,
 }
 
-fn tool_allowlist() -> Vec<String> {
+/// Mathscape MCP tools mounted in sandbox rounds: everything except the
+/// round-bound write tools, which wait for a Desktop accept/discard UI.
+/// The skill's runtime-capabilities sandbox section must list exactly these
+/// (checked by `skill_pack` tests).
+pub(crate) fn sandbox_tool_allowlist() -> Vec<String> {
     mathscape_mcp::tools::TOOL_NAMES
         .iter()
         .filter(|name| {
@@ -158,6 +171,60 @@ fn tool_allowlist() -> Vec<String> {
         })
         .map(|name| (*name).to_owned())
         .collect()
+}
+
+/// Harness grants for one sandbox round and the line recorded in
+/// `harness.jsonl`.
+///
+/// The Lean profile root is resolved from the *checkpoint* (the real
+/// workspace): the session copy has no parent `.mathscape/lean/profiles`.
+/// It is passed as `MATHSCAPE_LEAN_PROFILE_ROOT` to the Codex child (and on
+/// to the MCP child) and granted read-only to harness tools.
+pub(crate) fn round_harness(
+    checkpoint_root: Option<&Path>,
+    scratch: PathBuf,
+    tools: &[String],
+) -> (HarnessContext, Value) {
+    let mut harness = HarnessContext {
+        scratch_dir: Some(scratch.clone()),
+        ..HarnessContext::default()
+    };
+    let lean = discover_profile_root(checkpoint_root).filter(|found| found.root.is_dir());
+    if let Some(found) = &lean {
+        harness.read_roots.push(found.root.clone());
+        harness.env.push((
+            LEAN_PROFILE_ROOT_ENV.to_owned(),
+            found.root.display().to_string(),
+        ));
+    }
+    let skill = locate_skills_root().map(|root| load_worknet_skill(&root));
+    let skill_record = match &skill {
+        Some(Ok(pack)) => {
+            harness.skill_roots.push(pack.root.clone());
+            harness.instructions = Some(pack.instructions());
+            json!({
+                "name": pack.name,
+                "version": pack.version,
+                "tool_schema_version": pack.tool_schema_version,
+                "sha256": pack.sha256,
+                "path": pack.dir,
+            })
+        }
+        Some(Err(problem)) => json!({ "problem": problem }),
+        None => json!({ "problem": "未找到 skill 目录（可设置 MATHSCAPE_SKILLS_ROOT）" }),
+    };
+    let record = json!({
+        "schema": "mathscape.sandbox_harness.v0",
+        "permission_profile": "mathscape-session",
+        "skill": skill_record,
+        "lean_profile_root": lean,
+        "read_roots": harness.read_roots,
+        "skill_roots": harness.skill_roots,
+        "scratch": scratch,
+        "network": false,
+        "tools": tools,
+    });
+    (harness, record)
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
@@ -290,7 +357,7 @@ impl SandboxDialogueState {
             backend: BACKEND_LABEL,
             codex_program: self.inner.codex_program.clone(),
             mcp_program: self.inner.mcp_program.clone(),
-            tools: tool_allowlist(),
+            tools: sandbox_tool_allowlist(),
             available: !probes.is_empty() && probes.iter().all(CapabilityProbe::is_available),
             probes,
             model: snapshot.model,
@@ -364,7 +431,7 @@ impl SandboxDialogueState {
             active.insert(session_id.clone(), None);
         }
 
-        let tools = tool_allowlist();
+        let tools = sandbox_tool_allowlist();
         let prepared = {
             let (session_id, text, tools) = (session_id.clone(), text.clone(), tools.clone());
             with_home(&home, move |home| {
@@ -385,17 +452,23 @@ impl SandboxDialogueState {
                     None,
                 )?;
                 home.record_backend(&session_id, BACKEND_LABEL, &tools)?;
+                let checkpoint_root = home.checkpoint(&view.checkpoint_id).ok().map(|c| c.root);
+                let scratch = home.ensure_session_scratch(&session_id)?;
+                let (harness, harness_record) =
+                    round_harness(checkpoint_root.as_deref(), scratch, &tools);
                 Ok((
                     build_dialogue_prompt(&history, &text, continues_session),
                     view.workspace_root
                         .unwrap_or_else(|| home.session_workspace(&session_id)),
                     entry,
                     thread,
+                    harness,
+                    harness_record,
                 ))
             })
             .await
         };
-        let (prompt, workspace, user_entry, thread) = match prepared {
+        let (prompt, workspace, user_entry, thread, harness, mut harness_record) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.release(&session_id, None);
@@ -414,6 +487,7 @@ impl SandboxDialogueState {
                 workspace,
                 input_ref: prompt,
                 tools_allow: tools,
+                harness,
             })
             .await
             .map_err(|error| error.to_string())
@@ -450,6 +524,17 @@ impl SandboxDialogueState {
         };
         self.active()
             .insert(session_id.clone(), Some(round.clone()));
+        harness_record["round_id"] = json!(round.as_str());
+        {
+            let sid = session_id.clone();
+            if let Err(error) = with_home(&home, move |home| {
+                home.append_harness_context(&sid, &harness_record)
+            })
+            .await
+            {
+                eprintln!("mathscape: failed to record harness context: {error}");
+            }
+        }
 
         let this = self.clone();
         let pump_round = round.clone();
@@ -781,6 +866,57 @@ mod tests {
     }
 
     #[test]
+    fn round_harness_grants_lean_root_skill_and_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoint = dir.path().join("mother");
+        let profiles = checkpoint.join(mathscape_tool_lean::WORKSPACE_PROFILE_DIR);
+        std::fs::create_dir_all(&profiles).unwrap();
+        let scratch = dir.path().join("scratch");
+        let tools = vec!["lean.check".to_owned()];
+        let (harness, record) = round_harness(Some(&checkpoint), scratch.clone(), &tools);
+        if std::env::var_os(LEAN_PROFILE_ROOT_ENV).is_none() {
+            let root = profiles.canonicalize().unwrap();
+            assert_eq!(harness.read_roots, vec![root.clone()]);
+            assert!(
+                harness
+                    .env
+                    .iter()
+                    .any(|(k, v)| k == LEAN_PROFILE_ROOT_ENV && Path::new(v) == root)
+            );
+            assert_eq!(record["lean_profile_root"]["source"], "workspace");
+        }
+        assert_eq!(harness.scratch_dir.as_deref(), Some(scratch.as_path()));
+        assert!(harness.uses_permission_profile());
+        assert_eq!(harness.skill_roots.len(), 1, "repo skill pack should load");
+        assert!(
+            harness
+                .instructions
+                .as_deref()
+                .is_some_and(|text| text.contains("mathscape-worknet"))
+        );
+        assert_eq!(record["schema"], "mathscape.sandbox_harness.v0");
+        assert_eq!(record["skill"]["name"], "mathscape-worknet");
+        assert_eq!(record["network"], false);
+        assert_eq!(record["tools"], json!(["lean.check"]));
+    }
+
+    #[test]
+    fn round_harness_without_profiles_grants_no_lean_root() {
+        let dir = tempfile::tempdir().unwrap();
+        if std::env::var_os(LEAN_PROFILE_ROOT_ENV).is_some() {
+            return;
+        }
+        let (harness, record) = round_harness(Some(dir.path()), dir.path().join("s"), &[]);
+        // A platform data root may exist on a dev machine; it must be a dir.
+        for root in &harness.read_roots {
+            assert!(root.is_dir());
+        }
+        if harness.read_roots.is_empty() {
+            assert!(record["lean_profile_root"].is_null());
+        }
+    }
+
+    #[test]
     fn round_streams_events_and_records_reply_inside_session() {
         let fx = fixture("round");
         let before = fingerprint_workspace(&fx.checkpoint).unwrap();
@@ -846,7 +982,7 @@ mod tests {
         assert!(home.events_path(&fx.session_id).is_file());
         let record = home.session(&fx.session_id).unwrap();
         assert_eq!(record.backend, "codex");
-        assert_eq!(record.tool_allowlist, tool_allowlist());
+        assert_eq!(record.tool_allowlist, sandbox_tool_allowlist());
         assert_eq!(record.tool_allowlist.len(), 10);
         let export = home.export_session(&fx.session_id, None, None).unwrap();
         assert!(export.export_dir.join(EVENTS_FILE).is_file());
