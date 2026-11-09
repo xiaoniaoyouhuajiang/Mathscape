@@ -82,19 +82,19 @@ pub(crate) fn approval_plan(method: &str, params: &Value, allow: &[String]) -> A
     if is_shell_approval(method) {
         return ApprovalPlan::Respond(declined(
             json!({ "decision": "decline" }),
-            "审批策略拒绝了 shell 命令（沙箱保持只读）",
+            "审批策略拒绝了需要越权的 shell 命令（沙箱只允许写会话 scratch）",
         ));
     }
     if is_file_approval(method) {
         return ApprovalPlan::Respond(declined(
             json!({ "decision": "decline" }),
-            "审批策略拒绝了文件写入（沙箱保持只读）",
+            "审批策略拒绝了 scratch 以外的文件写入",
         ));
     }
     if method == "item/permissions/requestApproval" {
         return ApprovalPlan::Respond(declined(
             json!({ "permissions": {} }),
-            "审批策略拒绝了额外权限（沙箱保持只读）",
+            "审批策略拒绝了额外权限（沙箱权限固定）",
         ));
     }
     if method == "item/tool/call" {
@@ -455,7 +455,7 @@ mod tests {
         assert_eq!(reply.result["decision"], "decline");
         assert_eq!(
             reply.note.as_ref().map(|note| note.message.as_str()),
-            Some("审批策略拒绝了 shell 命令（沙箱保持只读）")
+            Some("审批策略拒绝了需要越权的 shell 命令（沙箱只允许写会话 scratch）")
         );
         let file = approval_plan(
             "item/fileChange/requestApproval",
@@ -465,7 +465,7 @@ mod tests {
         assert!(matches!(file, ApprovalPlan::Respond(_)));
         assert_eq!(
             note(&file).map(|note| note.message.as_str()),
-            Some("审批策略拒绝了文件写入（沙箱保持只读）")
+            Some("审批策略拒绝了 scratch 以外的文件写入")
         );
         let perms = approval_plan("item/permissions/requestApproval", &json!({}), &allow());
         let ApprovalPlan::Respond(perms) = perms else {

@@ -57,6 +57,41 @@ pub struct StartRoundRequest {
     pub input_ref: String,
     /// Tool names the harness may call, e.g. `workspace.search`.
     pub tools_allow: Vec<String>,
+    /// What the harness's own file/shell tools may touch, plus skills.
+    /// [`HarnessContext::default`] keeps the legacy read-only sandbox.
+    pub harness: HarnessContext,
+}
+
+/// Harness-side context for one round.
+///
+/// Mathscape MCP tools are governed by `tools_allow`; this struct governs the
+/// harness itself (Codex's shell / file tools). When any filesystem grant is
+/// present the adapter replaces the coarse `read-only` sandbox with a
+/// per-session permission profile: `:minimal` system paths, the workspace,
+/// `read_roots` and `skill_roots` are readable, only `scratch_dir` is
+/// writable, and the network stays off. Formal map changes still go through
+/// MCP proposals that the user accepts.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HarnessContext {
+    /// Skill directories registered with the harness (read-only).
+    pub skill_roots: Vec<PathBuf>,
+    /// Extra read-only roots, e.g. the managed Lean profile root.
+    pub read_roots: Vec<PathBuf>,
+    /// The only harness-writable directory (drafts, object cards, notes).
+    pub scratch_dir: Option<PathBuf>,
+    /// Non-secret variables set on the harness process and forwarded to the
+    /// Mathscape MCP child, e.g. `MATHSCAPE_LEAN_PROFILE_ROOT`.
+    pub env: Vec<(String, String)>,
+    /// Extra developer instructions (skill index, stable paths).
+    pub instructions: Option<String>,
+}
+
+impl HarnessContext {
+    /// `true` when the round should use a permission profile instead of the
+    /// legacy `read-only` sandbox.
+    pub fn uses_permission_profile(&self) -> bool {
+        self.scratch_dir.is_some() || !self.skill_roots.is_empty() || !self.read_roots.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
@@ -238,6 +273,7 @@ mod tests {
                 workspace: PathBuf::from("/tmp/ws"),
                 input_ref: "sha256:x".into(),
                 tools_allow: vec![],
+                harness: HarnessContext::default(),
             };
             assert_eq!(
                 block_on(executor.start_round(request)),

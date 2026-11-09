@@ -250,6 +250,7 @@ mod tests {
             workspace: PathBuf::from("/tmp/ws"),
             input_ref: "sha256:abc".into(),
             tools_allow: vec!["workspace.search".into(), "material.read".into()],
+            harness: crate::HarnessContext::default(),
         }
     }
 

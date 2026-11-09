@@ -9,6 +9,7 @@ const mdSource = "# 正确表述\n\n设 $a_n$ 为数列。\n";
 const snapshot = {
   workspace_id: "w", workspace_root: "/w", artifact_count: 1, conversion_count: 0,
   marker: { configured: false, ready: false, executable: null, version: null, problem: null },
+  lean: { root: null, source: null, root_exists: false, profiles: [], problem: "未找到 Lean profile 目录" },
   pdf_artifacts: [{ artifact_id: "pdf-notes", filename: "notes.pdf", page_count: 2 }],
   landscape_graph: { schema_version: "mathscape.graph-projection.v1", lens: "source", edges: [], nodes: [
     ...[...sourceLabels].map(([id, label]) => ({

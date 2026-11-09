@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ArtifactController } from "./artifact/artifact-controller";
+import { renderLeanStatus } from "./artifact/lean-status";
 import type { DesktopSnapshot } from "./artifact/types";
 import { eventBus } from "./core/events";
 import { errorMessage } from "./core/ipc";
@@ -454,6 +455,10 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
     workspaceRoot: snapshot.workspace_root,
   });
   artifactController.renderMarkerStatus(snapshot.marker);
+  renderLeanStatus(
+    { state: el.leanState, summary: el.leanSummary, profiles: el.leanProfiles, problem: el.leanProblem },
+    snapshot.lean,
+  );
   graphController.renderCurrentGraph(snapshot);
   inspectorController.refreshIfUnlocked();
   loadInkOverlay();

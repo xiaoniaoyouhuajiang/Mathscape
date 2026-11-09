@@ -32,6 +32,10 @@ export interface AppElements {
   markerState: HTMLElement;
   markerVersion: HTMLElement;
   markerProblem: HTMLElement;
+  leanState: HTMLElement;
+  leanSummary: HTMLElement;
+  leanProfiles: HTMLElement;
+  leanProblem: HTMLElement;
   toast: HTMLElement;
   readerHost: HTMLElement;
   reviewWorkspaceHost: HTMLElement;
@@ -129,6 +133,15 @@ export class AppShell {
           </div>
           <strong id="marker-version" class="runtime-version">—</strong>
           <p id="marker-problem" class="runtime-problem">正在探测本地 Marker 环境。</p>
+        </section>
+        <section class="lean-card" aria-label="Lean Profile">
+          <div class="runtime-heading">
+            <span class="field-label">Lean Profile · 环境 / 外部库</span>
+            <span id="lean-state" class="runtime-state">检查中</span>
+          </div>
+          <strong id="lean-summary" class="runtime-version">—</strong>
+          <ul id="lean-profiles" class="lean-profile-list"></ul>
+          <p id="lean-problem" class="runtime-problem">正在读取 Lean profile 记录。</p>
         </section>
         <section id="last-import" class="import-card is-empty">
           <span class="field-label">最近一次导入</span>
@@ -247,6 +260,10 @@ export class AppShell {
       markerState: requiredElement<HTMLElement>("#marker-state", root),
       markerVersion: requiredElement<HTMLElement>("#marker-version", root),
       markerProblem: requiredElement<HTMLElement>("#marker-problem", root),
+      leanState: requiredElement<HTMLElement>("#lean-state", root),
+      leanSummary: requiredElement<HTMLElement>("#lean-summary", root),
+      leanProfiles: requiredElement<HTMLElement>("#lean-profiles", root),
+      leanProblem: requiredElement<HTMLElement>("#lean-problem", root),
       toast: requiredElement<HTMLElement>("#toast", root),
       readerHost: requiredElement<HTMLElement>("#reader", root),
       reviewWorkspaceHost: requiredElement<HTMLElement>("#review-workspace", root),

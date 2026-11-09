@@ -7,6 +7,7 @@
 mod check;
 mod config;
 mod declaration;
+mod discovery;
 mod error;
 mod export;
 mod fingerprint;
@@ -28,6 +29,10 @@ pub use config::{
     LEAN_PROJECT_ENV, LeanProjectConfig,
 };
 pub use declaration::{DECLARATION_SCHEMA_VERSION, DeclarationCandidate, DeclarationKind};
+pub use discovery::{
+    DiscoveredLeanProfile, DiscoveredLeanProfileRoot, LeanProfileRootSource, WORKSPACE_PROFILE_DIR,
+    discover_profile_root, list_profiles,
+};
 pub use error::{
     LeanCheckError, LeanConfigError, LeanExportError, LeanFingerprintError, LeanLoogleError,
     LeanProbeError, LeanProfileError, LeanReceiptError, LeanRunnerError,

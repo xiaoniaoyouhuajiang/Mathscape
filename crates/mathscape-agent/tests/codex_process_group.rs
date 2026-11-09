@@ -138,6 +138,7 @@ fn request() -> StartRoundRequest {
         workspace: std::env::temp_dir(),
         input_ref: "explain 紧集".into(),
         tools_allow: vec![],
+        harness: mathscape_agent::HarnessContext::default(),
     }
 }
 

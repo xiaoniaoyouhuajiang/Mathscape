@@ -116,6 +116,7 @@ sandbox_export_<session_id>/
   transcript.jsonl       # 用户消息 + Agent 可见回复（按时间）
   events.jsonl           # 可选：AgentExecutor §3 事件原样（若已接通 4b）
   side_effects/          # 可选：本会话在副本上新建/改动的对象快照或 change 列表
+  harness.jsonl          # 非空时：每个 round 的 harness 上下文（skill 版本/哈希、Lean 根、只读根、scratch、工具清单）
 ```
 
 `manifest.json` 最小字段 [本文提议]：
@@ -173,6 +174,14 @@ v0 实现另带 `transcript_entries`（行数）与 `dialogue_threads`（线程�
 - 本机 **Codex**（已有 `CodexExecutor`）+ `mathscape mcp --workspace <sandbox_copy> --round <round_id>`。
 - 工具面 v0 = Phase1 已有 **10 个只读工具**；allowlist 可配置，默认全开只读集。
 - Codex sandbox `read-only`、`ephemeral: true` 沿用 Phase0 附。`approvalPolicy` 用 `on-request`（本机 Codex 的 serde 枚举是 kebab-case：`untrusted` | `on-request` | `granular` | `never`；`onRequest` 会被拒绝为 unknown variant），**不用** `never`：缺少 `readOnlyHint` 的 MCP 工具会被 Codex 当成破坏性调用，`never` 会直接拒绝并报 `approval policy is never`。Mathscape 10 个只读工具在 `tools/list` 上带注解 `readOnlyHint: true`、`destructiveHint: false`、`openWorldHint: false`；`thread/start` 另设 `mcp_servers.mathscape.default_tools_approval_mode = "approve"` 与 `enabled_tools` 白名单。适配器接受白名单内的只读 MCP；shell、文件写入、额外权限、动态工具与打开外链一律拒绝。未能归类的审批最多等 60 秒，超时记「等待审批已超时」并拒绝。以上不得写入源 checkpoint。
+
+### 4.3.1 Skill 注入与会话权限 [2026-11-09 实现]
+
+- 仓库内 `skills/mathscape-worknet/` 受版本管理（`SKILL.md` frontmatter 带 `metadata.version` 与 `metadata.tool_schema_version`）。Desktop 按 `MATHSCAPE_SKILLS_ROOT` → 构建时仓库路径 → 可执行文件旁 `skills/` / `../Resources/skills` 查找。
+- 握手时先发 `skills/extraRoots/set` 注册 skill 根目录（失败不致命），并在 `developerInstructions` 写入 skill 的稳定路径作为兜底，Agent 用 harness 自带的读文件能力读取。
+- 有 harness 授权（scratch / skill / 只读根）时，`thread/start` **不发** `sandbox`，改为 `config.default_permissions = "mathscape-session"` 与 `permissions.mathscape-session.filesystem`：`:minimal`、副本工作区、skill 根、Lean profile 根为 `read`，`<session>/scratch/` 为唯一 `write`，网络关闭。同时发送 `sandbox` 会使 permission profile 失效（codex 0.166.0 实测）。
+- 每个 round 的 harness 上下文追加到 `<session>/harness.jsonl`（`mathscape.sandbox_harness.v0`），导出时一并带走。scratch 内容的导出留作后续。
+- 本切片沙箱内仍不挂载 `artifact.stage` / `propose_changes` / `get_change_set`：Desktop 尚无 change set 的接受 / 丢弃 UI，随 SourceSpan PR 一起开放。
 
 ### 4.4 引用与视图信号（S2，薄）[锁定可后置 / 本文记方向]
 

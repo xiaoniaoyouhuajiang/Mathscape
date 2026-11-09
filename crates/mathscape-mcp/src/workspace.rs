@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use mathscape_agent::{CommandRunner, SystemCommandRunner, ToolError, ToolErrorCode};
 use mathscape_artifact::{ArtifactPool, ArtifactPoolError, WorkspaceRoot};
 use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
-use mathscape_tool_lean::{LEAN_PROFILE_ROOT_ENV, LeanProfileStore};
+use mathscape_tool_lean::{LeanProfileRootSource, LeanProfileStore, discover_profile_root};
 
 use crate::tools::EnsurePolicy;
 
@@ -96,41 +96,27 @@ impl McpWorkspace {
             return Ok(store.clone());
         }
 
-        // Prefer an explicit process configuration. When it is absent, also
-        // recognize the repository/workspace-local .mathscape root used by
-        // the managed profile installer before falling back to the platform
-        // data directory.
-        if std::env::var_os(LEAN_PROFILE_ROOT_ENV).is_some() {
-            return LeanProfileStore::from_env_or_default().map_err(|error| {
-                ToolError::new(
-                    ToolErrorCode::Internal,
-                    format!("failed to open configured Lean profile store: {error}"),
-                )
-            });
-        }
-        let mut candidates = vec![self.path().join(".mathscape/lean/profiles")];
-        if let Some(parent) = self.path().parent() {
-            candidates.push(parent.join(".mathscape/lean/profiles"));
-        }
-        if let Ok(current) = std::env::current_dir() {
-            candidates.push(current.join(".mathscape/lean/profiles"));
-        }
-        for candidate in candidates {
-            if candidate.is_dir() {
-                return LeanProfileStore::new(candidate).map_err(|error| {
+        // Same search order the desktop uses for the source layer and for
+        // sandbox rounds (`mathscape_tool_lean::discover_profile_root`):
+        // explicit environment, workspace-local .mathscape roots, cwd, then
+        // the platform data directory. An explicit root keeps the store's
+        // create-on-open behaviour; discovered roots already exist.
+        match discover_profile_root(Some(self.path())) {
+            Some(found) if found.source != LeanProfileRootSource::Environment => {
+                LeanProfileStore::new(found.root).map_err(|error| {
                     ToolError::new(
                         ToolErrorCode::Internal,
                         format!("failed to open workspace Lean profile store: {error}"),
                     )
-                });
+                })
             }
+            _ => LeanProfileStore::from_env_or_default().map_err(|error| {
+                ToolError::new(
+                    ToolErrorCode::Internal,
+                    format!("failed to open Lean profile store: {error}"),
+                )
+            }),
         }
-        LeanProfileStore::from_env_or_default().map_err(|error| {
-            ToolError::new(
-                ToolErrorCode::Internal,
-                format!("failed to open default Lean profile store: {error}"),
-            )
-        })
     }
 
     pub(crate) fn store(&self) -> Result<SqliteArtifactStore, ToolError> {
