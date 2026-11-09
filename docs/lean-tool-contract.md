@@ -209,12 +209,15 @@ MCP 输入不接受 `loogle_executable`、`index_file`、shell 参数或任意�
 {
   "severity": "error",
   "message": "…",
+  "code": "lean.unknownIdentifier",
   "line": 3,
   "column": 12,
   "end_line": 3,
   "end_column": 20
 }
 ```
+
+`code` 可选，来自 Lean 4.2x 起的 `error(lean.xxx):` 形式；旧形式 `error:` 不带 `code`。Lean 的诊断写在 stdout，解析同时读取 stdout 和 stderr；进程失败但没有可解析的诊断时，把两路输出合并成一条无位置的 error 诊断，不会返回空诊断。
 
 行列号以提交的 `source_text` 为准。诊断超过输出上限时保留已捕获内容，并标记 `diagnostics_truncated=true`；不得把截断后的结果报告为 `checked`。
 

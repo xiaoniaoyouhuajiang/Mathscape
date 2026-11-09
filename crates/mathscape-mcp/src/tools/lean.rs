@@ -84,7 +84,7 @@ pub(super) fn search_definition() -> Value {
                 },
                 "query": {
                     "type": "string",
-                    "description": format!("Loogle query, at most {MAX_QUERY_CHARS} Unicode characters."),
+                    "description": format!("Loogle query, at most {MAX_QUERY_CHARS} Unicode characters. A bare identifier must be an existing fully qualified constant (e.g. InformationTheory.klDiv); quote a fragment (\"klDiv\") to search by name substring. A rejected query returns invalid_arg with Loogle's message and suggestions."),
                 },
                 "module": {
                     "type": "string",
@@ -532,6 +532,21 @@ fn map_loogle_error(profile_id: &str, error: LeanLoogleError) -> Result<Value, T
             ToolErrorCode::InvalidArg,
             format!("invalid Loogle query: {query}"),
         )),
+        LeanLoogleError::QueryRejected {
+            message,
+            suggestions,
+        } => {
+            let mut text = format!("Loogle rejected the query: {message}");
+            if !suggestions.is_empty() {
+                text.push_str("; did you mean: ");
+                text.push_str(&suggestions.join(", "));
+            }
+            text.push_str(
+                ". Bare identifiers must name an existing constant (use the fully qualified \
+                 name), or quote a name fragment like \"klDiv\" for substring search.",
+            );
+            Err(ToolError::new(ToolErrorCode::InvalidArg, text))
+        }
         LeanLoogleError::Access { path, source } => Err(ToolError::new(
             ToolErrorCode::Internal,
             format!("failed to access Loogle path {path:?}: {source}"),

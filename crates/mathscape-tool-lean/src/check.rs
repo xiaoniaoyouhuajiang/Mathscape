@@ -215,6 +215,9 @@ pub enum LeanDiagnosticSeverity {
 pub struct LeanDiagnostic {
     pub severity: LeanDiagnosticSeverity,
     pub message: String,
+    /// Lean's diagnostic code from `error(lean.unknownIdentifier):`-style headers, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -317,11 +320,19 @@ impl LeanChecker {
         let mut diagnostics = parse_diagnostics(&run.stderr().lossy());
         diagnostics.extend(parse_diagnostics(&run.stdout().lossy()));
         if diagnostics.is_empty() && run.status() == LeanRunStatus::Failed {
-            let output = run.stderr().lossy().trim().to_owned();
+            // Lean prints compiler messages on stdout; keep both streams so a
+            // failed run never comes back without any explanation.
+            let output = [run.stderr().lossy(), run.stdout().lossy()]
+                .iter()
+                .map(|stream| stream.trim())
+                .filter(|stream| !stream.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
             if !output.is_empty() {
                 diagnostics.push(LeanDiagnostic {
                     severity: LeanDiagnosticSeverity::Error,
                     message: output,
+                    code: None,
                     file: None,
                     line: None,
                     column: None,
@@ -460,23 +471,47 @@ fn parse_diagnostic_line(line: &str) -> Option<LeanDiagnostic> {
         ("information", LeanDiagnosticSeverity::Information),
         ("info", LeanDiagnosticSeverity::Information),
     ];
-    for (label, severity) in SEVERITIES {
-        let marker = format!(": {label}:");
-        let Some(marker_start) = line.find(&marker) else {
-            continue;
-        };
+    // Lean emits `<file>:<line>:<col>: <severity>: <message>` and, since 4.2x,
+    // `<file>:<line>:<col>: <severity>(<code>): <message>`.
+    let mut search_from = 0;
+    while let Some(offset) = line[search_from..].find(": ") {
+        let marker_start = search_from + offset;
+        let rest = &line[marker_start + 2..];
+        search_from = marker_start + 2;
         let location = &line[..marker_start];
-        let message = line[marker_start + marker.len()..].trim().to_owned();
         let (file, line_number, column) = parse_location(location);
-        return Some(LeanDiagnostic {
-            severity,
-            message,
-            file,
-            line: line_number,
-            column,
-            end_line: None,
-            end_column: None,
-        });
+        if line_number.is_none() {
+            continue;
+        }
+        for (label, severity) in SEVERITIES {
+            let Some(after_label) = rest.strip_prefix(label) else {
+                continue;
+            };
+            let (code, message) = if let Some(message) = after_label.strip_prefix(':') {
+                (None, message)
+            } else if let Some(coded) = after_label.strip_prefix('(') {
+                let Some(close) = coded.find("):") else {
+                    continue;
+                };
+                let code = &coded[..close];
+                if code.is_empty() || code.contains(char::is_whitespace) {
+                    continue;
+                }
+                (Some(code.to_owned()), &coded[close + 2..])
+            } else {
+                continue;
+            };
+            return Some(LeanDiagnostic {
+                severity,
+                message: message.trim().to_owned(),
+                code,
+                file,
+                line: line_number,
+                column,
+                end_line: None,
+                end_column: None,
+            });
+        }
     }
     None
 }
@@ -609,6 +644,54 @@ mod tests {
     }
 
     #[test]
+    fn parses_coded_diagnostics_as_separate_entries() {
+        let diagnostics = parse_diagnostics(
+            "/tmp/Main.lean:15:2: error: expected token\n/tmp/Main.lean:17:47: error(lean.synthInstanceFailed): failed to synthesize instance of type class\n  LT ℝ\n/tmp/Main.lean:20:8: error(lean.unknownIdentifier): Unknown identifier `div_self`\n/tmp/Main.lean:5:1: warning(lean.unusedVariables): unused variable `h`",
+        );
+        assert_eq!(diagnostics.len(), 4);
+        assert_eq!(diagnostics[0].code, None);
+        assert_eq!(diagnostics[0].message, "expected token");
+        assert_eq!(
+            diagnostics[1].code.as_deref(),
+            Some("lean.synthInstanceFailed")
+        );
+        assert_eq!(diagnostics[1].line, Some(17));
+        assert!(diagnostics[1].message.contains("LT ℝ"));
+        assert_eq!(
+            diagnostics[2].code.as_deref(),
+            Some("lean.unknownIdentifier")
+        );
+        assert_eq!(diagnostics[3].severity, LeanDiagnosticSeverity::Warning);
+    }
+
+    #[test]
+    fn coded_first_diagnostic_is_not_dropped() {
+        let diagnostics = parse_diagnostics(
+            "/var/folders/x/T.lean:5:64: error(lean.invalidField): Invalid field `SigmaFinite`: The environment does not contain `MeasureTheory.Measure.SigmaFinite`\n  μ\nof type `Measure α`",
+        );
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].file.as_deref(),
+            Some("/var/folders/x/T.lean")
+        );
+        assert_eq!(diagnostics[0].column, Some(64));
+        assert!(
+            diagnostics[0]
+                .message
+                .starts_with("Invalid field `SigmaFinite`: The environment")
+        );
+        assert!(diagnostics[0].message.contains("of type `Measure α`"));
+    }
+
+    #[test]
+    fn message_text_with_severity_words_is_not_a_new_diagnostic() {
+        let diagnostics =
+            parse_diagnostics("/tmp/Main.lean:3:7: error: note: error(x): inside message");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "note: error(x): inside message");
+    }
+
+    #[test]
     fn validates_request_bounds() {
         assert!(matches!(
             LeanCheckRequest::new("import Mathlib")
@@ -687,6 +770,67 @@ exit 1
             LeanChecker::new().check(&profile, &mismatch, &LeanCancellation::new()),
             Err(LeanCheckError::ProfileFingerprintMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn reports_coded_diagnostics_from_stdout() {
+        let (_store_root, _project, profile) = profile_fixture(
+            r#"#!/bin/sh
+if [ "$1" = "env" ] && [ "$2" = "lean" ] && [ "$3" = "--version" ]; then
+  printf 'Lean (version 4.33.1)\n'
+  exit 0
+fi
+if [ "$1" != "env" ]; then
+  printf 'Lake version 5\n'
+  exit 0
+fi
+printf '%s:5:64: error(lean.invalidField): Invalid field `SigmaFinite`\n  μ\n' "$3"
+exit 1
+"#,
+        );
+        let request =
+            LeanCheckRequest::new("import Mathlib\n\nexample : True := by trivial\n").unwrap();
+        let result = LeanChecker::new()
+            .check(&profile, &request, &LeanCancellation::new())
+            .unwrap();
+        assert_eq!(result.status, LeanCheckStatus::Failed);
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(
+            result.diagnostics[0].code.as_deref(),
+            Some("lean.invalidField")
+        );
+        assert_eq!(result.diagnostics[0].line, Some(5));
+        assert_eq!(result.diagnostics[0].column, Some(64));
+    }
+
+    #[test]
+    fn unparsed_stdout_failure_still_yields_a_diagnostic() {
+        let (_store_root, _project, profile) = profile_fixture(
+            r#"#!/bin/sh
+if [ "$1" = "env" ] && [ "$2" = "lean" ] && [ "$3" = "--version" ]; then
+  printf 'Lean (version 4.33.1)\n'
+  exit 0
+fi
+if [ "$1" != "env" ]; then
+  printf 'Lake version 5\n'
+  exit 0
+fi
+printf 'unexpected lean failure without a location\n'
+exit 1
+"#,
+        );
+        let request =
+            LeanCheckRequest::new("import Mathlib\n\nexample : True := by trivial\n").unwrap();
+        let result = LeanChecker::new()
+            .check(&profile, &request, &LeanCancellation::new())
+            .unwrap();
+        assert_eq!(result.status, LeanCheckStatus::Failed);
+        assert_eq!(result.diagnostics.len(), 1);
+        assert!(
+            result.diagnostics[0]
+                .message
+                .contains("unexpected lean failure without a location")
+        );
     }
 
     #[test]
