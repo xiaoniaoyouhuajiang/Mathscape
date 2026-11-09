@@ -201,7 +201,25 @@ impl DesktopService {
         if let Err(error) = store.sync_canonical_markdown_if_stale(&canonical_sync_timestamp()) {
             eprintln!("mathscape: canonical markdown registry sync skipped: {error}");
         }
-        let landscape = store.landscape_snapshot()?;
+        // Inside a sandbox the map shows the single investigation projection
+        // (accepted graph + 「未审批」 staged objects), the same one MCP
+        // `graph.*` uses with scope=investigation.
+        let (landscape, investigation) = match &self.investigation_id {
+            Some(investigation_id) => {
+                let (landscape, marks) = mathscape_mcp::investigation::investigation_landscape(
+                    &store,
+                    investigation_id,
+                )?;
+                (
+                    landscape,
+                    Some(InvestigationSnapshot {
+                        investigation_id: investigation_id.clone(),
+                        marks,
+                    }),
+                )
+            }
+            None => (store.landscape_snapshot()?, None),
+        };
         let catalog = landscape.artifacts();
         let artifact_count = catalog.artifacts().len();
         let conversion_count = catalog.conversions().len();
@@ -234,6 +252,7 @@ impl DesktopService {
             lean: lean_runtime_status(&self.workspace_root),
             pdf_artifacts,
             landscape_graph,
+            investigation,
         })
     }
 
@@ -522,6 +541,17 @@ pub struct DesktopSnapshot {
     lean: LeanRuntimeStatus,
     pdf_artifacts: Vec<PdfArtifactSummary>,
     landscape_graph: IncidenceGraph,
+    /// Present inside a sandbox: which nodes/relations of `landscape_graph`
+    /// are staged (「未审批」) and which accepted objects have competing
+    /// staged replacements.
+    investigation: Option<InvestigationSnapshot>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct InvestigationSnapshot {
+    investigation_id: String,
+    #[serde(flatten)]
+    marks: mathscape_mcp::investigation::InvestigationMarks,
 }
 
 impl DesktopSnapshot {

@@ -369,6 +369,12 @@ pub struct LandscapeSnapshot {
 }
 
 impl LandscapeSnapshot {
+    /// Same snapshot with a different source map (the investigation overlay).
+    pub fn with_sources(mut self, sources: SourceMapSnapshot) -> Self {
+        self.sources = sources;
+        self
+    }
+
     pub fn canonical_ensures(&self) -> &[CanonicalEnsureLease] {
         &self.canonical_ensures
     }

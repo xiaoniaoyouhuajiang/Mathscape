@@ -1212,6 +1212,108 @@ mod tests {
     }
 
     #[test]
+    fn investigation_projection_marks_staged_objects_replacements_and_conflicts() {
+        let fx = fixture();
+        let a = unit_proposal(&fx, "a", "A", "# 定理 A", Value::Null);
+        let unit_id = staged_id(&a, "u");
+        let (accepted, _) = call_as(
+            &fx,
+            "round-1",
+            Some(INV),
+            "graph.get",
+            json!({ "node_id": unit_id, "scope": "accepted" }),
+        );
+        assert_eq!(accepted["status"], "not_found");
+        let (staged, _) = call_as(
+            &fx,
+            "round-1",
+            Some(INV),
+            "graph.get",
+            json!({ "node_id": unit_id, "scope": "investigation" }),
+        );
+        assert_eq!(staged["status"], "ok", "{staged}");
+        assert_eq!(staged["node"]["staged"], true);
+        assert_eq!(staged["node"]["change_set_id"], a["change_set_id"]);
+        assert_eq!(staged["node"]["change_set_version"], 1);
+
+        accept(&fx, vec![sel(&a)]).unwrap();
+        let revision = open_store(&fx.root)
+            .unwrap()
+            .map_edit_snapshot()
+            .unwrap()
+            .objects
+            .into_iter()
+            .find(|o| o.object_id == unit_id)
+            .unwrap()
+            .revision;
+        let edit = |request: &str, title: &str| {
+            propose(
+                &fx,
+                json!({
+                    "request_id": request, "rationale": "改标题",
+                    "proposed_objects": [{ "local_ref": "e", "kind": "source_unit", "op": "edit",
+                        "target_id": unit_id, "expected_revision": revision,
+                        "changes": { "display_title": { "action": "set", "value": title } } }]
+                }),
+            )
+        };
+        let e1 = edit("e1", "A 改");
+        assert_eq!(e1["status"], "staged", "{e1}");
+        let (node, _) = call_as(
+            &fx,
+            "round-1",
+            Some(INV),
+            "graph.get",
+            json!({ "node_id": unit_id, "scope": "investigation" }),
+        );
+        assert_eq!(node["node"]["label"], "A 改", "{node}");
+        assert_eq!(node["node"]["staged"], true);
+        assert_eq!(node["node"]["replaces_revision"], json!(revision));
+        let (formal, _) = call_as(
+            &fx,
+            "round-1",
+            Some(INV),
+            "graph.get",
+            json!({ "node_id": unit_id, "scope": "accepted" }),
+        );
+        assert_eq!(formal["node"]["label"], "A");
+
+        edit("e2", "A 另改");
+        let (node, _) = call_as(
+            &fx,
+            "round-1",
+            Some(INV),
+            "graph.get",
+            json!({ "node_id": unit_id, "scope": "investigation" }),
+        );
+        assert_eq!(
+            node["node"]["label"], "A",
+            "conflicting edits keep the accepted version"
+        );
+        assert_eq!(
+            node["node"]["staged_conflict"]["change_sets"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // The Desktop map uses the same projection.
+        let service = crate::DesktopService::open_with_credential_store(
+            &fx.root,
+            std::sync::Arc::new(mathscape_llm::MemoryCredentialResolver::default()),
+        )
+        .unwrap()
+        .with_investigation(Some(INV.into()));
+        let snapshot = serde_json::to_value(service.snapshot().unwrap()).unwrap();
+        assert_eq!(snapshot["investigation"]["investigation_id"], INV);
+        assert_eq!(
+            snapshot["investigation"]["conflicts"][0]["object_id"],
+            json!(unit_id)
+        );
+    }
+
+    #[test]
     fn sandbox_session_proposals_never_touch_the_checkpoint() {
         let dir = tempfile::tempdir().unwrap();
         let mother = dir.path().join("mother");

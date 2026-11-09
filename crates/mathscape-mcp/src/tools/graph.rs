@@ -35,6 +35,7 @@ use serde_json::{Map, Value, json};
 use super::material::{MARKDOWN_MEDIA_TYPE, PDF_MEDIA_TYPE};
 use super::{GRAPH_GET, GRAPH_NEIGHBORHOOD, diagnostic, parse_args};
 use crate::McpWorkspace;
+use crate::investigation::{InvestigationMarks, investigation_landscape};
 
 const GET_DESCRIPTION: &str = "Resolve one id from the material landscape graph (artifacts, source units, source spans, ink snapshots, plus notes from the ink store) without expanding neighbors. Accepts any workspace.search hit id as-is (a snapshot_id is canonicalized to its snapshot artifact id; use canonical_id afterwards) and any graph id (source-span, source-relation, projection-relation, conversion run). Returns kind (artifact|source_span|source_unit|snapshot|note|relation|unsupported), entity_kind, label, lifecycle, parent_artifact_id and content_ref, plus edge_summary counts per relation and direction. No body text: when content_ref is not null, call material.read with content_ref.artifact_id and content_ref.locator unchanged (md_byte_range, or pdf_pages 1-based). Notes, snapshots and ink spans get content_ref.type=ink_page (tool ink.page_image, node_id, page_id, stroke_ids for spans): pass content_ref.node_id and page_id to ink.page_image. content_ref is null with a content_unavailable diagnostic for units without located spans (no_span_locator; do not guess byte ranges), unsupported media, and relations. A missing id is status not_found with node null; an existing id of an unsupported kind is status ok with kind unsupported. Read-only.";
 
@@ -262,6 +263,8 @@ struct Graph {
     load_diagnostics: Vec<Value>,
     /// Logical canonical markdown nodes, keyed by canonical id.
     canonical_nodes: HashMap<String, CanonicalMarkdownView>,
+    /// `scope=investigation` overlay marks; `None` for `scope=accepted`.
+    investigation: Option<InvestigationMarks>,
 }
 
 fn internal(context: &str, error: impl std::fmt::Display) -> ToolError {
@@ -331,11 +334,24 @@ fn degrade(source_map: &mut SourceMapSnapshot, culprit: &str, entity: Option<&st
     true
 }
 
-fn load(workspace: &McpWorkspace) -> Result<Graph, ToolError> {
+/// Loads the accepted landscape, or — with an investigation id — the single
+/// `scope=investigation` projection (accepted graph + active staged
+/// versions, see [`investigation_landscape`]).
+fn load(workspace: &McpWorkspace, investigation: Option<&str>) -> Result<Graph, ToolError> {
     let store: SqliteArtifactStore = workspace.store()?;
-    let landscape = store
-        .landscape_snapshot()
-        .map_err(|error| internal("failed to read the landscape snapshot", error))?;
+    let (landscape, marks) = match investigation {
+        Some(investigation) => {
+            let (landscape, marks) = investigation_landscape(&store, investigation)
+                .map_err(|error| internal("failed to project the investigation", error))?;
+            (landscape, Some(marks))
+        }
+        None => (
+            store
+                .landscape_snapshot()
+                .map_err(|error| internal("failed to read the landscape snapshot", error))?,
+            None,
+        ),
+    };
     let ink = store
         .read_ink_graph()
         .map_err(|error| internal("failed to read ink notes", error))?;
@@ -567,6 +583,7 @@ fn load(workspace: &McpWorkspace) -> Result<Graph, ToolError> {
         relation_revisions,
         load_diagnostics,
         canonical_nodes,
+        investigation: marks,
     })
 }
 
@@ -1133,7 +1150,40 @@ impl Graph {
         if let Some(revision) = self.relation_revisions.get(&id) {
             edge["revision"] = json!(revision);
         }
+        if let Some(object) = edge.as_object_mut() {
+            self.annotate_scope(&id, object);
+        }
         edge
+    }
+
+    /// `scope=investigation` labels: staged objects carry `staged: true`,
+    /// their change set and version; accepted ones `scope: "accepted"`.
+    /// Accepted objects with competing staged replacements carry
+    /// `staged_conflict`. A no-op for `scope=accepted`.
+    fn annotate_scope(&self, id: &str, object: &mut Map<String, Value>) {
+        let Some(marks) = &self.investigation else {
+            return;
+        };
+        match marks.staged.get(id) {
+            Some(mark) => {
+                object.insert("scope".into(), json!("staged"));
+                object.insert("staged".into(), json!(true));
+                object.insert("change_set_id".into(), json!(mark.change_set_id));
+                object.insert("change_set_version".into(), json!(mark.change_set_version));
+                object.insert("change_sets".into(), json!(mark.change_sets));
+                object.insert("replaces_revision".into(), json!(mark.replaces_revision));
+            }
+            None => {
+                object.insert("scope".into(), json!("accepted"));
+                object.insert("staged".into(), json!(false));
+            }
+        }
+        if let Some(conflict) = marks.conflicts.iter().find(|item| item.object_id == id) {
+            object.insert(
+                "staged_conflict".into(),
+                json!({ "change_sets": conflict.change_sets }),
+            );
+        }
     }
 
     fn endpoints_json(&self, index: usize) -> Value {
@@ -1259,103 +1309,29 @@ pub(super) fn canonicalized(input: &str, canonical: &str) -> Value {
 fn scope_diagnostic() -> Value {
     diagnostic(
         "scope_not_supported",
-        "scope=investigation is not implemented in Phase1; answered with scope=accepted",
+        "no investigation is bound to this session; answered with scope=accepted",
     )
+}
+
+/// The investigation to project for `scope`, or `None` (accepted graph).
+fn projected_investigation(workspace: &McpWorkspace, scope: Scope) -> Option<String> {
+    if scope != Scope::Investigation {
+        return None;
+    }
+    if let Some(investigation) = current_investigation(workspace) {
+        return Some(investigation.to_owned());
+    }
+    let round = workspace.round().filter(|round| !round.trim().is_empty())?;
+    workspace
+        .store()
+        .ok()?
+        .round_investigation(round)
+        .ok()
+        .flatten()
 }
 
 fn current_investigation(workspace: &McpWorkspace) -> Option<&str> {
     workspace.investigation()
-}
-
-/// Lightweight projection for staged proposal nodes. The accepted landscape
-/// remains the source of truth for all ordinary graph calls; this overlay is
-/// deliberately marked so clients never mistake a proposal for a committed
-/// object.
-fn staged_node(workspace: &McpWorkspace, node_id: &str) -> Result<Option<Value>, ToolError> {
-    let Some(investigation) = current_investigation(workspace) else {
-        return Ok(None);
-    };
-    let store = workspace.store()?;
-    for pending in store
-        .list_pending_change_sets(investigation)
-        .map_err(|error| internal("failed to read staged proposals", error))?
-    {
-        let Some(staged) = pending
-            .record
-            .result
-            .get("staged_ids")
-            .and_then(Value::as_object)
-        else {
-            continue;
-        };
-        let Some((local_ref, _id)) = staged.iter().find(|(_, id)| id.as_str() == Some(node_id))
-        else {
-            continue;
-        };
-        let object = pending
-            .record
-            .proposal
-            .get("proposed_objects")
-            .and_then(Value::as_array)
-            .and_then(|objects| {
-                objects.iter().find(|object| {
-                    object.get("local_ref").and_then(Value::as_str) == Some(local_ref)
-                })
-            })
-            .cloned()
-            .unwrap_or(Value::Null);
-        let kind = object
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or("source_unit");
-        let (label, content_ref) = if kind == "source_span" {
-            let payload = object.get("payload").cloned().unwrap_or(Value::Null);
-            let label = payload
-                .get("quote")
-                .and_then(Value::as_str)
-                .unwrap_or(local_ref)
-                .to_owned();
-            let content_ref = payload
-                .get("artifact_id")
-                .and_then(Value::as_str)
-                .map(|artifact_id| {
-                    json!({
-                        "type": "md_byte_range", "artifact_id": artifact_id,
-                        "locator": payload.get("md_byte_range").cloned().unwrap_or(Value::Null),
-                        "via": node_id
-                    })
-                })
-                .unwrap_or(Value::Null);
-            (label, content_ref)
-        } else {
-            let payload = object.get("payload").cloned().unwrap_or(Value::Null);
-            (
-                payload
-                    .get("display_title")
-                    .and_then(Value::as_str)
-                    .unwrap_or(local_ref)
-                    .to_owned(),
-                Value::Null,
-            )
-        };
-        return Ok(Some(json!({
-            "id": node_id,
-            "canonical_id": node_id,
-            "kind": kind,
-            "entity_kind": if kind == "source_span" { "SourceSpan" } else { "SourceSemanticUnit" },
-            "label": label,
-            "summary": Value::Null,
-            "lifecycle": "staged",
-            "parent_artifact_id": Value::Null,
-            "content_ref": content_ref,
-            "staged": true,
-            "change_set_id": pending.record.change_set_id,
-            "change_set_version": pending.record.version,
-            "local_ref": local_ref,
-            "edge_summary": { "in": {}, "out": {} }
-        })));
-    }
-    Ok(None)
 }
 
 pub(super) fn invalid(message: impl Into<String>, details: Value) -> ToolError {
@@ -1387,20 +1363,11 @@ pub(super) fn call_get(workspace: &McpWorkspace, arguments: Value) -> Result<Val
         ));
     }
     let mut diagnostics = Vec::new();
-    if args.scope == Scope::Investigation {
-        if current_investigation(workspace).is_none() {
-            diagnostics.push(scope_diagnostic());
-        } else if let Some(node) = staged_node(workspace, &args.node_id)? {
-            return Ok(json!({
-                "status": status_value(ToolStatus::Ok),
-                "truncated": false,
-                "as_of": as_of(),
-                "node": node,
-                "diagnostics": diagnostics,
-            }));
-        }
+    let investigation = projected_investigation(workspace, args.scope);
+    if args.scope == Scope::Investigation && investigation.is_none() {
+        diagnostics.push(scope_diagnostic());
     }
-    let graph = load(workspace)?;
+    let graph = load(workspace, investigation.as_deref())?;
     let as_of = as_of();
     let Some(resolved) = graph.resolve(workspace, &args.node_id)? else {
         diagnostics.push(json!({
@@ -1422,6 +1389,7 @@ pub(super) fn call_get(workspace: &McpWorkspace, arguments: Value) -> Result<Val
     }
     let (mut node, reason, span_count) = graph.view(&resolved.canonical, resolved.target);
     node.insert("canonical_id".into(), json!(resolved.canonical));
+    graph.annotate_scope(&resolved.canonical, &mut node);
     let unsupported = node["kind"] == "unsupported";
     if unsupported {
         diagnostics.push(unsupported_diagnostic(&node["entity_kind"]));
@@ -1665,39 +1633,8 @@ pub(super) fn call_neighborhood(
 ) -> Result<Value, ToolError> {
     let args: NeighborhoodArgs = parse_args(arguments)?;
     let applied = validate(args)?;
-    if applied.scope == Scope::Investigation {
-        if current_investigation(workspace).is_none() {
-            // Preserve the Phase1 fallback when the caller has no bound
-            // investigation identity.
-        } else if applied.seeds.len() == 1
-            && let Some(mut node) = staged_node(workspace, &applied.seeds[0])?
-        {
-            node["depth"] = json!(0);
-            node["via_edge"] = Value::Null;
-            return Ok(json!({
-                "status": status_value(ToolStatus::Ok),
-                "truncated": false,
-                "as_of": as_of(),
-                "seed_ids": applied.seeds,
-                "applied": {
-                    "depth": applied.depth,
-                    "direction": applied.direction_name,
-                    "edge_types": applied.edge_types,
-                    "node_kinds": applied.node_kinds,
-                    "max_nodes": applied.max_nodes,
-                    "max_edges": applied.max_edges,
-                    "include_trashed": applied.include_trashed,
-                    "include_virtual": false,
-                    "scope": "investigation"
-                },
-                "nodes": [node],
-                "edges": [],
-                "counts": { "nodes_returned": 1, "edges_returned": 0 },
-                "diagnostics": []
-            }));
-        }
-    }
-    let graph = load(workspace)?;
+    let investigation = projected_investigation(workspace, applied.scope);
+    let graph = load(workspace, investigation.as_deref())?;
     let as_of = as_of();
     let applied_json = json!({
         "depth": applied.depth,
@@ -1708,10 +1645,10 @@ pub(super) fn call_neighborhood(
         "max_edges": applied.max_edges,
         "include_trashed": applied.include_trashed,
         "include_virtual": false,
-        "scope": "accepted",
+        "scope": if investigation.is_some() { "investigation" } else { "accepted" },
     });
     let mut diagnostics = Vec::new();
-    if applied.scope == Scope::Investigation && current_investigation(workspace).is_none() {
+    if applied.scope == Scope::Investigation && investigation.is_none() {
         diagnostics.push(scope_diagnostic());
     }
 
@@ -1974,6 +1911,7 @@ pub(super) fn call_neighborhood(
             }
         };
         let (mut view, reason, _) = graph.view(id, target);
+        graph.annotate_scope(id, &mut view);
         view.insert("depth".into(), json!(depth));
         view.insert("via_edge".into(), json!(via.map(|r| graph.relation_id(r))));
         if multi_seed {
