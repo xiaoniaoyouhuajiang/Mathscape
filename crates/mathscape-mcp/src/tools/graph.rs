@@ -98,7 +98,7 @@ fn scope_schema() -> Value {
         "type": "string",
         "enum": ["accepted", "investigation"],
         "default": "accepted",
-        "description": "Phase1 implements only accepted; investigation is answered as accepted with a scope_not_supported diagnostic.",
+        "description": "accepted reads the formal map; investigation includes the current investigation's staged active versions.",
     })
 }
 
@@ -1263,6 +1263,101 @@ fn scope_diagnostic() -> Value {
     )
 }
 
+fn current_investigation(workspace: &McpWorkspace) -> Option<&str> {
+    workspace.investigation()
+}
+
+/// Lightweight projection for staged proposal nodes. The accepted landscape
+/// remains the source of truth for all ordinary graph calls; this overlay is
+/// deliberately marked so clients never mistake a proposal for a committed
+/// object.
+fn staged_node(workspace: &McpWorkspace, node_id: &str) -> Result<Option<Value>, ToolError> {
+    let Some(investigation) = current_investigation(workspace) else {
+        return Ok(None);
+    };
+    let store = workspace.store()?;
+    for pending in store
+        .list_pending_change_sets(investigation)
+        .map_err(|error| internal("failed to read staged proposals", error))?
+    {
+        let Some(staged) = pending
+            .record
+            .result
+            .get("staged_ids")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        let Some((local_ref, _id)) = staged.iter().find(|(_, id)| id.as_str() == Some(node_id))
+        else {
+            continue;
+        };
+        let object = pending
+            .record
+            .proposal
+            .get("proposed_objects")
+            .and_then(Value::as_array)
+            .and_then(|objects| {
+                objects.iter().find(|object| {
+                    object.get("local_ref").and_then(Value::as_str) == Some(local_ref)
+                })
+            })
+            .cloned()
+            .unwrap_or(Value::Null);
+        let kind = object
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("source_unit");
+        let (label, content_ref) = if kind == "source_span" {
+            let payload = object.get("payload").cloned().unwrap_or(Value::Null);
+            let label = payload
+                .get("quote")
+                .and_then(Value::as_str)
+                .unwrap_or(local_ref)
+                .to_owned();
+            let content_ref = payload
+                .get("artifact_id")
+                .and_then(Value::as_str)
+                .map(|artifact_id| {
+                    json!({
+                        "type": "md_byte_range", "artifact_id": artifact_id,
+                        "locator": payload.get("md_byte_range").cloned().unwrap_or(Value::Null),
+                        "via": node_id
+                    })
+                })
+                .unwrap_or(Value::Null);
+            (label, content_ref)
+        } else {
+            let payload = object.get("payload").cloned().unwrap_or(Value::Null);
+            (
+                payload
+                    .get("display_title")
+                    .and_then(Value::as_str)
+                    .unwrap_or(local_ref)
+                    .to_owned(),
+                Value::Null,
+            )
+        };
+        return Ok(Some(json!({
+            "id": node_id,
+            "canonical_id": node_id,
+            "kind": kind,
+            "entity_kind": if kind == "source_span" { "SourceSpan" } else { "SourceSemanticUnit" },
+            "label": label,
+            "summary": Value::Null,
+            "lifecycle": "staged",
+            "parent_artifact_id": Value::Null,
+            "content_ref": content_ref,
+            "staged": true,
+            "change_set_id": pending.record.change_set_id,
+            "change_set_version": pending.record.version,
+            "local_ref": local_ref,
+            "edge_summary": { "in": {}, "out": {} }
+        })));
+    }
+    Ok(None)
+}
+
 pub(super) fn invalid(message: impl Into<String>, details: Value) -> ToolError {
     ToolError::new(ToolErrorCode::InvalidArg, message).with_details(details)
 }
@@ -1293,7 +1388,17 @@ pub(super) fn call_get(workspace: &McpWorkspace, arguments: Value) -> Result<Val
     }
     let mut diagnostics = Vec::new();
     if args.scope == Scope::Investigation {
-        diagnostics.push(scope_diagnostic());
+        if current_investigation(workspace).is_none() {
+            diagnostics.push(scope_diagnostic());
+        } else if let Some(node) = staged_node(workspace, &args.node_id)? {
+            return Ok(json!({
+                "status": status_value(ToolStatus::Ok),
+                "truncated": false,
+                "as_of": as_of(),
+                "node": node,
+                "diagnostics": diagnostics,
+            }));
+        }
     }
     let graph = load(workspace)?;
     let as_of = as_of();
@@ -1560,6 +1665,38 @@ pub(super) fn call_neighborhood(
 ) -> Result<Value, ToolError> {
     let args: NeighborhoodArgs = parse_args(arguments)?;
     let applied = validate(args)?;
+    if applied.scope == Scope::Investigation {
+        if current_investigation(workspace).is_none() {
+            // Preserve the Phase1 fallback when the caller has no bound
+            // investigation identity.
+        } else if applied.seeds.len() == 1
+            && let Some(mut node) = staged_node(workspace, &applied.seeds[0])?
+        {
+            node["depth"] = json!(0);
+            node["via_edge"] = Value::Null;
+            return Ok(json!({
+                "status": status_value(ToolStatus::Ok),
+                "truncated": false,
+                "as_of": as_of(),
+                "seed_ids": applied.seeds,
+                "applied": {
+                    "depth": applied.depth,
+                    "direction": applied.direction_name,
+                    "edge_types": applied.edge_types,
+                    "node_kinds": applied.node_kinds,
+                    "max_nodes": applied.max_nodes,
+                    "max_edges": applied.max_edges,
+                    "include_trashed": applied.include_trashed,
+                    "include_virtual": false,
+                    "scope": "investigation"
+                },
+                "nodes": [node],
+                "edges": [],
+                "counts": { "nodes_returned": 1, "edges_returned": 0 },
+                "diagnostics": []
+            }));
+        }
+    }
     let graph = load(workspace)?;
     let as_of = as_of();
     let applied_json = json!({
@@ -1574,7 +1711,7 @@ pub(super) fn call_neighborhood(
         "scope": "accepted",
     });
     let mut diagnostics = Vec::new();
-    if applied.scope == Scope::Investigation {
+    if applied.scope == Scope::Investigation && current_investigation(workspace).is_none() {
         diagnostics.push(scope_diagnostic());
     }
 

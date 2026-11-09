@@ -185,8 +185,7 @@ v0 实现另带 `transcript_entries`（行数）与 `dialogue_threads`（线程�
 - 握手时先发 `skills/extraRoots/set` 注册 skill 根目录（失败不致命），并在 `developerInstructions` 写入 skill 的稳定路径作为兜底，Agent 用 harness 自带的读文件能力读取。
 - 有 harness 授权（scratch / skill / 只读根）时，`thread/start` **不发** `sandbox`，改为 `config.default_permissions = "mathscape-session"` 与 `permissions.mathscape-session.filesystem`：`:minimal`、副本工作区、skill 根、Lean profile 根为 `read`，`<session>/scratch/` 为唯一 `write`，网络关闭。同时发送 `sandbox` 会使 permission profile 失效（codex 0.166.0 实测）。
 - 每个 round 的 harness 上下文追加到 `<session>/harness.jsonl`（`mathscape.sandbox_harness.v0`），导出时一并带走。scratch 内容的导出留作后续。
-- 本切片沙箱内仍不挂载 `artifact.stage` / `propose_changes` / `get_change_set`：Desktop 尚无 change set 的接受 / 丢弃 UI，随 SourceSpan PR 一起开放。
-- [2026-11-09，PR-B 计划] PR-B 在 round 与 investigation 绑定（§3.3 开放条件）、Desktop 接受 / 丢弃 / 批量审核就绪后，把 `propose_changes`、`get_change_set` 加入 `sandbox_tool_allowlist()`（`apps/mathscape-desktop/src/sandbox_dialogue.rs`）；`artifact.stage` 仍不挂载。skill 的运行时能力沙箱工具列表同步（`skill_pack` 测试校验二者一致），skill 升 v0.6.2。
+- PR-B 已将 round 与 investigation 绑定，并把 `propose_changes`、`get_change_set` 加入 `sandbox_tool_allowlist()`（`apps/mathscape-desktop/src/sandbox_dialogue.rs`）。它们只写沙箱副本的 staged/blocked 提案；接受、丢弃和批量审核仍由 Desktop 命令完成。`artifact.stage` 仍不挂载，普通文件草稿写入 scratch。skill 的运行时能力表同步为 v0.6.2（`skill_pack` 测试校验二者一致）。
 
 ### 4.4 引用与视图信号（S2，薄）[锁定可后置 / 本文记方向]
 

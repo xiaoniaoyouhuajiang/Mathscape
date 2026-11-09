@@ -589,7 +589,7 @@ fn nonblank(value: &str, path: &str, diagnostics: &mut Vec<DiscoveryDiagnostic>)
     }
 }
 
-pub(crate) fn valid_temp_id(value: &str) -> bool {
+pub fn valid_temp_id(value: &str) -> bool {
     value.len() <= 64
         && value
             .bytes()

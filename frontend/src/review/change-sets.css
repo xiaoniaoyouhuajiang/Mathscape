@@ -1,0 +1,9 @@
+.change-set-review-overlay { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(4, 10, 14, .72); }
+.change-set-review-dialog { width: min(720px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 32px)); overflow: auto; padding: 20px; border: 1px solid #426268; border-radius: 10px; background: #122027; color: #e4efec; box-shadow: 0 20px 80px rgba(0,0,0,.45); }
+.change-set-review-dialog h2 { margin: 0 0 6px; }
+.change-set-review-note, .change-set-review-feedback { color: #a9bec1; font-size: 12px; }
+.change-set-review-list { display: grid; gap: 6px; margin: 14px 0; }
+.change-set-review-row { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; padding: 9px; border: 1px solid #2d4951; border-radius: 6px; background: #172a31; cursor: pointer; }
+.change-set-review-row small { grid-column: 2 / -1; color: #9ab2b5; }
+.change-set-review-state { color: #a9dcc9; font-size: 11px; }
+.change-set-review-actions { display: flex; justify-content: flex-end; gap: 8px; }
