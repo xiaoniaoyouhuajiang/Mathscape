@@ -76,7 +76,10 @@ pub use ink_snapshot_label::{
 };
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use proposals::ProposedChangeRecord;
-pub use proposals::{ChangeSetDecision, ChangeSetDependency, PendingChangeSet};
+pub use proposals::{
+    ChangeSetAcceptance, ChangeSetDecision, ChangeSetDependency, ChangeSetSelectionRef,
+    DiscardOutcome, PendingChangeSet,
+};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use search::{
     SearchArtifactRow, SearchCorpus, SearchNoteRow, SearchSnapshotRow, SearchSourceUnitRow,
@@ -142,6 +145,11 @@ pub enum SqliteStoreError {
     DiscoveryInvariant(String),
     #[error("source registration invariant failed: {0}")]
     SourceRegistrationInvariant(String),
+    /// A Phase2 change set decision was refused. The message starts with a
+    /// stable code (`base_commit_conflict`, `plan_conflict`,
+    /// `dependency_not_accepted`, `proposal_stale`, ...).
+    #[error("{0}")]
+    ChangeSetConflict(String),
     #[error("ink document was not found: {0}")]
     InkDocumentNotFound(String),
     #[error("ink session was not found: {0}")]
@@ -2376,7 +2384,11 @@ fn validate_proposed_change_schema(connection: &Connection) -> Result<(), Sqlite
                 state, base_commit, created_at, proposed_by
          FROM proposed_change_set_versions LIMIT 0",
     )?;
-    for table in ["change_set_dependencies", "change_set_decisions"] {
+    for table in [
+        "change_set_dependencies",
+        "change_set_decisions",
+        "investigation_rounds",
+    ] {
         if !schema_object_exists(connection, "table", table)? {
             return Err(SqliteStoreError::MissingSchemaObject {
                 object_kind: "table",

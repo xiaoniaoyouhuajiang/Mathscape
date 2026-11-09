@@ -46,7 +46,7 @@ impl SandboxState {
         })
     }
 
-    async fn run<T, F>(&self, label: &str, work: F) -> Result<T, String>
+    pub(crate) async fn run<T, F>(&self, label: &str, work: F) -> Result<T, String>
     where
         T: Send + 'static,
         F: FnOnce(&SandboxHome) -> Result<T, mathscape_sandbox::SandboxError> + Send + 'static,

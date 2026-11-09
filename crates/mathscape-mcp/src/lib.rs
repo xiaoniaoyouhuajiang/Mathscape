@@ -43,6 +43,7 @@
 //! are normal tool results; call errors (`invalid_arg|forbidden|internal`)
 //! are tool results with `isError: true` and `{ "error": { … } }` content.
 
+pub mod investigation;
 mod protocol;
 pub mod tools;
 mod workspace;

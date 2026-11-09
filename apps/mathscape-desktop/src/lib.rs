@@ -102,6 +102,10 @@ pub struct DesktopService {
     active_parse: Arc<Mutex<Option<ParsePdfRequest>>>,
     active_discovery: Arc<Mutex<Option<discovery::ActiveDiscoveryControl>>>,
     ink_lan: Arc<ink_lan::InkLanRuntime>,
+    /// Investigation of the bound workspace (`sandbox:{session}` inside an
+    /// in-window sandbox, `None` on the mother workspace). Server-owned:
+    /// the frontend never builds it.
+    investigation_id: Option<String>,
 }
 
 impl DesktopService {
@@ -156,11 +160,22 @@ impl DesktopService {
             active_parse: Arc::new(Mutex::new(None)),
             active_discovery: Arc::new(Mutex::new(None)),
             ink_lan: Arc::new(ink_lan::InkLanRuntime::default()),
+            investigation_id: None,
         })
     }
 
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
+    }
+
+    pub fn investigation_id(&self) -> Option<&str> {
+        self.investigation_id.as_deref()
+    }
+
+    /// Same service bound to `investigation_id` (map overlay + review).
+    pub fn with_investigation(mut self, investigation_id: Option<String>) -> Self {
+        self.investigation_id = investigation_id;
+        self
     }
 
     /// Opens another workspace with the same Marker install and credential
@@ -454,6 +469,7 @@ mod task_tests {
             active_parse: Arc::new(Mutex::new(None)),
             active_discovery: Arc::new(Mutex::new(None)),
             ink_lan: Arc::new(ink_lan::InkLanRuntime::default()),
+            investigation_id: None,
         };
         let request = ParsePdfRequest::new("test:pdf", 2, 4, MarkerProfileChoice::MathOcrV1);
         let permit = service.begin_parse(&request).unwrap();
@@ -902,7 +918,11 @@ impl DesktopState {
                 .slot
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            slot.service = next.clone();
+            let investigation = sandbox.as_ref().map(|current| {
+                mathscape_mcp::investigation::sandbox_investigation_id(&current.sandbox_session_id)
+            });
+            let next_bound = next.clone().with_investigation(investigation);
+            slot.service = next_bound;
             slot.sandbox = sandbox;
         }
         if returning_home {
@@ -1006,11 +1026,9 @@ pub fn run() {
             content::get_source_node_detail,
             content::read_artifact_bytes,
             canonical_reader::get_canonical_reader_projection,
+            change_sets::get_change_set_investigation,
             change_sets::list_pending_change_sets,
-            change_sets::plan_change_set_accept,
-            change_sets::get_change_set_review,
-            change_sets::accept_change_set,
-            change_sets::discard_change_set,
+            change_sets::preview_change_set_impact,
             change_sets::plan_change_set_batch,
             change_sets::accept_change_set_batch,
             change_sets::discard_change_set_batch,

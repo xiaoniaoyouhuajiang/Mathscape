@@ -836,6 +836,17 @@ fn registration_plan_requires_parent_and_relation_closed_explicit_selection() {
     assert_eq!(plan.relations.len(), 1);
     assert_eq!(plan.relations[0].relation, DiscoveryRelationKind::Proves);
     assert!(!plan.spans.is_empty());
+    // Hash/identity contract shared with `propose_changes`: the stored
+    // `normalized_text_hash` is `source_text_hash` of the exact range text,
+    // and the span id is `markdown_span_id(artifact, range)`.
+    for span in &plan.spans {
+        let text = &SOURCE[span.range.start as usize..span.range.end as usize];
+        assert_eq!(span.exact_text_hash, source_text_hash(text));
+        assert_eq!(
+            span.stable_id,
+            markdown_span_id(&span.markdown_artifact_id, &span.range)
+        );
+    }
 }
 
 #[test]

@@ -7,6 +7,36 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct PlannedMapChange {
     pub impact: ImpactPlan,
     pub patch: Option<MapPatch<MapEditPayload>>,
+    /// Objects whose payload, endpoints or lifecycle differ from the input
+    /// snapshot, with their proposed revision. Used by the read-only
+    /// investigation projection; never written by itself.
+    pub changed_objects: Vec<MapEditObject>,
+}
+
+/// Write order of one patch: SourceSpan first, then source units ordered by
+/// parent depth in the final graph (parents before children), then
+/// relations. Ties fall back to the stable id.
+fn write_rank(final_map: &BTreeMap<String, MapEditObject>, o: &MapEditObject) -> (u8, usize) {
+    match o.kind.as_str() {
+        "SourceSpan" => (0, 0),
+        "SourceSemanticUnit" => {
+            let mut depth = 0;
+            let mut seen = BTreeSet::from([o.object_id.clone()]);
+            let mut parent = body(o)["parent_unit"].as_str();
+            while let Some(id) = parent {
+                if !seen.insert(id.to_owned()) {
+                    break;
+                }
+                depth += 1;
+                parent = final_map
+                    .get(id)
+                    .and_then(|p| body(p)["parent_unit"].as_str());
+            }
+            (1, depth)
+        }
+        "SourceUnitRelation" => (2, 0),
+        _ => (3, 0),
+    }
 }
 pub fn edit_fingerprint(value: &impl serde::Serialize) -> String {
     format!(
@@ -458,6 +488,11 @@ pub fn plan_map_change(
         }
     }
     let mut operations = vec![];
+    let mut changed_objects = vec![];
+    let ranks: BTreeMap<String, (u8, usize)> = final_map
+        .iter()
+        .map(|(id, o)| (id.clone(), write_rank(&final_map, o)))
+        .collect();
     let mut direct = vec![];
     let mut affected = vec![];
     for (id, o) in &mut final_map {
@@ -557,10 +592,13 @@ pub fn plan_map_change(
             }
         })();
         match make {
-            Ok(op) => operations.push(op),
+            Ok(op) => operations.push((ranks[id], id.clone(), op)),
             Err(e) => diagnostics.push(error(id, "invalid_object", e.to_string())),
         }
+        changed_objects.push(o.clone());
     }
+    operations.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    let operations: Vec<_> = operations.into_iter().map(|(_, _, op)| op).collect();
     if operations.is_empty() {
         diagnostics.push(error("", "no_changes", "没有可提交的变化"));
     }
@@ -609,6 +647,7 @@ pub fn plan_map_change(
             diagnostics,
         },
         patch,
+        changed_objects,
     }
 }
 

@@ -927,12 +927,11 @@ fn phase2_source_span_proposals_validate_ranges_and_use_content_identity() {
             .unwrap()
             .starts_with("mathscape:source-span/")
     );
-    assert_eq!(
+    assert!(
         result["staged_ids"]["u1"]
             .as_str()
             .unwrap()
-            .starts_with("mathscape:source-unit/"),
-        true
+            .starts_with("mathscape:source-unit/")
     );
 
     let (blocked, is_error) = call(

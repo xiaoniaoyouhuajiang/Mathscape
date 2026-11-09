@@ -9,6 +9,7 @@ mod fact_planner;
 mod fact_preflight;
 mod ink;
 pub use ink::plan_ink_evidence;
+pub mod change_set_plan;
 pub mod map_edit;
 pub mod registration;
 mod source_facts;

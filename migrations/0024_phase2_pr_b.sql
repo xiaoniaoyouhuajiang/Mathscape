@@ -44,6 +44,19 @@ CREATE TABLE change_set_decisions (
 CREATE INDEX change_set_decisions_by_investigation
     ON change_set_decisions(investigation_id, decided_at, decision_id);
 
+-- A round is one execution authorization; an investigation is the durable
+-- proposal visibility scope that several rounds may share. The adapter and
+-- the MCP server both bind (or verify) a round here, first writer wins.
+CREATE TABLE investigation_rounds (
+    round_id         TEXT PRIMARY KEY NOT NULL,
+    investigation_id TEXT NOT NULL,
+    bound_by         TEXT NOT NULL,
+    bound_at         TEXT NOT NULL
+);
+
+CREATE INDEX investigation_rounds_by_investigation
+    ON investigation_rounds(investigation_id, bound_at);
+
 PRAGMA user_version = 24;
 
 COMMIT;

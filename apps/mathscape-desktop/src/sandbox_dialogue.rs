@@ -468,7 +468,9 @@ impl SandboxDialogueState {
                 home.record_backend(&session_id, BACKEND_LABEL, &tools)?;
                 let checkpoint_root = home.checkpoint(&view.checkpoint_id).ok().map(|c| c.root);
                 let scratch = home.ensure_session_scratch(&session_id)?;
-                let investigation_id = format!("sandbox:{session_id}:{thread}");
+                // One sandbox session = one investigation; the thread is metadata.
+                let investigation_id =
+                    mathscape_mcp::investigation::sandbox_investigation_id(&session_id);
                 let (harness, harness_record) = round_harness_for_investigation(
                     checkpoint_root.as_deref(),
                     scratch,
@@ -500,6 +502,7 @@ impl SandboxDialogueState {
         });
 
         let executor = Arc::clone(&self.inner.executor);
+        let round_workspace = workspace.clone();
         let started = executor
             .start_round(StartRoundRequest {
                 backend: AgentBackend::Codex,
@@ -541,6 +544,39 @@ impl SandboxDialogueState {
                 return Err(message);
             }
         };
+        // Register round ↔ investigation in the session copy's store so the
+        // MCP server can verify the adapter-supplied investigation id.
+        {
+            let (root, rid, inv) = (
+                round_workspace,
+                round.as_str().to_owned(),
+                mathscape_mcp::investigation::sandbox_investigation_id(&session_id),
+            );
+            let bound = tauri::async_runtime::spawn_blocking(move || {
+                mathscape_store_sqlite::SqliteArtifactStore::open(&root.join("mathscape.sqlite3"))
+                    .and_then(|mut store| {
+                        store.bind_round_investigation(
+                            &rid,
+                            &inv,
+                            "mathscape-desktop",
+                            &format!(
+                                "unix:{}",
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs()
+                            ),
+                        )
+                    })
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result);
+            if let Err(error) = bound {
+                eprintln!("mathscape: failed to bind round investigation: {error}");
+            }
+        }
         self.active()
             .insert(session_id.clone(), Some(round.clone()));
         harness_record["round_id"] = json!(round.as_str());
@@ -1002,7 +1038,7 @@ mod tests {
         let record = home.session(&fx.session_id).unwrap();
         assert_eq!(record.backend, "codex");
         assert_eq!(record.tool_allowlist, sandbox_tool_allowlist());
-        assert_eq!(record.tool_allowlist.len(), 10);
+        assert_eq!(record.tool_allowlist.len(), 12);
         let export = home.export_session(&fx.session_id, None, None).unwrap();
         assert!(export.export_dir.join(EVENTS_FILE).is_file());
         drop(home);
