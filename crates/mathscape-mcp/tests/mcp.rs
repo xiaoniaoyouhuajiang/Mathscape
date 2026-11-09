@@ -403,6 +403,45 @@ fn artifact_count(root: &Path) -> usize {
         .len()
 }
 
+fn map_object_count(root: &Path) -> usize {
+    let connection = rusqlite::Connection::open(root.join("mathscape.sqlite3")).unwrap();
+    connection
+        .query_row("SELECT COUNT(*) FROM map_objects", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap() as usize
+}
+
+fn seed_source_span(root: &Path, markdown: &str) -> String {
+    let object_id = "mathscape:source-span/phase2-fixture";
+    let revision = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let connection = rusqlite::Connection::open(root.join("mathscape.sqlite3")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO map_objects(object_id, object_shape, entity_kind, current_revision)
+             VALUES (?1, 'entity', 'SourceSpan', ?2)",
+            rusqlite::params![object_id, revision],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO map_object_revisions
+             (object_id, revision_id, schema_version, lifecycle, created_at, created_by, generation_run, payload_json)
+             VALUES (?1, ?2, 'mathscape-source-1', 'active', '2026-11-09T00:00:00Z', 'test', NULL, ?3)",
+            rusqlite::params![
+                object_id,
+                revision,
+                json!({
+                    "payload_kind": "span",
+                    "payload": { "markdown": { "artifact": markdown } }
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+    object_id.to_owned()
+}
+
 #[test]
 fn initialize_ping_and_notifications() {
     let f = fixture();
@@ -468,7 +507,9 @@ fn tools_list_order_and_text_are_fixed() {
             "pdf.page_image",
             "mathlib.search",
             "lean.check",
-            "artifact.stage"
+            "artifact.stage",
+            "propose_changes",
+            "get_change_set"
         ]
     );
     for tool in tools {
@@ -486,7 +527,10 @@ fn tools_list_order_and_text_are_fixed() {
                 }),
                 "material.read may run a bounded ensure and must say so"
             );
-        } else if tool["name"] == "artifact.stage" {
+        } else if matches!(
+            tool["name"].as_str(),
+            Some("artifact.stage") | Some("propose_changes")
+        ) {
             assert_eq!(
                 tool["annotations"],
                 json!({
@@ -495,7 +539,17 @@ fn tools_list_order_and_text_are_fixed() {
                     "idempotentHint": true,
                     "openWorldHint": false,
                 }),
-                "artifact.stage is a bounded write-like staging exception"
+                "write-like tools are bounded staging/proposal exceptions"
+            );
+        } else if tool["name"] == "get_change_set" {
+            assert_eq!(
+                tool["annotations"],
+                json!({
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false,
+                })
             );
         } else {
             assert_eq!(
@@ -600,6 +654,18 @@ fn tools_list_order_and_text_are_fixed() {
         tools[10]["inputSchema"]["required"],
         json!(["request_id", "media_type", "name", "content"])
     );
+    assert_eq!(tools[11]["name"], "propose_changes");
+    assert_eq!(
+        tools[11]["inputSchema"]["required"],
+        json!(["request_id", "rationale"])
+    );
+    assert_eq!(tools[11]["annotations"]["readOnlyHint"], false);
+    assert_eq!(tools[12]["name"], "get_change_set");
+    assert_eq!(
+        tools[12]["inputSchema"]["required"],
+        json!(["change_set_id"])
+    );
+    assert_eq!(tools[12]["annotations"]["readOnlyHint"], true);
     let second = request(&f.server, 2, "tools/list", json!({}));
     assert_eq!(
         first["result"], second["result"],
@@ -751,6 +817,85 @@ fn artifact_stage_requires_round_and_blocks_unverified_validation_refs() {
         result["stage"]["validation"][0]["diagnostics"][0]["code"],
         "validator_media_type_mismatch"
     );
+}
+
+#[test]
+fn phase2_source_proposals_stage_and_read_back_without_changing_the_map() {
+    let f = fixture();
+    let span = seed_source_span(&f.root, &f.markdown);
+    let initial_objects = map_object_count(&f.root);
+    let proposal = json!({
+        "request_id": "proposal-one",
+        "rationale": "登记一个来源定理单元",
+        "proposed_objects": [{
+            "local_ref": "u1",
+            "kind": "source_unit",
+            "op": "create",
+            "payload": {
+                "kind": "statement",
+                "display_title": "测试定理",
+                "parent": null,
+                "source_spans": [span],
+                "completeness": "complete"
+            }
+        }]
+    });
+    let (staged, is_error) = call(&f.server, "propose_changes", proposal.clone());
+    assert!(!is_error, "unexpected proposal error: {staged}");
+    assert_eq!(staged["status"], "staged", "{staged}");
+    assert!(
+        staged["change_set_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("mathscape:change-set/")
+    );
+    assert_eq!(staged["version"], 1);
+    let staged_id = staged["staged_ids"]["u1"].as_str().unwrap();
+    assert!(staged_id.starts_with("mathscape:source-unit/"));
+    assert_eq!(map_object_count(&f.root), initial_objects);
+    assert_eq!(artifact_count(&f.root), 6);
+
+    let (read_back, is_error) = call(
+        &f.server,
+        "get_change_set",
+        json!({ "change_set_id": staged["change_set_id"] }),
+    );
+    assert!(!is_error);
+    assert_eq!(read_back["status"], "ok");
+    assert_eq!(read_back["state"], "staged");
+    assert_eq!(read_back["staged_ids"]["u1"], staged_id);
+    assert_eq!(read_back["proposal"]["request_id"], "proposal-one");
+
+    let (retry, is_error) = call(&f.server, "propose_changes", proposal);
+    assert!(!is_error);
+    assert_eq!(retry, staged);
+
+    let (blocked, is_error) = call(
+        &f.server,
+        "propose_changes",
+        json!({
+            "request_id": "proposal-blocked",
+            "rationale": "尝试写入尚未支持的语义节点",
+            "proposed_objects": [{
+                "local_ref": "entity",
+                "kind": "semantic_entity",
+                "op": "create",
+                "payload": {}
+            }]
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(blocked["diagnostics"][0]["code"], "kind_not_supported");
+    let (blocked_read, is_error) = call(
+        &f.server,
+        "get_change_set",
+        json!({ "change_set_id": blocked["change_set_id"] }),
+    );
+    assert!(!is_error);
+    assert_eq!(blocked_read["state"], "blocked");
+    assert_eq!(blocked_read["diagnostics"][0]["code"], "kind_not_supported");
+    assert_eq!(map_object_count(&f.root), initial_objects);
 }
 
 #[test]

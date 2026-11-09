@@ -131,6 +131,8 @@ pub enum ToolResultStatus {
     Ambiguous,
     Truncated,
     CapabilityUnavailable,
+    Staged,
+    Blocked,
     Error,
 }
 
@@ -142,6 +144,8 @@ impl From<ToolStatus> for ToolResultStatus {
             ToolStatus::Ambiguous => Self::Ambiguous,
             ToolStatus::Truncated => Self::Truncated,
             ToolStatus::CapabilityUnavailable => Self::CapabilityUnavailable,
+            ToolStatus::Staged => Self::Staged,
+            ToolStatus::Blocked => Self::Blocked,
         }
     }
 }

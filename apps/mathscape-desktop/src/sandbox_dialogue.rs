@@ -148,7 +148,14 @@ struct Inner {
 fn tool_allowlist() -> Vec<String> {
     mathscape_mcp::tools::TOOL_NAMES
         .iter()
-        .filter(|name| **name != mathscape_mcp::tools::ARTIFACT_STAGE)
+        .filter(|name| {
+            !matches!(
+                **name,
+                mathscape_mcp::tools::ARTIFACT_STAGE
+                    | mathscape_mcp::tools::PROPOSE_CHANGES
+                    | mathscape_mcp::tools::GET_CHANGE_SET
+            )
+        })
         .map(|name| (*name).to_owned())
         .collect()
 }

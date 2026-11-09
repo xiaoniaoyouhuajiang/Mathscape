@@ -11,6 +11,7 @@ mod lean;
 mod material;
 mod outline;
 mod pdf_image;
+mod propose;
 mod read;
 mod search;
 mod stage;
@@ -48,9 +49,11 @@ pub const PDF_PAGE_IMAGE: &str = "pdf.page_image";
 pub const MATHLIB_SEARCH: &str = "mathlib.search";
 pub const LEAN_CHECK: &str = "lean.check";
 pub const ARTIFACT_STAGE: &str = "artifact.stage";
+pub const PROPOSE_CHANGES: &str = "propose_changes";
+pub const GET_CHANGE_SET: &str = "get_change_set";
 
 /// Stable `tools/list` order. New tools are appended; existing entries stay put.
-pub const TOOL_NAMES: [&str; 11] = [
+pub const TOOL_NAMES: [&str; 13] = [
     WORKSPACE_SEARCH,
     MATERIAL_READ,
     MATERIAL_GREP,
@@ -62,6 +65,8 @@ pub const TOOL_NAMES: [&str; 11] = [
     MATHLIB_SEARCH,
     LEAN_CHECK,
     ARTIFACT_STAGE,
+    PROPOSE_CHANGES,
+    GET_CHANGE_SET,
 ];
 
 /// MCP `annotations` for the read-only tools.
@@ -102,6 +107,8 @@ fn with_annotations(mut definition: Value) -> Value {
     let annotations = match definition.get("name").and_then(Value::as_str) {
         Some(MATERIAL_READ) => material_read_annotations(),
         Some(ARTIFACT_STAGE) => artifact_stage_annotations(),
+        Some(PROPOSE_CHANGES) => propose::propose_annotations(),
+        Some(GET_CHANGE_SET) => propose::get_annotations(),
         _ => read_only_annotations(),
     };
     if let Some(object) = definition.as_object_mut() {
@@ -124,6 +131,8 @@ pub fn tool_definitions() -> Vec<Value> {
         lean::search_definition(),
         lean::check_definition(),
         stage::definition(),
+        propose::definition(),
+        propose::get_definition(),
     ]
     .into_iter()
     .map(with_annotations)
@@ -169,6 +178,8 @@ pub fn call(
         MATHLIB_SEARCH => structured(lean::search(workspace, arguments)),
         LEAN_CHECK => structured(lean::check(workspace, arguments)),
         ARTIFACT_STAGE => structured(stage::call(workspace, arguments)),
+        PROPOSE_CHANGES => structured(propose::propose(workspace, arguments)),
+        GET_CHANGE_SET => structured(propose::get(workspace, arguments)),
         _ => None,
     }
 }
