@@ -33,6 +33,8 @@
 //!   immutable verification receipt.
 //! - `artifact.stage` stores one round-bound text snapshot in the isolated
 //!   staging area; it does not promote the file to the ArtifactPool or map.
+//! - `propose_changes` and `get_change_set` stage and read Phase2-0 source
+//!   unit/relation proposals; they never mutate the accepted map.
 //!
 //! Wire envelope follows `docs/phase0-contract.md` §2 and reuses the DTOs of
 //! `mathscape-agent` ([`mathscape_agent::ToolStatus`], [`mathscape_agent::Locator`],

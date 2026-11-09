@@ -16,6 +16,7 @@ mod ink_recovery;
 mod ink_snapshot_label;
 mod map_edit;
 mod markdown_patch;
+mod proposals;
 mod read;
 mod registration;
 mod run_disposition;
@@ -74,6 +75,7 @@ pub use ink_snapshot_label::{
     normalize_snapshot_label,
 };
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
+pub use proposals::ProposedChangeRecord;
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use search::{
     SearchArtifactRow, SearchCorpus, SearchNoteRow, SearchSnapshotRow, SearchSourceUnitRow,
@@ -103,7 +105,9 @@ const CANONICAL_MARKDOWN_MIGRATION: &str =
     include_str!("../../../migrations/0021_canonical_markdown.sql");
 const CANONICAL_MARKDOWN_ENSURE_MIGRATION: &str =
     include_str!("../../../migrations/0022_canonical_markdown_ensure.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 22;
+const PROPOSED_CHANGE_SETS_MIGRATION: &str =
+    include_str!("../../../migrations/0023_proposed_change_sets.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 23;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -413,6 +417,7 @@ impl SqliteArtifactStore {
         ink_note::validate_schema(&connection)?;
         canonical_ensure::validate_schema(&connection)?;
         validate_registration_schema(&connection)?;
+        validate_proposed_change_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -661,7 +666,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=22 => {
+            6..=23 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -846,6 +851,20 @@ impl SqliteArtifactStore {
                 connection.pragma_update(None, "user_version", 22)?;
             }
         }
+        if version < 23 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 23",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                connection.execute_batch(PROPOSED_CHANGE_SETS_MIGRATION)?;
+            } else {
+                connection.pragma_update(None, "user_version", 23)?;
+            }
+        }
         validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -861,6 +880,7 @@ impl SqliteArtifactStore {
         ink_link::validate_schema(&connection)?;
         ink_snapshot_label::validate_schema(&connection)?;
         canonical_ensure::validate_schema(&connection)?;
+        validate_proposed_change_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -2322,6 +2342,24 @@ fn validate_markdown_patch_schema(connection: &Connection) -> Result<(), SqliteS
             });
         }
     }
+    Ok(())
+}
+
+fn validate_proposed_change_schema(connection: &Connection) -> Result<(), SqliteStoreError> {
+    for table in ["proposed_change_sets", "proposed_change_set_versions"] {
+        if !schema_object_exists(connection, "table", table)? {
+            return Err(SqliteStoreError::MissingSchemaObject {
+                object_kind: "table",
+                name: table,
+            });
+        }
+    }
+    connection.prepare(
+        "SELECT change_set_id, version, investigation_id, round_id, generation,
+                request_id, request_fingerprint, proposal_json, result_json,
+                state, base_commit, created_at
+         FROM proposed_change_set_versions LIMIT 0",
+    )?;
     Ok(())
 }
 

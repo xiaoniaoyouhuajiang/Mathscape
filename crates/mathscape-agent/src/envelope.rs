@@ -20,15 +20,23 @@ pub enum ToolStatus {
     /// A required external capability is missing or has the wrong version;
     /// `details` carries the [`crate::CapabilityProbe`].
     CapabilityUnavailable,
+    /// A write-like proposal passed validation and is waiting for a user
+    /// decision. Phase2 only.
+    Staged,
+    /// A write-like proposal was retained with validation debt and cannot be
+    /// accepted. Phase2 only.
+    Blocked,
 }
 
 impl ToolStatus {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Ok,
         Self::NotFound,
         Self::Ambiguous,
         Self::Truncated,
         Self::CapabilityUnavailable,
+        Self::Staged,
+        Self::Blocked,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -38,6 +46,8 @@ impl ToolStatus {
             Self::Ambiguous => "ambiguous",
             Self::Truncated => "truncated",
             Self::CapabilityUnavailable => "capability_unavailable",
+            Self::Staged => "staged",
+            Self::Blocked => "blocked",
         }
     }
 }
@@ -48,8 +58,8 @@ impl fmt::Display for ToolStatus {
     }
 }
 
-/// Call-error codes (§2.2). `not_found` is a [`ToolStatus`]; `blocked` is
-/// reserved for `propose_changes` in Phase2 and intentionally absent.
+/// Call-error codes (§2.2). `not_found`, `staged` and `blocked` are business
+/// [`ToolStatus`] values; `blocked` is not a call error.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolErrorCode {
@@ -174,7 +184,9 @@ mod tests {
                 json!("not_found"),
                 json!("ambiguous"),
                 json!("truncated"),
-                json!("capability_unavailable")
+                json!("capability_unavailable"),
+                json!("staged"),
+                json!("blocked")
             ]
         );
         for status in ToolStatus::ALL {

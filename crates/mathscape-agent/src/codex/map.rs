@@ -821,6 +821,8 @@ fn status_from_wire(status: &str) -> ToolResultStatus {
         "ambiguous" => ToolResultStatus::Ambiguous,
         "truncated" => ToolResultStatus::Truncated,
         "capability_unavailable" => ToolResultStatus::CapabilityUnavailable,
+        "staged" => ToolResultStatus::Staged,
+        "blocked" => ToolResultStatus::Blocked,
         "error" => ToolResultStatus::Error,
         _ => ToolResultStatus::Ok,
     }
