@@ -16,6 +16,7 @@ use mathscape_domain::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::source_locator::{markdown_span_id, source_text_hash};
 use crate::{
     DiscoveryResult, PreparedUnitDiscoveryRequest, ReferenceResolutionStatus,
     ResolvedDiscoverySelector, StageValidationReport, ValidatedUnitSet, assemble_discovery,
@@ -706,7 +707,7 @@ pub fn plan_source_registration(
             return spans[index].stable_id.clone();
         }
         let stable_id = markdown_span_id(&source.snapshot.artifact_id, selector.range());
-        let exact_text_hash = fingerprint(&selector.text());
+        let exact_text_hash = source_text_hash(selector.text());
         span_by_range.insert(key, spans.len());
         spans.push(PlannedSourceSpan {
             stable_id: stable_id.clone(),
@@ -922,24 +923,10 @@ pub fn plan_source_registration(
     })
 }
 
-pub fn stable_hash_id(
+fn stable_hash_id(
     kind: &str,
     fingerprint: &ContentHash,
 ) -> Result<StableId, SourceRegistrationPlanError> {
-    StableId::parse(format!(
-        "mathscape:{kind}/{}",
-        fingerprint
-            .as_str()
-            .strip_prefix("sha256:")
-            .unwrap_or(fingerprint.as_str())
-    ))
-    .map_err(|error| SourceRegistrationPlanError::InvalidIdentity(error.to_string()))
-}
-
-/// Deterministic identity shared by content discovery and Phase2 proposals.
-/// The identity intentionally contains the immutable Markdown artifact and
-/// half-open byte range, but no quote text or presentation metadata.
-pub fn markdown_span_id(artifact_id: &StableId, range: &TextByteRange) -> StableId {
-    let identity = fingerprint(&("markdown-source-span-1", artifact_id, range));
-    stable_hash_id("source-span", &identity).expect("hash-derived StableId is valid")
+    crate::source_locator::stable_hash_id(kind, fingerprint)
+        .map_err(SourceRegistrationPlanError::InvalidIdentity)
 }

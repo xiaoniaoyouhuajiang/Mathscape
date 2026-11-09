@@ -1,7 +1,8 @@
 //! Stage A: prepare, propose, resolve, validate and freeze. No graph writes.
 use crate::discovery_producer::{collect_text, reject_finish_reason};
 use crate::discovery_prompt::output_schema_for;
-use crate::discovery_validation::{authorize_discovery_input, is_ancestor, valid_temp_id};
+use crate::discovery_validation::{authorize_discovery_input, is_ancestor};
+use crate::source_locator::valid_temp_id;
 use crate::{
     DiscoveryInputError, DiscoveryInputLimits, DiscoveryProducerLimits, DiscoveryRunSummary,
     DiscoveryValidationLimits, PAGE_MARKER_STRUCTURAL_KIND, ResolvedDiscoverySelector,

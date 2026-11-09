@@ -13,7 +13,12 @@ pub mod map_edit;
 pub mod registration;
 mod source_facts;
 pub mod source_integrity;
+mod source_locator;
 mod source_registration;
+pub use source_locator::{
+    locator_matches, markdown_span_id, normalized_locator_string, quote_matches_range,
+    source_text_hash, stable_hash_id, valid_temp_id,
+};
 mod source_review;
 pub use discovery_workflow::*;
 pub use fact_planner::*;
@@ -57,7 +62,7 @@ pub use discovery_validation::{
     DiscoveryValidationLimits, DiscoveryValidationReport, ResolvedDiscoverySelector,
     ValidatedDiscoveryCoverage, ValidatedDiscoveryIssue, ValidatedDiscoveryProposal,
     ValidatedDiscoveryReference, ValidatedDiscoveryRelation, ValidatedDiscoverySourceLabel,
-    ValidatedDiscoveryUnit, ValidatedProposalStatus, valid_temp_id, validate_discovery_proposal,
+    ValidatedDiscoveryUnit, ValidatedProposalStatus, validate_discovery_proposal,
 };
 pub use markdown_anchors::{
     AnchorError, MAX_MARKDOWN_BYTES, PAGE_MARKER_STRUCTURAL_KIND, anchor_markdown,
@@ -88,5 +93,5 @@ pub use selector_resolver::{
     DISCOVERY_MODEL_INPUT_VERSION, DiscoveryModelInput, DiscoveryModelInputRegion,
     DiscoveryModelInputSegment, ResolvedSelectorProposal, SelectorBinding, SelectorResolutionCode,
     SelectorResolutionDiagnostic, SelectorResolutionReport, SelectorResolver, SelectorRewrite,
-    SelectorRewriteKind, locator_matches,
+    SelectorRewriteKind,
 };

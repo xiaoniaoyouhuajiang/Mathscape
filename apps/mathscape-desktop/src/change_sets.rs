@@ -205,6 +205,9 @@ fn plan_one(
     let store = store(service)?;
     let record = selection_record(&store, investigation_id, selection)?;
     let _ = dependency_records(&store, investigation_id, &record)?;
+    let snapshot = store
+        .map_edit_snapshot()
+        .map_err(|error| error.to_string())?;
     let request = request_for(&record, operations(&record)?, record.base_commit.clone())?;
     Ok(plan_map_change(&snapshot, &request, &actor()?).impact)
 }
@@ -333,9 +336,6 @@ fn accept_one(
     let record = selection_record(&store, investigation_id, &selection)?;
     let _ = dependency_records(&store, investigation_id, &record)?;
     let actor = actor()?;
-    let snapshot = store
-        .map_edit_snapshot()
-        .map_err(|error| error.to_string())?;
     let request = request_for(&record, operations(&record)?, record.base_commit.clone())?;
     let planner_request = request.clone();
     let planner_actor = actor.clone();
@@ -527,6 +527,9 @@ fn plan_batch(
         reason: "批量接受来源提案".into(),
         operations: all_operations,
     };
+    let snapshot = store
+        .map_edit_snapshot()
+        .map_err(|error| error.to_string())?;
     let impact = plan_map_change(&snapshot, &request, &actor()?).impact;
     // The existing map writer verifies the planner fingerprint under its
     // transaction. A batch is one combined UserChangeRequest, so its plan
@@ -570,9 +573,6 @@ fn accept_batch(
         .map(|selection| selection_record(&store, investigation_id, selection))
         .collect::<Result<Vec<_>, _>>()?;
     records.sort_by_key(|record| record.created_at.clone());
-    let snapshot = store
-        .map_edit_snapshot()
-        .map_err(|error| error.to_string())?;
     let all_operations = records
         .iter()
         .map(operations)

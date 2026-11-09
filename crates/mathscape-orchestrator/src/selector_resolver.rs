@@ -8,6 +8,8 @@ use mathscape_domain::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::source_locator::{locator_matches, normalized_locator_string, overlapping_matches};
+
 pub const DISCOVERY_MODEL_INPUT_VERSION: &str = "mathscape-discovery-model-input-1";
 
 /// Minimal model-facing view of one trusted DiscoveryInput. Stable hashes,
@@ -732,158 +734,14 @@ pub(crate) fn context_matches(
     anchor: &DiscoveryQuoteAnchor,
 ) -> bool {
     let prefix_matches = anchor.prefix.as_ref().is_none_or(|prefix| {
-        let source = normalized_string(&text[..candidate.0]);
-        let wanted = normalized_string(prefix);
+        let source = normalized_locator_string(&text[..candidate.0]);
+        let wanted = normalized_locator_string(prefix);
         source.trim_end().ends_with(wanted.trim())
     });
     let suffix_matches = anchor.suffix.as_ref().is_none_or(|suffix| {
-        let source = normalized_string(&text[candidate.1..]);
-        let wanted = normalized_string(suffix);
+        let source = normalized_locator_string(&text[candidate.1..]);
+        let wanted = normalized_locator_string(suffix);
         source.trim_start().starts_with(wanted.trim())
     });
     prefix_matches && suffix_matches
-}
-
-fn normalized_string(text: &str) -> String {
-    normalize_locator_text(text, false)
-        .chars
-        .into_iter()
-        .collect()
-}
-
-/// Shared matching policy for v3 quotes and staged single occurrences.
-pub fn locator_matches(text: &str, quote: &str) -> (Vec<(usize, usize)>, bool) {
-    let exact = overlapping_matches(text, quote)
-        .into_iter()
-        .map(|start| (start, start + quote.len()))
-        .collect::<Vec<_>>();
-    if !exact.is_empty() {
-        return (exact, false);
-    }
-    let source = normalize_locator_text(text, true);
-    let wanted = normalize_locator_text(strip_outer_math_delimiters(quote), false);
-    (normalized_matches(&source, &wanted.chars), true)
-}
-
-fn overlapping_matches(text: &str, needle: &str) -> Vec<usize> {
-    if needle.is_empty() {
-        return Vec::new();
-    }
-    let mut starts = Vec::new();
-    let mut cursor = 0;
-    while cursor <= text.len().saturating_sub(needle.len()) {
-        let Some(relative) = text[cursor..].find(needle) else {
-            break;
-        };
-        let start = cursor + relative;
-        starts.push(start);
-        cursor = start
-            + text[start..]
-                .chars()
-                .next()
-                .expect("a nonempty match starts on a character")
-                .len_utf8();
-    }
-    starts
-}
-
-struct NormalizedLocatorText {
-    chars: Vec<char>,
-    source_spans: Vec<(usize, usize)>,
-}
-
-fn normalize_locator_text(text: &str, track_source: bool) -> NormalizedLocatorText {
-    let mut chars = Vec::new();
-    let mut source_spans = Vec::new();
-    let mut index = 0;
-    while index < text.len() {
-        let tail = &text[index..];
-        if let Some(len) = tex_spacing_prefix(tail) {
-            push_normalized_space(&mut chars, &mut source_spans, index, index + len);
-            index += len;
-            continue;
-        }
-        let ch = tail
-            .chars()
-            .next()
-            .expect("index remains on a character boundary");
-        let end = index + ch.len_utf8();
-        if ch.is_whitespace() {
-            let mut whitespace_end = end;
-            while whitespace_end < text.len() {
-                let next = text[whitespace_end..]
-                    .chars()
-                    .next()
-                    .expect("whitespace scan remains in bounds");
-                if !next.is_whitespace() {
-                    break;
-                }
-                whitespace_end += next.len_utf8();
-            }
-            push_normalized_space(&mut chars, &mut source_spans, index, whitespace_end);
-            index = whitespace_end;
-            continue;
-        }
-        chars.push(ch);
-        source_spans.push((index, end));
-        index = end;
-    }
-    if !track_source {
-        source_spans.clear();
-    }
-    NormalizedLocatorText {
-        chars,
-        source_spans,
-    }
-}
-
-fn strip_outer_math_delimiters(text: &str) -> &str {
-    let text = text.trim();
-    if text.len() >= 4 && text.starts_with("$$") && text.ends_with("$$") {
-        &text[2..text.len() - 2]
-    } else if text.len() >= 2 && text.starts_with('$') && text.ends_with('$') {
-        &text[1..text.len() - 1]
-    } else {
-        text
-    }
-}
-
-fn tex_spacing_prefix(text: &str) -> Option<usize> {
-    ["\\qquad", "\\quad", "\\,", "\\:", "\\;", "\\!", "\\ "]
-        .into_iter()
-        .find_map(|command| text.starts_with(command).then_some(command.len()))
-}
-
-fn push_normalized_space(
-    chars: &mut Vec<char>,
-    source_spans: &mut Vec<(usize, usize)>,
-    start: usize,
-    end: usize,
-) {
-    if chars.last() == Some(&' ') {
-        if let Some(span) = source_spans.last_mut() {
-            span.1 = end;
-        }
-    } else {
-        chars.push(' ');
-        source_spans.push((start, end));
-    }
-}
-
-fn normalized_matches(source: &NormalizedLocatorText, wanted: &[char]) -> Vec<(usize, usize)> {
-    if wanted.is_empty() || wanted.len() > source.chars.len() {
-        return Vec::new();
-    }
-    source
-        .chars
-        .windows(wanted.len())
-        .enumerate()
-        .filter(|(_, window)| *window == wanted)
-        .map(|(index, _)| {
-            (
-                source.source_spans[index].0,
-                source.source_spans[index + wanted.len() - 1].1,
-            )
-        })
-        .collect()
 }

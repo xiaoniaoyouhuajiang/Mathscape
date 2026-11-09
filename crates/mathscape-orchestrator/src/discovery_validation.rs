@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::is_page_marker_text;
+use crate::source_locator::valid_temp_id;
 use crate::{
     discovery_input::discovery_input_fingerprint,
     selector_resolver::{MAX_DISAMBIGUATOR_CHARACTERS, context_matches},
@@ -587,17 +588,6 @@ fn nonblank(value: &str, path: &str, diagnostics: &mut Vec<DiscoveryDiagnostic>)
             "字符串不能为空或只有空白",
         );
     }
-}
-
-pub fn valid_temp_id(value: &str) -> bool {
-    value.len() <= 64
-        && value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
 fn contains_range(outer: &ResolvedDiscoverySelector, inner: &ResolvedDiscoverySelector) -> bool {
