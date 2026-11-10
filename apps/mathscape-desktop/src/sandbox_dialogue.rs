@@ -154,21 +154,15 @@ struct Inner {
     active: Mutex<HashMap<String, Option<RoundId>>>,
 }
 
-/// Mathscape MCP tools mounted in sandbox rounds: everything except the
-/// round-bound write tools, which wait for a Desktop accept/discard UI.
+/// Mathscape MCP tools mounted in sandbox rounds. Proposal writes are safe
+/// because they only create staged versions in the isolated copy; the
+/// Desktop-only accept/discard commands remain outside MCP.
 /// The skill's runtime-capabilities sandbox section must list exactly these
 /// (checked by `skill_pack` tests).
 pub(crate) fn sandbox_tool_allowlist() -> Vec<String> {
     mathscape_mcp::tools::TOOL_NAMES
         .iter()
-        .filter(|name| {
-            !matches!(
-                **name,
-                mathscape_mcp::tools::ARTIFACT_STAGE
-                    | mathscape_mcp::tools::PROPOSE_CHANGES
-                    | mathscape_mcp::tools::GET_CHANGE_SET
-            )
-        })
+        .filter(|name| **name != mathscape_mcp::tools::ARTIFACT_STAGE)
         .map(|name| (*name).to_owned())
         .collect()
 }
@@ -180,10 +174,23 @@ pub(crate) fn sandbox_tool_allowlist() -> Vec<String> {
 /// workspace): the session copy has no parent `.mathscape/lean/profiles`.
 /// It is passed as `MATHSCAPE_LEAN_PROFILE_ROOT` to the Codex child (and on
 /// to the MCP child) and granted read-only to harness tools.
+#[cfg(test)]
 pub(crate) fn round_harness(
     checkpoint_root: Option<&Path>,
     scratch: PathBuf,
     tools: &[String],
+) -> (HarnessContext, Value) {
+    round_harness_for_investigation(checkpoint_root, scratch, tools, None)
+}
+
+/// Same permission profile with a durable investigation binding. The
+/// generated Codex round remains a separate execution token; the MCP child
+/// receives this value through the explicit forwarded environment seam.
+pub(crate) fn round_harness_for_investigation(
+    checkpoint_root: Option<&Path>,
+    scratch: PathBuf,
+    tools: &[String],
+    investigation_id: Option<&str>,
 ) -> (HarnessContext, Value) {
     let mut harness = HarnessContext {
         scratch_dir: Some(scratch.clone()),
@@ -195,6 +202,12 @@ pub(crate) fn round_harness(
         harness.env.push((
             LEAN_PROFILE_ROOT_ENV.to_owned(),
             found.root.display().to_string(),
+        ));
+    }
+    if let Some(investigation_id) = investigation_id.filter(|value| !value.trim().is_empty()) {
+        harness.env.push((
+            "MATHSCAPE_INVESTIGATION_ID".to_owned(),
+            investigation_id.to_owned(),
         ));
     }
     let skill = locate_skills_root().map(|root| load_worknet_skill(&root));
@@ -218,6 +231,7 @@ pub(crate) fn round_harness(
         "permission_profile": "mathscape-session",
         "skill": skill_record,
         "lean_profile_root": lean,
+        "investigation_id": investigation_id,
         "read_roots": harness.read_roots,
         "skill_roots": harness.skill_roots,
         "scratch": scratch,
@@ -454,8 +468,15 @@ impl SandboxDialogueState {
                 home.record_backend(&session_id, BACKEND_LABEL, &tools)?;
                 let checkpoint_root = home.checkpoint(&view.checkpoint_id).ok().map(|c| c.root);
                 let scratch = home.ensure_session_scratch(&session_id)?;
-                let (harness, harness_record) =
-                    round_harness(checkpoint_root.as_deref(), scratch, &tools);
+                // One sandbox session = one investigation; the thread is metadata.
+                let investigation_id =
+                    mathscape_mcp::investigation::sandbox_investigation_id(&session_id);
+                let (harness, harness_record) = round_harness_for_investigation(
+                    checkpoint_root.as_deref(),
+                    scratch,
+                    &tools,
+                    Some(&investigation_id),
+                );
                 Ok((
                     build_dialogue_prompt(&history, &text, continues_session),
                     view.workspace_root
@@ -481,6 +502,7 @@ impl SandboxDialogueState {
         });
 
         let executor = Arc::clone(&self.inner.executor);
+        let round_workspace = workspace.clone();
         let started = executor
             .start_round(StartRoundRequest {
                 backend: AgentBackend::Codex,
@@ -522,6 +544,39 @@ impl SandboxDialogueState {
                 return Err(message);
             }
         };
+        // Register round ↔ investigation in the session copy's store so the
+        // MCP server can verify the adapter-supplied investigation id.
+        {
+            let (root, rid, inv) = (
+                round_workspace,
+                round.as_str().to_owned(),
+                mathscape_mcp::investigation::sandbox_investigation_id(&session_id),
+            );
+            let bound = tauri::async_runtime::spawn_blocking(move || {
+                mathscape_store_sqlite::SqliteArtifactStore::open(&root.join("mathscape.sqlite3"))
+                    .and_then(|mut store| {
+                        store.bind_round_investigation(
+                            &rid,
+                            &inv,
+                            "mathscape-desktop",
+                            &format!(
+                                "unix:{}",
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs()
+                            ),
+                        )
+                    })
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result);
+            if let Err(error) = bound {
+                eprintln!("mathscape: failed to bind round investigation: {error}");
+            }
+        }
         self.active()
             .insert(session_id.clone(), Some(round.clone()));
         harness_record["round_id"] = json!(round.as_str());
@@ -983,7 +1038,7 @@ mod tests {
         let record = home.session(&fx.session_id).unwrap();
         assert_eq!(record.backend, "codex");
         assert_eq!(record.tool_allowlist, sandbox_tool_allowlist());
-        assert_eq!(record.tool_allowlist.len(), 10);
+        assert_eq!(record.tool_allowlist.len(), 14);
         let export = home.export_session(&fx.session_id, None, None).unwrap();
         assert!(export.export_dir.join(EVENTS_FILE).is_file());
         drop(home);

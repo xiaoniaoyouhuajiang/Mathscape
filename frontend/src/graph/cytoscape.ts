@@ -487,6 +487,26 @@ const styles: StylesheetJson = [
       "line-style": "dashed",
     },
   },
+  // Phase2 staged proposals (staged-overlay.ts): dashed, translucent, badged.
+  {
+    selector: ".is-staged",
+    style: {
+      opacity: 0.6,
+      "border-style": "dashed",
+      "border-width": 2,
+      "border-color": "#ffd84a",
+      "line-style": "dashed",
+      "line-color": "#ffd84a",
+    },
+  },
+  {
+    selector: ".is-staged-conflict",
+    style: {
+      "border-style": "double",
+      "border-width": 4,
+      "border-color": "#e0913f",
+    },
+  },
   // Out-of-focus context: still drawn so the focused region keeps its place in
   // the whole map, but faint and inert so it cannot be clicked by accident.
   {

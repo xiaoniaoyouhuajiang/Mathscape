@@ -737,7 +737,8 @@ code {
   position: fixed;
   right: 22px;
   top: 84px;
-  z-index: 40;
+  /* Above the sandbox dialogue dock (60/61): toasts raised from the dock were hidden under it. */
+  z-index: 70;
   max-width: min(420px, calc(100vw - 44px));
   padding: 12px 15px;
   border: 1px solid #456c64;

@@ -6,6 +6,7 @@
  *
  * The switch is not persisted: restarting the app always opens the mother.
  */
+import { reviewBeforeLeaving } from "../review/change-sets";
 import { invoke } from "@tauri-apps/api/core";
 
 import { errorMessage } from "../core/ipc";
@@ -31,7 +32,9 @@ function reloadWindow(): void {
 }
 
 /** Ask, then bind this window to the session copy. Returns false if declined or refused. */
-export async function enterSandbox(sessionId: string, workspaceRoot: string, toast: Toast): Promise<boolean> {
+export async function enterSandbox(sessionId: string, workspaceRoot: string, toast: Toast, leavingSessionId: string | null = null): Promise<boolean> {
+  // Switching this window away from a sandbox session reviews its proposals first.
+  if (leavingSessionId && leavingSessionId !== sessionId && !await reviewBeforeLeaving(leavingSessionId, "switch_session", toast)) return false;
   if (!window.confirm(enterConfirmMessage(sessionId, workspaceRoot))) return false;
   try {
     await invoke<WorkspaceStatus>("sandbox_enter_session", { sandboxSessionId: sessionId });
@@ -44,7 +47,8 @@ export async function enterSandbox(sessionId: string, workspaceRoot: string, toa
 }
 
 /** Ask, then rebind this window to the mother workspace. */
-export async function returnToMother(motherRoot: string, toast: Toast): Promise<boolean> {
+export async function returnToMother(motherRoot: string, toast: Toast, leavingSessionId: string | null = null): Promise<boolean> {
+  if (!await reviewBeforeLeaving(leavingSessionId, "switch_session", toast)) return false;
   if (!window.confirm(returnConfirmMessage(motherRoot))) return false;
   try {
     await invoke<WorkspaceStatus>("sandbox_return_to_mother");

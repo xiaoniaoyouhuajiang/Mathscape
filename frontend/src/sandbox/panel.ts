@@ -6,6 +6,7 @@
  * "Sandbox session" is the product concept; it has nothing to do with Codex
  * `SandboxMode`. There is still no write path back to the checkpoint.
  */
+import { reviewBeforeLeaving } from "../review/change-sets";
 import { invoke } from "@tauri-apps/api/core";
 
 import { errorMessage } from "../core/ipc";
@@ -322,11 +323,11 @@ export class SandboxPanelController {
       const row = el("div", "sandbox-item-actions");
       row.append(
         inWindow
-          ? button("返回母工作区", () => void returnToMother(workspace.motherWorkspaceRoot, this.toast), "primary")
-          : button("在本窗口打开…", () => void enterSandbox(id, root, this.toast), "primary"),
+          ? button("返回母工作区", () => void returnToMother(workspace.motherWorkspaceRoot, this.toast, id), "primary")
+          : button("在本窗口打开…", () => void enterSandbox(id, root, this.toast, workspace.sandbox?.sandboxSessionId ?? null), "primary"),
         button("对话", () => {
           this.close();
-          this.dialogue.open(id);
+          void this.dialogue.open(id);
         }, "secondary"),
       );
       details.append(row);
@@ -336,7 +337,8 @@ export class SandboxPanelController {
       const notes = el("input", "sandbox-input");
       notes.placeholder = "可选：导出备注";
       notes.maxLength = 2000;
-      const exportWith = (chooseDestination: boolean) =>
+      const exportWith = async (chooseDestination: boolean) => {
+        if (!await reviewBeforeLeaving(id, "export", this.toast)) return;
         void this.act(
           () =>
             invoke<ExportOutcome | null>("sandbox_export_session", {
@@ -348,12 +350,14 @@ export class SandboxPanelController {
             }),
           (outcome) => (outcome ? `已导出到 ${outcome.export_dir}` : null),
         );
+      };
       const row = el("div", "sandbox-item-actions");
       row.append(
-        button("导出", () => exportWith(false), "secondary"),
-        button("导出到…", () => exportWith(true), "quiet"),
+        button("导出", () => void exportWith(false), "secondary"),
+        button("导出到…", () => void exportWith(true), "quiet"),
         el("span", "sandbox-actions-spacer"),
-        button("丢弃", () => {
+        button("丢弃", async () => {
+          if (!await reviewBeforeLeaving(id, "discard", this.toast)) return;
           if (!window.confirm(`丢弃会物理删除 ${id} 的整个隔离目录，且不可恢复（已导出的包保留）。继续？`)) return;
           void this.act(
             () => invoke<SessionView>("sandbox_discard_session", { sandboxSessionId: id }),

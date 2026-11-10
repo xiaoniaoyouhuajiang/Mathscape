@@ -1,0 +1,28 @@
+/* Blocking batch review dialog (switch / discard / export / exit).
+   Colours, notes, headings, buttons and the discard confirmation come from
+   review.css; only the dialog layout lives here. */
+.change-set-review-overlay { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(4, 10, 14, .72); }
+/* One grid row per child: header, summary, list, confirm, feedback, footer. */
+.change-set-review-dialog { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto auto; gap: 10px; width: min(1180px, calc(100vw - 32px)); height: min(760px, calc(100vh - 32px)); padding: 18px 20px; border: 1px solid var(--review-border-strong); border-radius: 10px; background: var(--review-bg); color: var(--review-text); box-shadow: 0 20px 80px rgba(0,0,0,.45); }
+.change-set-review-dialog h2 { margin: 0 0 4px; }
+.change-set-review-dialog [hidden] { display: none; }
+.change-set-review-list { overflow: auto; min-height: 0; }
+.change-set-review-table { --change-set-columns: 22px minmax(240px, 1fr) 64px 64px minmax(160px, 1fr); display: grid; gap: 4px; }
+.change-set-review-row { display: grid; grid-template-columns: var(--change-set-columns); gap: 8px; align-items: center; padding: 8px; border: 1px solid var(--review-border); border-radius: 6px; background: var(--review-panel); cursor: pointer; font-size: 12px; }
+.change-set-review-head { background: transparent; border-color: transparent; color: var(--review-muted); cursor: default; }
+.change-set-review-title { display: grid; min-width: 0; overflow-wrap: anywhere; }
+.change-set-review-state.state-staged { color: var(--review-ok); }
+.change-set-review-state.state-blocked { color: #e0913f; }
+.change-set-review-debt.has-debt { color: var(--review-warn); }
+.change-set-review-impact { color: #c6d5d6; overflow-wrap: anywhere; }
+.change-set-review-summary { margin: 0; padding: 6px 8px; border: 1px solid var(--review-border); border-radius: 6px; font-size: 12px; background: var(--review-panel-deep); }
+.change-set-review-feedback { margin: 0; }
+.change-set-review-actions { align-items: center; justify-content: flex-end; }
+.change-set-review-actions button { border: 1px solid var(--review-border-strong); border-radius: 5px; background: #1d3138; color: #d6ece5; padding: 4px 9px; cursor: pointer; font-size: 12px; }
+.change-set-review-spacer { flex: 1; }
+
+/* Staged badges in the map detail panel. */
+.detail-staged-badge { margin: 6px 0; padding: 6px 8px; border: 1px dashed #ffd84a; border-radius: 6px; color: #ffe58a; font-size: 12px; }
+.detail-staged-badge.is-conflict { border-color: #ff8a65; color: #ffc4b0; }
+.detail-accepted-version { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #2d4951; }
+.detail-accepted-version h4 { margin: 0 0 4px; font-size: 12px; color: #a9bec1; }

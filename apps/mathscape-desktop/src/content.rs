@@ -17,7 +17,7 @@ use crate::{DesktopService, DesktopState};
 
 #[derive(Debug, Serialize)]
 pub struct ContentContext {
-    conversion_id: String,
+    pub(crate) conversion_id: String,
     paths: Vec<ProductPath>,
 }
 
@@ -27,7 +27,7 @@ pub struct ArtifactContentInfo {
     pub(crate) media_type: String,
     pub(crate) byte_size: u64,
     content_hash: ContentHash,
-    contexts: Vec<ContentContext>,
+    pub(crate) contexts: Vec<ContentContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ink_snapshot_id: Option<String>,
 }
@@ -260,61 +260,7 @@ impl DesktopService {
         })
     }
     pub fn content_info(&self, artifact_id: &str) -> Result<ArtifactContentInfo, String> {
-        let id = StableId::parse(artifact_id).map_err(|e| e.to_string())?;
-        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
-            .map_err(|e| e.to_string())?;
-        let catalog = store.read_catalog_snapshot().map_err(|e| e.to_string())?;
-        let artifact = catalog
-            .artifacts()
-            .iter()
-            .find(|a| a.entity().header().stable_id() == &id)
-            .ok_or("Artifact 不存在")?
-            .entity()
-            .payload();
-        let mut contexts = Vec::new();
-        for relation in catalog.conversions() {
-            if !relation
-                .endpoints()
-                .iter()
-                .any(|e| e.role().as_str() == "output" && e.entity() == &id)
-            {
-                continue;
-            }
-            let SourcePayload::ConversionRun(run) = relation.payload() else {
-                continue;
-            };
-            let paths: Vec<ProductPath> =
-                match run.parameters().additional_options().get(PRODUCT_PATHS_KEY) {
-                    Some(json) => {
-                        serde_json::from_str(json).map_err(|e| format!("产物路径映射损坏：{e}"))?
-                    }
-                    None => vec![],
-                };
-            // Do not expose unrelated artifacts through a malformed manifest.
-            if paths.iter().any(|p| {
-                !relation
-                    .endpoints()
-                    .iter()
-                    .any(|e| e.role().as_str() == "output" && e.entity() == &p.artifact_id)
-            }) {
-                return Err("产物路径映射引用了转换以外的文件".into());
-            }
-            contexts.push(ContentContext {
-                conversion_id: relation.header().stable_id().to_string(),
-                paths,
-            });
-        }
-        Ok(ArtifactContentInfo {
-            artifact_id: id.to_string(),
-            media_type: artifact.media_type().to_string(),
-            byte_size: artifact.byte_size(),
-            content_hash: artifact.content_hash().clone(),
-            contexts,
-            ink_snapshot_id: store
-                .ink_snapshot_for_artifact(id.as_str())
-                .map_err(|error| error.to_string())?
-                .map(|snapshot| snapshot.snapshot_id),
-        })
+        content_info_at(&self.workspace_root, artifact_id)
     }
 
     pub fn read_artifact_bytes(
@@ -335,51 +281,7 @@ impl DesktopService {
         artifact_id: &str,
         conversion_id: Option<&str>,
     ) -> Result<AnchoredMarkdown, String> {
-        let info = self.content_info(artifact_id)?;
-        if info.media_type != "text/markdown" {
-            return Err("块级选区只支持 Markdown 文件".into());
-        }
-        if info.byte_size > MAX_MARKDOWN_BYTES as u64 {
-            return Err("Markdown 超过 16 MiB，当前块级选区暂不支持".into());
-        }
-        match conversion_id {
-            Some(id) if !info.contexts.iter().any(|c| c.conversion_id == id) => {
-                return Err("转换上下文不属于此 Markdown".into());
-            }
-            None if !info.contexts.is_empty() => return Err("请选择 Markdown 的转换来源".into()),
-            _ => {}
-        }
-        let id = StableId::parse(artifact_id).map_err(|e| e.to_string())?;
-        let conversion = conversion_id
-            .map(StableId::parse)
-            .transpose()
-            .map_err(|e| e.to_string())?;
-        let pool = ArtifactPool::open(&self.workspace_root).map_err(|e| e.to_string())?;
-        let mut bytes = Vec::with_capacity(info.byte_size as usize);
-        while (bytes.len() as u64) < info.byte_size {
-            let length = (info.byte_size - bytes.len() as u64).min(4 * 1024 * 1024) as u32;
-            let chunk = pool
-                .read_bytes(&id, bytes.len() as u64, length)
-                .map_err(|e| e.to_string())?;
-            if chunk.len() != length as usize {
-                return Err("文件长度已改变，请检查 Artifact 完整性".into());
-            }
-            bytes.extend(chunk);
-        }
-        // Detect growth as well as short reads, then verify catalog content identity.
-        if !pool
-            .read_bytes(&id, info.byte_size, 1)
-            .map_err(|e| e.to_string())?
-            .is_empty()
-        {
-            return Err("文件长度已改变，请检查 Artifact 完整性".into());
-        }
-        let source = String::from_utf8(bytes).map_err(|_| "Markdown 不是有效 UTF-8")?;
-        let document = anchor_markdown(id, conversion, source).map_err(|e| e.to_string())?;
-        if document.snapshot.content_hash != info.content_hash {
-            return Err("Markdown 内容哈希与登记信息不符".into());
-        }
-        Ok(document)
+        markdown_document_at(&self.workspace_root, artifact_id, conversion_id)
     }
 
     /// Markdown for NoteLink resolution (§14.3): the conversion origin is not
@@ -515,4 +417,120 @@ pub async fn read_artifact_bytes(
     .await
     .map_err(|e| e.to_string())??;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Content info of an artifact in an explicit workspace root (the bound
+/// workspace, or the sandbox an investigation lives in).
+pub(crate) fn content_info_at(
+    workspace_root: &std::path::Path,
+    artifact_id: &str,
+) -> Result<ArtifactContentInfo, String> {
+    let id = StableId::parse(artifact_id).map_err(|e| e.to_string())?;
+    let store = SqliteArtifactStore::open(&workspace_root.join("mathscape.sqlite3"))
+        .map_err(|e| e.to_string())?;
+    let catalog = store.read_catalog_snapshot().map_err(|e| e.to_string())?;
+    let artifact = catalog
+        .artifacts()
+        .iter()
+        .find(|a| a.entity().header().stable_id() == &id)
+        .ok_or("Artifact 不存在")?
+        .entity()
+        .payload();
+    let mut contexts = Vec::new();
+    for relation in catalog.conversions() {
+        if !relation
+            .endpoints()
+            .iter()
+            .any(|e| e.role().as_str() == "output" && e.entity() == &id)
+        {
+            continue;
+        }
+        let SourcePayload::ConversionRun(run) = relation.payload() else {
+            continue;
+        };
+        let paths: Vec<ProductPath> =
+            match run.parameters().additional_options().get(PRODUCT_PATHS_KEY) {
+                Some(json) => {
+                    serde_json::from_str(json).map_err(|e| format!("产物路径映射损坏：{e}"))?
+                }
+                None => vec![],
+            };
+        // Do not expose unrelated artifacts through a malformed manifest.
+        if paths.iter().any(|p| {
+            !relation
+                .endpoints()
+                .iter()
+                .any(|e| e.role().as_str() == "output" && e.entity() == &p.artifact_id)
+        }) {
+            return Err("产物路径映射引用了转换以外的文件".into());
+        }
+        contexts.push(ContentContext {
+            conversion_id: relation.header().stable_id().to_string(),
+            paths,
+        });
+    }
+    Ok(ArtifactContentInfo {
+        artifact_id: id.to_string(),
+        media_type: artifact.media_type().to_string(),
+        byte_size: artifact.byte_size(),
+        content_hash: artifact.content_hash().clone(),
+        contexts,
+        ink_snapshot_id: store
+            .ink_snapshot_for_artifact(id.as_str())
+            .map_err(|error| error.to_string())?
+            .map(|snapshot| snapshot.snapshot_id),
+    })
+}
+
+/// The anchored Markdown of a snapshot in an explicit workspace root.
+pub(crate) fn markdown_document_at(
+    workspace_root: &std::path::Path,
+    artifact_id: &str,
+    conversion_id: Option<&str>,
+) -> Result<AnchoredMarkdown, String> {
+    let info = content_info_at(workspace_root, artifact_id)?;
+    if info.media_type != "text/markdown" {
+        return Err("块级选区只支持 Markdown 文件".into());
+    }
+    if info.byte_size > MAX_MARKDOWN_BYTES as u64 {
+        return Err("Markdown 超过 16 MiB，当前块级选区暂不支持".into());
+    }
+    match conversion_id {
+        Some(id) if !info.contexts.iter().any(|c| c.conversion_id == id) => {
+            return Err("转换上下文不属于此 Markdown".into());
+        }
+        None if !info.contexts.is_empty() => return Err("请选择 Markdown 的转换来源".into()),
+        _ => {}
+    }
+    let id = StableId::parse(artifact_id).map_err(|e| e.to_string())?;
+    let conversion = conversion_id
+        .map(StableId::parse)
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let pool = ArtifactPool::open(workspace_root).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::with_capacity(info.byte_size as usize);
+    while (bytes.len() as u64) < info.byte_size {
+        let length = (info.byte_size - bytes.len() as u64).min(4 * 1024 * 1024) as u32;
+        let chunk = pool
+            .read_bytes(&id, bytes.len() as u64, length)
+            .map_err(|e| e.to_string())?;
+        if chunk.len() != length as usize {
+            return Err("文件长度已改变，请检查 Artifact 完整性".into());
+        }
+        bytes.extend(chunk);
+    }
+    // Detect growth as well as short reads, then verify catalog content identity.
+    if !pool
+        .read_bytes(&id, info.byte_size, 1)
+        .map_err(|e| e.to_string())?
+        .is_empty()
+    {
+        return Err("文件长度已改变，请检查 Artifact 完整性".into());
+    }
+    let source = String::from_utf8(bytes).map_err(|_| "Markdown 不是有效 UTF-8")?;
+    let document = anchor_markdown(id, conversion, source).map_err(|e| e.to_string())?;
+    if document.snapshot.content_hash != info.content_hash {
+        return Err("Markdown 内容哈希与登记信息不符".into());
+    }
+    Ok(document)
 }

@@ -84,6 +84,8 @@ import {
   type TurnUsage,
   type TurnView,
 } from "./steps";
+import { openProposalReview, reviewBeforeLeaving } from "../review/change-sets";
+import "../review/change-sets.css";
 
 export const DIALOGUE_EVENT = "sandbox://dialogue";
 export const DIALOGUE_SIZE_KEY = "mathscape:sandbox-dialogue-size";
@@ -290,6 +292,7 @@ export class SandboxDialogueDock {
   private readonly threadRow: HTMLElement;
   private readonly threadSelect: HTMLSelectElement;
   private readonly newThreadButton: HTMLButtonElement;
+  private readonly reviewButton: HTMLButtonElement;
   private readonly readonlyNote: HTMLElement;
   /** Element that gives the map pane room for the sidebar (`.shell`). */
   private readonly layoutHost: HTMLElement;
@@ -372,7 +375,11 @@ export class SandboxDialogueDock {
     this.newThreadButton.type = "button";
     this.newThreadButton.title = "开一条新对话：Agent 上下文清空，沙箱副本里的状态保留";
     this.newThreadButton.onclick = () => void this.newThread();
-    this.threadRow.append(threadLabel, this.newThreadButton);
+    this.reviewButton = el("button", "sandbox-btn sandbox-btn-quiet sandbox-dock-review", "审核变更");
+    this.reviewButton.type = "button";
+    this.reviewButton.title = "审核当前对话调查的 staged / blocked 提案";
+    this.reviewButton.onclick = () => void this.reviewChanges();
+    this.threadRow.append(threadLabel, this.newThreadButton, this.reviewButton);
     const pickers = el("div", "sandbox-dock-pickers");
     pickers.append(this.modelRow, this.effortRow);
     this.modelHint = el("span", "sandbox-dock-model-hint");
@@ -502,7 +509,14 @@ export class SandboxDialogueDock {
     return this.sessionId;
   }
 
-  async open(sessionId: string): Promise<void> {
+  /**
+   * Show `sessionId`. Switching away from another session first runs the
+   * blocking batch review of that session's proposals; resolves `false`
+   * when the user cancels the switch.
+   */
+  async open(sessionId: string): Promise<boolean> {
+    const leaving = this.sessionId;
+    if (leaving && leaving !== sessionId && !await reviewBeforeLeaving(leaving, "switch_session", this.toast)) return false;
     this.ensureListening();
     this.floatHandle.hidden = true;
     this.root.hidden = false;
@@ -525,13 +539,14 @@ export class SandboxDialogueDock {
     void this.refreshStatus();
     try {
       const dialogue = await invoke<SessionDialogue>("sandbox_session_dialogue", { sandboxSessionId: sessionId });
-      if (this.sessionId !== sessionId) return;
+      if (this.sessionId !== sessionId) return true;
       this.adopt(dialogue, true);
     } catch (error) {
       this.toast(errorMessage(error), "error");
     }
     this.renderAll();
     this.input.focus();
+    return true;
   }
 
   close(): void {
@@ -1158,6 +1173,8 @@ export class SandboxDialogueDock {
   private async newThread(): Promise<void> {
     const sessionId = this.sessionId;
     if (!sessionId || this.sending || this.activeRoundId || this.switchingThread) return;
+    // A thread is metadata of the session's investigation: switching threads
+    // keeps proposals staged and is not a review trigger.
     this.switchingThread = true;
     this.syncControls();
     try {
@@ -1172,6 +1189,15 @@ export class SandboxDialogueDock {
       this.switchingThread = false;
       this.renderAll();
       this.input.focus();
+    }
+  }
+
+  private async reviewChanges(): Promise<void> {
+    if (!this.sessionId) return;
+    try {
+      await openProposalReview(this.sessionId, this.toast);
+    } catch (error) {
+      this.toast(`无法打开提案审核：${errorMessage(error)}`, "error");
     }
   }
 
@@ -1380,6 +1406,10 @@ export class SandboxDialogueDock {
     this.input.element.hidden = readonly;
     this.renderThreadPicker();
     this.newThreadButton.disabled = running || this.sending || this.switchingThread || !this.sessionId;
+    this.reviewButton.disabled = running || this.sending || this.switchingThread || !this.sessionId;
+    this.reviewButton.title = this.reviewButton.disabled
+      ? (this.sessionId ? "本轮对话进行中，结束后才能审核提案" : "没有打开沙箱会话")
+      : "审核当前对话调查的 staged / blocked 提案";
     if (!this.modelRow.hidden) {
       this.modelSelect.disabled = running || this.sending || this.modelSelect.options.length < 2;
     }

@@ -403,6 +403,20 @@ fn uncovered_scanned_read_ensures_then_serves_and_covered_reads_never_rerun() {
         assert!(codes(&again).contains(&"served_canonical_markdown".to_owned()));
         assert!(again["details"].get("ensure").is_none());
         assert_eq!(again["served_artifact_id"], first["served_artifact_id"]);
+        // A single snapshot also reports where the requested pages are in
+        // it; the body starts at byte 0, so the range indexes the text.
+        let segments = again["details"]["served_segments"].as_array().unwrap();
+        assert_eq!(segments.len(), 1, "{again}");
+        assert_eq!(segments[0]["artifact_id"], first["served_artifact_id"]);
+        assert_eq!(segments[0]["pages"], json!({ "from": from, "to": to }));
+        assert_eq!(segments[0]["trimmed_to_pages"], true, "{again}");
+        let range = &segments[0]["md_byte_range"];
+        let text = again["text"].as_str().unwrap();
+        let piece = &text
+            [range["start"].as_u64().unwrap() as usize..range["end"].as_u64().unwrap() as usize];
+        assert!(piece.contains("第4页"), "{piece}");
+        assert_eq!(piece.contains("第3页"), from == 3, "{piece}");
+        assert!(!codes(&again).contains(&"page_markers_absent".to_owned()));
     }
     assert_eq!(
         h.marker_calls(),

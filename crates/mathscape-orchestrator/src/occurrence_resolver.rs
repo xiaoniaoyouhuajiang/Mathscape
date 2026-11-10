@@ -1,6 +1,6 @@
 //! Single-occurrence lookup with request- and proposal-bound candidate selection.
 use crate::discovery_validation::{AuthorizedRegion, authorize_discovery_input};
-use crate::selector_resolver::locator_matches;
+use crate::source_locator::locator_matches;
 use crate::{ResolvedDiscoverySelector, SelectorResolver};
 use mathscape_domain::{
     ContentHash, DiscoveryInput, DiscoveryQuoteAnchor, DiscoverySelector, TextByteRange,

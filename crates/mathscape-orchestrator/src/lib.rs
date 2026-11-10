@@ -9,11 +9,17 @@ mod fact_planner;
 mod fact_preflight;
 mod ink;
 pub use ink::plan_ink_evidence;
+pub mod change_set_plan;
 pub mod map_edit;
 pub mod registration;
 mod source_facts;
 pub mod source_integrity;
+mod source_locator;
 mod source_registration;
+pub use source_locator::{
+    locate_quote, locator_matches, markdown_span_id, normalized_locator_string,
+    quote_matches_range, source_text_hash, stable_hash_id, valid_temp_id,
+};
 mod source_review;
 pub use discovery_workflow::*;
 pub use fact_planner::*;

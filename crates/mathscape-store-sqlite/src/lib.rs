@@ -76,6 +76,10 @@ pub use ink_snapshot_label::{
 };
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use proposals::ProposedChangeRecord;
+pub use proposals::{
+    ChangeSetAcceptance, ChangeSetDecision, ChangeSetDependency, ChangeSetSelectionRef,
+    DiscardOutcome, PendingChangeSet,
+};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use search::{
     SearchArtifactRow, SearchCorpus, SearchNoteRow, SearchSnapshotRow, SearchSourceUnitRow,
@@ -107,7 +111,8 @@ const CANONICAL_MARKDOWN_ENSURE_MIGRATION: &str =
     include_str!("../../../migrations/0022_canonical_markdown_ensure.sql");
 const PROPOSED_CHANGE_SETS_MIGRATION: &str =
     include_str!("../../../migrations/0023_proposed_change_sets.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 23;
+const PHASE2_PR_B_MIGRATION: &str = include_str!("../../../migrations/0024_phase2_pr_b.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 24;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -140,6 +145,11 @@ pub enum SqliteStoreError {
     DiscoveryInvariant(String),
     #[error("source registration invariant failed: {0}")]
     SourceRegistrationInvariant(String),
+    /// A Phase2 change set decision was refused. The message starts with a
+    /// stable code (`base_commit_conflict`, `plan_conflict`,
+    /// `dependency_not_accepted`, `proposal_stale`, ...).
+    #[error("{0}")]
+    ChangeSetConflict(String),
     #[error("ink document was not found: {0}")]
     InkDocumentNotFound(String),
     #[error("ink session was not found: {0}")]
@@ -359,6 +369,12 @@ pub struct LandscapeSnapshot {
 }
 
 impl LandscapeSnapshot {
+    /// Same snapshot with a different source map (the investigation overlay).
+    pub fn with_sources(mut self, sources: SourceMapSnapshot) -> Self {
+        self.sources = sources;
+        self
+    }
+
     pub fn canonical_ensures(&self) -> &[CanonicalEnsureLease] {
         &self.canonical_ensures
     }
@@ -666,7 +682,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=23 => {
+            6..=24 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -863,6 +879,20 @@ impl SqliteArtifactStore {
                 connection.execute_batch(PROPOSED_CHANGE_SETS_MIGRATION)?;
             } else {
                 connection.pragma_update(None, "user_version", 23)?;
+            }
+        }
+        if version < 24 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 24",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                connection.execute_batch(PHASE2_PR_B_MIGRATION)?;
+            } else {
+                connection.pragma_update(None, "user_version", 24)?;
             }
         }
         validate_registration_schema(&connection)?;
@@ -2357,9 +2387,21 @@ fn validate_proposed_change_schema(connection: &Connection) -> Result<(), Sqlite
     connection.prepare(
         "SELECT change_set_id, version, investigation_id, round_id, generation,
                 request_id, request_fingerprint, proposal_json, result_json,
-                state, base_commit, created_at
+                state, base_commit, created_at, proposed_by
          FROM proposed_change_set_versions LIMIT 0",
     )?;
+    for table in [
+        "change_set_dependencies",
+        "change_set_decisions",
+        "investigation_rounds",
+    ] {
+        if !schema_object_exists(connection, "table", table)? {
+            return Err(SqliteStoreError::MissingSchemaObject {
+                object_kind: "table",
+                name: table,
+            });
+        }
+    }
     Ok(())
 }
 

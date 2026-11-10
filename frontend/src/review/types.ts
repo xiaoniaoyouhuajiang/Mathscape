@@ -190,4 +190,10 @@ export interface ReviewRunMeta {
   updated_at?: string;
   registrations?: import("../discovery/registration-types").RegistrationSummary[];
   disposition?: import("../discovery/types").DiscoveryDispositionReceipt|null;
+  /**
+   * Set when the workspace shows a Phase2 proposal (「提案」 data source)
+   * instead of a discovery run. Units cannot be picked one by one: the
+   * change set is accepted or discarded whole through `controller`.
+   */
+  proposal?: import("./proposal-model").ProposalWorkspaceMeta;
 }

@@ -337,6 +337,86 @@ extraCommands.set("sandbox_send_message", (args) => {
 });
 extraCommands.set("sandbox_cancel_round", () => false);
 
+
+// Phase2 proposal review: a queue of one staged proposal over a snapshot
+// that only the sandbox copy has (served by get_change_set_snapshot).
+const proposalSource = "# 引理 C\n\n设 $x^2 \\ge 0$ 对一切实数成立。\n";
+const proposalBytes = new TextEncoder().encode(proposalSource);
+const proposalQuote = "设 $x^2 \\ge 0$ 对一切实数成立。";
+const proposalStart = new TextEncoder().encode(proposalSource.slice(0, proposalSource.indexOf(proposalQuote))).length;
+const proposalEnd = proposalStart + new TextEncoder().encode(proposalQuote).length;
+const proposalReview = { failSnapshot: "", calls: [] as Array<{ command: string; args: Record<string, unknown> }>, accepted: false };
+const proposalItem = () => ({
+  changeSetId: "mathscape:change-set/demo", version: 3, state: "staged", investigationId: "sandbox:sbx_demo", roundId: "r1",
+  proposedBy: "agent:codex", createdAt: "2026-11-10T09:00:00+08:00", proposalFingerprint: "fp-demo", baseCommit: null,
+  proposal: {
+    rationale: "登记引理 C",
+    proposed_objects: [
+      { local_ref: "s", kind: "source_span", op: "create", payload: { artifact_id: "md-sbx", md_byte_range: { start: proposalStart, end: proposalEnd }, granularity: "inline", quote: proposalQuote } },
+      { local_ref: "u", kind: "source_unit", op: "create", payload: { kind: "lemma", display_title: "引理 C", parent: null, source_spans: ["$new:s"], completeness: "complete" } },
+    ],
+  },
+  result: {
+    debts: [{ kind: "unresolved", value: { id: "chapter-pages-1-7", kind: "locator", summary: "PDF 第 2–7 页所在快照缺少分页标记" } }],
+    diagnostics: [{ level: "warn", code: "head_integrity", message: "工作区已有对象存在问题；不阻塞", local_ref: null, target_id: "mathscape:source-unit/old" }],
+  },
+  dependencies: [],
+  anchors: [{
+    span_ref: "s", span_id: "mathscape:source-span/demo", origin: "new", artifact: "md-sbx", conversion: null,
+    range: { start: proposalStart, end: proposalEnd }, block_ids: ["pb2"], page: { pdf_page_index: 1, page_number: 2 },
+    granularity: "inline", excerpt: proposalQuote, verified: true, compiled: true,
+  }],
+  history: [
+    { version: 2, state: "superseded", createdAt: "2026-11-10T08:30:00+08:00", diagnostics: [{ code: "invalid_locator", message: "x" }] },
+    { version: 1, state: "superseded", createdAt: "2026-11-10T08:00:00+08:00", diagnostics: [] },
+  ],
+  targetTitles: { "mathscape:source-unit/old": "旧定理" },
+});
+extraCommands.set("get_change_set_investigation", (args) => {
+  proposalReview.calls.push({ command: "investigation", args });
+  return args.sandboxSessionId ? `sandbox:${String(args.sandboxSessionId)}` : (sessionStorage.getItem("harness.sandbox") === "1" ? "sandbox:sbx_demo" : null);
+});
+extraCommands.set("list_pending_change_sets", (args) => {
+  const failure = sessionStorage.getItem("harness.failQueue");
+  if (failure) throw new Error(failure);
+  return listPendingChangeSets(args);
+});
+const listPendingChangeSets = (args: Record<string, unknown>) => ({
+  // Only specs that opt in (sessionStorage harness.proposals) see a pending proposal.
+  investigationId: String(args.investigationId), baseCommit: null,
+  items: proposalReview.accepted || sessionStorage.getItem("harness.proposals") !== "1" ? [] : [proposalItem()],
+});
+extraCommands.set("get_change_set_snapshot", (args) => {
+  proposalReview.calls.push({ command: "snapshot", args });
+  const failure = proposalReview.failSnapshot || sessionStorage.getItem("harness.failSnapshot");
+  if (failure) throw new Error(failure);
+  const heading = new TextEncoder().encode("# 引理 C").length;
+  return {
+    conversionId: null,
+    document: {
+      source: proposalSource,
+      blocks: [
+        { id: "pb1", kind: "heading", range: { start: 0, end: heading } },
+        { id: "pb2", kind: "paragraph", range: { start: proposalStart, end: proposalBytes.length - 1 } },
+      ],
+      snapshot: { content_hash: "sha256:sbx", byte_size: proposalBytes.length },
+    },
+  };
+});
+extraCommands.set("preview_change_set_impact", () => ({
+  changeSetId: "mathscape:change-set/demo", version: 3, plannedWith: [],
+  impact: { plan_fingerprint: "p", status: "ready", base_commit: null, direct_changes: [{ object_id: "a", kind: "SourceSpan", action: "create" }, { object_id: "b", kind: "SourceSemanticUnit", action: "create" }], affected_objects: [], diagnostics: [] },
+}));
+extraCommands.set("plan_change_set_batch", (args) => {
+  proposalReview.calls.push({ command: "plan", args });
+  return { investigationId: String(args.investigationId), baseCommit: null, selections: args.selections, impact: { plan_fingerprint: "p", status: "ready", base_commit: null, direct_changes: [], affected_objects: [], diagnostics: [] }, perChangeSet: [], batchPlanFingerprint: "bp" };
+});
+extraCommands.set("accept_change_set_batch", (args) => {
+  proposalReview.calls.push({ command: "accept", args });
+  proposalReview.accepted = true;
+  return { commitId: "c", accepted: args.selections, receipt: {} };
+});
+
 await import("../src/main");
 
 const core = (): Core => (document.querySelector("#graph") as unknown as { _cyreg: { cy: Core } } | null)?._cyreg?.cy
@@ -346,6 +426,7 @@ const appHarness = {
   windowEvents, requestWindowClose,
   sandboxCalls,
   sandboxRound,
+  proposalReview,
   contentFailures, contentRequests, detailRequests, sourceDetailBehavior, searchBehavior, snapshots, snapshotLabelCalls,
   /** Cytoscape state of a node: selected flag and distance from the canvas centre. */
   nodeView: (id: string) => {

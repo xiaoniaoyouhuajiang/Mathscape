@@ -2,7 +2,7 @@
 
 > 读者：Mob（实现）· 起草：2026-10-30（Asia/Shanghai）· 状态：**契约草案，用户决策已锁定（2026-10-30），待用户审阅本文后合并**
 > 依据：[Phase0 契约](phase0-contract.md)（**Phase0**）、[Phase2 写路径契约](phase2-write-contract.md)（**Phase2**）、用户 2026-10-30 对话锁定的「沙箱化 flow」方向。
-> 标签：**[锁定]** = 用户已拍板；**[本文提议]** = 为闭合实现补的细节，可在不违背 [锁定] 的前提下微调；**[待核]** = 未定。
+> 标签：**[锁定]** = 用户已拍板；**[锁定·2026-11-09 用户改定]** = PR-B 讨论中改定，原口径保留对照；**[本文提议]** = 为闭合实现补的细节，可在不违背 [锁定] 的前提下微调；**[待核]** = 未定。
 > 本 PR **只有文档**，不含 Rust / TS 实现。
 >
 > **命名**：本文「沙箱 Flow / Sandbox session」是 **Mathscape 产品概念**（可回滚的探索会话）。**不要**与 Codex CLI 的 `SandboxMode`（`read-only | workspace-write | …`，见 Phase0 附）混淆；下文凡指后者写 **Codex sandbox**。
@@ -94,6 +94,9 @@
 | **S0/S1** | **默认只读 tools**（现有 7 个 MCP） | 探索引用、对话壳、事件面板；副本上亦无正式 propose/accept |
 | **S1 可选** | 若需「构造语义节点」体感 | 仅允许写入**隔离副本**；仍**不**走 Phase2 正式接受入源图。具体 API 可先用 Desktop 已有 map_edit 的受限调试入口或后续 `propose` 的沙箱适配——实现 PR 选定一种并写进清单 |
 | **定向 flow 接回后** | Phase2 `propose_changes` 等 | 沙箱可演进为「投影在副本上预览接受」，但源 checkpoint 仍只经显式「晋升 / 不在本文」路径；本文不定义晋升 |
+| **PR-B（2026-11-09）** [锁定·2026-11-09 用户改定] | `propose_changes` + `get_change_set`（不含 `artifact.stage`） | 沙箱走与正式工作区**同一套**暂存与审批流程（Phase2 §4.2、§4.4.1、§5.5）：暂存对象以「未审批」样式显示在副本地图上，Agent 可在其上继续构建；会话切换 / 离开沙箱 / 退出应用时批量审核。**接受只写副本工作区**（副本里的 `mathscape.sqlite3`），不碰源 checkpoint；丢弃会话时已接受与未审的一并物理删除。S1 可选行所说的「受限调试入口」不再需要。原口径：S0/S1 只读，试写方式待实现 PR 选定 |
+
+开放条件 [锁定·2026-11-09 用户改定 / 2026-11-10 定稿]：`propose_changes` / `get_change_set` 进沙箱白名单（§4.3.1）的前提是 **round 与 investigation 绑定**——整场沙箱会话对应**一个** investigation：`investigation_id = sandbox:<sandbox_session_id>`，会话内所有对话线程与 round 共享，`thread_id` 只作元数据。适配器为每个 round 声明该 investigation，服务端在 `investigation_rounds` 登记绑定（先写者为准，不一致 ⇒ `investigation_mismatch`），因此跨 round、跨线程都能看到并引用本会话的暂存。早先「每条线程一个 investigation（`sandbox:<session>:<thread>`）」的写法作废（Phase2 §2.2 R1、§10 第 7 条）。
 
 ### 3.4 拆卸：丢弃 vs 导出 [锁定]
 
@@ -146,7 +149,8 @@ v0 实现另带 `transcript_entries`（行数）与 `dialogue_threads`（线程�
 - 新线程（非首条）的 prompt 明确告诉 Agent：副本里可能有更早对话留下的状态，但更早的对话内容不在上下文中，以工具查到的当前状态为准。
 - **丢弃 / 导出仍作用于整场会话**（全部线程 + 副本），不按线程拆。要撤掉副作用 → 丢弃，或从同一 checkpoint 新开会话（§3.4）。
 - 兼容：线程出现前写下的 `session.json` 无线程字段、transcript 行无 `thread_id`，一律视为 `d1`。
-- **与 Phase2 的关系**（方向，不在沙箱实现）：沙箱副作用今天无用户审批。正式产品里「切换对话 / 开新任务前确认是否保存上一个状态」映射为 Phase2 待审提案的处理：上一条对话留下的 `staged` 提案在切换时让用户选择接受 / 丢弃 / 留待以后审（提案与对话结束脱钩，见 `phase2-write-contract.md`），不另立「保存状态」概念。该确认 UI 等 `propose_changes` 能暂存提案后再接。
+- **与 Phase2 的关系** [锁定·2026-11-09 用户改定]：「切换对话 / 开新任务前确认是否保存上一个状态」映射为 Phase2 待审提案的处理，**沙箱与正式工作区共用**：**切换沙箱会话、丢弃会话、导出会话、离开沙箱或退出应用**时，若本会话的 investigation 有 `staged` / `blocked` 提案，弹出 Phase2 §5.5 的批量审核界面（覆盖整场会话的全部待审提案；默认全选、按依赖分组、影响预览、取消勾选多层连带取消依赖项、丢弃可选连带），用户可接受所选 / 丢弃所选 / 稍后再审；关闭界面不做决定 ⇒ 原样保留，未勾选项保持 `staged`。不另立「保存状态」概念。**点「新对话」不触发审核**：新线程与旧线程共享同一 investigation，旧线程的暂存继续在地图上以「未审批」样式可见、可被引用（2026-11-10 定稿；原口径把「新对话」列为触发点，作废）。接受只写副本工作区。导出包只含对话记录与事件，不含地图或提案。
+  - 原口径（2026-11-06）：「沙箱副作用今天无用户审批……该确认 UI 等 `propose_changes` 能暂存提案后再接」，即方向记录、不在沙箱实现。
 
 ---
 
@@ -181,12 +185,12 @@ v0 实现另带 `transcript_entries`（行数）与 `dialogue_threads`（线程�
 - 握手时先发 `skills/extraRoots/set` 注册 skill 根目录（失败不致命），并在 `developerInstructions` 写入 skill 的稳定路径作为兜底，Agent 用 harness 自带的读文件能力读取。
 - 有 harness 授权（scratch / skill / 只读根）时，`thread/start` **不发** `sandbox`，改为 `config.default_permissions = "mathscape-session"` 与 `permissions.mathscape-session.filesystem`：`:minimal`、副本工作区、skill 根、Lean profile 根为 `read`，`<session>/scratch/` 为唯一 `write`，网络关闭。同时发送 `sandbox` 会使 permission profile 失效（codex 0.166.0 实测）。
 - 每个 round 的 harness 上下文追加到 `<session>/harness.jsonl`（`mathscape.sandbox_harness.v0`），导出时一并带走。scratch 内容的导出留作后续。
-- 本切片沙箱内仍不挂载 `artifact.stage` / `propose_changes` / `get_change_set`：Desktop 尚无 change set 的接受 / 丢弃 UI，随 SourceSpan PR 一起开放。
+- PR-B 已将 round 与 investigation 绑定，并把 `propose_changes`、`get_change_set` 加入 `sandbox_tool_allowlist()`（`apps/mathscape-desktop/src/sandbox_dialogue.rs`）。它们只写沙箱副本的 staged/blocked 提案；接受、丢弃和批量审核仍由 Desktop 命令完成。`artifact.stage` 仍不挂载，普通文件草稿写入 scratch。skill 的运行时能力表同步为 v0.6.2（`skill_pack` 测试校验二者一致）。2026-11-10 起白名单另含只读的 `material.locate`（`mathscape-mcp/15`，skill v0.6.3）。同日第三轮验收后又加入只读的 `list_change_sets`（`mathscape-mcp/16`，skill v0.6.4），让 Agent 在后续轮次找回本会话的提案并用 `supersedes` 修订。
 
 ### 4.4 引用与视图信号（S2，薄）[锁定可后置 / 本文记方向]
 
 - `@` / 点选 → 对象 chip（带 `object_id`）；候选来自 search / graph / 最近上下文。
-- 工具命中在图上短高亮（读路径回声）；**不做**完整 staged 幽灵层（那是 Phase2 接受路径的事）。
+- 工具命中在图上短高亮（读路径回声）；~~**不做**完整 staged 幽灵层（那是 Phase2 接受路径的事）~~ [2026-11-09 用户改定] 暂存对象按 Phase2 §4.4.1 以「未审批」样式常驻显示（不是回声动画，随审批结果消失或转正）；场景播放器的回声仍只作用于读路径。
 - 富交互声明式块、沙箱 iframe widget：**后置**，本契约不展开。
 
 ---
@@ -227,7 +231,7 @@ PR 描述固定三节（用户体感调试约定，保持简单）：
 | # | 问题 | 建议默认 | 为何可后定 |
 | --- | --- | --- | --- |
 | T1 | 副本策略：全量复制 vs COW | v0 全量复制；过大再 COW | 不改变只读 checkpoint 不变式 |
-| T2 | 沙箱内是否首版就开放「副本上试写」 | S1 默认只读；试写另开子切片 | 先稳壳与 tools 体感 |
+| T2 | 沙箱内是否首版就开放「副本上试写」 | S1 默认只读；试写另开子切片。**2026-11-09 已定**：PR-B 起经 Phase2 暂存 + 批量审核在副本上试写（§3.3） | 先稳壳与 tools 体感 |
 | T3 | 导出是否需要 `side_effects/` 必选 | v0 可选；有试写后再必选 | 只读阶段 transcript 已够 |
 | T4 | checkpoint 是否支持「只读绑定远程/只读卷」 | 首版仅本地目录 | 降低 Desktop 复杂度 |
 
@@ -270,3 +274,4 @@ PR 描述固定三节（用户体感调试约定，保持简单）：
 | 2026-11-04 | Composer chip 光标 / 选区「token 模型」（`mob/composer-chip-token-caret`，接 #33/#34）：chip 按 Slack 式 token 处理。插入 chip（粘贴、拖放、`@` 选中）时保证 chip 后有一个可见空格（已有空格则复用，不叠加；后面是文字或换行则补一个），光标落在空格之后；纯函数 `spaceAfterChip` / `chipSpans`（`composer-chips.ts`）。纯 ←/→（无 Shift/Alt/Ctrl/Meta，IME 组字中不拦截）：从 chip 之后按 ← 先选中整个 chip（Range 包住 chip 元素，`is-selected` 高亮），再按 ← 光标到 chip 之前；→ 对称（之前 → 选中 → 之后）；从空格之后按 ← 第一步是原生移动到「紧贴 chip 之后」。Backspace/Delete：chip 被选中，或光标紧贴 chip 之后（Backspace）/ 之前（Delete）时整体删除；删除改为按展开文本去掉该 chip 后整体重渲染并恢复光标，不再残留锚点或空节点（修复「删 chip 后再粘贴，光标画在行首」一类问题）。选中 chip 后直接输入则替换它。U+FEFF 锚点从首要手段降为兜底：只在 chip 后面没有任何文本时（空格被删、失焦时末尾 id 被 chip 化、两个 chip 紧挨）才放；光标左边不是 chip（空输入框、行首 chip 之前）用元素级位置，不再造锚点。单击 chip 仍是跳转地图。发送展开、`@` 菜单按键（Enter/Tab 选中不发送）不变。仅前端，MCP 契约未改。 |
 | 2026-11-06 | 对话线程（`mob/sandbox-dialogue-threads`，§3.5）：一场沙箱会话可开多条对话线程，共享同一隔离副本；「新对话」只清空 Agent 上下文（prompt 只回放活跃线程），不重置副本状态。仅一条活跃线程可发消息，旧线程只读；跑轮中禁止开新线程，迟到写入旧线程被拒（`InactiveThread`）。`session.json` 新增 `dialogue_threads` / `active_thread_id`（缺省 = `d1`），transcript 行新增 `thread_id`（缺省 = `d1`），导出 manifest 新增 `dialogue_threads`。Desktop：新命令 `sandbox_new_dialogue_thread`，`sandbox_session_dialogue` 返回 `threads` / `activeThreadId`；dock 顶栏「对话」下拉 + 「新对话」，旧线程只读提示 +「回到当前对话」。丢弃 / 导出仍按整场会话。正式产品的切换确认映射到 Phase2 待审提案，后置。 |
 | 2026-11-06 | `material.read` 按页拼接 + 只补缺口（`mob/read-stitch-coverage`）：PDF 精读不再要求单份快照完全包含请求。已有快照按页合起来盖住请求时直接拼接返回（`details.served_segments` 给每段物理快照的 `artifact_id` / `pages` / `md_byte_range`），不跑 Marker；有缺口时 Marker 逐个缺口运行（每段一份快照，缺口间已覆盖页不重解析），再与旧快照拼接。修复沙箱 `sbx-20261101T235040-bc83e994` 中已解析过 1–4 / 5–10 / 11–14 页、读 1–8 / 9–14 仍整段重解析的问题。幂等键策略版本 `ensure-v3`（键内范围为单个缺口）；`details.ensure.marker_range` 改为 `marker_ranges` + `runs`；`max_pages_per_request` 改按缺口页数之和计。工具数仍为 7，grep / search 不变。详见 `docs/canonical-markdown.md`。 |
+| 2026-11-09 | PR-B 契约修订（`feat/pr-b-staged-proposals`）：§3.3 试写表新增 PR-B 行与「round 与 investigation 绑定」开放条件；§3.5 切换确认由方向记录改为与正式工作区共用 Phase2 §5.5 批量审核（用户改定）；§4.3.1 记录白名单开放计划；§4.4 暂存对象「未审批」样式上图（用户改定）；T2 已定。接受只写副本，源 checkpoint 只读不变式不变。仅文档。 |

@@ -509,7 +509,9 @@ fn tools_list_order_and_text_are_fixed() {
             "lean.check",
             "artifact.stage",
             "propose_changes",
-            "get_change_set"
+            "get_change_set",
+            "material.locate",
+            "list_change_sets"
         ]
     );
     for tool in tools {
@@ -541,7 +543,10 @@ fn tools_list_order_and_text_are_fixed() {
                 }),
                 "write-like tools are bounded staging/proposal exceptions"
             );
-        } else if tool["name"] == "get_change_set" {
+        } else if matches!(
+            tool["name"].as_str(),
+            Some("get_change_set") | Some("list_change_sets")
+        ) {
             assert_eq!(
                 tool["annotations"],
                 json!({
@@ -896,6 +901,139 @@ fn phase2_source_proposals_stage_and_read_back_without_changing_the_map() {
     assert_eq!(blocked_read["state"], "blocked");
     assert_eq!(blocked_read["diagnostics"][0]["code"], "kind_not_supported");
     assert_eq!(map_object_count(&f.root), initial_objects);
+}
+
+#[test]
+fn phase2_source_span_proposals_validate_ranges_and_use_content_identity() {
+    let f = fixture();
+    let end = "# 引理 Lemma".len() as u64;
+    let proposal = json!({
+        "request_id": "span-proposal",
+        "rationale": "以精确 Markdown 范围登记定理",
+        "proposed_objects": [
+            {"local_ref": "s1", "kind": "source_span", "op": "create", "payload": {
+                "artifact_id": f.markdown.clone(),
+                "md_byte_range": {"start": 0, "end": end},
+                "granularity": "block",
+                "quote": "# 引理 Lemma"
+            }},
+            {"local_ref": "u1", "kind": "source_unit", "op": "create", "payload": {
+                "kind": "statement", "display_title": "引理", "parent": null,
+                "source_spans": ["$new:s1"], "completeness": "complete"
+            }}
+        ]
+    });
+    let (result, is_error) = call(&f.server, "propose_changes", proposal);
+    assert!(!is_error, "{result}");
+    assert_eq!(result["status"], "staged", "{result}");
+    assert!(
+        result["staged_ids"]["s1"]
+            .as_str()
+            .unwrap()
+            .starts_with("mathscape:source-span/")
+    );
+    assert!(
+        result["staged_ids"]["u1"]
+            .as_str()
+            .unwrap()
+            .starts_with("mathscape:source-unit/")
+    );
+
+    let (blocked, is_error) = call(
+        &f.server,
+        "propose_changes",
+        json!({
+            "request_id": "span-bad-quote",
+            "rationale": "错误范围",
+            "proposed_objects": [{"local_ref": "s1", "kind": "source_span", "op": "create", "payload": {
+                "artifact_id": f.markdown, "md_byte_range": {"start": 0, "end": end},
+                "granularity": "inline", "quote": "不是这个范围"
+            }}]
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(blocked["diagnostics"][0]["code"], "quote_mismatch");
+}
+
+#[test]
+fn investigation_graph_reads_staged_nodes_without_changing_accepted_map() {
+    let f = fixture();
+    let server = McpServer::new(
+        McpWorkspace::open(&f.root)
+            .unwrap()
+            .with_round(Some("round-1".into()))
+            .with_investigation(Some("sandbox:session:thread".into())),
+    );
+    let (result, is_error) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "graph-staged",
+            "rationale": "显示未审批来源单元",
+            "proposed_objects": [{"local_ref": "u1", "kind": "source_unit", "op": "create", "payload": {
+                "kind": "statement", "display_title": "暂存定理", "parent": null,
+                "source_spans": [seed_source_span(&f.root, &f.markdown)], "completeness": "complete"
+            }}]
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(result["status"], "staged");
+    let staged_id = result["staged_ids"]["u1"].as_str().unwrap();
+    let (node, is_error) = call(
+        &server,
+        "graph.get",
+        json!({"node_id": staged_id, "scope": "investigation"}),
+    );
+    assert!(!is_error);
+    assert_eq!(node["status"], "ok");
+    assert_eq!(node["node"]["staged"], true);
+    assert_eq!(node["node"]["change_set_id"], result["change_set_id"]);
+}
+
+#[test]
+fn proposals_can_depend_on_another_staged_change_set_in_one_investigation() {
+    let f = fixture();
+    let span = seed_source_span(&f.root, &f.markdown);
+    let server = McpServer::new(
+        McpWorkspace::open(&f.root)
+            .unwrap()
+            .with_round(Some("round-a".into()))
+            .with_investigation(Some("investigation-deps".into())),
+    );
+    let (first, is_error) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "dep-a",
+            "rationale": "先登记父单元",
+            "proposed_objects": [{"local_ref": "a", "kind": "source_unit", "op": "create", "payload": {
+                "kind": "section", "display_title": "父", "parent": null,
+                "source_spans": [span.clone()], "completeness": "complete"
+            }}]
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(first["status"], "staged", "{first}");
+    let parent = first["staged_ids"]["a"].as_str().unwrap().to_owned();
+    let (second, is_error) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "dep-b",
+            "rationale": "再登记子单元",
+            "proposed_objects": [{"local_ref": "b", "kind": "source_unit", "op": "create", "payload": {
+                "kind": "statement", "display_title": "子", "parent": parent,
+                "source_spans": [span], "completeness": "complete"
+            }}]
+        }),
+    );
+    assert!(!is_error);
+    assert_eq!(second["status"], "staged", "{second}");
+    assert_eq!(
+        second["dependencies"][0]["change_set_id"],
+        first["change_set_id"]
+    );
 }
 
 #[test]
@@ -2055,6 +2193,16 @@ fn scanned_pdf_read_reports_canonical_coverage_without_running_marker() {
     assert_eq!(covered["partial"], true);
     assert_eq!(covered["canonical_id"], canonical.canonical_id().as_str());
     assert_eq!(covered["served_artifact_id"], markdown);
+    assert_eq!(
+        covered["details"]["served_segments"],
+        json!([{
+            "artifact_id": markdown, "canonical_id": canonical.canonical_id().as_str(),
+            "pages": { "from": 1, "to": 1 }, "snapshot_pages": { "from": 1, "to": 1 },
+            "md_byte_range": { "start": 0, "end": markdown_body.len() },
+            "trimmed_to_pages": true, "is_head": true
+        }]),
+        "{covered}"
+    );
     assert_eq!(covered["coverage"]["complete"], false);
     assert_eq!(covered["coverage"]["page_index_base"], "one");
     assert_eq!(
@@ -2270,4 +2418,282 @@ fn scanned_pdf_read_refuses_snapshot_that_only_overlaps_the_request() {
     assert_eq!(covered["served_artifact_id"], markdown);
     assert_eq!(covered["locator"]["pdf_pages"]["from"], 2);
     assert_eq!(covered["locator"]["pdf_pages"]["to"], 3);
+}
+
+/// A `pages`-page PDF plus one Marker snapshot of the zero-based PDF pages
+/// `from..=to` with `body`, recorded as a conversion so it is a canonical
+/// segment. Returns `(dir, root, pdf, markdown)`.
+fn canonical_book(
+    pages: usize,
+    from: u32,
+    to: u32,
+    body: &str,
+) -> (TempDir, std::path::PathBuf, String, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    let mut pool = ArtifactPool::create(&root).unwrap();
+    let blank: Vec<&[&str]> = vec![&[]; pages];
+    let pdf = import(
+        &mut pool,
+        pdf_bytes(&blank),
+        "application/pdf",
+        "book.pdf",
+        Some(pages as u32),
+    );
+    let markdown = import(
+        &mut pool,
+        body.as_bytes().to_vec(),
+        "text/markdown",
+        "book.md",
+        None,
+    );
+    let conversion = ConversionRun::new(
+        "marker_single".to_owned(),
+        Some("2.0.0".to_owned()),
+        None,
+        CommandRecordStatus::Recorded,
+        ConversionParameters::new(
+            Some(PageRange::new(from, to, PageIndexBase::Zero).unwrap()),
+            "markdown".to_owned(),
+            Some(true),
+            BTreeMap::from([(
+                "marker_profile".to_owned(),
+                "mathscape.marker.math-ocr.v1".to_owned(),
+            )]),
+        )
+        .unwrap(),
+        None,
+        Some(Timestamp::parse("2026-11-02T00:00:00+08:00").unwrap()),
+        Some(Timestamp::parse("2026-11-02T00:01:00+08:00").unwrap()),
+        ConversionExitStatus::Succeeded,
+        vec![],
+        None,
+    )
+    .unwrap()
+    .into_record(
+        EntityHeader::new(
+            mathscape_domain::StableId::parse("mathscape:conversion/marker/book").unwrap(),
+            RevisionId::parse(format!("sha256:{}", "d".repeat(64))).unwrap(),
+            EntityKind::ConversionRun,
+            SchemaVersion::parse("canonical-test-v1").unwrap(),
+            LifecycleStatus::Active,
+            Timestamp::parse("2026-11-02T00:01:00+08:00").unwrap(),
+            ActorRef::parse("canonical-test").unwrap(),
+            None,
+        ),
+        vec![mathscape_domain::StableId::parse(&pdf).unwrap()],
+        vec![mathscape_domain::StableId::parse(&markdown).unwrap()],
+    )
+    .unwrap();
+    pool.record_conversion(&conversion).unwrap();
+    drop(pool);
+    // The Desktop syncs the canonical registry on open; do the same here.
+    SqliteArtifactStore::open(&root.join("mathscape.sqlite3"))
+        .unwrap()
+        .sync_canonical_markdown_from_catalog(
+            &Timestamp::parse("2026-11-02T00:02:00+08:00").unwrap(),
+        )
+        .unwrap();
+    (dir, root, pdf, markdown)
+}
+
+fn book_server(root: &Path, round: Option<&str>) -> McpServer {
+    McpServer::new(
+        McpWorkspace::open(root)
+            .unwrap()
+            .with_capability_runner(Box::new(NothingInstalled))
+            .with_round(round.map(str::to_owned))
+            .with_investigation(Some("sandbox:book".to_owned())),
+    )
+}
+
+fn diagnostic_codes(value: &Value) -> Vec<String> {
+    value["diagnostics"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["code"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Round-2 gap: `material.locate` on a snapshot with Marker page markers
+/// resolves the page, and a page-granularity span stores it; an inline span
+/// over the same range gets the non-blocking `page_granularity_available`.
+#[test]
+fn locate_on_a_paginated_snapshot_resolves_the_page_and_page_spans_store_it() {
+    let body = "{7}----------------\n\n习题 8 设 $f$ 在 $[a,b]$ 上连续。\n\n{8}----------------\n\n习题 9 求极限。\n";
+    let (_dir, root, _pdf, markdown) = canonical_book(10, 7, 8, body);
+    let server = book_server(&root, Some("round-book"));
+    // The agent reads the pages first; this also syncs the canonical view.
+    let (_, _) = call(
+        &server,
+        "material.read",
+        json!({ "artifact_id": _pdf, "locator": { "pdf_pages": { "from": 8, "to": 9 } } }),
+    );
+    for (quote, page) in [
+        ("习题 8 设 $f$ 在 $[a,b]$ 上连续。", 8),
+        ("习题 9 求极限。", 9),
+    ] {
+        let (found, is_error) = call(
+            &server,
+            "material.locate",
+            json!({ "artifact_id": markdown, "quote": quote }),
+        );
+        assert!(!is_error, "{found}");
+        assert_eq!(found["status"], "ok", "{found}");
+        assert_eq!(found["page"]["page_number"], page, "{found}");
+        assert_eq!(found["page"]["pdf_page_index"], page - 1, "{found}");
+        assert_eq!(found["page_granularity_available"], true, "{found}");
+        let codes = diagnostic_codes(&found);
+        assert!(
+            !codes
+                .iter()
+                .any(|code| code == "page_markers_absent" || code == "page_unresolved"),
+            "{found}"
+        );
+    }
+    let (found, _) = call(
+        &server,
+        "material.locate",
+        json!({ "artifact_id": markdown, "quote": "习题 9 求极限。" }),
+    );
+    let proposal = |request: &str, granularity: &str| {
+        json!({
+            "request_id": request, "rationale": "登记习题 9",
+            "proposed_objects": [
+                { "local_ref": "s", "kind": "source_span", "op": "create", "payload": {
+                    "artifact_id": markdown, "md_byte_range": found["md_byte_range"],
+                    "granularity": granularity, "quote": "习题 9 求极限。" }},
+                { "local_ref": "u", "kind": "source_unit", "op": "create", "payload": {
+                    "kind": "problem", "display_title": "习题 9", "parent": null,
+                    "source_spans": ["$new:s"], "completeness": "complete" }}
+            ]
+        })
+    };
+    let (paged, is_error) = call(&server, "propose_changes", proposal("paged", "page"));
+    assert!(!is_error, "{paged}");
+    assert_eq!(paged["status"], "staged", "{paged}");
+    let page_payload = paged["compiled_operations"].to_string();
+    assert!(page_payload.contains("\"pdf_page_index\":8"), "{paged}");
+    let (inline, is_error) = call(&server, "propose_changes", proposal("inline", "inline"));
+    assert!(!is_error, "{inline}");
+    assert_eq!(inline["status"], "staged", "{inline}");
+    let hint = inline["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "page_granularity_available")
+        .unwrap_or_else(|| panic!("{inline}"));
+    assert_eq!(hint["level"], "info");
+    assert!(
+        hint["message"].as_str().unwrap().contains("第 9 页"),
+        "{hint}"
+    );
+}
+
+/// The sandbox b1455 case: Marker snapshots begin with blank lines before
+/// the first page's own `{7}------` marker, and `material.read` serves the
+/// first page as `0..{8}`. That segment must map to page 8 (it used to be
+/// treated as crossing the leading marker), so locate offers page
+/// granularity and a page span over it is staged with the page stored.
+#[test]
+fn first_page_served_segment_with_leading_marker_maps_to_its_page() {
+    let dashes = "-".repeat(48);
+    let body = format!(
+        "\n\n{{7}}{dashes}\n\n习题 8 设 $f$ 在 $[a,b]$ 上连续。\n\n习题 9 求极限。\n\n{{8}}{dashes}\n\n习题 10 证明之。\n"
+    );
+    let (_dir, root, pdf, markdown) = canonical_book(10, 7, 8, &body);
+    let server = book_server(&root, Some("round-book"));
+    let (read, is_error) = call(
+        &server,
+        "material.read",
+        json!({ "artifact_id": pdf, "locator": { "pdf_pages": { "from": 8, "to": 8 } } }),
+    );
+    assert!(!is_error, "{read}");
+    let segment = read["details"]["served_segments"][0]["md_byte_range"].clone();
+    let end = body.find("{8}").unwrap();
+    assert_eq!(segment, json!({ "start": 0, "end": end }), "{read}");
+    let quote = &body[..end];
+    let (found, is_error) = call(
+        &server,
+        "material.locate",
+        json!({ "artifact_id": markdown, "quote": quote, "within": segment }),
+    );
+    assert!(!is_error, "{found}");
+    assert_eq!(found["status"], "ok", "{found}");
+    assert_eq!(found["md_byte_range"], segment, "{found}");
+    assert_eq!(found["page"]["page_number"], 8, "{found}");
+    assert_eq!(found["page_granularity_available"], true, "{found}");
+    assert!(
+        !diagnostic_codes(&found)
+            .iter()
+            .any(|code| code == "page_unresolved"),
+        "{found}"
+    );
+    let (paged, is_error) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "first-page", "rationale": "登记第 8 页",
+            "proposed_objects": [
+                { "local_ref": "s", "kind": "source_span", "op": "create", "payload": {
+                    "artifact_id": markdown, "md_byte_range": segment,
+                    "granularity": "page", "quote": quote }},
+                { "local_ref": "u", "kind": "source_unit", "op": "create", "payload": {
+                    "kind": "problem", "display_title": "第 8 页习题", "parent": null,
+                    "source_spans": ["$new:s"], "completeness": "complete" }}
+            ]
+        }),
+    );
+    assert!(!is_error, "{paged}");
+    assert_eq!(paged["status"], "staged", "{paged}");
+    assert!(
+        !diagnostic_codes(&paged)
+            .iter()
+            .any(|code| code == "page_mapping_unavailable"),
+        "{paged}"
+    );
+    let payload = paged["compiled_operations"].to_string();
+    assert!(payload.contains("\"pdf_page_index\":7"), "{paged}");
+}
+
+/// The sandbox 854f case: a snapshot of PDF pages 1–3 without page markers.
+/// `material.locate` cannot give a page and now says why
+/// (`page_markers_absent`, like `material.read`).
+#[test]
+fn locate_on_an_unmarked_multi_page_snapshot_reports_page_markers_absent() {
+    let body = "# 第一章\n\n定理 1.1 有界单调数列收敛。\n\n定理 1.2 闭区间上的连续函数有界。\n";
+    let (_dir, root, pdf, markdown) = canonical_book(5, 0, 2, body);
+    let server = book_server(&root, None);
+    let (_, _) = call(
+        &server,
+        "material.read",
+        json!({ "artifact_id": pdf, "locator": { "pdf_pages": { "from": 1, "to": 3 } } }),
+    );
+    let (found, is_error) = call(
+        &server,
+        "material.locate",
+        json!({ "artifact_id": markdown, "quote": "定理 1.1 有界单调数列收敛。" }),
+    );
+    assert!(!is_error, "{found}");
+    assert_eq!(found["status"], "ok", "{found}");
+    assert_eq!(found["page"], Value::Null, "{found}");
+    assert_eq!(found["page_granularity_available"], false, "{found}");
+    let absent = found["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "page_markers_absent")
+        .unwrap_or_else(|| panic!("{found}"));
+    assert_eq!(absent["snapshot_pages"], json!({ "from": 1, "to": 3 }));
+    assert_eq!(absent["artifact_id"], markdown);
+    // A plain imported Markdown (no PDF) is not "markers absent": it maps to no PDF at all.
+    let f = fixture();
+    let (plain, _) = call(
+        &f.server,
+        "material.locate",
+        json!({ "artifact_id": f.markdown, "quote": "Every bounded monotone sequence converges." }),
+    );
+    assert_eq!(plain["status"], "ok", "{plain}");
+    assert_eq!(diagnostic_codes(&plain), ["page_unresolved"], "{plain}");
 }

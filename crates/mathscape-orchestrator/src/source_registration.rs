@@ -16,6 +16,7 @@ use mathscape_domain::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::source_locator::{markdown_span_id, source_text_hash};
 use crate::{
     DiscoveryResult, PreparedUnitDiscoveryRequest, ReferenceResolutionStatus,
     ResolvedDiscoverySelector, StageValidationReport, ValidatedUnitSet, assemble_discovery,
@@ -705,14 +706,8 @@ pub fn plan_source_registration(
         if let Some(index) = span_by_range.get(&key).copied() {
             return spans[index].stable_id.clone();
         }
-        let identity = fingerprint(&(
-            "markdown-source-span-1",
-            &source.snapshot.artifact_id,
-            selector.range(),
-        ));
-        let stable_id = stable_hash_id("source-span", &identity)
-            .expect("a hash-derived StableId is always valid");
-        let exact_text_hash = fingerprint(&selector.text());
+        let stable_id = markdown_span_id(&source.snapshot.artifact_id, selector.range());
+        let exact_text_hash = source_text_hash(selector.text());
         span_by_range.insert(key, spans.len());
         spans.push(PlannedSourceSpan {
             stable_id: stable_id.clone(),
@@ -932,12 +927,6 @@ fn stable_hash_id(
     kind: &str,
     fingerprint: &ContentHash,
 ) -> Result<StableId, SourceRegistrationPlanError> {
-    StableId::parse(format!(
-        "mathscape:{kind}/{}",
-        fingerprint
-            .as_str()
-            .strip_prefix("sha256:")
-            .unwrap_or(fingerprint.as_str())
-    ))
-    .map_err(|error| SourceRegistrationPlanError::InvalidIdentity(error.to_string()))
+    crate::source_locator::stable_hash_id(kind, fingerprint)
+        .map_err(SourceRegistrationPlanError::InvalidIdentity)
 }

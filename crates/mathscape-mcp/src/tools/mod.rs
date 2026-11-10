@@ -8,6 +8,7 @@ mod graph;
 mod grep;
 mod ink;
 mod lean;
+mod locate;
 mod material;
 mod outline;
 mod pdf_image;
@@ -32,10 +33,12 @@ pub use ink::{
     CROP_MARGIN, DEFAULT_MAX_BYTES, DEFAULT_MAX_EDGE_PX, FADED_OPACITY, MAX_MAX_BYTES,
     MAX_MAX_EDGE_PX, MAX_NODE_ID_CHARS, MAX_PAGE_INDEX, MIN_MAX_BYTES, MIN_MAX_EDGE_PX,
 };
+pub use locate::MAX_LOCATE_CANDIDATES;
 pub use outline::{
     MAX_DIAGNOSTIC_MESSAGE_CHARS, MAX_OUTLINE_DIAGNOSTICS, MAX_OUTLINE_ENTRIES,
     MAX_OUTLINE_ENTRIES_BYTES, MAX_OUTLINE_TITLE_CHARS,
 };
+pub use propose::MAX_LIST_CHANGE_SETS;
 pub use read::MAX_READ_BYTES;
 
 pub const WORKSPACE_SEARCH: &str = "workspace.search";
@@ -51,9 +54,56 @@ pub const LEAN_CHECK: &str = "lean.check";
 pub const ARTIFACT_STAGE: &str = "artifact.stage";
 pub const PROPOSE_CHANGES: &str = "propose_changes";
 pub const GET_CHANGE_SET: &str = "get_change_set";
+pub const MATERIAL_LOCATE: &str = "material.locate";
+pub const LIST_CHANGE_SETS: &str = "list_change_sets";
+
+/// Version of the `tools/list` table (names, descriptions, input schemas)
+/// that the bundled `mathscape-worknet` skill is written against; the skill
+/// frontmatter's `tool_schema_version` must equal it. Bump it whenever
+/// [`tool_definitions`] changes — `tool_table_fingerprint_is_pinned` fails
+/// until the version and the pinned fingerprint are updated together.
+///
+/// `/14`: `propose_changes` gained `source_span`, `$new:` references and
+/// cross-proposal references (PR-B); the table still has 13 tools.
+/// `/15`: new read-only `material.locate` (14 tools); `material.read`
+/// documents single-snapshot `served_segments` and `page_markers_absent`.
+/// `/16`: new read-only `list_change_sets` (15 tools) so a later round can
+/// find its own change sets and revise one with `supersedes`;
+/// `material.locate` documents `page_markers_absent` / `page_unresolved`;
+/// `propose_changes` documents page granularity and `supersedes`.
+pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/16";
+
+/// sha256 of the serialized [`tool_definitions`] with object keys sorted (so
+/// the value does not depend on serde_json's `preserve_order` feature), for
+/// pinning the schema.
+pub fn tool_table_fingerprint() -> String {
+    use sha2::{Digest, Sha256};
+    fn sorted(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_by(|a, b| a.0.cmp(b.0));
+                Value::Object(
+                    entries
+                        .into_iter()
+                        .map(|(key, value)| (key.clone(), sorted(value)))
+                        .collect(),
+                )
+            }
+            Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    let table = Value::Array(tool_definitions().iter().map(sorted).collect());
+    let bytes = serde_json::to_vec(&table).expect("tool definitions serialize");
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
 
 /// Stable `tools/list` order. New tools are appended; existing entries stay put.
-pub const TOOL_NAMES: [&str; 13] = [
+pub const TOOL_NAMES: [&str; 15] = [
     WORKSPACE_SEARCH,
     MATERIAL_READ,
     MATERIAL_GREP,
@@ -67,6 +117,8 @@ pub const TOOL_NAMES: [&str; 13] = [
     ARTIFACT_STAGE,
     PROPOSE_CHANGES,
     GET_CHANGE_SET,
+    MATERIAL_LOCATE,
+    LIST_CHANGE_SETS,
 ];
 
 /// MCP `annotations` for the read-only tools.
@@ -108,7 +160,7 @@ fn with_annotations(mut definition: Value) -> Value {
         Some(MATERIAL_READ) => material_read_annotations(),
         Some(ARTIFACT_STAGE) => artifact_stage_annotations(),
         Some(PROPOSE_CHANGES) => propose::propose_annotations(),
-        Some(GET_CHANGE_SET) => propose::get_annotations(),
+        Some(GET_CHANGE_SET) | Some(LIST_CHANGE_SETS) => propose::get_annotations(),
         _ => read_only_annotations(),
     };
     if let Some(object) = definition.as_object_mut() {
@@ -133,6 +185,8 @@ pub fn tool_definitions() -> Vec<Value> {
         stage::definition(),
         propose::definition(),
         propose::get_definition(),
+        locate::definition(),
+        propose::list_definition(),
     ]
     .into_iter()
     .map(with_annotations)
@@ -180,6 +234,8 @@ pub fn call(
         ARTIFACT_STAGE => structured(stage::call(workspace, arguments)),
         PROPOSE_CHANGES => structured(propose::propose(workspace, arguments)),
         GET_CHANGE_SET => structured(propose::get(workspace, arguments)),
+        MATERIAL_LOCATE => structured(locate::call(workspace, arguments)),
+        LIST_CHANGE_SETS => structured(propose::list(workspace, arguments)),
         _ => None,
     }
 }
@@ -222,5 +278,27 @@ pub(crate) fn to_object(value: impl serde::Serialize) -> Result<Map<String, Valu
             ToolErrorCode::Internal,
             format!("failed to serialize tool result: {error}"),
         )),
+    }
+}
+
+#[cfg(test)]
+mod schema_version_tests {
+    use super::*;
+
+    /// The tool table a given [`TOOL_SCHEMA_VERSION`] stands for. Changing a
+    /// tool name, description or schema changes the fingerprint: bump
+    /// `TOOL_SCHEMA_VERSION` (and the skill frontmatter) and re-pin.
+    const PINNED: (&str, &str) = (
+        "mathscape-mcp/16",
+        "4b796a03d05280852dea48c22f94621072bcd0a422cab7891284155cd3c4e603",
+    );
+
+    #[test]
+    fn tool_table_fingerprint_is_pinned() {
+        assert_eq!(
+            (TOOL_SCHEMA_VERSION, tool_table_fingerprint().as_str()),
+            PINNED,
+            "the MCP tool table changed: bump TOOL_SCHEMA_VERSION and re-pin"
+        );
     }
 }

@@ -9,6 +9,26 @@ export interface DesktopSnapshot {
   lean: LeanRuntimeStatus;
   pdf_artifacts: PdfArtifactSummary[];
   landscape_graph: IncidenceGraph;
+  /** Phase2 scope=investigation projection marks (sandbox windows only). */
+  investigation?: InvestigationSnapshot | null;
+}
+
+/** Marks a staged (「未审批」) object of the investigation projection. */
+export interface StagedMark {
+  staged: true;
+  change_set_id: string;
+  change_set_version: number;
+  change_sets: string[];
+  /** Accepted revision a staged edit replaces (`null` for creations). */
+  replaces_revision: string | null;
+}
+
+export interface InvestigationSnapshot {
+  investigation_id: string;
+  /** Keyed by domain object id. */
+  staged: Record<string, StagedMark>;
+  /** Accepted objects with competing staged edits (shown as accepted). */
+  conflicts: { object_id: string; change_sets: string[] }[];
 }
 
 export interface MarkerRuntimeStatus {

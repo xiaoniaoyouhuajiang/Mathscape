@@ -11,6 +11,7 @@ skill 不能假设文档里写出的工具已经存在。每次启动一个工�
 - `graph.neighborhood`
 - `material.read`
 - `material.grep`
+- `material.locate`（把一段原文换成快照里的精确 `md_byte_range`，供 `propose_changes` 的 source_span 使用）
 - `pdf.outline`
 - `ink.page_image`
 - `pdf.page_image`
@@ -35,6 +36,7 @@ skill 不能假设文档里写出的工具已经存在。每次启动一个工�
 
 - `propose_changes`
 - `get_change_set`
+- `list_change_sets`
 - `user.ask`
 - `plan_change_set_accept`
 - `accept_change_set`
@@ -67,7 +69,7 @@ skill 不能假设文档里写出的工具已经存在。每次启动一个工�
 
 ```text
 workspace.search        implemented
-propose_changes         contract_only
+propose_changes         implemented_staged_only
 rdtx.upsert_edge        unavailable
 artifact.stage          implemented_round_bound
 ```
@@ -78,8 +80,9 @@ artifact.stage          implemented_round_bound
 
 在 Mathscape 桌面端的沙箱对话中，本轮的实际情况是：
 
-- **挂载的 mathscape 工具**：`workspace.search`、`material.read`、`material.grep`、`pdf.outline`、`graph.get`、`graph.neighborhood`、`ink.page_image`、`pdf.page_image`、`mathlib.search`、`lean.check`。
-- **未挂载**：`artifact.stage`、`propose_changes`、`get_change_set`。桌面端尚无提案接受界面，因此沙箱暂不开放提案；需要提交的内容写成 scratch 草稿，并在回复中标 `deferred_capability: propose_changes`。
+- **挂载的 mathscape 工具**：`workspace.search`、`material.read`、`material.grep`、`pdf.outline`、`graph.get`、`graph.neighborhood`、`ink.page_image`、`pdf.page_image`、`mathlib.search`、`lean.check`、`propose_changes`、`get_change_set`、`material.locate`、`list_change_sets`。提案工具只写当前沙箱副本的 staged/blocked 记录；接受和丢弃仍由 Desktop 审核命令完成。
+- **找回之前的提案**：之前轮次的工具结果不会回放，修订旧提案前先调用只读的提案列表工具（见 SKILL.md §4.1「修订」），它只列本沙箱会话的提案，并给出可直接用于修订的对象。
+- **未挂载**：`artifact.stage`。文件草稿仍写入 scratch；需要登记来源时使用 `propose_changes`，不能把文件暂存冒充正式地图写入。
 - **harness 自带的文件与 shell 工具**：只能写会话 scratch 目录（路径见本轮 developer instructions）；工作区副本、本 skill 目录和 Lean profile 都是只读；网络关闭。scratch 中的文件是草稿，不是地图变更，也不会提升任何可信状态。
 - **Lean 草稿**：写在 scratch 中，用 `lean.check` 检查，不要直接运行 `lake build` 或修改 Lean profile 的依赖。编译通过只说明 Lean 接受了这段代码，不说明它忠实于原文或证明完整。
 - **本 skill**：只读，不要尝试修改；需要改动时在回复中提出。

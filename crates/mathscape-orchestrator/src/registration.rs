@@ -181,6 +181,7 @@ fn impact(
         direct_changes: items,
         affected_objects: vec![],
         diagnostics,
+        head_issues: vec![],
     }
 }
 

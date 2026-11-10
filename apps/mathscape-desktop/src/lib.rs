@@ -1,5 +1,7 @@
 mod backlink;
 mod canonical_reader;
+mod change_set_anchors;
+mod change_sets;
 mod content;
 mod discovery;
 mod discovery_view;
@@ -101,6 +103,10 @@ pub struct DesktopService {
     active_parse: Arc<Mutex<Option<ParsePdfRequest>>>,
     active_discovery: Arc<Mutex<Option<discovery::ActiveDiscoveryControl>>>,
     ink_lan: Arc<ink_lan::InkLanRuntime>,
+    /// Investigation of the bound workspace (`sandbox:{session}` inside an
+    /// in-window sandbox, `None` on the mother workspace). Server-owned:
+    /// the frontend never builds it.
+    investigation_id: Option<String>,
 }
 
 impl DesktopService {
@@ -155,11 +161,22 @@ impl DesktopService {
             active_parse: Arc::new(Mutex::new(None)),
             active_discovery: Arc::new(Mutex::new(None)),
             ink_lan: Arc::new(ink_lan::InkLanRuntime::default()),
+            investigation_id: None,
         })
     }
 
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
+    }
+
+    pub fn investigation_id(&self) -> Option<&str> {
+        self.investigation_id.as_deref()
+    }
+
+    /// Same service bound to `investigation_id` (map overlay + review).
+    pub fn with_investigation(mut self, investigation_id: Option<String>) -> Self {
+        self.investigation_id = investigation_id;
+        self
     }
 
     /// Opens another workspace with the same Marker install and credential
@@ -185,7 +202,25 @@ impl DesktopService {
         if let Err(error) = store.sync_canonical_markdown_if_stale(&canonical_sync_timestamp()) {
             eprintln!("mathscape: canonical markdown registry sync skipped: {error}");
         }
-        let landscape = store.landscape_snapshot()?;
+        // Inside a sandbox the map shows the single investigation projection
+        // (accepted graph + 「未审批」 staged objects), the same one MCP
+        // `graph.*` uses with scope=investigation.
+        let (landscape, investigation) = match &self.investigation_id {
+            Some(investigation_id) => {
+                let (landscape, marks) = mathscape_mcp::investigation::investigation_landscape(
+                    &store,
+                    investigation_id,
+                )?;
+                (
+                    landscape,
+                    Some(InvestigationSnapshot {
+                        investigation_id: investigation_id.clone(),
+                        marks,
+                    }),
+                )
+            }
+            None => (store.landscape_snapshot()?, None),
+        };
         let catalog = landscape.artifacts();
         let artifact_count = catalog.artifacts().len();
         let conversion_count = catalog.conversions().len();
@@ -218,6 +253,7 @@ impl DesktopService {
             lean: lean_runtime_status(&self.workspace_root),
             pdf_artifacts,
             landscape_graph,
+            investigation,
         })
     }
 
@@ -453,6 +489,7 @@ mod task_tests {
             active_parse: Arc::new(Mutex::new(None)),
             active_discovery: Arc::new(Mutex::new(None)),
             ink_lan: Arc::new(ink_lan::InkLanRuntime::default()),
+            investigation_id: None,
         };
         let request = ParsePdfRequest::new("test:pdf", 2, 4, MarkerProfileChoice::MathOcrV1);
         let permit = service.begin_parse(&request).unwrap();
@@ -505,6 +542,17 @@ pub struct DesktopSnapshot {
     lean: LeanRuntimeStatus,
     pdf_artifacts: Vec<PdfArtifactSummary>,
     landscape_graph: IncidenceGraph,
+    /// Present inside a sandbox: which nodes/relations of `landscape_graph`
+    /// are staged (「未审批」) and which accepted objects have competing
+    /// staged replacements.
+    investigation: Option<InvestigationSnapshot>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct InvestigationSnapshot {
+    investigation_id: String,
+    #[serde(flatten)]
+    marks: mathscape_mcp::investigation::InvestigationMarks,
 }
 
 impl DesktopSnapshot {
@@ -901,7 +949,11 @@ impl DesktopState {
                 .slot
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            slot.service = next.clone();
+            let investigation = sandbox.as_ref().map(|current| {
+                mathscape_mcp::investigation::sandbox_investigation_id(&current.sandbox_session_id)
+            });
+            let next_bound = next.clone().with_investigation(investigation);
+            slot.service = next_bound;
             slot.sandbox = sandbox;
         }
         if returning_home {
@@ -1005,6 +1057,13 @@ pub fn run() {
             content::get_source_node_detail,
             content::read_artifact_bytes,
             canonical_reader::get_canonical_reader_projection,
+            change_sets::get_change_set_investigation,
+            change_sets::list_pending_change_sets,
+            change_sets::get_change_set_snapshot,
+            change_sets::preview_change_set_impact,
+            change_sets::plan_change_set_batch,
+            change_sets::accept_change_set_batch,
+            change_sets::discard_change_set_batch,
             backlink::get_source_backlink,
             llm_settings::get_llm_settings,
             llm_settings::set_default_llm_profile,
