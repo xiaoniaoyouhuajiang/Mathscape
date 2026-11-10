@@ -510,7 +510,8 @@ fn tools_list_order_and_text_are_fixed() {
             "artifact.stage",
             "propose_changes",
             "get_change_set",
-            "material.locate"
+            "material.locate",
+            "list_change_sets"
         ]
     );
     for tool in tools {
@@ -542,7 +543,10 @@ fn tools_list_order_and_text_are_fixed() {
                 }),
                 "write-like tools are bounded staging/proposal exceptions"
             );
-        } else if tool["name"] == "get_change_set" {
+        } else if matches!(
+            tool["name"].as_str(),
+            Some("get_change_set") | Some("list_change_sets")
+        ) {
             assert_eq!(
                 tool["annotations"],
                 json!({
@@ -2414,4 +2418,216 @@ fn scanned_pdf_read_refuses_snapshot_that_only_overlaps_the_request() {
     assert_eq!(covered["served_artifact_id"], markdown);
     assert_eq!(covered["locator"]["pdf_pages"]["from"], 2);
     assert_eq!(covered["locator"]["pdf_pages"]["to"], 3);
+}
+
+/// A `pages`-page PDF plus one Marker snapshot of the zero-based PDF pages
+/// `from..=to` with `body`, recorded as a conversion so it is a canonical
+/// segment. Returns `(dir, root, pdf, markdown)`.
+fn canonical_book(
+    pages: usize,
+    from: u32,
+    to: u32,
+    body: &str,
+) -> (TempDir, std::path::PathBuf, String, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    let mut pool = ArtifactPool::create(&root).unwrap();
+    let blank: Vec<&[&str]> = vec![&[]; pages];
+    let pdf = import(
+        &mut pool,
+        pdf_bytes(&blank),
+        "application/pdf",
+        "book.pdf",
+        Some(pages as u32),
+    );
+    let markdown = import(
+        &mut pool,
+        body.as_bytes().to_vec(),
+        "text/markdown",
+        "book.md",
+        None,
+    );
+    let conversion = ConversionRun::new(
+        "marker_single".to_owned(),
+        Some("2.0.0".to_owned()),
+        None,
+        CommandRecordStatus::Recorded,
+        ConversionParameters::new(
+            Some(PageRange::new(from, to, PageIndexBase::Zero).unwrap()),
+            "markdown".to_owned(),
+            Some(true),
+            BTreeMap::from([(
+                "marker_profile".to_owned(),
+                "mathscape.marker.math-ocr.v1".to_owned(),
+            )]),
+        )
+        .unwrap(),
+        None,
+        Some(Timestamp::parse("2026-11-02T00:00:00+08:00").unwrap()),
+        Some(Timestamp::parse("2026-11-02T00:01:00+08:00").unwrap()),
+        ConversionExitStatus::Succeeded,
+        vec![],
+        None,
+    )
+    .unwrap()
+    .into_record(
+        EntityHeader::new(
+            mathscape_domain::StableId::parse("mathscape:conversion/marker/book").unwrap(),
+            RevisionId::parse(format!("sha256:{}", "d".repeat(64))).unwrap(),
+            EntityKind::ConversionRun,
+            SchemaVersion::parse("canonical-test-v1").unwrap(),
+            LifecycleStatus::Active,
+            Timestamp::parse("2026-11-02T00:01:00+08:00").unwrap(),
+            ActorRef::parse("canonical-test").unwrap(),
+            None,
+        ),
+        vec![mathscape_domain::StableId::parse(&pdf).unwrap()],
+        vec![mathscape_domain::StableId::parse(&markdown).unwrap()],
+    )
+    .unwrap();
+    pool.record_conversion(&conversion).unwrap();
+    drop(pool);
+    // The Desktop syncs the canonical registry on open; do the same here.
+    SqliteArtifactStore::open(&root.join("mathscape.sqlite3"))
+        .unwrap()
+        .sync_canonical_markdown_from_catalog(
+            &Timestamp::parse("2026-11-02T00:02:00+08:00").unwrap(),
+        )
+        .unwrap();
+    (dir, root, pdf, markdown)
+}
+
+fn book_server(root: &Path, round: Option<&str>) -> McpServer {
+    McpServer::new(
+        McpWorkspace::open(root)
+            .unwrap()
+            .with_capability_runner(Box::new(NothingInstalled))
+            .with_round(round.map(str::to_owned))
+            .with_investigation(Some("sandbox:book".to_owned())),
+    )
+}
+
+fn diagnostic_codes(value: &Value) -> Vec<String> {
+    value["diagnostics"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["code"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Round-2 gap: `material.locate` on a snapshot with Marker page markers
+/// resolves the page, and a page-granularity span stores it; an inline span
+/// over the same range gets the non-blocking `page_granularity_available`.
+#[test]
+fn locate_on_a_paginated_snapshot_resolves_the_page_and_page_spans_store_it() {
+    let body = "{7}----------------\n\n习题 8 设 $f$ 在 $[a,b]$ 上连续。\n\n{8}----------------\n\n习题 9 求极限。\n";
+    let (_dir, root, _pdf, markdown) = canonical_book(10, 7, 8, body);
+    let server = book_server(&root, Some("round-book"));
+    // The agent reads the pages first; this also syncs the canonical view.
+    let (_, _) = call(
+        &server,
+        "material.read",
+        json!({ "artifact_id": _pdf, "locator": { "pdf_pages": { "from": 8, "to": 9 } } }),
+    );
+    for (quote, page) in [
+        ("习题 8 设 $f$ 在 $[a,b]$ 上连续。", 8),
+        ("习题 9 求极限。", 9),
+    ] {
+        let (found, is_error) = call(
+            &server,
+            "material.locate",
+            json!({ "artifact_id": markdown, "quote": quote }),
+        );
+        assert!(!is_error, "{found}");
+        assert_eq!(found["status"], "ok", "{found}");
+        assert_eq!(found["page"]["page_number"], page, "{found}");
+        assert_eq!(found["page"]["pdf_page_index"], page - 1, "{found}");
+        assert_eq!(found["page_granularity_available"], true, "{found}");
+        let codes = diagnostic_codes(&found);
+        assert!(
+            !codes
+                .iter()
+                .any(|code| code == "page_markers_absent" || code == "page_unresolved"),
+            "{found}"
+        );
+    }
+    let (found, _) = call(
+        &server,
+        "material.locate",
+        json!({ "artifact_id": markdown, "quote": "习题 9 求极限。" }),
+    );
+    let proposal = |request: &str, granularity: &str| {
+        json!({
+            "request_id": request, "rationale": "登记习题 9",
+            "proposed_objects": [
+                { "local_ref": "s", "kind": "source_span", "op": "create", "payload": {
+                    "artifact_id": markdown, "md_byte_range": found["md_byte_range"],
+                    "granularity": granularity, "quote": "习题 9 求极限。" }},
+                { "local_ref": "u", "kind": "source_unit", "op": "create", "payload": {
+                    "kind": "problem", "display_title": "习题 9", "parent": null,
+                    "source_spans": ["$new:s"], "completeness": "complete" }}
+            ]
+        })
+    };
+    let (paged, is_error) = call(&server, "propose_changes", proposal("paged", "page"));
+    assert!(!is_error, "{paged}");
+    assert_eq!(paged["status"], "staged", "{paged}");
+    let page_payload = paged["compiled_operations"].to_string();
+    assert!(page_payload.contains("\"pdf_page_index\":8"), "{paged}");
+    let (inline, is_error) = call(&server, "propose_changes", proposal("inline", "inline"));
+    assert!(!is_error, "{inline}");
+    assert_eq!(inline["status"], "staged", "{inline}");
+    let hint = inline["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "page_granularity_available")
+        .unwrap_or_else(|| panic!("{inline}"));
+    assert_eq!(hint["level"], "info");
+    assert!(
+        hint["message"].as_str().unwrap().contains("第 9 页"),
+        "{hint}"
+    );
+}
+
+/// The sandbox 854f case: a snapshot of PDF pages 1–3 without page markers.
+/// `material.locate` cannot give a page and now says why
+/// (`page_markers_absent`, like `material.read`).
+#[test]
+fn locate_on_an_unmarked_multi_page_snapshot_reports_page_markers_absent() {
+    let body = "# 第一章\n\n定理 1.1 有界单调数列收敛。\n\n定理 1.2 闭区间上的连续函数有界。\n";
+    let (_dir, root, pdf, markdown) = canonical_book(5, 0, 2, body);
+    let server = book_server(&root, None);
+    let (_, _) = call(
+        &server,
+        "material.read",
+        json!({ "artifact_id": pdf, "locator": { "pdf_pages": { "from": 1, "to": 3 } } }),
+    );
+    let (found, is_error) = call(
+        &server,
+        "material.locate",
+        json!({ "artifact_id": markdown, "quote": "定理 1.1 有界单调数列收敛。" }),
+    );
+    assert!(!is_error, "{found}");
+    assert_eq!(found["status"], "ok", "{found}");
+    assert_eq!(found["page"], Value::Null, "{found}");
+    assert_eq!(found["page_granularity_available"], false, "{found}");
+    let absent = found["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "page_markers_absent")
+        .unwrap_or_else(|| panic!("{found}"));
+    assert_eq!(absent["snapshot_pages"], json!({ "from": 1, "to": 3 }));
+    assert_eq!(absent["artifact_id"], markdown);
+    // A plain imported Markdown (no PDF) is not "markers absent": it maps to no PDF at all.
+    let f = fixture();
+    let (plain, _) = call(
+        &f.server,
+        "material.locate",
+        json!({ "artifact_id": f.markdown, "quote": "Every bounded monotone sequence converges." }),
+    );
+    assert_eq!(plain["status"], "ok", "{plain}");
+    assert_eq!(diagnostic_codes(&plain), ["page_unresolved"], "{plain}");
 }

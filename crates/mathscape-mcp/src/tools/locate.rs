@@ -23,7 +23,7 @@ use crate::McpWorkspace;
 /// At most this many candidates are returned for an ambiguous quote.
 pub const MAX_LOCATE_CANDIDATES: usize = 20;
 
-const DESCRIPTION: &str = "Find the exact md_byte_range of a passage inside one immutable Markdown snapshot, for citing it as a propose_changes source_span. artifact_id is the snapshot (served_artifact_id or details.served_segments[].artifact_id of material.read); quote is the passage's own text, copied from material.read (at most 4096 bytes: one problem or paragraph, never a whole chapter). Optional within {start,end} (bytes, half-open) restricts the search, e.g. to one served segment. Matching is the propose_changes quote rule: exact text first, otherwise equal after whitespace/TeX-spacing normalization of both sides, mapped back to raw bytes. One match: status ok with md_byte_range, block_ids and, when it maps to exactly one PDF page, page; several: status ambiguous with every candidate (at most 20, narrow with within or a longer quote); none: not_found. Pass the returned md_byte_range together with the same quote to propose_changes and the quote check always passes. Read-only.";
+const DESCRIPTION: &str = "Find the exact md_byte_range of a passage inside one immutable Markdown snapshot, for citing it as a propose_changes source_span. artifact_id is the snapshot (served_artifact_id or details.served_segments[].artifact_id of material.read); quote is the passage's own text, copied from material.read (at most 4096 bytes: one problem or paragraph, never a whole chapter). Optional within {start,end} (bytes, half-open) restricts the search, e.g. to one served segment. Matching is the propose_changes quote rule: exact text first, otherwise equal after whitespace/TeX-spacing normalization of both sides, mapped back to raw bytes. One match: status ok with md_byte_range, block_ids and, when it maps to exactly one PDF page, page with page_granularity_available true (then cite the span with granularity page); a snapshot covering several pages without page markers yields diagnostic page_markers_absent (page null: cite with granularity inline and claim no page number), any other unresolved page yields page_unresolved with the reason; several: status ambiguous with every candidate (at most 20, narrow with within or a longer quote); none: not_found. Pass the returned md_byte_range together with the same quote to propose_changes and the quote check always passes. Read-only.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -129,19 +129,22 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
     };
     let (ranges, normalized) = locate_quote(haystack, &args.quote);
     let total = ranges.len();
+    let mut unresolved_page: Option<String> = None;
     let candidates = ranges
         .into_iter()
         .take(MAX_LOCATE_CANDIDATES)
         .map(|(start, end)| {
             let (start, end) = ((start + offset) as u64, (end + offset) as u64);
-            let page = map_page(&context, &ByteRangeInput { start, end })
-                .ok()
-                .map(|page| {
-                    json!({
-                        "pdf_page_index": page.pdf_page_index(),
-                        "page_number": page.pdf_page_index() + 1
-                    })
-                });
+            let page = match map_page(&context, &ByteRangeInput { start, end }) {
+                Ok(page) => Some(json!({
+                    "pdf_page_index": page.pdf_page_index(),
+                    "page_number": page.pdf_page_index() + 1
+                })),
+                Err(reason) => {
+                    unresolved_page.get_or_insert(reason);
+                    None
+                }
+            };
             json!({
                 "md_byte_range": { "start": start, "end": end },
                 "block_ids": context.block_ids(start, end),
@@ -156,6 +159,30 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
             "code": "matched_normalized",
             "message": "no exact occurrence; matched after whitespace/TeX-spacing normalization. Cite the range with this same quote"
         }));
+    }
+    if let Some(reason) = unresolved_page {
+        // Same code as material.read: the snapshot itself cannot give pages.
+        match context.page_markers_absent() {
+            Some(pages) => {
+                let covered = pages.map_or_else(
+                    || "no recorded page range".to_owned(),
+                    |(from, to)| format!("pages {from}–{to}"),
+                );
+                diagnostics.push(json!({
+                    "code": "page_markers_absent",
+                    "message": format!(
+                        "snapshot {} covers {covered} but has no page markers; the range cannot be attributed to a single PDF page, so cite it with granularity inline and do not claim a page number",
+                        artifact.as_str()
+                    ),
+                    "artifact_id": artifact.as_str(),
+                    "snapshot_pages": pages.map(|(from, to)| json!({ "from": from, "to": to })),
+                }));
+            }
+            None => diagnostics.push(json!({
+                "code": "page_unresolved",
+                "message": format!("no single PDF page for this range ({reason}); cite it with granularity inline and do not claim a page number"),
+            })),
+        }
     }
     if total > MAX_LOCATE_CANDIDATES {
         diagnostics.push(json!({

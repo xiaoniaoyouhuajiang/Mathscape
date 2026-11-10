@@ -2,7 +2,9 @@
 //!
 //! `propose_changes` validates source-unit and source-relation operations with
 //! the existing pure map planner, then persists only an auditable candidate.
-//! `get_change_set` reads that candidate back; neither tool mutates the map.
+//! `get_change_set` reads that candidate back and `list_change_sets` lists the
+//! investigation's change sets (so a later round can revise one with
+//! `supersedes`); none of them mutates the map.
 //!
 //! Investigation identity is server-owned: a round is bound to exactly one
 //! investigation (`investigation_rounds`), and a sandbox session is one
@@ -34,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{GET_CHANGE_SET, PROPOSE_CHANGES};
+use super::{GET_CHANGE_SET, LIST_CHANGE_SETS, PROPOSE_CHANGES};
 use crate::McpWorkspace;
 use crate::investigation::staged_change_sets;
 
@@ -184,7 +186,7 @@ impl Diagnostic {
 pub(super) fn definition() -> Value {
     json!({
         "name": PROPOSE_CHANGES,
-        "description": "Validate and persist a Phase2 source-layer proposal. It supports immutable source_span creation plus source_unit/source_relation create/edit, returns staged or blocked, and never changes the accepted map. A source_span payload is {artifact_id, md_byte_range, granularity, quote}: quote is the full text of that range, the range is at most 4096 bytes (span_too_long; split a chapter by problem or paragraph), and material.locate returns a range that passes the quote check. Problems of existing workspace objects this proposal does not touch are warn head_integrity and never block. Requires a bound round token.",
+        "description": "Validate and persist a Phase2 source-layer proposal. It supports immutable source_span creation plus source_unit/source_relation create/edit, returns staged or blocked, and never changes the accepted map. A source_span payload is {artifact_id, md_byte_range, granularity, quote}: quote is the full text of that range, the range is at most 4096 bytes (span_too_long; split a chapter by problem or paragraph), and material.locate returns a range that passes the quote check. Use granularity page when material.locate returned a page (page_granularity_available true); inline records no page, so never claim a page number for an inline span. To revise an earlier proposal of this investigation, pass the supersedes object from list_change_sets; without it a new change set is created. Problems of existing workspace objects this proposal does not touch are warn head_integrity and never block. Requires a bound round token.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -230,6 +232,21 @@ pub(super) fn get_definition() -> Value {
                 "version": { "type": "integer", "minimum": 1 }
             },
             "required": ["change_set_id"],
+            "additionalProperties": false
+        }
+    })
+}
+
+pub(super) fn list_definition() -> Value {
+    json!({
+        "name": LIST_CHANGE_SETS,
+        "description": "List the Phase2 change sets of the current investigation (this sandbox session only), newest first. Each entry has change_set_id, request_id, a short title, the active version with its state, proposal_fingerprint and blocking diagnostic codes, plus every version's state. When the active version is staged or blocked, `supersedes` is ready to pass to propose_changes to revise it as the next version of the same change set. Read-only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pending_only": { "type": "boolean", "description": "Only change sets whose active version is staged or blocked." },
+                "limit": { "type": "integer", "minimum": 1, "maximum": MAX_LIST_CHANGE_SETS }
+            },
             "additionalProperties": false
         }
     })
@@ -555,6 +572,166 @@ pub(super) fn get(workspace: &McpWorkspace, arguments: Value) -> Result<Value, T
         "diagnostics": record.result.get("diagnostics").cloned().unwrap_or_else(|| json!([])),
         "decision": record.result.get("decision").cloned().unwrap_or(Value::Null)
     }))
+}
+
+/// Upper bound (and default) of `list_change_sets` entries.
+pub const MAX_LIST_CHANGE_SETS: usize = 100;
+const LIST_TITLE_CHARS: usize = 120;
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListArgs {
+    #[serde(default)]
+    pending_only: bool,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// `list_change_sets`: every change set of the current investigation, newest
+/// active version first. Scoped by the server-owned investigation id; a
+/// caller without one gets an empty list.
+pub(super) fn list(workspace: &McpWorkspace, arguments: Value) -> Result<Value, ToolError> {
+    let args: ListArgs = super::parse_args(arguments)?;
+    let limit = match args.limit {
+        None => MAX_LIST_CHANGE_SETS,
+        Some(limit) if (1..=MAX_LIST_CHANGE_SETS).contains(&limit) => limit,
+        Some(_) => {
+            return Err(ToolError::new(
+                ToolErrorCode::InvalidArg,
+                format!("limit must be between 1 and {MAX_LIST_CHANGE_SETS}"),
+            ));
+        }
+    };
+    let store = workspace.store()?;
+    let Some(investigation) = current_investigation(workspace, &store)? else {
+        return Ok(json!({
+            "status": ToolStatus::Ok,
+            "investigation_id": Value::Null,
+            "total": 0,
+            "truncated": false,
+            "change_sets": [],
+            "diagnostics": [super::diagnostic(
+                "investigation_unavailable",
+                "this call is not bound to an investigation; there are no change sets to list"
+            )]
+        }));
+    };
+    let versions = store
+        .list_change_set_versions(&investigation)
+        .map_err(internal)?;
+    let mut grouped: Vec<(String, Vec<ProposedChangeRecord>)> = Vec::new();
+    for pending in versions {
+        let record = pending.record;
+        match grouped
+            .iter_mut()
+            .find(|(id, _)| *id == record.change_set_id)
+        {
+            Some((_, records)) => records.push(record),
+            None => grouped.push((record.change_set_id.clone(), vec![record])),
+        }
+    }
+    let mut entries = grouped
+        .into_iter()
+        .filter_map(|(change_set_id, mut records)| {
+            records.sort_by_key(|record| record.version);
+            // Versions only grow; the active one is the newest.
+            let active = records.last()?;
+            let revisable = matches!(active.state.as_str(), "staged" | "blocked");
+            if args.pending_only && !revisable {
+                return None;
+            }
+            Some((
+                active.created_at.clone(),
+                change_set_entry(&change_set_id, &records, revisable),
+            ))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    let total = entries.len();
+    let change_sets = entries
+        .into_iter()
+        .take(limit)
+        .map(|(_, entry)| entry)
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "status": ToolStatus::Ok,
+        "investigation_id": investigation,
+        "total": total,
+        "truncated": total > change_sets.len(),
+        "change_sets": change_sets
+    }))
+}
+
+fn change_set_entry(
+    change_set_id: &str,
+    records: &[ProposedChangeRecord],
+    revisable: bool,
+) -> Value {
+    let active = records
+        .last()
+        .expect("a change set has at least one version");
+    let first = records
+        .first()
+        .expect("a change set has at least one version");
+    let rationale = active
+        .proposal
+        .get("rationale")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut title: String = rationale.chars().take(LIST_TITLE_CHARS).collect();
+    if rationale.chars().count() > LIST_TITLE_CHARS {
+        title.push('…');
+    }
+    let mut blocking = Vec::<String>::new();
+    for diagnostic in active
+        .result
+        .get("diagnostics")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if diagnostic.get("level").and_then(Value::as_str) == Some("error")
+            && let Some(code) = diagnostic.get("code").and_then(Value::as_str)
+            && !blocking.iter().any(|seen| seen == code)
+        {
+            blocking.push(code.to_owned());
+        }
+    }
+    let debt_count = active
+        .result
+        .get("debts")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    json!({
+        "change_set_id": change_set_id,
+        "request_id": active.request_id,
+        "title": title,
+        "created_at": first.created_at,
+        "active": {
+            "version": active.version,
+            "state": active.state,
+            "proposal_fingerprint": active.proposal_fingerprint(),
+            "created_at": active.created_at,
+            "round_id": active.round_id,
+            "blocking_codes": blocking,
+            "debt_count": debt_count
+        },
+        "versions": records.iter().map(|record| json!({
+            "version": record.version,
+            "state": record.state,
+            "request_id": record.request_id,
+            "created_at": record.created_at
+        })).collect::<Vec<_>>(),
+        "supersedes": if revisable {
+            json!({
+                "change_set_id": change_set_id,
+                "version": active.version,
+                "proposal_fingerprint": active.proposal_fingerprint()
+            })
+        } else {
+            Value::Null
+        }
+    })
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -968,6 +1145,21 @@ pub(super) fn load_snapshot(
 }
 
 impl SnapshotContext {
+    /// Why no page of this snapshot can ever be resolved, when that is a
+    /// property of the snapshot itself: it has no Marker page markers and
+    /// covers several pages (or no recorded page range). `None` when page
+    /// markers exist, the snapshot is a single page, or it maps to no PDF.
+    pub(super) fn page_markers_absent(&self) -> Option<Option<(u32, u32)>> {
+        if !self.markers.is_empty() {
+            return None;
+        }
+        match &self.pdf {
+            Ok((_, Some((from, to)))) if from == to => None,
+            Ok((_, pages)) => Some(*pages),
+            Err(_) => None,
+        }
+    }
+
     /// Canonical (non page-marker) blocks overlapping `[start, end)`; the
     /// same rule `propose_changes` records in `marker_block_ids`.
     pub(super) fn block_ids(&self, start: u64, end: u64) -> Vec<String> {
@@ -1144,6 +1336,21 @@ fn materialize_span_drafts(
                 }
             }
         } else {
+            if input.granularity == SpanGranularity::Inline
+                && let Ok(page) = map_page(context, range)
+            {
+                // Non-blocking: inline stores no page, so the agent should
+                // not claim one; page granularity would record it.
+                diagnostics.push(Diagnostic::with_level(
+                    Level::Info,
+                    "page_granularity_available",
+                    format!(
+                        "该范围唯一落在 PDF 第 {} 页；inline 不记录页码，改用 granularity page 才会存下页码",
+                        page.pdf_page_index() + 1
+                    ),
+                    local,
+                ));
+            }
             None
         };
         // Same semantics as discovery: `fingerprint(&text)`.

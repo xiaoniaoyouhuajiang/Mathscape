@@ -38,6 +38,7 @@ pub use outline::{
     MAX_DIAGNOSTIC_MESSAGE_CHARS, MAX_OUTLINE_DIAGNOSTICS, MAX_OUTLINE_ENTRIES,
     MAX_OUTLINE_ENTRIES_BYTES, MAX_OUTLINE_TITLE_CHARS,
 };
+pub use propose::MAX_LIST_CHANGE_SETS;
 pub use read::MAX_READ_BYTES;
 
 pub const WORKSPACE_SEARCH: &str = "workspace.search";
@@ -54,6 +55,7 @@ pub const ARTIFACT_STAGE: &str = "artifact.stage";
 pub const PROPOSE_CHANGES: &str = "propose_changes";
 pub const GET_CHANGE_SET: &str = "get_change_set";
 pub const MATERIAL_LOCATE: &str = "material.locate";
+pub const LIST_CHANGE_SETS: &str = "list_change_sets";
 
 /// Version of the `tools/list` table (names, descriptions, input schemas)
 /// that the bundled `mathscape-worknet` skill is written against; the skill
@@ -65,7 +67,11 @@ pub const MATERIAL_LOCATE: &str = "material.locate";
 /// cross-proposal references (PR-B); the table still has 13 tools.
 /// `/15`: new read-only `material.locate` (14 tools); `material.read`
 /// documents single-snapshot `served_segments` and `page_markers_absent`.
-pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/15";
+/// `/16`: new read-only `list_change_sets` (15 tools) so a later round can
+/// find its own change sets and revise one with `supersedes`;
+/// `material.locate` documents `page_markers_absent` / `page_unresolved`;
+/// `propose_changes` documents page granularity and `supersedes`.
+pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/16";
 
 /// sha256 of the serialized [`tool_definitions`] with object keys sorted (so
 /// the value does not depend on serde_json's `preserve_order` feature), for
@@ -97,7 +103,7 @@ pub fn tool_table_fingerprint() -> String {
 }
 
 /// Stable `tools/list` order. New tools are appended; existing entries stay put.
-pub const TOOL_NAMES: [&str; 14] = [
+pub const TOOL_NAMES: [&str; 15] = [
     WORKSPACE_SEARCH,
     MATERIAL_READ,
     MATERIAL_GREP,
@@ -112,6 +118,7 @@ pub const TOOL_NAMES: [&str; 14] = [
     PROPOSE_CHANGES,
     GET_CHANGE_SET,
     MATERIAL_LOCATE,
+    LIST_CHANGE_SETS,
 ];
 
 /// MCP `annotations` for the read-only tools.
@@ -153,7 +160,7 @@ fn with_annotations(mut definition: Value) -> Value {
         Some(MATERIAL_READ) => material_read_annotations(),
         Some(ARTIFACT_STAGE) => artifact_stage_annotations(),
         Some(PROPOSE_CHANGES) => propose::propose_annotations(),
-        Some(GET_CHANGE_SET) => propose::get_annotations(),
+        Some(GET_CHANGE_SET) | Some(LIST_CHANGE_SETS) => propose::get_annotations(),
         _ => read_only_annotations(),
     };
     if let Some(object) = definition.as_object_mut() {
@@ -179,6 +186,7 @@ pub fn tool_definitions() -> Vec<Value> {
         propose::definition(),
         propose::get_definition(),
         locate::definition(),
+        propose::list_definition(),
     ]
     .into_iter()
     .map(with_annotations)
@@ -227,6 +235,7 @@ pub fn call(
         PROPOSE_CHANGES => structured(propose::propose(workspace, arguments)),
         GET_CHANGE_SET => structured(propose::get(workspace, arguments)),
         MATERIAL_LOCATE => structured(locate::call(workspace, arguments)),
+        LIST_CHANGE_SETS => structured(propose::list(workspace, arguments)),
         _ => None,
     }
 }
@@ -280,8 +289,8 @@ mod schema_version_tests {
     /// tool name, description or schema changes the fingerprint: bump
     /// `TOOL_SCHEMA_VERSION` (and the skill frontmatter) and re-pin.
     const PINNED: (&str, &str) = (
-        "mathscape-mcp/15",
-        "6d60d599c58098aa0545bbdb88bb27d20aa0cef5a06b65293ac775ef7a43acce",
+        "mathscape-mcp/16",
+        "4b796a03d05280852dea48c22f94621072bcd0a422cab7891284155cd3c4e603",
     );
 
     #[test]

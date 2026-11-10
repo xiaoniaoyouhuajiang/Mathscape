@@ -1404,6 +1404,138 @@ mod tests {
         assert_eq!(codes(&blocked), ["span_too_long"], "{blocked}");
     }
 
+    fn list(fx: &Fx, round: &str, investigation: &str, args: Value) -> Value {
+        let (result, is_error) = call_as(fx, round, Some(investigation), "list_change_sets", args);
+        assert!(!is_error, "{result}");
+        result
+    }
+
+    /// Sandbox acceptance round 3: a later round (no tool results in the
+    /// replayed history) finds its blocked proposal with `list_change_sets`
+    /// and revises it with the returned `supersedes`, producing v2 of the
+    /// same change set instead of a new one. Strictly per investigation.
+    #[test]
+    fn list_change_sets_lets_a_later_round_revise_its_blocked_proposal() {
+        let fx = fixture();
+        let blocked = propose(
+            &fx,
+            json!({
+                "request_id": "first", "rationale": "登记定理 A（父对象写错）",
+                "proposed_objects": [span(&fx, "s", "# 定理 A", "inline"),
+                    unit("u", "定理 A", json!("mathscape:source-unit/nope"), json!(["$new:s"]))]
+            }),
+        );
+        assert_eq!(blocked["status"], "blocked", "{blocked}");
+        let staged = unit_proposal(&fx, "second", "定理 B", "第二段内容。", Value::Null);
+        assert_eq!(staged["status"], "staged", "{staged}");
+
+        // Round 2 only knows the investigation.
+        let listed = list(&fx, "round-2", INV, json!({}));
+        assert_eq!(listed["status"], "ok");
+        assert_eq!(listed["investigation_id"], INV);
+        assert_eq!(listed["total"], 2);
+        let entries = listed["change_sets"].as_array().unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry["change_set_id"] == blocked["change_set_id"])
+            .unwrap_or_else(|| panic!("{listed}"));
+        assert_eq!(entry["request_id"], "first");
+        assert_eq!(entry["title"], "登记定理 A（父对象写错）");
+        assert_eq!(entry["active"]["version"], 1);
+        assert_eq!(entry["active"]["state"], "blocked");
+        assert_eq!(
+            entry["active"]["blocking_codes"],
+            json!(["dangling_staged_ref"])
+        );
+        assert_eq!(
+            entry["versions"],
+            json!([{
+                "version": 1, "state": "blocked", "request_id": "first",
+                "created_at": entry["active"]["created_at"]
+            }])
+        );
+        let supersedes = entry["supersedes"].clone();
+        assert_eq!(
+            supersedes["proposal_fingerprint"],
+            blocked["proposal_fingerprint"]
+        );
+
+        let revised = call_as(
+            &fx,
+            "round-2",
+            Some(INV),
+            "propose_changes",
+            json!({
+                "request_id": "first-fixed", "rationale": "登记定理 A",
+                "supersedes": supersedes,
+                "proposed_objects": [span(&fx, "s", "# 定理 A", "inline"),
+                    unit("u", "定理 A", Value::Null, json!(["$new:s"]))]
+            }),
+        )
+        .0;
+        assert_eq!(revised["status"], "staged", "{revised}");
+        assert_eq!(revised["change_set_id"], blocked["change_set_id"]);
+        assert_eq!(revised["version"], 2);
+
+        let listed = list(&fx, "round-3", INV, json!({ "pending_only": true }));
+        assert_eq!(listed["total"], 2, "{listed}");
+        let entry = listed["change_sets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["change_set_id"] == blocked["change_set_id"])
+            .unwrap()
+            .clone();
+        assert_eq!(entry["active"]["version"], 2);
+        assert_eq!(entry["active"]["state"], "staged");
+        assert_eq!(entry["active"]["blocking_codes"], json!([]));
+        let states: Vec<_> = entry["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|version| (version["version"].clone(), version["state"].clone()))
+            .collect();
+        assert_eq!(
+            states,
+            [(json!(1), json!("superseded")), (json!(2), json!("staged"))]
+        );
+
+        // Accepted: listed by default with no `supersedes`; hidden by pending_only.
+        accept(&fx, vec![sel(&staged)]).unwrap();
+        let all = list(&fx, "round-3", INV, json!({}));
+        let accepted = all["change_sets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["change_set_id"] == staged["change_set_id"])
+            .unwrap();
+        assert_eq!(accepted["active"]["state"], "accepted");
+        assert_eq!(accepted["supersedes"], Value::Null);
+        let pending = list(
+            &fx,
+            "round-3",
+            INV,
+            json!({ "pending_only": true, "limit": 5 }),
+        );
+        assert_eq!(pending["total"], 1, "{pending}");
+        let limited = list(&fx, "round-3", INV, json!({ "limit": 1 }));
+        assert_eq!(limited["change_sets"].as_array().unwrap().len(), 1);
+        assert_eq!(limited["truncated"], true);
+
+        // Another investigation sees nothing of this one.
+        let other = list(&fx, "round-9", "sandbox:other", json!({}));
+        assert_eq!(other["total"], 0, "{other}");
+        assert_eq!(other["change_sets"], json!([]));
+        let (bad, is_error) = call_as(
+            &fx,
+            "round-3",
+            Some(INV),
+            "list_change_sets",
+            json!({ "limit": 0 }),
+        );
+        assert!(is_error, "{bad}");
+    }
+
     /// Rewrites the accepted payload of `object_id` in place, to stage a head
     /// that already contains an ink evidence span or a broken object.
     fn rewrite_head_payload(fx: &Fx, object_id: &str, payload: Value) {
