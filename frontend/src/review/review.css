@@ -1,4 +1,20 @@
-.review-workspace { position: absolute; inset: 66px 0 0; z-index: 4; display: flex; flex-direction: column; background: #121a21; color: #e2ece9; }
+:root {
+  /* Shared review palette: the review workspace and the proposal batch dialog. */
+  --review-bg: #121a21;
+  --review-panel: #16232a;
+  --review-panel-deep: #101820;
+  --review-border: #2f4750;
+  --review-border-strong: #4d6b70;
+  --review-text: #e2ece9;
+  --review-muted: #93a9b0;
+  --review-accent: #5fc2ad;
+  --review-current: #ffd84a;
+  --review-warn: #e8bd7c;
+  --review-error: #f0a08a;
+  --review-ok: #a9dcc9;
+}
+
+.review-workspace { position: absolute; inset: 66px 0 0; z-index: 4; display: flex; flex-direction: column; background: var(--review-bg); color: var(--review-text); }
 .review-workspace[hidden] { display: none; }
 
 .review-header { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 6px 12px; padding: 12px 16px 10px; border-bottom: 1px solid #2d3f49; }
@@ -102,3 +118,23 @@
 .review-return-chip button { border: 1px solid #b89a3e; background: #3a3218; color: #ffe9a8; padding: 5px 10px; cursor: pointer; font-size: 12px; }
 .review-return-open { border-radius: 6px 0 0 6px; }
 .review-return-close { border-radius: 0 6px 6px 0; }
+
+/* Proposal mode (Phase2 staged change sets). */
+.review-danger { border-color: #a8504a !important; background: #3a1f1f !important; color: #f6d5cf !important; }
+.review-proposal-rationale { margin: 4px 0; padding: 6px 8px; border-left: 3px solid var(--review-accent); background: var(--review-panel); font-size: 12px; white-space: pre-wrap; }
+.review-proposal.state-blocked { border-left: 3px solid #e0913f; }
+.review-proposal.state-staged { border-left: 3px solid #4e9d6c; }
+.review-proposal-history { margin: -2px 0 4px 14px; font-size: 11px; color: var(--review-muted); }
+.review-proposal-history summary { cursor: pointer; }
+.review-debt { cursor: default; }
+.review-debt-origin { font-size: 11px; color: var(--review-muted); }
+.review-debt-tag { border: 1px solid var(--review-border-strong); border-radius: 999px; padding: 0 7px; font-size: 10px; color: var(--review-warn); }
+.review-debt-body { margin: 4px 0 2px; font-size: 12px; overflow-wrap: anywhere; }
+.review-debt-id { display: block; color: #6f858c; font-size: 10px; overflow-wrap: anywhere; }
+.review-unverified { margin-top: 6px; padding: 6px 8px; border: 1px dashed #c7a86a; border-radius: 6px; }
+.review-unverified-text { max-height: none; }
+.proposal-discard-confirm { display: grid; gap: 6px; margin-top: 6px; padding: 8px 10px; border: 1px solid #a8504a; border-radius: 6px; background: #2a1a1a; color: #f0d4d0; font-size: 12px; }
+.proposal-discard-confirm p { margin: 0; }
+.proposal-discard-cascade { color: #e6d0cc; }
+.proposal-discard-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.proposal-discard-actions button { border: 1px solid var(--review-border-strong); border-radius: 5px; background: #1d3138; color: #d6ece5; padding: 4px 9px; cursor: pointer; font-size: 12px; }

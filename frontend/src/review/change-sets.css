@@ -1,38 +1,28 @@
+/* Blocking batch review dialog (switch / discard / export / exit).
+   Colours, notes, headings, buttons and the discard confirmation come from
+   review.css; only the dialog layout lives here. */
 .change-set-review-overlay { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(4, 10, 14, .72); }
-.change-set-review-dialog { display: grid; grid-template-rows: auto 1fr auto auto; gap: 10px; width: min(1180px, calc(100vw - 32px)); height: min(760px, calc(100vh - 32px)); padding: 18px 20px; border: 1px solid #426268; border-radius: 10px; background: #122027; color: #e4efec; box-shadow: 0 20px 80px rgba(0,0,0,.45); }
+/* One grid row per child: header, summary, list, confirm, feedback, footer. */
+.change-set-review-dialog { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto auto; gap: 10px; width: min(1180px, calc(100vw - 32px)); height: min(760px, calc(100vh - 32px)); padding: 18px 20px; border: 1px solid var(--review-border-strong); border-radius: 10px; background: var(--review-bg); color: var(--review-text); box-shadow: 0 20px 80px rgba(0,0,0,.45); }
 .change-set-review-dialog h2 { margin: 0 0 4px; }
-.change-set-review-note, .change-set-review-feedback, .change-set-review-meta { color: #a9bec1; font-size: 12px; margin: 0; }
-.change-set-review-body { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; min-height: 0; }
-.change-set-review-list, .change-set-review-detail { overflow: auto; min-height: 0; }
-.change-set-review-table { display: grid; gap: 4px; }
-.change-set-review-row { display: grid; grid-template-columns: 22px minmax(0, 2.2fr) 56px 56px minmax(0, 1.6fr) auto; gap: 8px; align-items: center; padding: 8px; border: 1px solid #2d4951; border-radius: 6px; background: #172a31; cursor: pointer; font-size: 12px; }
-.change-set-review-row.is-current { border-color: #ffd84a; }
-.change-set-review-head { background: transparent; border-color: transparent; color: #8fa7aa; cursor: default; }
-.change-set-review-group { margin-top: 6px; color: #9ab2b5; font-size: 11px; }
-.change-set-review-title { display: grid; }
-.change-set-review-deps { color: #9ab2b5; }
-.change-set-review-state.state-staged { color: #a9dcc9; }
+.change-set-review-dialog [hidden] { display: none; }
+.change-set-review-list { overflow: auto; min-height: 0; }
+.change-set-review-table { --change-set-columns: 22px minmax(240px, 1fr) 64px 64px minmax(160px, 1fr); display: grid; gap: 4px; }
+.change-set-review-row { display: grid; grid-template-columns: var(--change-set-columns); gap: 8px; align-items: center; padding: 8px; border: 1px solid var(--review-border); border-radius: 6px; background: var(--review-panel); cursor: pointer; font-size: 12px; }
+.change-set-review-head { background: transparent; border-color: transparent; color: var(--review-muted); cursor: default; }
+.change-set-review-title { display: grid; min-width: 0; overflow-wrap: anywhere; }
+.change-set-review-state.state-staged { color: var(--review-ok); }
 .change-set-review-state.state-blocked { color: #e0913f; }
-.change-set-review-debt.has-debt { color: #e8c46a; }
-.change-set-review-impact { color: #c6d5d6; }
-.change-set-review-row-actions { display: flex; gap: 4px; }
-.change-set-review-snapshot { border-top: 1px solid #2d4951; padding-top: 8px; margin-top: 8px; }
-.change-set-review-graph { height: 180px; }
-.change-set-review-unit { margin: 6px 0; padding: 6px 8px; border-left: 3px dashed #7fb7c0; background: #15252b; }
-.change-set-review-anchor blockquote { margin: 4px 0; color: #cfdcdc; white-space: pre-wrap; }
-.change-set-review-diagnostic { font-size: 12px; margin: 2px 0; }
-.change-set-review-diagnostic.level-error { color: #f0a08a; }
-.change-set-review-diagnostic.level-warn { color: #e8c46a; }
-.change-set-review-diagnostic.level-info { color: #9ab2b5; }
-.change-set-review-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
-.change-set-review-cascade { font-size: 12px; color: #c6d5d6; }
-.change-set-review-empty { color: #8fa7aa; }
+.change-set-review-debt.has-debt { color: var(--review-warn); }
+.change-set-review-impact { color: #c6d5d6; overflow-wrap: anywhere; }
+.change-set-review-summary { margin: 0; padding: 6px 8px; border: 1px solid var(--review-border); border-radius: 6px; font-size: 12px; background: var(--review-panel-deep); }
+.change-set-review-feedback { margin: 0; }
+.change-set-review-actions { align-items: center; justify-content: flex-end; }
+.change-set-review-actions button { border: 1px solid var(--review-border-strong); border-radius: 5px; background: #1d3138; color: #d6ece5; padding: 4px 9px; cursor: pointer; font-size: 12px; }
+.change-set-review-spacer { flex: 1; }
+
+/* Staged badges in the map detail panel. */
 .detail-staged-badge { margin: 6px 0; padding: 6px 8px; border: 1px dashed #ffd84a; border-radius: 6px; color: #ffe58a; font-size: 12px; }
-.change-set-review-summary { margin: 0; padding: 6px 8px; border: 1px solid #2d4951; border-radius: 6px; color: #d7e7e9; font-size: 12px; background: #13242a; }
-.change-set-review-confirm { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid #a8504a; border-radius: 6px; background: #2a1a1a; color: #f0d4d0; font-size: 12px; }
-.change-set-review-confirm p { margin: 0; }
-.change-set-review-confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
-.change-set-review-snapshot-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .detail-staged-badge.is-conflict { border-color: #ff8a65; color: #ffc4b0; }
 .detail-accepted-version { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #2d4951; }
 .detail-accepted-version h4 { margin: 0 0 4px; font-size: 12px; color: #a9bec1; }

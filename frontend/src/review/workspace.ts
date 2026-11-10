@@ -13,6 +13,11 @@ import { eventBus } from "../core/events";
 import { shortStableId } from "../core/stable-id";
 import "./review.css";
 import { openSourceRegistrationReview } from "../discovery/registration-workspace";
+import {
+  debtView, dependentsIndex, diagnosticLabel, discardPreview, impactSummary, keyOf, proposalDebts, stateLabel,
+  targetDiagnosticGroups, titleOf, type ImpactPreview, type PendingChangeSet, type ProposalWorkspaceMeta,
+} from "./proposal-model";
+import { renderDiscardConfirm } from "./proposal-discard";
 
 export const OPEN_REVIEW_EVENT = "mathscape:open-review";
 export type { OpenReviewDetail } from "../core/events";
@@ -159,6 +164,8 @@ export class DiscoveryReviewWorkspace {
   private graphMode = false;
   private evidenceMode = false;
   private readonly md = markdownRenderer();
+  private proposalPreview: ImpactPreview | string | null = null;
+  private proposalBusy = false;
 
   private header = el("header", "review-header");
   private tabs = el("nav", "review-tabs");
@@ -246,7 +253,19 @@ export class DiscoveryReviewWorkspace {
     this.renderFooter();
     this.preview.replaceChildren(el("p", "review-preview-empty", "正在读取来源 Markdown…"));
     const source = outcome.view.source;
-    if (source === null) {
+    const proposal = meta.proposal;
+    this.proposalPreview = null; this.proposalBusy = false;
+    if (proposal) {
+      // The snapshot was read by the backend for this investigation (a live
+      // sandbox copy when the proposal was made there) — never re-read here.
+      if (proposal.document) {
+        this.doc = proposal.document;
+        this.bytes = new TextEncoder().encode(proposal.document.source);
+      } else {
+        this.stale = proposal.documentError ?? "无法读取提案引用的 Markdown 快照。";
+      }
+      void this.loadProposalPreview(proposal, generation);
+    } else if (source === null) {
       this.stale = "发现结果没有记录来源快照。";
     } else {
       try {
@@ -529,16 +548,7 @@ export class DiscoveryReviewWorkspace {
     const outcome = this.outcome!;
     const model = this.model!;
     if (this.meta.proposal) {
-      const summary = el("div", "review-summary");
-      const stat = (value: number, label: string) => {
-        const box = el("div", "review-stat");
-        box.append(el("strong", "", String(value)), el("span", "", label));
-        return box;
-      };
-      summary.append(stat(model.units.length, "单元"), stat(model.relations.length, "关系"), stat(model.diagnostics.length, "诊断"));
-      this.list.append(summary, el("p", "review-note",
-        "这是 Agent 提案在本快照中的部分，只读。提案按整个 change set 接受或丢弃，请回到「审核提案」操作；接受只表示写入地图，不提升 Trust，也不代表数学上已验证。"));
-      if (this.stale) this.list.append(el("p", "review-warning", this.stale));
+      this.renderProposalOverview(this.meta.proposal);
       return;
     }
     const unresolved = model.references.filter(reference => reference.status === "unresolved").length;
@@ -852,8 +862,18 @@ export class DiscoveryReviewWorkspace {
     controls.append(pdf);
     const children: HTMLElement[] = [heading, controls];
     if (target.note) children.push(el("p", "review-fallback-note", target.note));
+    const server = anchor && this.meta.proposal?.anchors.find(entry => entry.range.start === anchor.start && entry.range.end === anchor.end);
+    if (server) {
+      const origin = server.origin === "head" ? "已有证据" : server.origin === "staged" ? "其他提案中的证据" : "本提案新建证据";
+      const page = server.page ? `PDF 第 ${server.page.page_number} 页` : "无唯一 PDF 页映射";
+      const blocks = server.compiled ? `${server.block_ids.length} 个原文块` : "未编译（阻塞提案），块与页未确定";
+      children.push(el("p", "review-item-meta", `${origin} · ${page} · ${blocks}${server.granularity ? ` · ${server.granularity}` : ""}`));
+    }
     if (this.stale) {
       children.push(el("p", "review-stale", this.stale));
+      // A proposal anchor still shows the backend's excerpt, rendered with
+      // KaTeX, clearly marked as not checked against the snapshot.
+      if (this.meta.proposal && anchor?.excerpt) children.push(this.unverifiedQuote(anchor.excerpt));
     } else if (anchor === undefined) {
       children.push(el("p", "review-preview-empty", "该条目没有可定位的原文范围。"));
     } else if (this.doc === null) {
@@ -957,7 +977,7 @@ export class DiscoveryReviewWorkspace {
   private renderFooter(): void {
     const review = this.outcome?.review;
     if (this.meta.proposal) {
-      this.footer.replaceChildren(el("p", "review-note", "提案只读：接受或丢弃在「审核提案」中按整个 change set 进行。"));
+      this.renderProposalFooter(this.meta.proposal);
       return;
     }
     if (!review) {
@@ -1040,6 +1060,197 @@ export class DiscoveryReviewWorkspace {
     this.footer.querySelector(".review-action-feedback")!.textContent = message;
     if (this.tab === "units" || this.tab === "graph") this.renderList(); else this.syncCheckboxes();
   }
+
+  // ------------------------------------------------------------- proposal
+
+  private unverifiedQuote(text: string): HTMLElement {
+    const box = el("div", "review-unverified");
+    box.append(el("span", "review-fallback", "未与快照核对"), this.renderMath(text, "review-excerpt review-unverified-text"));
+    return box;
+  }
+
+  private async loadProposalPreview(proposal: ProposalWorkspaceMeta, generation: number): Promise<void> {
+    if (proposal.item.state !== "staged") { this.proposalPreview = "阻塞，不能接受"; this.renderFooter(); return; }
+    try {
+      const preview = await proposal.controller.preview(proposal.item);
+      if (generation !== this.generation) return;
+      this.proposalPreview = preview;
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.proposalPreview = String(error);
+    }
+    this.renderFooter();
+  }
+
+  private proposalTitle(items: PendingChangeSet[], key: string): string {
+    const item = items.find(candidate => keyOf(candidate) === key);
+    return item ? `${titleOf(item)} v${item.version}` : key.replace(/^mathscape:change-set\//, "").slice(-14);
+  }
+
+  private renderProposalOverview(proposal: ProposalWorkspaceMeta): void {
+    const model = this.model!;
+    const { item, items } = proposal;
+    const summary = el("div", "review-summary");
+    const stat = (value: number, label: string) => {
+      const box = el("div", "review-stat");
+      box.append(el("strong", "", String(value)), el("span", "", label));
+      return box;
+    };
+    const debts = proposalDebts(item);
+    summary.append(stat(model.units.length, "单元"), stat(model.relations.length, "关系"), stat(debts.length, "Debt"));
+    this.list.append(summary, el("p", "review-note",
+      "提案按整个 change set 接受或丢弃。接受只表示写入当前工作区地图，不提升 Trust，也不代表数学上已验证。"));
+    if (item.proposal.rationale) this.list.append(el("p", "review-proposal-rationale", item.proposal.rationale));
+    if (this.stale) this.list.append(el("p", "review-warning", this.stale));
+    const unverified = proposal.anchors.filter(anchor => !anchor.verified).length;
+    if (unverified) this.list.append(el("p", "review-warning", `${unverified} 处锚点的引文未能在后端与快照核对，按 Agent 引文显示。`));
+
+    // Queue: every pending version; the current one is marked.
+    this.list.append(el("h4", "review-subheading", `待审核提案 ${items.length}`));
+    for (const candidate of items) {
+      const key = keyOf(candidate);
+      const row = el("article", `review-item review-proposal state-${candidate.state}`);
+      row.classList.toggle("is-current", key === keyOf(item));
+      row.tabIndex = 0;
+      row.append(el("strong", "", `${titleOf(candidate)} v${candidate.version}`),
+        el("span", "review-item-meta", `${stateLabel(candidate.state)} · ${candidate.proposedBy} · round ${candidate.roundId}`));
+      row.onclick = () => { if (key !== keyOf(item)) void proposal.controller.open(key); };
+      this.list.append(row);
+      // Older versions of the same change set stay folded.
+      if (candidate.history?.length) {
+        const history = el("details", "review-proposal-history");
+        history.append(el("summary", "", `历史版本 ${candidate.history.length} 个（已折叠）`));
+        const list = el("ul", "review-structure");
+        for (const old of candidate.history) {
+          const codes = old.diagnostics.map(diagnostic => diagnosticLabel(diagnostic.code)).filter(Boolean);
+          list.append(el("li", "", `v${old.version} · ${stateLabel(old.state)} · ${old.createdAt}${codes.length ? ` · ${[...new Set(codes)].join("、")}` : ""}`));
+        }
+        history.append(list);
+        this.list.append(history);
+      }
+    }
+    if (proposal.groupCount > 1) {
+      const switcher = el("div", "review-graph-controls");
+      for (let index = 0; index < proposal.groupCount; index++) {
+        const choice = button(`快照 ${index + 1}`, () => void proposal.controller.open(keyOf(item), index));
+        choice.setAttribute("aria-pressed", String(index === proposal.groupIndex));
+        switcher.append(choice);
+      }
+      this.list.append(el("h4", "review-subheading", `本提案涉及 ${proposal.groupCount} 个快照`), switcher);
+    }
+
+    // Dependencies both ways.
+    const dependents = dependentsIndex(items).get(keyOf(item)) ?? [];
+    if (item.dependencies.length || dependents.length) {
+      this.list.append(el("h4", "review-subheading", "依赖"));
+      const list = el("ul", "review-structure");
+      for (const dependency of item.dependencies) {
+        const pending = items.some(candidate => keyOf(candidate) === keyOf(dependency));
+        list.append(el("li", "", `依赖 ${this.proposalTitle(items, keyOf(dependency))}${pending ? "" : "（已处理）"}${dependency.referencedIds?.length ? ` · 引用 ${dependency.referencedIds.length} 个对象` : ""}`));
+      }
+      for (const dependent of dependents) list.append(el("li", "", `被 ${this.proposalTitle(items, dependent)} 依赖`));
+      this.list.append(list);
+    }
+
+    // Structured Debt: body, kind tag, id in small grey text.
+    if (debts.length) {
+      this.list.append(el("h4", "review-subheading", `Debt ${debts.length}`));
+      for (const debt of debts) {
+        const view = debtView(debt);
+        const card = el("article", "review-item review-debt");
+        const heading = el("div", "review-item-heading");
+        heading.append(el("span", "review-debt-origin", view.origin));
+        if (view.tag) heading.append(el("span", "review-debt-tag", view.tag));
+        card.append(heading, el("p", "review-debt-body", view.body));
+        if (view.id) card.append(el("small", "review-debt-id", view.id));
+        this.list.append(card);
+      }
+    }
+
+    // Diagnostics that name no proposal object: about existing objects.
+    const groups = targetDiagnosticGroups(item);
+    const objectGroups = groups.filter(group => group.targetId !== null);
+    if (objectGroups.length) {
+      this.list.append(el("h4", "review-subheading", "工作区已有对象的问题"));
+      for (const group of objectGroups) {
+        const card = el("article", "review-item review-diagnostic severity-warning");
+        card.append(el("strong", "", group.title ?? shortId(group.targetId!)), el("small", "review-debt-id", group.targetId!));
+        for (const diagnostic of group.diagnostics) card.append(el("span", "review-item-meta", `${diagnosticLabel(diagnostic.code)}：${diagnostic.message}`));
+        this.list.append(card);
+      }
+    }
+    const general = groups.find(group => group.targetId === null);
+    if (general) {
+      this.list.append(el("h4", "review-subheading", "提案级诊断"));
+      for (const diagnostic of general.diagnostics) {
+        const card = el("article", `review-item review-diagnostic severity-${diagnostic.level === "warn" ? "warning" : diagnostic.level ?? "error"}`);
+        card.append(el("strong", "", diagnosticLabel(diagnostic.code)), el("span", "review-item-meta", diagnostic.message));
+        this.list.append(card);
+      }
+    }
+  }
+
+  private renderProposalFooter(proposal: ProposalWorkspaceMeta): void {
+    const item = proposal.item;
+    const preview = this.proposalPreview;
+    const impact = preview === null ? "影响预览计算中…" : typeof preview === "string" ? preview : `影响：${impactSummary(preview.impact)}`;
+    const state = el("p", "review-selection-state", `${stateLabel(item.state)} · ${impact}`);
+    if (preview && typeof preview !== "string" && preview.plannedWith.length) state.title = `与 ${preview.plannedWith.length} 个上游提案一起规划`;
+    const accept = button("接受本提案", () => void this.decideProposal(proposal, "accept"), "review-accept");
+    accept.disabled = this.proposalBusy || item.state !== "staged" || (typeof preview !== "string" && preview !== null && preview.impact.status !== "ready");
+    const discard = button("丢弃本提案", () => this.confirmProposalDiscard(proposal), "review-danger");
+    discard.disabled = this.proposalBusy;
+    const actions = el("div", "review-footer-actions");
+    actions.append(accept, discard);
+    const previous = this.footer.querySelector(".review-action-feedback")?.textContent ?? "";
+    const feedback = el("p", "review-action-feedback", previous);
+    feedback.setAttribute("role", "status");
+    this.footer.replaceChildren(state, actions, feedback);
+  }
+
+  private confirmProposalDiscard(proposal: ProposalWorkspaceMeta): void {
+    if (this.proposalBusy) return;
+    const preview = discardPreview(proposal.items, [keyOf(proposal.item)]);
+    const confirm = renderDiscardConfirm(preview, choice => {
+      confirm.remove();
+      if (choice) void this.decideProposal(proposal, "discard", choice.cascade);
+    });
+    this.footer.querySelector(".proposal-discard-confirm")?.remove();
+    this.footer.append(confirm);
+  }
+
+  private async decideProposal(proposal: ProposalWorkspaceMeta, decision: "accept" | "discard", cascade = false): Promise<void> {
+    if (this.proposalBusy) return;
+    const generation = this.generation;
+    this.proposalBusy = true;
+    this.renderFooter();
+    const feedback = () => this.footer.querySelector(".review-action-feedback");
+    feedback()!.textContent = decision === "accept" ? "正在按当前地图重新规划并提交…" : "正在丢弃…";
+    try {
+      const outcome = decision === "accept"
+        ? await proposal.controller.accept(proposal.item)
+        : await proposal.controller.discard(proposal.item, cascade);
+      if (generation !== this.generation) return;
+      this.proposalBusy = false;
+      if (outcome.remaining === 0) {
+        // Nothing left to review: keep the workspace open on the outcome.
+        this.graph?.destroy(); this.graph = null;
+        this.list.replaceChildren(el("p", "review-empty", `${outcome.message}。当前调查没有待审核提案了。`));
+        this.preview.replaceChildren(el("p", "review-preview-empty", "没有待审核提案。"));
+        this.footer.replaceChildren(el("p", "review-action-feedback", outcome.message), button("关闭", () => this.close()));
+        return;
+      }
+      await proposal.controller.open(keyOf(proposal.item));
+      const next = feedback();
+      if (next) next.textContent = outcome.message;
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.proposalBusy = false;
+      this.renderFooter();
+      feedback()!.textContent = `${decision === "accept" ? "接受" : "丢弃"}失败：${String(error)}`;
+    }
+  }
+
 }
 
 function closeSelection(selected: Set<string>, review: SourceReviewProjection, eligible: Set<string>): void {

@@ -192,8 +192,8 @@ export interface ReviewRunMeta {
   disposition?: import("../discovery/types").DiscoveryDispositionReceipt|null;
   /**
    * Set when the workspace shows a Phase2 proposal (「提案」 data source)
-   * instead of a discovery run. The view is read-only: a change set is
-   * accepted or discarded whole from the proposal review panel.
+   * instead of a discovery run. Units cannot be picked one by one: the
+   * change set is accepted or discarded whole through `controller`.
    */
-  proposal?: { changeSetId: string; version: number; state: string; proposedBy: string; snapshot: string | null };
+  proposal?: import("./proposal-model").ProposalWorkspaceMeta;
 }

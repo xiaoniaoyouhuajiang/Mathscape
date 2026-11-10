@@ -473,7 +473,7 @@ Phase0 §2.2 已把 `blocked` 预留给 `propose_changes`。v1 增量仅：
 
 ### 5.4 不开放给 Agent [锁定]
 
-Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuestion）。接受 / 丢弃 / 撤回命令只注册为 Desktop Tauri 命令（PR-B 实现：`get_change_set_investigation`、`list_pending_change_sets`、`preview_change_set_impact`、`plan_change_set_batch`、`accept_change_set_batch`、`discard_change_set_batch`；单个接受 = 只含一项的批量，不另设 `accept_change_set`），并校验传入的 `investigation_id` 属于本窗口（本窗口绑定的调查，或仍存活的沙箱会话 `sandbox:{session}`；否则 `investigation_not_in_workspace`），不进 `mathscape mcp` 的 `tools/list`，也不经适配器转发（FX §7.1；决策 2）。
+Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuestion）。接受 / 丢弃 / 撤回命令只注册为 Desktop Tauri 命令（PR-B 实现：`get_change_set_investigation`、`list_pending_change_sets`、`get_change_set_snapshot`、`preview_change_set_impact`、`plan_change_set_batch`、`accept_change_set_batch`、`discard_change_set_batch`；单个接受 = 只含一项的批量，不另设 `accept_change_set`），并校验传入的 `investigation_id` 属于本窗口（本窗口绑定的调查，或仍存活的沙箱会话 `sandbox:{session}`；否则 `investigation_not_in_workspace`），不进 `mathscape mcp` 的 `tools/list`，也不经适配器转发（FX §7.1；决策 2）。
 
 ### 5.5 批量审核：会话切换 / 退出时统一决定 [锁定·2026-11-09 用户改定 / 本文提议细节]
 
@@ -485,19 +485,20 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 - 任何时候也可手动打开（对话侧栏「审核变更（N）」入口）；中途审过的不再出现。
 - 用户关闭界面不做决定 ⇒ 全部保持原状态（不自动接受、不自动丢弃），可之后再审（决策 4「接受与流程结束分离」）。
 
-**界面**：
+**界面**（[2026-11-10] 这里只指阻塞式批量对话框——切换 / 丢弃 / 导出 / 退出时弹出；手动审核走 §5.6 的全屏审核工作区）：
 - 列出本调查全部活动 version，**按依赖分组**（依赖图的连通分量，组内按拓扑序，同层按 `(change_set_id, version)`；无依赖的单独成组）。`staged` 默认**全选**；`blocked` 不可勾选，只能丢弃或留待 Agent 重提。每项展开后按 **Markdown 快照分组**（U2）。
-- 每个 change_set 一行，可展开看内容（复用审核工作区，§5.6）、Debt、诊断与**影响预览**（`ImpactPlan` 的 `direct_changes` / `affected_objects`）；顶部显示整批合计影响。
+- 每个 change_set 一行：勾选框、标题（含旧版本数与依赖）、状态、Debt 数与**影响预览**（`ImpactPlan` 的 `direct_changes` / `affected_objects`）；表头与各行共用同一列定义，标题列 `minmax(240px, 1fr)`；顶部显示整批合计影响。[2026-11-10] 对话框不再内嵌详情，看内容请用手动审核的工作区（§5.6）。
 - **取消勾选**一项 ⇒ 依赖它的项自动连带取消，**多层传递**（并标注「因依赖 X 被取消」）；重新勾选依赖者 ⇒ 自动勾选其依赖闭包。
 - 丢弃前预览受影响的依赖者，并提供「连带丢弃依赖项」选项（U3，默认不勾 ⇒ 依赖者转 `blocked`）。
 - 单个 change_set 内部仍整批接受，**不拆开**（决策 4）。
-- 按钮：「接受所选」「丢弃所选」「稍后再审」。未勾选项保持 `staged`（2026-11-09 用户定 U4）。
+- 按钮：「接受所选」「丢弃所选」，以及继续原操作（「保留未审批并切换 / 导出 / 退出」）或取消原操作。未勾选项保持 `staged`（2026-11-09 用户定 U4）。
 
 **命令与提交**（Desktop 专用，不进 `tools/list`，§5.4）：
-1. `plan_change_set_batch(investigation_id, selections[{change_set_id, version, proposal_fingerprint}])`：服务端校验依赖闭合（选中集合对依赖封闭，否则返回缺失项），按依赖拓扑序把所有选中 version 编译为**一个** `UserChangeRequest`（写入顺序同 §4.2.7），对当前 head 运行 `plan_map_change` → 批 `ImpactPlan` 与 `batch_plan_fingerprint`；同时给出每个 change_set 的分项影响。
+1. `plan_change_set_batch(investigation_id, selections[{change_set_id, version, proposal_fingerprint}])`：服务端校验依赖闭合（选中集合对依赖封闭，否则返回缺失项），按依赖拓扑序把所有选中 version 编译为**一个** `UserChangeRequest`（写入顺序同 §4.2.7），对当前 head 运行 `plan_map_change_over_head`（§2.2 V1：请求未触及对象上 head 已有的问题进 `head_issues`，不阻塞）→ 批 `ImpactPlan` 与 `batch_plan_fingerprint`；同时给出每个 change_set 的分项影响。
 2. `accept_change_set_batch(investigation_id, selections, batch_plan_fingerprint, request_id)`：同 §5.1 第 3 步——一个 `BEGIN IMMEDIATE` 事务内（`SqliteArtifactStore::accept_change_sets`）用当前 head 重跑 planner、核对 `base_commit` 与指纹、`write_patch`、为每个 change_set 分别写接受决定并置 `accepted`；任一不符整批拒绝，要求重新预览。[R6] 整批 = 一个 `UserChangeRequest`、一个计划指纹、一个事务、一个 commit，每个 change_set 的决定记同一 `commit_id`。
 3. `discard_change_set_batch(investigation_id, selections, cascade)`：只改提案状态，按 §6.1 处理连带；`cascade=false`（默认）依赖者转 `blocked`，`cascade=true` 依赖闭包一并丢弃。
-4. `preview_change_set_impact`：单个 change_set（连同其 staged 依赖闭包）对当前 head 的影响预览，供列表的影响预览栏使用。
+4. `preview_change_set_impact`：单个 change_set（连同其 staged 依赖闭包）对当前 head 的影响预览（同样用 `plan_map_change_over_head`），供列表的影响预览栏使用。
+5. [2026-11-10] `get_change_set_snapshot(investigation_id, artifact_id)`：审核时读提案引用的 Markdown 快照。用 `investigation_id` 解析工作区（与其他命令同一 `workspace_for`：母工作区窗口审核仍存活的沙箱会话时读的是沙箱副本，所以沙箱里新产生的快照也能读到）；只服务本调查某个 version 锚定到的快照（否则 `snapshot_not_referenced`）；转换来源按 `canonical_markdown_coverage` 取唯一登记的 conversion，选不出时退一步用唯一的转换上下文，仍不唯一则 `conversion_ambiguous`；返回 `AnchoredMarkdown` 与所用 `conversion_id`。前端如实显示错误原因，不吞掉。
 
 **不变**：只能显式接受；不自动提升 Trust；接受 ≠ 数学正确（面板固定提示「接受只表示写入地图，不代表数学上已验证」）；接受绑定提案版本 + 计划指纹；冲突不自动合并（§5.2）。
 
@@ -508,7 +509,8 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 - 新增**「提案」数据源**：服务端把 change_set version 投影成 `SourceReviewProjection` 形状（新版本号如 `mathscape-change-set-review-projection-1`）：`units` ← `source_unit` 项（`acceptance` 取 `staged|blocked`），`anchors` ← 其 span 的 Markdown 定位，`relations` / `structure_relations` ← 关系与父子，`diagnostics` ← 诊断，新增 `debts` 与 `impact` 字段。工作区按数据源切换。
 - 按钮换成「接受」「丢弃」（批量界面里为勾选），去掉内容发现的逐单元勾选——change_set 不做部分接受。增加 Debt 栏与影响预览栏。
 - 详见 §9.1 前端项；多来源 change_set 按快照分组（U2）。
-- [2026-11-10 实现定稿] 数据源由前端从 `list_pending_change_sets` 的提案全文与已加载的 Markdown 快照转换（不另设 `get_change_set_review` 命令）：每个快照一份 `SourceReviewProjection`，在 `DiscoveryReviewWorkspace` 的**只读提案模式**下打开（无逐单元勾选、无 Markdown 补丁、无登记按钮，接受 / 丢弃仍在批量面板里按整个 change_set 做）。列表行另有 Debt 栏与影响预览栏，顶部显示所选集合的合计影响。
+- [2026-11-10 实现定稿，同日第二轮修订] 不另设 `get_change_set_review` 命令。锚点由服务端给：`list_pending_change_sets` 的每个 version 带 `anchors[]`（`span_ref`、`span_id`、`origin` = `new|head|staged`、`artifact`、`conversion`、`range`、`block_ids`、`page{pdf_page_index,page_number}`、`granularity`、`excerpt`、`verified`、`compiled`）：新建 span 的块 id 与页码取自该 version 的 `compiled_operations`（未编译的阻塞 version 退回提案自带的范围，`compiled=false`）；引用的已有 span（`mathscape:source-span/…`）先在 head 里解析，再在本调查其他 version 的编译结果里解析；`excerpt` 从快照按范围读出（`verified=true`），读不到时用 Agent 引文。另带 `history[]`（同一 change_set 的旧 version，新在前）与 `targetTitles`（诊断 `target_id` 对应的已有对象标题）。前端只把这些拼成每个快照一份 `SourceReviewProjection`，不再从原始 payload 推块 id 或页码。
+- 手动审核（对话侧栏「审核变更」）直接打开全屏 `DiscoveryReviewWorkspace` 的**提案模式**：两栏、标签页、按字节范围高亮 + KaTeX、点击定位、`rawAnchorPreview`；快照经 `get_change_set_snapshot` 读取，读不到时显示真实原因，并用带 KaTeX 的渲染显示引文、标注「未与快照核对」。总览列出待审队列（同一 change_set 的旧 version 默认折叠）、依赖与被依赖、结构化 Debt（正文为 summary，kind 作标签，id 以灰色小字；不显示 JSON）、「工作区已有对象的问题」（没有 `local_ref` 的诊断按 `target_id` 分组）和提案级诊断。底栏「接受本提案」走批量接受（只含一项的批量，一次提交），「丢弃本提案」先预览依赖者并可选连带丢弃（默认依赖者转 `blocked`）。无逐单元勾选、无 Markdown 补丁、无登记按钮。
 
 ---
 
@@ -646,7 +648,7 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 | B3 | `propose_changes`：`source_span` 项与 §4.2.5 校验 / 补全；`$new:` 解析与裸写兼容告警；`unused_span`；`source_spans` / `evidence_spans` 的引用解析（现只解析 `parent` / `source` / `target`） | `crates/mathscape-mcp/src/tools/propose.rs` |
 | B4 | 跨 change_set 依赖：解析到本调查 staged id、依赖表、依赖闭包试编排、成环检查、连带转 `blocked` | `propose.rs`、`crates/mathscape-store-sqlite/src/proposals.rs`、新迁移 |
 | B5 | 投影（P2-2b）：`graph.get` / `graph.neighborhood` 的 `scope=investigation`，`staged: true` 字段，`staged_conflict` | `crates/mathscape-mcp/src/tools/graph.rs` |
-| B6 | Desktop 命令（实现）：`get_change_set_investigation`、`list_pending_change_sets`、`preview_change_set_impact`、`plan_change_set_batch` / `accept_change_set_batch` / `discard_change_set_batch`；单个接受走只含一项的批量；审核投影在前端转换（§5.6）；协调器同事务写 patch + 决定 | `apps/mathscape-desktop/src/`（新 `change_sets.rs`） |
+| B6 | Desktop 命令（实现）：`get_change_set_investigation`、`list_pending_change_sets`（带服务端锚点）、`get_change_set_snapshot`、`preview_change_set_impact`、`plan_change_set_batch` / `accept_change_set_batch` / `discard_change_set_batch`；单个接受走只含一项的批量；锚点由服务端解析、审核投影在前端拼装（§5.6）；协调器同事务写 patch + 决定 | `apps/mathscape-desktop/src/`（新 `change_sets.rs`） |
 | B7 | 前端：审核工作区「提案」数据源、接受 / 丢弃按钮、Debt 栏、影响预览栏；批量审核对话框（依赖分组、默认全选、连带取消）；地图「未审批」样式（§4.4.1）；会话切换 / 退出钩子 | `frontend/src/review/`、`frontend/src/sandbox/`、`frontend/src/graph/` |
 | B8 | 沙箱接入：round 绑定 investigation、白名单开放 `propose_changes` / `get_change_set`（沙箱 §4.3.1）；skill 升 v0.6.2（运行时能力的沙箱工具列表、`$new:`、span 提案写法），`skill_pack` 测试同步 | `apps/mathscape-desktop/src/sandbox_dialogue.rs`、`skills/mathscape-worknet/` |
 

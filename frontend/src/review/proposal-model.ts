@@ -5,6 +5,7 @@
  * never builds an investigation id, never assembles map nodes and never
  * decides acceptability — it only groups, selects and explains.
  */
+import type { AnchoredMarkdown } from "../reader/selection";
 import type { DiscoveryOutcome, SourceReviewAnchor, SourceReviewProjection, SourceReviewUnit } from "./types";
 
 export interface ChangeSetSelection {
@@ -32,6 +33,35 @@ export interface ProposalDiagnostic {
   code: string;
   message: string;
   local_ref?: string | null;
+  /** Existing (head or staged) object the diagnostic is about. */
+  target_id?: string | null;
+}
+
+/** One Markdown anchor of a proposal, resolved by the backend. */
+export interface ProposalAnchor {
+  /** Local ref (without `$new:`) of a span this version creates, or the stable id it references. */
+  span_ref: string;
+  span_id: string | null;
+  /** `new`: created by this version · `head`: already in the map · `staged`: created by another staged version. */
+  origin: "new" | "head" | "staged" | string;
+  artifact: string;
+  conversion: string | null;
+  range: { start: number; end: number };
+  block_ids: string[];
+  page: { pdf_page_index: number; page_number: number } | null;
+  granularity: string | null;
+  excerpt: string;
+  /** `excerpt` was read from the snapshot at `range` on the backend. */
+  verified: boolean;
+  /** Block ids and page come from the compiled operations. */
+  compiled: boolean;
+}
+
+export interface HistoryVersion {
+  version: number;
+  state: string;
+  createdAt: string;
+  diagnostics: ProposalDiagnostic[];
 }
 
 export interface ProposedObject {
@@ -75,6 +105,12 @@ export interface PendingChangeSet {
     staged_ids?: Record<string, string> | null;
   };
   dependencies: ChangeSetRef[];
+  /** Server-resolved Markdown anchors (never rebuilt from the raw payload). */
+  anchors?: ProposalAnchor[];
+  /** Older versions of the same change set, newest first. */
+  history?: HistoryVersion[];
+  /** Titles of existing objects named by a diagnostic's `target_id`. */
+  targetTitles?: Record<string, string>;
 }
 
 export interface ChangeSetQueue {
@@ -97,6 +133,8 @@ export interface ImpactPlan {
   direct_changes: ImpactItem[];
   affected_objects: ImpactItem[];
   diagnostics: { code: string; message: string; object_id?: string | null }[];
+  /** Pre-existing problems of untouched head objects; informational, never blocking. */
+  head_issues?: { code: string; message: string; object_id?: string | null }[];
 }
 
 export interface BatchPlan {
@@ -274,10 +312,54 @@ export function proposalDebts(item: PendingChangeSet): ProposalDebt[] {
   return item.result.debts ?? [];
 }
 
+/** Structured display of one Debt entry: body text, a kind tag and an optional id. */
+export interface DebtView {
+  origin: string;
+  tag: string | null;
+  body: string;
+  id: string | null;
+}
+
+const DEBT_TEXT_KEYS = ["summary", "message", "description", "text", "reason", "note"];
+
+function scalarText(value: unknown): string | null {
+  if (typeof value === "string") return value.trim() || null;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return null;
+}
+
+/** Plain text of an arbitrary Agent value, never raw JSON. */
+function plainText(value: unknown): string {
+  const scalar = scalarText(value);
+  if (scalar !== null) return scalar;
+  if (Array.isArray(value)) return value.map(plainText).filter(Boolean).join("；");
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, entry]) => { const text = plainText(entry); return text ? `${key}：${text}` : ""; })
+      .filter(Boolean).join("；");
+  }
+  return "";
+}
+
+export function debtView(debt: ProposalDebt & { debt_id?: string }): DebtView {
+  const origin = debt.kind === "agent_declared" ? "Agent 声明" : debt.kind === "unresolved" ? "未解决" : "校验";
+  if (debt.kind === "agent_declared" || debt.kind === "unresolved") {
+    const value = debt.value;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      const bodyKey = DEBT_TEXT_KEYS.find(key => scalarText(record[key]) !== null);
+      const rest = Object.fromEntries(Object.entries(record).filter(([key]) => key !== bodyKey && key !== "kind" && key !== "id"));
+      const body = [bodyKey ? scalarText(record[bodyKey])! : "", plainText(rest)].filter(Boolean).join("；");
+      return { origin, tag: scalarText(record.kind), body: body || "（无说明）", id: scalarText(record.id) };
+    }
+    return { origin, tag: null, body: plainText(value) || "（无说明）", id: null };
+  }
+  return { origin, tag: debt.code ? diagnosticLabel(debt.code) : null, body: debt.message ?? "", id: debt.debt_id ?? null };
+}
+
 export function debtLabel(debt: ProposalDebt): string {
-  if (debt.kind === "agent_declared") return `Agent 声明：${typeof debt.value === "string" ? debt.value : JSON.stringify(debt.value)}`;
-  if (debt.kind === "unresolved") return `未解决：${typeof debt.value === "string" ? debt.value : JSON.stringify(debt.value)}`;
-  return [debt.code, debt.message].filter(Boolean).join("：");
+  const view = debtView(debt);
+  return [view.origin, view.tag, view.body].filter(Boolean).join(" · ");
 }
 
 const DIAGNOSTIC_LABELS: Record<string, string> = {
@@ -292,6 +374,10 @@ const DIAGNOSTIC_LABELS: Record<string, string> = {
   dependency_not_accepted: "依赖的提案尚未接受",
   change_set_dependency_cycle: "提案依赖成环",
   span_already_exists: "证据已存在，将直接引用",
+  span_too_long: "证据范围超过 4KB",
+  head_integrity: "工作区已有对象存在问题（不阻塞）",
+  invalid_locator: "原文证据缺少物理定位",
+  page_markers_absent: "快照没有分页标记",
 };
 
 export function diagnosticLabel(code: string | undefined): string {
@@ -303,67 +389,68 @@ export type ProposalReviewProjection = Pick<SourceReviewProjection, "units" | "s
   version: "mathscape-proposal-review-projection-1";
   change_set_id: string;
   change_set_version: number;
-  /** Markdown snapshot the anchors point into; `null` for proposals that only reference existing evidence. */
-  source: { artifact_id: string | null };
+  /** Markdown snapshot the anchors point into (and the conversion the backend reads it through); `null` when nothing anchors into Markdown. */
+  source: { artifact_id: string | null; conversion_id: string | null };
+  /** Server anchors of this group, by `span_ref`. */
+  anchors: ProposalAnchor[];
 };
-
-function spanAnchor(object: ProposedObject): { artifact: string; anchor: SourceReviewAnchor } | null {
-  const payload = object.payload ?? {};
-  const range = payload.md_byte_range as { start?: number; end?: number } | undefined;
-  const artifact = payload.artifact_id;
-  if (typeof artifact !== "string" || typeof range?.start !== "number" || typeof range?.end !== "number") return null;
-  return {
-    artifact,
-    anchor: {
-      purpose: "unit",
-      range: { start: range.start, end: range.end },
-      block_ids: [],
-      excerpt: typeof payload.quote === "string" ? payload.quote : "",
-    },
-  };
-}
 
 const newRef = (value: unknown): string | null => typeof value === "string" ? value.replace(/^\$new:/, "") : null;
 
+/** Span refs of a unit: `source_spans` of a create payload, or the set value of an edit. */
+function spanRefs(fields: Record<string, unknown>): string[] {
+  const raw = fields.source_spans;
+  const list = Array.isArray(raw) ? raw : (raw && typeof raw === "object" && Array.isArray((raw as { value?: unknown }).value) ? (raw as { value: unknown[] }).value : []);
+  return list.map(newRef).filter((ref): ref is string => ref !== null);
+}
+
+function reviewAnchorOf(anchor: ProposalAnchor, purpose: string): SourceReviewAnchor {
+  return { purpose, range: { start: anchor.range.start, end: anchor.range.end }, block_ids: anchor.block_ids, excerpt: anchor.excerpt };
+}
+
 /**
  * Projects a proposal into the review projection shape, one entry per
- * Markdown snapshot (grouped by the snapshot its new spans point into).
+ * Markdown snapshot. Anchors (snapshot, conversion, range, block ids, page,
+ * excerpt) come from the backend (`PendingChangeSet.anchors`); the payload
+ * only contributes titles, kinds and structure.
  */
 export function proposalReviewProjection(item: PendingChangeSet): ProposalReviewProjection[] {
   const objects = item.proposal.proposed_objects ?? [];
   const relations = item.proposal.proposed_relations ?? [];
-  const spans = new Map<string, { artifact: string; anchor: SourceReviewAnchor }>();
-  for (const object of objects) {
-    if (object.kind !== "source_span") continue;
-    const anchor = spanAnchor(object);
-    if (anchor) spans.set(object.local_ref, anchor);
+  const anchors = new Map<string, ProposalAnchor>();
+  for (const anchor of item.anchors ?? []) {
+    anchors.set(anchor.span_ref, anchor);
+    if (anchor.span_id && !anchors.has(anchor.span_id)) anchors.set(anchor.span_id, anchor);
   }
   const groups = new Map<string | null, ProposalReviewProjection>();
-  const groupFor = (artifact: string | null) => {
+  const groupFor = (anchor: ProposalAnchor | null) => {
+    const artifact = anchor?.artifact ?? null;
     let group = groups.get(artifact);
     if (!group) {
       group = {
         version: "mathscape-proposal-review-projection-1",
         change_set_id: item.changeSetId,
         change_set_version: item.version,
-        source: { artifact_id: artifact },
-        units: [], structure_relations: [], relations: [], diagnostics: [],
+        source: { artifact_id: artifact, conversion_id: anchor?.conversion ?? null },
+        units: [], structure_relations: [], relations: [], diagnostics: [], anchors: [],
       };
       groups.set(artifact, group);
     }
+    if (anchor && !group.anchors.includes(anchor)) group.anchors.push(anchor);
     return group;
   };
   const unitGroup = new Map<string, string | null>();
   for (const object of objects) {
     if (object.kind !== "source_unit") continue;
     const fields = (object.op === "edit" ? object.changes : object.payload) ?? {};
-    const spanRefs = Array.isArray(fields.source_spans) ? fields.source_spans : [];
-    const anchors = spanRefs.map(newRef).flatMap(ref => (ref && spans.get(ref) ? [spans.get(ref)!] : []));
-    const artifact = anchors[0]?.artifact ?? null;
+    const unitAnchors = spanRefs(fields).flatMap(ref => anchors.get(ref) ?? []);
+    const first = unitAnchors[0] ?? null;
     const title = object.op === "edit"
       ? ((fields.display_title as { value?: string } | undefined)?.value ?? object.target_id ?? object.local_ref)
       : (typeof fields.display_title === "string" ? fields.display_title : object.local_ref);
     const parentField = object.op === "edit" ? (fields.parent as { value?: string } | undefined)?.value : fields.parent;
+    // Anchors in other snapshots cannot be shown against this group's document.
+    const local = unitAnchors.filter(anchor => anchor.artifact === first?.artifact);
     const unit: SourceReviewUnit = {
       unit_ref: object.local_ref,
       unit_kind: typeof fields.kind === "string" ? fields.kind : "statement",
@@ -374,37 +461,68 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
       completeness: typeof fields.completeness === "string" ? fields.completeness : "complete",
       fact_status: "processed",
       acceptance: object.op === "edit" ? "edit" : "create",
-      anchors: anchors.map(entry => entry.anchor),
-      source_excerpt: anchors.map(entry => entry.anchor.excerpt).join("\n"),
+      anchors: local.map(anchor => reviewAnchorOf(anchor, "unit")),
+      source_excerpt: local.map(anchor => anchor.excerpt).join("\n"),
     };
-    unitGroup.set(object.local_ref, artifact);
-    const group = groupFor(artifact);
+    unitGroup.set(object.local_ref, first?.artifact ?? null);
+    const group = groupFor(first);
+    local.forEach(anchor => groupFor(anchor));
     group.units.push(unit);
     if (unit.parent) group.structure_relations.push({ relation_ref: `${object.local_ref}:parent`, parent: unit.parent, child: unit.unit_ref });
   }
   for (const relation of relations) {
     const source = newRef(relation.source) ?? relation.target_id ?? "";
     const target = newRef(relation.target) ?? "";
-    const evidence = (relation.evidence_spans ?? []).map(newRef).flatMap(ref => (ref && spans.get(ref) ? [spans.get(ref)!] : []));
+    const evidence = (relation.evidence_spans ?? []).map(newRef).flatMap(ref => (ref && anchors.get(ref)) || []);
     const artifact = unitGroup.get(source) ?? evidence[0]?.artifact ?? null;
-    groupFor(artifact).relations.push({
+    const sample = artifact === null ? null : (item.anchors ?? []).find(anchor => anchor.artifact === artifact) ?? null;
+    const group = groupFor(sample);
+    group.relations.push({
       relation_ref: relation.local_ref,
       source, target,
       relation: relation.relation ?? relation.op,
-      evidence: evidence.map(entry => ({ ...entry.anchor, purpose: "relation_evidence" })),
+      evidence: evidence.filter(anchor => anchor.artifact === group.source.artifact_id).map(anchor => reviewAnchorOf(anchor, "relation_evidence")),
       bases: [], origins: [],
     });
   }
+  // Anchors no unit or relation claimed still belong to their snapshot.
+  for (const anchor of item.anchors ?? []) groupFor(anchor);
   for (const diagnostic of item.result.diagnostics ?? []) {
-    const artifact = diagnostic.local_ref ? (unitGroup.get(diagnostic.local_ref) ?? spans.get(diagnostic.local_ref)?.artifact ?? null) : null;
-    groupFor(artifact).diagnostics.push({
-      diagnostic_ref: `${diagnostic.code}:${diagnostic.local_ref ?? ""}`,
-      severity: diagnostic.level ?? "error", stage: "proposal", code: diagnostic.code, path: diagnostic.local_ref ?? "",
-      message: diagnostic.message, checked: true, related_units: diagnostic.local_ref ? [diagnostic.local_ref] : [],
+    if (!diagnostic.local_ref) continue;
+    const artifact = unitGroup.get(diagnostic.local_ref) ?? anchors.get(diagnostic.local_ref)?.artifact ?? null;
+    const group = groups.get(artifact) ?? groupFor(null);
+    group.diagnostics.push({
+      diagnostic_ref: `${diagnostic.code}:${diagnostic.local_ref}`,
+      severity: diagnostic.level ?? "error", stage: "proposal", code: diagnostic.code, path: diagnostic.local_ref,
+      message: diagnostic.message, checked: true, related_units: [diagnostic.local_ref],
     });
   }
   if (groups.size === 0) groupFor(null);
   return [...groups.values()];
+}
+
+/** Diagnostics without a `local_ref`, grouped by the existing object they name. */
+export interface TargetDiagnosticGroup {
+  /** `null`: about the proposal as a whole. */
+  targetId: string | null;
+  title: string | null;
+  diagnostics: ProposalDiagnostic[];
+}
+
+export function targetDiagnosticGroups(item: PendingChangeSet): TargetDiagnosticGroup[] {
+  const groups = new Map<string | null, TargetDiagnosticGroup>();
+  for (const diagnostic of item.result.diagnostics ?? []) {
+    if (diagnostic.local_ref) continue;
+    const targetId = diagnostic.target_id ?? null;
+    let group = groups.get(targetId);
+    if (!group) {
+      group = { targetId, title: targetId ? item.targetTitles?.[targetId] ?? null : null, diagnostics: [] };
+      groups.set(targetId, group);
+    }
+    group.diagnostics.push(diagnostic);
+  }
+  // Object groups first (by id), the proposal-level group last.
+  return [...groups.values()].sort((a, b) => a.targetId === null ? 1 : b.targetId === null ? -1 : a.targetId < b.targetId ? -1 : 1);
 }
 
 /** One-line impact summary for the impact column. */
@@ -427,7 +545,7 @@ export function impactSummary(plan: ImpactPlan | null | undefined): string {
 export function proposalDiscoveryOutcome(item: PendingChangeSet, group: ProposalReviewProjection, contentHash: string): DiscoveryOutcome {
   const runId = `proposal:${keyOf(item)}:${group.source.artifact_id ?? "existing"}`;
   const source = group.source.artifact_id
-    ? { artifact_id: group.source.artifact_id, conversion_id: null, content_hash: contentHash, input_fingerprint: item.proposalFingerprint }
+    ? { artifact_id: group.source.artifact_id, conversion_id: group.source.conversion_id, content_hash: contentHash, input_fingerprint: item.proposalFingerprint }
     : null;
   const status = item.state === "staged" ? "completed" : "needs_attention";
   const anchorView = (anchor: SourceReviewAnchor) => ({ start: anchor.range.start, end: anchor.range.end, block_ids: anchor.block_ids, excerpt: anchor.excerpt, purpose: anchor.purpose });
@@ -474,4 +592,50 @@ export function proposalDiscoveryOutcome(item: PendingChangeSet, group: Proposal
       attempts: 0, input_tokens: null, output_tokens: null, total_tokens: null, elapsed_ms: 0,
     },
   };
+}
+
+/** Result of a whole-proposal decision taken in the review workspace. */
+export interface ProposalDecision {
+  message: string;
+  /** Pending versions left in the investigation after the decision. */
+  remaining: number;
+}
+
+/**
+ * What the review workspace needs to act on a proposal. The backend still
+ * owns every rule; this only routes the user's decision to it.
+ */
+export interface ProposalWorkspaceController {
+  readonly investigationId: string;
+  /** Opens another pending version (or another snapshot of the same one). */
+  open(key: string, groupIndex?: number): Promise<void>;
+  preview(item: PendingChangeSet): Promise<ImpactPreview>;
+  /** Accepts one version through the batch accept (plan → accept, one commit). */
+  accept(item: PendingChangeSet): Promise<ProposalDecision>;
+  discard(item: PendingChangeSet, cascade: boolean): Promise<ProposalDecision>;
+}
+
+/** `ReviewRunMeta.proposal`: the version, its queue and the snapshot read for it. */
+export interface ProposalWorkspaceMeta {
+  changeSetId: string;
+  version: number;
+  state: string;
+  proposedBy: string;
+  snapshot: string | null;
+  item: PendingChangeSet;
+  /** The whole pending queue, for navigation, dependencies and discard previews. */
+  items: PendingChangeSet[];
+  groupIndex: number;
+  groupCount: number;
+  /** The snapshot from `get_change_set_snapshot`, or `null` with `documentError`. */
+  document: AnchoredMarkdown | null;
+  documentError: string | null;
+  /** Server anchors of the shown group (verified flag, page). */
+  anchors: ProposalAnchor[];
+  controller: ProposalWorkspaceController;
+}
+
+/** Display label of a version state. */
+export function stateLabel(state: string): string {
+  return ({ staged: "未审批", blocked: "阻塞", superseded: "已替换", discarded: "已丢弃", accepted: "已接受" } as Record<string, string>)[state] ?? state;
 }

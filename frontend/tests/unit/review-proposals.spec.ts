@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
-  defaultSelection, dependencyGroups, deselect, discardImpact, discardPreview, impactSummary, keyOf,
-  proposalDiscoveryOutcome, proposalReviewProjection, select, selectionRefs, type PendingChangeSet,
+  debtLabel, debtView, defaultSelection, dependencyGroups, deselect, discardImpact, discardPreview, impactSummary, keyOf,
+  proposalDiscoveryOutcome, proposalReviewProjection, select, selectionRefs, targetDiagnosticGroups,
+  type PendingChangeSet, type ProposalAnchor,
 } from "../../src/review/proposal-model";
+
+function anchor(spanRef: string, artifact: string, start: number, end: number, extra: Partial<ProposalAnchor> = {}): ProposalAnchor {
+  return {
+    span_ref: spanRef, span_id: `mathscape:source-span/${spanRef}`, origin: "new", artifact, conversion: `conv-${artifact}`,
+    range: { start, end }, block_ids: [`block:${spanRef}`], page: { pdf_page_index: 2, page_number: 3 },
+    granularity: "inline", excerpt: `text-${spanRef}`, verified: true, compiled: true, ...extra,
+  };
+}
 
 function item(id: string, deps: string[] = [], state = "staged", createdAt = id): PendingChangeSet {
   return {
@@ -68,35 +77,80 @@ describe("proposal batch selection", () => {
 });
 
 describe("proposal review projection", () => {
-  it("projects units, anchors and relations per Markdown snapshot", () => {
+  it("projects units, anchors and relations per Markdown snapshot from the server anchors", () => {
     const proposal = item("P");
     proposal.proposal.proposed_objects = [
-      { local_ref: "s1", kind: "source_span", op: "create", payload: { artifact_id: "md-1", md_byte_range: { start: 0, end: 5 }, granularity: "inline", quote: "定理" } },
+      // The raw payload ranges are deliberately different: only server anchors count.
+      { local_ref: "s1", kind: "source_span", op: "create", payload: { artifact_id: "md-1", md_byte_range: { start: 99, end: 100 }, granularity: "inline", quote: "raw" } },
       { local_ref: "s2", kind: "source_span", op: "create", payload: { artifact_id: "md-2", md_byte_range: { start: 3, end: 9 }, granularity: "block", quote: "证明" } },
       { local_ref: "u1", kind: "source_unit", op: "create", payload: { kind: "statement", display_title: "定理 1", parent: null, source_spans: ["$new:s1"], completeness: "complete" } },
       { local_ref: "u2", kind: "source_unit", op: "create", payload: { kind: "proof", display_title: "证明", parent: "$new:u1", source_spans: ["$new:s2"] } },
     ];
     proposal.proposal.proposed_relations = [{ local_ref: "r1", kind: "source_relation", op: "create", relation: "proves", source: "$new:u2", target: "$new:u1", evidence_spans: ["$new:s2"] }];
     proposal.result.diagnostics = [{ level: "info", code: "span_already_exists", message: "已存在", local_ref: "s1" }];
+    proposal.anchors = [anchor("s1", "md-1", 0, 5), anchor("s2", "md-2", 3, 9)];
     const groups = proposalReviewProjection(proposal);
-    expect(groups.map(group => group.source.artifact_id)).toEqual(["md-1", "md-2"]);
-    expect(groups[0].units[0].anchors[0].range).toEqual({ start: 0, end: 5 });
+    expect(groups.map(group => group.source)).toEqual([
+      { artifact_id: "md-1", conversion_id: "conv-md-1" }, { artifact_id: "md-2", conversion_id: "conv-md-2" },
+    ]);
+    expect(groups[0].units[0].anchors[0]).toEqual({ purpose: "unit", range: { start: 0, end: 5 }, block_ids: ["block:s1"], excerpt: "text-s1" });
     expect(groups[0].diagnostics[0].code).toBe("span_already_exists");
     expect(groups[1].units[0].parent).toBe("u1");
     expect(groups[1].structure_relations).toEqual([{ relation_ref: "u2:parent", parent: "u1", child: "u2" }]);
     expect(groups[1].relations[0]).toMatchObject({ source: "u2", target: "u1", relation: "proves" });
+    expect(groups[1].relations[0].evidence[0].block_ids).toEqual(["block:s2"]);
   });
 
-  it("opens a snapshot group in the discovery workspace shape, read-only", () => {
+  it("resolves references to existing spans through the server anchors", () => {
+    const proposal = item("P");
+    const existing = "mathscape:source-span/old";
+    proposal.proposal.proposed_objects = [
+      { local_ref: "u1", kind: "source_unit", op: "create", payload: { kind: "statement", display_title: "引理", parent: null, source_spans: [existing] } },
+      { local_ref: "u2", kind: "source_unit", op: "edit", target_id: "mathscape:source-unit/x", changes: { source_spans: { action: "set", value: [existing] } } },
+    ];
+    proposal.anchors = [anchor(existing, "md-9", 10, 20, { origin: "head", span_id: existing })];
+    const [group] = proposalReviewProjection(proposal);
+    expect(group.source.artifact_id).toBe("md-9");
+    expect(group.units.map(unit => unit.anchors[0]?.range)).toEqual([{ start: 10, end: 20 }, { start: 10, end: 20 }]);
+  });
+
+  it("groups diagnostics without a local ref by the existing object they name", () => {
+    const proposal = item("P");
+    proposal.result.diagnostics = [
+      { level: "warn", code: "head_integrity", message: "a", target_id: "mathscape:source-unit/b" },
+      { level: "warn", code: "head_integrity", message: "b", target_id: "mathscape:source-unit/a" },
+      { level: "warn", code: "head_integrity", message: "c", target_id: "mathscape:source-unit/a" },
+      { level: "error", code: "dependency_blocked", message: "d" },
+      { level: "error", code: "quote_mismatch", message: "e", local_ref: "s1" },
+    ];
+    proposal.targetTitles = { "mathscape:source-unit/a": "定理 A" };
+    const groups = targetDiagnosticGroups(proposal);
+    expect(groups.map(group => [group.targetId, group.title, group.diagnostics.length])).toEqual([
+      ["mathscape:source-unit/a", "定理 A", 2], ["mathscape:source-unit/b", null, 1], [null, null, 1],
+    ]);
+  });
+
+  it("shows structured Debt as text, never JSON", () => {
+    const declared = debtView({ kind: "unresolved", value: { id: "chapter-pages-1-7", kind: "locator", summary: "缺少分页标记" } });
+    expect(declared).toEqual({ origin: "未解决", tag: "locator", body: "缺少分页标记", id: "chapter-pages-1-7" });
+    const nested = debtView({ kind: "agent_declared", value: { kind: "gap", detail: { page: 3 } } });
+    expect(nested.body).toBe("detail：page：3");
+    expect(debtLabel({ kind: "agent_declared", value: { a: [1, 2] } })).not.toMatch(/[{}[\]"]/);
+    expect(debtView({ kind: "validation", code: "invalid_locator", message: "缺少物理定位", debt_id: "validation:invalid_locator" } as never))
+      .toEqual({ origin: "校验", tag: "原文证据缺少物理定位", body: "缺少物理定位", id: "validation:invalid_locator" });
+  });
+
+  it("opens a snapshot group in the discovery workspace shape", () => {
     const proposal = item("P");
     proposal.proposal.proposed_objects = [
       { local_ref: "s1", kind: "source_span", op: "create", payload: { artifact_id: "md-1", md_byte_range: { start: 0, end: 6 }, granularity: "inline", quote: "定理" } },
       { local_ref: "u1", kind: "source_unit", op: "create", payload: { kind: "statement", display_title: "定理 1", parent: null, source_spans: ["$new:s1"], completeness: "complete" } },
     ];
+    proposal.anchors = [anchor("s1", "md-1", 0, 6, { excerpt: "定理" })];
     const [group] = proposalReviewProjection(proposal);
     const outcome = proposalDiscoveryOutcome(proposal, group, "sha256:doc");
-    expect(outcome.view.source).toMatchObject({ artifact_id: "md-1", content_hash: "sha256:doc", conversion_id: null });
-    expect(outcome.view.units[0]).toMatchObject({ unit_ref: "u1", title: "定理 1", anchors: [{ start: 0, end: 6, excerpt: "定理" }] });
+    expect(outcome.view.source).toMatchObject({ artifact_id: "md-1", content_hash: "sha256:doc", conversion_id: "conv-md-1" });
+    expect(outcome.view.units[0]).toMatchObject({ unit_ref: "u1", title: "定理 1", anchors: [{ start: 0, end: 6, excerpt: "定理", block_ids: ["block:s1"] }] });
     expect(outcome.review?.acceptance.selected_units).toEqual([]);
     expect(outcome.review?.result_fingerprint).toBe("fp-P");
     expect(outcome.run.run_id).toBe("proposal:P@1:md-1");
