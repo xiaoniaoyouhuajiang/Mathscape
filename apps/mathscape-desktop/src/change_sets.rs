@@ -197,24 +197,65 @@ async fn workspace_for(
     investigation_id: &str,
 ) -> Result<PathBuf, String> {
     let service = desktop.service();
-    if service.investigation_id() == Some(investigation_id) {
-        return Ok(service.workspace_root().to_path_buf());
-    }
-    if let Some(session_id) = investigation_id.strip_prefix("sandbox:") {
-        let session_id = session_id.to_owned();
-        let view = sandbox
-            .run("change set workspace", move |home| {
-                home.live_session(&session_id)
-            })
-            .await
-            .map_err(|_| investigation_foreign())?;
-        if sandbox_investigation_id(&view.sandbox_session_id) == investigation_id
-            && let Some(root) = view.workspace_root
-        {
-            return Ok(root);
+    let own = service
+        .investigation_id()
+        .map(|own| (own.to_owned(), service.workspace_root().to_path_buf()));
+    let session = match sandbox_session_of(investigation_id) {
+        Some(session_id) if own.as_ref().is_none_or(|(id, _)| id != investigation_id) => {
+            let session_id = session_id.to_owned();
+            sandbox
+                .run("change set workspace", move |home| {
+                    home.live_session(&session_id)
+                })
+                .await
+                .ok()
         }
+        _ => None,
+    };
+    authorize_investigation(
+        investigation_id,
+        own.as_ref().map(|(id, root)| (id.as_str(), root.as_path())),
+        session.as_ref(),
+    )
+}
+
+/// The sandbox session named by a session-level investigation id
+/// (`sandbox:{session}`). The retired thread-level form
+/// `sandbox:{session}:{thread}` and an empty session are not session ids.
+fn sandbox_session_of(investigation_id: &str) -> Option<&str> {
+    investigation_id
+        .strip_prefix("sandbox:")
+        .filter(|session| !session.is_empty() && !session.contains(':'))
+}
+
+/// The pure part of [`workspace_for`]. `own` is this window's bound
+/// investigation and workspace; `session` is what the sandbox home reports
+/// for the session the id names. Anything else — another workspace's
+/// investigation, a round-scoped CLI investigation, a discarded session or a
+/// thread-level id — is refused, so a command can never act on proposals
+/// outside this window's reach.
+fn authorize_investigation(
+    investigation_id: &str,
+    own: Option<(&str, &Path)>,
+    session: Option<&mathscape_sandbox::SessionView>,
+) -> Result<PathBuf, String> {
+    if let Some((own_id, root)) = own
+        && own_id == investigation_id
+    {
+        return Ok(root.to_path_buf());
     }
-    Err(investigation_foreign())
+    let Some(session_id) = sandbox_session_of(investigation_id) else {
+        return Err(investigation_foreign());
+    };
+    match session {
+        Some(view)
+            if view.sandbox_session_id == session_id
+                && sandbox_investigation_id(&view.sandbox_session_id) == investigation_id =>
+        {
+            view.workspace_root.clone().ok_or_else(investigation_foreign)
+        }
+        _ => Err(investigation_foreign()),
+    }
 }
 
 fn investigation_foreign() -> String {
@@ -811,7 +852,6 @@ mod tests {
             decisions[0].commit_id.as_deref(),
             Some(receipt.commit_id.as_str())
         );
-        // Accepting is not a mathematical endorsement: Trust is untouched.
         let unit = open_store(&fx.root)
             .unwrap()
             .map_edit_snapshot()
@@ -820,7 +860,11 @@ mod tests {
             .into_iter()
             .find(|object| object.object_id == staged_id(&a, "u"))
             .unwrap();
-        assert!(unit.payload.get("trust").is_none());
+        // Accepting is not a mathematical endorsement: the planner writes the
+        // fixed initial Trust (unchecked typing, no proof), never a raised one.
+        let trust = &unit.payload["payload"]["trust"];
+        assert_eq!(trust["proof"], "none", "{trust}");
+        assert_eq!(trust["typing"], "unchecked", "{trust}");
     }
 
     #[test]
@@ -1336,5 +1380,132 @@ mod tests {
                 .unwrap()
                 .same_content(&before)
         );
+    }
+
+    fn session_view(id: &str, root: Option<&str>) -> mathscape_sandbox::SessionView {
+        mathscape_sandbox::SessionView {
+            sandbox_session_id: id.into(),
+            state: if root.is_some() {
+                mathscape_sandbox::SessionState::Active
+            } else {
+                mathscape_sandbox::SessionState::Discarded
+            },
+            checkpoint_id: "cp".into(),
+            checkpoint_digest: None,
+            created_at: "unix:0".into(),
+            last_exported_at: None,
+            export_count: 0,
+            discarded_at: None,
+            workspace_root: root.map(PathBuf::from),
+        }
+    }
+
+    #[test]
+    fn commands_only_reach_this_windows_investigations() {
+        let own_root = Path::new("/ws/sandbox-copy");
+        let own = Some(("sandbox:s1", own_root));
+        // The window's own investigation.
+        assert_eq!(
+            authorize_investigation("sandbox:s1", own, None).unwrap(),
+            own_root
+        );
+        // Another live sandbox session reviewed from the dock: its copy.
+        let other = session_view("s2", Some("/sandbox/s2/workspace"));
+        assert_eq!(
+            authorize_investigation("sandbox:s2", own, Some(&other)).unwrap(),
+            Path::new("/sandbox/s2/workspace")
+        );
+        // The session lookup must name the same session.
+        assert!(authorize_investigation("sandbox:s3", own, Some(&other)).is_err());
+        // A discarded session has no copy left.
+        let discarded = session_view("s2", None);
+        assert!(authorize_investigation("sandbox:s2", own, Some(&discarded)).is_err());
+        // Unknown session, thread-level ids, empty ids and non-sandbox
+        // investigations (e.g. a round-scoped CLI investigation) are refused.
+        for foreign in ["sandbox:s9", "sandbox:s1:d1", "sandbox:", "round-1", ""] {
+            let error = authorize_investigation(foreign, own, None).unwrap_err();
+            assert!(error.starts_with("investigation_not_in_workspace"), "{foreign}");
+        }
+        // The mother workspace has no investigation of its own.
+        assert!(authorize_investigation("sandbox:s1", None, None).is_err());
+    }
+
+    /// Staged objects live only in the investigation projection: the formal
+    /// head, the accepted map and landscape, default search, the formal
+    /// edit entry and the mother map never contain them.
+    #[test]
+    fn staged_objects_stay_out_of_the_head_search_and_edit_entries() {
+        let fx = fixture();
+        let a = unit_proposal(&fx, "a", "暂存专用标题", "# 定理 A", Value::Null);
+        assert_eq!(a["status"], "staged", "{a}");
+        let (unit_id, span_id) = (staged_id(&a, "u"), staged_id(&a, "s"));
+        let store = open_store(&fx.root).unwrap();
+        let head = store.map_edit_snapshot().unwrap();
+        assert_eq!(head.base_commit, None, "propose never moves the head");
+        assert!(!has_object(&fx, &unit_id) && !has_object(&fx, &span_id));
+        let landscape = store.landscape_snapshot().unwrap();
+        assert!(
+            landscape
+                .sources()
+                .objects
+                .iter()
+                .all(|object| object.stable_id.as_str() != unit_id)
+        );
+        // The formal edit entry point works on the head only.
+        assert!(mathscape_orchestrator::map_edit::get_edit_context(&head, &unit_id).is_err());
+        // Default search answers from the accepted map.
+        let (search, _) = call_as(&fx, "round-1", Some(INV), "workspace.search",
+            json!({ "query": "暂存专用标题" }));
+        assert!(!search.to_string().contains(&unit_id), "{search}");
+        // The mother map (no investigation) does not show it; the bound
+        // window does, through the shared projection.
+        let open = |investigation: Option<&str>| {
+            let service = crate::DesktopService::open(&fx.root)
+                .unwrap()
+            .with_investigation(investigation.map(str::to_owned));
+            serde_json::to_value(service.snapshot().unwrap()).unwrap()
+        };
+        let mother = open(None);
+        assert!(mother["investigation"].is_null());
+        assert!(!mother["landscape_graph"].to_string().contains(&unit_id));
+        let window = open(Some(INV));
+        assert!(window["landscape_graph"].to_string().contains(&unit_id));
+        assert_eq!(window["investigation"]["staged"][&unit_id]["staged"], true);
+        assert_eq!(
+            window["investigation"]["staged"][&unit_id]["replaces_revision"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn neighborhood_uses_the_same_projection_and_labels_scope() {
+        let fx = fixture();
+        let a = unit_proposal(&fx, "a", "A", "# 定理 A", Value::Null);
+        let unit_id = staged_id(&a, "u");
+        let (hood, _) = call_as(&fx, "round-1", Some(INV), "graph.neighborhood",
+            json!({ "seed_ids": [unit_id], "depth": 1, "scope": "investigation" }));
+        assert_eq!(hood["applied"]["scope"], "investigation", "{hood}");
+        let nodes = hood["nodes"].as_array().unwrap();
+        let seed = nodes.iter().find(|node| node["id"] == json!(unit_id)).unwrap();
+        assert_eq!(seed["staged"], true);
+        assert_eq!(seed["scope"], "staged");
+        assert_eq!(seed["change_set_id"], a["change_set_id"]);
+        assert!(
+            nodes.iter().any(|node| node["id"] == json!(staged_id(&a, "s")) && node["staged"] == true),
+            "{hood}"
+        );
+        // After acceptance the same node is labelled accepted.
+        accept(&fx, vec![sel(&a)]).unwrap();
+        let (hood, _) = call_as(&fx, "round-1", Some(INV), "graph.neighborhood",
+            json!({ "seed_ids": [unit_id], "depth": 1, "scope": "investigation" }));
+        let seed = hood["nodes"].as_array().unwrap().iter()
+            .find(|node| node["id"] == json!(unit_id)).cloned().unwrap();
+        assert_eq!(seed["staged"], false, "{hood}");
+        assert_eq!(seed["scope"], "accepted");
+        // Without an investigation the call falls back to accepted.
+        let (plain, _) = call_as(&fx, "round-unbound", None, "graph.neighborhood",
+            json!({ "seed_ids": [unit_id], "depth": 1, "scope": "investigation" }));
+        assert_eq!(plain["applied"]["scope"], "accepted");
+        assert!(plain["diagnostics"].to_string().contains("scope_not_supported"), "{plain}");
     }
 }
