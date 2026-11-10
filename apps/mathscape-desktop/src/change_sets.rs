@@ -39,6 +39,9 @@ use sha2::{Digest, Sha256};
 use tauri::State;
 
 use crate::DesktopState;
+use crate::change_set_anchors::{
+    AnchorContext, AnchorView, ChangeSetSnapshot, change_set_snapshot,
+};
 use crate::sandbox::SandboxState;
 
 const ACTOR: &str = "mathscape-desktop-user";
@@ -80,6 +83,21 @@ pub struct PendingChangeSetView {
     pub proposal: Value,
     pub result: Value,
     pub dependencies: Vec<DependencyView>,
+    /// Markdown anchors resolved on the server (see `change_set_anchors`).
+    pub anchors: Vec<AnchorView>,
+    /// Older versions of the same change set, newest first (folded in the UI).
+    pub history: Vec<HistoryVersionView>,
+    /// Titles of head objects named by a diagnostic's `target_id`.
+    pub target_titles: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryVersionView {
+    pub version: i64,
+    pub state: String,
+    pub created_at: String,
+    pub diagnostics: Value,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -274,8 +292,44 @@ where
         .map_err(|error| error.to_string())?
 }
 
-fn view(item: &PendingChangeSet) -> PendingChangeSetView {
+fn view(
+    item: &PendingChangeSet,
+    versions: &[PendingChangeSet],
+    anchors: &mut AnchorContext<'_>,
+) -> PendingChangeSetView {
+    let mut history: Vec<HistoryVersionView> = versions
+        .iter()
+        .filter(|other| {
+            other.record.change_set_id == item.record.change_set_id
+                && other.record.version < item.record.version
+        })
+        .map(|other| HistoryVersionView {
+            version: other.record.version,
+            state: other.record.state.clone(),
+            created_at: other.record.created_at.clone(),
+            diagnostics: other
+                .record
+                .result
+                .get("diagnostics")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(vec![])),
+        })
+        .collect();
+    history.sort_by_key(|item| std::cmp::Reverse(item.version));
+    let target_titles = item
+        .record
+        .result
+        .get("diagnostics")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|diagnostic| diagnostic.get("target_id").and_then(Value::as_str))
+        .filter_map(|id| Some((id.to_owned(), anchors.head_title(id)?)))
+        .collect();
     PendingChangeSetView {
+        anchors: anchors.anchors(item),
+        history,
+        target_titles,
         change_set_id: item.record.change_set_id.clone(),
         version: item.record.version,
         state: item.record.state.clone(),
@@ -304,14 +358,21 @@ pub fn list_queue(root: &Path, investigation_id: &str) -> Result<ChangeSetQueue,
     let items = store
         .list_pending_change_sets(investigation_id)
         .map_err(|error| error.to_string())?;
-    let base_commit = store
+    let versions = store
+        .list_change_set_versions(investigation_id)
+        .map_err(|error| error.to_string())?;
+    let head = store
         .map_edit_snapshot()
-        .map_err(|error| error.to_string())?
-        .base_commit;
+        .map_err(|error| error.to_string())?;
+    let mut anchors = AnchorContext::new(root, &store, &head, &versions);
+    let items = items
+        .iter()
+        .map(|item| view(item, &versions, &mut anchors))
+        .collect();
     Ok(ChangeSetQueue {
         investigation_id: investigation_id.to_owned(),
-        base_commit,
-        items: items.iter().map(view).collect(),
+        base_commit: head.base_commit.clone(),
+        items,
     })
 }
 
@@ -583,6 +644,21 @@ pub async fn list_pending_change_sets(
 ) -> Result<ChangeSetQueue, String> {
     let root = workspace_for(&desktop, &sandbox, &investigation_id).await?;
     blocking(move || list_queue(&root, &investigation_id)).await
+}
+
+/// The Markdown snapshot a proposal of `investigation_id` anchors into,
+/// read from the investigation's own workspace (a live sandbox copy when the
+/// proposal was made there, even from the mother-workspace window) through
+/// the conversion the review uses.
+#[tauri::command]
+pub async fn get_change_set_snapshot(
+    investigation_id: String,
+    artifact_id: String,
+    desktop: State<'_, DesktopState>,
+    sandbox: State<'_, SandboxState>,
+) -> Result<ChangeSetSnapshot, String> {
+    let root = workspace_for(&desktop, &sandbox, &investigation_id).await?;
+    blocking(move || change_set_snapshot(&root, &investigation_id, &artifact_id)).await
 }
 
 #[tauri::command]
@@ -1703,5 +1779,114 @@ mod tests {
                 .contains("scope_not_supported"),
             "{plain}"
         );
+    }
+
+    #[test]
+    fn pending_view_resolves_anchors_on_the_server() {
+        let fx = fixture();
+        let a = unit_proposal(&fx, "a", "A", "第一段内容。", Value::Null);
+        let queue = list_queue(&fx.root, INV).unwrap();
+        let anchor = &queue.items[0].anchors[0];
+        let (start, end) = range("第一段内容。");
+        assert_eq!(anchor.span_ref, "s");
+        assert_eq!(anchor.origin, "new");
+        assert_eq!(anchor.artifact, fx.md);
+        assert_eq!(
+            anchor.range,
+            crate::change_set_anchors::AnchorRange {
+                start: start as u64,
+                end: end as u64
+            }
+        );
+        assert_eq!(anchor.span_id.as_deref(), Some(staged_id(&a, "s").as_str()));
+        assert!(anchor.compiled && anchor.verified);
+        assert_eq!(anchor.excerpt, "第一段内容。");
+        // A later proposal that cites the accepted span by id gets the same
+        // anchor resolved from the head map.
+        accept(&fx, vec![sel(&a)]).unwrap();
+        let span_id = staged_id(&a, "s");
+        propose(
+            &fx,
+            json!({
+                "request_id": "b", "rationale": "引用已有证据",
+                "proposed_objects": [unit("u", "B", Value::Null, json!([span_id]))]
+            }),
+        );
+        let queue = list_queue(&fx.root, INV).unwrap();
+        let anchors = &queue.items[0].anchors;
+        assert_eq!(anchors.len(), 1, "{anchors:?}");
+        assert_eq!(anchors[0].origin, "head");
+        assert_eq!(anchors[0].span_ref, span_id);
+        assert_eq!(anchors[0].excerpt, "第一段内容。");
+        assert!(anchors[0].verified);
+        // The snapshot is served for review; an unrelated artifact is not.
+        let snapshot = change_set_snapshot(&fx.root, INV, &fx.md).unwrap();
+        assert_eq!(snapshot.document.source, MD);
+        assert_eq!(snapshot.conversion_id, None);
+        let other = change_set_snapshot(&fx.root, "sandbox:other", &fx.md).unwrap_err();
+        assert!(other.starts_with("snapshot_not_referenced"), "{other}");
+    }
+
+    #[test]
+    fn a_sandbox_snapshot_is_readable_from_the_mother_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let mother = dir.path().join("mother");
+        let fx = fixture_at(mother.clone(), tempfile::tempdir().unwrap());
+        let home = mathscape_sandbox::SandboxHome::open(dir.path().join("sandbox")).unwrap();
+        let checkpoint = home.register_checkpoint(&mother, None).unwrap();
+        let session = home.start_session(&checkpoint.checkpoint_id).unwrap();
+        let copy_root = session.workspace_root.clone().unwrap();
+        // A snapshot that only exists in the sandbox copy (made there, e.g.
+        // by a Markdown patch during the dialogue).
+        const NEW: &str = "# 引理 C\n\n只在沙箱里的段落。\n";
+        let mut pool = ArtifactPool::open(&copy_root).unwrap();
+        let metadata = ArtifactMetadata::new(
+            None,
+            MediaType::parse("text/markdown").unwrap(),
+            Some("sandbox.md".into()),
+            None,
+            RightsRecord::new(RightsStatus::NotAssessed, vec![], None).unwrap(),
+        );
+        let new_md = pool
+            .import_bytes(NEW.as_bytes(), metadata, ActorRef::parse("test").unwrap())
+            .unwrap()
+            .stable_id()
+            .to_string();
+        drop(pool);
+        let copy = Fx {
+            _dir: tempfile::tempdir().unwrap(),
+            root: copy_root.clone(),
+            md: new_md.clone(),
+        };
+        let investigation = sandbox_investigation_id(&session.sandbox_session_id);
+        let quote = "只在沙箱里的段落。";
+        let start = NEW.find(quote).unwrap();
+        let (result, is_error) = call_as(
+            &copy,
+            "round-1",
+            Some(&investigation),
+            "propose_changes",
+            json!({
+                "request_id": "c", "rationale": "沙箱新快照",
+                "proposed_objects": [
+                    { "local_ref": "s", "kind": "source_span", "op": "create", "payload": {
+                        "artifact_id": new_md, "md_byte_range": { "start": start, "end": start + quote.len() },
+                        "granularity": "inline", "quote": quote }},
+                    unit("u", "C", Value::Null, json!(["$new:s"]))
+                ]
+            }),
+        );
+        assert!(!is_error, "{result}");
+        // The mother-workspace window has no investigation of its own; the
+        // live session resolves to the sandbox copy.
+        let live = home.live_session(&session.sandbox_session_id).unwrap();
+        let root = authorize_investigation(&investigation, None, Some(&live)).unwrap();
+        assert_eq!(root, copy_root);
+        let snapshot = change_set_snapshot(&root, &investigation, &new_md).unwrap();
+        assert_eq!(snapshot.document.source, NEW);
+        // Reading it from the mother workspace itself fails with the real
+        // reason instead of silently showing nothing.
+        let error = change_set_snapshot(&fx.root, &investigation, &new_md).unwrap_err();
+        assert!(error.starts_with("snapshot_not_referenced"), "{error}");
     }
 }

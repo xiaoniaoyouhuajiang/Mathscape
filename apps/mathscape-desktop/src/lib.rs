@@ -1,5 +1,6 @@
 mod backlink;
 mod canonical_reader;
+mod change_set_anchors;
 mod change_sets;
 mod content;
 mod discovery;
@@ -1058,6 +1059,7 @@ pub fn run() {
             canonical_reader::get_canonical_reader_projection,
             change_sets::get_change_set_investigation,
             change_sets::list_pending_change_sets,
+            change_sets::get_change_set_snapshot,
             change_sets::preview_change_set_impact,
             change_sets::plan_change_set_batch,
             change_sets::accept_change_set_batch,
