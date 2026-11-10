@@ -240,9 +240,13 @@ impl<K: Clone + Eq + Debug> Supervisor<K> {
                 });
             }
         }
-        if self.child.is_some() && self.state == ResidentState::Ready {
+        if self.state == ResidentState::Ready && self.child.is_some() {
             self.last_used = self.clock.now();
-            return Ok(self.child.as_mut().expect("child checked above"));
+            // `if let` here would hit the conditional-return borrow limitation.
+            return self.child.as_mut().ok_or_else(|| AcquireError::Startup {
+                reason: "resident child vanished".to_owned(),
+                stderr: String::new(),
+            });
         }
 
         if let Some(retry_at) = self.retry_at.take() {
