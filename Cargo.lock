@@ -3524,6 +3524,7 @@ dependencies = [
 name = "mathscape-tool-lean"
 version = "0.1.0"
 dependencies = [
+ "mathscape-resident",
  "nix",
  "serde",
  "serde_json",
