@@ -5,7 +5,8 @@
 > 版本：本文引入 `mcp_envelope v1` 与 `agent_events v1`（增量见 §4.5、§4.1.4）；Phase1 已有 10 个只读工具的语义与描述除 `scope` 一句外不变。Lean 工具契约另见 [`lean-tool-contract.md`](lean-tool-contract.md)。
 > 标签：**[锁定]** = 用户 2026-10-30 决策或由其直接推出；**[锁定·2026-11-09 用户改定]** = PR-B 讨论中用户改定的锁定项，原口径以「原口径」保留对照（汇总见 §2.1）；**[本文提议]** = 起草时为闭合契约补的细节，现有草案未写，实现 PR 可在不违背 [锁定] 的前提下微调（汇总见 §11）；**[待核]** = 真正未定（§10）。
 > P2-2 来源层暂存切片已在 `mathscape-mcp` / `mathscape-store-sqlite` 实现；PR-B 已接入 SourceSpan、调查级投影、Desktop 接受 / 丢弃 / 批量审核命令和沙箱提案白名单。`user.ask` 与已接受对象撤回仍是后续切片。
-> **2026-11-09 修订（PR-B，`feat/pr-b-staged-proposals`）**：新增 SourceSpan 提案、`$new:` 临时引用、最终图依赖校验、跨 change set 引用与连带规则、暂存上图、会话切换 / 退出时的批量审核，以及沙箱接入（§2.1、§4.2.5–§4.2.8、§4.4.1、§5.5、§6.1、§9.1）。用户随后锁定了退役 span、批量未勾选项、多 Markdown 快照分组、线程级 investigation 和依赖丢弃传播规则。Loogle 加速不在本修订范围，推迟到下一个 PR。
+> **2026-11-09 修订（PR-B，`feat/pr-b-staged-proposals`）**：新增 SourceSpan 提案、`$new:` 临时引用、最终图依赖校验、跨 change set 引用与连带规则、暂存上图、会话切换 / 退出时的批量审核，以及沙箱接入（§2.1、§4.2.5–§4.2.8、§4.4.1、§5.5、§6.1、§9.1）。用户随后锁定了退役 span、批量未勾选项、多 Markdown 快照分组和依赖丢弃传播规则（§2.2「2026-11-09 用户定」）；investigation 粒度定为**整场沙箱会话**（`sandbox:{session}`），取代早先的线程级写法。Loogle 加速不在本修订范围，推迟到下一个 PR。
+> **2026-11-10 定稿（PR-B 实现对齐）**：按实现写入七条修订——会话级调查、quote 先截取再比较、粒度失败码、hash 语义、依赖带版本且替换后转 blocked、批量一个 commit 且未勾选保持 staged、单一投影及其排除项（汇总见 §2.2）；删除旧口径「线程级调查」「全文搜索式 quote 匹配」「替换后依赖自动改指」。
 
 ---
 
@@ -56,6 +57,29 @@
 | 11 | 暂存上图 | `staged` 只出现在 Agent 的 `scope=investigation` 投影中；Desktop 地图只显示已接受快照 | Desktop 地图也显示本调查的 `staged` 对象（「未审批」样式），Agent 可在自己的暂存对象上继续构建；正式 head 在接受前不动 | §4.4.1 |
 
 不变的锁定项（明确列出，防止误读）：Agent 唯一写入口仍是 `propose_changes`（决策 2）；校验失败留 Debt + 指纹（决策 3）；接受不提升 Trust、接受 ≠ 数学正确（§3.3）；接受时按 OCC 检测冲突、不自动合并（§5.2、§7.3）；撤回走退役 / 级联（决策 5）。
+
+### 2.2 PR-B 定稿：用户定的四项与七条修订 [锁定·2026-11-09 用户定 / 2026-11-10 定稿]
+
+**2026-11-09 用户定**（原 §10 待核 4–6 与丢弃传播）：
+
+| # | 用户定 | 落点 |
+| --- | --- | --- |
+| U1 | 同 id 的 span 在正式图上**已退役** ⇒ `span_inactive`，version `blocked`；不自动重新激活，重新激活另走显式操作 | §4.2.5 |
+| U2 | 一个 change_set 可涉及多个 Markdown 快照；审核面板**按快照分组**展示，每个 SourceSpan 保留自己的 artifact / range | §5.5、§5.6 |
+| U3 | 丢弃 A 时，依赖 A 的项**默认转 `blocked`**（`dependency_discarded`，传递依赖者 `dependency_blocked`）；界面提供「连带丢弃」选项，选中后依赖闭包一并 `discarded` | §4.2.8、§6.1 |
+| U4 | 混合模型：暂存上图 + 批量审核；批量审核中**未勾选项保持 `staged`**，可稍后再审；沙箱副本整体丢弃时随副本删除 | §5.5 |
+
+**七条修订**（2026-11-10 按 PR-B 实现定稿；原文措辞若与下表冲突，以下表为准）：
+
+| # | 修订 | 要点 | 落点 |
+| --- | --- | --- | --- |
+| R1 | 会话级调查 | 沙箱 investigation = `sandbox:{session}`，整场会话的所有线程与 round 共享；`thread_id` 只是元数据。服务端登记 round↔investigation（`investigation_rounds`，先写者为准），不一致 ⇒ `forbidden` / `investigation_mismatch` | §7.1 |
+| R2 | quote 先截取再比较 | 先按 `[start,end)` 截出原文，再与 `quote` 比较：先精确，再两侧同样归一化后比较；**不在**快照全文里搜索 | §4.2.5 |
+| R3 | 粒度失败码 | `block` 粒度但范围内没有 canonical block ⇒ `block_locator_unavailable`；`page` 粒度但不能唯一映射到一页 ⇒ `page_mapping_unavailable`；都 blocked，不静默降级 | §4.2.5、§8 |
+| R4 | hash 语义 | span 文本 hash 与内容发现同一函数：`source_text_hash(text) = fingerprint(&text)`（JSON 序列化后取 sha256）；span id = `markdown_span_id(artifact, range)` | §4.2.5 |
+| R5 | 依赖带版本、替换后转 blocked | 依赖记录 `A@version` 与被引用 id；A 被 `supersedes` 后，直接依赖者转 `blocked`（`dependency_superseded`），更深的转 `blocked`（`dependency_blocked`）；**不自动改指**新 version，由 Agent 重提 | §4.2.8 |
+| R6 | 批量一个 commit，未勾选保持 staged | 选中集合（含依赖闭包校验）合成**一个** `UserChangeRequest`、一个计划指纹、一个 `BEGIN IMMEDIATE` 事务、一个 commit；每个 change_set 的接受决定记同一 `commit_id`。未勾选项保持 `staged` | §5.5 |
+| R7 | 单一投影及其排除项 | `graph.get`、`graph.neighborhood` 与 Desktop 地图共用同一份服务端投影；暂存对象不进正式 head、正式快照 / landscape、导出、默认搜索、正式编辑入口和母工作区地图 | §4.4、§4.4.1 |
 
 ---
 
@@ -296,22 +320,25 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 | `artifact_id` 是本工作区已登记的**不可变** canonical Markdown 快照，内容哈希与登记一致 | `snapshot_not_found` / `snapshot_not_immutable` |
 | 范围在快照字节长度内、`start < end` | `range_out_of_bounds` |
 | `start`、`end` 落在 UTF-8 字符边界 | `invalid_utf8_boundary` |
-| `quote` 与范围原文一致：复用内容发现的 `locator_matches(text, quote)` / `normalize_locator_text`（`crates/mathscape-orchestrator/src/selector_resolver.rs`，TeX 感知的空白与外层数学定界符归一化）。先精确比较，再归一化比较；归一化后仍不等 | `quote_mismatch` |
+| `quote` 与范围原文一致 [2026-11-10 定稿 R2]：**先按 `[start,end)` 截出范围原文**，再比较——先精确相等；否则两侧都去掉外层数学定界符并做 TeX 感知的空白归一化（`source_locator::quote_matches_range`，归一化与内容发现共用 `normalize_locator_text`）后相等。不在快照全文里搜索 quote（原口径的 `locator_matches` 是全文搜索，只留给内容发现） | `quote_mismatch` |
+| `granularity = block` 但范围内没有 canonical `block:*`（页标记不算） [R3] | `block_locator_unavailable` |
+| `granularity = page` 但范围不能唯一映射到一个 PDF 页（跨分页标记、多页快照无分页标记、快照无页信息等） [R3] | `page_mapping_unavailable` |
+| 同 id span 在正式图上已退役 [U1] | `span_inactive` |
 | span 未被本 version 任何单元 / 关系引用 | `unused_span`（§4.2.4 第 6 条） |
 
 服务端补全：
 - `markdown = MarkdownLocator(artifact_id, ByteRange(start, end))`，`displayed_lines` 不填。
-- `normalized_text_hash` = 范围原文的 sha256（与来源登记 `materialize_source_registration` 写 `exact_text_hash` 的位置和算法一致）。
+- `normalized_text_hash` [2026-11-10 定稿 R4] = `source_text_hash(范围原文)` = `fingerprint(&text)`，即对原文字符串做 JSON 序列化后取 sha256，与内容发现登记写 span 文本 hash 的函数相同（`crates/mathscape-orchestrator/src/source_locator.rs`，两条路径都调用它）。字段名里的 `normalized` 是历史命名：hash 前**不做**归一化。PR-B 合并前提案路径曾用原文字节 sha256，但该版本从未进入 main，不存在需要迁移的已有数据。
 - `marker_block_ids` = 与范围相交的 canonical `block:*` id（同 `ResolvedDiscoverySelector::canonical_block_ids` 的相交规则，块取自快照的 `AnchoredMarkdown.blocks`）。
-- `page`：仅当能确定唯一 PDF 页时填 `PageCoordinate`——优先用 `crates/mathscape-orchestrator/src/markdown_pdf_map.rs` 的 `build_markdown_pdf_block_map`（Marker 分页 Markdown 的确定性页溯源），范围跨页或无分页信息时留空（来源登记现在一律留空；`markdown` 已满足 `invalid_locator` 校验）。
+- `page`：仅 `granularity = page` 时填 `PageCoordinate`，由快照的分页标记（或单页快照的页范围）确定唯一页；不能唯一确定 ⇒ `page_mapping_unavailable`（R3），不留空降级。`inline` / `block` 粒度不填 `page`（来源登记同样留空；`markdown` 已满足 `invalid_locator` 校验）。
 - `layout = Other`、`bounding_boxes = []`、`exact_text_artifact = None`；**`ink` 永不填**——手稿证据只走 `register_ink_evidence`（Desktop 用户写入）。
 - lifecycle / trust 同 §3.3：接受者写入，不自设可信终态。
 
-**身份与去重** [锁定·2026-11-09 用户改定]：span id **复用内容发现的确定性规则**——`stable_hash_id("source-span", fingerprint(("markdown-source-span-1", artifact_id, range)))`（`crates/mathscape-orchestrator/src/source_registration.rs` `plan_source_registration` 中的 `intern_span`；`fingerprint` = 对 JSON 序列化取 sha256，`crates/mathscape-orchestrator/src/unit_discovery.rs`）。因此：
+**身份与去重** [锁定·2026-11-09 用户改定]：span id **复用内容发现的确定性规则**——`markdown_span_id(artifact_id, range) = stable_hash_id("source-span", fingerprint(("markdown-source-span-1", artifact_id, range)))`，定义在共享模块 `crates/mathscape-orchestrator/src/source_locator.rs`，来源登记的 `intern_span` 与 propose 都调用它（有跨路径同 id、同 hash 的测试）。因此：
 - 同一快照同一范围得到同一 id，无论来自内容发现登记、哪个 change_set、哪个 version。
 - 该 id 在正式图上已有**活动** span ⇒ 视为引用，`CreateSourceSpan` 在编译时降为「引用已有 span」，**不** blocked（诊断 `info: span_already_exists`）；Agent 给的 `granularity` 与已有不同时以已有为准，附 `warn: span_granularity_ignored`。
 - 多个 change_set 暂存同一 span ⇒ 同一 id；先接受者创建，后接受者变为引用。span 因此**不产生** change_set 之间的依赖边（每个需要它的 change_set 自带一条 `CreateSourceSpan` 即可）；若 Agent 直接写另一 change_set 暂存的 span id 而不自带 `CreateSourceSpan`，则按 §4.2.8 记为依赖（任一创建它的 change_set 已接受或同批接受即满足）。
-- 同 id 的 span 在正式图上存在但**已退役**：本修订先按 `span_inactive` blocked，是否像来源登记那样「重新激活」见 §10 待核 4。
+- 同 id 的 span 在正式图上存在但**已退役** [2026-11-09 用户定 U1]：`span_inactive` ⇒ blocked，不自动重新激活。
 
 #### 4.2.6 临时引用 `$new:<local_ref>` [锁定·2026-11-09 用户改定]
 
@@ -322,7 +349,9 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 #### 4.2.7 最终图校验与写入顺序 [锁定·2026-11-09 用户改定]
 
 - **校验在最终图上统一做**：不按书写顺序逐项检查，而是把 head ⊕ 依赖闭包 ⊕ 本 version 全部操作应用后，对最终图运行同一套校验——`plan_map_change` 内的结构检查 + 共享校验器 `source_integrity::validate_live_references`（已被手工编辑、来源登记、登记撤回共用）。成环（`parent_cycle`）、单元证据为空、跨来源父子、关系端点缺失、引用不可用对象等一律在此报出，不另写一套。
-- **写入顺序**（接受时生成 patch）：`CreateSourceSpan` → `CreateSourceUnit` / `EditSourceUnit`（按最终图父深度，父在前）→ `CreateSourceRelation` / `EditSourceRelation`；整个 change_set（批量时整批，§5.5）在**一个** `BEGIN IMMEDIATE` 事务里写完，失败整体回滚。
+- **应用顺序** [2026-11-10 定稿]：planner 不按书写顺序应用操作，而是先 `CreateSourceSpan`，再按**本请求内**新建单元的父深度应用 `CreateSourceUnit`（父在前），最后其余操作；同层保持原相对顺序。因此打乱书写顺序得到同一计划（有测试）。
+- **写入顺序**（接受时生成 patch）：`CreateSourceSpan` → `CreateSourceUnit` / `EditSourceUnit`（按最终图父深度，父在前）→ `CreateSourceRelation` / `EditSourceRelation`，同层按 id 排序；整个 change_set（批量时整批，§5.5）在**一个** `BEGIN IMMEDIATE` 事务里写完，失败整体回滚。
+- **批量拼接顺序** [2026-11-10 定稿]：多个 change_set 按依赖拓扑序拼成一个请求，同层以 `(change_set_id, version)` 决定先后，**不看 `created_at`**，所以合成请求与计划指纹只由依赖图决定。共享 span 去重（只保留第一条 `CreateSourceSpan`）。
 - planner 需新增对 `CreateSourceSpan` 的处理：把 span 写入 `final_map`；已有活动同 id span 时转为 no-op 引用（§4.2.5）。
 
 #### 4.2.8 跨 change set 依赖与连带规则 [锁定·2026-11-09 用户改定 / 本文提议细节]
@@ -332,8 +361,8 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 | 事件 | 对依赖者 B 的影响 | 码 |
 | --- | --- | --- |
 | 接受 B | 要求 B 依赖的每个 A **已接受**或在**同批**接受（§5.5）；否则拒绝，面板指出缺哪个 | `dependency_not_accepted` |
-| 用户丢弃 A | 预览中列出所有直接 / 传递依赖者；用户二选一：**连带丢弃**，或**保留为 blocked**（默认，B 转 `blocked`，等 Agent 重提） | `dependency_discarded` |
-| Agent 以 `supersedes` 替换 A | 重新校验 B：B 引用的 id 在 A 新 version 中仍存在（同名 `local_ref` 得同一 id，§4.2.2）⇒ B 保持 `staged`，依赖改指 A 的新 version；否则 B → `blocked` | `dependency_superseded` / `dangling_staged_ref` |
+| 用户丢弃 A [2026-11-09 用户定 U3] | 预览中列出所有直接 / 传递依赖者；用户二选一：**连带丢弃**（依赖闭包一并 `discarded`），或**保留为 blocked**（默认：直接依赖者 `dependency_discarded`，更深的 `dependency_blocked`，等 Agent 重提）。`blocked` 的 version 也可丢弃 | `dependency_discarded` / `dependency_blocked` |
+| Agent 以 `supersedes` 替换 A [2026-11-10 定稿 R5] | 依赖记录带 `A@version`；A 被替换后，直接依赖者 B → `blocked`（`dependency_superseded`），更深的依赖者 → `blocked`（`dependency_blocked`）。**不自动改指** A 的新 version（原口径「id 仍存在则保持 staged 并改指」作废）：B 是对 A 旧内容的判断，由 Agent 读回后重提。之后新提案若引用已不在任何 staged version 中的 id ⇒ `dangling_staged_ref` | `dependency_superseded` / `dependency_blocked` / `dangling_staged_ref` |
 | A 的新 version 为 `blocked` | B → `blocked`（被引用对象不再出现在投影中） | `dependency_blocked` |
 | A 已接受、之后被撤回（P2-4） | 已接受的 B：按 §6.2「禁止非法悬挂」，A 的撤回计划为 `Blocked`，除非级联把 B 的对象一并退役；仍暂存的 B：转 `blocked` | `dependency_withdrawn` |
 | B 引用 A、A 又引用 B（经替换产生） | 两者中后提交的 version `blocked` | `change_set_dependency_cycle` |
@@ -372,6 +401,8 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 - 节点 / 边加字段：`staged: true|false`、`change_set_id`、`change_set_version`（staged 时必有）；暂存的 `edit` 以 replacement 出现并带 `replaces_revision`，不覆盖已接受 revision（FX §4.4 第 2 条）。1c §6 其他字段不变。
 - 同一已接受对象在本调查内有多个 `staged` 的互斥 replacement → 不任取，返回该节点的已接受版本并附诊断 `staged_conflict`（列出 change_set_id）。
 - 没有绑定调查（调试 CLI、无 `--round`）时仍按 `accepted` 回答并附 `scope_not_supported`，保持向后兼容。
+- **单一投影** [2026-11-10 定稿 R7]：投影只有一份服务端实现（`mathscape_mcp::investigation::investigation_landscape`，内部用 orchestrator 的 `project_investigation`），`graph.get`、`graph.neighborhood` 与 Desktop 地图共用。暂存 `edit` 以 replacement 叠加：投影里该对象显示暂存后的内容并带 `replaces_revision`，已接受 revision 不被改写。scope 标签：暂存节点 `scope: "staged"`、`staged: true`；已接受节点在调查范围下 `scope: "accepted"`、`staged: false`；`graph.neighborhood` 的 `applied.scope` 在投影时为 `investigation`。
+- **排除项** [R7]：暂存对象不进正式 head（`get_map_head` / `map_edit_snapshot`）、正式快照 / landscape、沙箱导出包（导出只含对话记录与事件）、默认 `scope=accepted` 的 `graph.*` 与 `workspace.search`、正式编辑入口（`get_map_object_edit_context` 只认 head）和母工作区地图。`workspace.search` 的 `scope=investigation` 暂存命中仍未实现，继续返回 `scope_not_supported`。
 - `scope=accepted`（默认）行为完全不变。
 
 #### 4.4.1 暂存上图（Desktop 地图）[锁定·2026-11-09 用户改定 / 本文提议样式]
@@ -381,7 +412,7 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 - Desktop 地图用**同一份投影**（已接受快照 ∪ 当前调查的 `staged` 活动 version，节点 / 边带 `staged: true`、`change_set_id`、`change_set_version`）渲染当前调查的暂存对象，样式为「未审批」：虚线描边、半透明、角标「未审批」；暂存 `edit` 以 replacement 叠在原对象上并可切换查看原版本；`staged_conflict` 节点显示已接受版本加冲突角标。`blocked` 的不上图，只在审核面板出现。
 - 暂存对象可点开（详情显示 change_set、Debt、诊断），但**不能**在地图上手工编辑——手工编辑只针对正式对象，避免两条写路径交叉。
 - Agent 可以在自己的暂存对象上继续构建：经 `scope=investigation` 读到暂存对象及其 `staged_ids`，在后续 `propose_changes` 中按稳定 id 引用（§4.2.4 第 2 条、§4.2.8）。
-- **正式 head 不动，直到接受**；接受时按 OCC 检测冲突（§5.1 第 3 步、§7.3）。地图 `get_map_head`、正式快照、导出等一律不含暂存对象。
+- **正式 head 不动，直到接受**；接受时按 OCC 检测冲突（§5.1 第 3 步、§7.3）。地图 `get_map_head`、正式快照、导出等一律不含暂存对象（排除项见 §4.4）。暂存 replacement 节点的详情可「查看已接受版本」（读 head）。
 - 切换到其他调查 / 沙箱会话时，地图只显示该调查自己的暂存（跨调查不可见，§4.4）。
 
 ### 4.5 `mcp_envelope v1` 增量 [本文提议]
@@ -425,28 +456,31 @@ Phase0 §2.2 已把 `blocked` 预留给 `propose_changes`。v1 增量仅：
 
 ### 5.4 不开放给 Agent [锁定]
 
-Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuestion）。`plan_change_set_accept` / `accept_change_set` / `discard_change_set` / 撤回命令只注册为 Desktop Tauri 命令，不进 `mathscape mcp` 的 `tools/list`，也不经适配器转发（FX §7.1；决策 2）。
+Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuestion）。接受 / 丢弃 / 撤回命令只注册为 Desktop Tauri 命令（PR-B 实现：`get_change_set_investigation`、`list_pending_change_sets`、`preview_change_set_impact`、`plan_change_set_batch`、`accept_change_set_batch`、`discard_change_set_batch`；单个接受 = 只含一项的批量，不另设 `accept_change_set`），并校验传入的 `investigation_id` 属于本窗口（本窗口绑定的调查，或仍存活的沙箱会话 `sandbox:{session}`；否则 `investigation_not_in_workspace`），不进 `mathscape mcp` 的 `tools/list`，也不经适配器转发（FX §7.1；决策 2）。
 
 ### 5.5 批量审核：会话切换 / 退出时统一决定 [锁定·2026-11-09 用户改定 / 本文提议细节]
 
 原口径：只有针对单个 change_set 的接受面板，且无批量入口（决策 4、§5.1 第 2 步）。
 
 **触发**：
-- 用户切换调查 / 沙箱对话线程（「新对话」）/ 离开沙箱回母工作区 / 退出应用，且当前调查有 `staged` 或 `blocked` 活动 version ⇒ 弹出批量审核界面。
+- [2026-11-10 定稿] 用户**切换沙箱会话**、**丢弃会话**、**导出会话**、离开沙箱回母工作区或**退出应用**，且当前调查（整场会话，R1）有 `staged` 或 `blocked` 活动 version ⇒ 弹出批量审核界面，等用户决定后再继续原操作。**切换对话线程（「新对话」）不触发**：线程共享同一调查，暂存继续可见。原口径把「新对话」列为触发点，作废。
+- 审核范围 = 本调查的全部待审 version，不限于当前线程或某一 round。
 - 任何时候也可手动打开（对话侧栏「审核变更（N）」入口）；中途审过的不再出现。
 - 用户关闭界面不做决定 ⇒ 全部保持原状态（不自动接受、不自动丢弃），可之后再审（决策 4「接受与流程结束分离」）。
 
 **界面**：
-- 列出本调查全部活动 version，**按依赖分组**（依赖图的连通分量，组内按拓扑序；无依赖的单独成组）。`staged` 默认**全选**；`blocked` 不可勾选，只能丢弃或留待 Agent 重提。
+- 列出本调查全部活动 version，**按依赖分组**（依赖图的连通分量，组内按拓扑序，同层按 `(change_set_id, version)`；无依赖的单独成组）。`staged` 默认**全选**；`blocked` 不可勾选，只能丢弃或留待 Agent 重提。每项展开后按 **Markdown 快照分组**（U2）。
 - 每个 change_set 一行，可展开看内容（复用审核工作区，§5.6）、Debt、诊断与**影响预览**（`ImpactPlan` 的 `direct_changes` / `affected_objects`）；顶部显示整批合计影响。
-- **取消勾选**一项 ⇒ 依赖它的项自动连带取消（并标注「因依赖 X 被取消」）；重新勾选依赖者 ⇒ 自动勾选其依赖。
+- **取消勾选**一项 ⇒ 依赖它的项自动连带取消，**多层传递**（并标注「因依赖 X 被取消」）；重新勾选依赖者 ⇒ 自动勾选其依赖闭包。
+- 丢弃前预览受影响的依赖者，并提供「连带丢弃依赖项」选项（U3，默认不勾 ⇒ 依赖者转 `blocked`）。
 - 单个 change_set 内部仍整批接受，**不拆开**（决策 4）。
-- 按钮：「接受所选」「丢弃所选」「稍后再审」。未勾选项保持 `staged`（见 §10 待核 5）。
+- 按钮：「接受所选」「丢弃所选」「稍后再审」。未勾选项保持 `staged`（2026-11-09 用户定 U4）。
 
 **命令与提交**（Desktop 专用，不进 `tools/list`，§5.4）：
 1. `plan_change_set_batch(investigation_id, selections[{change_set_id, version, proposal_fingerprint}])`：服务端校验依赖闭合（选中集合对依赖封闭，否则返回缺失项），按依赖拓扑序把所有选中 version 编译为**一个** `UserChangeRequest`（写入顺序同 §4.2.7），对当前 head 运行 `plan_map_change` → 批 `ImpactPlan` 与 `batch_plan_fingerprint`；同时给出每个 change_set 的分项影响。
-2. `accept_change_set_batch(investigation_id, selections, batch_plan_fingerprint, request_id)`：同 §5.1 第 3 步——一个 `BEGIN IMMEDIATE` 事务内重跑 planner、核对 `base_commit` 与指纹、`write_patch`、为每个 change_set 分别写接受决定并置 `accepted`；任一不符整批拒绝，要求重新预览。每个 change_set 的回执记录同一 `commit_id`。
-3. `discard_change_set_batch(...)`：只改提案状态，按 §6.1 处理连带。
+2. `accept_change_set_batch(investigation_id, selections, batch_plan_fingerprint, request_id)`：同 §5.1 第 3 步——一个 `BEGIN IMMEDIATE` 事务内（`SqliteArtifactStore::accept_change_sets`）用当前 head 重跑 planner、核对 `base_commit` 与指纹、`write_patch`、为每个 change_set 分别写接受决定并置 `accepted`；任一不符整批拒绝，要求重新预览。[R6] 整批 = 一个 `UserChangeRequest`、一个计划指纹、一个事务、一个 commit，每个 change_set 的决定记同一 `commit_id`。
+3. `discard_change_set_batch(investigation_id, selections, cascade)`：只改提案状态，按 §6.1 处理连带；`cascade=false`（默认）依赖者转 `blocked`，`cascade=true` 依赖闭包一并丢弃。
+4. `preview_change_set_impact`：单个 change_set（连同其 staged 依赖闭包）对当前 head 的影响预览，供列表的影响预览栏使用。
 
 **不变**：只能显式接受；不自动提升 Trust；接受 ≠ 数学正确（面板固定提示「接受只表示写入地图，不代表数学上已验证」）；接受绑定提案版本 + 计划指纹；冲突不自动合并（§5.2）。
 
@@ -456,7 +490,8 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 - 复用 `DiscoveryReviewWorkspace`（`workspace.ts`）的布局与交互、`anchor-fragment.ts`（`ReviewAnchor`、`checkAnchor`、`renderAnchorFragment`，按字节范围高亮、不做文本重搜）、`ReviewGraph`（`review-graph.ts`，独立 Cytoscape 容器，不并入主图）、`labels.ts`。
 - 新增**「提案」数据源**：服务端把 change_set version 投影成 `SourceReviewProjection` 形状（新版本号如 `mathscape-change-set-review-projection-1`）：`units` ← `source_unit` 项（`acceptance` 取 `staged|blocked`），`anchors` ← 其 span 的 Markdown 定位，`relations` / `structure_relations` ← 关系与父子，`diagnostics` ← 诊断，新增 `debts` 与 `impact` 字段。工作区按数据源切换。
 - 按钮换成「接受」「丢弃」（批量界面里为勾选），去掉内容发现的逐单元勾选——change_set 不做部分接受。增加 Debt 栏与影响预览栏。
-- 详见 §9.1 前端项与 §10 待核 6（多来源 change_set）。
+- 详见 §9.1 前端项；多来源 change_set 按快照分组（U2）。
+- [2026-11-10 实现定稿] 数据源由前端从 `list_pending_change_sets` 的提案全文与已加载的 Markdown 快照转换（不另设 `get_change_set_review` 命令）：每个快照一份 `SourceReviewProjection`，在 `DiscoveryReviewWorkspace` 的**只读提案模式**下打开（无逐单元勾选、无 Markdown 补丁、无登记按钮，接受 / 丢弃仍在批量面板里按整个 change_set 做）。列表行另有 Debt 栏与影响预览栏，顶部显示所选集合的合计影响。
 
 ---
 
@@ -472,7 +507,7 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 ### 6.1 丢弃（廉价）
 
 - 只改提案状态；不触碰正式图与 head，不占短锁之外的资源。
-- [锁定·2026-11-09 用户改定] 其他 change_set 若依赖被丢弃者的暂存对象（§4.2.8），丢弃预览列出全部直接 / 传递依赖者，用户选择连带丢弃或令其转 `blocked`（默认）；不静默保留悬挂依赖。原口径：「§4.2.4 第 2 条已禁止跨 change_set 引用暂存，不受影响」。
+- [锁定·2026-11-09 用户定 U3] 其他 change_set 若依赖被丢弃者的暂存对象（§4.2.8），丢弃预览列出全部直接 / 传递依赖者，用户选择连带丢弃或令其转 `blocked`（默认）；不静默保留悬挂依赖。原口径：「§4.2.4 第 2 条已禁止跨 change_set 引用暂存，不受影响」。
 - 被丢弃的内容仍可在历史中查看（FX §4.4 末条）。
 
 ### 6.2 撤回已接受（退役 / 级联）[锁定语义，策略名为本文提议]
@@ -494,6 +529,7 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 - **调查间并存**：多个调查可同时 `running` / `awaiting_user`，各自有暂存 change_set，互不可见（§4.4）。这**取代** FX §3 A2 与 §8.2「启动另一轮调查：拒绝」一行。
 - **写槽** = 调查当前 generation 的执行授权（FX §8.4.2）。持有写槽才可 `propose_changes` / `user.ask`；进入 `awaiting_user`、取消、暂停、Desktop 重启时写槽释放、旧 generation 失效，迟到请求 → `forbidden`。
 - 调查最小状态 [本文提议]：`running | awaiting_user | paused | closed`；只有 `running` 持写槽。
+- **调查身份** [2026-11-10 定稿 R1]：沙箱调查 = `sandbox:{session}`（整场会话，所有线程与 round 共享；`thread_id` 只作元数据）。服务端在 `investigation_rounds` 登记 round → investigation，先写者为准；同一 round 之后声明别的调查 ⇒ `forbidden`，`details.reason: investigation_mismatch`。没有适配器声明时，未登记的 round 自成一个调查（调试 CLI）。
 
 ### 7.2 短锁协调器
 
@@ -510,7 +546,7 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 
 ### 7.4 存储（实现 PR 的方向，非本文锁定 DDL）[本文提议]
 
-追加迁移新增业务表（名称可在实现时定）：`investigations`、`pending_questions`、`proposed_change_sets` / `proposed_change_set_versions`、`change_set_decisions`；2026-11-09 增 `change_set_dependencies`（`dependent_change_set_id`、`dependent_version`、`depends_on_change_set_id`、`referenced_ids`），以及决定行上的可选 `batch_id`。追加式、不改历史迁移（REV §6 末段）。这些是普通业务表，与「sidecar 打包」无关；Phase0 §1 提到的 `ToolExecutionRecord` 侧车审计表不是 Phase2-0 前置条件（事件 JSONL trace 已覆盖工具调用记录），留待需要时另议。
+追加迁移新增业务表（名称可在实现时定）：`investigations`、`pending_questions`、`proposed_change_sets` / `proposed_change_set_versions`、`change_set_decisions`；2026-11-09 增 `change_set_dependencies`（`dependent_change_set_id`、`dependent_version`、`depends_on_change_set_id`、`depends_on_version`、`referenced_ids`）与 `investigation_rounds`（round → investigation 绑定）；PR-B 实现为 schema 24 的 `proposed_change_set_versions` / `change_set_decisions` / `change_set_dependencies` / `investigation_rounds`，同批接受以决定行上的同一 `commit_id` 关联，不另设 `batch_id`。追加式、不改历史迁移（REV §6 末段）。这些是普通业务表，与「sidecar 打包」无关；Phase0 §1 提到的 `ToolExecutionRecord` 侧车审计表不是 Phase2-0 前置条件（事件 JSONL trace 已覆盖工具调用记录），留待需要时另议。
 
 ---
 
@@ -527,6 +563,10 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 | `scope=investigation` 但无绑定调查 | `graph.*` / `workspace.search` | 按 accepted 回答 + `scope_not_supported` |
 | 本调查对同一对象有多个 staged replacement | `graph.*` | 已接受版本 + `staged_conflict` |
 | SourceSpan 快照无效 / 越界 / 非 UTF-8 边界 / 原文不符 | `propose_changes` | `blocked`：`snapshot_not_found` / `snapshot_not_immutable` / `range_out_of_bounds` / `invalid_utf8_boundary` / `quote_mismatch` |
+| `block` / `page` 粒度无法落到 canonical block / 唯一页 | `propose_changes` | `blocked`：`block_locator_unavailable` / `page_mapping_unavailable` |
+| 同 id span 已退役 | `propose_changes` | `blocked`：`span_inactive` |
+| round 已绑定到另一调查 | `propose_changes` / `get_change_set` | `forbidden`，`investigation_mismatch` |
+| Desktop 命令的 `investigation_id` 不属于本窗口 | Desktop 提案命令 | 拒绝：`investigation_not_in_workspace` |
 | 新建 span 未被引用 | `propose_changes` | `blocked`：`unused_span` |
 | `$new:` 未定义；引用的暂存 id 不在本调查活动 staged 中 | `propose_changes` | `blocked`：`dangling_new_ref` / `dangling_staged_ref` |
 | change_set 依赖成环 | `propose_changes` | `blocked`：`change_set_dependency_cycle` |
@@ -569,11 +609,11 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 
 **代码复用（挪到共享模块，不复制代码）**：
 - 新建共享模块（建议 `crates/mathscape-orchestrator/src/source_locator.rs`），从原处**移动**并改为 `pub`（或 `pub(crate)` 后经 orchestrator 对外导出给 `mathscape-mcp`）：
-  - `selector_resolver.rs`：`locator_matches`（现 `pub(crate)`）、`normalize_locator_text` 及其私有辅助（`strip_outer_math_delimiters`、`tex_spacing_prefix`、`push_normalized_space`、`normalized_matches`、`overlapping_matches`、`NormalizedLocatorText`）；`selector_resolver.rs` 改为 `use` 新模块。
+  - `selector_resolver.rs`：`locator_matches`（内容发现继续用于全文定位；propose 不用，改用截取后比较的 `quote_matches_range`，R2）、`normalize_locator_text` 及其私有辅助（`strip_outer_math_delimiters`、`tex_spacing_prefix`、`push_normalized_space`、`normalized_matches`、`overlapping_matches`、`NormalizedLocatorText`）；`selector_resolver.rs` 改为 `use` 新模块。
   - `discovery_validation.rs`：`valid_temp_id`（现 `pub(crate)`）。
   - `source_registration.rs`：`stable_hash_id`（现私有）与 span 身份计算——抽成 `markdown_span_id(artifact_id, range) -> StableId`，`plan_source_registration` 的 `intern_span` 与 propose 共用，保证两边 id 一致（加一条跨路径同 id 的单元测试）。
   - `unit_discovery.rs`：`fingerprint`（现 `pub(crate)`）随之暴露或在新模块内复用。
-- 不复用的部分说明：`discovery_validation` 的 `quote_occurrences` / `quote_position` 依赖内容发现的 `AuthorizedBlock` 与锚点模型，propose 只需「给定范围的原文 = quote」，用 `locator_matches` 判断范围文本是否匹配即可，不搬。`is_ancestor` / 成环由 `validate_live_references` 在最终图上覆盖，不另搬。
+- 不复用的部分说明：`discovery_validation` 的 `quote_occurrences` / `quote_position` 依赖内容发现的 `AuthorizedBlock` 与锚点模型，propose 只需「给定范围的原文 = quote」，用 `quote_matches_range` 对截取出的范围原文判断即可，不搬。`is_ancestor` / 成环由 `validate_live_references` 在最终图上覆盖，不另搬。
 
 **切片（同分支按顺序提交）**：
 
@@ -584,7 +624,7 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 | B3 | `propose_changes`：`source_span` 项与 §4.2.5 校验 / 补全；`$new:` 解析与裸写兼容告警；`unused_span`；`source_spans` / `evidence_spans` 的引用解析（现只解析 `parent` / `source` / `target`） | `crates/mathscape-mcp/src/tools/propose.rs` |
 | B4 | 跨 change_set 依赖：解析到本调查 staged id、依赖表、依赖闭包试编排、成环检查、连带转 `blocked` | `propose.rs`、`crates/mathscape-store-sqlite/src/proposals.rs`、新迁移 |
 | B5 | 投影（P2-2b）：`graph.get` / `graph.neighborhood` 的 `scope=investigation`，`staged: true` 字段，`staged_conflict` | `crates/mathscape-mcp/src/tools/graph.rs` |
-| B6 | Desktop 命令：`plan_change_set_accept` / `accept_change_set` / `discard_change_set`，`plan_change_set_batch` / `accept_change_set_batch` / `discard_change_set_batch`，`list_pending_change_sets(investigation_id)`，`get_change_set_review(change_set_id, version)`（§5.6 投影 DTO）；协调器同事务写 patch + 决定 | `apps/mathscape-desktop/src/`（新 `change_sets.rs`） |
+| B6 | Desktop 命令（实现）：`get_change_set_investigation`、`list_pending_change_sets`、`preview_change_set_impact`、`plan_change_set_batch` / `accept_change_set_batch` / `discard_change_set_batch`；单个接受走只含一项的批量；审核投影在前端转换（§5.6）；协调器同事务写 patch + 决定 | `apps/mathscape-desktop/src/`（新 `change_sets.rs`） |
 | B7 | 前端：审核工作区「提案」数据源、接受 / 丢弃按钮、Debt 栏、影响预览栏；批量审核对话框（依赖分组、默认全选、连带取消）；地图「未审批」样式（§4.4.1）；会话切换 / 退出钩子 | `frontend/src/review/`、`frontend/src/sandbox/`、`frontend/src/graph/` |
 | B8 | 沙箱接入：round 绑定 investigation、白名单开放 `propose_changes` / `get_change_set`（沙箱 §4.3.1）；skill 升 v0.6.2（运行时能力的沙箱工具列表、`$new:`、span 提案写法），`skill_pack` 测试同步 | `apps/mathscape-desktop/src/sandbox_dialogue.rs`、`skills/mathscape-worknet/` |
 
@@ -605,10 +645,10 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 1. ~~**[待核] 暂存新建 SourceSpan**~~ **已定（2026-11-09 用户改定）**：见 §4.2.5。原文：Phase2-0 的 `source_unit/create` 只能引用已存在的 span id。若首个调查场景需要 Agent 从 `material.read` 的 locator 新建 span，需要另定「span 也作为暂存对象」的规则（涉及 artifact revision 绑定与登记管线）。
 2. **[风险] Codex 长时间持有 `requestUserInput`**：harness 是否容忍数小时挂起未实测；§4.1.3 已规定中断时降级为下一 turn 投递，实测后可能把原生通道也改为「立即降级」。
 3. **[风险] 投影成本**：`scope=investigation` 每次合并已接受快照与暂存；暂存规模大时需限额，诊断沿用 1c 截断惯例。2026-11-09 起 Desktop 地图也用这份投影（§4.4.1），依赖闭包试编排（§4.2.4 第 4 步）同样随暂存规模增长。
-4. ~~**[待核] 同 id span 已退役**~~：已定，`span_inactive` → `blocked`，不自动重新激活；重新激活必须是独立的显式操作。
-5. ~~**[待核] 批量审核中未勾选项**~~：已定，保持 `staged`，可稍后再审；沙箱副本整体丢弃时随副本物理删除。
-6. ~~**[待核] 多来源 change_set 的审核投影**~~：已定，一个 change_set 可涉及多个 Markdown 快照，审核面板按快照分组展示；每个 SourceSpan 保留自己的 artifact/range。
-7. ~~**[待核] 沙箱 investigation 的粒度**~~：已定，一条对话线程对应一个 investigation；同线程多个 round 共享，切换新线程前触发旧线程待审提案审核。
+4. ~~**[待核] 同 id span 已退役**~~：**2026-11-09 用户定**（U1），`span_inactive` → `blocked`，不自动重新激活；重新激活必须是独立的显式操作。
+5. ~~**[待核] 批量审核中未勾选项**~~：**2026-11-09 用户定**（U4），保持 `staged`，可稍后再审；沙箱副本整体丢弃时随副本物理删除。
+6. ~~**[待核] 多来源 change_set 的审核投影**~~：**2026-11-09 用户定**（U2），一个 change_set 可涉及多个 Markdown 快照，审核面板按快照分组展示；每个 SourceSpan 保留自己的 artifact/range。
+7. ~~**[待核] 沙箱 investigation 的粒度**~~：已定（R1），**整场沙箱会话**对应一个 investigation（`sandbox:{session}`），所有线程与 round 共享；切换线程不触发审核，切换 / 丢弃 / 导出会话与退出应用时触发（§5.5）。早先「一条对话线程一个 investigation」的写法作废。
 
 ---
 
@@ -635,6 +675,8 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 | 审批时机 | 逐个 change_set 显式接受 | 另加会话切换 / 退出时的批量审核（仍显式、整 change_set） | 用户改定（2026-11-09，§2.1 #4′） |
 | 暂存可见性 | 仅 Agent 投影 | Desktop 地图「未审批」样式上图 | 用户改定（2026-11-09，§2.1 #11） |
 | `staged_ids` 派生 | 本文 2026-10-30 版写 `(request_id, local_ref)` | `(change_set_id, local_ref)`，与现行代码一致 | 本文提议（对齐代码） |
+| 替换后的依赖者 | 2026-11-09 版：id 仍在则改指新 version | 一律转 `blocked`，不改指 | 2026-11-10 定稿（R5） |
+| 沙箱 investigation 粒度 | 2026-11-09 版：线程级 | 会话级 `sandbox:{session}` | 2026-11-10 定稿（R1） |
 
 ---
 
@@ -644,3 +686,4 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 | --- | --- |
 | 2026-10-30 | 初稿；用户锁定决策 1–8。 |
 | 2026-11-09 | PR-B 契约修订（`feat/pr-b-staged-proposals`）：用户改定决策 4（审批时机）与 §4.2.4 第 2 条（跨 change_set 引用），新增 SourceSpan 提案、`$new:` 临时引用、最终图依赖校验与写入顺序、连带规则、暂存上图、批量审核、审核面板与校验代码复用、PR-B 实现切片（§2.1、§4.2.5–§4.2.8、§4.4.1、§5.5–§5.6、§6.1–§6.2、§9.1、§10）。Loogle 加速推迟到下一个 PR。 |
+| 2026-11-10 | PR-B 实现对齐：§2.2 汇总四项「2026-11-09 用户定」与七条修订（会话级调查、quote 截取后比较、粒度失败码、hash 语义、依赖带版本且替换后转 blocked、批量一个 commit、单一投影与排除项）；删去线程级调查、全文搜索式 quote 匹配与替换后自动改指；补应用 / 拼接顺序、Desktop 命令清单与归属校验、§8 新码。 |

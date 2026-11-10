@@ -96,7 +96,7 @@
 | **定向 flow 接回后** | Phase2 `propose_changes` 等 | 沙箱可演进为「投影在副本上预览接受」，但源 checkpoint 仍只经显式「晋升 / 不在本文」路径；本文不定义晋升 |
 | **PR-B（2026-11-09）** [锁定·2026-11-09 用户改定] | `propose_changes` + `get_change_set`（不含 `artifact.stage`） | 沙箱走与正式工作区**同一套**暂存与审批流程（Phase2 §4.2、§4.4.1、§5.5）：暂存对象以「未审批」样式显示在副本地图上，Agent 可在其上继续构建；会话切换 / 离开沙箱 / 退出应用时批量审核。**接受只写副本工作区**（副本里的 `mathscape.sqlite3`），不碰源 checkpoint；丢弃会话时已接受与未审的一并物理删除。S1 可选行所说的「受限调试入口」不再需要。原口径：S0/S1 只读，试写方式待实现 PR 选定 |
 
-开放条件 [锁定·2026-11-09 用户改定]：`propose_changes` / `get_change_set` 进沙箱白名单（§4.3.1）的前提是 **round 与 investigation 绑定**——适配器为每条对话线程登记一个 investigation（建议 `investigation_id = sandbox:<sandbox_session_id>:<thread_id>`，同一线程的各 round 共享），`--round` 校验据此找到 investigation；现行实现把 round token 直接当 investigation id（`crates/mathscape-mcp/src/tools/propose.rs`），每轮各自一个调查，跨轮看不到自己的暂存，须先改。粒度（线程 vs 整场会话）见 Phase2 §10 待核 7。
+开放条件 [锁定·2026-11-09 用户改定 / 2026-11-10 定稿]：`propose_changes` / `get_change_set` 进沙箱白名单（§4.3.1）的前提是 **round 与 investigation 绑定**——整场沙箱会话对应**一个** investigation：`investigation_id = sandbox:<sandbox_session_id>`，会话内所有对话线程与 round 共享，`thread_id` 只作元数据。适配器为每个 round 声明该 investigation，服务端在 `investigation_rounds` 登记绑定（先写者为准，不一致 ⇒ `investigation_mismatch`），因此跨 round、跨线程都能看到并引用本会话的暂存。早先「每条线程一个 investigation（`sandbox:<session>:<thread>`）」的写法作废（Phase2 §2.2 R1、§10 第 7 条）。
 
 ### 3.4 拆卸：丢弃 vs 导出 [锁定]
 
@@ -149,7 +149,7 @@ v0 实现另带 `transcript_entries`（行数）与 `dialogue_threads`（线程�
 - 新线程（非首条）的 prompt 明确告诉 Agent：副本里可能有更早对话留下的状态，但更早的对话内容不在上下文中，以工具查到的当前状态为准。
 - **丢弃 / 导出仍作用于整场会话**（全部线程 + 副本），不按线程拆。要撤掉副作用 → 丢弃，或从同一 checkpoint 新开会话（§3.4）。
 - 兼容：线程出现前写下的 `session.json` 无线程字段、transcript 行无 `thread_id`，一律视为 `d1`。
-- **与 Phase2 的关系** [锁定·2026-11-09 用户改定]：「切换对话 / 开新任务前确认是否保存上一个状态」映射为 Phase2 待审提案的处理，**沙箱与正式工作区共用**：点「新对话」、离开沙箱或退出应用时，若当前线程的 investigation 有 `staged` / `blocked` 提案，弹出 Phase2 §5.5 的批量审核界面（默认全选、按依赖分组、影响预览、取消勾选连带取消依赖项），用户可接受所选 / 丢弃所选 / 稍后再审；关闭界面不做决定 ⇒ 原样保留。不另立「保存状态」概念。接受写入副本工作区，之后的新线程从副本正式状态继续（它看不到旧线程未审的暂存，除非 investigation 粒度定为整场会话，见 Phase2 §10 待核 7）。
+- **与 Phase2 的关系** [锁定·2026-11-09 用户改定]：「切换对话 / 开新任务前确认是否保存上一个状态」映射为 Phase2 待审提案的处理，**沙箱与正式工作区共用**：**切换沙箱会话、丢弃会话、导出会话、离开沙箱或退出应用**时，若本会话的 investigation 有 `staged` / `blocked` 提案，弹出 Phase2 §5.5 的批量审核界面（覆盖整场会话的全部待审提案；默认全选、按依赖分组、影响预览、取消勾选多层连带取消依赖项、丢弃可选连带），用户可接受所选 / 丢弃所选 / 稍后再审；关闭界面不做决定 ⇒ 原样保留，未勾选项保持 `staged`。不另立「保存状态」概念。**点「新对话」不触发审核**：新线程与旧线程共享同一 investigation，旧线程的暂存继续在地图上以「未审批」样式可见、可被引用（2026-11-10 定稿；原口径把「新对话」列为触发点，作废）。接受只写副本工作区。导出包只含对话记录与事件，不含地图或提案。
   - 原口径（2026-11-06）：「沙箱副作用今天无用户审批……该确认 UI 等 `propose_changes` 能暂存提案后再接」，即方向记录、不在沙箱实现。
 
 ---
