@@ -29,7 +29,10 @@ fn main() -> ExitCode {
         println!("codex-cli 0.0.0-mathscape-fixture");
         return ExitCode::SUCCESS;
     }
-    let mut options = CodexFixtureOptions::default();
+    let mut options = CodexFixtureOptions {
+        codex_home: std::env::var_os("CODEX_HOME").map(std::path::PathBuf::from),
+        ..CodexFixtureOptions::default()
+    };
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {

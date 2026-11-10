@@ -7,8 +7,26 @@
 //! Each adapter owns session management, registering `mathscape mcp` with the
 //! harness, mapping native events to `agent_events v0`, cancellation and
 //! `round_id` injection. hmz is never required.
+//!
+//! # 会话 → 线程 → 轮次（ACP 形状）
+//!
+//! 2026-11 起接口按 ACP（Agent Client Protocol）的形状分三层，harness 无关
+//! （docs/codex-session-persistence.md §2.1）：
+//!
+//! | 本接口 | ACP |
+//! | --- | --- |
+//! | [`AgentExecutor::open_session`]：一个 harness 进程，工具白名单与授权在此固定 | `initialize` |
+//! | [`AgentExecutor::new_thread`] | `session/new` |
+//! | [`AgentExecutor::load_thread`] | `session/load` |
+//! | [`AgentExecutor::prompt`] + [`AgentExecutor::events`] | `session/prompt` + `session/update` |
+//! | [`AgentExecutor::cancel`] | `session/cancel` |
+//! | [`ApprovalHandler`] | `session/request_permission` |
+//!
+//! [`AgentExecutor::start_round`] 保留为一次性便捷方法：临时会话 + 新线程 +
+//! 一轮，轮末关闭进程。
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::{future::BoxFuture, stream::BoxStream};
 use serde::{Deserialize, Serialize};
@@ -94,6 +112,116 @@ impl HarnessContext {
     }
 }
 
+/// One harness session: one long-lived harness process (one Codex
+/// app-server) that can hold several threads. The tool allow-list, harness
+/// grants and skills are fixed per session; opening the same key with a
+/// different spec makes the adapter restart the process on next use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionSpec {
+    pub backend: AgentBackend,
+    /// Stable caller key, e.g. the sandbox session id.
+    pub session_key: String,
+    pub workspace: PathBuf,
+    /// Fixed for the session (not per round).
+    pub tools_allow: Vec<String>,
+    pub harness: HarnessContext,
+    /// File the adapter writes the current `round_id` into before each turn;
+    /// the long-lived Mathscape MCP process reads it (`--round-file`).
+    /// `None` → an adapter-managed temporary file.
+    pub round_file: Option<PathBuf>,
+    /// Threads are not persisted and the process closes after the first
+    /// turn ends ([`AgentExecutor::start_round`]).
+    pub ephemeral: bool,
+}
+
+/// `session/load`: continue a harness thread.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoadThread {
+    /// Harness-native thread id.
+    pub thread_id: String,
+    /// A copy of the thread's persisted state kept by the caller (for Codex:
+    /// the rollout file in the session dir). Used when the harness itself no
+    /// longer has the thread.
+    pub state_copy: Option<PathBuf>,
+}
+
+/// How a thread became usable for the next prompt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadContinuity {
+    /// New thread, empty context.
+    Started,
+    /// Already loaded in the running harness process.
+    Live,
+    /// Reloaded from the harness's own store.
+    Resumed,
+    /// Reloaded after restoring the caller's state copy into the harness store.
+    Restored,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThreadBinding {
+    pub thread_id: String,
+    pub continuity: ThreadContinuity,
+    /// Where the harness persists the thread, when known (Codex rollout).
+    pub state_path: Option<PathBuf>,
+}
+
+/// Per-turn context placed before the user message. Not part of the
+/// thread's stable prefix (developer instructions).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContextNote {
+    /// Short source key, e.g. `mathscape.workspace_delta`.
+    pub key: String,
+    pub text: String,
+}
+
+/// `session/prompt`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Prompt {
+    pub thread_id: String,
+    /// The user message (or a rebuilt prompt after a context fallback).
+    pub text: String,
+    pub context: Vec<ContextNote>,
+}
+
+/// Approval request forwarded to an [`ApprovalHandler`].
+#[derive(Clone, Copy, Debug)]
+pub struct ApprovalRequest<'a> {
+    pub round_id: &'a RoundId,
+    /// Harness-native method, e.g. `item/commandExecution/requestApproval`.
+    pub method: &'a str,
+    pub params: &'a serde_json::Value,
+    pub tools_allow: &'a [String],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApprovalDecision {
+    /// Apply the adapter's built-in policy (read-only allow-list; shell and
+    /// writes declined; unclassified requests held, then timed out).
+    Policy,
+    /// Decline now.
+    Decline,
+}
+
+/// Host-side approval callback (ACP `session/request_permission`). The
+/// default keeps the built-in policy; interactive approval cards would
+/// implement this.
+pub trait ApprovalHandler: Send + Sync {
+    fn decide(&self, request: &ApprovalRequest<'_>) -> ApprovalDecision {
+        let _ = request;
+        ApprovalDecision::Policy
+    }
+}
+
+/// [`ApprovalHandler`] that always applies the built-in policy.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PolicyApprovals;
+
+impl ApprovalHandler for PolicyApprovals {}
+
+static ONE_SHOT: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AgentError {
@@ -106,6 +234,8 @@ pub enum AgentError {
     },
     #[error("unknown round {0}")]
     UnknownRound(RoundId),
+    #[error("unknown harness session {0}")]
+    UnknownSession(String),
     #[error("required capability {} is unavailable", .0.capability)]
     CapabilityUnavailable(CapabilityProbe),
     /// Adapter does not support listing or changing models (e.g. Claude Code today).
@@ -128,9 +258,81 @@ pub enum AgentError {
 pub trait AgentExecutor: Send + Sync {
     fn backend(&self) -> AgentBackend;
 
-    /// Starts a round and returns the adapter-assigned `round_id`.
-    fn start_round(&self, request: StartRoundRequest)
-    -> BoxFuture<'_, Result<RoundId, AgentError>>;
+    /// Declare (or update) a harness session. Cheap: the process starts
+    /// lazily on the first thread operation.
+    fn open_session(&self, spec: SessionSpec) -> BoxFuture<'_, Result<(), AgentError>>;
+
+    /// New harness thread with an empty context.
+    fn new_thread(&self, session_key: &str) -> BoxFuture<'_, Result<ThreadBinding, AgentError>>;
+
+    /// Continue an existing harness thread. Errors when the harness cannot
+    /// reload it; the caller then rebuilds context itself.
+    fn load_thread(
+        &self,
+        session_key: &str,
+        load: LoadThread,
+    ) -> BoxFuture<'_, Result<ThreadBinding, AgentError>>;
+
+    /// Run one turn on a thread; returns the adapter-assigned `round_id`.
+    fn prompt(
+        &self,
+        session_key: &str,
+        prompt: Prompt,
+    ) -> BoxFuture<'_, Result<RoundId, AgentError>>;
+
+    /// Where the harness persists `thread_id` right now, if known.
+    fn thread_state_path(&self, session_key: &str, thread_id: &str) -> Option<PathBuf> {
+        let _ = (session_key, thread_id);
+        None
+    }
+
+    /// Stop the session's harness process. Idempotent.
+    fn close_session(&self, session_key: &str) -> BoxFuture<'_, Result<(), AgentError>>;
+
+    /// Stop every harness process (App exit). Blocking.
+    fn close_all(&self) {}
+
+    /// One-shot round: temporary session + new thread + one turn; the
+    /// process closes when the turn ends.
+    fn start_round(
+        &self,
+        request: StartRoundRequest,
+    ) -> BoxFuture<'_, Result<RoundId, AgentError>> {
+        Box::pin(async move {
+            let key = format!(
+                "one-shot-{}-{}",
+                std::process::id(),
+                ONE_SHOT.fetch_add(1, Ordering::Relaxed) + 1
+            );
+            self.open_session(SessionSpec {
+                backend: request.backend,
+                session_key: key.clone(),
+                workspace: request.workspace,
+                tools_allow: request.tools_allow,
+                harness: request.harness,
+                round_file: None,
+                ephemeral: true,
+            })
+            .await?;
+            let started = async {
+                let thread = self.new_thread(&key).await?;
+                self.prompt(
+                    &key,
+                    Prompt {
+                        thread_id: thread.thread_id,
+                        text: request.input_ref,
+                        context: Vec::new(),
+                    },
+                )
+                .await
+            }
+            .await;
+            if started.is_err() {
+                let _ = self.close_session(&key).await;
+            }
+            started
+        })
+    }
 
     /// Event stream for a round, in `seq` order (`agent_events v0`).
     fn events(&self, round_id: &RoundId) -> Result<BoxStream<'static, AgentEvent>, AgentError>;
@@ -232,12 +434,36 @@ impl AgentExecutor for UnimplementedExecutor {
         self.backend
     }
 
-    fn start_round(
+    fn open_session(&self, _spec: SessionSpec) -> BoxFuture<'_, Result<(), AgentError>> {
+        let backend = self.backend;
+        Box::pin(async move { Err(AgentError::NotImplemented(backend)) })
+    }
+
+    fn new_thread(&self, _session_key: &str) -> BoxFuture<'_, Result<ThreadBinding, AgentError>> {
+        let backend = self.backend;
+        Box::pin(async move { Err(AgentError::NotImplemented(backend)) })
+    }
+
+    fn load_thread(
         &self,
-        _request: StartRoundRequest,
+        _session_key: &str,
+        _load: LoadThread,
+    ) -> BoxFuture<'_, Result<ThreadBinding, AgentError>> {
+        let backend = self.backend;
+        Box::pin(async move { Err(AgentError::NotImplemented(backend)) })
+    }
+
+    fn prompt(
+        &self,
+        _session_key: &str,
+        _prompt: Prompt,
     ) -> BoxFuture<'_, Result<RoundId, AgentError>> {
         let backend = self.backend;
         Box::pin(async move { Err(AgentError::NotImplemented(backend)) })
+    }
+
+    fn close_session(&self, _session_key: &str) -> BoxFuture<'_, Result<(), AgentError>> {
+        Box::pin(async move { Ok(()) })
     }
 
     fn events(&self, _round_id: &RoundId) -> Result<BoxStream<'static, AgentEvent>, AgentError> {

@@ -13,7 +13,8 @@ use futures::{future::BoxFuture, stream::BoxStream};
 
 use crate::{
     AgentBackend, AgentError, AgentEvent, AgentExecutor, CallId, CapabilityProbe, EventPayload,
-    RoundId, StartRoundRequest, ToolResultStatus, ToolStatus, TurnId, TurnOutcome,
+    LoadThread, Prompt, RoundId, SessionSpec, ThreadBinding, ThreadContinuity, ToolResultStatus,
+    ToolStatus, TurnId, TurnOutcome,
     event::{Cancel, CancelRequester, ToolCall, ToolResult, TurnEnd, TurnStart, Usage},
 };
 
@@ -160,7 +161,10 @@ struct FakeRound {
 pub struct FakeBackend {
     backend: AgentBackend,
     next_round: AtomicU64,
+    next_thread: AtomicU64,
     rounds: Mutex<HashMap<RoundId, FakeRound>>,
+    /// session key → known thread ids
+    sessions: Mutex<HashMap<String, Vec<String>>>,
 }
 
 impl FakeBackend {
@@ -169,7 +173,9 @@ impl FakeBackend {
         Self {
             backend,
             next_round: AtomicU64::new(1),
+            next_thread: AtomicU64::new(1),
             rounds: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -185,29 +191,102 @@ impl AgentExecutor for FakeBackend {
         self.backend
     }
 
-    fn start_round(
-        &self,
-        request: StartRoundRequest,
-    ) -> BoxFuture<'_, Result<RoundId, AgentError>> {
+    fn open_session(&self, spec: SessionSpec) -> BoxFuture<'_, Result<(), AgentError>> {
         Box::pin(async move {
-            if request.backend != self.backend {
+            if spec.backend != self.backend {
                 return Err(AgentError::BackendMismatch {
                     served: self.backend,
-                    requested: request.backend,
+                    requested: spec.backend,
                 });
+            }
+            self.sessions
+                .lock()
+                .expect("fake sessions lock")
+                .entry(spec.session_key)
+                .or_default();
+            Ok(())
+        })
+    }
+
+    fn new_thread(&self, session_key: &str) -> BoxFuture<'_, Result<ThreadBinding, AgentError>> {
+        let key = session_key.to_owned();
+        Box::pin(async move {
+            let mut sessions = self.sessions.lock().expect("fake sessions lock");
+            let threads = sessions
+                .get_mut(&key)
+                .ok_or_else(|| AgentError::UnknownSession(key.clone()))?;
+            let n = self.next_thread.fetch_add(1, Ordering::Relaxed);
+            let thread_id = format!("fake-thread-{n}");
+            threads.push(thread_id.clone());
+            Ok(ThreadBinding {
+                thread_id,
+                continuity: ThreadContinuity::Started,
+                state_path: None,
+            })
+        })
+    }
+
+    fn load_thread(
+        &self,
+        session_key: &str,
+        load: LoadThread,
+    ) -> BoxFuture<'_, Result<ThreadBinding, AgentError>> {
+        let key = session_key.to_owned();
+        Box::pin(async move {
+            let mut sessions = self.sessions.lock().expect("fake sessions lock");
+            let threads = sessions
+                .get_mut(&key)
+                .ok_or_else(|| AgentError::UnknownSession(key.clone()))?;
+            let continuity = if threads.contains(&load.thread_id) {
+                ThreadContinuity::Live
+            } else {
+                threads.push(load.thread_id.clone());
+                ThreadContinuity::Resumed
+            };
+            Ok(ThreadBinding {
+                thread_id: load.thread_id,
+                continuity,
+                state_path: None,
+            })
+        })
+    }
+
+    fn prompt(
+        &self,
+        session_key: &str,
+        prompt: Prompt,
+    ) -> BoxFuture<'_, Result<RoundId, AgentError>> {
+        let key = session_key.to_owned();
+        Box::pin(async move {
+            if !self
+                .sessions
+                .lock()
+                .expect("fake sessions lock")
+                .get(&key)
+                .is_some_and(|threads| threads.contains(&prompt.thread_id))
+            {
+                return Err(AgentError::UnknownSession(key));
             }
             let n = self.next_round.fetch_add(1, Ordering::Relaxed);
             let round_id = RoundId::parse(format!("fake-round-{n}")).expect("valid id");
-            let events = scripted_round_with_input(&round_id, self.backend, &request.input_ref);
+            let events = scripted_round_with_input(&round_id, self.backend, &prompt.text);
             self.rounds.lock().expect("fake rounds lock").insert(
                 round_id.clone(),
                 FakeRound {
-                    input_ref: request.input_ref,
+                    input_ref: prompt.text,
                     events,
                 },
             );
             Ok(round_id)
         })
+    }
+
+    fn close_session(&self, session_key: &str) -> BoxFuture<'_, Result<(), AgentError>> {
+        self.sessions
+            .lock()
+            .expect("fake sessions lock")
+            .remove(session_key);
+        Box::pin(async move { Ok(()) })
     }
 
     fn events(&self, round_id: &RoundId) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
@@ -244,8 +323,8 @@ mod tests {
     use super::*;
     use crate::{read_jsonl, validate_round, write_jsonl};
 
-    fn request(backend: AgentBackend) -> StartRoundRequest {
-        StartRoundRequest {
+    fn request(backend: AgentBackend) -> crate::StartRoundRequest {
+        crate::StartRoundRequest {
             backend,
             workspace: PathBuf::from("/tmp/ws"),
             input_ref: "sha256:abc".into(),

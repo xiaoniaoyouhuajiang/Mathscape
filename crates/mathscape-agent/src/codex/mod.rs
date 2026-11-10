@@ -61,8 +61,10 @@
 
 mod approval;
 mod fixture;
+mod host;
 mod map;
 mod model;
+mod rollout;
 mod session;
 
 pub use fixture::{

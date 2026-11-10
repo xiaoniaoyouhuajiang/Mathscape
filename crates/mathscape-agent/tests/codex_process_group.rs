@@ -70,6 +70,19 @@ impl Wrapper {
         );
         std::fs::write(&script, body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Another test thread may fork while our write fd is still open; the
+        // child then briefly holds it and exec fails with ETXTBSY. Wait until
+        // the script is executable before handing it to the adapter.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while std::process::Command::new(&script)
+            .arg("--version")
+            .output()
+            .map(|out| !out.status.success())
+            .unwrap_or(true)
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         Self { dir, script, pids }
     }
 
@@ -241,4 +254,86 @@ fn cancel_through_wrapper_ends_the_stream_without_orphans() {
         alive.is_empty(),
         "orphaned grandchildren still running: {alive:?}"
     );
+}
+
+fn session_spec(key: &str) -> mathscape_agent::SessionSpec {
+    mathscape_agent::SessionSpec {
+        backend: AgentBackend::Codex,
+        session_key: key.into(),
+        workspace: std::env::temp_dir(),
+        tools_allow: vec![],
+        harness: mathscape_agent::HarnessContext::default(),
+        round_file: None,
+        ephemeral: false,
+    }
+}
+
+fn one_turn(executor: &CodexExecutor, key: &str) {
+    block_on(executor.open_session(session_spec(key))).unwrap();
+    let thread = block_on(executor.new_thread(key)).unwrap();
+    let round = block_on(executor.prompt(
+        key,
+        mathscape_agent::Prompt {
+            thread_id: thread.thread_id,
+            text: "hi".into(),
+            context: vec![],
+        },
+    ))
+    .unwrap();
+    let (events, _) = drain(
+        executor.events(&round).unwrap(),
+        Duration::from_secs(5),
+        |_| {},
+    );
+    assert!(
+        events.iter().any(|event| event.type_name() == "turn_end"),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn persistent_session_survives_the_turn_and_close_all_kills_the_group() {
+    let wrapper = Wrapper::new("close-all");
+    let executor = wrapper.executor(&["app-server"]);
+    one_turn(&executor, "s-close");
+    // The app-server stays up between turns …
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        wrapper
+            .grandchildren()
+            .iter()
+            .filter(|pid| running(**pid))
+            .count(),
+        3
+    );
+    // … and App exit stops every process in its group.
+    executor.close_all();
+    let alive = wrapper.wait_until_gone(Duration::from_secs(3));
+    assert!(alive.is_empty(), "orphans after close_all: {alive:?}");
+}
+
+#[test]
+fn idle_reclaim_kills_the_group() {
+    let wrapper = Wrapper::new("idle");
+    let executor = CodexExecutor::new(CodexConfig {
+        program: wrapper.script.clone(),
+        args: vec!["app-server".into()],
+        handshake_timeout: Duration::from_secs(3),
+        interrupt_grace: Duration::from_millis(800),
+        idle_timeout: Some(Duration::from_millis(300)),
+        ..CodexConfig::default()
+    });
+    one_turn(&executor, "s-idle");
+    let alive = wrapper.wait_until_gone(Duration::from_secs(5));
+    assert!(alive.is_empty(), "orphans after idle reclaim: {alive:?}");
+}
+
+#[test]
+fn dropping_the_executor_kills_the_group() {
+    let wrapper = Wrapper::new("drop");
+    let executor = wrapper.executor(&["app-server"]);
+    one_turn(&executor, "s-drop");
+    drop(executor);
+    let alive = wrapper.wait_until_gone(Duration::from_secs(3));
+    assert!(alive.is_empty(), "orphans after drop: {alive:?}");
 }
