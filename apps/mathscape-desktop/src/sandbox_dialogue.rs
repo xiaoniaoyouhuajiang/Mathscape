@@ -204,6 +204,12 @@ pub(crate) fn round_harness_for_investigation(
             found.root.display().to_string(),
         ));
     }
+    // Resident Loogle socket (the desktop owns the process; the per-round MCP
+    // child only connects to it). Absent: mathlib.search stays one-shot.
+    let loogle_socket = crate::loogle_host::round_env();
+    if let Some(entry) = loogle_socket.clone() {
+        harness.env.push(entry);
+    }
     if let Some(investigation_id) = investigation_id.filter(|value| !value.trim().is_empty()) {
         harness.env.push((
             "MATHSCAPE_INVESTIGATION_ID".to_owned(),
@@ -231,6 +237,7 @@ pub(crate) fn round_harness_for_investigation(
         "permission_profile": "mathscape-session",
         "skill": skill_record,
         "lean_profile_root": lean,
+        "loogle_resident_socket": loogle_socket.map(|(_, path)| path),
         "investigation_id": investigation_id,
         "read_roots": harness.read_roots,
         "skill_roots": harness.skill_roots,

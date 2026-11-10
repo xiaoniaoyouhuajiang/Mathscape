@@ -389,6 +389,46 @@ fn persists_validated_workspace_runtime_settings_and_supplies_safe_defaults() {
 }
 
 #[test]
+fn loogle_resident_setting_defaults_on_and_persists_off() {
+    let directory = TestDirectory::create("loogle-resident-setting");
+    let workspace = directory.path().join("workspace");
+    let credentials = Arc::new(MemoryCredentialResolver::default());
+    let service =
+        DesktopService::open_with_credential_store(&workspace, credentials.clone()).unwrap();
+    let defaults = serde_json::to_value(service.workspace_settings().unwrap()).unwrap();
+    assert_eq!(
+        defaults["loogle_resident"], true,
+        "「Loogle 常驻模式」默认打开"
+    );
+
+    // A request from an older frontend without the field keeps it on.
+    let legacy: SaveWorkspaceSettingsRequest = serde_json::from_value(serde_json::json!({
+        "discovery_admission": "review_before_publish",
+        "discovery_timeout_seconds": 600,
+        "connect_timeout_seconds": 15
+    }))
+    .unwrap();
+    assert!(
+        service
+            .save_workspace_settings(legacy)
+            .unwrap()
+            .loogle_resident()
+    );
+
+    let off: SaveWorkspaceSettingsRequest = serde_json::from_value(serde_json::json!({
+        "discovery_admission": "review_before_publish",
+        "discovery_timeout_seconds": 600,
+        "connect_timeout_seconds": 15,
+        "loogle_resident": false
+    }))
+    .unwrap();
+    service.save_workspace_settings(off).unwrap();
+    let reopened = DesktopService::open_with_credential_store(&workspace, credentials).unwrap();
+    assert!(!reopened.workspace_settings().unwrap().loogle_resident());
+    directory.cleanup();
+}
+
+#[test]
 fn persists_llm_profile_while_keeping_api_key_out_of_sqlite() {
     let directory = TestDirectory::create("llm-settings");
     let workspace = directory.path().join("workspace");

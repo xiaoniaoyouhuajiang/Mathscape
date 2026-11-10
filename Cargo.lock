@@ -3328,6 +3328,7 @@ dependencies = [
  "mathscape-orchestrator",
  "mathscape-pdf",
  "mathscape-query",
+ "mathscape-resident",
  "mathscape-sandbox",
  "mathscape-store-sqlite",
  "mathscape-tool-lean",
@@ -3486,6 +3487,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mathscape-resident"
+version = "0.1.0"
+dependencies = [
+ "nix",
+ "serde",
+]
+
+[[package]]
 name = "mathscape-sandbox"
 version = "0.1.0"
 dependencies = [
@@ -3516,6 +3525,7 @@ dependencies = [
 name = "mathscape-tool-lean"
 version = "0.1.0"
 dependencies = [
+ "mathscape-resident",
  "nix",
  "serde",
  "serde_json",

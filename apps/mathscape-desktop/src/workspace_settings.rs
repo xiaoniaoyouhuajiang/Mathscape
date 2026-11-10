@@ -32,6 +32,13 @@ pub struct WorkspaceSettings {
     discovery_admission: DiscoveryAdmissionPreference,
     discovery_timeout_seconds: u64,
     connect_timeout_seconds: u64,
+    /// 「Loogle 常驻模式」. Older saved settings have no field: on.
+    #[serde(default = "default_true")]
+    loogle_resident: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 impl Default for WorkspaceSettings {
@@ -41,6 +48,7 @@ impl Default for WorkspaceSettings {
             discovery_admission: DiscoveryAdmissionPreference::ReviewBeforePublish,
             discovery_timeout_seconds: DEFAULT_DISCOVERY_TIMEOUT_SECONDS,
             connect_timeout_seconds: DEFAULT_CONNECT_TIMEOUT_SECONDS,
+            loogle_resident: true,
         }
     }
 }
@@ -82,6 +90,10 @@ impl WorkspaceSettings {
         self.connect_timeout_seconds
     }
 
+    pub const fn loogle_resident(&self) -> bool {
+        self.loogle_resident
+    }
+
     pub(crate) fn discovery_policy(
         &self,
         admission: DiscoveryAdmission,
@@ -100,6 +112,8 @@ pub struct SaveWorkspaceSettingsRequest {
     discovery_admission: DiscoveryAdmissionPreference,
     discovery_timeout_seconds: u64,
     connect_timeout_seconds: u64,
+    #[serde(default = "default_true")]
+    loogle_resident: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -136,10 +150,12 @@ impl DesktopService {
             discovery_admission: request.discovery_admission,
             discovery_timeout_seconds: request.discovery_timeout_seconds,
             connect_timeout_seconds: request.connect_timeout_seconds,
+            loogle_resident: request.loogle_resident,
         };
         settings.validate()?;
         let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
         store.save_workspace_settings(&settings)?;
+        crate::loogle_host::set_enabled(settings.loogle_resident);
         Ok(settings)
     }
 }

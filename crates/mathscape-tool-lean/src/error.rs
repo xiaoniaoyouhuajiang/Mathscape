@@ -318,6 +318,14 @@ pub enum LeanLoogleError {
     InvalidJson(#[source] serde_json::Error),
     #[error(transparent)]
     Runner(#[from] LeanRunnerError),
+    /// The resident Loogle did not answer in time; the process was killed and
+    /// the next query restarts it.
+    #[error("Loogle {stage} timed out after {seconds}s")]
+    TimedOut { stage: String, seconds: u64 },
+    /// The resident Loogle could not start (for example a missing or stale
+    /// index under `--index-mode read`). The index is never rebuilt.
+    #[error("resident Loogle is unavailable: {reason}")]
+    ResidentUnavailable { reason: String },
 }
 
 pub(crate) fn validate_absolute_path(

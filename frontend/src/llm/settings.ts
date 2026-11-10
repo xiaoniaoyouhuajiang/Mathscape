@@ -4,11 +4,15 @@ import { eventBus } from "../core/events";
 import "./settings.css";
 import {
   announceWorkspaceSettings,
+  getLoogleResidentStatus,
   getWorkspaceSettings,
   saveWorkspaceSettings,
   type DiscoveryAdmissionPreference,
   type WorkspaceSettings,
 } from "../workspace-settings";
+
+const LOOGLE_RESIDENT_NOTE =
+  "打开后，mathlib.search 第一次查询会启动一个常驻 Loogle（约 11–36 秒，常驻约 5.5GB 内存），之后每次查询通常不到 1 秒；空闲 15 分钟自动关闭。关闭后每次查询单独启动 Loogle（约 11 秒）。";
 
 type WireProtocol =
   | "open_ai_chat_completions"
@@ -70,6 +74,8 @@ export class LlmSettingsController {
   private readonly admission: HTMLSelectElement;
   private readonly discoveryTimeout: HTMLInputElement;
   private readonly connectTimeout: HTMLInputElement;
+  private readonly loogleResident: HTMLInputElement;
+  private readonly loogleResidentNote: HTMLElement;
   private readonly workspaceResult: HTMLElement;
   private readonly workspaceSaveButton: HTMLButtonElement;
   private readonly provider: HTMLSelectElement;
@@ -137,6 +143,13 @@ export class LlmSettingsController {
                 <small>只限制建立网络连接的时间，不限制模型推理时长。</small>
               </label>
             </details>
+            <div class="settings-field loogle-resident-setting">
+              <label class="clear-key-field">
+                <input name="loogle-resident" type="checkbox" />
+                <span>Loogle 常驻模式</span>
+              </label>
+              <small class="loogle-resident-note">${LOOGLE_RESIDENT_NOTE}</small>
+            </div>
             <div class="workspace-settings-result settings-result" aria-live="polite" hidden></div>
             <footer class="settings-actions compact-actions">
               <button class="settings-primary save-workspace-settings" type="submit">保存运行策略</button>
@@ -224,6 +237,8 @@ export class LlmSettingsController {
     this.admission = required<HTMLSelectElement>(host, "select[name=discovery-admission]");
     this.discoveryTimeout = required<HTMLInputElement>(host, "input[name=discovery-timeout]");
     this.connectTimeout = required<HTMLInputElement>(host, "input[name=connect-timeout]");
+    this.loogleResident = required<HTMLInputElement>(host, "input[name=loogle-resident]");
+    this.loogleResidentNote = required<HTMLElement>(host, ".loogle-resident-note");
     this.workspaceResult = required<HTMLElement>(host, ".workspace-settings-result");
     this.workspaceSaveButton = required<HTMLButtonElement>(host, ".save-workspace-settings");
     this.provider = required<HTMLSelectElement>(host, "select[name=provider]");
@@ -308,6 +323,24 @@ export class LlmSettingsController {
     } catch (error: unknown) {
       this.showWorkspaceResult(errorMessage(error), false);
     }
+    await this.loadLoogleResidentStatus();
+  }
+
+  private async loadLoogleResidentStatus(): Promise<void> {
+    let status = null;
+    try {
+      status = await getLoogleResidentStatus();
+    } catch {
+      status = null;
+    }
+    const forcedOff = status?.forced_off === true;
+    const unavailable = status?.available === false;
+    this.loogleResident.disabled = forcedOff || unavailable;
+    this.loogleResidentNote.textContent = forcedOff
+      ? "已被环境变量 MATHSCAPE_LOOGLE_RESIDENT 关闭，mathlib.search 每次单独启动 Loogle。"
+      : unavailable
+        ? "当前平台不支持常驻 Loogle，mathlib.search 每次单独启动 Loogle。"
+        : LOOGLE_RESIDENT_NOTE;
   }
 
   private close(): void {
@@ -347,6 +380,7 @@ export class LlmSettingsController {
     this.admission.value = settings.discovery_admission;
     this.discoveryTimeout.value = String(settings.discovery_timeout_seconds);
     this.connectTimeout.value = String(settings.connect_timeout_seconds);
+    this.loogleResident.checked = settings.loogle_resident !== false;
   }
 
   private async saveWorkspacePolicy(): Promise<void> {
@@ -359,6 +393,7 @@ export class LlmSettingsController {
         discovery_admission: this.admission.value as DiscoveryAdmissionPreference,
         discovery_timeout_seconds: this.discoveryTimeout.valueAsNumber,
         connect_timeout_seconds: this.connectTimeout.valueAsNumber,
+        loogle_resident: this.loogleResident.checked,
       });
       this.populateWorkspaceForm(settings);
       announceWorkspaceSettings(settings);

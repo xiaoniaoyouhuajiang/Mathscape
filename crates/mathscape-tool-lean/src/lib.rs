@@ -12,6 +12,9 @@ mod error;
 mod export;
 mod fingerprint;
 mod loogle;
+#[cfg(unix)]
+mod loogle_ipc;
+mod loogle_resident;
 mod probe;
 mod profile;
 mod receipt;
@@ -42,7 +45,21 @@ pub use fingerprint::{
     LEAN_FINGERPRINT_ALGORITHM, LEAN_FINGERPRINT_SCHEMA_VERSION, LeanEnvironmentFingerprint,
     LeanFingerprintFile, LeanFingerprintStatus, fingerprint_environment,
 };
-pub use loogle::{LoogleAdapter, LoogleIndexMode, LoogleSearchRequest, LoogleSearchResult};
+pub use loogle::{
+    LoogleAdapter, LoogleIndexMode, LoogleSearchRequest, LoogleSearchResult,
+    MANAGED_LOOGLE_INDEX_RELATIVE_PATH, MANAGED_LOOGLE_RELATIVE_PATH, fingerprint_file,
+};
+#[cfg(unix)]
+pub use loogle_ipc::{
+    LOOGLE_IPC_VERSION, LOOGLE_RESIDENT_ENV, LOOGLE_SOCKET_ENV, LoogleBackendMode, LoogleIpcError,
+    LoogleIpcRequest, LoogleIpcResponse, LoogleResidentHost, default_socket_path,
+    request_over_socket, resident_forced_off,
+};
+pub use loogle_resident::{
+    LOOGLE_INSTANCE_NAME, LOOGLE_READY_LINE, LoogleResidentKey, LoogleTarget, RESIDENT_MAX_RESULTS,
+    ResidentLoogle, ResidentLoogleOutcome, ResidentLoogleResult, loogle_resident_policy,
+    validate_resident_query,
+};
 pub use probe::{LeanEnvironmentProbe, LeanEnvironmentState};
 pub use profile::{
     DEFAULT_LEAN_TOOLCHAIN, DEFAULT_MATHLIB_REFERENCE, DEFAULT_PROFILE_ID, LEAN_PROFILE_ROOT_ENV,

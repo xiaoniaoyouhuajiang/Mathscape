@@ -25,6 +25,7 @@ mathscape-llm = { workspace = true, features = ["keyring"] }
 mathscape-orchestrator.workspace = true
 mathscape-pdf.workspace = true
 mathscape-query.workspace = true
+mathscape-resident.workspace = true
 mathscape-sandbox.workspace = true
 mathscape-store-sqlite.workspace = true
 mathscape-tool-marker.workspace = true

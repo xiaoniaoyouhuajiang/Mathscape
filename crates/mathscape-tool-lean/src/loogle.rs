@@ -1,4 +1,9 @@
-use std::{fs::File, io::Read, path::PathBuf, time::Duration};
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -9,6 +14,11 @@ use crate::{
     runner::LeanCommand,
 };
 
+/// Managed Loogle executable, relative to the profile directory.
+pub const MANAGED_LOOGLE_RELATIVE_PATH: &str = "tools/loogle/.lake/build/bin/loogle";
+/// Managed Loogle index, relative to the profile's fingerprinted cache root.
+pub const MANAGED_LOOGLE_INDEX_RELATIVE_PATH: &str = "loogle/mathlib.loogle-index";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoogleIndexMode {
     None,
@@ -18,7 +28,7 @@ pub enum LoogleIndexMode {
 }
 
 impl LoogleIndexMode {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Use => "use",
@@ -136,29 +146,10 @@ impl LoogleAdapter {
         )?;
         let project_root = &profile.metadata().project_root;
         if let Some(index_file) = &request.index_file {
-            let Some(managed_root) = profile
-                .fingerprint()
-                .cache_root
-                .as_deref()
-                .map(PathBuf::from)
-            else {
-                return Err(LeanLoogleError::Access {
-                    path: index_file.clone(),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "managed profile cache is unavailable",
-                    ),
-                });
-            };
-            if !index_file.starts_with(&managed_root) {
-                return Err(LeanLoogleError::Access {
-                    path: index_file.clone(),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "Loogle index must stay inside the managed profile cache",
-                    ),
-                });
-            }
+            ensure_managed_index(
+                index_file,
+                profile.fingerprint().cache_root.as_deref().map(Path::new),
+            )?;
         }
         let mut command = LeanCommand::new(lake.to_owned(), project_root.to_owned()).args([
             "env".to_owned(),
@@ -194,37 +185,87 @@ impl LoogleAdapter {
             return Err(LeanLoogleError::OutputTruncated);
         }
         let response = parse_response(run.stdout().bytes())?;
-        let candidates = response
-            .hits
-            .into_iter()
-            .map(|hit| DeclarationCandidate {
-                schema_version: DECLARATION_SCHEMA_VERSION,
-                profile_fingerprint: profile.fingerprint().digest.clone(),
-                name: hit.name,
-                kind: DeclarationKind::Unknown,
-                module: hit.module,
-                type_text: hit.type_text,
-                docstring: hit.doc,
-                source_file: None,
-                source_line: None,
-                source_column: None,
-                dependencies: Vec::new(),
-                type_truncated: false,
-                metadata_complete: false,
-            })
-            .collect::<Vec<_>>();
-        Ok(LoogleSearchResult {
-            backend: "loogle".to_owned(),
-            backend_fingerprint: self.backend_fingerprint.clone(),
-            total: response.count,
-            truncated: response.count > candidates.len(),
-            candidates,
-            profile_fingerprint: profile.fingerprint().digest.clone(),
-        })
+        Ok(build_search_result(
+            response,
+            &profile.fingerprint().digest,
+            &self.backend_fingerprint,
+            usize::MAX,
+        ))
     }
 }
 
-fn hash_executable(path: &PathBuf) -> std::io::Result<String> {
+/// Turns a Loogle reply into the MCP-facing result. `limit` caps the
+/// candidates (the resident process runs with a fixed `--max-results`);
+/// `total` stays Loogle's `count`, so `truncated` means the same thing on both
+/// backends: `count > candidates.len()`.
+pub(crate) fn build_search_result(
+    response: RawLoogleResponse,
+    profile_fingerprint: &str,
+    backend_fingerprint: &str,
+    limit: usize,
+) -> LoogleSearchResult {
+    let candidates = response
+        .hits
+        .into_iter()
+        .take(limit)
+        .map(|hit| DeclarationCandidate {
+            schema_version: DECLARATION_SCHEMA_VERSION,
+            profile_fingerprint: profile_fingerprint.to_owned(),
+            name: hit.name,
+            kind: DeclarationKind::Unknown,
+            module: hit.module,
+            type_text: hit.type_text,
+            docstring: hit.doc,
+            source_file: None,
+            source_line: None,
+            source_column: None,
+            dependencies: Vec::new(),
+            type_truncated: false,
+            metadata_complete: false,
+        })
+        .collect::<Vec<_>>();
+    LoogleSearchResult {
+        backend: "loogle".to_owned(),
+        backend_fingerprint: backend_fingerprint.to_owned(),
+        total: response.count,
+        truncated: response.count > candidates.len(),
+        candidates,
+        profile_fingerprint: profile_fingerprint.to_owned(),
+    }
+}
+
+/// Checks that `index_file` stays inside the profile's managed cache.
+pub(crate) fn ensure_managed_index(
+    index_file: &Path,
+    managed_root: Option<&Path>,
+) -> Result<(), LeanLoogleError> {
+    let Some(managed_root) = managed_root else {
+        return Err(LeanLoogleError::Access {
+            path: index_file.to_owned(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "managed profile cache is unavailable",
+            ),
+        });
+    };
+    if !index_file.starts_with(managed_root) {
+        return Err(LeanLoogleError::Access {
+            path: index_file.to_owned(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Loogle index must stay inside the managed profile cache",
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// SHA-256 of a file as `sha256:<hex>` (the MCP `index_fingerprint` format).
+pub fn fingerprint_file(path: &Path) -> std::io::Result<String> {
+    Ok(format!("sha256:{}", hash_executable(path)?))
+}
+
+pub(crate) fn hash_executable(path: &Path) -> std::io::Result<String> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -249,7 +290,7 @@ fn hex(bytes: &[u8]) -> String {
     )
 }
 
-fn parse_response(bytes: &[u8]) -> Result<RawLoogleResponse, LeanLoogleError> {
+pub(crate) fn parse_response(bytes: &[u8]) -> Result<RawLoogleResponse, LeanLoogleError> {
     if let Some(rejected) = parse_rejection(bytes) {
         return Err(rejected);
     }
@@ -257,7 +298,7 @@ fn parse_response(bytes: &[u8]) -> Result<RawLoogleResponse, LeanLoogleError> {
 }
 
 /// Recognizes Loogle's `{"error": ..., "suggestions": [...]}` reply.
-fn parse_rejection(bytes: &[u8]) -> Option<LeanLoogleError> {
+pub(crate) fn parse_rejection(bytes: &[u8]) -> Option<LeanLoogleError> {
     let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
     let message = value.get("error")?.as_str()?.trim().to_owned();
     let suggestions = value
@@ -279,20 +320,25 @@ fn parse_rejection(bytes: &[u8]) -> Option<LeanLoogleError> {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawLoogleResponse {
-    count: usize,
+pub(crate) struct RawLoogleResponse {
+    pub(crate) count: usize,
     #[serde(default)]
     #[serde(rename = "header")]
     _header: Option<String>,
     #[serde(default)]
     #[serde(rename = "heartbeats")]
     _heartbeats: Option<u64>,
-    hits: Vec<RawLoogleHit>,
+    /// A query that parses but matches nothing comes back as `count: 0` with
+    /// suggestions (measured on Loogle for Mathlib 4.33.1).
+    #[serde(default)]
+    #[serde(rename = "suggestions")]
+    _suggestions: Option<Vec<String>>,
+    pub(crate) hits: Vec<RawLoogleHit>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawLoogleHit {
+pub(crate) struct RawLoogleHit {
     name: String,
     module: String,
     #[serde(rename = "type")]
@@ -346,6 +392,16 @@ mod tests {
         .unwrap();
         assert_eq!(response.count, 1);
         assert_eq!(response.hits[0].name, "add_comm");
+    }
+
+    #[test]
+    fn no_match_reply_with_suggestions_parses_as_empty() {
+        let response = parse_response(
+            br#"{"count":0,"header":"","heartbeats":1,"hits":[],"suggestions":["Nat.add_comm"]}"#,
+        )
+        .unwrap();
+        assert_eq!(response.count, 0);
+        assert!(response.hits.is_empty());
     }
 
     #[test]

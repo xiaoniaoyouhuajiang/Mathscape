@@ -44,8 +44,32 @@ test("persists workspace review and timeout policy independently of the LLM prof
     discovery_admission: "ask_each_run",
     discovery_timeout_seconds: 900,
     connect_timeout_seconds: 20,
+    loogle_resident: true,
   });
   expect(await page.evaluate(() => (window as any).harness.saves.length)).toBe(0);
+});
+
+test("Loogle 常驻模式 defaults on and saves off with the workspace policy", async ({ page }) => {
+  await page.locator("#settings-trigger").click();
+  const toggle = page.getByLabel("Loogle 常驻模式");
+  await expect(toggle).toBeChecked();
+  await expect(toggle).toBeEnabled();
+  await expect(page.locator(".loogle-resident-note")).toContainText("空闲 15 分钟自动关闭");
+  await toggle.uncheck();
+  await page.getByRole("button", { name: "保存运行策略" }).click();
+  await expect(page.locator(".workspace-settings-result")).toContainText("运行策略已保存");
+  const request = await page.evaluate(() => (window as any).harness.workspaceSaves[0]);
+  expect(request.loogle_resident).toBe(false);
+  await page.getByRole("button", { name: "关闭" }).click();
+  await page.locator("#settings-trigger").click();
+  await expect(page.getByLabel("Loogle 常驻模式")).not.toBeChecked();
+});
+
+test("Loogle 常驻模式 is locked when the environment forces it off", async ({ page }) => {
+  await page.evaluate(() => (window as any).harness.forceLoogleOff());
+  await page.locator("#settings-trigger").click();
+  await expect(page.getByLabel("Loogle 常驻模式")).toBeDisabled();
+  await expect(page.locator(".loogle-resident-note")).toContainText("MATHSCAPE_LOOGLE_RESIDENT");
 });
 
 test("preserves or explicitly clears a saved credential", async ({ page }) => {
