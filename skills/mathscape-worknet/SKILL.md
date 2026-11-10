@@ -2,11 +2,11 @@
 name: mathscape-worknet
 description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、对象卡、表示、证明上下文、失败见证）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
 metadata:
-  version: "0.6.3"
-  tool_schema_version: "mathscape-mcp/15"
+  version: "0.6.4"
+  tool_schema_version: "mathscape-mcp/16"
 ---
 
-# Mathscape 数学地图构建 skill v0.6.3
+# Mathscape 数学地图构建 skill v0.6.4
 
 这份 skill 给在 Mathscape 工作区中帮助用户搭建数学地图的 Agent 使用。它的任务很简单：从用户关心的原文、手稿或问题出发，逐步整理出可回溯的数学理解，并把仍然不确定的地方留下来。
 
@@ -142,9 +142,9 @@ workspace.search
 
 `artifact.stage` 是受 round 约束的文件暂存能力。它可以保存对象卡、工作网草案、Lean 文件和检查报告，但不会登记正式 Artifact、地图节点或关系。
 
-`propose_changes`、`get_change_set` 和 `user.ask` 只有在本轮工具列表中实际出现时才能调用。语义层的 `emir.upsert_*`、`rdtx.upsert_*`、`rdtx.record_failure` 等目前属于契约草案，必须作为 `propose_changes` 的薄封装，不能另开一条绕过用户接受的写路径。
+`propose_changes`、`get_change_set`、`list_change_sets` 和 `user.ask` 只有在本轮工具列表中实际出现时才能调用。语义层的 `emir.upsert_*`、`rdtx.upsert_*`、`rdtx.record_failure` 等目前属于契约草案，必须作为 `propose_changes` 的薄封装，不能另开一条绕过用户接受的写路径。
 
-### 4.1 `propose_changes` 怎么写（`mathscape-mcp/15`）
+### 4.1 `propose_changes` 怎么写（`mathscape-mcp/16`）
 
 只在本轮工具列表里有 `propose_changes` 时使用。它只产生 `staged` 或 `blocked` 的提案，从不改正式地图；`staged` 的对象会以「未审批」样式出现在用户地图上，用户之后在 Desktop 统一接受或丢弃。接受只表示写入地图，不代表数学上已验证，也不会提升 Trust。
 
@@ -156,7 +156,7 @@ workspace.search
 { "local_ref": "s1", "kind": "source_span", "op": "create",
   "payload": { "artifact_id": "<material.read 返回的 Markdown 快照 id>",
                "md_byte_range": { "start": 120, "end": 188 },
-               "granularity": "inline",
+               "granularity": "page",
                "quote": "<这段字节范围里的全部原文>" } }
 ```
 
@@ -165,14 +165,15 @@ workspace.search
 1. `material.read` 读页（`pdf_pages`）。返回的 `served_artifact_id` 或 `details.served_segments[].artifact_id` 是快照 id；`served_segments[].md_byte_range` 是所读页在该快照里的范围。正文从快照第 0 字节开始，单快照时正文里的偏移就是快照字节偏移。
 2. 从读到的正文里原样复制一小段（一道题、一个定义、一段证明），调用 `material.locate {artifact_id, quote, within?}`。`within` 可填上一步的 `md_byte_range`，把搜索限制在这几页。
 3. `status: ok` 时把返回的 `md_byte_range` 和**同一个** `quote` 原样放进 `source_span`，R2 引文核对一定通过；`ambiguous` 时从 `candidates` 里按上下文选一个，或加长 quote / 缩小 `within` 再查；`not_found` 说明这段文字不在该快照里，重新读原文。
-4. 只在 locate 结果的 `page_granularity_available` 为 true 时才用 `page` 粒度。
+4. 粒度按 locate 结果选：`page_granularity_available` 为 true（返回了唯一的 `page`）时**用 `page` 粒度**，页码才会存进 span；只有拿不到页（`page` 为 null，诊断 `page_markers_absent` 或 `page_unresolved`）时才用 `inline`。
+5. **不要声称没有存下来的页码。** `inline` span 不记录页码；如果你用了 `inline`，回复里就不要说「锚定到第 N 页」，可以说「位于快照某字节范围，页码未记录」。提案里出现 `page_granularity_available`（info）说明这个 inline 范围其实能落到唯一一页，下次改用 `page`。
 
 规则：
 
 - `quote` 必须是**整个范围**的原文，不能只写开头或结尾，也不能用「…」省略中间。服务端按范围截出原文再和 `quote` 比较（先精确，再忽略空白、TeX 间距命令和外层 `$…$` 差异），不会在全文里帮你找。
 - 单个 span 最长 4096 字节（`span_too_long`）。一章不是一个 span：按题、按定义或按段拆成多个小 span，再分别挂到各自的来源单元上；章节单元可以只引用标题那一小段。
-- `granularity` 取 `inline`、`block` 或 `page`。`block` 要求范围内有 canonical block，`page` 要求范围能唯一落到一页，否则 blocked。拿不准就用 `inline`。
-- 快照没有分页标记（`material.read` 给出 `page_markers_absent`）时只能用 `inline` 粒度。用户直接导入的 Markdown、其他来源转换的 Markdown，以及部分早期解析的快照都可能没有分页标记，这是正常情况，不要为此重新解析。
+- `granularity` 取 `inline`、`block` 或 `page`。`block` 要求范围内有 canonical block，`page` 要求范围能唯一落到一页，否则 blocked。locate 给出唯一页就用 `page`；locate 没给页时用 `inline`。
+- 快照没有分页标记（`material.read` 或 `material.locate` 给出 `page_markers_absent`）时只能用 `inline` 粒度，也不要自己推断页码。用户直接导入的 Markdown、其他来源转换的 Markdown，以及部分早期解析的快照都可能没有分页标记，这是正常情况，不要为此重新解析。
 - 同一快照同一范围的 span id 是确定的：已经在地图上就会自动变成引用（`span_already_exists`），不会重复创建。
 - 不要填 id、hash、页码、块 id 等字段；多写字段会被拒绝。新建的 span 必须被本次提案里的单元或关系用到，否则 `unused_span`。
 
@@ -198,11 +199,11 @@ workspace.search
 **引用规则**：
 
 - `$new:<local_ref>` 指本次提案里的新建项。`local_ref` 只用字母、数字、`_`、`-`、`.`，首字符是字母或数字，最长 64 字节。
-- `mathscape:` 开头的稳定 id 指正式地图上的对象，或**本调查**里其他仍为 `staged` 的提案对象（用 `graph.get` / `graph.neighborhood` 的 `scope: "investigation"` 或 `get_change_set` 的 `staged_ids` 查到）。引用别的提案就形成依赖：用户必须先接受或同批接受被依赖的提案。
+- `mathscape:` 开头的稳定 id 指正式地图上的对象，或**本调查**里其他仍为 `staged` 的提案对象（用 `graph.get` / `graph.neighborhood` 的 `scope: "investigation"`，或先 `list_change_sets` 再 `get_change_set` 的 `staged_ids` 查到）。引用别的提案就形成依赖：用户必须先接受或同批接受被依赖的提案。
 - 裸写 `local_ref`（不带 `$new:`）这一版还能用但会收到 `bare_local_ref_deprecated`，下一版移除。
 - 本调查 = 整场沙箱会话：开「新对话」后，之前对话里的暂存提案仍然可见、可引用。
 
-**修订**：读 `get_change_set` 拿到当前 `version` 和 `proposal_fingerprint`，再用 `supersedes: {change_set_id, version, proposal_fingerprint}` 重新提交整份提案。同名 `local_ref` 得到同一个 id。被替换的提案上，依赖它的其他提案会转为 `blocked`（`dependency_superseded`，更深一层是 `dependency_blocked`），不会自动改指新版本，需要你读回后重新提交。
+**修订**：之前轮次的工具结果不会回放给你，你多半记不住旧提案的 id。**重提或修改之前的提案前，先调用 `list_change_sets`**（只列本调查 = 本沙箱会话的提案，新的在前；`pending_only: true` 只看 staged/blocked）。按 `title`、`request_id` 和 `active.blocking_codes` 找到要改的那份，把它的 `supersedes` 对象原样放进 `propose_changes`，重新提交**整份**提案；需要看旧内容时再用 `get_change_set` 读回。这样得到的是同一个 change set 的下一个版本（v2、v3…），旧版本被折叠；不带 `supersedes` 就会新建一个独立提案，旧的 blocked 版本还留在用户的审核队列里。`supersedes` 为 null 表示该提案已被接受或丢弃，不能再修订，需要的话新建提案。同名 `local_ref` 得到同一个 id。被替换的提案上，依赖它的其他提案会转为 `blocked`（`dependency_superseded`，更深一层是 `dependency_blocked`），不会自动改指新版本，需要你读回后重新提交。
 
 **常见诊断码**（`blocked` 时整份提案保留，改好后用 `supersedes` 重提）：
 
@@ -213,7 +214,8 @@ workspace.search
 | `range_out_of_bounds` / `invalid_utf8_boundary` | 范围越界或切在字符中间 |
 | `snapshot_not_found` / `snapshot_not_immutable` | `artifact_id` 不是已登记的 Markdown 快照 |
 | `block_locator_unavailable` / `page_mapping_unavailable` | `block` / `page` 粒度定位不到；改用 `inline` |
-| `page_markers_absent`（`material.read` 的诊断） | 快照没有分页标记，页映射不可用；用 `inline` 粒度 |
+| `page_markers_absent`（`material.read` / `material.locate` 的诊断） | 快照覆盖多页但没有分页标记，页映射不可用；用 `inline` 粒度，不要声称页码 |
+| `page_unresolved`（`material.locate` 的诊断） | 这段范围落不到唯一一页（跨页，或快照不属于任何 PDF）；用 `inline` 粒度 |
 | `invalid_locator` | 本提案里的原文证据缺少物理定位（没有 Markdown 范围、页或手稿选区）；`target_id` 指出是哪个对象 |
 | `span_inactive` | 同一范围的 span 已被用户退役；不要自动重建，告诉用户 |
 | `unused_span` | 新建的 span 没被引用 |
@@ -223,7 +225,7 @@ workspace.search
 | `dependency_superseded` / `dependency_blocked` / `dependency_discarded` | 被依赖的提案被替换、变 blocked 或被用户丢弃 |
 | `parent_cycle`、`mixed_source_context`、`cross_source_parent` 等 | 最终图结构不合法 |
 
-`span_already_exists`（info）、`span_granularity_ignored`（warn）和 `head_integrity`（warn）不阻塞提案。`head_integrity` 表示工作区里**已有**、且本提案没有碰到的对象本身有问题（`target_id` 是该对象）：它与本提案无关，不要为此修改或重提提案，在交接时告诉用户即可。只有本提案及其依赖的提案新增或修改的对象出错，才会让提案 blocked。诊断里 `local_ref` 指本提案的条目，`target_id` 指地图对象 id。
+`span_already_exists`（info）、`page_granularity_available`（info：这个 inline 范围能落到唯一一页，改用 `page` 才会存页码）、`span_granularity_ignored`（warn）和 `head_integrity`（warn）不阻塞提案。`head_integrity` 表示工作区里**已有**、且本提案没有碰到的对象本身有问题（`target_id` 是该对象）：它与本提案无关，不要为此修改或重提提案，在交接时告诉用户即可。只有本提案及其依赖的提案新增或修改的对象出错，才会让提案 blocked。诊断里 `local_ref` 指本提案的条目，`target_id` 指地图对象 id。
 
 如果某阶段所需能力不可用，输出应包含：
 

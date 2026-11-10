@@ -88,6 +88,8 @@
 | V1 | 只有本提案触及的对象出错才阻塞 | 手稿笔迹 span（`ink.snapshot_artifact` + 非空 `stroke_ids`）算有物理定位，不再报 `invalid_locator`（仅认作合法定位，不进 source payload）。提案、影响预览、批量计划 / 接受与调查投影改用 `plan_map_change_over_head`：本提案及其依赖闭包既未操作、也未改动的对象上，head 里**本来就有**的问题移入 `ImpactPlan.head_issues`，在 `propose_changes` 里是 `warn: head_integrity`（`target_id` = 该对象），不阻塞、不进 Debt；本提案在未触及对象上**新引起**的问题仍阻塞。所有诊断带 `target_id`。手动地图编辑仍用严格的 `plan_map_change`（不做隐式修复） | §4.2.4、§8 |
 | V2 | 按页读的字节段 | `material.read` 按 `pdf_pages` 读时，单快照也返回 `details.served_segments`（所读页在快照里的 `md_byte_range`；正文从快照第 0 字节起）。多页快照没有分页标记 ⇒ 诊断 `page_markers_absent`，只能用 `inline` 粒度；用户导入或其他来源的 Markdown 没有分页标记属正常情况，不放宽重解析规则 | §4.2.5 |
 | V3 | `material.locate` 与 span 长度上限 | 新只读工具 `material.locate {artifact_id, quote, within?}`：按 R2 同一规则搜索（先精确，否则两侧归一化后比较并映射回原始字节），返回的每个范围与同一 `quote` 必过 R2；唯一命中给 `md_byte_range`、块 id、能唯一确定时的页；多处命中 `ambiguous` 列出候选（上限 20）。单个 span 最长 4096 字节，超过 ⇒ `span_too_long`。R2 的截取后比较不变。`tool_schema_version` = `mathscape-mcp/15` | §4.2.5、§4.6 |
+| V4 | 找回并修订本调查的提案（第三轮验收） | 新只读工具 `list_change_sets {pending_only?, limit?}`（§4.3.1）：只列本调查的 change_set，新的在前，每项带活动 version 的状态、阻塞码和可直接放进 `propose_changes` 的 `supersedes`。原因：对话历史只回放文字，Agent 拿不到旧提案 id，重提只能新建 change_set，旧的 blocked 版本留在队列里。`tool_schema_version` = `mathscape-mcp/16`，skill v0.6.4 要求修订前先列出再带 `supersedes` | §4.3.1、§4.2.8 |
+| V5 | 页粒度与 `page_markers_absent`（第三轮验收） | `material.locate` 给出唯一页（`page_granularity_available` = true）时，skill 要求用 `page` 粒度，只有拿不到页才用 `inline`，且不得声称未存下的页码；`propose_changes` 对能唯一落到一页的 `inline` span 给 `info: page_granularity_available`（不阻塞）。`material.locate` 在多页且无分页标记的快照上给 `page_markers_absent`（与 `material.read` 同码），其他落不到唯一页的情形给 `page_unresolved`（附原因） | §4.2.5、§4.6 |
 
 ---
 
@@ -403,6 +405,26 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 - 只读，不校验 `--round` generation（Phase0 §2.1），因此 `awaiting_user` 后的下一 turn 可立即回读。
 - 也供 Agent 查看接受后回执，确认哪些已提交（FX §6.2 末段「最终报告哪些已提交、哪些仍为候选」）。
 
+#### 4.3.1 `list_change_sets` [2026-11-10 用户定]
+
+只读。输入 `{ "pending_only": false?, "limit": 1–100? }`（默认列全部状态，上限 100）。调查与 `get_change_set` 同一解析（round 绑定或适配器声明的 investigation）；没有调查时返回空列表 + `investigation_unavailable`。输出：
+
+```jsonc
+{ "status": "ok", "investigation_id": "sandbox:…", "total": 2, "truncated": false,
+  "change_sets": [ {
+    "change_set_id": "…", "request_id": "…(活动 version 的)", "title": "rationale 前 120 字",
+    "created_at": "…(v1)",
+    "active": { "version": 2, "state": "staged|blocked|accepted|discarded|withdrawn",
+                "proposal_fingerprint": "…", "created_at": "…", "round_id": "…",
+                "blocking_codes": ["…"], "debt_count": 0 },
+    "versions": [ { "version": 1, "state": "superseded", "request_id": "…", "created_at": "…" }, … ],
+    "supersedes": { "change_set_id": "…", "version": 2, "proposal_fingerprint": "…" } | null } ] }
+```
+
+- 按活动 version 的 `created_at` 倒序；`pending_only` 只留活动 version 为 `staged` / `blocked` 的。
+- `supersedes` 只在活动 version 为 `staged` / `blocked` 时给出，原样传给 `propose_changes` 即得到同一 change_set 的下一 version（§4.2 的 `supersedes` 校验不变）；已接受 / 丢弃的为 `null`。
+- 可见性同 §4.3：只列本调查；其他调查的 change_set 不出现、不泄露数量。
+
 ### 4.4 `scope=investigation`：暂存投影 [锁定语义]
 
 替换今天的桩（Phase0 §2.3：`investigation` 按 `accepted` 回答 + `scope_not_supported`；1c §3.2 同）：
@@ -439,6 +461,8 @@ Phase0 §2.2 已把 `blocked` 预留给 `propose_changes`。v1 增量仅：
 只读工具，输入 `{artifact_id, quote, within?: {start, end}}`。`artifact_id` 必须是 text/markdown 快照（与 `source_span.artifact_id` 相同的校验：`propose::load_snapshot`）。`quote` 1–4096 字节，超过 ⇒ `not_found` + `span_too_long`。`within` 是快照字节坐标的半开区间，须在快照内且落在 UTF-8 边界，否则 `invalid_arg`。
 
 匹配：`source_locator::locate_quote`——先找精确出现；没有时两侧做与 R2 相同的归一化后搜索，再把命中映射回原始字节；最后用 `quote_matches_range` 过滤，保证每个候选与同一 `quote` 必过 R2。输出 `status`（`ok` 唯一 / `ambiguous` 多处 / `not_found`）、`match`（`exact` | `normalized`）、`candidate_count`、`truncated`、`candidates[]`（每项 `md_byte_range`、`block_ids`（同 `marker_block_ids` 规则）、`page`（仅能唯一映射到一页时给 `{pdf_page_index, page_number}`）、`page_granularity_available`）；唯一命中时这些字段也放在顶层。候选上限 20（`candidates_truncated`）。不写地图、目录或产物池。
+
+[2026-11-10 第三轮] 有候选落不到唯一页时追加一条诊断：快照覆盖多页（或没有页范围）且没有分页标记 ⇒ `page_markers_absent`（带 `artifact_id`、`snapshot_pages`，与 `material.read` 同码）；其他原因（跨分页标记、快照不属于任何 PDF 的 canonical 视图等）⇒ `page_unresolved`（消息里带原因）。两者都表示只能用 `inline` 粒度、不应声称页码。
 
 ## 5. Desktop 接受路径 [锁定语义]
 
@@ -586,7 +610,10 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 | span 范围超过 4096 字节 | `propose_changes` | `blocked`：`span_too_long` |
 | 本提案触及的原文证据没有物理定位（无 Markdown 范围、无页、无手稿选区） | `propose_changes` | `blocked`：`invalid_locator`（`target_id` 指出对象） |
 | head 里已有、本提案未触及的对象有问题 | `propose_changes` / Desktop 预览与接受 | `warn: head_integrity`（`target_id`），不阻塞 |
-| 多页快照没有分页标记 | `material.read` | 诊断 `page_markers_absent`；span 只能用 `inline` |
+| 多页快照没有分页标记 | `material.read` / `material.locate` | 诊断 `page_markers_absent`；span 只能用 `inline` |
+| locate 命中但落不到唯一页（跨页、无 PDF 映射） | `material.locate` | 诊断 `page_unresolved`；span 只能用 `inline` |
+| `inline` span 其实能唯一落到一页 | `propose_changes` | `info: page_granularity_available`，不阻塞 |
+| 列出提案时没有绑定调查 | `list_change_sets` | 空列表 + `investigation_unavailable` |
 | locate 无命中 / 多处命中 / quote 超过 4096 字节 | `material.locate` | `not_found` / `ambiguous`（候选上限 20）/ `not_found` + `span_too_long` |
 | 同 id span 已退役 | `propose_changes` | `blocked`：`span_inactive` |
 | round 已绑定到另一调查 | `propose_changes` / `get_change_set` | `forbidden`，`investigation_mismatch` |
@@ -711,4 +738,5 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 | 2026-10-30 | 初稿；用户锁定决策 1–8。 |
 | 2026-11-09 | PR-B 契约修订（`feat/pr-b-staged-proposals`）：用户改定决策 4（审批时机）与 §4.2.4 第 2 条（跨 change_set 引用），新增 SourceSpan 提案、`$new:` 临时引用、最终图依赖校验与写入顺序、连带规则、暂存上图、批量审核、审核面板与校验代码复用、PR-B 实现切片（§2.1、§4.2.5–§4.2.8、§4.4.1、§5.5–§5.6、§6.1–§6.2、§9.1、§10）。Loogle 加速推迟到下一个 PR。 |
 | 2026-11-10 | PR-B 实现对齐：§2.2 汇总四项「2026-11-09 用户定」与七条修订（会话级调查、quote 截取后比较、粒度失败码、hash 语义、依赖带版本且替换后转 blocked、批量一个 commit、单一投影与排除项）；删去线程级调查、全文搜索式 quote 匹配与替换后自动改指；补应用 / 拼接顺序、Desktop 命令清单与归属校验、§8 新码。 |
+| 2026-11-10 | 第三轮验收修订（§2.2 V4–V5）：新增只读 `list_change_sets`（§4.3.1），Agent 修订旧提案前先列出再带 `supersedes`；`material.locate` 给 `page_markers_absent` / `page_unresolved`；唯一页时用 `page` 粒度、`inline` 能落到唯一页时给 `page_granularity_available`；`tool_schema_version` 升到 `mathscape-mcp/16`，skill v0.6.4。 |
 | 2026-11-10 | 沙箱对话 3 验收修订（§2.2 V1–V3）：手稿笔迹定位算物理定位；只有本提案触及的对象出错才阻塞，head 里已有问题降为 `head_integrity` 警告；`material.read` 单快照也返回 `served_segments`，无分页标记给 `page_markers_absent`；新增 `material.locate`（§4.6）与 4096 字节的 `span_too_long`；`tool_schema_version` 升到 `mathscape-mcp/15`。审核面板改由服务端给锚点、手动审核进全屏审核工作区（§5.6）。 |
