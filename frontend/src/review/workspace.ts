@@ -189,7 +189,7 @@ export class DiscoveryReviewWorkspace {
   }
   private async refreshRegistrationState():Promise<void> {
     const runId=this.outcome?.run.run_id;
-    if(!runId)return;
+    if(!runId||this.meta.proposal)return;
     const generation=this.generation;
     try {
       const summaries=await invoke<import("../discovery/types").DiscoveryRunSummaryView[]>("list_discovery_runs",{request:{artifact_id:null}});
@@ -226,10 +226,11 @@ export class DiscoveryReviewWorkspace {
     this.locked = null; this.lockedAnchor = 0; this.rawMode = false;
     this.graphMode = this.model.units.length < GRAPH_UNIT_LIMIT; this.evidenceMode = false;
     const review = outcome.review;
-    this.accepted = review?.acceptance.state === "registered"
-      || meta.review_status === "registered" || meta.review_status === "withdrawn";
-    this.eligible = new Set(review?.units.filter(unit => unit.acceptance !== "blocked").map(unit => unit.unit_ref) ?? []);
-    this.selected = new Set(review?.acceptance.selected_units ?? []);
+    // A proposal is read-only here: no unit selection, nothing to accept.
+    this.accepted = !meta.proposal && (review?.acceptance.state === "registered"
+      || meta.review_status === "registered" || meta.review_status === "withdrawn");
+    this.eligible = meta.proposal ? new Set() : new Set(review?.units.filter(unit => unit.acceptance !== "blocked").map(unit => unit.unit_ref) ?? []);
+    this.selected = new Set(meta.proposal ? [] : review?.acceptance.selected_units ?? []);
     if (this.selected.size === 0) this.eligible.forEach(ref => this.selected.add(ref));
     this.tab = "overview";
     const draft = this.readDraft();
@@ -295,7 +296,7 @@ export class DiscoveryReviewWorkspace {
   // ---------------------------------------------------------------- state
 
   private draftKey(): string | null {
-    return this.outcome?.review ? `mathscape:review-draft:${this.outcome.review.run_id}` : null;
+    return this.outcome?.review && !this.meta.proposal ? `mathscape:review-draft:${this.outcome.review.run_id}` : null;
   }
 
   private readDraft(): Draft | null {
@@ -437,8 +438,14 @@ export class DiscoveryReviewWorkspace {
     const outcome = this.outcome!;
     const source = outcome.view.source;
     const title = el("div", "review-title");
-    title.append(el("span", "eyebrow", "REVIEW"), el("h2", "", `内容发现审核 · ${this.meta.title ?? source?.artifact_id ?? "未知材料"}`));
-    const facts = [
+    const proposal = this.meta.proposal;
+    title.append(el("span", "eyebrow", "REVIEW"), el("h2", "", `${proposal ? "提案审核" : "内容发现审核"} · ${this.meta.title ?? source?.artifact_id ?? "未知材料"}`));
+    const facts = proposal ? [
+      `提案 ${shortId(proposal.changeSetId)} v${proposal.version}`,
+      proposal.state === "staged" ? "未审批" : "阻塞",
+      `提出者 ${proposal.proposedBy}`,
+      ...(proposal.snapshot ? [`快照 ${shortId(proposal.snapshot)}`] : []),
+    ] : [
       `流水线：${workflowStatusLabel(outcome.outcome)}`,
       ...(this.meta.review_status ? [`审核：${acceptanceLabel(this.meta.review_status)}`] : []),
       `运行 ${shortId(outcome.run.run_id)}`,
@@ -521,6 +528,19 @@ export class DiscoveryReviewWorkspace {
   private renderOverview(): void {
     const outcome = this.outcome!;
     const model = this.model!;
+    if (this.meta.proposal) {
+      const summary = el("div", "review-summary");
+      const stat = (value: number, label: string) => {
+        const box = el("div", "review-stat");
+        box.append(el("strong", "", String(value)), el("span", "", label));
+        return box;
+      };
+      summary.append(stat(model.units.length, "单元"), stat(model.relations.length, "关系"), stat(model.diagnostics.length, "诊断"));
+      this.list.append(summary, el("p", "review-note",
+        "这是 Agent 提案在本快照中的部分，只读。提案按整个 change set 接受或丢弃，请回到「审核提案」操作；接受只表示写入地图，不提升 Trust，也不代表数学上已验证。"));
+      if (this.stale) this.list.append(el("p", "review-warning", this.stale));
+      return;
+    }
     const unresolved = model.references.filter(reference => reference.status === "unresolved").length;
     const summary = el("div", "review-summary");
     const stat = (value: number, label: string) => {
@@ -612,7 +632,7 @@ export class DiscoveryReviewWorkspace {
   }
 
   private renderUnits(): void {
-    const selectable = this.outcome!.review !== null;
+    const selectable = this.outcome!.review !== null && !this.meta.proposal;
     for (const unit of this.model!.units) {
       const item = el("article", `review-item review-unit state-${unit.acceptance ?? "none"}`);
       item.style.setProperty("--review-depth", String(this.depth(unit)));
@@ -936,6 +956,10 @@ export class DiscoveryReviewWorkspace {
 
   private renderFooter(): void {
     const review = this.outcome?.review;
+    if (this.meta.proposal) {
+      this.footer.replaceChildren(el("p", "review-note", "提案只读：接受或丢弃在「审核提案」中按整个 change set 进行。"));
+      return;
+    }
     if (!review) {
       this.footer.replaceChildren(el("p", "review-note", "该运行没有可接受的来源审核投影。"));
       return;

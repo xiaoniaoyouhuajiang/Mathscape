@@ -5,7 +5,7 @@
  * never builds an investigation id, never assembles map nodes and never
  * decides acceptability — it only groups, selects and explains.
  */
-import type { SourceReviewAnchor, SourceReviewProjection, SourceReviewUnit } from "./types";
+import type { DiscoveryOutcome, SourceReviewAnchor, SourceReviewProjection, SourceReviewUnit } from "./types";
 
 export interface ChangeSetSelection {
   change_set_id: string;
@@ -117,6 +117,11 @@ export interface ImpactPreview {
 
 export const keyOf = (item: { changeSetId: string; version: number }): string => `${item.changeSetId}@${item.version}`;
 
+/** Same tie-break as the backend batch order: `(change_set_id, version)`, never `createdAt`. */
+export function compareKeys(a: { changeSetId: string; version: number }, b: { changeSetId: string; version: number }): number {
+  return a.changeSetId < b.changeSetId ? -1 : a.changeSetId > b.changeSetId ? 1 : a.version - b.version;
+}
+
 export function selectionOf(item: PendingChangeSet): ChangeSetSelection {
   return { change_set_id: item.changeSetId, version: item.version, proposal_fingerprint: item.proposalFingerprint };
 }
@@ -211,7 +216,7 @@ export function dependencyGroups(items: PendingChangeSet[]): PendingChangeSet[][
       neighbours.get(dependency)!.add(key);
     }
   }
-  const order = [...items].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || keyOf(a).localeCompare(keyOf(b)));
+  const order = [...items].sort(compareKeys);
   const assigned = new Set<string>();
   const groups: PendingChangeSet[][] = [];
   for (const item of order) {
@@ -248,6 +253,17 @@ export function discardImpact(items: PendingChangeSet[], roots: string[], cascad
   return cascade
     ? { discarded: new Set([...roots, ...dependents]), blocked: new Set() }
     : { discarded: new Set(roots), blocked: dependents };
+}
+
+/** Who a discard of `roots` touches, for the confirmation preview. */
+export function discardPreview(items: PendingChangeSet[], roots: string[]): { roots: PendingChangeSet[]; dependents: PendingChangeSet[] } {
+  const dependents = transitiveDependents(items, roots);
+  const rootSet = new Set(roots);
+  const sorted = [...items].sort(compareKeys);
+  return {
+    roots: sorted.filter(item => rootSet.has(keyOf(item))),
+    dependents: sorted.filter(item => dependents.has(keyOf(item))),
+  };
 }
 
 export function selectionRefs(items: PendingChangeSet[], selected: Set<string>): ChangeSetSelection[] {
@@ -399,4 +415,63 @@ export function impactSummary(plan: ImpactPlan | null | undefined): string {
   const edited = plan.direct_changes.length - created;
   const parts = [created ? `新建 ${created}` : "", edited ? `修改 ${edited}` : "", plan.affected_objects.length ? `波及 ${plan.affected_objects.length}` : ""].filter(Boolean);
   return parts.join(" · ") || "无变化";
+}
+
+/**
+ * One snapshot group of a proposal in the discovery workspace's data shape,
+ * opened read-only (`ReviewRunMeta.proposal`): no unit selection, no
+ * Markdown patch, no registration. `contentHash` is the hash of the loaded
+ * snapshot the anchors were checked against; the span ids are bound to the
+ * immutable snapshot artifact, so this is the same document.
+ */
+export function proposalDiscoveryOutcome(item: PendingChangeSet, group: ProposalReviewProjection, contentHash: string): DiscoveryOutcome {
+  const runId = `proposal:${keyOf(item)}:${group.source.artifact_id ?? "existing"}`;
+  const source = group.source.artifact_id
+    ? { artifact_id: group.source.artifact_id, conversion_id: null, content_hash: contentHash, input_fingerprint: item.proposalFingerprint }
+    : null;
+  const status = item.state === "staged" ? "completed" : "needs_attention";
+  const anchorView = (anchor: SourceReviewAnchor) => ({ start: anchor.range.start, end: anchor.range.end, block_ids: anchor.block_ids, excerpt: anchor.excerpt, purpose: anchor.purpose });
+  return {
+    outcome: status,
+    view: {
+      version: "mathscape-desktop-discovery-view-1",
+      status,
+      complete: true,
+      source,
+      units: group.units.map(unit => ({
+        unit_ref: unit.unit_ref, unit_kind: unit.unit_kind, title: unit.display_title ?? unit.unit_ref, display_title: unit.display_title,
+        parent: unit.parent, completeness: unit.completeness, fact_status: "processed", source_excerpt: unit.source_excerpt,
+        anchors: unit.anchors.map(anchorView), source_labels: [], source_title: null,
+      })),
+      references: [],
+      relations: group.relations.map(relation => ({
+        source: relation.source, target: relation.target, relation: relation.relation,
+        evidence: relation.evidence.map(anchorView), bases: [], origins: [],
+      })),
+      issues: [],
+      pending_tasks: [],
+      diagnostics: [],
+      attempts: [],
+    },
+    review: source && {
+      version: "mathscape-source-review-projection-1",
+      run_id: runId,
+      result_fingerprint: item.proposalFingerprint,
+      status,
+      complete: true,
+      source,
+      units: group.units.map(unit => ({ ...unit, acceptance: item.state === "staged" ? unit.acceptance : "blocked" })),
+      references: [],
+      structure_relations: group.structure_relations,
+      relations: group.relations,
+      diagnostics: group.diagnostics,
+      pending_tasks: [],
+      acceptance: { state: item.state, selected_units: [], required_units: [], missing_targets: [], blockers: [], allowed_scopes: [] },
+    },
+    run: {
+      run_id: runId, profile_id: "propose_changes", provider: item.proposedBy, requested_model: "",
+      admission: "review_before_publish", request_timeout_seconds: null, connect_timeout_seconds: null,
+      attempts: 0, input_tokens: null, output_tokens: null, total_tokens: null, elapsed_ms: 0,
+    },
+  };
 }

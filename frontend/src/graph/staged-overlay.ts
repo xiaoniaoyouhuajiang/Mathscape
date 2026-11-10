@@ -18,6 +18,12 @@ function domainIds(data: Record<string, unknown>): string[] {
   return [data.domainId, data.relationId].filter((value): value is string => typeof value === "string");
 }
 
+/** Change sets whose staged edits of `domainId` conflict (the map shows the accepted version). */
+export function stagedConflict(investigation: InvestigationSnapshot | null | undefined, domainId: string | null | undefined): string[] | null {
+  if (!investigation || !domainId) return null;
+  return investigation.conflicts.find(conflict => conflict.object_id === domainId)?.change_sets ?? null;
+}
+
 export function stagedMark(investigation: InvestigationSnapshot | null | undefined, domainId: string | null | undefined): StagedMark | null {
   if (!investigation || !domainId) return null;
   return investigation.staged[domainId] ?? null;
@@ -33,8 +39,10 @@ export function applyStagedOverlay(core: Core, investigation: InvestigationSnaps
       element.toggleClass(STAGED_CLASS, !!mark);
       element.toggleClass(STAGED_CONFLICT_CLASS, ids.some(id => conflicts.has(id)));
       if (element.isNode()) {
-        const base = String(element.data("label") ?? "").replace(/^〔未审批〕/, "");
-        element.data("label", mark && element.data("elementKind") !== "junction" ? `〔未审批〕${base}` : base);
+        const base = String(element.data("label") ?? "").replace(/^〔(未审批|提案冲突)〕/, "");
+        const conflict = ids.some(id => conflicts.has(id));
+        const badge = element.data("elementKind") === "junction" ? "" : mark ? "〔未审批〕" : conflict ? "〔提案冲突〕" : "";
+        element.data("label", `${badge}${base}`);
       }
     });
   });

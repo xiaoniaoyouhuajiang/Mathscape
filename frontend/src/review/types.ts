@@ -190,4 +190,10 @@ export interface ReviewRunMeta {
   updated_at?: string;
   registrations?: import("../discovery/registration-types").RegistrationSummary[];
   disposition?: import("../discovery/types").DiscoveryDispositionReceipt|null;
+  /**
+   * Set when the workspace shows a Phase2 proposal (「提案」 data source)
+   * instead of a discovery run. The view is read-only: a change set is
+   * accepted or discarded whole from the proposal review panel.
+   */
+  proposal?: { changeSetId: string; version: number; state: string; proposedBy: string; snapshot: string | null };
 }

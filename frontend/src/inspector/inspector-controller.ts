@@ -1,4 +1,4 @@
-import { stagedMark } from "../graph/staged-overlay";
+import { stagedConflict, stagedMark } from "../graph/staged-overlay";
 import type {
   DesktopSnapshot,
   MarkerRuntimeStatus,
@@ -128,6 +128,28 @@ export class InspectorController {
         "p",
         "detail-staged-badge",
         `未审批提案 · ${staged.change_set_id.slice(-12)}@v${staged.change_set_version}${staged.replaces_revision ? "（替换已接受版本）" : ""}。在「审核提案」中接受后才进入正式地图。`,
+      ));
+      // A staged edit is shown as a replacement; the accepted version is
+      // still the head and can be read on demand.
+      if (staged.replaces_revision && node.domain_kind === "SourceSemanticUnit") {
+        const showAccepted = textElement("button", "parse-button", "查看已接受版本");
+        showAccepted.type = "button";
+        showAccepted.onclick = () => {
+          showAccepted.disabled = true;
+          const accepted = textElement("section", "detail-accepted-version", "");
+          accepted.append(textElement("h4", "", "已接受版本"));
+          sourceSlot.append(accepted);
+          void this.renderSourceDetail(node, accepted, actions);
+        };
+        actions.append(showAccepted);
+      }
+    }
+    const conflict = stagedConflict(this.delegate.getSnapshot()?.investigation, node.domain_id);
+    if (!staged && conflict) {
+      sourceSlot.append(textElement(
+        "p",
+        "detail-staged-badge is-conflict",
+        `提案冲突：${conflict.length} 个未审批提案同时修改此对象（${conflict.join("、")}），地图显示已接受版本。请在「审核提案」中决定保留哪一个。`,
       ));
     }
 

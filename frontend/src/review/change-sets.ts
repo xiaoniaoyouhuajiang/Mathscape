@@ -19,12 +19,13 @@ import { markdownDocument, type AnchoredMarkdown } from "../reader/selection";
 import { checkAnchor, renderAnchorFragment, reviewAnchor } from "./anchor-fragment";
 import { completenessLabel, relationLabel, unitKindLabel } from "./labels";
 import {
-  debtLabel, defaultSelection, dependencyGroups, deselect, diagnosticLabel, discardImpact, impactSummary, keyOf,
-  proposalDebts, proposalReviewProjection, select, selectionOf, selectionRefs, titleOf,
+  debtLabel, defaultSelection, dependencyGroups, deselect, diagnosticLabel, discardPreview, impactSummary, keyOf,
+  proposalDebts, proposalDiscoveryOutcome, proposalReviewProjection, select, selectionOf, selectionRefs, titleOf,
   type BatchPlan, type ChangeSetQueue, type ChangeSetSelection, type ImpactPreview, type PendingChangeSet,
   type ProposalReviewProjection,
 } from "./proposal-model";
 import { ReviewGraph } from "./review-graph";
+import { openReviewWorkspace } from "./workspace";
 
 export type ReviewTrigger = "manual" | "switch_session" | "discard" | "export" | "exit";
 type Toast = (message: string, kind: "success" | "error") => void;
@@ -33,7 +34,7 @@ const TRIGGER_TEXT: Record<ReviewTrigger, { title: string; proceed: string; canc
   manual: { title: "审核提案", proceed: "关闭", cancel: "", note: "" },
   switch_session: { title: "切换沙箱前审核提案", proceed: "保留未审批并切换", cancel: "取消切换", note: "切换后仍可回到这个沙箱继续审核。" },
   discard: { title: "丢弃沙箱前审核提案", proceed: "继续丢弃沙箱", cancel: "取消丢弃", note: "丢弃沙箱会删除副本中的全部提案与已接受内容。" },
-  export: { title: "导出前审核提案", proceed: "保留未审批并导出", cancel: "取消导出", note: "只有已接受的内容属于正式地图；未审批提案随会话一起导出但不进入正式 head。" },
+  export: { title: "导出前审核提案", proceed: "保留未审批并导出", cancel: "取消导出", note: "导出包只含对话记录与事件，不含地图或提案；未审批提案留在沙箱副本中，之后仍可审核。" },
   exit: { title: "退出前审核提案", proceed: "保留未审批并退出", cancel: "取消退出", note: "未审批提案会保留，下次打开该沙箱可继续审核。" },
 };
 
@@ -92,7 +93,9 @@ class ProposalReview {
   private readonly list = el("div", "change-set-review-list");
   private readonly detail = el("div", "change-set-review-detail");
   private readonly feedback = el("p", "change-set-review-feedback");
-  private readonly cascade = el("input");
+  private readonly summary = el("p", "change-set-review-summary");
+  private readonly confirmHost = el("div", "change-set-review-confirm");
+  private summaryGeneration = 0;
   private items: PendingChangeSet[] = [];
   private selected = new Set<string>();
   private current: string | null = null;
@@ -121,7 +124,9 @@ class ProposalReview {
     );
     const body = el("div", "change-set-review-body");
     body.append(this.list, this.detail);
-    this.dialog.append(header, body, this.feedback, this.footer());
+    this.summary.hidden = this.trigger === "manual";
+    this.confirmHost.hidden = true;
+    this.dialog.append(header, this.summary, body, this.confirmHost, this.feedback, this.footer());
     this.overlay.append(this.dialog);
     document.body.append(this.overlay);
     const done = new Promise<boolean>(resolve => { this.resolve = resolve; });
@@ -136,14 +141,10 @@ class ProposalReview {
       actions.append(button("关闭", () => this.finish(true), "quiet"));
       return actions;
     }
-    this.cascade.type = "checkbox";
-    const cascadeLabel = el("label", "change-set-review-cascade");
-    cascadeLabel.append(this.cascade, document.createTextNode(" 同时丢弃依赖它们的提案"));
     actions.append(
       button(text.cancel, () => this.finish(false), "quiet"),
-      cascadeLabel,
       el("span", "sandbox-actions-spacer"),
-      button("丢弃所选", () => void this.discard(selectionRefs(this.items, this.selected), this.cascade.checked), "danger"),
+      button("丢弃所选", () => void this.discardKeys([...this.selected]), "danger"),
       button("接受所选", () => void this.accept(selectionRefs(this.items, this.selected)), "primary"),
       button(text.proceed, () => this.finish(true), "secondary"),
     );
@@ -174,7 +175,25 @@ class ProposalReview {
     this.current ??= this.items[0] ? keyOf(this.items[0]) : null;
     this.renderList();
     this.renderDetail();
+    void this.refreshSummary();
     for (const item of this.items) void this.loadPreview(item);
+  }
+
+  /** Total impact of the current selection, planned as one batch against the head. */
+  private async refreshSummary(): Promise<void> {
+    if (this.trigger === "manual") return;
+    const generation = ++this.summaryGeneration;
+    const selections = selectionRefs(this.items, this.selected);
+    if (!selections.length) { this.summary.textContent = "所选合计：未选择提案。"; return; }
+    this.summary.textContent = `所选 ${selections.length} 个提案合计：计算中…`;
+    try {
+      const plan = await invoke<BatchPlan>("plan_change_set_batch", { investigationId: this.investigationId, selections });
+      if (generation !== this.summaryGeneration) return;
+      this.summary.textContent = `所选 ${selections.length} 个提案合计（一次提交）：${impactSummary(plan.impact)}`;
+    } catch (error) {
+      if (generation !== this.summaryGeneration) return;
+      this.summary.textContent = `所选合计：${message(error)}`;
+    }
   }
 
   private async loadPreview(item: PendingChangeSet): Promise<void> {
@@ -227,6 +246,7 @@ class ProposalReview {
         this.selected = deselect(this.items, this.selected, key);
       }
       this.renderList();
+      void this.refreshSummary();
     };
     const title = el("span", "change-set-review-title");
     title.append(el("strong", "", titleOf(item)), el("small", "", ` v${item.version}`));
@@ -273,7 +293,15 @@ class ProposalReview {
 
   private groupView(group: ProposalReviewProjection): HTMLElement {
     const section = el("section", "change-set-review-snapshot");
-    section.append(el("h4", "", group.source.artifact_id ? `快照 ${group.source.artifact_id.slice(-12)}` : "引用已有证据"));
+    const heading = el("div", "change-set-review-snapshot-heading");
+    heading.append(el("h4", "", group.source.artifact_id ? `快照 ${group.source.artifact_id.slice(-12)}` : "引用已有证据"));
+    const item = this.items.find(candidate => keyOf(candidate) === this.current);
+    // The blocking dialog must not be dismissed by opening the workspace, so
+    // the full workspace is offered from the review panel only.
+    if (this.trigger === "manual" && item && group.source.artifact_id && group.units.length) {
+      heading.append(button("在审核工作区打开", () => void this.openInWorkspace(item, group), "quiet"));
+    }
+    section.append(heading);
     if (group.units.length) {
       const host = el("div", "review-graph change-set-review-graph");
       section.append(host);
@@ -306,13 +334,30 @@ class ProposalReview {
     return section;
   }
 
+  /** Opens one snapshot group in the discovery review workspace, read-only. */
+  private async openInWorkspace(item: PendingChangeSet, group: ProposalReviewProjection): Promise<void> {
+    const artifactId = group.source.artifact_id;
+    if (!artifactId) return;
+    const doc = await this.document(artifactId);
+    if (!doc) { this.feedback.textContent = "无法读取该提案引用的 Markdown 快照。"; return; }
+    this.finish(true);
+    openReviewWorkspace(proposalDiscoveryOutcome(item, group, doc.snapshot.content_hash), {
+      title: titleOf(item),
+      proposal: { changeSetId: item.changeSetId, version: item.version, state: item.state, proposedBy: item.proposedBy, snapshot: artifactId },
+    });
+  }
+
+  private document(artifactId: string): Promise<AnchoredMarkdown | null> {
+    let doc = this.docs.get(artifactId);
+    if (!doc) { doc = markdownDocument(artifactId, null).catch(() => null); this.docs.set(artifactId, doc); }
+    return doc;
+  }
+
   private anchorView(artifactId: string | null, anchor: ProposalReviewProjection["units"][number]["anchors"][number]): HTMLElement {
     const host = el("div", "change-set-review-anchor");
     host.append(el("blockquote", "", anchor.excerpt || `[${anchor.range.start}, ${anchor.range.end})`));
     if (!artifactId) return host;
-    let doc = this.docs.get(artifactId);
-    if (!doc) { doc = markdownDocument(artifactId, null).catch(() => null); this.docs.set(artifactId, doc); }
-    void doc.then(loaded => {
+    void this.document(artifactId).then(loaded => {
       if (!loaded || !host.isConnected) return;
       const bytes = new TextEncoder().encode(loaded.source);
       const review = reviewAnchor(anchor);
@@ -353,12 +398,43 @@ class ProposalReview {
   }
 
   private async discardOne(item: PendingChangeSet): Promise<void> {
-    const impact = discardImpact(this.items, [keyOf(item)], false);
-    let cascade = false;
-    if (impact.blocked.size) {
-      cascade = window.confirm(`有 ${impact.blocked.size} 个提案依赖它。\n确定：一并丢弃它们（逐条记录）。\n取消：只丢弃这一个，依赖方转为阻塞。`);
-    }
-    await this.discard([selectionOf(item)], cascade);
+    await this.discardKeys([keyOf(item)]);
+  }
+
+  /**
+   * Discard preview: lists the proposals that depend on `keys` and lets the
+   * user choose. Default (unchecked) turns the dependents blocked; checking
+   * 「连带丢弃」 discards them too. Nothing happens until 「确认丢弃」.
+   */
+  private async discardKeys(keys: string[]): Promise<void> {
+    if (this.busy) return;
+    const preview = discardPreview(this.items, keys);
+    if (!preview.roots.length) { this.feedback.textContent = "请选择至少一个提案。"; return; }
+    const choice = await this.askDiscard(preview);
+    if (choice === null) return;
+    await this.discard(preview.roots.map(selectionOf), choice.cascade);
+  }
+
+  private askDiscard(preview: ReturnType<typeof discardPreview>): Promise<{ cascade: boolean } | null> {
+    return new Promise(resolve => {
+      const box = this.confirmHost;
+      const names = (items: PendingChangeSet[]) => items.map(item => `${titleOf(item)} v${item.version}`).join("、");
+      const children: HTMLElement[] = [el("p", "", `将丢弃：${names(preview.roots)}。丢弃只改提案状态，不写正式地图。`)];
+      const cascade = el("input");
+      cascade.type = "checkbox";
+      if (preview.dependents.length) {
+        children.push(el("p", "change-set-review-confirm-dependents", `依赖它们的提案（${preview.dependents.length} 个，含间接依赖）：${names(preview.dependents)}`));
+        const label = el("label", "change-set-review-cascade");
+        label.append(cascade, document.createTextNode(" 连带丢弃这些依赖提案（不勾选则它们转为「阻塞」，等待 Agent 重新提交）"));
+        children.push(label);
+      }
+      const done = (value: { cascade: boolean } | null) => { box.hidden = true; box.replaceChildren(); resolve(value); };
+      const actions = el("div", "change-set-review-confirm-actions");
+      actions.append(button("取消", () => done(null), "quiet"), button("确认丢弃", () => done({ cascade: cascade.checked }), "danger"));
+      children.push(actions);
+      box.replaceChildren(...children);
+      box.hidden = false;
+    });
   }
 
   private async discard(selections: ChangeSetSelection[], cascade: boolean): Promise<void> {

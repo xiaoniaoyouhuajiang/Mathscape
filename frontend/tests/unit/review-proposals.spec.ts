@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  defaultSelection, dependencyGroups, deselect, discardImpact, impactSummary, keyOf,
-  proposalReviewProjection, select, selectionRefs, type PendingChangeSet,
+  defaultSelection, dependencyGroups, deselect, discardImpact, discardPreview, impactSummary, keyOf,
+  proposalDiscoveryOutcome, proposalReviewProjection, select, selectionRefs, type PendingChangeSet,
 } from "../../src/review/proposal-model";
 
 function item(id: string, deps: string[] = [], state = "staged", createdAt = id): PendingChangeSet {
@@ -38,6 +38,21 @@ describe("proposal batch selection", () => {
     expect(groups.map(group => group.map(keyOf))).toEqual([["A@1", "B@1", "C@1"], ["D@1", "E@1"]]);
   });
 
+  it("orders like the backend batch: by (change_set_id, version), never createdAt", () => {
+    const late = [item("A", [], "staged", "2026-11-10T09:00"), item("B", ["A"], "staged", "2026-11-09T01:00"), item("D", [], "staged", "2026-11-01T00:00")];
+    expect(dependencyGroups(late).map(group => group.map(keyOf))).toEqual([["A@1", "B@1"], ["D@1"]]);
+    const reversed = late.map(entry => ({ ...entry, createdAt: entry.createdAt.split("").reverse().join("") }));
+    expect(dependencyGroups(reversed).map(group => group.map(keyOf))).toEqual([["A@1", "B@1"], ["D@1"]]);
+  });
+
+  it("previews who a discard touches before anything happens", () => {
+    const preview = discardPreview(items, ["A@1"]);
+    expect(preview.roots.map(keyOf)).toEqual(["A@1"]);
+    expect(preview.dependents.map(keyOf)).toEqual(["B@1", "C@1"]);
+    expect(discardPreview(items, ["D@1"]).dependents.map(keyOf)).toEqual(["E@1"]);
+    expect(discardPreview(items, ["C@1"]).dependents).toEqual([]);
+  });
+
   it("mirrors the backend discard rule", () => {
     const blocked = discardImpact(items, ["A@1"], false);
     expect([...blocked.discarded]).toEqual(["A@1"]);
@@ -70,6 +85,23 @@ describe("proposal review projection", () => {
     expect(groups[1].units[0].parent).toBe("u1");
     expect(groups[1].structure_relations).toEqual([{ relation_ref: "u2:parent", parent: "u1", child: "u2" }]);
     expect(groups[1].relations[0]).toMatchObject({ source: "u2", target: "u1", relation: "proves" });
+  });
+
+  it("opens a snapshot group in the discovery workspace shape, read-only", () => {
+    const proposal = item("P");
+    proposal.proposal.proposed_objects = [
+      { local_ref: "s1", kind: "source_span", op: "create", payload: { artifact_id: "md-1", md_byte_range: { start: 0, end: 6 }, granularity: "inline", quote: "定理" } },
+      { local_ref: "u1", kind: "source_unit", op: "create", payload: { kind: "statement", display_title: "定理 1", parent: null, source_spans: ["$new:s1"], completeness: "complete" } },
+    ];
+    const [group] = proposalReviewProjection(proposal);
+    const outcome = proposalDiscoveryOutcome(proposal, group, "sha256:doc");
+    expect(outcome.view.source).toMatchObject({ artifact_id: "md-1", content_hash: "sha256:doc", conversion_id: null });
+    expect(outcome.view.units[0]).toMatchObject({ unit_ref: "u1", title: "定理 1", anchors: [{ start: 0, end: 6, excerpt: "定理" }] });
+    expect(outcome.review?.acceptance.selected_units).toEqual([]);
+    expect(outcome.review?.result_fingerprint).toBe("fp-P");
+    expect(outcome.run.run_id).toBe("proposal:P@1:md-1");
+    const blocked = proposalDiscoveryOutcome({ ...proposal, state: "blocked" }, group, "sha256:doc");
+    expect(blocked.review?.units[0].acceptance).toBe("blocked");
   });
 
   it("summarizes the impact plan", () => {
