@@ -90,4 +90,35 @@ test.describe("Phase2 proposal review workspace", () => {
     await dialog.getByRole("button", { name: "取消切换" }).click();
     await expect(dialog).toHaveCount(0);
   });
+
+  test("an empty queue opens the workspace on an explicit empty state instead of doing nothing", async ({ page }) => {
+    await page.addInitScript(() => sessionStorage.setItem("harness.proposals", "0"));
+    await openReview(page);
+    const workspace = page.locator(".review-workspace");
+    await expect(workspace).toBeVisible();
+    await expect(workspace.locator(".review-header h2")).toHaveText("提案审核");
+    await expect(workspace.locator(".review-list")).toContainText("当前没有待审核的提案");
+    await expect(workspace.locator(".review-preview")).toContainText("已接受或已丢弃的提案");
+    await page.screenshot({ path: "../.test-runs/reader/proposal-workspace-empty.png" });
+    await workspace.locator(".review-footer").getByRole("button", { name: "关闭" }).click();
+    await expect(workspace).toBeHidden();
+  });
+
+  test("a failing queue read surfaces a toast above the dialogue dock", async ({ page }) => {
+    await page.addInitScript(() => sessionStorage.setItem("harness.failQueue", "investigation_not_found: 调查不存在"));
+    await openReview(page);
+    const toast = page.locator("#toast");
+    await expect(toast).toHaveClass(/is-visible/);
+    await expect(toast).toContainText("无法读取提案：investigation_not_found");
+    // The toast must not sit under the dock (it used to: z-index 40 < 60).
+    const topmost = await toast.evaluate((node) => {
+      // The toast ignores pointer events; let hit-testing see it for this probe.
+      (node as HTMLElement).style.pointerEvents = "auto";
+      const box = node.getBoundingClientRect();
+      const hits = [[0.1, 0.5], [0.5, 0.5], [0.9, 0.5]].map(([x, y]) => document.elementFromPoint(box.left + box.width * x, box.top + box.height * y));
+      (node as HTMLElement).style.pointerEvents = "";
+      return hits.every(hit => hit === node || node.contains(hit));
+    });
+    expect(topmost).toBe(true);
+  });
 });

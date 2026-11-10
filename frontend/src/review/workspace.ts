@@ -26,6 +26,11 @@ export function openReviewWorkspace(outcome: DiscoveryOutcome, meta?: ReviewRunM
   eventBus.emit("open-review", { outcome, meta });
 }
 
+/** Opens the review workspace on 「当前没有待审核的提案」 for `investigationId`. */
+export function openEmptyProposalReview(investigationId: string): void {
+  eventBus.emit("open-review-empty", { investigationId });
+}
+
 /** Larger results start as a layered list; a graph of that size is unreadable. */
 const GRAPH_UNIT_LIMIT = 40;
 
@@ -191,7 +196,11 @@ export class DiscoveryReviewWorkspace {
     );
     this.returnChip.querySelector(".review-return-close")!.setAttribute("aria-label", "关闭审核工作区");
     (host.parentElement ?? document.body).append(this.returnChip);
-    eventBus.on("reader-opened", () => { if (this.isOpen()) this.suspend(); });
+    eventBus.on("reader-opened", () => {
+      if (!this.isOpen()) return;
+      // The empty proposal state has nothing to return to.
+      if (this.outcome === null) this.close(); else this.suspend();
+    });
     eventBus.on("discovery-runs-changed",()=>void this.refreshRegistrationState());
   }
   private async refreshRegistrationState():Promise<void> {
@@ -287,6 +296,25 @@ export class DiscoveryReviewWorkspace {
     const restored = draft?.target ? this.findTarget(draft.target) : null;
     const first = this.model.units.find(unit => unit.anchors.length > 0);
     this.lock(restored ?? (first ? this.unitTarget(first) : null), false);
+  }
+
+  /**
+   * Manual proposal review with an empty queue: an explicit empty state
+   * instead of doing nothing (accepted / discarded proposals are not listed).
+   */
+  openEmptyProposals(investigationId: string): void {
+    this.close();
+    this.host.hidden = false;
+    const title = el("div", "review-title");
+    title.append(el("span", "eyebrow", "REVIEW"), el("h2", "", "提案审核"));
+    const actions = el("div", "review-header-actions");
+    actions.append(button("关闭", () => this.close()));
+    this.header.replaceChildren(title, actions, el("p", "review-meta", `调查 ${shortId(investigationId)}`));
+    this.tabs.replaceChildren();
+    this.list.replaceChildren(el("p", "review-empty", "当前没有待审核的提案。"));
+    this.preview.replaceChildren(el("p", "review-preview-empty",
+      "已接受或已丢弃的提案不再列在这里；agent 提交新的提案（或修订旧提案）后，再点「审核变更」。"));
+    this.footer.replaceChildren(el("p", "review-action-feedback", "没有待审核提案。"), button("关闭", () => this.close()));
   }
 
   suspend(): void {
@@ -1294,5 +1322,6 @@ export function mountReviewWorkspace(host: HTMLElement): DiscoveryReviewWorkspac
   eventBus.on("open-review", (detail) => {
     void workspace.open(detail.outcome, detail.meta);
   });
+  eventBus.on("open-review-empty", (detail) => workspace.openEmptyProposals(detail.investigationId));
   return workspace;
 }

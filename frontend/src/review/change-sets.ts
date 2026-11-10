@@ -26,7 +26,7 @@ import {
   type ProposalDecision, type ProposalWorkspaceController,
 } from "./proposal-model";
 import { renderDiscardConfirm, type DiscardChoice } from "./proposal-discard";
-import { openReviewWorkspace } from "./workspace";
+import { openEmptyProposalReview, openReviewWorkspace } from "./workspace";
 import "./review.css";
 import "./change-sets.css";
 
@@ -102,7 +102,9 @@ export async function openProposalReview(sandboxSessionId: string | null, toast:
     return;
   }
   const first = session.items[0];
-  if (!first) { toast("当前调查没有待审核提案。", "success"); return; }
+  // Open the workspace on an explicit empty state: a toast alone is easy to
+  // miss (the dialogue dock can sit on top of it).
+  if (!first) { openEmptyProposalReview(investigationId); return; }
   await session.open(keyOf(first));
 }
 

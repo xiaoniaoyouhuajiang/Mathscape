@@ -37,6 +37,8 @@ export interface MathscapeEventMap {
   /** N3d: open the workspace search panel (⌘K / Ctrl+K, 搜索 buttons). */
   "open-workspace-search": { query?: string } | void;
   "open-review": OpenReviewDetail;
+  /** Manual proposal review of an investigation with nothing pending. */
+  "open-review-empty": { investigationId: string };
   "reader-opened": void;
   "open-settings": void;
   "workspace-settings-changed": WorkspaceSettings;
@@ -78,6 +80,7 @@ export class MathscapeEventBus {
       "ink-split-toggle",
       "open-workspace-search",
       "open-review",
+      "open-review-empty",
       "reader-opened",
       "open-settings",
       "workspace-settings-changed",

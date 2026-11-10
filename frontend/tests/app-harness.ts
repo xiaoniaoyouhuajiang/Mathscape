@@ -376,11 +376,16 @@ extraCommands.set("get_change_set_investigation", (args) => {
   proposalReview.calls.push({ command: "investigation", args });
   return args.sandboxSessionId ? `sandbox:${String(args.sandboxSessionId)}` : (sessionStorage.getItem("harness.sandbox") === "1" ? "sandbox:sbx_demo" : null);
 });
-extraCommands.set("list_pending_change_sets", (args) => ({
+extraCommands.set("list_pending_change_sets", (args) => {
+  const failure = sessionStorage.getItem("harness.failQueue");
+  if (failure) throw new Error(failure);
+  return listPendingChangeSets(args);
+});
+const listPendingChangeSets = (args: Record<string, unknown>) => ({
   // Only specs that opt in (sessionStorage harness.proposals) see a pending proposal.
   investigationId: String(args.investigationId), baseCommit: null,
   items: proposalReview.accepted || sessionStorage.getItem("harness.proposals") !== "1" ? [] : [proposalItem()],
-}));
+});
 extraCommands.set("get_change_set_snapshot", (args) => {
   proposalReview.calls.push({ command: "snapshot", args });
   const failure = proposalReview.failSnapshot || sessionStorage.getItem("harness.failSnapshot");

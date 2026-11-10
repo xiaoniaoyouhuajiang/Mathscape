@@ -1194,7 +1194,11 @@ export class SandboxDialogueDock {
 
   private async reviewChanges(): Promise<void> {
     if (!this.sessionId) return;
-    await openProposalReview(this.sessionId, this.toast);
+    try {
+      await openProposalReview(this.sessionId, this.toast);
+    } catch (error) {
+      this.toast(`无法打开提案审核：${errorMessage(error)}`, "error");
+    }
   }
 
   private async cancel(): Promise<void> {
@@ -1403,6 +1407,9 @@ export class SandboxDialogueDock {
     this.renderThreadPicker();
     this.newThreadButton.disabled = running || this.sending || this.switchingThread || !this.sessionId;
     this.reviewButton.disabled = running || this.sending || this.switchingThread || !this.sessionId;
+    this.reviewButton.title = this.reviewButton.disabled
+      ? (this.sessionId ? "本轮对话进行中，结束后才能审核提案" : "没有打开沙箱会话")
+      : "审核当前对话调查的 staged / blocked 提案";
     if (!this.modelRow.hidden) {
       this.modelSelect.disabled = running || this.sending || this.modelSelect.options.length < 2;
     }
