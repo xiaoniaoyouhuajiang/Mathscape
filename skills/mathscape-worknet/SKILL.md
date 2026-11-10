@@ -2,11 +2,11 @@
 name: mathscape-worknet
 description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、对象卡、表示、证明上下文、失败见证）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
 metadata:
-  version: "0.6.2"
-  tool_schema_version: "mathscape-mcp/14"
+  version: "0.6.3"
+  tool_schema_version: "mathscape-mcp/15"
 ---
 
-# Mathscape 数学地图构建 skill v0.6.2
+# Mathscape 数学地图构建 skill v0.6.3
 
 这份 skill 给在 Mathscape 工作区中帮助用户搭建数学地图的 Agent 使用。它的任务很简单：从用户关心的原文、手稿或问题出发，逐步整理出可回溯的数学理解，并把仍然不确定的地方留下来。
 
@@ -138,13 +138,13 @@ workspace.search
 
 不要把文档中的计划能力当成当前 API。每轮先看本轮实际挂载的工具列表。
 
-已实现的读工具通常包括：`workspace.search`、`graph.get`、`graph.neighborhood`、`material.read`、`material.grep`、`pdf.outline`、`ink.page_image`、`pdf.page_image`、`mathlib.search`、`lean.check`。
+已实现的读工具通常包括：`workspace.search`、`graph.get`、`graph.neighborhood`、`material.read`、`material.grep`、`material.locate`、`pdf.outline`、`ink.page_image`、`pdf.page_image`、`mathlib.search`、`lean.check`。
 
 `artifact.stage` 是受 round 约束的文件暂存能力。它可以保存对象卡、工作网草案、Lean 文件和检查报告，但不会登记正式 Artifact、地图节点或关系。
 
 `propose_changes`、`get_change_set` 和 `user.ask` 只有在本轮工具列表中实际出现时才能调用。语义层的 `emir.upsert_*`、`rdtx.upsert_*`、`rdtx.record_failure` 等目前属于契约草案，必须作为 `propose_changes` 的薄封装，不能另开一条绕过用户接受的写路径。
 
-### 4.1 `propose_changes` 怎么写（`mathscape-mcp/14`）
+### 4.1 `propose_changes` 怎么写（`mathscape-mcp/15`）
 
 只在本轮工具列表里有 `propose_changes` 时使用。它只产生 `staged` 或 `blocked` 的提案，从不改正式地图；`staged` 的对象会以「未审批」样式出现在用户地图上，用户之后在 Desktop 统一接受或丢弃。接受只表示写入地图，不代表数学上已验证，也不会提升 Trust。
 
@@ -157,11 +157,22 @@ workspace.search
   "payload": { "artifact_id": "<material.read 返回的 Markdown 快照 id>",
                "md_byte_range": { "start": 120, "end": 188 },
                "granularity": "inline",
-               "quote": "<这段字节范围里的原文>" } }
+               "quote": "<这段字节范围里的全部原文>" } }
 ```
 
-- `md_byte_range` 是该快照的字节坐标，半开区间 `[start, end)`；服务端按范围截出原文再和 `quote` 比较（先精确，再忽略空白和外层 `$…$` 差异），不会在全文里帮你找。
+**流程：先定位，再提案。** 不要自己数字节、试读小窗口或写脚本算偏移：
+
+1. `material.read` 读页（`pdf_pages`）。返回的 `served_artifact_id` 或 `details.served_segments[].artifact_id` 是快照 id；`served_segments[].md_byte_range` 是所读页在该快照里的范围。正文从快照第 0 字节开始，单快照时正文里的偏移就是快照字节偏移。
+2. 从读到的正文里原样复制一小段（一道题、一个定义、一段证明），调用 `material.locate {artifact_id, quote, within?}`。`within` 可填上一步的 `md_byte_range`，把搜索限制在这几页。
+3. `status: ok` 时把返回的 `md_byte_range` 和**同一个** `quote` 原样放进 `source_span`，R2 引文核对一定通过；`ambiguous` 时从 `candidates` 里按上下文选一个，或加长 quote / 缩小 `within` 再查；`not_found` 说明这段文字不在该快照里，重新读原文。
+4. 只在 locate 结果的 `page_granularity_available` 为 true 时才用 `page` 粒度。
+
+规则：
+
+- `quote` 必须是**整个范围**的原文，不能只写开头或结尾，也不能用「…」省略中间。服务端按范围截出原文再和 `quote` 比较（先精确，再忽略空白、TeX 间距命令和外层 `$…$` 差异），不会在全文里帮你找。
+- 单个 span 最长 4096 字节（`span_too_long`）。一章不是一个 span：按题、按定义或按段拆成多个小 span，再分别挂到各自的来源单元上；章节单元可以只引用标题那一小段。
 - `granularity` 取 `inline`、`block` 或 `page`。`block` 要求范围内有 canonical block，`page` 要求范围能唯一落到一页，否则 blocked。拿不准就用 `inline`。
+- 快照没有分页标记（`material.read` 给出 `page_markers_absent`）时只能用 `inline` 粒度。用户直接导入的 Markdown、其他来源转换的 Markdown，以及部分早期解析的快照都可能没有分页标记，这是正常情况，不要为此重新解析。
 - 同一快照同一范围的 span id 是确定的：已经在地图上就会自动变成引用（`span_already_exists`），不会重复创建。
 - 不要填 id、hash、页码、块 id 等字段；多写字段会被拒绝。新建的 span 必须被本次提案里的单元或关系用到，否则 `unused_span`。
 
@@ -197,10 +208,13 @@ workspace.search
 
 | 码 | 含义 |
 | --- | --- |
-| `quote_mismatch` | 范围原文和 `quote` 不一致；重新 `material.read` 核对字节范围 |
+| `quote_mismatch` | 范围原文和 `quote` 不一致（常见原因：quote 只写了开头）；用 `material.locate` 重新取范围 |
+| `span_too_long` | 范围超过 4096 字节；按题或按段拆成多个 span |
 | `range_out_of_bounds` / `invalid_utf8_boundary` | 范围越界或切在字符中间 |
 | `snapshot_not_found` / `snapshot_not_immutable` | `artifact_id` 不是已登记的 Markdown 快照 |
 | `block_locator_unavailable` / `page_mapping_unavailable` | `block` / `page` 粒度定位不到；改用 `inline` |
+| `page_markers_absent`（`material.read` 的诊断） | 快照没有分页标记，页映射不可用；用 `inline` 粒度 |
+| `invalid_locator` | 本提案里的原文证据缺少物理定位（没有 Markdown 范围、页或手稿选区）；`target_id` 指出是哪个对象 |
 | `span_inactive` | 同一范围的 span 已被用户退役；不要自动重建，告诉用户 |
 | `unused_span` | 新建的 span 没被引用 |
 | `dangling_new_ref` / `dangling_staged_ref` | `$new:` 没定义，或引用的暂存对象不在本调查的 staged 提案里 |
@@ -209,7 +223,7 @@ workspace.search
 | `dependency_superseded` / `dependency_blocked` / `dependency_discarded` | 被依赖的提案被替换、变 blocked 或被用户丢弃 |
 | `parent_cycle`、`mixed_source_context`、`cross_source_parent` 等 | 最终图结构不合法 |
 
-`span_already_exists`（info）和 `span_granularity_ignored`（warn）不阻塞提案。
+`span_already_exists`（info）、`span_granularity_ignored`（warn）和 `head_integrity`（warn）不阻塞提案。`head_integrity` 表示工作区里**已有**、且本提案没有碰到的对象本身有问题（`target_id` 是该对象）：它与本提案无关，不要为此修改或重提提案，在交接时告诉用户即可。只有本提案及其依赖的提案新增或修改的对象出错，才会让提案 blocked。诊断里 `local_ref` 指本提案的条目，`target_id` 指地图对象 id。
 
 如果某阶段所需能力不可用，输出应包含：
 

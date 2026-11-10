@@ -81,6 +81,14 @@
 | R6 | 批量一个 commit，未勾选保持 staged | 选中集合（含依赖闭包校验）合成**一个** `UserChangeRequest`、一个计划指纹、一个 `BEGIN IMMEDIATE` 事务、一个 commit；每个 change_set 的接受决定记同一 `commit_id`。未勾选项保持 `staged` | §5.5 |
 | R7 | 单一投影及其排除项 | `graph.get`、`graph.neighborhood` 与 Desktop 地图共用同一份服务端投影；暂存对象不进正式 head、正式快照 / landscape、导出、默认搜索、正式编辑入口和母工作区地图 | §4.4、§4.4.1 |
 
+**2026-11-10 沙箱对话 3 验收后的修订**（用户定；与上文冲突时以下表为准）：
+
+| # | 修订 | 要点 | 落点 |
+| --- | --- | --- | --- |
+| V1 | 只有本提案触及的对象出错才阻塞 | 手稿笔迹 span（`ink.snapshot_artifact` + 非空 `stroke_ids`）算有物理定位，不再报 `invalid_locator`（仅认作合法定位，不进 source payload）。提案、影响预览、批量计划 / 接受与调查投影改用 `plan_map_change_over_head`：本提案及其依赖闭包既未操作、也未改动的对象上，head 里**本来就有**的问题移入 `ImpactPlan.head_issues`，在 `propose_changes` 里是 `warn: head_integrity`（`target_id` = 该对象），不阻塞、不进 Debt；本提案在未触及对象上**新引起**的问题仍阻塞。所有诊断带 `target_id`。手动地图编辑仍用严格的 `plan_map_change`（不做隐式修复） | §4.2.4、§8 |
+| V2 | 按页读的字节段 | `material.read` 按 `pdf_pages` 读时，单快照也返回 `details.served_segments`（所读页在快照里的 `md_byte_range`；正文从快照第 0 字节起）。多页快照没有分页标记 ⇒ 诊断 `page_markers_absent`，只能用 `inline` 粒度；用户导入或其他来源的 Markdown 没有分页标记属正常情况，不放宽重解析规则 | §4.2.5 |
+| V3 | `material.locate` 与 span 长度上限 | 新只读工具 `material.locate {artifact_id, quote, within?}`：按 R2 同一规则搜索（先精确，否则两侧归一化后比较并映射回原始字节），返回的每个范围与同一 `quote` 必过 R2；唯一命中给 `md_byte_range`、块 id、能唯一确定时的页；多处命中 `ambiguous` 列出候选（上限 20）。单个 span 最长 4096 字节，超过 ⇒ `span_too_long`。R2 的截取后比较不变。`tool_schema_version` = `mathscape-mcp/15` | §4.2.5、§4.6 |
+
 ---
 
 ## 3. D1 / D2 / D3：Phase2 契约级口径
@@ -289,7 +297,7 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 2. 引用闭合 [锁定·2026-11-09 用户改定]：所有引用均可解析——`$new:<local_ref>` 必须指向本 version 内的新建项（否则 `dangling_new_ref`）；稳定 id 必须是正式图上的活动对象，或**本调查**某个 `staged` 活动 version 的 `staged_ids`（否则 `dangling_staged_ref`；其他调查的暂存视同不存在）。引用其他 change_set 的暂存对象即形成依赖边，接受时须满足 §4.2.8 的连带规则，从而仍保证 FX §4.4 末条「正式提交不得留下只指向暂存对象的引用」。
    - 原口径：「`local_ref` 只在本 version 内有效；不得只指向**其他** change_set 的暂存对象」。
 3. 写前置：`edit` 的 `expected_revision` = 当前 revision；`existing_refs` 当前可用（FX §8.3 第 2 类）。
-4. 试编排：把 version 编译成 `UserChangeRequest` 并以**当前 head ⊕ 依赖闭包**（本 version 引用到的其他 `staged` change_set 的操作，按依赖拓扑序前置）运行纯 planner `plan_map_change`（`crates/mathscape-orchestrator/src/map_edit.rs`），`ImpactPlanStatus::Blocked|Conflicted` 的 `ImpactDiagnostic` 逐条转为 `validation` Debt。planner 先把全部操作应用到 `final_map` 再整体校验（含 `source_integrity::validate_live_references` 的 `parent_cycle`、`invalid_evidence`、`mixed_source_context`、`cross_source_parent`、`invalid_locator`、`invalid_relation`、`inactive_or_invalid_reference`），因此本 version 内各项的书写顺序不影响结果（§4.2.7）。2026-11-09 改定前只以当前 head 为底。
+4. 试编排：把 version 编译成 `UserChangeRequest` 并以**当前 head ⊕ 依赖闭包**（本 version 引用到的其他 `staged` change_set 的操作，按依赖拓扑序前置）运行纯 planner `plan_map_change_over_head`（`crates/mathscape-orchestrator/src/map_edit.rs`），`ImpactPlanStatus::Blocked|Conflicted` 的 `ImpactDiagnostic` 逐条转为 `validation` Debt（带 `target_id`）。[2026-11-10 V1] 请求既未操作也未改动的对象上、head 里本来就有的问题（同 `code` + 同对象在原 head 上已出现）不阻塞：它们在 `ImpactPlan.head_issues` 里，`propose_changes` 映射为 `warn: head_integrity`，消息写明对象 id，不进 Debt；Desktop 批量计划与接受用同一 planner，因此接受也不被它们挡住。planner 先把全部操作应用到 `final_map` 再整体校验（含 `source_integrity::validate_live_references` 的 `parent_cycle`、`invalid_evidence`、`mixed_source_context`、`cross_source_parent`、`invalid_locator`、`invalid_relation`、`inactive_or_invalid_reference`），因此本 version 内各项的书写顺序不影响结果（§4.2.7）。2026-11-09 改定前只以当前 head 为底。
 5. 禁止项：`same_as`、自设可信终态（MCP 草案 §3.2）。
 6. [2026-11-09 新增] SourceSpan 校验（§4.2.5）与 `unused_span`：本 version 新建、但未被本 version 任何单元 / 关系引用的 span → `unused_span`。
 7. [2026-11-09 新增] 依赖图无环：change_set 之间的依赖边不得成环（`change_set_dependency_cycle`）。
@@ -311,7 +319,7 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 | `artifact_id` | canonical Markdown **快照** Artifact 的 id（`material.read` 的 `details.served_segments[].artifact_id`） |
 | `md_byte_range` | `{start, end}`，该快照字节坐标，半开区间，`start < end` |
 | `granularity` | `inline` \| `block` \| `page`（`SpanGranularity`） |
-| `quote` | 该范围的原文（可带 TeX 定界符差异，见下） |
+| `quote` | **整个范围**的原文（可带空白 / TeX 定界符差异，见下）；不能只写开头或用省略号 |
 
 服务端校验（任一失败 ⇒ `validation` Debt ⇒ version `blocked`）：
 
@@ -319,6 +327,7 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 | --- | --- |
 | `artifact_id` 是本工作区已登记的**不可变** canonical Markdown 快照，内容哈希与登记一致 | `snapshot_not_found` / `snapshot_not_immutable` |
 | 范围在快照字节长度内、`start < end` | `range_out_of_bounds` |
+| 范围不超过 4096 字节 [2026-11-10 V3]（一章按题或按段拆成多个 span） | `span_too_long` |
 | `start`、`end` 落在 UTF-8 字符边界 | `invalid_utf8_boundary` |
 | `quote` 与范围原文一致 [2026-11-10 定稿 R2]：**先按 `[start,end)` 截出范围原文**，再比较——先精确相等；否则两侧都去掉外层数学定界符并做 TeX 感知的空白归一化（`source_locator::quote_matches_range`，归一化与内容发现共用 `normalize_locator_text`）后相等。不在快照全文里搜索 quote（原口径的 `locator_matches` 是全文搜索，只留给内容发现） | `quote_mismatch` |
 | `granularity = block` 但范围内没有 canonical `block:*`（页标记不算） [R3] | `block_locator_unavailable` |
@@ -333,6 +342,8 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 - `page`：仅 `granularity = page` 时填 `PageCoordinate`，由快照的分页标记（或单页快照的页范围）确定唯一页；不能唯一确定 ⇒ `page_mapping_unavailable`（R3），不留空降级。`inline` / `block` 粒度不填 `page`（来源登记同样留空；`markdown` 已满足 `invalid_locator` 校验）。
 - `layout = Other`、`bounding_boxes = []`、`exact_text_artifact = None`；**`ink` 永不填**——手稿证据只走 `register_ink_evidence`（Desktop 用户写入）。
 - lifecycle / trust 同 §3.3：接受者写入，不自设可信终态。
+
+**先定位再提案** [2026-11-10 V2/V3]：Agent 用 `material.read` 读页，取 `served_segments[].artifact_id / md_byte_range`；从正文原样复制一段，调用 `material.locate`（可用 `within` 限定在所读页的字节段），把返回的 `md_byte_range` 与**同一** `quote` 放进 `source_span`。`material.locate` 只是 R2 的搜索形式：它返回的范围都满足 `quote_matches_range(范围原文, quote)`，因此一定通过 R2；R2 本身仍是截取后比较，不在全文里搜。快照没有分页标记时（`page_markers_absent`）只能用 `inline` 粒度。
 
 **身份与去重** [锁定·2026-11-09 用户改定]：span id **复用内容发现的确定性规则**——`markdown_span_id(artifact_id, range) = stable_hash_id("source-span", fingerprint(("markdown-source-span-1", artifact_id, range)))`，定义在共享模块 `crates/mathscape-orchestrator/src/source_locator.rs`，来源登记的 `intern_span` 与 propose 都调用它（有跨路径同 id、同 hash 的测试）。因此：
 - 同一快照同一范围得到同一 id，无论来自内容发现登记、哪个 change_set、哪个 version。
@@ -422,6 +433,12 @@ Phase0 §2.2 已把 `blocked` 预留给 `propose_changes`。v1 增量仅：
 - 不新增调用错误码；新增的 `details.reason`：`idempotency_conflict`、`supersede_conflict`、`round_not_bound`、`generation_stale`（均挂在 `invalid_arg` / `forbidden` 下）。
 
 ---
+
+### 4.6 `material.locate` [2026-11-10 用户定]
+
+只读工具，输入 `{artifact_id, quote, within?: {start, end}}`。`artifact_id` 必须是 text/markdown 快照（与 `source_span.artifact_id` 相同的校验：`propose::load_snapshot`）。`quote` 1–4096 字节，超过 ⇒ `not_found` + `span_too_long`。`within` 是快照字节坐标的半开区间，须在快照内且落在 UTF-8 边界，否则 `invalid_arg`。
+
+匹配：`source_locator::locate_quote`——先找精确出现；没有时两侧做与 R2 相同的归一化后搜索，再把命中映射回原始字节；最后用 `quote_matches_range` 过滤，保证每个候选与同一 `quote` 必过 R2。输出 `status`（`ok` 唯一 / `ambiguous` 多处 / `not_found`）、`match`（`exact` | `normalized`）、`candidate_count`、`truncated`、`candidates[]`（每项 `md_byte_range`、`block_ids`（同 `marker_block_ids` 规则）、`page`（仅能唯一映射到一页时给 `{pdf_page_index, page_number}`）、`page_granularity_available`）；唯一命中时这些字段也放在顶层。候选上限 20（`candidates_truncated`）。不写地图、目录或产物池。
 
 ## 5. Desktop 接受路径 [锁定语义]
 
@@ -564,6 +581,11 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 | 本调查对同一对象有多个 staged replacement | `graph.*` | 已接受版本 + `staged_conflict` |
 | SourceSpan 快照无效 / 越界 / 非 UTF-8 边界 / 原文不符 | `propose_changes` | `blocked`：`snapshot_not_found` / `snapshot_not_immutable` / `range_out_of_bounds` / `invalid_utf8_boundary` / `quote_mismatch` |
 | `block` / `page` 粒度无法落到 canonical block / 唯一页 | `propose_changes` | `blocked`：`block_locator_unavailable` / `page_mapping_unavailable` |
+| span 范围超过 4096 字节 | `propose_changes` | `blocked`：`span_too_long` |
+| 本提案触及的原文证据没有物理定位（无 Markdown 范围、无页、无手稿选区） | `propose_changes` | `blocked`：`invalid_locator`（`target_id` 指出对象） |
+| head 里已有、本提案未触及的对象有问题 | `propose_changes` / Desktop 预览与接受 | `warn: head_integrity`（`target_id`），不阻塞 |
+| 多页快照没有分页标记 | `material.read` | 诊断 `page_markers_absent`；span 只能用 `inline` |
+| locate 无命中 / 多处命中 / quote 超过 4096 字节 | `material.locate` | `not_found` / `ambiguous`（候选上限 20）/ `not_found` + `span_too_long` |
 | 同 id span 已退役 | `propose_changes` | `blocked`：`span_inactive` |
 | round 已绑定到另一调查 | `propose_changes` / `get_change_set` | `forbidden`，`investigation_mismatch` |
 | Desktop 命令的 `investigation_id` 不属于本窗口 | Desktop 提案命令 | 拒绝：`investigation_not_in_workspace` |
@@ -687,3 +709,4 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 | 2026-10-30 | 初稿；用户锁定决策 1–8。 |
 | 2026-11-09 | PR-B 契约修订（`feat/pr-b-staged-proposals`）：用户改定决策 4（审批时机）与 §4.2.4 第 2 条（跨 change_set 引用），新增 SourceSpan 提案、`$new:` 临时引用、最终图依赖校验与写入顺序、连带规则、暂存上图、批量审核、审核面板与校验代码复用、PR-B 实现切片（§2.1、§4.2.5–§4.2.8、§4.4.1、§5.5–§5.6、§6.1–§6.2、§9.1、§10）。Loogle 加速推迟到下一个 PR。 |
 | 2026-11-10 | PR-B 实现对齐：§2.2 汇总四项「2026-11-09 用户定」与七条修订（会话级调查、quote 截取后比较、粒度失败码、hash 语义、依赖带版本且替换后转 blocked、批量一个 commit、单一投影与排除项）；删去线程级调查、全文搜索式 quote 匹配与替换后自动改指；补应用 / 拼接顺序、Desktop 命令清单与归属校验、§8 新码。 |
+| 2026-11-10 | 沙箱对话 3 验收修订（§2.2 V1–V3）：手稿笔迹定位算物理定位；只有本提案触及的对象出错才阻塞，head 里已有问题降为 `head_integrity` 警告；`material.read` 单快照也返回 `served_segments`，无分页标记给 `page_markers_absent`；新增 `material.locate`（§4.6）与 4096 字节的 `span_too_long`；`tool_schema_version` 升到 `mathscape-mcp/15`。审核面板改由服务端给锚点、手动审核进全屏审核工作区（§5.6）。 |
