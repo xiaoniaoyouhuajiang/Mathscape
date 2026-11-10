@@ -10,7 +10,7 @@ use mathscape_domain::{
     ActorRef, MapEditObject, MapEditSnapshot, UserChangeOperation, UserChangeRequest,
 };
 
-use crate::map_edit::plan_map_change;
+use crate::map_edit::plan_map_change_over_head;
 
 /// Key of one immutable change set version.
 pub type ChangeSetKey = (String, i64);
@@ -306,7 +306,7 @@ pub fn project_investigation(
             reason: "investigation projection".into(),
             operations,
         };
-        let planned = plan_map_change(snapshot, &request, actor);
+        let planned = plan_map_change_over_head(snapshot, &request, actor);
         if planned.impact.status != mathscape_domain::ImpactPlanStatus::Ready {
             continue;
         }

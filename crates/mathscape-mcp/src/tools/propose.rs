@@ -21,7 +21,7 @@ use mathscape_domain::{
 use mathscape_orchestrator::change_set_plan::{
     ChangeSetKey, ClosureError, StagedChangeSet, combined_operations, staged_dependency_closure,
 };
-use mathscape_orchestrator::map_edit::plan_map_change;
+use mathscape_orchestrator::map_edit::plan_map_change_over_head;
 use mathscape_orchestrator::{
     PAGE_MARKER_STRUCTURAL_KIND, anchor_markdown, markdown_span_id, page_marker_id,
     quote_matches_range, source_text_hash, valid_temp_id,
@@ -148,6 +148,9 @@ struct Diagnostic {
     code: String,
     message: String,
     local_ref: Option<String>,
+    /// The map object the problem is about, when it is one (planner
+    /// diagnostics carry the object id; local items carry `local_ref`).
+    target_id: Option<String>,
 }
 
 impl Diagnostic {
@@ -166,6 +169,7 @@ impl Diagnostic {
             code: code.to_owned(),
             message: message.into(),
             local_ref: local_ref.map(str::to_owned),
+            target_id: None,
         }
     }
 
@@ -338,13 +342,30 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
                     reason: args.rationale.clone(),
                     operations: combined_operations(closure, &operations),
                 };
-                let planned = plan_map_change(&snapshot, &request, &actor);
+                let planned = plan_map_change_over_head(&snapshot, &request, &actor);
                 diagnostics.extend(planned.impact.diagnostics.into_iter().map(|diagnostic| {
+                    let target_id = diagnostic.object_id.filter(|id| !id.is_empty());
                     Diagnostic {
                         level: Level::Error,
-                        local_ref: reverse_lookup(&ids, diagnostic.object_id.as_deref()),
+                        local_ref: reverse_lookup(&ids, target_id.as_deref()),
+                        target_id,
                         code: diagnostic.code,
                         message: diagnostic.message,
+                    }
+                }));
+                // Problems that already exist in the head on objects this
+                // proposal and its dependencies do not touch never block it.
+                diagnostics.extend(planned.impact.head_issues.into_iter().map(|diagnostic| {
+                    let target = diagnostic.object_id.unwrap_or_default();
+                    Diagnostic {
+                        level: Level::Warn,
+                        code: "head_integrity".into(),
+                        message: format!(
+                            "工作区已有对象 {target} 存在问题（{}：{}）；与本提案无关，不阻塞",
+                            diagnostic.code, diagnostic.message
+                        ),
+                        local_ref: None,
+                        target_id: Some(target),
                     }
                 }));
             }
@@ -362,7 +383,7 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
                 "kind": "validation",
                 "code": item.code,
                 "local_ref": item.local_ref,
-                "target_id": Value::Null,
+                "target_id": item.target_id,
                 "message": item.message
             })
         })
@@ -611,6 +632,7 @@ fn validate_refs(refs: &[ExistingRef]) -> Vec<Diagnostic> {
                     code: "invalid_existing_ref".to_owned(),
                     message: "existing_refs needs a stable id and sha256 revision".to_owned(),
                     local_ref: None,
+                    target_id: None,
                 })
             } else {
                 None
@@ -630,6 +652,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                 message: "Phase2-0 only supports source_unit, source_span and source_relation"
                     .to_owned(),
                 local_ref: Some(object.local_ref.clone()),
+                target_id: None,
             });
         }
         if !matches!(object.op.as_str(), "create" | "edit") {
@@ -638,6 +661,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                 code: "operation_not_supported".to_owned(),
                 message: "Phase2-0 only supports create and edit".to_owned(),
                 local_ref: Some(object.local_ref.clone()),
+                target_id: None,
             });
         }
         match object.op.as_str() {
@@ -646,6 +670,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                 code: "missing_payload".to_owned(),
                 message: "create requires payload".to_owned(),
                 local_ref: Some(object.local_ref.clone()),
+                target_id: None,
             }),
             "edit" if object.target_id.is_none() || object.expected_revision.is_none() => result
                 .push(Diagnostic {
@@ -653,6 +678,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                     code: "missing_revision_guard".to_owned(),
                     message: "edit requires target_id and expected_revision".to_owned(),
                     local_ref: Some(object.local_ref.clone()),
+                    target_id: None,
                 }),
             _ => {}
         }
@@ -663,6 +689,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                     code: "operation_not_supported".to_owned(),
                     message: "source_span only supports create".to_owned(),
                     local_ref: Some(object.local_ref.clone()),
+                    target_id: None,
                 });
             }
             if object.payload.is_none() {
@@ -671,6 +698,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                     code: "missing_payload".to_owned(),
                     message: "source_span/create requires payload".to_owned(),
                     local_ref: Some(object.local_ref.clone()),
+                    target_id: None,
                 });
             }
         }
@@ -683,6 +711,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                 code: "kind_not_supported".to_owned(),
                 message: "relation kind must be source_relation".to_owned(),
                 local_ref: Some(relation.local_ref.clone()),
+                target_id: None,
             });
         }
         if !matches!(relation.op.as_str(), "create" | "edit") {
@@ -691,6 +720,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                 code: "operation_not_supported".to_owned(),
                 message: "Phase2-0 only supports create and edit".to_owned(),
                 local_ref: Some(relation.local_ref.clone()),
+                target_id: None,
             });
         }
         if relation.op == "create"
@@ -703,6 +733,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                 code: "missing_relation_fields".to_owned(),
                 message: "relation create requires relation, source and target".to_owned(),
                 local_ref: Some(relation.local_ref.clone()),
+                target_id: None,
             });
         }
         if relation.op == "edit"
@@ -713,6 +744,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                 code: "missing_revision_guard".to_owned(),
                 message: "relation edit requires target_id and expected_revision".to_owned(),
                 local_ref: Some(relation.local_ref.clone()),
+                target_id: None,
             });
         }
     }
@@ -723,6 +755,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                 code: "invalid_staged_id".to_owned(),
                 message: "server-generated staged id is invalid".to_owned(),
                 local_ref: Some(local_ref.clone()),
+                target_id: None,
             });
         }
     }
@@ -769,6 +802,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                     code: "dangling_new_ref".into(),
                     message: format!("$new:{local} does not name an item in this version"),
                     local_ref: owner,
+                    target_id: None,
                 });
             }
         } else if !value.starts_with("mathscape:") && !value.is_empty() {
@@ -778,6 +812,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                 message: "bare local_ref is accepted for compatibility; use $new:<local_ref>"
                     .into(),
                 local_ref: owner,
+                target_id: None,
             });
         }
     }
@@ -822,6 +857,7 @@ fn check_local_ref(result: &mut Vec<Diagnostic>, refs: &mut BTreeSet<String>, lo
             message: "local_ref must be unique and match [A-Za-z0-9][A-Za-z0-9_.-]{0,63}"
                 .to_owned(),
             local_ref: Some(local_ref.to_owned()),
+            target_id: None,
         });
     }
 }
@@ -1759,7 +1795,8 @@ fn diagnostic_value(item: &Diagnostic) -> Value {
         },
         "code": item.code,
         "message": item.message,
-        "local_ref": item.local_ref
+        "local_ref": item.local_ref,
+        "target_id": item.target_id
     })
 }
 

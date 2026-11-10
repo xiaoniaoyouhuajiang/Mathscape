@@ -184,6 +184,11 @@ pub struct ImpactPlan {
     pub direct_changes: Vec<ImpactItem>,
     pub affected_objects: Vec<ImpactItem>,
     pub diagnostics: Vec<ImpactDiagnostic>,
+    /// Problems that already exist in the head on objects the request does
+    /// not touch. Only the staged-proposal planner fills this; they do not
+    /// block and are shown as "workspace object problems".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub head_issues: Vec<ImpactDiagnostic>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct ObjectRevisionReceipt {

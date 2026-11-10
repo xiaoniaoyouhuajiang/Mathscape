@@ -29,7 +29,7 @@ use mathscape_orchestrator::change_set_plan::{
     ChangeSetKey, StagedChangeSet, combined_operations, ordered_selection,
     staged_dependency_closure,
 };
-use mathscape_orchestrator::map_edit::plan_map_change;
+use mathscape_orchestrator::map_edit::plan_map_change_over_head;
 use mathscape_store_sqlite::{
     ChangeSetAcceptance, ChangeSetSelectionRef, PendingChangeSet, SqliteArtifactStore,
 };
@@ -405,7 +405,7 @@ pub fn plan_batch(
         .map_edit_snapshot()
         .map_err(|error| error.to_string())?;
     let (request, order) = batch_request(&sets, &selections, snapshot.base_commit.clone())?;
-    let impact = plan_map_change(&snapshot, &request, &actor()?).impact;
+    let impact = plan_map_change_over_head(&snapshot, &request, &actor()?).impact;
     // Attribute each direct change to the first selected version touching it.
     let mut owner = BTreeMap::<String, ChangeSetKey>::new();
     for key in &order {
@@ -480,7 +480,7 @@ pub fn preview_impact(
         change_set_id: change_set_id.to_owned(),
         version,
         planned_with,
-        impact: plan_map_change(&snapshot, &request, &actor()?).impact,
+        impact: plan_map_change_over_head(&snapshot, &request, &actor()?).impact,
     })
 }
 
@@ -517,7 +517,7 @@ pub fn accept_batch(
     };
     let receipt = store
         .accept_change_sets(&acceptance, move |snapshot| {
-            let planned = plan_map_change(snapshot, &request, &actor);
+            let planned = plan_map_change_over_head(snapshot, &request, &actor);
             (planned.impact, planned.patch)
         })
         .map_err(|error| error.to_string())?;
@@ -1235,6 +1235,71 @@ mod tests {
             },
         );
         assert_eq!(staged_id(&a, "s"), expected_id.to_string());
+    }
+
+    /// Rewrites the accepted payload of `object_id` in place, to stage a head
+    /// that already contains an ink evidence span or a broken object.
+    fn rewrite_head_payload(fx: &Fx, object_id: &str, payload: Value) {
+        rusqlite::Connection::open(fx.root.join("mathscape.sqlite3"))
+            .unwrap()
+            .execute(
+                "UPDATE map_object_revisions SET payload_json = ?2 WHERE object_id = ?1",
+                rusqlite::params![object_id, payload.to_string()],
+            )
+            .unwrap();
+    }
+
+    /// Regression of the sandbox dialogue-3 test: a handwritten-manuscript
+    /// span that was copied into the sandbox with the checkpoint made every
+    /// proposal `invalid_locator`. Ink spans are valid locators; any other
+    /// pre-existing head problem on an untouched object is a `head_integrity`
+    /// warning naming the object, never blocking, and accept still commits.
+    #[test]
+    fn unrelated_head_problems_never_block_a_proposal() {
+        let fx = fixture();
+        let a = unit_proposal(&fx, "a", "定理 A", "# 定理 A", Value::Null);
+        accept(&fx, vec![sel(&a)]).unwrap();
+        let head_span = staged_id(&a, "s");
+        rewrite_head_payload(
+            &fx,
+            &head_span,
+            json!({ "payload_kind": "span", "payload": {
+                "granularity": "inline", "layout": "other", "page": null,
+                "bounding_boxes": [], "marker_block_ids": [], "markdown": null,
+                "exact_text_artifact": null, "normalized_text_hash": null,
+                "ink": {
+                    "snapshot_artifact": format!("mathscape:artifact/sha256/{}", "9".repeat(64)),
+                    "page_id": "p0", "stroke_ids": ["s1"], "selection_mode": "lasso"
+                }
+            }}),
+        );
+        let b = unit_proposal(&fx, "b", "定理 B", "# 定理 B", Value::Null);
+        assert_eq!(b["status"], "staged", "{b}");
+        assert!(codes(&b).is_empty(), "{b}");
+
+        // Now a genuinely broken head span (no locator at all).
+        rewrite_head_payload(
+            &fx,
+            &head_span,
+            json!({ "payload_kind": "span", "payload": {
+                "granularity": "inline", "markdown": null, "page": null
+            }}),
+        );
+        let c = unit_proposal(&fx, "c", "第一段", "第一段内容。", Value::Null);
+        assert_eq!(c["status"], "staged", "{c}");
+        let warning = c["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "head_integrity")
+            .unwrap_or_else(|| panic!("{c}"));
+        assert_eq!(warning["level"], "warn");
+        assert_eq!(warning["target_id"], json!(head_span));
+        assert!(warning["local_ref"].is_null());
+        assert!(c["debts"].as_array().unwrap().is_empty(), "{c}");
+        accept(&fx, vec![sel(&b), sel(&c)]).unwrap();
+        assert_eq!(state(&fx, &c), "accepted");
+        assert!(has_object(&fx, &staged_id(&c, "u")));
     }
 
     #[test]

@@ -105,6 +105,21 @@ pub fn related_object(o: &MapEditObject, role: &str) -> ImpactObjectRef {
         reference_kind: role.into(),
     }
 }
+/// A handwritten-manuscript span (ink evidence) is located physically by its
+/// immutable ink snapshot artifact and the selected stroke ids. It is a valid
+/// locator for integrity checks only; it never enters a source payload.
+pub fn has_ink_locator(span_payload: &Value) -> bool {
+    let ink = &span_payload["ink"];
+    ink["snapshot_artifact"]
+        .as_str()
+        .is_some_and(|id| !id.trim().is_empty())
+        && ink["stroke_ids"].as_array().is_some_and(|ids| {
+            !ids.is_empty()
+                && ids
+                    .iter()
+                    .all(|id| id.as_str().is_some_and(|id| !id.trim().is_empty()))
+        })
+}
 pub fn validate_live_references(map: &BTreeMap<String, MapEditObject>) -> Vec<ImpactDiagnostic> {
     let mut errors = vec![];
     for o in map.values().filter(|o| is_live(o)) {
@@ -191,7 +206,7 @@ pub fn validate_live_references(map: &BTreeMap<String, MapEditObject>) -> Vec<Im
             }
         } else if o.kind == "SourceSpan" {
             let p = &o.payload["payload"];
-            if p["markdown"].is_null() && p["page"].is_null() {
+            if p["markdown"].is_null() && p["page"].is_null() && !has_ink_locator(p) {
                 errors.push(ImpactDiagnostic {
                     code: "invalid_locator".into(),
                     object_id: Some(o.object_id.clone()),
@@ -220,4 +235,46 @@ pub fn validate_live_references(map: &BTreeMap<String, MapEditObject>) -> Vec<Im
         }
     }
     errors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn span(id: &str, payload: Value) -> MapEditObject {
+        MapEditObject {
+            object_id: id.into(),
+            revision: format!("sha256:{}", "1".repeat(64)),
+            kind: "SourceSpan".into(),
+            lifecycle: "active".into(),
+            payload: json!({ "payload_kind": "span", "payload": payload }),
+            endpoints: vec![],
+        }
+    }
+
+    /// Source registration and its withdrawal validate the whole live graph
+    /// with this function; an ink evidence span must not fail it.
+    #[test]
+    fn ink_spans_have_a_physical_locator() {
+        let ink = json!({
+            "markdown": null, "page": null,
+            "ink": { "snapshot_artifact": "mathscape:artifact/sha256/aa", "page_id": "p", "stroke_ids": ["s"] }
+        });
+        assert!(has_ink_locator(&ink));
+        let map = BTreeMap::from([("ink".to_owned(), span("ink", ink))]);
+        assert!(validate_live_references(&map).is_empty());
+        for broken in [
+            json!({ "markdown": null, "page": null }),
+            json!({ "markdown": null, "page": null, "ink": { "snapshot_artifact": "a", "stroke_ids": [] } }),
+            json!({ "markdown": null, "page": null, "ink": { "snapshot_artifact": "", "stroke_ids": ["s"] } }),
+        ] {
+            assert!(!has_ink_locator(&broken));
+            let map = BTreeMap::from([("x".to_owned(), span("x", broken))]);
+            let errors = validate_live_references(&map);
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].code, "invalid_locator");
+            assert_eq!(errors[0].object_id.as_deref(), Some("x"));
+        }
+    }
 }
