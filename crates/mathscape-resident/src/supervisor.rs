@@ -166,6 +166,21 @@ impl<K: Clone + Eq + Debug> Supervisor<K> {
         self.child.as_ref().map(ResidentChild::pid)
     }
 
+    /// 当前的就绪子进程（不懒启动，也不刷新空闲计时）。供 `Multiplexed`
+    /// 实例的读循环在两次请求之间持续读取子进程输出。
+    pub fn child_mut(&mut self) -> Option<&mut ResidentChild> {
+        if self.state == ResidentState::Ready {
+            self.child.as_mut()
+        } else {
+            None
+        }
+    }
+
+    /// 刷新空闲计时（长请求进行中或刚结束时调用，避免被误回收）。
+    pub fn touch(&mut self) {
+        self.last_used = self.clock.now();
+    }
+
     pub fn fallback_reason(&self) -> Option<&str> {
         self.fallback_reason.as_deref()
     }
