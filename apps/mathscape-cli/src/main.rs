@@ -1,7 +1,7 @@
 //! `mathscape` command-line entry point.
 //!
 //! Subcommands:
-//! - `mathscape mcp --workspace <path> [--round <token>]`: MCP server on
+//! - `mathscape mcp --workspace <path> [--round <token>] [--round-file <path>]`: MCP server on
 //!   stdio. The default catalog is read-only and has a round-bound staging
 //!   exception.
 
@@ -15,7 +15,7 @@ use mathscape_mcp::{McpServer, McpWorkspace};
 /// Help text. The tool list comes from [`TOOL_NAMES`] so it cannot drift.
 fn usage() -> String {
     format!(
-        "用法：\n  mathscape mcp --workspace <path> [--round <token>]\n\n子命令：\n  mcp    以 stdio 运行 Mathscape MCP 服务（{} 个工具：{}）",
+        "用法：\n  mathscape mcp --workspace <path> [--round <token>] [--round-file <path>]\n\n子命令：\n  mcp    以 stdio 运行 Mathscape MCP 服务（{} 个工具：{}）",
         TOOL_NAMES.len(),
         TOOL_NAMES.join("、")
     )
@@ -27,6 +27,7 @@ enum Command {
     Mcp {
         workspace: PathBuf,
         round: Option<String>,
+        round_file: Option<PathBuf>,
     },
 }
 
@@ -36,6 +37,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
         Some("mcp") => {
             let mut workspace = None;
             let mut round = None;
+            let mut round_file = None;
             while let Some(arg) = args.next() {
                 let (flag, inline) = match arg.split_once('=') {
                     Some((flag, value)) => (flag.to_owned(), Some(value.to_owned())),
@@ -56,12 +58,23 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
                         workspace = Some(PathBuf::from(path));
                     }
                     "--round" => round = Some(value("--round")?),
+                    "--round-file" => {
+                        let path = value("--round-file")?;
+                        if path.is_empty() {
+                            return Err("--round-file 需要一个非空路径".to_owned());
+                        }
+                        round_file = Some(PathBuf::from(path));
+                    }
                     "-h" | "--help" => return Ok(Command::Help),
                     other => return Err(format!("未知参数：{other}")),
                 }
             }
             let workspace = workspace.ok_or("缺少 --workspace <path>")?;
-            Ok(Command::Mcp { workspace, round })
+            Ok(Command::Mcp {
+                workspace,
+                round,
+                round_file,
+            })
         }
         Some(other) => Err(format!("未知子命令：{other}")),
     }
@@ -80,13 +93,17 @@ fn main() -> ExitCode {
             println!("{}", usage());
             ExitCode::SUCCESS
         }
-        Command::Mcp { workspace, round } => run_mcp(workspace, round),
+        Command::Mcp {
+            workspace,
+            round,
+            round_file,
+        } => run_mcp(workspace, round, round_file),
     }
 }
 
-fn run_mcp(workspace: PathBuf, round: Option<String>) -> ExitCode {
+fn run_mcp(workspace: PathBuf, round: Option<String>, round_file: Option<PathBuf>) -> ExitCode {
     let workspace = match McpWorkspace::open(&workspace) {
-        Ok(opened) => opened.with_round(round),
+        Ok(opened) => opened.with_round(round).with_round_file(round_file),
         Err(error) => {
             eprintln!("{error}（{}）", workspace.display());
             return ExitCode::FAILURE;
@@ -118,14 +135,30 @@ mod tests {
             parse(&["mcp", "--workspace", "/tmp/ws", "--round", "r1"]),
             Ok(Command::Mcp {
                 workspace: PathBuf::from("/tmp/ws"),
-                round: Some("r1".into())
+                round: Some("r1".into()),
+                round_file: None,
+            })
+        );
+        assert_eq!(
+            parse(&[
+                "mcp",
+                "--workspace",
+                "/tmp/ws",
+                "--round-file",
+                "/tmp/s/current_round"
+            ]),
+            Ok(Command::Mcp {
+                workspace: PathBuf::from("/tmp/ws"),
+                round: None,
+                round_file: Some(PathBuf::from("/tmp/s/current_round")),
             })
         );
         assert_eq!(
             parse(&["mcp", "--workspace=/tmp/ws"]),
             Ok(Command::Mcp {
                 workspace: PathBuf::from("/tmp/ws"),
-                round: None
+                round: None,
+                round_file: None,
             })
         );
     }

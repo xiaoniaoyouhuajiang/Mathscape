@@ -514,14 +514,14 @@ fn current_investigation(
     let Some(round) = workspace.round().filter(|value| !value.trim().is_empty()) else {
         return Ok(workspace.investigation().map(str::to_owned));
     };
-    let registered = store.round_investigation(round).map_err(internal)?;
+    let registered = store.round_investigation(&round).map_err(internal)?;
     match (workspace.investigation(), registered) {
         (Some(declared), Some(registered)) if declared != registered => {
             Err(investigation_mismatch(&registered, declared))
         }
         (Some(declared), _) => Ok(Some(declared.to_owned())),
         (None, Some(registered)) => Ok(Some(registered)),
-        (None, None) => Ok(Some(round.to_owned())),
+        (None, None) => Ok(Some(round)),
     }
 }
 
@@ -746,7 +746,6 @@ fn required_round(workspace: &McpWorkspace) -> Result<String, ToolError> {
     workspace
         .round()
         .filter(|round| !round.trim().is_empty())
-        .map(str::to_owned)
         .ok_or_else(|| {
             ToolError::new(
                 ToolErrorCode::Forbidden,

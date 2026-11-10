@@ -188,6 +188,7 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
 
     let store = StageStore::new(workspace.path()).map_err(internal)?;
     let request_fingerprint = request_fingerprint(&args)?;
+    let round = round.as_str();
     let staged_artifact_id = staged_id(round, &args.request_id);
     if let Some(existing) = store.load_record(&staged_artifact_id).map_err(internal)? {
         if existing.request_fingerprint == request_fingerprint {

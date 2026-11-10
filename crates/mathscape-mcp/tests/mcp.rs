@@ -481,7 +481,26 @@ fn initialize_ping_and_notifications() {
     );
     let unknown_tool = request(&f.server, 4, "tools/call", json!({ "name": "graph.path" }));
     assert_eq!(unknown_tool["error"]["code"], -32602);
-    assert_eq!(f.server.workspace().round(), Some("placeholder"));
+    assert_eq!(f.server.workspace().round().as_deref(), Some("placeholder"));
+}
+
+#[test]
+fn round_file_overrides_the_fixed_round_on_every_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = fixture();
+    let round_file = dir.path().join("current_round");
+    let workspace = McpWorkspace::open(&f.root)
+        .unwrap()
+        .with_round(Some("startup".into()))
+        .with_round_file(Some(round_file.clone()));
+    // Missing or blank file: fall back to the startup value.
+    assert_eq!(workspace.round().as_deref(), Some("startup"));
+    std::fs::write(&round_file, "  \n").unwrap();
+    assert_eq!(workspace.round().as_deref(), Some("startup"));
+    std::fs::write(&round_file, "codex-1-1\n").unwrap();
+    assert_eq!(workspace.round().as_deref(), Some("codex-1-1"));
+    std::fs::write(&round_file, "codex-1-2").unwrap();
+    assert_eq!(workspace.round().as_deref(), Some("codex-1-2"));
 }
 
 #[test]
