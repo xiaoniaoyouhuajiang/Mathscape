@@ -8,6 +8,7 @@ mod graph;
 mod grep;
 mod ink;
 mod lean;
+mod locate;
 mod material;
 mod outline;
 mod pdf_image;
@@ -32,6 +33,7 @@ pub use ink::{
     CROP_MARGIN, DEFAULT_MAX_BYTES, DEFAULT_MAX_EDGE_PX, FADED_OPACITY, MAX_MAX_BYTES,
     MAX_MAX_EDGE_PX, MAX_NODE_ID_CHARS, MAX_PAGE_INDEX, MIN_MAX_BYTES, MIN_MAX_EDGE_PX,
 };
+pub use locate::MAX_LOCATE_CANDIDATES;
 pub use outline::{
     MAX_DIAGNOSTIC_MESSAGE_CHARS, MAX_OUTLINE_DIAGNOSTICS, MAX_OUTLINE_ENTRIES,
     MAX_OUTLINE_ENTRIES_BYTES, MAX_OUTLINE_TITLE_CHARS,
@@ -51,6 +53,7 @@ pub const LEAN_CHECK: &str = "lean.check";
 pub const ARTIFACT_STAGE: &str = "artifact.stage";
 pub const PROPOSE_CHANGES: &str = "propose_changes";
 pub const GET_CHANGE_SET: &str = "get_change_set";
+pub const MATERIAL_LOCATE: &str = "material.locate";
 
 /// Version of the `tools/list` table (names, descriptions, input schemas)
 /// that the bundled `mathscape-worknet` skill is written against; the skill
@@ -60,7 +63,9 @@ pub const GET_CHANGE_SET: &str = "get_change_set";
 ///
 /// `/14`: `propose_changes` gained `source_span`, `$new:` references and
 /// cross-proposal references (PR-B); the table still has 13 tools.
-pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/14";
+/// `/15`: new read-only `material.locate` (14 tools); `material.read`
+/// documents single-snapshot `served_segments` and `page_markers_absent`.
+pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/15";
 
 /// sha256 of the serialized [`tool_definitions`] with object keys sorted (so
 /// the value does not depend on serde_json's `preserve_order` feature), for
@@ -92,7 +97,7 @@ pub fn tool_table_fingerprint() -> String {
 }
 
 /// Stable `tools/list` order. New tools are appended; existing entries stay put.
-pub const TOOL_NAMES: [&str; 13] = [
+pub const TOOL_NAMES: [&str; 14] = [
     WORKSPACE_SEARCH,
     MATERIAL_READ,
     MATERIAL_GREP,
@@ -106,6 +111,7 @@ pub const TOOL_NAMES: [&str; 13] = [
     ARTIFACT_STAGE,
     PROPOSE_CHANGES,
     GET_CHANGE_SET,
+    MATERIAL_LOCATE,
 ];
 
 /// MCP `annotations` for the read-only tools.
@@ -172,6 +178,7 @@ pub fn tool_definitions() -> Vec<Value> {
         stage::definition(),
         propose::definition(),
         propose::get_definition(),
+        locate::definition(),
     ]
     .into_iter()
     .map(with_annotations)
@@ -219,6 +226,7 @@ pub fn call(
         ARTIFACT_STAGE => structured(stage::call(workspace, arguments)),
         PROPOSE_CHANGES => structured(propose::propose(workspace, arguments)),
         GET_CHANGE_SET => structured(propose::get(workspace, arguments)),
+        MATERIAL_LOCATE => structured(locate::call(workspace, arguments)),
         _ => None,
     }
 }
@@ -272,8 +280,8 @@ mod schema_version_tests {
     /// tool name, description or schema changes the fingerprint: bump
     /// `TOOL_SCHEMA_VERSION` (and the skill frontmatter) and re-pin.
     const PINNED: (&str, &str) = (
-        "mathscape-mcp/14",
-        "515a11df8293b793b837f136d18a92f5f749ce0dbfe3177d413ac9efda0b1fde",
+        "mathscape-mcp/15",
+        "6d60d599c58098aa0545bbdb88bb27d20aa0cef5a06b65293ac775ef7a43acce",
     );
 
     #[test]

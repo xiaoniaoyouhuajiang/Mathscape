@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn help_lists_every_mcp_tool() {
         let text = usage();
-        assert!(text.contains("13 个工具"), "{text}");
+        assert!(text.contains("14 个工具"), "{text}");
         for name in TOOL_NAMES {
             assert!(text.contains(name), "help is missing {name}: {text}");
         }

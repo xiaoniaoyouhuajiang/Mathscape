@@ -17,8 +17,8 @@ pub mod source_integrity;
 mod source_locator;
 mod source_registration;
 pub use source_locator::{
-    locator_matches, markdown_span_id, normalized_locator_string, quote_matches_range,
-    source_text_hash, stable_hash_id, valid_temp_id,
+    locate_quote, locator_matches, markdown_span_id, normalized_locator_string,
+    quote_matches_range, source_text_hash, stable_hash_id, valid_temp_id,
 };
 mod source_review;
 pub use discovery_workflow::*;

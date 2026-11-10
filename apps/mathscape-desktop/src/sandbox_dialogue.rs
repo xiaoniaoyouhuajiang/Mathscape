@@ -1038,7 +1038,7 @@ mod tests {
         let record = home.session(&fx.session_id).unwrap();
         assert_eq!(record.backend, "codex");
         assert_eq!(record.tool_allowlist, sandbox_tool_allowlist());
-        assert_eq!(record.tool_allowlist.len(), 12);
+        assert_eq!(record.tool_allowlist.len(), 13);
         let export = home.export_session(&fx.session_id, None, None).unwrap();
         assert!(export.export_dir.join(EVENTS_FILE).is_file());
         drop(home);

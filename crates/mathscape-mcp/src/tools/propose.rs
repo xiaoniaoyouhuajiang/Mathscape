@@ -42,6 +42,9 @@ const MAX_REQUEST_ID_CHARS: usize = 128;
 const MAX_RATIONALE_CHARS: usize = 4000;
 const MAX_ITEMS: usize = 1000;
 const MAX_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
+/// Upper bound of one SourceSpan's `md_byte_range`, in bytes. A chapter is
+/// not one span: split it by problem or paragraph (`span_too_long`).
+pub(super) const MAX_SPAN_BYTES: u64 = 4 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -106,9 +109,9 @@ struct SourceSpanInput {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct ByteRangeInput {
-    start: u64,
-    end: u64,
+pub(super) struct ByteRangeInput {
+    pub(super) start: u64,
+    pub(super) end: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -143,10 +146,10 @@ enum Level {
 }
 
 #[derive(Clone, Debug)]
-struct Diagnostic {
+pub(super) struct Diagnostic {
     level: Level,
-    code: String,
-    message: String,
+    pub(super) code: String,
+    pub(super) message: String,
     local_ref: Option<String>,
     /// The map object the problem is about, when it is one (planner
     /// diagnostics carry the object id; local items carry `local_ref`).
@@ -181,7 +184,7 @@ impl Diagnostic {
 pub(super) fn definition() -> Value {
     json!({
         "name": PROPOSE_CHANGES,
-        "description": "Validate and persist a Phase2 source-layer proposal. It supports immutable source_span creation plus source_unit/source_relation create/edit, returns staged or blocked, and never changes the accepted map. Requires a bound round token.",
+        "description": "Validate and persist a Phase2 source-layer proposal. It supports immutable source_span creation plus source_unit/source_relation create/edit, returns staged or blocked, and never changes the accepted map. A source_span payload is {artifact_id, md_byte_range, granularity, quote}: quote is the full text of that range, the range is at most 4096 bytes (span_too_long; split a chapter by problem or paragraph), and material.locate returns a range that passes the quote check. Problems of existing workspace objects this proposal does not touch are warn head_integrity and never block. Requires a bound round token.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -863,9 +866,9 @@ fn check_local_ref(result: &mut Vec<Diagnostic>, refs: &mut BTreeSet<String>, lo
 }
 /// One Markdown snapshot read once per proposal: bytes, anchored blocks,
 /// page markers and its PDF mapping.
-struct SnapshotContext {
-    source: String,
-    blocks: Vec<MarkdownBlock>,
+pub(super) struct SnapshotContext {
+    pub(super) source: String,
+    pub(super) blocks: Vec<MarkdownBlock>,
     /// `(marker block start, marker block end, zero-based PDF page index)`.
     /// Marker's `{N}------` ids are zero-based PDF page indices.
     markers: Vec<(u64, u64, u32)>,
@@ -873,7 +876,7 @@ struct SnapshotContext {
     pdf: Result<(StableId, Option<(u32, u32)>), String>,
 }
 
-fn load_snapshot(
+pub(super) fn load_snapshot(
     workspace: &McpWorkspace,
     store: &SqliteArtifactStore,
     artifact: &StableId,
@@ -964,8 +967,27 @@ fn load_snapshot(
     })
 }
 
+impl SnapshotContext {
+    /// Canonical (non page-marker) blocks overlapping `[start, end)`; the
+    /// same rule `propose_changes` records in `marker_block_ids`.
+    pub(super) fn block_ids(&self, start: u64, end: u64) -> Vec<String> {
+        self.blocks
+            .iter()
+            .filter(|block| {
+                block.kind != PAGE_MARKER_STRUCTURAL_KIND
+                    && block.range.start < end
+                    && block.range.end > start
+            })
+            .map(|block| block.id.clone())
+            .collect()
+    }
+}
+
 /// Maps `[start, end)` to exactly one PDF page, or explains why not.
-fn map_page(context: &SnapshotContext, range: &ByteRangeInput) -> Result<PageCoordinate, String> {
+pub(super) fn map_page(
+    context: &SnapshotContext,
+    range: &ByteRangeInput,
+) -> Result<PageCoordinate, String> {
     let (pdf, pages) = context.pdf.clone()?;
     let page = if context.markers.is_empty() {
         // No page markers: only a single-page snapshot maps uniquely.
@@ -1069,6 +1091,17 @@ fn materialize_span_drafts(
             ));
             continue;
         }
+        if range.end - range.start > MAX_SPAN_BYTES {
+            diagnostics.push(Diagnostic::error(
+                "span_too_long",
+                format!(
+                    "md_byte_range covers {} bytes, more than the {MAX_SPAN_BYTES}-byte SourceSpan limit; split it into one span per problem or paragraph (material.locate returns the range of each piece)",
+                    range.end - range.start
+                ),
+                local,
+            ));
+            continue;
+        }
         let (start, end) = (range.start as usize, range.end as usize);
         if !context.source.is_char_boundary(start) || !context.source.is_char_boundary(end) {
             diagnostics.push(Diagnostic::error(
@@ -1089,16 +1122,7 @@ fn materialize_span_drafts(
             ));
             continue;
         }
-        let block_ids = context
-            .blocks
-            .iter()
-            .filter(|block| {
-                block.kind != PAGE_MARKER_STRUCTURAL_KIND
-                    && block.range.start < range.end
-                    && block.range.end > range.start
-            })
-            .map(|block| block.id.clone())
-            .collect::<Vec<_>>();
+        let block_ids = context.block_ids(range.start, range.end);
         if input.granularity == SpanGranularity::Block && block_ids.is_empty() {
             diagnostics.push(Diagnostic::error(
                 "block_locator_unavailable",

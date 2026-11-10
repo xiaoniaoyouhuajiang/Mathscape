@@ -509,7 +509,8 @@ fn tools_list_order_and_text_are_fixed() {
             "lean.check",
             "artifact.stage",
             "propose_changes",
-            "get_change_set"
+            "get_change_set",
+            "material.locate"
         ]
     );
     for tool in tools {
@@ -2188,6 +2189,16 @@ fn scanned_pdf_read_reports_canonical_coverage_without_running_marker() {
     assert_eq!(covered["partial"], true);
     assert_eq!(covered["canonical_id"], canonical.canonical_id().as_str());
     assert_eq!(covered["served_artifact_id"], markdown);
+    assert_eq!(
+        covered["details"]["served_segments"],
+        json!([{
+            "artifact_id": markdown, "canonical_id": canonical.canonical_id().as_str(),
+            "pages": { "from": 1, "to": 1 }, "snapshot_pages": { "from": 1, "to": 1 },
+            "md_byte_range": { "start": 0, "end": markdown_body.len() },
+            "trimmed_to_pages": true, "is_head": true
+        }]),
+        "{covered}"
+    );
     assert_eq!(covered["coverage"]["complete"], false);
     assert_eq!(covered["coverage"]["page_index_base"], "one");
     assert_eq!(

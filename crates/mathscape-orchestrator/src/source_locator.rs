@@ -99,6 +99,28 @@ pub fn locator_matches(text: &str, quote: &str) -> (Vec<(usize, usize)>, bool) {
     (normalized_matches(&source, &wanted.chars), true)
 }
 
+/// Every `[start, end)` of `text` that `quote` denotes under the
+/// `propose_changes` R2 rule ([`quote_matches_range`]): exact occurrences
+/// first; only when there is none, normalized occurrences mapped back to raw
+/// byte offsets. Each returned range is guaranteed to satisfy
+/// `quote_matches_range(&text[start..end], quote)`, so citing it together with
+/// the same `quote` always passes R2. Ranges are sorted and unique.
+pub fn locate_quote(text: &str, quote: &str) -> (Vec<(usize, usize)>, bool) {
+    let (candidates, normalized) = locator_matches(text, quote);
+    let mut ranges = candidates
+        .into_iter()
+        .filter(|&(start, end)| {
+            start < end
+                && text.is_char_boundary(start)
+                && text.is_char_boundary(end)
+                && quote_matches_range(&text[start..end], quote)
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable();
+    ranges.dedup();
+    (ranges, normalized)
+}
+
 pub(crate) fn overlapping_matches(text: &str, needle: &str) -> Vec<usize> {
     if needle.is_empty() {
         return Vec::new();
@@ -235,6 +257,33 @@ mod tests {
         assert!(!quote_matches_range(&text[0..18], "Let $G$ be a group."));
         assert!(!quote_matches_range(&text[1..19], "Let $G$ be a group."));
         assert!(!quote_matches_range("abc", "   "));
+    }
+
+    #[test]
+    fn located_ranges_always_pass_the_r2_comparison() {
+        let text = "设 $a_n$ 为数列。\n\n设  $a_n$\t为数列。另一句 $$x+y$$ 结束";
+        let (exact, normalized) = locate_quote(text, "设 $a_n$ 为数列。");
+        assert!(!normalized);
+        assert_eq!(exact.len(), 1);
+        let (fuzzy, normalized) = locate_quote(text, "设 $a_n$ \\quad 为数列。");
+        assert!(normalized);
+        assert_eq!(fuzzy.len(), 2, "{fuzzy:?}");
+        let (math, _) = locate_quote(text, "$$x+y$$");
+        assert_eq!(math.len(), 1);
+        for quote in [
+            "设 $a_n$ \\quad 为数列。",
+            "$$x+y$$",
+            "设 $a_n$ 为数列。",
+            " 结束",
+        ] {
+            let (ranges, _) = locate_quote(text, quote);
+            assert!(!ranges.is_empty(), "{quote}");
+            for (start, end) in ranges {
+                assert!(quote_matches_range(&text[start..end], quote), "{quote}");
+            }
+        }
+        assert!(locate_quote(text, "不存在").0.is_empty());
+        assert!(locate_quote(text, "   ").0.is_empty());
     }
 
     #[test]

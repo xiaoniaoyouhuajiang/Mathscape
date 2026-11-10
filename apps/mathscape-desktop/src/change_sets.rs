@@ -1237,6 +1237,97 @@ mod tests {
         assert_eq!(staged_id(&a, "s"), expected_id.to_string());
     }
 
+    fn locate(fx: &Fx, args: Value) -> Value {
+        let (result, is_error) = call_as(fx, "round-1", Some(INV), "material.locate", args);
+        assert!(!is_error, "{result}");
+        result
+    }
+
+    /// `material.locate` returns ranges that pass R2 with the same quote,
+    /// and `propose_changes` bounds a span at 4 KiB.
+    #[test]
+    fn located_ranges_pass_the_quote_check_and_long_spans_are_refused() {
+        let fx = fixture();
+        for (index, quote) in ["第一段内容。", "#  定理   A", "第二段内容。 "]
+            .into_iter()
+            .enumerate()
+        {
+            let found = locate(&fx, json!({ "artifact_id": fx.md, "quote": quote }));
+            assert_eq!(found["status"], "ok", "{quote}: {found}");
+            assert!(
+                !found["block_ids"].as_array().unwrap().is_empty(),
+                "{found}"
+            );
+            assert_eq!(found["page_granularity_available"], false, "{found}");
+            let proposal = propose(
+                &fx,
+                json!({
+                    "request_id": format!("locate-{index}"), "rationale": "定位",
+                    "proposed_objects": [
+                        { "local_ref": "s", "kind": "source_span", "op": "create", "payload": {
+                            "artifact_id": fx.md, "md_byte_range": found["md_byte_range"],
+                            "granularity": "inline", "quote": quote }},
+                        unit("u", "X", Value::Null, json!(["$new:s"]))]
+                }),
+            );
+            assert_eq!(proposal["status"], "staged", "{quote}: {proposal}");
+        }
+        let ambiguous = locate(&fx, json!({ "artifact_id": fx.md, "quote": "段内容。" }));
+        assert_eq!(ambiguous["status"], "ambiguous", "{ambiguous}");
+        assert_eq!(ambiguous["candidate_count"], 2);
+        let (second, _) = range("第二段内容。");
+        let narrowed = locate(
+            &fx,
+            json!({ "artifact_id": fx.md, "quote": "段内容。",
+                    "within": { "start": second, "end": MD.len() } }),
+        );
+        assert_eq!(narrowed["status"], "ok", "{narrowed}");
+        assert_eq!(
+            narrowed["md_byte_range"]["start"].as_u64().unwrap() as usize,
+            second + "第二".len()
+        );
+        let missing = locate(&fx, json!({ "artifact_id": fx.md, "quote": "第三段" }));
+        assert_eq!(missing["status"], "not_found");
+        let too_long = locate(
+            &fx,
+            json!({ "artifact_id": fx.md, "quote": "长".repeat(2000) }),
+        );
+        assert_eq!(too_long["diagnostics"][0]["code"], "span_too_long");
+
+        // A span over 4 KiB is refused with span_too_long.
+        let long_md = format!("{}\n", "长句。".repeat(600));
+        let mut pool = ArtifactPool::open(&fx.root).unwrap();
+        let long = pool
+            .import_bytes(
+                long_md.as_bytes(),
+                ArtifactMetadata::new(
+                    None,
+                    MediaType::parse("text/markdown").unwrap(),
+                    Some("long.md".into()),
+                    None,
+                    RightsRecord::new(RightsStatus::NotAssessed, vec![], None).unwrap(),
+                ),
+                ActorRef::parse("test").unwrap(),
+            )
+            .unwrap()
+            .stable_id()
+            .to_string();
+        drop(pool);
+        let blocked = propose(
+            &fx,
+            json!({
+                "request_id": "long", "rationale": "整章",
+                "proposed_objects": [
+                    { "local_ref": "s", "kind": "source_span", "op": "create", "payload": {
+                        "artifact_id": long, "md_byte_range": { "start": 0, "end": long_md.len() - 1 },
+                        "granularity": "inline", "quote": long_md.trim_end() }},
+                    unit("u", "X", Value::Null, json!(["$new:s"]))]
+            }),
+        );
+        assert_eq!(blocked["status"], "blocked");
+        assert_eq!(codes(&blocked), ["span_too_long"], "{blocked}");
+    }
+
     /// Rewrites the accepted payload of `object_id` in place, to stage a head
     /// that already contains an ink evidence span or a broken object.
     fn rewrite_head_payload(fx: &Fx, object_id: &str, payload: Value) {

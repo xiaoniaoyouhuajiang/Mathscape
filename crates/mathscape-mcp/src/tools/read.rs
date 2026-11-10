@@ -32,7 +32,7 @@ use mathscape_agent::{
 use mathscape_artifact::{ArtifactPool, ArtifactPoolError};
 use mathscape_domain::{
     CanonicalMarkdownView, InclusivePageRange, PageCoverPiece, StableId, markdown_offset_of_page,
-    plan_page_cover,
+    marker_page_id, plan_page_cover,
 };
 use mathscape_pdf::{PdfEngine, PdfOpenOptions, PdfPageIndex, PdfSelection};
 use serde::{Deserialize, Serialize};
@@ -60,7 +60,7 @@ const MAX_STITCH_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
 /// Placed between stitched snapshot pieces in the returned text.
 const STITCH_SEPARATOR: &str = "\n\n";
 
-const DESCRIPTION: &str = "Careful read of part of one workspace material by locator. Markdown: locator md_byte_range {start,end} in bytes, half-open; optional expand {before,after} in bytes. PDF: locator pdf_pages {from,to}, 1-based and inclusive; the body is always canonical Marker markdown (content_type markdown), never the raw PDF text layer, even when the pages have one. Returns the actual locator read; text is capped at 32 KiB (status truncated, truncated true). When a canonical markdown view exists, the result includes canonical_id, coverage and partial (partial true means this request or the book is not fully covered). PDF pages are served from existing immutable markdown snapshots: one snapshot that contains every requested page, or else several snapshots stitched in page order (details.served_segments lists each piece with its artifact_id, pages and md_byte_range inside that snapshot; quote and cite those). Pages already parsed are never parsed again. If some requested pages are not parsed yet, this call runs Marker locally on just those missing pages (one run per gap of missing pages, never re-parsing covered pages between gaps) and waits for it (synchronous, can take minutes; at most 12 newly parsed pages per call, rolling page budget, one Marker run per workspace slot), adds the new immutable snapshots to the workspace parse cache and returns the stitched markdown in the same result. A concurrent read of a PDF that is already being parsed waits for that parse instead of failing. The result is ok or truncated with the text, or capability_unavailable with details.ensure.status blocked_budget, capability_unavailable (Marker missing) or failed (Marker error or the sync time limit; nothing is left running); it never falls back to the PDF text layer. Do not poll or re-read to wait for parsing. To locate a phrase in a PDF quickly use material.grep (text-layer hits with a pdf_pages locator), then read that page here. It never modifies or deletes existing materials and never contacts the network. Keep PDF page ranges small. A canonical id may be passed as artifact_id with md_byte_range to read its head snapshot.";
+const DESCRIPTION: &str = "Careful read of part of one workspace material by locator. Markdown: locator md_byte_range {start,end} in bytes, half-open; optional expand {before,after} in bytes. PDF: locator pdf_pages {from,to}, 1-based and inclusive; the body is always canonical Marker markdown (content_type markdown), never the raw PDF text layer, even when the pages have one. Returns the actual locator read; text is capped at 32 KiB (status truncated, truncated true). When a canonical markdown view exists, the result includes canonical_id, coverage and partial (partial true means this request or the book is not fully covered). PDF pages are served from existing immutable markdown snapshots: one snapshot that contains every requested page (the body is that snapshot from byte 0, so text offsets are its byte offsets), or else several snapshots stitched in page order. details.served_segments lists each piece, also for a single snapshot, with its artifact_id, pages and the md_byte_range of the requested pages inside that snapshot; quote and cite those, and use material.locate to get the exact md_byte_range of a passage. A snapshot covering several pages without page markers yields diagnostic page_markers_absent: cite it with granularity inline. Pages already parsed are never parsed again. If some requested pages are not parsed yet, this call runs Marker locally on just those missing pages (one run per gap of missing pages, never re-parsing covered pages between gaps) and waits for it (synchronous, can take minutes; at most 12 newly parsed pages per call, rolling page budget, one Marker run per workspace slot), adds the new immutable snapshots to the workspace parse cache and returns the stitched markdown in the same result. A concurrent read of a PDF that is already being parsed waits for that parse instead of failing. The result is ok or truncated with the text, or capability_unavailable with details.ensure.status blocked_budget, capability_unavailable (Marker missing) or failed (Marker error or the sync time limit; nothing is left running); it never falls back to the PDF text layer. Do not poll or re-read to wait for parsing. To locate a phrase in a PDF quickly use material.grep (text-layer hits with a pdf_pages locator), then read that page here. It never modifies or deletes existing materials and never contacts the network. Keep PDF page ranges small. A canonical id may be passed as artifact_id with md_byte_range to read its head snapshot.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -642,10 +642,10 @@ fn serve_canonical_snapshot(
             Err(Ok(_)) => continue,
             Err(Err(error)) => return Err(error),
         }
-        chosen = Some((view, served));
+        chosen = Some((view, segment, served));
         break;
     }
-    let Some((view, served)) = chosen else {
+    let Some((view, segment, served)) = chosen else {
         return serve_stitched(
             workspace,
             pool,
@@ -659,6 +659,27 @@ fn serve_canonical_snapshot(
         );
     };
     let (text, truncated) = read_markdown_prefix(pool, &served)?;
+    // The body is the snapshot from byte 0 (text offsets are snapshot
+    // offsets); served_segments says where the requested pages are inside it.
+    let segment_pages = segment.pages;
+    let mut segments = Vec::new();
+    if let Some(snapshot_pages) = segment_pages
+        && let Some(source) = read_markdown_whole(pool, &served)?
+    {
+        let (range, exact) = page_byte_range(&source, snapshot_pages, request);
+        if let Some(diagnostic) = page_markers_absent(&source, &served.id, snapshot_pages) {
+            diagnostics.push(diagnostic);
+        }
+        segments.push(ServedSegment {
+            artifact_id: served.id.to_string(),
+            canonical_id: view.canonical_id.to_string(),
+            pages: request,
+            snapshot_pages,
+            md_byte_range: range,
+            trimmed_to_pages: exact,
+            is_head: view.head_artifact_id.as_ref() == Some(&served.id),
+        });
+    }
     diagnostics.push(match ensured {
         None => diagnostic(
             "served_canonical_markdown",
@@ -686,9 +707,7 @@ fn serve_canonical_snapshot(
         total_bytes: None,
         total_pages: Some(page_count),
         revision: Some(material.revision.clone()),
-        details: ensured
-            .map(|report| ensure_details(report, &material.id, None))
-            .transpose()?,
+        details: single_details(ensured, &material.id, &segments)?,
         diagnostics,
     })?;
     annotate_view(value, Some(view), Some(request), Some(served.id.as_str())).map(Some)
@@ -723,19 +742,28 @@ struct ByteRange {
 /// no marker; an edge whose marker is missing keeps the snapshot edge and
 /// reports `false` (not trimmed).
 fn piece_byte_range(source: &str, piece: &PageCoverPiece) -> (ByteRange, bool) {
-    let snapshot = piece.snapshot_pages;
+    page_byte_range(source, piece.snapshot_pages, piece.pages)
+}
+
+/// Byte range of `pages` inside a snapshot covering `snapshot` (see
+/// [`piece_byte_range`]).
+fn page_byte_range(
+    source: &str,
+    snapshot: InclusivePageRange,
+    pages: InclusivePageRange,
+) -> (ByteRange, bool) {
     let mut exact = true;
-    let start = if piece.pages.from == snapshot.from {
+    let start = if pages.from <= snapshot.from {
         0
-    } else if let Some(at) = markdown_offset_of_page(source, snapshot, piece.pages.from) {
+    } else if let Some(at) = markdown_offset_of_page(source, snapshot, pages.from) {
         at
     } else {
         exact = false;
         0
     };
-    let end = if piece.pages.to >= snapshot.to {
+    let end = if pages.to >= snapshot.to {
         source.len()
-    } else if let Some(at) = markdown_offset_of_page(source, snapshot, piece.pages.to + 1) {
+    } else if let Some(at) = markdown_offset_of_page(source, snapshot, pages.to + 1) {
         at
     } else {
         exact = false;
@@ -828,6 +856,9 @@ fn serve_stitched(
         };
         let (range, exact) = piece_byte_range(&source, piece);
         untrimmed |= !exact;
+        if let Some(diagnostic) = page_markers_absent(&source, &snapshot.id, piece.snapshot_pages) {
+            diagnostics.push(diagnostic);
+        }
         if !text.is_empty() {
             text.push_str(STITCH_SEPARATOR);
         }
@@ -903,6 +934,55 @@ fn serve_stitched(
     })?;
     let primary = views[cover.pieces[0].view_index];
     annotate_view(value, Some(primary), Some(request), None).map(Some)
+}
+
+/// `page_markers_absent` when a snapshot covering several pages has no Marker
+/// page markers (`{N}------`): its bytes cannot be attributed to one page, so
+/// a SourceSpan over it must use inline granularity. User-imported Markdown
+/// and Markdown from other sources often has no markers; this is normal.
+fn page_markers_absent(
+    source: &str,
+    artifact: &StableId,
+    snapshot_pages: InclusivePageRange,
+) -> Option<Value> {
+    if snapshot_pages.from == snapshot_pages.to
+        || source
+            .split_inclusive('\n')
+            .any(|line| marker_page_id(line).is_some())
+    {
+        return None;
+    }
+    Some(json!({
+        "code": "page_markers_absent",
+        "message": format!(
+            "snapshot {artifact} covers pages {}–{} but has no page markers; md_byte_range cannot be attributed to a single page, so SourceSpan over it must use granularity inline (page granularity is unavailable)",
+            snapshot_pages.from, snapshot_pages.to
+        ),
+        "artifact_id": artifact.as_str(),
+        "snapshot_pages": snapshot_pages,
+    }))
+}
+
+/// `details` of a single-snapshot read: the ensure report (if any) plus the
+/// served segment.
+fn single_details(
+    ensured: Option<&EnsureReport>,
+    material: &StableId,
+    segments: &[ServedSegment],
+) -> Result<Option<Value>, ToolError> {
+    let mut details = ensured
+        .map(|report| ensure_details(report, material, None))
+        .transpose()?;
+    if !segments.is_empty() {
+        let object = details.get_or_insert_with(|| json!({}));
+        if let Some(object) = object.as_object_mut() {
+            object.insert(
+                "served_segments".into(),
+                to_json(&segments, "served segments")?,
+            );
+        }
+    }
+    Ok(details)
 }
 
 /// Picks the snapshot to serve for `request`. Only a segment whose page range
