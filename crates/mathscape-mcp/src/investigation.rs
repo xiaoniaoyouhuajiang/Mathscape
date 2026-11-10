@@ -46,7 +46,6 @@ pub fn staged_change_sets(versions: &[PendingChangeSet]) -> Vec<StagedChangeSet>
             change_set_id: item.record.change_set_id.clone(),
             version: item.record.version,
             state: item.record.state.clone(),
-            created_at: item.record.created_at.clone(),
             operations: record_operations(&item.record),
             depends_on: item
                 .dependencies

@@ -22,7 +22,6 @@ pub struct StagedChangeSet {
     pub version: i64,
     /// `staged` | `blocked` | `accepted` | `discarded` | `superseded` | `withdrawn`.
     pub state: String,
-    pub created_at: String,
     pub operations: Vec<UserChangeOperation>,
     /// Direct dependencies `(change_set_id, version)` recorded at propose time.
     pub depends_on: Vec<ChangeSetKey>,
@@ -82,19 +81,16 @@ impl ClosureError {
 }
 
 /// Topologically orders `members` (dependencies first). Edges to keys outside
-/// `members` are ignored. Ties keep creation order, then id.
+/// `members` are ignored. Ties are broken by `(change_set_id, version)` only:
+/// the order — and therefore the combined request and its plan fingerprint —
+/// is a function of the dependency graph, never of `created_at`, the
+/// selection order or the order rows were read in.
 pub fn topological_order<'a>(
     members: &[&'a StagedChangeSet],
 ) -> Result<Vec<&'a StagedChangeSet>, ClosureError> {
     let keys: BTreeSet<ChangeSetKey> = members.iter().map(|set| set.key()).collect();
     let mut remaining: Vec<&StagedChangeSet> = members.to_vec();
-    remaining.sort_by(|a, b| {
-        (a.created_at.as_str(), a.change_set_id.as_str(), a.version).cmp(&(
-            b.created_at.as_str(),
-            b.change_set_id.as_str(),
-            b.version,
-        ))
-    });
+    remaining.sort_by_key(|set| set.key());
     let mut done = BTreeSet::<ChangeSetKey>::new();
     let mut ordered = Vec::with_capacity(remaining.len());
     while !remaining.is_empty() {
@@ -354,4 +350,83 @@ pub fn project_investigation(
         });
     }
     overlay
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(id: &str, state: &str, deps: &[&str]) -> StagedChangeSet {
+        StagedChangeSet {
+            change_set_id: id.into(),
+            version: 1,
+            state: state.into(),
+            operations: vec![],
+            depends_on: deps.iter().map(|dep| ((*dep).to_owned(), 1)).collect(),
+        }
+    }
+
+    fn ids(sets: &[&StagedChangeSet]) -> Vec<String> {
+        sets.iter().map(|set| set.change_set_id.clone()).collect()
+    }
+
+    #[test]
+    fn topological_order_depends_only_on_the_graph() {
+        // z ← y ← x, plus an independent b: dependencies first, ties by id.
+        let all = [
+            set("x", "staged", &["y"]),
+            set("b", "staged", &[]),
+            set("y", "staged", &["z"]),
+            set("z", "staged", &[]),
+        ];
+        let forward: Vec<&StagedChangeSet> = all.iter().collect();
+        let mut backward = forward.clone();
+        backward.reverse();
+        let expected = vec!["b", "z", "y", "x"];
+        assert_eq!(ids(&topological_order(&forward).unwrap()), expected);
+        assert_eq!(ids(&topological_order(&backward).unwrap()), expected);
+        let cycle = [set("p", "staged", &["q"]), set("q", "staged", &["p"])];
+        let refs: Vec<&StagedChangeSet> = cycle.iter().collect();
+        assert!(matches!(
+            topological_order(&refs),
+            Err(ClosureError::Cycle(_))
+        ));
+    }
+
+    #[test]
+    fn closure_is_transitive_and_skips_accepted_dependencies() {
+        let all = [
+            set("a", "accepted", &[]),
+            set("b", "staged", &["a"]),
+            set("c", "staged", &["b"]),
+            set("d", "staged", &["c"]),
+        ];
+        let closure = staged_dependency_closure(&all, &[("d".into(), 1)]).unwrap();
+        assert_eq!(ids(&closure), vec!["b", "c"]);
+        let blocked = [set("a", "blocked", &[]), set("b", "staged", &["a"])];
+        assert_eq!(
+            staged_dependency_closure(&blocked, &[("b".into(), 1)])
+                .unwrap_err()
+                .code(),
+            "dependency_blocked"
+        );
+    }
+
+    #[test]
+    fn a_selection_must_be_closed_under_pending_dependencies() {
+        let all = [
+            set("a", "staged", &[]),
+            set("b", "staged", &["a"]),
+            set("c", "staged", &["b"]),
+        ];
+        assert_eq!(
+            ordered_selection(&all, &[("c".into(), 1), ("b".into(), 1)])
+                .unwrap_err()
+                .code(),
+            "dependency_not_accepted"
+        );
+        let ordered =
+            ordered_selection(&all, &[("c".into(), 1), ("a".into(), 1), ("b".into(), 1)]).unwrap();
+        assert_eq!(ids(&ordered), vec!["a", "b", "c"]);
+    }
 }

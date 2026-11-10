@@ -38,6 +38,52 @@ fn write_rank(final_map: &BTreeMap<String, MapEditObject>, o: &MapEditObject) ->
         _ => (3, 0),
     }
 }
+/// Order in which [`plan_map_change`] applies one request's operations.
+///
+/// Validation runs once on the final graph, so the written order of a
+/// request must not matter. The only operation that reads another one's
+/// result while being applied is `CreateSourceUnit`, whose child inherits
+/// the source context of a parent created in the same request. Spans are
+/// therefore applied first, then created units parent-first (depth counted
+/// over the request's own creations), then everything else; ties keep the
+/// written order.
+fn application_order(operations: &[UserChangeOperation]) -> Vec<usize> {
+    let created_parents: BTreeMap<&str, Option<&str>> = operations
+        .iter()
+        .filter_map(|op| match op {
+            UserChangeOperation::CreateSourceUnit { object_id, draft } => {
+                Some((object_id.as_str(), draft.parent.as_deref()))
+            }
+            _ => None,
+        })
+        .collect();
+    fn depth<'a>(created_parents: &BTreeMap<&'a str, Option<&'a str>>, id: &'a str) -> usize {
+        let mut depth = 0;
+        let mut seen = BTreeSet::from([id]);
+        let mut parent = created_parents.get(id).copied().flatten();
+        while let Some(current) = parent {
+            if !created_parents.contains_key(current) || !seen.insert(current) {
+                break;
+            }
+            depth += 1;
+            parent = created_parents.get(current).copied().flatten();
+        }
+        depth
+    }
+    let mut order: Vec<(u8, usize, usize)> = operations
+        .iter()
+        .enumerate()
+        .map(|(index, op)| match op {
+            UserChangeOperation::CreateSourceSpan { .. } => (0, 0, index),
+            UserChangeOperation::CreateSourceUnit { object_id, .. } => {
+                (1, depth(&created_parents, object_id), index)
+            }
+            _ => (2, 0, index),
+        })
+        .collect();
+    order.sort();
+    order.into_iter().map(|(_, _, index)| index).collect()
+}
 pub fn edit_fingerprint(value: &impl serde::Serialize) -> String {
     format!(
         "sha256:{:x}",
@@ -166,7 +212,10 @@ pub fn plan_map_change(
         .collect();
     let mut final_map = original.clone();
     let mut touched = BTreeSet::new();
-    for op in &request.operations {
+    for op in application_order(&request.operations)
+        .into_iter()
+        .map(|index| &request.operations[index])
+    {
         let id = op.object_id();
         if StableId::parse(id).is_err() || !touched.insert(id.to_owned()) {
             diagnostics.push(error(
@@ -813,5 +862,140 @@ mod tests {
             .map(|option| option.object_id.as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(parents, BTreeSet::from(["unit-b"]));
+    }
+
+    fn span_op(id: &str, artifact: &str) -> UserChangeOperation {
+        UserChangeOperation::CreateSourceSpan {
+            object_id: id.into(),
+            draft: SourceSpanDraft {
+                granularity: SpanGranularity::Inline,
+                layout: LayoutKind::Other,
+                page: None,
+                bounding_boxes: vec![],
+                marker_block_ids: vec![],
+                markdown: Some(MarkdownLocator::new(
+                    StableId::parse(artifact).unwrap(),
+                    ByteRange::new(0, 4).unwrap(),
+                    None,
+                )),
+                exact_text_artifact: None,
+                normalized_text_hash: None,
+            },
+        }
+    }
+
+    fn unit_op(id: &str, parent: Option<&str>, spans: &[&str]) -> UserChangeOperation {
+        UserChangeOperation::CreateSourceUnit {
+            object_id: id.into(),
+            draft: SourceUnitDraft {
+                kind: DiscoveryUnitKind::Statement,
+                display_title: Some(id.into()),
+                parent: parent.map(str::to_owned),
+                source_spans: spans.iter().map(|s| (*s).to_owned()).collect(),
+                completeness: UnitCompleteness::Complete,
+            },
+        }
+    }
+
+    /// The planner applies a request in dependency order, so the written
+    /// order (child before parent, relation before its units, spans last)
+    /// never changes the result; the patch is written span → unit by parent
+    /// depth → relation.
+    #[test]
+    fn written_order_does_not_change_the_plan() {
+        let a = format!("mathscape:artifact/sha256/{}", "a".repeat(64));
+        let b = format!("mathscape:artifact/sha256/{}", "b".repeat(64));
+        let (sa, sb) = ("mathscape:source-span/a", "mathscape:source-span/b");
+        let (parent, child, grandchild) = (
+            "mathscape:source-unit/p",
+            "mathscape:source-unit/c",
+            "mathscape:source-unit/g",
+        );
+        let relation = UserChangeOperation::CreateSourceRelation {
+            object_id: "mathscape:source-relation/r".into(),
+            draft: SourceRelationDraft {
+                relation: DiscoveryRelationKind::Proves,
+                source: child.into(),
+                target: parent.into(),
+                evidence_spans: vec![sa.into()],
+            },
+        };
+        // The child inherits the source context of a parent created in the
+        // same request, which needs the parent applied first.
+        let natural = vec![
+            span_op(sa, &a),
+            span_op(sb, &b),
+            unit_op(parent, None, &[sa]),
+            unit_op(child, Some(parent), &[sa]),
+            unit_op(grandchild, Some(child), &[sa]),
+            unit_op("mathscape:source-unit/other", None, &[sb]),
+            relation.clone(),
+        ];
+        let mut reversed = natural.clone();
+        reversed.reverse();
+        let snapshot = MapEditSnapshot {
+            base_commit: None,
+            adopted_by: Default::default(),
+            objects: vec![],
+        };
+        let actor = ActorRef::parse("tester").unwrap();
+        let plan = |operations: Vec<UserChangeOperation>| {
+            plan_map_change(
+                &snapshot,
+                &UserChangeRequest {
+                    request_id: "mathscape:request/order".into(),
+                    base_commit: None,
+                    reason: "order".into(),
+                    operations,
+                },
+                &actor,
+            )
+        };
+        let forward = plan(natural);
+        let backward = plan(reversed);
+        assert_eq!(
+            forward.impact.status,
+            ImpactPlanStatus::Ready,
+            "{:?}",
+            forward.impact.diagnostics
+        );
+        assert_eq!(backward.impact.status, ImpactPlanStatus::Ready);
+        let objects = |planned: &PlannedMapChange| {
+            planned
+                .changed_objects
+                .iter()
+                .map(|o| (o.object_id.clone(), o.payload.clone(), o.endpoints.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(objects(&forward), objects(&backward));
+        let written = |planned: &PlannedMapChange| {
+            planned
+                .patch
+                .as_ref()
+                .unwrap()
+                .operations()
+                .iter()
+                .map(|op| match op {
+                    MapOperation::CreateEntity { entity } => entity.header().stable_id().to_string(),
+                    MapOperation::CreateRelation { relation } => {
+                        relation.header().stable_id().to_string()
+                    }
+                    other => panic!("unexpected {other:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(written(&forward), written(&backward));
+        assert_eq!(
+            written(&forward),
+            vec![
+                sa,
+                sb,
+                "mathscape:source-unit/other",
+                parent,
+                child,
+                grandchild,
+                "mathscape:source-relation/r"
+            ]
+        );
     }
 }

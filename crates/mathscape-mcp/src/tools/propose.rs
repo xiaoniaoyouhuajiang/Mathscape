@@ -317,7 +317,6 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
             change_set_id: change_set_id.clone(),
             version,
             state: "staged".into(),
-            created_at: String::new(),
             operations: operations.clone(),
             depends_on: dependencies
                 .iter()
