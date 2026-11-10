@@ -789,7 +789,8 @@ impl SandboxHome {
 
 // ---------------------------------------------------------------- helpers
 
-fn now_rfc3339() -> String {
+/// Local time, RFC3339 with milliseconds (the format of every sandbox timestamp).
+pub fn now_rfc3339() -> String {
     Local::now().to_rfc3339_opts(SecondsFormat::Millis, false)
 }
 

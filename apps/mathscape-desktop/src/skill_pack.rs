@@ -4,7 +4,10 @@
 //! (`skills/extraRoots/set`) and also name the stable path, version and
 //! content hash in developer instructions, so the agent can read the files
 //! with its own (read-only) file tools even if the loader is unavailable.
-//! Each round records the same identity in the session's `harness.jsonl`.
+//! The "read SKILL.md first" instruction is turn context on a thread's first
+//! turn only ([`SkillPack::first_turn_note`]); a resumed thread whose pack
+//! changed gets [`SkillPack::update_note`]. Each round records the same
+//! identity in the session's `harness.jsonl`.
 
 use std::{
     env, fs,
@@ -98,16 +101,43 @@ impl SkillPack {
         &self.sha256[..12.min(self.sha256.len())]
     }
 
-    /// Developer-instruction paragraph: the stable path plus how to start.
+    /// Developer-instruction paragraph: identity and stable path only. It is
+    /// part of the thread's cached prefix, so it holds nothing per-turn.
     pub fn instructions(&self) -> String {
         let version = self.version.as_deref().unwrap_or("unversioned");
-        let dir = self.dir.display();
         format!(
-            "Mathscape skill `{name}` {version} (sha256 {hash}) is registered with your skill loader and lives read-only at {dir}. \
-Before building anything, read {dir}/SKILL.md and follow it; it points to the references you need (start with references/reader-primer.md and references/runtime-capabilities.md, whose sandbox section describes this round). \
-Read large references such as references/rdtx_try.md only in the parts you need. Do not modify the skill directory.",
+            "Mathscape skill `{name}` {version} (sha256 {hash}) is registered with your skill loader and lives read-only at {dir}. Do not modify the skill directory.",
             name = self.name,
             hash = self.short_hash(),
+            dir = self.dir.display(),
+        )
+    }
+
+    /// Turn context for a thread's first turn: how to start reading.
+    pub fn first_turn_note(&self) -> String {
+        let dir = self.dir.display();
+        format!(
+            "Before building anything, read {dir}/SKILL.md and follow it; it points to the references you need (start with references/reader-primer.md and references/runtime-capabilities.md, whose sandbox section describes this session). \
+Read large references such as references/rdtx_try.md only in the parts you need."
+        )
+    }
+
+    /// Turn context after a resume when the pack (or the tool schema it
+    /// targets) changed since the thread's last turn.
+    pub fn update_note(
+        &self,
+        previous_version: Option<&str>,
+        previous_tool_schema: Option<&str>,
+    ) -> String {
+        let version = self.version.as_deref().unwrap_or("unversioned");
+        let tools = self.tool_schema_version.as_deref().unwrap_or("unknown");
+        let dir = self.dir.display();
+        format!(
+            "工具/skill 已更新到 {name} {version}（tool_schema_version {tools}，sha256 {hash}；本对话上一轮用的是 {prev} / {prev_tools}）。请重读 {dir}/SKILL.md 与 references/runtime-capabilities.md 中变化的部分；之前轮次里关于工具的结论以新版本为准。",
+            name = self.name,
+            hash = self.short_hash(),
+            prev = previous_version.unwrap_or("未知版本"),
+            prev_tools = previous_tool_schema.unwrap_or("未知"),
         )
     }
 }
@@ -177,6 +207,22 @@ mod tests {
         );
         assert!(pack.files > 1);
         assert_eq!(pack.sha256.len(), 64);
+    }
+
+    #[test]
+    fn read_instruction_is_first_turn_context_not_prefix() {
+        let pack = repo_pack();
+        let prefix = pack.instructions();
+        assert!(prefix.contains(pack.short_hash()));
+        assert!(prefix.contains(&pack.dir.display().to_string()));
+        assert!(!prefix.contains("Before building anything"));
+        let first = pack.first_turn_note();
+        assert!(first.contains("SKILL.md"));
+        assert!(first.contains("runtime-capabilities.md"));
+        let update = pack.update_note(Some("v0.6.4"), Some("mathscape-mcp/15"));
+        assert!(update.starts_with("工具/skill 已更新到"));
+        assert!(update.contains("v0.6.4"));
+        assert!(update.contains(pack.version.as_deref().unwrap()));
     }
 
     #[test]

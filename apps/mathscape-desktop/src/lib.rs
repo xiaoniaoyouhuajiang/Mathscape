@@ -25,6 +25,7 @@ mod map_edit;
 mod markdown_patch;
 mod registration;
 mod sandbox;
+mod sandbox_continuity;
 mod sandbox_dialogue;
 mod search;
 mod skill_pack;
@@ -1029,6 +1030,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let root = workspace_root(app.handle())?;
+            let mother = root.clone();
             let service = match env::var_os(MARKER_EXECUTABLE_ENVIRONMENT_VARIABLE) {
                 Some(path) if !path.is_empty() => DesktopService::open_with_marker(root, path)?,
                 _ => DesktopService::open(root)?,
@@ -1055,9 +1057,8 @@ pub fn run() {
             }
             app.manage(DesktopState::new(service));
             app.manage(sandbox_dialogue::SandboxDialogueState::from_environment());
-            app.manage(sandbox::SandboxState::open(sandbox::sandbox_root(
-                app.handle(),
-            )?)?);
+            let legacy_sandbox = sandbox::legacy_sandbox_root(app.handle());
+            app.manage(sandbox::open_for_workspace(&mother, legacy_sandbox)?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1186,6 +1187,10 @@ pub fn run() {
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
                 loogle_host::shutdown();
+                // Stop every sandbox session's Codex app-server (whole group).
+                if let Some(dialogue) = app.try_state::<sandbox_dialogue::SandboxDialogueState>() {
+                    dialogue.close_all();
+                }
                 if let Some(state) = app.try_state::<DesktopState>() {
                     tauri::async_runtime::block_on(state.service().shutdown_ink_lan(false)).ok();
                 }
