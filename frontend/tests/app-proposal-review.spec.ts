@@ -13,6 +13,10 @@ async function openReview(page: Page): Promise<void> {
 }
 
 test.describe("Phase2 proposal review workspace", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => sessionStorage.setItem("harness.proposals", "1"));
+  });
+
   test("manual review opens the full workspace; accept goes through the batch accept", async ({ page }) => {
     await openReview(page);
     const workspace = page.locator(".review-workspace");

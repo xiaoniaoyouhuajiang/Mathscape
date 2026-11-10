@@ -377,7 +377,9 @@ extraCommands.set("get_change_set_investigation", (args) => {
   return args.sandboxSessionId ? `sandbox:${String(args.sandboxSessionId)}` : (sessionStorage.getItem("harness.sandbox") === "1" ? "sandbox:sbx_demo" : null);
 });
 extraCommands.set("list_pending_change_sets", (args) => ({
-  investigationId: String(args.investigationId), baseCommit: null, items: proposalReview.accepted ? [] : [proposalItem()],
+  // Only specs that opt in (sessionStorage harness.proposals) see a pending proposal.
+  investigationId: String(args.investigationId), baseCommit: null,
+  items: proposalReview.accepted || sessionStorage.getItem("harness.proposals") !== "1" ? [] : [proposalItem()],
 }));
 extraCommands.set("get_change_set_snapshot", (args) => {
   proposalReview.calls.push({ command: "snapshot", args });
