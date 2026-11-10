@@ -1,7 +1,7 @@
 # Mathscape Lean 工具契约 v0
 
 > 状态：冻结，可直接用于实现下一切片。  
-> 日期：2026-11-08（Asia/Shanghai）  
+> 日期：2026-11-08（Asia/Shanghai）；2026-11-10 增补 §3.4 常驻模式  
 > 依赖：[Phase0 契约](phase0-contract.md) 的 `mcp_envelope v0` 与只读工具约定。  
 > 范围：受管 Lean/mathlib profile、`mathlib.search`、`lean.check` 和验证回执。
 
@@ -110,6 +110,7 @@ MCP 输入不接受 `loogle_executable`、`index_file`、shell 参数或任意�
   "backend": "loogle",
   "backend_fingerprint": "sha256:…",
   "index_fingerprint": "sha256:…",
+  "backend_mode": "resident",
   "total": 77,
   "truncated": true,
   "candidates": [
@@ -135,6 +136,39 @@ MCP 输入不接受 `loogle_executable`、`index_file`、shell 参数或任意�
 - 结果超过 `max_results`：`status=ok`、`truncated=true`；
 - 参数非法：MCP 调用错误 `invalid_arg`；
 - Loogle 运行失败或输出无法解析：调用错误 `internal`，不得伪造空结果。
+- 常驻 Loogle 启动失败（例如索引缺失或与当前 Loogle 不匹配）：`status=capability_unavailable`，诊断码 `loogle_resident_unavailable`；不会重建索引；
+- 常驻 Loogle 单条查询超时：调用错误 `internal`，`details.reason=timeout`；进程已被整组杀掉，下一次调用会重新启动。
+
+`backend_mode` 是 2026-11-10 新增的说明字段：`resident` 表示由 Desktop 持有的常驻 Loogle 回答，`oneshot` 表示本次单独启动了一次 Loogle。一次性回答前若尝试过常驻路径，会附 `backend_fallback` 说明原因（开关关闭、已降级、连不上 Desktop 等）。两种后端的 `total`、`truncated`、`candidates` 语义完全相同；该字段不改变输入 schema，因此 `tool_schema_version` 不变。Loogle 无命中时返回的 `count: 0` 加 `suggestions` 按「没有命中」处理（此前会被误判为 JSON 非法）。
+
+### 3.4 常驻模式（2026-11-10）
+
+一次性调用每次都要导入 Mathlib 并加载索引。用户 Mac 上实测（24 GiB 内存，profile `lean4-4.33.1-mathlib-4.33.1`，索引 376MB）：一次性调用每次约 11 秒、峰值约 5.3GB；`loogle --json --interactive` 冷启动 36 秒、热缓存约 11 秒，之后多数查询 0.1–0.2 秒，按名字精确查约 1 毫秒，复杂模式查询约 2.3 秒，常驻约 5.5GB。
+
+**进程放在哪里。** `mathlib.search` 在 `mathscape mcp` 进程里执行，而这个进程每一轮由 Codex app-server 重新拉起、随轮次结束被整组杀掉。所以常驻 Loogle 由 Desktop 进程持有：Desktop 启动时在临时目录下建一个 0700 子目录并监听其中的 Unix socket（`mathscape-<pid>/loogle.sock`），把路径作为 `MATHSCAPE_LOOGLE_SOCKET` 放进每轮的 harness 环境，经 `env_vars` 转发给 MCP 子进程。MCP 每次调用发一行 JSON 请求、读一行 JSON 响应；没有这个变量（例如单独运行 CLI）、连不上、或 Desktop 回答「已关闭/已降级」时，走原来的一次性路径。只有当前用户能访问该 socket；Desktop 仍会重新校验请求里的 profile 路径，并要求索引位于受管 profile 缓存目录内。
+
+**实例规则。**
+
+| 项目 | 规则 |
+| --- | --- |
+| 实例数 | 整个 App 一个。身份 =（profile 指纹、module、索引文件、Loogle 可执行文件 SHA-256）；身份变化即关闭旧进程、启动新进程 |
+| 启动 | 懒启动，第一次查询时才启动，不预热；等到 stdout 出现 `Loogle is ready.` 才算就绪 |
+| 环境 | 直接 exec Loogle，不经过 `lake env`（省掉约 0.6GB 的 lake 进程）；`LEAN_PATH` 由一次 `lake env printenv LEAN_PATH` 取得，按 profile 指纹缓存。该命令只读，不构建、不更新用户的 Lean 依赖 |
+| 索引 | 固定 `--index-mode read`；缺失或过期时报 `loogle_resident_unavailable`，从不重建 |
+| 条数 | 启动时固定 `--max-results 200`，每次按请求的 `max_results` 截断；`total` 仍是 Loogle 的 `count` |
+| 查询 | 一行一条；含换行或回车的查询按 `invalid_arg` 拒绝（MCP 输入层本来就拒绝控制字符） |
+| 并发 | 串行：Desktop 内一把锁就是队列 |
+| 超时 | 单条查询 30 秒，启动 90 秒；超时整组杀进程，本条返回超时错误，下次请求重启 |
+| 失败 | 退避重启（0.5 秒起翻倍，封顶 10 秒）；连续 3 次失败（启动失败、超时、崩溃、输出错乱）后，本次 App 运行期间降级为一次性调用。被拒绝的查询不算失败 |
+| 回收 | 空闲 15 分钟关闭进程，下次查询重新启动 |
+| 清理 | 子进程自成进程组，关闭、超时和 App 退出时整组结束；Desktop 退出时同时删除 socket |
+| 指纹 | Loogle 可执行文件与索引的指纹按（路径、大小、修改时间、inode）缓存，常驻路径不再每次重新哈希索引 |
+
+**开关。** 工作区设置「Loogle 常驻模式」，默认打开；关闭后立即停掉常驻进程，后续调用回到一次性路径。关闭再打开会清掉降级状态。环境变量 `MATHSCAPE_LOOGLE_RESIDENT=0`（或 `false`/`off`/`no`）强制关闭，此时设置界面里的开关不可用。
+
+**日志。** 生命周期事件（`spawn`、`ready`、`startup_failed`、`request_failed`、`restart`、`exit`、`idle_reclaim`、`key_changed`、`fallback`、`disabled`、`enabled`、`shutdown`）追加到 App 日志目录下的 `resident-processes.jsonl`。每轮的 `harness.jsonl` 记录本轮拿到的 socket 路径（`loogle_resident_socket`）。
+
+生命周期部分在独立 crate `mathscape-resident` 中实现（启动、握手、状态机、退避、降级、空闲回收、整组清理、事件），请求编帧由各实例自己实现；之后的 Codex app-server 常驻会复用它。
 
 ## 4. `lean.check`
 
