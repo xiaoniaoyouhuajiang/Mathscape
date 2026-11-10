@@ -13,7 +13,8 @@ use std::{
 use mathscape_agent::{ToolError, ToolErrorCode, ToolStatus};
 use mathscape_tool_lean::{
     LeanCheckError, LeanCheckRequest, LeanChecker, LeanLoogleError, LeanProfileRef,
-    LeanProfileStore, LeanReceiptStore, LoogleAdapter, LoogleSearchRequest, ManagedLeanProfile,
+    LeanProfileStore, LeanReceiptStore, LoogleAdapter, LoogleSearchRequest, LoogleSearchResult,
+    ManagedLeanProfile,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -25,8 +26,14 @@ use crate::McpWorkspace;
 const MAX_QUERY_CHARS: usize = 4096;
 const DEFAULT_MAX_RESULTS: usize = 50;
 const MAX_RESULTS: usize = 100;
-const LOOGLE_RELATIVE_PATH: &str = "tools/loogle/.lake/build/bin/loogle";
-const LOOGLE_INDEX_RELATIVE_PATH: &str = "loogle/mathlib.loogle-index";
+use mathscape_tool_lean::{
+    MANAGED_LOOGLE_INDEX_RELATIVE_PATH as LOOGLE_INDEX_RELATIVE_PATH,
+    MANAGED_LOOGLE_RELATIVE_PATH as LOOGLE_RELATIVE_PATH,
+};
+/// How long the MCP server waits for the desktop's resident Loogle, including
+/// queueing behind other queries and a cold start (90s) plus the query (30s).
+#[cfg(unix)]
+const RESIDENT_WAIT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 const SEARCH_DESCRIPTION: &str = "Search declarations in the local managed mathlib profile with Loogle. Results are candidates only; validate a proposed proof with lean.check. The profile and index are local and fingerprinted; this tool never contacts the network or accepts executable/index paths.";
 const CHECK_DESCRIPTION: &str = "Check one complete Lean source file with the selected managed profile and persist an immutable verification receipt. The source must contain its own imports, declarations and proof; this tool never reads a user path or writes the user Lean project. A checked result proves only the submitted Lean source.";
@@ -218,6 +225,28 @@ pub(super) fn search(workspace: &McpWorkspace, arguments: Value) -> Result<Value
             ),
         ));
     }
+    // Resident path: the desktop owns a long-lived Loogle (each Codex round
+    // starts a fresh MCP process, so it cannot live here). Any problem reaching
+    // it falls back to the one-shot run below.
+    let mut fallback: Option<String> = None;
+    if let Some(attempt) = resident_search(&profile, &executable, &index_file, &args) {
+        match attempt {
+            ResidentAttempt::Answered {
+                result,
+                index_fingerprint,
+            } => {
+                return Ok(search_output(
+                    &profile,
+                    result,
+                    index_fingerprint,
+                    "resident",
+                    None,
+                ));
+            }
+            ResidentAttempt::Failed(error) => return map_loogle_error(&args.profile_id, error),
+            ResidentAttempt::Fallback(reason) => fallback = Some(reason),
+        }
+    }
     let index_fingerprint = hash_file(&index_file).map_err(|error| {
         ToolError::new(
             ToolErrorCode::Internal,
@@ -235,6 +264,25 @@ pub(super) fn search(workspace: &McpWorkspace, arguments: Value) -> Result<Value
         Ok(result) => result,
         Err(error) => return map_loogle_error(&args.profile_id, error),
     };
+    Ok(search_output(
+        &profile,
+        result,
+        index_fingerprint,
+        "oneshot",
+        fallback,
+    ))
+}
+
+/// The structured `mathlib.search` result. `backend_mode` says which backend
+/// answered; `backend_fallback` (only on a one-shot answer after a resident
+/// attempt) says why the resident Loogle was not used.
+fn search_output(
+    profile: &ManagedLeanProfile,
+    result: LoogleSearchResult,
+    index_fingerprint: String,
+    backend_mode: &str,
+    fallback: Option<String>,
+) -> Value {
     let status = if result.truncated {
         ToolStatus::Truncated
     } else {
@@ -242,21 +290,96 @@ pub(super) fn search(workspace: &McpWorkspace, arguments: Value) -> Result<Value
     };
     let mut output = json!({
         "status": status,
-        "profile": profile_reference(&profile),
+        "profile": profile_reference(profile),
         "backend": result.backend,
         "backend_fingerprint": result.backend_fingerprint,
         "index_fingerprint": index_fingerprint,
+        "backend_mode": backend_mode,
         "total": result.total,
         "truncated": result.truncated,
         "candidates": result.candidates,
     });
+    if let Some(reason) = fallback {
+        output["backend_fallback"] = json!(reason);
+    }
     if result.candidates.is_empty() {
         output["diagnostics"] = json!([diagnostic(
             "no_matches",
             "Loogle returned no declarations for this query"
         )]);
     }
-    Ok(output)
+    output
+}
+
+enum ResidentAttempt {
+    Answered {
+        result: LoogleSearchResult,
+        index_fingerprint: String,
+    },
+    Failed(LeanLoogleError),
+    Fallback(String),
+}
+
+/// `None` when no resident host is configured (`MATHSCAPE_LOOGLE_SOCKET`
+/// unset, e.g. the CLI on its own): behaviour is exactly the one-shot path.
+#[cfg(unix)]
+fn resident_search(
+    profile: &ManagedLeanProfile,
+    executable: &Path,
+    index_file: &Path,
+    args: &SearchArgs,
+) -> Option<ResidentAttempt> {
+    use mathscape_tool_lean::{
+        LOOGLE_IPC_VERSION, LOOGLE_SOCKET_ENV, LoogleIpcRequest, LoogleIpcResponse, LoogleTarget,
+        request_over_socket,
+    };
+    let socket = std::env::var_os(LOOGLE_SOCKET_ENV).filter(|value| !value.is_empty())?;
+    let target = match LoogleTarget::for_profile(profile, executable, index_file) {
+        Ok(target) => target,
+        Err(error) => return Some(ResidentAttempt::Fallback(error.to_string())),
+    };
+    let request = LoogleIpcRequest {
+        v: LOOGLE_IPC_VERSION,
+        target,
+        query: args.query.clone(),
+        module: args.module.clone(),
+        max_results: args.max_results,
+    };
+    Some(
+        match request_over_socket(Path::new(&socket), &request, RESIDENT_WAIT) {
+            Ok(LoogleIpcResponse::Ok {
+                result,
+                index_fingerprint,
+            }) => ResidentAttempt::Answered {
+                result,
+                index_fingerprint,
+            },
+            Ok(LoogleIpcResponse::Error { error }) => ResidentAttempt::Failed(error.into()),
+            Ok(LoogleIpcResponse::Fallback { reason }) => ResidentAttempt::Fallback(reason),
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::TimedOut =>
+            {
+                ResidentAttempt::Failed(LeanLoogleError::TimedOut {
+                    stage: "resident host".to_owned(),
+                    seconds: RESIDENT_WAIT.as_secs(),
+                })
+            }
+            Err(error) => {
+                ResidentAttempt::Fallback(format!("resident Loogle host unreachable: {error}"))
+            }
+        },
+    )
+}
+
+#[cfg(not(unix))]
+fn resident_search(
+    _profile: &ManagedLeanProfile,
+    _executable: &Path,
+    _index_file: &Path,
+    _args: &SearchArgs,
+) -> Option<ResidentAttempt> {
+    None
 }
 
 pub(super) fn check(workspace: &McpWorkspace, arguments: Value) -> Result<Value, ToolError> {
@@ -567,6 +690,17 @@ fn map_loogle_error(profile_id: &str, error: LeanLoogleError) -> Result<Value, T
             ToolErrorCode::Internal,
             format!("Loogle runner failed: {error}"),
         )),
+        LeanLoogleError::ResidentUnavailable { reason } => Ok(capability(
+            profile_id,
+            "lean.loogle",
+            "loogle_resident_unavailable",
+            reason,
+        )),
+        LeanLoogleError::TimedOut { stage, seconds } => Err(ToolError::new(
+            ToolErrorCode::Internal,
+            format!("Loogle {stage} timed out after {seconds}s; retry once or simplify the query"),
+        )
+        .with_details(json!({ "reason": "timeout", "stage": stage, "seconds": seconds }))),
         _ => Err(ToolError::new(
             ToolErrorCode::Internal,
             format!("Loogle search failed: {error}"),
@@ -594,4 +728,54 @@ fn default_module() -> String {
 
 const fn default_max_results() -> usize {
     DEFAULT_MAX_RESULTS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resident_unavailable_is_a_capability_result() {
+        let value = map_loogle_error(
+            "p",
+            LeanLoogleError::ResidentUnavailable {
+                reason: "index is stale".to_owned(),
+            },
+        )
+        .unwrap();
+        assert_eq!(value["status"], "capability_unavailable");
+        assert_eq!(
+            value["diagnostics"][0]["code"],
+            "loogle_resident_unavailable"
+        );
+        assert_eq!(value["details"]["capability"], "lean.loogle");
+    }
+
+    #[test]
+    fn resident_timeout_is_an_internal_error_with_details() {
+        let error = map_loogle_error(
+            "p",
+            LeanLoogleError::TimedOut {
+                stage: "query".to_owned(),
+                seconds: 30,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ToolErrorCode::Internal);
+        assert!(error.message.contains("timed out after 30s"));
+    }
+
+    #[test]
+    fn resident_rejection_keeps_the_existing_invalid_arg_shape() {
+        let error = map_loogle_error(
+            "p",
+            LeanLoogleError::QueryRejected {
+                message: "Unknown identifier 'klDiv'".to_owned(),
+                suggestions: vec!["InformationTheory.klDiv".to_owned()],
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ToolErrorCode::InvalidArg);
+        assert!(error.message.contains("InformationTheory.klDiv"));
+    }
 }

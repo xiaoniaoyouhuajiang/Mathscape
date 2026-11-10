@@ -24,10 +24,13 @@ let workspaceSettings = {
   discovery_admission: "review_before_publish",
   discovery_timeout_seconds: 600,
   connect_timeout_seconds: 15,
+  loogle_resident: true,
 };
+let loogleStatus = { available: true, forced_off: false };
 
 mockIPC((command, payload) => {
   if (command === "get_workspace_settings") return workspaceSettings;
+  if (command === "get_loogle_resident_status") return loogleStatus;
   if (command === "save_workspace_settings") {
     const request = (payload as { request: Record<string, any> }).request;
     workspaceSaves.push(request);
@@ -80,5 +83,8 @@ const controller = new LlmSettingsController(
   (message, kind) => toasts.push({ message, kind }),
 );
 void controller.loadSummary().then(() => Object.assign(window, {
-  harness: { controller, saves, workspaceSaves, toasts },
+  harness: {
+    controller, saves, workspaceSaves, toasts,
+    forceLoogleOff: () => { loogleStatus = { available: true, forced_off: true }; },
+  },
 }));

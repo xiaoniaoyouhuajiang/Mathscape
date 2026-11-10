@@ -3328,6 +3328,7 @@ dependencies = [
  "mathscape-orchestrator",
  "mathscape-pdf",
  "mathscape-query",
+ "mathscape-resident",
  "mathscape-sandbox",
  "mathscape-store-sqlite",
  "mathscape-tool-lean",

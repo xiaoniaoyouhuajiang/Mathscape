@@ -20,6 +20,7 @@ pub use ink_lan::{
     InkSetupStatus,
 };
 mod llm_settings;
+mod loogle_host;
 mod map_edit;
 mod markdown_patch;
 mod registration;
@@ -1042,6 +1043,16 @@ pub fn run() {
                     let _ = resume.start_ink_lan(None).await;
                 }
             });
+            // Resident Loogle: bind the socket now, start Loogle lazily on the
+            // first mathlib.search. A failure only disables resident mode.
+            let loogle_resident = service
+                .workspace_settings()
+                .map(|settings| settings.loogle_resident())
+                .unwrap_or(true);
+            let log_dir = app.path().app_log_dir().ok();
+            if let Err(error) = loogle_host::start(log_dir.as_deref(), loogle_resident) {
+                eprintln!("mathscape: {error}");
+            }
             app.manage(DesktopState::new(service));
             app.manage(sandbox_dialogue::SandboxDialogueState::from_environment());
             app.manage(sandbox::SandboxState::open(sandbox::sandbox_root(
@@ -1071,6 +1082,7 @@ pub fn run() {
             llm_settings::test_llm_profile,
             workspace_settings::get_workspace_settings,
             workspace_settings::save_workspace_settings,
+            loogle_host::get_loogle_resident_status,
             discovery::get_active_discovery,
             discovery::list_discovery_runs,
             discovery::get_discovery_review,
@@ -1173,6 +1185,7 @@ pub fn run() {
         .expect("failed to build Mathscape desktop application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                loogle_host::shutdown();
                 if let Some(state) = app.try_state::<DesktopState>() {
                     tauri::async_runtime::block_on(state.service().shutdown_ink_lan(false)).ok();
                 }
