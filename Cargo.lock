@@ -3486,6 +3486,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mathscape-resident"
+version = "0.1.0"
+dependencies = [
+ "nix",
+ "serde",
+]
+
+[[package]]
 name = "mathscape-sandbox"
 version = "0.1.0"
 dependencies = [
