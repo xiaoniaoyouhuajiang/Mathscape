@@ -39,6 +39,13 @@ pub const HARNESS_FILE: &str = "harness.jsonl";
 /// Lives beside `workspace/`, so the workspace copy itself stays read-only to
 /// harness tools; discard deletes it with the session.
 pub const SCRATCH_DIR: &str = "scratch";
+/// Current round token for the session's long-lived MCP process
+/// (`mathscape mcp --round-file`). Written before every turn.
+pub const CURRENT_ROUND_FILE: &str = "current_round";
+/// Harness-owned thread state copies, one subdirectory per backend
+/// (`harness/codex/rollout-….jsonl`). A cache: the transcript stays the
+/// source of truth.
+pub const HARNESS_STATE_DIR: &str = "harness";
 /// Upper bound of one transcript message (user input or agent reply).
 pub const MAX_MESSAGE_CHARS: usize = 20_000;
 /// Implicit thread of every session (and of legacy untagged lines).
@@ -53,6 +60,37 @@ const MAX_THREADS: usize = 200;
 pub struct DialogueThread {
     pub thread_id: String,
     pub created_at: String,
+    /// The harness thread this dialogue continues (docs/codex-session-persistence.md §3).
+    /// `None` until the first turn ran on a persistent harness thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<HarnessThreadBinding>,
+}
+
+/// Which harness thread a dialogue thread is bound to, and what it was
+/// bound with. Compared on the next turn to detect tool / skill updates and
+/// a moved workspace.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessThreadBinding {
+    /// Backend label, e.g. `codex`.
+    pub backend: String,
+    /// Harness-native thread id (Codex thread UUID).
+    pub thread_id: String,
+    /// File name of the rollout copy under `harness/<backend>/`, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout_file: Option<String>,
+    /// Session workspace copy path the thread was last run against.
+    pub workspace: std::path::PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_schema_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_sha256: Option<String>,
+    /// When the last turn on this thread ended (RFC3339). The next turn's
+    /// 「自上轮以来工作区变化」summary counts changes after this instant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_turn_at: Option<String>,
 }
 
 /// Threads of a session in creation order plus the active one.
@@ -69,6 +107,7 @@ pub(crate) fn effective_threads(record: &SessionRecord) -> DialogueThreads {
         vec![DialogueThread {
             thread_id: FIRST_THREAD_ID.to_owned(),
             created_at: record.created_at.clone(),
+            harness: None,
         }]
     } else {
         record.dialogue_threads.clone()
@@ -240,12 +279,65 @@ impl SandboxHome {
         let thread = DialogueThread {
             thread_id: format!("{THREAD_ID_PREFIX}{next}"),
             created_at: now_rfc3339(),
+            harness: None,
         };
         record.active_thread_id = Some(thread.thread_id.clone());
         record.dialogue_threads = current.threads;
         record.dialogue_threads.push(thread);
         write_json_atomic(&self.session_dir(session_id).join(SESSION_FILE), &record)?;
         Ok(effective_threads(&record))
+    }
+
+    /// Record (or replace) the harness thread a dialogue thread is bound to.
+    pub fn set_thread_harness(
+        &self,
+        session_id: &str,
+        thread_id: &str,
+        binding: Option<HarnessThreadBinding>,
+    ) -> Result<DialogueThreads> {
+        let mut record = self.session(session_id)?;
+        let mut current = effective_threads(&record);
+        let Some(thread) = current
+            .threads
+            .iter_mut()
+            .find(|thread| thread.thread_id == thread_id)
+        else {
+            return Err(SandboxError::Invalid(format!("未知对话：{thread_id}")));
+        };
+        thread.harness = binding;
+        record.dialogue_threads = current.threads;
+        if record.active_thread_id.is_none() {
+            record.active_thread_id = Some(current.active_thread_id);
+        }
+        write_json_atomic(&self.session_dir(session_id).join(SESSION_FILE), &record)?;
+        Ok(effective_threads(&record))
+    }
+
+    /// `<session>/current_round` (see [`CURRENT_ROUND_FILE`]).
+    pub fn current_round_path(&self, session_id: &str) -> std::path::PathBuf {
+        self.session_dir(session_id).join(CURRENT_ROUND_FILE)
+    }
+
+    /// `<session>/harness/<backend>/`, created on demand.
+    pub fn ensure_harness_state_dir(
+        &self,
+        session_id: &str,
+        backend: &str,
+    ) -> Result<std::path::PathBuf> {
+        self.session(session_id)?;
+        if backend.is_empty()
+            || !backend
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(SandboxError::Invalid(format!("非法 backend：{backend}")));
+        }
+        let path = self
+            .session_dir(session_id)
+            .join(HARNESS_STATE_DIR)
+            .join(backend);
+        std::fs::create_dir_all(&path).map_err(|e| SandboxError::io(&path, e))?;
+        Ok(path)
     }
 
     /// Append one raw `agent_events v0` event (already serialized as JSON).

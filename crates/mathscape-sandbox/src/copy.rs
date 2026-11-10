@@ -14,6 +14,18 @@ use crate::SandboxError;
 /// * `*.sqlite3-shm` is skipped: SQLite rebuilds the shared-memory index from
 ///   the WAL and a copied index could disagree with the copied WAL.
 pub(crate) fn copy_tree(source: &Path, destination: &Path) -> Result<u64, SandboxError> {
+    copy_tree_excluding(source, destination, None)
+}
+
+/// [`copy_tree`] that skips one directory (and everything below it). The
+/// sandbox home lives inside the mother workspace
+/// (`<workspace>/.mathscape/sandbox`), so copying that workspace as a
+/// checkpoint must not copy the sandbox into itself.
+pub(crate) fn copy_tree_excluding(
+    source: &Path,
+    destination: &Path,
+    exclude: Option<&Path>,
+) -> Result<u64, SandboxError> {
     let mut copied = 0_u64;
     let entries = fs::read_dir(source).map_err(|e| SandboxError::io(source, e))?;
     for entry in entries {
@@ -22,9 +34,12 @@ pub(crate) fn copy_tree(source: &Path, destination: &Path) -> Result<u64, Sandbo
         let to = destination.join(entry.file_name());
         let link_meta = fs::symlink_metadata(&from).map_err(|e| SandboxError::io(&from, e))?;
         let file_type = link_meta.file_type();
+        if exclude.is_some_and(|skip| from == skip) {
+            continue;
+        }
         if file_type.is_dir() {
             fs::create_dir(&to).map_err(|e| SandboxError::io(&to, e))?;
-            copied += copy_tree(&from, &to)?;
+            copied += copy_tree_excluding(&from, &to, exclude)?;
             continue;
         }
         if is_shared_memory_index(&from) {
