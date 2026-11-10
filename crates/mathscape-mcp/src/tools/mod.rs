@@ -52,6 +52,45 @@ pub const ARTIFACT_STAGE: &str = "artifact.stage";
 pub const PROPOSE_CHANGES: &str = "propose_changes";
 pub const GET_CHANGE_SET: &str = "get_change_set";
 
+/// Version of the `tools/list` table (names, descriptions, input schemas)
+/// that the bundled `mathscape-worknet` skill is written against; the skill
+/// frontmatter's `tool_schema_version` must equal it. Bump it whenever
+/// [`tool_definitions`] changes — `tool_table_fingerprint_is_pinned` fails
+/// until the version and the pinned fingerprint are updated together.
+///
+/// `/14`: `propose_changes` gained `source_span`, `$new:` references and
+/// cross-proposal references (PR-B); the table still has 13 tools.
+pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/14";
+
+/// sha256 of the serialized [`tool_definitions`] with object keys sorted (so
+/// the value does not depend on serde_json's `preserve_order` feature), for
+/// pinning the schema.
+pub fn tool_table_fingerprint() -> String {
+    use sha2::{Digest, Sha256};
+    fn sorted(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_by(|a, b| a.0.cmp(b.0));
+                Value::Object(
+                    entries
+                        .into_iter()
+                        .map(|(key, value)| (key.clone(), sorted(value)))
+                        .collect(),
+                )
+            }
+            Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    let table = Value::Array(tool_definitions().iter().map(sorted).collect());
+    let bytes = serde_json::to_vec(&table).expect("tool definitions serialize");
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 /// Stable `tools/list` order. New tools are appended; existing entries stay put.
 pub const TOOL_NAMES: [&str; 13] = [
     WORKSPACE_SEARCH,
@@ -222,5 +261,24 @@ pub(crate) fn to_object(value: impl serde::Serialize) -> Result<Map<String, Valu
             ToolErrorCode::Internal,
             format!("failed to serialize tool result: {error}"),
         )),
+    }
+}
+
+#[cfg(test)]
+mod schema_version_tests {
+    use super::*;
+
+    /// The tool table a given [`TOOL_SCHEMA_VERSION`] stands for. Changing a
+    /// tool name, description or schema changes the fingerprint: bump
+    /// `TOOL_SCHEMA_VERSION` (and the skill frontmatter) and re-pin.
+    const PINNED: (&str, &str) = ("mathscape-mcp/14", "515a11df8293b793b837f136d18a92f5f749ce0dbfe3177d413ac9efda0b1fde");
+
+    #[test]
+    fn tool_table_fingerprint_is_pinned() {
+        assert_eq!(
+            (TOOL_SCHEMA_VERSION, tool_table_fingerprint().as_str()),
+            PINNED,
+            "the MCP tool table changed: bump TOOL_SCHEMA_VERSION and re-pin"
+        );
     }
 }

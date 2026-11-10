@@ -67,7 +67,7 @@ skill 不能假设文档里写出的工具已经存在。每次启动一个工�
 
 ```text
 workspace.search        implemented
-propose_changes         contract_only
+propose_changes         implemented_staged_only
 rdtx.upsert_edge        unavailable
 artifact.stage          implemented_round_bound
 ```

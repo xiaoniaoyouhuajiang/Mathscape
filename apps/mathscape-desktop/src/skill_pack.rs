@@ -172,8 +172,8 @@ mod tests {
         assert!(pack.version.is_some(), "metadata.version is required");
         assert_eq!(
             pack.tool_schema_version.as_deref(),
-            Some(format!("mathscape-mcp/{}", mathscape_mcp::tools::TOOL_NAMES.len()).as_str()),
-            "bump tool_schema_version when the MCP tool table changes"
+            Some(mathscape_mcp::tools::TOOL_SCHEMA_VERSION),
+            "the skill must be written against the current MCP tool table"
         );
         assert!(pack.files > 1);
         assert_eq!(pack.sha256.len(), 64);

@@ -278,7 +278,7 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 | `source_span` / `create` | ✅ [锁定·2026-11-09 用户改定；原口径 ❌，见 §10 待核 1] | 新增 `UserChangeOperation::CreateSourceSpan`（§4.2.5） |
 | `source_span` / `edit` | ❌ | span 是不可变定位；改定位 = 新建 span + 改引用 |
 
-`payload` 字段与 `SourceUnitDraft` / `SourceRelationDraft` 一一对应（`unit_kind` 映射到 `SourceUnitDraft.kind`，避免与外层 `kind` 冲突；`parent` / `source` / `target` / `source_spans` / `evidence_spans` 可写 `$new:<local_ref>`（或兼容期裸 `local_ref`），编译时替换为 `staged_ids`）；`changes` 即 `SourceUnitChanges` / `SourceRelationChanges`。
+`source_unit` 的 `payload` 即 `SourceUnitDraft`（单元种类写在 `payload.kind`，与外层项的 `kind` 分属两层；2026-11-10 对齐代码，原写法 `unit_kind` 未实现），`source_relation` 的 `relation` / `source` / `target` / `evidence_spans` 写在项的顶层（对应 `SourceRelationDraft`）；`parent` / `source` / `target` / `source_spans` / `evidence_spans` 可写 `$new:<local_ref>`（或兼容期裸 `local_ref`），编译时替换为 `staged_ids`）；`changes` 即 `SourceUnitChanges` / `SourceRelationChanges`。
 
 不支持的项 ⇒ `validation` Debt `kind_not_supported` / `operation_not_supported` ⇒ 整个 version `blocked`（接受粒度是 change_set，不做部分接受，决策 4）。
 

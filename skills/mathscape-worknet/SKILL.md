@@ -3,7 +3,7 @@ name: mathscape-worknet
 description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、对象卡、表示、证明上下文、失败见证）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
 metadata:
   version: "0.6.2"
-  tool_schema_version: "mathscape-mcp/13"
+  tool_schema_version: "mathscape-mcp/14"
 ---
 
 # Mathscape 数学地图构建 skill v0.6.2
@@ -143,6 +143,73 @@ workspace.search
 `artifact.stage` 是受 round 约束的文件暂存能力。它可以保存对象卡、工作网草案、Lean 文件和检查报告，但不会登记正式 Artifact、地图节点或关系。
 
 `propose_changes`、`get_change_set` 和 `user.ask` 只有在本轮工具列表中实际出现时才能调用。语义层的 `emir.upsert_*`、`rdtx.upsert_*`、`rdtx.record_failure` 等目前属于契约草案，必须作为 `propose_changes` 的薄封装，不能另开一条绕过用户接受的写路径。
+
+### 4.1 `propose_changes` 怎么写（`mathscape-mcp/14`）
+
+只在本轮工具列表里有 `propose_changes` 时使用。它只产生 `staged` 或 `blocked` 的提案，从不改正式地图；`staged` 的对象会以「未审批」样式出现在用户地图上，用户之后在 Desktop 统一接受或丢弃。接受只表示写入地图，不代表数学上已验证，也不会提升 Trust。
+
+一次提案 = 一个 change set，用户整批接受或丢弃，不会只接受其中几项。`request_id` 用于幂等：同一 `request_id` 重发同样内容得到原结果，内容不同会报错。
+
+**来源片段 `source_span`**：只给定位，服务端补齐身份、hash、块和页。
+
+```json
+{ "local_ref": "s1", "kind": "source_span", "op": "create",
+  "payload": { "artifact_id": "<material.read 返回的 Markdown 快照 id>",
+               "md_byte_range": { "start": 120, "end": 188 },
+               "granularity": "inline",
+               "quote": "<这段字节范围里的原文>" } }
+```
+
+- `md_byte_range` 是该快照的字节坐标，半开区间 `[start, end)`；服务端按范围截出原文再和 `quote` 比较（先精确，再忽略空白和外层 `$…$` 差异），不会在全文里帮你找。
+- `granularity` 取 `inline`、`block` 或 `page`。`block` 要求范围内有 canonical block，`page` 要求范围能唯一落到一页，否则 blocked。拿不准就用 `inline`。
+- 同一快照同一范围的 span id 是确定的：已经在地图上就会自动变成引用（`span_already_exists`），不会重复创建。
+- 不要填 id、hash、页码、块 id 等字段；多写字段会被拒绝。新建的 span 必须被本次提案里的单元或关系用到，否则 `unused_span`。
+
+**来源单元与关系**：
+
+```json
+{ "local_ref": "u1", "kind": "source_unit", "op": "create",
+  "payload": { "kind": "statement", "display_title": "定理 2.1",
+               "parent": null, "source_spans": ["$new:s1"],
+               "completeness": "complete" } }
+```
+
+```json
+{ "local_ref": "r1", "kind": "source_relation", "op": "create",
+  "relation": "proves", "source": "$new:u2", "target": "$new:u1",
+  "evidence_spans": ["$new:s2"] }
+```
+
+- 单元 `kind`：`section`、`definition`、`statement`、`proof`、`problem`、`hint`、`solution`、`example`、`remark`、`method`、`notation`、`narrative`；`completeness`：`complete`、`left_truncated`、`right_truncated`、`internally_missing`、`uncertain`。关系 `relation`：`proves`、`solves`、`hints`、`explains`、`cites`、`applies_method`。
+- 修改已有对象用 `op: "edit"`，带 `target_id`、`expected_revision` 和 `changes`；不能提议退役。
+- 顺序随意：服务端在最终图上统一校验，子单元写在父单元前面也可以。
+
+**引用规则**：
+
+- `$new:<local_ref>` 指本次提案里的新建项。`local_ref` 只用字母、数字、`_`、`-`、`.`，首字符是字母或数字，最长 64 字节。
+- `mathscape:` 开头的稳定 id 指正式地图上的对象，或**本调查**里其他仍为 `staged` 的提案对象（用 `graph.get` / `graph.neighborhood` 的 `scope: "investigation"` 或 `get_change_set` 的 `staged_ids` 查到）。引用别的提案就形成依赖：用户必须先接受或同批接受被依赖的提案。
+- 裸写 `local_ref`（不带 `$new:`）这一版还能用但会收到 `bare_local_ref_deprecated`，下一版移除。
+- 本调查 = 整场沙箱会话：开「新对话」后，之前对话里的暂存提案仍然可见、可引用。
+
+**修订**：读 `get_change_set` 拿到当前 `version` 和 `proposal_fingerprint`，再用 `supersedes: {change_set_id, version, proposal_fingerprint}` 重新提交整份提案。同名 `local_ref` 得到同一个 id。被替换的提案上，依赖它的其他提案会转为 `blocked`（`dependency_superseded`，更深一层是 `dependency_blocked`），不会自动改指新版本，需要你读回后重新提交。
+
+**常见诊断码**（`blocked` 时整份提案保留，改好后用 `supersedes` 重提）：
+
+| 码 | 含义 |
+| --- | --- |
+| `quote_mismatch` | 范围原文和 `quote` 不一致；重新 `material.read` 核对字节范围 |
+| `range_out_of_bounds` / `invalid_utf8_boundary` | 范围越界或切在字符中间 |
+| `snapshot_not_found` / `snapshot_not_immutable` | `artifact_id` 不是已登记的 Markdown 快照 |
+| `block_locator_unavailable` / `page_mapping_unavailable` | `block` / `page` 粒度定位不到；改用 `inline` |
+| `span_inactive` | 同一范围的 span 已被用户退役；不要自动重建，告诉用户 |
+| `unused_span` | 新建的 span 没被引用 |
+| `dangling_new_ref` / `dangling_staged_ref` | `$new:` 没定义，或引用的暂存对象不在本调查的 staged 提案里 |
+| `invalid_local_ref` | `local_ref` 不合规 |
+| `change_set_dependency_cycle` | 提案之间互相依赖 |
+| `dependency_superseded` / `dependency_blocked` / `dependency_discarded` | 被依赖的提案被替换、变 blocked 或被用户丢弃 |
+| `parent_cycle`、`mixed_source_context`、`cross_source_parent` 等 | 最终图结构不合法 |
+
+`span_already_exists`（info）和 `span_granularity_ignored`（warn）不阻塞提案。
 
 如果某阶段所需能力不可用，输出应包含：
 
