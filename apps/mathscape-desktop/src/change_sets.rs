@@ -252,7 +252,9 @@ fn authorize_investigation(
             if view.sandbox_session_id == session_id
                 && sandbox_investigation_id(&view.sandbox_session_id) == investigation_id =>
         {
-            view.workspace_root.clone().ok_or_else(investigation_foreign)
+            view.workspace_root
+                .clone()
+                .ok_or_else(investigation_foreign)
         }
         _ => Err(investigation_foreign()),
     }
@@ -1424,7 +1426,10 @@ mod tests {
         // investigations (e.g. a round-scoped CLI investigation) are refused.
         for foreign in ["sandbox:s9", "sandbox:s1:d1", "sandbox:", "round-1", ""] {
             let error = authorize_investigation(foreign, own, None).unwrap_err();
-            assert!(error.starts_with("investigation_not_in_workspace"), "{foreign}");
+            assert!(
+                error.starts_with("investigation_not_in_workspace"),
+                "{foreign}"
+            );
         }
         // The mother workspace has no investigation of its own.
         assert!(authorize_investigation("sandbox:s1", None, None).is_err());
@@ -1454,15 +1459,20 @@ mod tests {
         // The formal edit entry point works on the head only.
         assert!(mathscape_orchestrator::map_edit::get_edit_context(&head, &unit_id).is_err());
         // Default search answers from the accepted map.
-        let (search, _) = call_as(&fx, "round-1", Some(INV), "workspace.search",
-            json!({ "query": "暂存专用标题" }));
+        let (search, _) = call_as(
+            &fx,
+            "round-1",
+            Some(INV),
+            "workspace.search",
+            json!({ "query": "暂存专用标题" }),
+        );
         assert!(!search.to_string().contains(&unit_id), "{search}");
         // The mother map (no investigation) does not show it; the bound
         // window does, through the shared projection.
         let open = |investigation: Option<&str>| {
             let service = crate::DesktopService::open(&fx.root)
                 .unwrap()
-            .with_investigation(investigation.map(str::to_owned));
+                .with_investigation(investigation.map(str::to_owned));
             serde_json::to_value(service.snapshot().unwrap()).unwrap()
         };
         let mother = open(None);
@@ -1482,30 +1492,60 @@ mod tests {
         let fx = fixture();
         let a = unit_proposal(&fx, "a", "A", "# 定理 A", Value::Null);
         let unit_id = staged_id(&a, "u");
-        let (hood, _) = call_as(&fx, "round-1", Some(INV), "graph.neighborhood",
-            json!({ "seed_ids": [unit_id], "depth": 1, "scope": "investigation" }));
+        let (hood, _) = call_as(
+            &fx,
+            "round-1",
+            Some(INV),
+            "graph.neighborhood",
+            json!({ "seed_ids": [unit_id], "depth": 1, "scope": "investigation" }),
+        );
         assert_eq!(hood["applied"]["scope"], "investigation", "{hood}");
         let nodes = hood["nodes"].as_array().unwrap();
-        let seed = nodes.iter().find(|node| node["id"] == json!(unit_id)).unwrap();
+        let seed = nodes
+            .iter()
+            .find(|node| node["id"] == json!(unit_id))
+            .unwrap();
         assert_eq!(seed["staged"], true);
         assert_eq!(seed["scope"], "staged");
         assert_eq!(seed["change_set_id"], a["change_set_id"]);
         assert!(
-            nodes.iter().any(|node| node["id"] == json!(staged_id(&a, "s")) && node["staged"] == true),
+            nodes
+                .iter()
+                .any(|node| node["id"] == json!(staged_id(&a, "s")) && node["staged"] == true),
             "{hood}"
         );
         // After acceptance the same node is labelled accepted.
         accept(&fx, vec![sel(&a)]).unwrap();
-        let (hood, _) = call_as(&fx, "round-1", Some(INV), "graph.neighborhood",
-            json!({ "seed_ids": [unit_id], "depth": 1, "scope": "investigation" }));
-        let seed = hood["nodes"].as_array().unwrap().iter()
-            .find(|node| node["id"] == json!(unit_id)).cloned().unwrap();
+        let (hood, _) = call_as(
+            &fx,
+            "round-1",
+            Some(INV),
+            "graph.neighborhood",
+            json!({ "seed_ids": [unit_id], "depth": 1, "scope": "investigation" }),
+        );
+        let seed = hood["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == json!(unit_id))
+            .cloned()
+            .unwrap();
         assert_eq!(seed["staged"], false, "{hood}");
         assert_eq!(seed["scope"], "accepted");
         // Without an investigation the call falls back to accepted.
-        let (plain, _) = call_as(&fx, "round-unbound", None, "graph.neighborhood",
-            json!({ "seed_ids": [unit_id], "depth": 1, "scope": "investigation" }));
+        let (plain, _) = call_as(
+            &fx,
+            "round-unbound",
+            None,
+            "graph.neighborhood",
+            json!({ "seed_ids": [unit_id], "depth": 1, "scope": "investigation" }),
+        );
         assert_eq!(plain["applied"]["scope"], "accepted");
-        assert!(plain["diagnostics"].to_string().contains("scope_not_supported"), "{plain}");
+        assert!(
+            plain["diagnostics"]
+                .to_string()
+                .contains("scope_not_supported"),
+            "{plain}"
+        );
     }
 }

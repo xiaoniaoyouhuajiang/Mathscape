@@ -976,7 +976,9 @@ mod tests {
                 .operations()
                 .iter()
                 .map(|op| match op {
-                    MapOperation::CreateEntity { entity } => entity.header().stable_id().to_string(),
+                    MapOperation::CreateEntity { entity } => {
+                        entity.header().stable_id().to_string()
+                    }
                     MapOperation::CreateRelation { relation } => {
                         relation.header().stable_id().to_string()
                     }

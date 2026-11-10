@@ -271,7 +271,10 @@ mod schema_version_tests {
     /// The tool table a given [`TOOL_SCHEMA_VERSION`] stands for. Changing a
     /// tool name, description or schema changes the fingerprint: bump
     /// `TOOL_SCHEMA_VERSION` (and the skill frontmatter) and re-pin.
-    const PINNED: (&str, &str) = ("mathscape-mcp/14", "515a11df8293b793b837f136d18a92f5f749ce0dbfe3177d413ac9efda0b1fde");
+    const PINNED: (&str, &str) = (
+        "mathscape-mcp/14",
+        "515a11df8293b793b837f136d18a92f5f749ce0dbfe3177d413ac9efda0b1fde",
+    );
 
     #[test]
     fn tool_table_fingerprint_is_pinned() {
