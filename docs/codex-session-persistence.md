@@ -41,7 +41,7 @@ Codex 是目前唯一实现。ACP 实现留到真正接第二个 harness 时再�
 
 - 每个沙箱会话一个常驻 `codex app-server`，同一进程里可以有多个线程（每条「对话」一个）。`mathscape mcp` 跟着这个 app-server 活。
 - 生命周期复用 `mathscape-resident` 的 `Supervisor`：懒启动、握手超时、退避重启、空闲回收（15 分钟，与 Loogle 一致）、整组杀进程。
-- 关闭时机：空闲回收、会话丢弃、切换到别的沙箱会话、App 退出。进程身份（key）包含工作区路径、工具白名单、skill sha256、`tool_schema_version`、MCP 程序路径和授权；任何一项变化都会关掉旧进程再起新的（`key_changed`），已有线程下次用时按 id 恢复。
+- 关闭时机：空闲回收、会话丢弃、切换到别的沙箱会话、App 退出。进程身份（key）包含 codex 程序与参数、`CODEX_HOME`、MCP 程序路径、工作区路径、工具白名单、harness 授权（scratch / skill / 只读根、环境变量）与 round 文件；任何一项变化都会关掉旧进程再起新的，已有线程下次用时按 id 恢复。skill 内容（sha256 / `tool_schema_version`）不在 key 里：由 Desktop 在续接前比对（§2.5），不同时先关掉本会话进程再续接。
 - `--round` 不能再作为 MCP 启动参数（进程跨轮存活）。改为 `mathscape mcp --round-file <session>/current_round`：适配器在每轮 `turn/start` 前写入本轮 round id，MCP 每次工具调用时读取。同一会话一次只跑一轮（Desktop 已保证），所以没有竞争。
 
 ### 2.3 线程持久化与可迁移
@@ -59,16 +59,17 @@ Codex 是目前唯一实现。ACP 实现留到真正接第二个 harness 时再�
 
 ### 2.4 稳定前缀
 
-- `developerInstructions` 只放每条线程都不变的内容：工具白名单（会话级固定）、凭据说明、scratch 路径、skill 路径与「首轮先读 SKILL.md」。去掉 `round {round_id}`。
-- 每轮会变的内容（round id、线程续接提示、工作区变化摘要、skill/工具更新提示）放进本轮 `turn/start.input` 的**第一个文本项** `<mathscape_turn_context>…</mathscape_turn_context>`，用户消息是第二个文本项。它们只追加在上下文末尾，不破坏已缓存的前缀。
+- `developerInstructions` 只放每条线程都不变的内容：工具白名单（会话级固定）、凭据说明、scratch 路径、skill 身份与路径。去掉 `round {round_id}`。codex 在 `thread/resume` 时不接收新的 `developerInstructions`，线程沿用创建时的那份。
+- 「先读 SKILL.md」只在线程首轮作为本轮上下文注入；会话开场说明（沙箱身份、上下文跨轮保留、以新工具结果为准）同样只在首轮。
+- 每轮会变的内容（round id、线程续接提示、工作区迁移、工作区变化摘要、skill/工具更新提示）放进本轮 `turn/start.input` 的**第一个文本项** `<mathscape_turn_context>…</mathscape_turn_context>`，用户消息是第二个文本项。它们只追加在上下文末尾，不破坏已缓存的前缀。
 
 ### 2.5 版本比对
 
-每条线程在 `session.json` 里记录 `tool_schema_version`、skill sha256 与 skill 版本。续接时与当前值比对：不同 ⇒ 进程 key 已变（MCP 进程会重启），并在本轮开头注入「工具/skill 已更新到 X（原 Y），请重读变化部分」，之后更新记录。
+每条线程在 `session.json` 里记录 `tool_schema_version`、skill sha256 与 skill 版本。续接时与当前值比对：不同 ⇒ 若本会话的 app-server 在跑，先关掉它（MCP 随之重启，新进程列出新工具），再按 id 恢复线程，并在本轮开头注入「工具/skill 已更新到 X（本对话上一轮用的是 Y），请重读变化部分」，之后更新记录。
 
 ### 2.6 工作区变化摘要
 
-非首轮时，Desktop 统计「自上轮结束以来」本 investigation 的提案变化（新接受 / 新丢弃 / 新暂存或被替换的 change set，按 `updated_at` 与上一轮结束时刻比较），写成一段简短摘要注入本轮开头，并提醒 Agent：上下文里的旧工具结果可能已过时，以本轮重新调用工具的结果为准。没有变化时只保留提醒，不列清单。
+每轮结束后，Desktop 给会话副本拍一份紧凑快照（地图对象 `stable_id → kind@revision`、artifact 数、手稿数、本 investigation 每个 change set 的活动版本与状态），存为 `harness/codex/<thread_id>.workspace.json`。非首轮开头读出上一份快照与当前快照比对，写成「自上轮以来工作区变化」摘要：新增 / 修改 / 删除的地图对象、artifact 与手稿数量变化、提案的新建 / 状态变化（每类最多列 8 个 id），并提醒 Agent：上下文里的旧工具结果可能已过时，以本轮重新调用工具的结果为准。没有变化时写「没有变化」并保留提醒。快照比较不依赖时间戳，用户在两轮之间做的接受、丢弃、手改都能看到。
 
 ## 3. 存储布局（新）
 
@@ -80,6 +81,7 @@ Codex 是目前唯一实现。ACP 实现留到真正接第二个 harness 时再�
     transcript.jsonl  events.jsonl  harness.jsonl
     current_round       # 本轮 round id（MCP --round-file 读取）
     harness/codex/rollout-<ts>-<thread_id>.jsonl   # rollout 副本（正本是 Mathscape 自己的 transcript）
+    harness/codex/<thread_id>.workspace.json       # 上一轮结束时的工作区快照（§2.6）
     scratch/  workspace/
   exports/
 ```
@@ -104,3 +106,13 @@ Codex 是目前唯一实现。ACP 实现留到真正接第二个 harness 时再�
 - ACP 适配器与第二个 harness；
 - 导出包携带 rollout 副本；
 - 跨机器迁移时 Lean profile 根等外部路径的重新发现（沿用现有发现逻辑）。
+
+## 6. 实现状态（PR #48）
+
+- `mathscape-agent`：`AgentExecutor` 改为 ACP 形状（`open_session` / `new_thread` / `load_thread` / `prompt` / `close_session` / `close_all`，旧的 `start_round` 保留为一次性会话的便捷方法）；`codex/host.rs` 每会话一个驱动线程，持有 `mathscape-resident::Supervisor`；`codex/rollout.rs` 负责查找与恢复 rollout。
+- `mathscape-mcp`：新增 `--round-file`（与 `--round` 二选一）。
+- `mathscape-sandbox`：沙箱根迁入工作区、旧根非破坏性导入（`migrations.jsonl`）、`dialogue_threads[*].harness` 绑定、`current_round`。
+- Desktop：`sandbox_dialogue.rs` 接入续接 / 恢复 / 降级；`sandbox_continuity.rs` 生成每轮上下文与工作区快照；切换会话、回母工作区、丢弃、退出时关闭进程。
+- skill v0.6.5：说明线程内工具结果会保留，旧结果以「自上轮以来工作区变化」和新调用为准。
+- 测试：fixture 支持多线程、`thread/resume` 与假 rollout；`codex_session.rs`、`codex_process_group.rs`（空闲回收、`close_all`、无孤儿进程）、Desktop 对话测试（关闭后续接、跨机器恢复、线程丢失降级、旧对话重建、skill 变化重启）；`codex_live_mock.rs`（默认忽略，`MATHSCAPE_CODEX_MOCK=1` 用真实 codex + 本地 mock Responses 服务验证前缀只追加、resume、restore）。
+

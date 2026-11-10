@@ -88,7 +88,8 @@ pub struct HarnessThreadBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_sha256: Option<String>,
     /// When the last turn on this thread ended (RFC3339). The next turn's
-    /// 「自上轮以来工作区变化」summary counts changes after this instant.
+    /// 「自上轮以来工作区变化」summary compares the workspace digest saved
+    /// at that point (`harness/<backend>/<thread>.workspace.json`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_turn_at: Option<String>,
 }

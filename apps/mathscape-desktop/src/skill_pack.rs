@@ -219,9 +219,9 @@ mod tests {
         let first = pack.first_turn_note();
         assert!(first.contains("SKILL.md"));
         assert!(first.contains("runtime-capabilities.md"));
-        let update = pack.update_note(Some("v0.6.4"), Some("mathscape-mcp/15"));
+        let update = pack.update_note(Some("0.6.4"), Some("mathscape-mcp/16"));
         assert!(update.starts_with("工具/skill 已更新到"));
-        assert!(update.contains("v0.6.4"));
+        assert!(update.contains("0.6.4"));
         assert!(update.contains(pack.version.as_deref().unwrap()));
     }
 

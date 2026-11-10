@@ -1,5 +1,5 @@
 //! Harness-thread continuity for sandbox dialogues
-//! (docs/codex-session-persistence.md §2.4–§2.8).
+//! (docs/codex-session-persistence.md §2.3–§2.6).
 //!
 //! - which harness thread a dialogue thread continues, and the per-turn
 //!   context notes (first-turn skill read, moved workspace, updated
@@ -157,7 +157,7 @@ pub(crate) fn describe_delta(before: &WorkspaceDigest, after: &WorkspaceDigest) 
         ));
     }
     if lines.is_empty() {
-        return "自上轮以来工作区没有变化（图谱、提案、材料、手稿均未变）。".to_owned();
+        return "自上轮以来工作区没有变化（图谱、提案、材料、手稿均未变）。涉及具体对象时仍以本轮重新调用工具的结果为准。".to_owned();
     }
     format!(
         "自上轮以来工作区变化（用户或 Mathscape 在两轮之间所做）：\n{}\n之前轮次的工具结果可能已过时；涉及这些对象时以本轮重新调用工具的结果为准。",

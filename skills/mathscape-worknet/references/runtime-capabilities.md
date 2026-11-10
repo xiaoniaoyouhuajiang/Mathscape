@@ -81,7 +81,8 @@ artifact.stage          implemented_round_bound
 在 Mathscape 桌面端的沙箱对话中，本轮的实际情况是：
 
 - **挂载的 mathscape 工具**：`workspace.search`、`material.read`、`material.grep`、`pdf.outline`、`graph.get`、`graph.neighborhood`、`ink.page_image`、`pdf.page_image`、`mathlib.search`、`lean.check`、`propose_changes`、`get_change_set`、`material.locate`、`list_change_sets`。提案工具只写当前沙箱副本的 staged/blocked 记录；接受和丢弃仍由 Desktop 审核命令完成。
-- **找回之前的提案**：之前轮次的工具结果不会回放，修订旧提案前先调用只读的提案列表工具（见 SKILL.md §4.1「修订」），它只列本沙箱会话的提案，并给出可直接用于修订的对象。
+- **对话连续性**：同一沙箱会话的各轮延续同一条 Codex 线程，之前轮次的工具调用与结果都保留在上下文中。每个非首轮开头会有一段「自上轮以来工作区变化」摘要（用户可能在两轮之间接受、丢弃提案或改动地图）；与旧结果冲突时以摘要和本轮新调用的工具结果为准。若出现「上下文已降级」，说明线程无法恢复，此前只剩文字转录；出现「工具/skill 已更新」时，按提示重读变化的部分。
+- **找回之前的提案**：旧提案的 id 和状态可能已变，修订旧提案前先调用只读的提案列表工具（见 SKILL.md §4.1「修订」），它只列本沙箱会话的提案，并给出可直接用于修订的对象。
 - **未挂载**：`artifact.stage`。文件草稿仍写入 scratch；需要登记来源时使用 `propose_changes`，不能把文件暂存冒充正式地图写入。
 - **harness 自带的文件与 shell 工具**：只能写会话 scratch 目录（路径见本轮 developer instructions）；工作区副本、本 skill 目录和 Lean profile 都是只读；网络关闭。scratch 中的文件是草稿，不是地图变更，也不会提升任何可信状态。
 - **Lean 草稿**：写在 scratch 中，用 `lean.check` 检查，不要直接运行 `lake build` 或修改 Lean profile 的依赖。编译通过只说明 Lean 接受了这段代码，不说明它忠实于原文或证明完整。

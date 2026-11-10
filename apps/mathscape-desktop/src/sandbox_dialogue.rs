@@ -798,6 +798,21 @@ impl SandboxDialogueState {
         sink: &Sink,
     ) -> Result<(RoundId, HarnessThreadBinding, ThreadContinuity), String> {
         let executor = Arc::clone(&self.inner.executor);
+        // Skill or tool schema changed since the thread's last turn: restart
+        // the app-server (and its MCP) so the new tools are listed; the
+        // thread is resumed by id below and told what changed.
+        let stale_tools = prepared
+            .dialogue_thread
+            .as_ref()
+            .and_then(|thread| thread.harness.as_ref())
+            .zip(prepared.skill.as_ref())
+            .is_some_and(|(binding, skill)| {
+                binding.skill_sha256.as_deref() != Some(skill.sha256.as_str())
+                    || binding.tool_schema_version != skill.tool_schema_version
+            });
+        if stale_tools && self.opened().contains(session_id) {
+            self.close_harness_session(session_id).await;
+        }
         executor
             .open_session(SessionSpec {
                 backend: AgentBackend::Codex,
@@ -1615,6 +1630,43 @@ mod tests {
         assert!(state.active().is_empty());
         let home = fx.home.lock().unwrap();
         assert!(home.read_transcript(&fx.session_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn skill_change_restarts_the_app_server_and_tells_the_agent() {
+        let fx = fixture("skill-change");
+        let state = dialogue(&fx, &["app-server"]);
+        send_and_wait(&state, &fx, "记住 X");
+        if load_worknet_skill(&locate_skills_root().unwrap()).is_err() {
+            state.close_all();
+            return;
+        }
+        // Pretend the last turn ran with an older skill.
+        {
+            let home = fx.home.lock().unwrap();
+            let threads = home.dialogue_threads(&fx.session_id).unwrap();
+            let active = threads
+                .threads
+                .iter()
+                .find(|t| t.thread_id == threads.active_thread_id)
+                .unwrap();
+            let mut binding = active.harness.clone().expect("bound after a turn");
+            binding.skill_sha256 = Some("old".into());
+            binding.skill_version = Some("0.0.1".into());
+            home.set_thread_harness(&fx.session_id, &active.thread_id, Some(binding))
+                .unwrap();
+        }
+        send_and_wait(&state, &fx, "X 是什么");
+        // A fresh app-server (new handshake) resumed the same thread.
+        assert_eq!(logged(&fx, "codex-home", "initialize").len(), 2);
+        let resume = logged(&fx, "codex-home", "thread/resume");
+        assert_eq!(resume.len(), 1);
+        assert_eq!(resume[0]["params"]["threadId"], "thr_fixture");
+        let turns = logged(&fx, "codex-home", "turn/start");
+        let input = turns.last().unwrap()["params"]["input"].to_string();
+        assert!(input.contains("工具/skill 已更新到"), "{input}");
+        assert!(input.contains("0.0.1"), "{input}");
+        state.close_all();
     }
 
     #[test]

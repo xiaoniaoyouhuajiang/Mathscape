@@ -2,11 +2,11 @@
 name: mathscape-worknet
 description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、对象卡、表示、证明上下文、失败见证）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
 metadata:
-  version: "0.6.4"
+  version: "0.6.5"
   tool_schema_version: "mathscape-mcp/16"
 ---
 
-# Mathscape 数学地图构建 skill v0.6.4
+# Mathscape 数学地图构建 skill v0.6.5
 
 这份 skill 给在 Mathscape 工作区中帮助用户搭建数学地图的 Agent 使用。它的任务很简单：从用户关心的原文、手稿或问题出发，逐步整理出可回溯的数学理解，并把仍然不确定的地方留下来。
 
@@ -203,7 +203,7 @@ workspace.search
 - 裸写 `local_ref`（不带 `$new:`）这一版还能用但会收到 `bare_local_ref_deprecated`，下一版移除。
 - 本调查 = 整场沙箱会话：开「新对话」后，之前对话里的暂存提案仍然可见、可引用。
 
-**修订**：之前轮次的工具结果不会回放给你，你多半记不住旧提案的 id。**重提或修改之前的提案前，先调用 `list_change_sets`**（只列本调查 = 本沙箱会话的提案，新的在前；`pending_only: true` 只看 staged/blocked）。按 `title`、`request_id` 和 `active.blocking_codes` 找到要改的那份，把它的 `supersedes` 对象原样放进 `propose_changes`，重新提交**整份**提案；需要看旧内容时再用 `get_change_set` 读回。这样得到的是同一个 change set 的下一个版本（v2、v3…），旧版本被折叠；不带 `supersedes` 就会新建一个独立提案，旧的 blocked 版本还留在用户的审核队列里。`supersedes` 为 null 表示该提案已被接受或丢弃，不能再修订，需要的话新建提案。同名 `local_ref` 得到同一个 id。被替换的提案上，依赖它的其他提案会转为 `blocked`（`dependency_superseded`，更深一层是 `dependency_blocked`），不会自动改指新版本，需要你读回后重新提交。
+**修订**：同一个沙箱对话通常延续同一条 Codex 线程，之前轮次的工具结果仍在你的上下文里；但线程可能在换机器、长时间闲置或版本升级后被恢复甚至降级为转录重建（届时会有「上下文已降级」提示），而且早先的结果可能已过时。所以不要凭记忆里的旧提案 id 或状态行事。**重提或修改之前的提案前，先调用 `list_change_sets`**（只列本调查 = 本沙箱会话的提案，新的在前；`pending_only: true` 只看 staged/blocked）。按 `title`、`request_id` 和 `active.blocking_codes` 找到要改的那份，把它的 `supersedes` 对象原样放进 `propose_changes`，重新提交**整份**提案；需要看旧内容时再用 `get_change_set` 读回。这样得到的是同一个 change set 的下一个版本（v2、v3…），旧版本被折叠；不带 `supersedes` 就会新建一个独立提案，旧的 blocked 版本还留在用户的审核队列里。`supersedes` 为 null 表示该提案已被接受或丢弃，不能再修订，需要的话新建提案。同名 `local_ref` 得到同一个 id。被替换的提案上，依赖它的其他提案会转为 `blocked`（`dependency_superseded`，更深一层是 `dependency_blocked`），不会自动改指新版本，需要你读回后重新提交。
 
 **常见诊断码**（`blocked` 时整份提案保留，改好后用 `supersedes` 重提）：
 
