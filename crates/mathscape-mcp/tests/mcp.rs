@@ -2591,6 +2591,72 @@ fn locate_on_a_paginated_snapshot_resolves_the_page_and_page_spans_store_it() {
     );
 }
 
+/// The sandbox b1455 case: Marker snapshots begin with blank lines before
+/// the first page's own `{7}------` marker, and `material.read` serves the
+/// first page as `0..{8}`. That segment must map to page 8 (it used to be
+/// treated as crossing the leading marker), so locate offers page
+/// granularity and a page span over it is staged with the page stored.
+#[test]
+fn first_page_served_segment_with_leading_marker_maps_to_its_page() {
+    let dashes = "-".repeat(48);
+    let body = format!(
+        "\n\n{{7}}{dashes}\n\n习题 8 设 $f$ 在 $[a,b]$ 上连续。\n\n习题 9 求极限。\n\n{{8}}{dashes}\n\n习题 10 证明之。\n"
+    );
+    let (_dir, root, pdf, markdown) = canonical_book(10, 7, 8, &body);
+    let server = book_server(&root, Some("round-book"));
+    let (read, is_error) = call(
+        &server,
+        "material.read",
+        json!({ "artifact_id": pdf, "locator": { "pdf_pages": { "from": 8, "to": 8 } } }),
+    );
+    assert!(!is_error, "{read}");
+    let segment = read["details"]["served_segments"][0]["md_byte_range"].clone();
+    let end = body.find("{8}").unwrap();
+    assert_eq!(segment, json!({ "start": 0, "end": end }), "{read}");
+    let quote = &body[..end];
+    let (found, is_error) = call(
+        &server,
+        "material.locate",
+        json!({ "artifact_id": markdown, "quote": quote, "within": segment }),
+    );
+    assert!(!is_error, "{found}");
+    assert_eq!(found["status"], "ok", "{found}");
+    assert_eq!(found["md_byte_range"], segment, "{found}");
+    assert_eq!(found["page"]["page_number"], 8, "{found}");
+    assert_eq!(found["page_granularity_available"], true, "{found}");
+    assert!(
+        !diagnostic_codes(&found)
+            .iter()
+            .any(|code| code == "page_unresolved"),
+        "{found}"
+    );
+    let (paged, is_error) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "first-page", "rationale": "登记第 8 页",
+            "proposed_objects": [
+                { "local_ref": "s", "kind": "source_span", "op": "create", "payload": {
+                    "artifact_id": markdown, "md_byte_range": segment,
+                    "granularity": "page", "quote": quote }},
+                { "local_ref": "u", "kind": "source_unit", "op": "create", "payload": {
+                    "kind": "problem", "display_title": "第 8 页习题", "parent": null,
+                    "source_spans": ["$new:s"], "completeness": "complete" }}
+            ]
+        }),
+    );
+    assert!(!is_error, "{paged}");
+    assert_eq!(paged["status"], "staged", "{paged}");
+    assert!(
+        !diagnostic_codes(&paged)
+            .iter()
+            .any(|code| code == "page_mapping_unavailable"),
+        "{paged}"
+    );
+    let payload = paged["compiled_operations"].to_string();
+    assert!(payload.contains("\"pdf_page_index\":7"), "{paged}");
+}
+
 /// The sandbox 854f case: a snapshot of PDF pages 1–3 without page markers.
 /// `material.locate` cannot give a page and now says why
 /// (`page_markers_absent`, like `material.read`).

@@ -1160,6 +1160,53 @@ impl SnapshotContext {
         }
     }
 
+    /// `[start, end)` narrowed to its effective content for page mapping:
+    /// leading/trailing ASCII whitespace and whole page-marker blocks at
+    /// either edge are skipped (repeatedly), so a range that merely begins
+    /// with its own page's `{N}------` marker, or ends right after the next
+    /// one, is not mistaken for crossing pages. Only page mapping uses this;
+    /// the stored range is never changed. `Err` when nothing but markers and
+    /// whitespace remains.
+    fn content_bounds(&self, range: &ByteRangeInput) -> Result<(u64, u64), String> {
+        let bytes = self.source.as_bytes();
+        let is_space = |at: u64| {
+            bytes
+                .get(at as usize)
+                .is_some_and(|byte| byte.is_ascii_whitespace())
+        };
+        let (mut start, mut end) = (range.start, range.end);
+        loop {
+            if start < end && is_space(start) {
+                start += 1;
+            } else if let Some((_, marker_end, _)) =
+                self.markers.iter().find(|(marker, marker_end, _)| {
+                    *marker == start && *marker_end > *marker && *marker_end <= end
+                })
+            {
+                start = *marker_end;
+            } else {
+                break;
+            }
+        }
+        loop {
+            if start < end && is_space(end - 1) {
+                end -= 1;
+            } else if let Some((marker, _, _)) =
+                self.markers.iter().find(|(marker, marker_end, _)| {
+                    *marker_end == end && *marker < *marker_end && *marker >= start
+                })
+            {
+                end = *marker;
+            } else {
+                break;
+            }
+        }
+        if start >= end {
+            return Err("范围内只有分页标记或空白，没有可归属页面的内容".to_owned());
+        }
+        Ok((start, end))
+    }
+
     /// Canonical (non page-marker) blocks overlapping `[start, end)`; the
     /// same rule `propose_changes` records in `marker_block_ids`.
     pub(super) fn block_ids(&self, start: u64, end: u64) -> Vec<String> {
@@ -1190,10 +1237,11 @@ pub(super) fn map_page(
             None => return Err("快照没有页范围也没有分页标记".to_owned()),
         }
     } else {
+        let (start, end) = context.content_bounds(range)?;
         if context
             .markers
             .iter()
-            .any(|(start, _, _)| *start > range.start && *start < range.end)
+            .any(|(marker, _, _)| *marker > start && *marker < end)
         {
             return Err("范围跨越分页标记，覆盖多页".to_owned());
         }
@@ -1202,7 +1250,7 @@ pub(super) fn map_page(
             .markers
             .iter()
             .rev()
-            .find(|(start, _, _)| *start <= range.start)
+            .find(|(marker, _, _)| *marker <= start)
             .or_else(|| context.markers.first())
             .map(|(_, _, page)| *page)
             .expect("markers is non-empty");
@@ -2074,6 +2122,50 @@ mod tests {
         // A marker outside the snapshot's covered pages is inconsistent.
         let bad = context(vec![(0, 20, 5)], Some((31, 32)));
         assert!(map_page(&bad, &range(25, 30)).is_err());
+    }
+
+    /// Marker's real layout: the first page segment starts at byte 0 with
+    /// blank lines before its own `{7}------` marker (snapshot b1455).
+    fn marked_source() -> (SnapshotContext, [usize; 4]) {
+        let dashes = "-".repeat(48);
+        let source = format!("\n\n{{7}}{dashes}\n\n习题 8 A\n\n{{8}}{dashes}\n\n习题 9 B\n");
+        let m7 = source.find("{7}").unwrap();
+        let m8 = source.find("{8}").unwrap();
+        let a_end = source.find("A").unwrap() + 1;
+        let b_end = source.find("B").unwrap() + 1;
+        let marker_len = 3 + dashes.len();
+        let ctx = SnapshotContext {
+            source: source.clone(),
+            blocks: Vec::new(),
+            markers: vec![
+                (m7 as u64, (m7 + marker_len) as u64, 7),
+                (m8 as u64, (m8 + marker_len) as u64, 8),
+            ],
+            pdf: Ok((pdf(), Some((8, 9)))),
+        };
+        (ctx, [m8, m8 + marker_len, a_end, b_end])
+    }
+
+    #[test]
+    fn leading_own_page_marker_and_trailing_next_marker_do_not_cross_pages() {
+        let (ctx, [m8, m8_end, a_end, b_end]) = marked_source();
+        let to = |end: usize| range(0, end as u64);
+        // 0..end of A, and the served first-page segment 0..{8}.
+        assert_eq!(map_page(&ctx, &to(a_end)).unwrap().pdf_page_index(), 7);
+        assert_eq!(map_page(&ctx, &to(m8)).unwrap().pdf_page_index(), 7);
+        // Including the whole {8} marker but no page-9 content: still page 8.
+        assert_eq!(map_page(&ctx, &to(m8_end)).unwrap().pdf_page_index(), 7);
+        assert_eq!(map_page(&ctx, &to(m8_end + 2)).unwrap().pdf_page_index(), 7);
+        // Real page-9 content after {8}: crosses pages.
+        assert!(map_page(&ctx, &to(b_end)).is_err());
+        // A range starting at {8} maps to page 9.
+        let ninth = map_page(&ctx, &range(m8 as u64, b_end as u64)).unwrap();
+        assert_eq!(ninth.pdf_page_index(), 8);
+        // Only markers and whitespace: nothing to attribute.
+        assert!(map_page(&ctx, &range(m8 as u64, m8_end as u64)).is_err());
+        assert!(map_page(&ctx, &range(0, 2)).is_err());
+        let m7_end = ctx.markers[0].1;
+        assert!(map_page(&ctx, &range(0, m7_end + 2)).is_err());
     }
 
     #[test]
