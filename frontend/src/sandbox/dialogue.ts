@@ -150,6 +150,8 @@ export interface CiteContext {
   scenes?: {
     live: (scene: ToolScene, part: "call" | "result") => void;
     replay: (scenes: ToolScene[]) => void;
+    /** The round ended (or the session changed): forget in-flight calls. */
+    idle?: () => void;
   };
   /**
    * Sync ensure (「解析中」): read a map node's current summary from a fresh
@@ -525,6 +527,7 @@ export class SandboxDialogueDock {
       for (const timer of this.parseWatch.values()) clearTimeout(timer);
       this.parseWatch.clear();
       this.parsingCalls.clear();
+      this.cite?.scenes?.idle?.();
       this.sessionId = sessionId;
       this.transcript = [];
       this.events = [];
@@ -1012,7 +1015,7 @@ export class SandboxDialogueDock {
     if (typeof callId !== "string") return;
     const step = this.events.filter((item) => item.round_id === event.round_id && item.payload?.call_id === callId);
     const call = step.find((item) => item.type === "tool_call");
-    const draft = compileToolScene(call, event.type === "tool_result" ? event : undefined);
+    const draft = compileToolScene(call, event.type === "tool_result" ? event : undefined, this.events.slice(0, this.events.indexOf(event)));
     const resolve = this.resolvers()(event.round_id);
     if (!draft || !resolve) return;
     scenes.live(resolveScene(draft, sceneResolve(resolve)), event.type === "tool_call" ? "call" : "result");
@@ -1110,6 +1113,7 @@ export class SandboxDialogueDock {
         break;
       case "round_finished":
         if (this.activeRoundId === update.round_id) this.activeRoundId = null;
+        this.cite?.scenes?.idle?.();
         this.syncControls();
         // Ids this round's tools returned can now chip in the composer.
         this.input.refresh();
@@ -1281,7 +1285,7 @@ export class SandboxDialogueDock {
       this.renderLog(false);
     };
     const drafts = this.cite?.scenes && process.roundId
-      ? compileRoundScenes(this.events.filter((event) => event.round_id === process.roundId))
+      ? compileRoundScenes(this.events.filter((event) => event.round_id === process.roundId), this.events)
       : [];
     if (drafts.length > 0) {
       const head = el("div", "sandbox-process-head");

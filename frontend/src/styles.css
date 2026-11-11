@@ -1274,11 +1274,11 @@ code {
   right: 16px;
   z-index: 3;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   grid-template-areas:
-    "tag title step stop"
-    "tag type type stop"
-    "tag summary summary stop";
+    "tag title step elapsed stop"
+    "tag type type type stop"
+    "tag summary summary summary stop";
   gap: 2px 10px;
   align-items: center;
   max-width: min(460px, calc(100% - 32px));
@@ -1328,6 +1328,65 @@ code {
 
 @media (prefers-reduced-motion: reduce) {
   .scene-hud-parsing { animation: none; }
+}
+
+/* 「减少动效」 (settings or system): scene chrome switches state instantly. */
+.reduce-motion .scene-hud,
+.reduce-motion .scene-act,
+.reduce-motion .scene-hud-parsing,
+.reduce-motion .scene-hud-caret,
+.reduce-motion .scene-act-spinner,
+.reduce-motion .scene-running,
+.is-reduced-motion .scene-hud,
+.is-reduced-motion .scene-act,
+.is-reduced-motion .scene-hud-parsing,
+.is-reduced-motion .scene-hud-caret,
+.is-reduced-motion .scene-act-spinner {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Elapsed time of the HUD's in-flight call. */
+.scene-hud-elapsed {
+  grid-area: elapsed;
+  color: #f2d06b;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.scene-hud-elapsed[hidden],
+.scene-hud-step[hidden] {
+  display: none;
+}
+
+.scene-hud-step[data-pacing] {
+  color: #8fb0b8;
+}
+
+/* Running pill: any tool call in flight for more than ~2s (live). */
+.scene-running {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(360px, calc(100% - 32px));
+  padding: 3px 10px;
+  border: 1px solid #6b5a22;
+  border-radius: 999px;
+  background: rgb(26 22 8 / 90%);
+  color: #f2d06b;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: scene-parsing-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.scene-running[hidden] {
+  display: none;
 }
 
 .scene-hud-tag {
@@ -1518,6 +1577,193 @@ code {
   object-fit: contain;
   border-radius: 4px;
   background: #fdfdf8;
+}
+
+/* Fourth slice windows: Mathlib (Loogle), Lean, 原文定位, blocked proposal. */
+.scene-act[data-act="mathlib"],
+.scene-act[data-act="lean"],
+.scene-act[data-act="propose"] {
+  width: min(360px, calc(100% - 16px));
+}
+
+.scene-act-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.scene-act-badge {
+  padding: 0 7px;
+  border: 1px solid #3d6b78;
+  border-radius: 999px;
+  color: #8fd3e2;
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.scene-act-badge[data-mode="oneshot"] {
+  border-color: #6b5a22;
+  color: #f2d06b;
+}
+
+.scene-act-fallback {
+  border-color: #a5524a;
+  color: #f0a59b;
+}
+
+.scene-act-query {
+  margin: 0;
+  padding: 2px 8px;
+  border: 1px solid #2f5866;
+  border-radius: 6px;
+  background: rgb(4 12 18 / 80%);
+  color: #f2f7f8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.scene-act-running {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #f2d06b;
+}
+
+.scene-act-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgb(242 208 107 / 30%);
+  border-top-color: #f2d06b;
+  border-radius: 50%;
+  animation: scene-spin 900ms linear infinite;
+}
+
+@keyframes scene-spin {
+  to { transform: rotate(360deg); }
+}
+
+.scene-act-elapsed {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.scene-act-candidates,
+.scene-act-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.scene-act-candidate,
+.scene-act-diagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: rgb(79 195 217 / 8%);
+  transition: opacity 160ms ease-out;
+}
+
+.scene-act-candidate.is-pending,
+.scene-act-diagnostic.is-pending {
+  opacity: 0;
+}
+
+.scene-act-candidate-name {
+  color: #f2f7f8;
+  font-size: 12px;
+}
+
+.scene-act-candidate-type,
+.scene-act-diagnostic-message {
+  color: #9fb8bf;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.scene-act-diagnostic[data-severity="error"] {
+  background: rgb(165 82 74 / 18%);
+}
+
+.scene-act-diagnostic-where,
+.scene-act-diagnostic-code {
+  color: #f0a59b;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.scene-act-code {
+  max-height: 150px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: rgb(4 12 18 / 85%);
+  color: #e3eef1;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.scene-act-verdict {
+  margin: 0;
+  font-weight: 600;
+}
+
+.scene-act-verdict[data-verdict="checked"],
+.scene-act-verdict[data-verdict="ok"] {
+  color: #7fd6a0;
+}
+
+.scene-act-verdict[data-verdict="failed"],
+.scene-act-reason,
+.scene-act-error {
+  margin: 0;
+  color: #f0a59b;
+}
+
+.scene-act-note {
+  margin: 0;
+  color: #f2d06b;
+  font-size: 11px;
+}
+
+.scene-act-quote {
+  margin: 0;
+  padding: 4px 8px;
+  border-left: 3px solid #3d6b78;
+  color: #cfe3e8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.scene-act-quote[data-phase="miss"],
+.scene-act-quote[data-phase="error"] {
+  border-left-color: #a5524a;
+  text-decoration: line-through rgb(240 165 155 / 50%);
+}
+
+.scene-act-mark {
+  background: rgb(242 208 107 / 28%);
+  color: #fff6d6;
+}
+
+.scene-act-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  color: #9fb8bf;
+}
+
+.scene-act-suggestion {
+  color: #8fd3e2;
 }
 
 @keyframes scene-hud-in {

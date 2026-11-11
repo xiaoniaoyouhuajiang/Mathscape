@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { eventBus } from "../core/events";
+import { motionPreference, setMotionPreference, type MotionPreference } from "../core/motion";
 
 import "./settings.css";
 import {
@@ -75,6 +76,7 @@ export class LlmSettingsController {
   private readonly discoveryTimeout: HTMLInputElement;
   private readonly connectTimeout: HTMLInputElement;
   private readonly loogleResident: HTMLInputElement;
+  private readonly motion: HTMLSelectElement;
   private readonly loogleResidentNote: HTMLElement;
   private readonly workspaceResult: HTMLElement;
   private readonly workspaceSaveButton: HTMLButtonElement;
@@ -113,6 +115,24 @@ export class LlmSettingsController {
             </div>
             <button class="settings-close" type="button" aria-label="关闭">×</button>
           </header>
+          <section class="motion-settings settings-section">
+            <div class="settings-section-heading">
+              <div>
+                <span class="settings-eyebrow">DISPLAY</span>
+                <h3>界面</h3>
+              </div>
+              <span class="settings-scope">本机</span>
+            </div>
+            <label class="settings-field">
+              <span>减少动效</span>
+              <select name="reduce-motion">
+                <option value="system">跟随系统（默认）</option>
+                <option value="on">开启：状态直接切换</option>
+                <option value="off">关闭：播放完整动画</option>
+              </select>
+              <small>影响沙箱会话在地图上的工具场景：开启后不做收拢、镜头平移、打字机与逐条出现，但仍显示每一步的状态。立即生效。</small>
+            </label>
+          </section>
           <form class="workspace-settings-form settings-section">
             <div class="settings-section-heading">
               <div>
@@ -253,6 +273,10 @@ export class LlmSettingsController {
     this.saveButton = required<HTMLButtonElement>(host, ".save-settings");
     this.testButton = required<HTMLButtonElement>(host, ".test-settings");
 
+    const motion = required<HTMLSelectElement>(host, "select[name=reduce-motion]");
+    motion.value = motionPreference();
+    motion.onchange = () => setMotionPreference(motion.value as MotionPreference);
+    this.motion = motion;
     this.trigger.onclick = () => void this.open();
     eventBus.on("open-settings", () => void this.open());
     this.profileSelect = required<HTMLSelectElement>(host, "select[name=saved-profile]");
@@ -316,6 +340,7 @@ export class LlmSettingsController {
     this.populateForm();
     this.result.hidden = true;
     this.workspaceResult.hidden = true;
+    this.motion.value = motionPreference();
     this.overlay.hidden = false;
     this.admission.focus();
     try {
