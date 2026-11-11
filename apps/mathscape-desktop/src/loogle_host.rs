@@ -17,18 +17,15 @@ use serde::Serialize;
 #[cfg(unix)]
 mod imp {
     use std::{
-        fs::OpenOptions,
-        io::Write,
         path::{Path, PathBuf},
-        sync::{Arc, OnceLock},
-        time::{SystemTime, UNIX_EPOCH},
+        sync::OnceLock,
     };
 
-    use mathscape_resident::{EventSink, ResidentEvent};
     use mathscape_tool_lean::{
         LoogleResidentHost, ResidentLoogle, default_socket_path, resident_forced_off,
     };
-    use serde_json::json;
+
+    use crate::resident_log::jsonl_sink;
 
     static HOST: OnceLock<LoogleResidentHost> = OnceLock::new();
 
@@ -36,7 +33,7 @@ mod imp {
         if HOST.get().is_some() {
             return Ok(());
         }
-        let loogle = ResidentLoogle::new(event_sink(log_file));
+        let loogle = ResidentLoogle::new(jsonl_sink(log_file));
         let host = LoogleResidentHost::start(default_socket_path(), loogle, resident_forced_off())
             .map_err(|error| format!("failed to start the resident Loogle socket: {error}"))?;
         host.set_enabled(enabled);
@@ -50,27 +47,6 @@ mod imp {
 
     pub(super) fn socket_path() -> Option<&'static Path> {
         HOST.get().map(LoogleResidentHost::socket_path)
-    }
-
-    fn event_sink(log_file: Option<PathBuf>) -> EventSink {
-        Arc::new(move |event: &ResidentEvent| {
-            let Some(path) = &log_file else { return };
-            let at_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_millis() as u64)
-                .unwrap_or_default();
-            let line = json!({
-                "schema": "mathscape.resident_event.v0",
-                "at_ms": at_ms,
-                "event": event,
-            });
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(file, "{line}");
-            }
-        })
     }
 }
 
@@ -103,10 +79,7 @@ mod imp {
 
 /// Starts the socket (not Loogle itself) once per app run.
 pub(crate) fn start(log_dir: Option<&Path>, enabled: bool) -> Result<(), String> {
-    imp::start(
-        log_dir.map(|dir| dir.join("resident-processes.jsonl")),
-        enabled,
-    )
+    imp::start(crate::resident_log::log_file(log_dir), enabled)
 }
 
 /// Applies the「Loogle 常驻模式」setting; off stops the process immediately.

@@ -15,7 +15,12 @@ path = "src/bin/codex_fixture.rs"
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 futures.workspace = true
+mathscape-resident.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+mathscape-artifact.workspace = true
+tempfile = "3"

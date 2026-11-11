@@ -143,8 +143,18 @@ fn register_checkpoint_is_idempotent_and_validated() {
         home.register_checkpoint(&empty, None),
         Err(SandboxError::MissingDatabase(_))
     ));
+    // A directory that *contains* the sandbox root is fine (the copy skips
+    // the sandbox); this one is just not a workspace.
     assert!(matches!(
         home.register_checkpoint(tmp.path(), None),
+        Err(SandboxError::MissingDatabase(_))
+    ));
+    // A directory inside the sandbox root can never be isolated.
+    let inside = home.root().join("sessions/not-a-session");
+    fs::create_dir_all(&inside).unwrap();
+    fs::write(inside.join(WORKSPACE_DATABASE), b"x").unwrap();
+    assert!(matches!(
+        home.register_checkpoint(&inside, None),
         Err(SandboxError::OverlappingRoots { .. })
     ));
 
@@ -485,12 +495,18 @@ fn dialogue_prompt_replays_recent_history_without_system_lines() {
     );
     assert!(!prompt.contains("本轮已取消"));
     assert!(prompt.ends_with("用户本轮消息：\n第二问"));
+    // Same tool wording as the persistent session preamble: proposals included.
+    assert!(prompt.starts_with(DIALOGUE_INTRO), "{prompt}");
+    assert!(!prompt.contains("只读工具"), "{prompt}");
+    assert!(prompt.contains("propose_changes"), "{prompt}");
+    assert!(prompt.contains(REBUILT_CONTEXT_NOTE), "{prompt}");
 
     let long = "长".repeat(13_000);
     let prompt = build_dialogue_prompt(&[entry(TranscriptRole::User, &long)], "q", false);
     assert!(!prompt.contains("此前的对话"));
     assert!(build_dialogue_prompt(&[], "q", false).ends_with("q"));
     assert!(!build_dialogue_prompt(&[], "q", false).contains("新开的一条对话"));
+    assert!(!build_dialogue_prompt(&[], "q", false).contains(REBUILT_CONTEXT_NOTE));
     let later = build_dialogue_prompt(&[], "q", true);
     assert!(later.contains("新开的一条对话"), "{later}");
     assert!(later.ends_with("q"));
@@ -597,4 +613,131 @@ fn legacy_session_without_threads_reads_as_first_thread() {
             .collect::<Vec<_>>(),
         vec![FIRST_THREAD_ID, "d2"]
     );
+}
+
+/// Sandbox root inside the mother workspace (`<ws>/.mathscape/sandbox`).
+fn setup_in_workspace() -> (TempDir, SandboxHome, PathBuf) {
+    let tmp = TempDir::new("inws");
+    let checkpoint = make_checkpoint(tmp.path());
+    let home = SandboxHome::open(SandboxHome::workspace_root_for(&checkpoint)).unwrap();
+    (tmp, home, checkpoint)
+}
+
+#[test]
+fn sandbox_inside_the_mother_workspace_is_not_copied_into_sessions() {
+    let (_tmp, home, checkpoint) = setup_in_workspace();
+    fs::create_dir_all(checkpoint.join(".mathscape/lean")).unwrap();
+    fs::write(checkpoint.join(".mathscape/lean/keep.txt"), b"k").unwrap();
+    let record = home.register_checkpoint(&checkpoint, None).unwrap();
+    let first = home.start_session(&record.checkpoint_id).unwrap();
+    let second = home.start_session(&record.checkpoint_id).unwrap();
+    let copy = second.workspace_root.unwrap();
+    assert!(copy.join(WORKSPACE_DATABASE).is_file());
+    assert!(copy.join(".mathscape/lean/keep.txt").is_file());
+    assert!(
+        !copy.join(".mathscape/sandbox").exists(),
+        "the sandbox root must not be copied into a session"
+    );
+    assert!(first.workspace_root.unwrap().is_dir());
+}
+
+#[test]
+fn moving_the_workspace_rebases_checkpoint_roots() {
+    let (tmp, home, checkpoint) = setup_in_workspace();
+    let record = home.register_checkpoint(&checkpoint, Some("ws")).unwrap();
+    let session = home.start_session(&record.checkpoint_id).unwrap();
+    drop(home);
+    let moved = tmp.path().join("moved-workspace");
+    fs::rename(&checkpoint, &moved).unwrap();
+    let home = SandboxHome::open(SandboxHome::workspace_root_for(&moved)).unwrap();
+    let moved = moved.canonicalize().unwrap();
+    assert_eq!(home.checkpoint("ws").unwrap().root, moved);
+    let session = home.session(&session.sandbox_session_id).unwrap();
+    assert_eq!(session.checkpoint_root, moved);
+    // A new session from the moved checkpoint still works.
+    assert!(home.start_session("ws").is_ok());
+}
+
+#[test]
+fn legacy_sessions_are_copied_without_touching_the_legacy_root() {
+    let (tmp, legacy, checkpoint) = setup();
+    let record = legacy.register_checkpoint(&checkpoint, Some("ws")).unwrap();
+    let mine = legacy.start_session(&record.checkpoint_id).unwrap();
+    legacy
+        .append_transcript(
+            &mine.sandbox_session_id,
+            TranscriptRole::User,
+            "旧会话",
+            None,
+            None,
+        )
+        .unwrap();
+    let other_root = tmp.path().join("other");
+    fs::create_dir_all(&other_root).unwrap();
+    fs::write(other_root.join(WORKSPACE_DATABASE), b"o").unwrap();
+    let other = legacy
+        .register_checkpoint(&other_root, Some("other"))
+        .unwrap();
+    let theirs = legacy.start_session(&other.checkpoint_id).unwrap();
+    let legacy_before = snapshot_tree(legacy.root());
+
+    let home = SandboxHome::open(SandboxHome::workspace_root_for(&checkpoint)).unwrap();
+    let report = home
+        .import_legacy_sessions(legacy.root(), &checkpoint)
+        .unwrap();
+    assert_eq!(report.copied, vec![mine.sandbox_session_id.clone()]);
+    assert!(home.session(&theirs.sandbox_session_id).is_err());
+    let copied = home.session(&mine.sandbox_session_id).unwrap();
+    assert_eq!(copied.checkpoint_root, checkpoint.canonicalize().unwrap());
+    assert_eq!(
+        home.checkpoint(&copied.checkpoint_id).unwrap().root,
+        copied.checkpoint_root
+    );
+    let transcript = home.read_transcript(&mine.sandbox_session_id).unwrap();
+    assert_eq!(transcript[0].text, "旧会话");
+    // The legacy root is byte-for-byte unchanged.
+    assert_eq!(snapshot_tree(legacy.root()), legacy_before);
+
+    // Idempotent, and a discarded copy is never revived.
+    let again = home
+        .import_legacy_sessions(legacy.root(), &checkpoint)
+        .unwrap();
+    assert!(again.copied.is_empty());
+    home.discard_session(&mine.sandbox_session_id).unwrap();
+    let after_discard = home
+        .import_legacy_sessions(legacy.root(), &checkpoint)
+        .unwrap();
+    assert!(after_discard.copied.is_empty());
+    assert!(home.session(&mine.sandbox_session_id).is_err());
+}
+
+#[test]
+fn harness_binding_round_trips_through_session_json() {
+    let (_tmp, home, checkpoint) = setup();
+    let record = home.register_checkpoint(&checkpoint, None).unwrap();
+    let session = home.start_session(&record.checkpoint_id).unwrap();
+    let id = session.sandbox_session_id;
+    let binding = HarnessThreadBinding {
+        backend: "codex".into(),
+        thread_id: "01a1c59d-fd72-7831-83e0-10f1b2afeff8".into(),
+        rollout_file: Some("rollout-x.jsonl".into()),
+        workspace: home.session_workspace(&id),
+        tool_schema_version: Some("mathscape-mcp/16".into()),
+        skill_version: Some("0.6.5".into()),
+        skill_sha256: Some("ab".into()),
+        last_turn_at: None,
+    };
+    let threads = home
+        .set_thread_harness(&id, FIRST_THREAD_ID, Some(binding.clone()))
+        .unwrap();
+    assert_eq!(threads.threads[0].harness.as_ref(), Some(&binding));
+    assert_eq!(
+        home.dialogue_threads(&id).unwrap().threads[0].harness,
+        Some(binding)
+    );
+    assert!(home.set_thread_harness(&id, "d9", None).is_err());
+    let dir = home.ensure_harness_state_dir(&id, "codex").unwrap();
+    assert!(dir.ends_with("harness/codex"));
+    assert!(home.ensure_harness_state_dir(&id, "../x").is_err());
+    assert!(home.current_round_path(&id).ends_with(CURRENT_ROUND_FILE));
 }

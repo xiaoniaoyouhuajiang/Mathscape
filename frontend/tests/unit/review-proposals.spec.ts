@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   debtLabel, debtView, defaultSelection, dependencyGroups, deselect, discardImpact, discardPreview, impactSummary, keyOf,
-  proposalDiscoveryOutcome, proposalReviewProjection, select, selectionRefs, targetDiagnosticGroups,
+  proposalDiscoveryOutcome, proposalOverview, proposalReviewProjection, select, selectionRefs, targetDiagnosticGroups,
   type PendingChangeSet, type ProposalAnchor,
 } from "../../src/review/proposal-model";
 
@@ -166,3 +166,69 @@ describe("proposal review projection", () => {
       diagnostics: [{ code: "dangling_staged_ref", message: "x" }] })).toBe("阻塞：引用的对象不存在");
   });
 });
+
+/** Three snapshots; relations inside one, across two, and to existing map objects. */
+function multiSnapshotProposal(): PendingChangeSet {
+  const proposal = item("M");
+  const span = (ref: string, artifact: string) => ({ local_ref: ref, kind: "source_span", op: "create", payload: { artifact_id: artifact, md_byte_range: { start: 0, end: 4 }, granularity: "inline", quote: ref } });
+  const unit = (ref: string, title: string, spanRef: string) => ({ local_ref: ref, kind: "source_unit", op: "create", payload: { kind: "statement", display_title: title, parent: null, source_spans: [`$new:${spanRef}`] } });
+  const rel = (ref: string, relation: string, source: string, target: string, evidence: string[] = []) => ({ local_ref: ref, kind: "source_relation", op: "create", relation, source, target, evidence_spans: evidence });
+  proposal.proposal.proposed_objects = [
+    span("sa", "md-1"), span("sb", "md-1"), span("sc", "md-2"), span("sd", "md-3"), span("se", "md-3"),
+    unit("a", "定义 1", "sa"), unit("b", "定理 2", "sb"), unit("c", "例 3", "sc"), unit("d", "引理 4", "sd"), unit("e", "推论 5", "se"),
+  ];
+  proposal.proposal.proposed_relations = [
+    rel("r_ab", "explains", "$new:a", "$new:b", ["$new:sb"]),
+    rel("r_bc", "applies_method", "$new:b", "$new:c", ["$new:sc"]),
+    rel("r_ca", "cites", "$new:c", "$new:a"),
+    rel("r_xd", "explains", "mathscape:source-unit/x", "$new:d", ["$new:sd"]),
+    rel("r_ey", "applies_method", "$new:e", "mathscape:source-unit/y"),
+  ];
+  proposal.anchors = [anchor("sa", "md-1", 0, 4), anchor("sb", "md-1", 5, 9), anchor("sc", "md-2", 0, 4), anchor("sd", "md-3", 0, 4), anchor("se", "md-3", 5, 9)];
+  proposal.result.debts = [{ kind: "unresolved", value: "页码待核" }];
+  proposal.targetTitles = { "mathscape:source-unit/x": "已有定义 X" };
+  return proposal;
+}
+
+describe("proposal overview across snapshots", () => {
+  it("counts the whole change set, not the shown snapshot", () => {
+    const overview = proposalOverview(multiSnapshotProposal());
+    expect([overview.units, overview.relations, overview.spans, overview.debts]).toEqual([5, 5, 5, 1]);
+    expect(overview.groups.map(group => [group.artifact, group.units, group.relations, group.crossRelations])).toEqual([
+      ["md-1", 2, 3, 2], ["md-2", 1, 2, 2], ["md-3", 2, 2, 0],
+    ]);
+    expect(overview.defaultGroup).toBe(0);
+    expect(overview.unitList.map(unit => [unit.ref, unit.group])).toEqual([["a", 0], ["b", 0], ["c", 1], ["d", 2], ["e", 2]]);
+  });
+
+  it("lists every relation with its ends, flagging cross-snapshot ones and existing objects", () => {
+    const overview = proposalOverview(multiSnapshotProposal());
+    expect(overview.relationList.map(r => [r.ref, r.source.title, r.target.title, r.crossSnapshot, r.source.origin, r.target.origin])).toEqual([
+      ["r_ab", "定义 1", "定理 2", false, "new", "new"],
+      ["r_bc", "定理 2", "例 3", true, "new", "new"],
+      ["r_ca", "例 3", "定义 1", true, "new", "new"],
+      ["r_xd", "已有定义 X", "引理 4", false, "existing", "new"],
+      ["r_ey", "推论 5", "mathscape:source-unit/y", false, "new", "existing"],
+    ]);
+    expect(overview.groupOf("c")).toBe(1);
+    expect(overview.groupOf("mathscape:source-unit/x")).toBeNull();
+  });
+
+  it("keeps cross-snapshot relations visible in both snapshots", () => {
+    const groups = proposalReviewProjection(multiSnapshotProposal());
+    expect(groups[0].relations.map(r => r.relation_ref)).toEqual(["r_ab", "r_bc", "r_ca"]);
+    expect(groups[1].relations.map(r => r.relation_ref)).toEqual(["r_bc", "r_ca"]);
+    // A relation from an existing object lives with its new target.
+    expect(groups[2].relations.map(r => r.relation_ref)).toEqual(["r_xd", "r_ey"]);
+    // Evidence is shown only against the snapshot it points into.
+    expect(groups[0].relations[1].evidence).toEqual([]);
+    expect(groups[1].relations[0].evidence[0].block_ids).toEqual(["block:sc"]);
+  });
+
+  it("defaults to the snapshot with the most units and relations", () => {
+    const proposal = multiSnapshotProposal();
+    proposal.proposal.proposed_relations = proposal.proposal.proposed_relations!.slice(3);
+    expect(proposalOverview(proposal).defaultGroup).toBe(2);
+  });
+});
+

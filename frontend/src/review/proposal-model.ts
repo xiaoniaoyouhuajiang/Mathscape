@@ -109,7 +109,7 @@ export interface PendingChangeSet {
   anchors?: ProposalAnchor[];
   /** Older versions of the same change set, newest first. */
   history?: HistoryVersion[];
-  /** Titles of existing objects named by a diagnostic's `target_id`. */
+  /** Titles of existing (head or staged) objects the proposal names: diagnostic targets, relation endpoints, parents, edit targets. */
   targetTitles?: Record<string, string>;
 }
 
@@ -470,20 +470,25 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
     group.units.push(unit);
     if (unit.parent) group.structure_relations.push({ relation_ref: `${object.local_ref}:parent`, parent: unit.parent, child: unit.unit_ref });
   }
+  const sampleFor = (artifact: string | null) => artifact === null ? null : (item.anchors ?? []).find(anchor => anchor.artifact === artifact) ?? null;
   for (const relation of relations) {
     const source = newRef(relation.source) ?? relation.target_id ?? "";
     const target = newRef(relation.target) ?? "";
     const evidence = (relation.evidence_spans ?? []).map(newRef).flatMap(ref => (ref && anchors.get(ref)) || []);
-    const artifact = unitGroup.get(source) ?? evidence[0]?.artifact ?? null;
-    const sample = artifact === null ? null : (item.anchors ?? []).find(anchor => anchor.artifact === artifact) ?? null;
-    const group = groupFor(sample);
-    group.relations.push({
-      relation_ref: relation.local_ref,
-      source, target,
-      relation: relation.relation ?? relation.op,
-      evidence: evidence.filter(anchor => anchor.artifact === group.source.artifact_id).map(anchor => reviewAnchorOf(anchor, "relation_evidence")),
-      bases: [], origins: [],
-    });
+    // Home: the source unit's snapshot, else the target unit's, else the evidence's.
+    const artifact = unitGroup.has(source) ? unitGroup.get(source)! : unitGroup.has(target) ? unitGroup.get(target)! : evidence[0]?.artifact ?? null;
+    const homes = [groupFor(sampleFor(artifact))];
+    // A cross-snapshot relation is also listed in the target unit's snapshot.
+    if (unitGroup.has(source) && unitGroup.has(target) && unitGroup.get(target) !== artifact) homes.push(groupFor(sampleFor(unitGroup.get(target)!)));
+    for (const group of homes) {
+      group.relations.push({
+        relation_ref: relation.local_ref,
+        source, target,
+        relation: relation.relation ?? relation.op,
+        evidence: evidence.filter(anchor => anchor.artifact === group.source.artifact_id).map(anchor => reviewAnchorOf(anchor, "relation_evidence")),
+        bases: [], origins: [],
+      });
+    }
   }
   // Anchors no unit or relation claimed still belong to their snapshot.
   for (const anchor of item.anchors ?? []) groupFor(anchor);
@@ -499,6 +504,100 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
   }
   if (groups.size === 0) groupFor(null);
   return [...groups.values()];
+}
+
+/** One end of a relation in the change-set-wide overview. */
+export interface OverviewEndpoint {
+  ref: string;
+  title: string;
+  /** `new`: a unit of this proposal · `existing`: a map object or another proposal's staged object. */
+  origin: "new" | "existing";
+  /** Snapshot group (index into `proposalReviewProjection`) of a new unit; `null` otherwise. */
+  group: number | null;
+}
+
+export interface OverviewRelation {
+  ref: string;
+  relation: string;
+  op: string;
+  source: OverviewEndpoint;
+  target: OverviewEndpoint;
+  /** Both ends are new units in different snapshot groups. */
+  crossSnapshot: boolean;
+}
+
+export interface OverviewGroup {
+  index: number;
+  artifact: string | null;
+  /** Units shown in this snapshot. */
+  units: number;
+  /** Relations listed in this snapshot (cross-snapshot ones appear in both). */
+  relations: number;
+  crossRelations: number;
+}
+
+/** Change-set-wide numbers and every relation, independent of the shown snapshot. */
+export interface ProposalOverview {
+  units: number;
+  spans: number;
+  relations: number;
+  debts: number;
+  groups: OverviewGroup[];
+  /** Every unit of the proposal with its snapshot group. */
+  unitList: { ref: string; title: string; group: number }[];
+  relationList: OverviewRelation[];
+  /** Group shown first: the one with the most units + relations. */
+  defaultGroup: number;
+  /** Display title of a ref (new unit local ref or existing object id). */
+  title(ref: string): string;
+  /** Group of a new unit, `null` for existing objects. */
+  groupOf(ref: string): number | null;
+}
+
+const shortRef = (value: string): string => value.length > 28 ? `${value.slice(0, 16)}…${value.slice(-8)}` : value;
+
+export function proposalOverview(item: PendingChangeSet, groups: ProposalReviewProjection[] = proposalReviewProjection(item)): ProposalOverview {
+  const objects = item.proposal.proposed_objects ?? [];
+  const relations = item.proposal.proposed_relations ?? [];
+  const unitGroup = new Map<string, number>();
+  const titles = new Map<string, string>();
+  groups.forEach((group, index) => group.units.forEach(unit => {
+    if (!unitGroup.has(unit.unit_ref)) unitGroup.set(unit.unit_ref, index);
+    titles.set(unit.unit_ref, unit.display_title ?? unit.unit_ref);
+  }));
+  const title = (ref: string) => titles.get(ref) ?? item.targetTitles?.[ref] ?? shortRef(ref);
+  const groupOf = (ref: string) => unitGroup.get(ref) ?? null;
+  const endpoint = (ref: string): OverviewEndpoint => ({ ref, title: title(ref), origin: unitGroup.has(ref) ? "new" : "existing", group: groupOf(ref) });
+  const relationList = relations.map(relation => {
+    const sourceRef = newRef(relation.source) ?? relation.target_id ?? "";
+    const targetRef = newRef(relation.target) ?? "";
+    const source = endpoint(sourceRef), target = endpoint(targetRef);
+    return {
+      ref: relation.local_ref, relation: relation.relation ?? relation.op, op: relation.op, source, target,
+      crossSnapshot: source.group !== null && target.group !== null && source.group !== target.group,
+    };
+  });
+  const overviewGroups = groups.map((group, index) => {
+    const refs = new Set(group.units.map(unit => unit.unit_ref));
+    return {
+      index, artifact: group.source.artifact_id, units: group.units.length, relations: group.relations.length,
+      crossRelations: group.relations.filter(relation => !refs.has(relation.source) || !refs.has(relation.target))
+        .filter(relation => unitGroup.has(relation.source) && unitGroup.has(relation.target)).length,
+    };
+  });
+  let defaultGroup = 0;
+  overviewGroups.forEach(group => {
+    const best = overviewGroups[defaultGroup];
+    if (group.units + group.relations > best.units + best.relations) defaultGroup = group.index;
+  });
+  return {
+    units: objects.filter(object => object.kind === "source_unit").length,
+    spans: objects.filter(object => object.kind === "source_span").length,
+    relations: relations.length,
+    debts: proposalDebts(item).length,
+    groups: overviewGroups, relationList, defaultGroup, title, groupOf,
+    unitList: [...unitGroup].map(([ref, group]) => ({ ref, title: title(ref), group })),
+  };
 }
 
 /** Diagnostics without a `local_ref`, grouped by the existing object they name. */
@@ -607,7 +706,7 @@ export interface ProposalDecision {
  */
 export interface ProposalWorkspaceController {
   readonly investigationId: string;
-  /** Opens another pending version (or another snapshot of the same one). */
+  /** Opens another pending version (or another snapshot of the same one); no index ⇒ the overview's default group. */
   open(key: string, groupIndex?: number): Promise<void>;
   preview(item: PendingChangeSet): Promise<ImpactPreview>;
   /** Accepts one version through the batch accept (plan → accept, one commit). */
@@ -627,6 +726,8 @@ export interface ProposalWorkspaceMeta {
   items: PendingChangeSet[];
   groupIndex: number;
   groupCount: number;
+  /** Change-set-wide totals and every relation (not just the shown snapshot). */
+  overview: ProposalOverview;
   /** The snapshot from `get_change_set_snapshot`, or `null` with `documentError`. */
   document: AnchoredMarkdown | null;
   documentError: string | null;

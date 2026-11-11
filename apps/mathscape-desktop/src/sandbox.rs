@@ -14,7 +14,7 @@
 
 use std::{
     env,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -27,7 +27,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::DesktopState;
 
-/// Override for the sandbox home (defaults to `<app_data>/sandbox`).
+/// Override for the sandbox home (defaults to `<mother workspace>/.mathscape/sandbox`).
 pub(crate) const SANDBOX_ROOT_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_SANDBOX_ROOT";
 
 #[derive(Clone)]
@@ -38,12 +38,6 @@ pub(crate) struct SandboxState {
 impl SandboxState {
     pub(crate) fn home(&self) -> Arc<Mutex<SandboxHome>> {
         Arc::clone(&self.home)
-    }
-
-    pub(crate) fn open(root: PathBuf) -> Result<Self, mathscape_sandbox::SandboxError> {
-        Ok(Self {
-            home: Arc::new(Mutex::new(SandboxHome::open(root)?)),
-        })
     }
 
     pub(crate) async fn run<T, F>(&self, label: &str, work: F) -> Result<T, String>
@@ -64,11 +58,56 @@ impl SandboxState {
     }
 }
 
-pub(crate) fn sandbox_root(app: &AppHandle) -> Result<PathBuf, Box<dyn std::error::Error>> {
+/// Sandbox home for the mother workspace `mother`: `$MATHSCAPE_SANDBOX_ROOT`
+/// if set, else `<mother>/.mathscape/sandbox` so sessions (and the harness
+/// state kept in them) travel with the workspace
+/// (docs/codex-session-persistence.md §2.4).
+pub(crate) fn sandbox_root(mother: &Path) -> (PathBuf, bool) {
     match env::var_os(SANDBOX_ROOT_ENVIRONMENT_VARIABLE) {
-        Some(path) if !path.is_empty() => Ok(PathBuf::from(path)),
-        _ => Ok(app.path().app_data_dir()?.join("sandbox")),
+        Some(path) if !path.is_empty() => (PathBuf::from(path), true),
+        _ => (SandboxHome::workspace_root_for(mother), false),
     }
+}
+
+/// Where sessions lived before they moved into the workspace.
+pub(crate) fn legacy_sandbox_root(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("sandbox"))
+}
+
+/// Open the sandbox home of `mother` and copy in (never move) this
+/// workspace's sessions from the legacy `<app_data>/sandbox`. Migration
+/// problems are logged; they never block startup.
+pub(crate) fn open_for_workspace(
+    mother: &Path,
+    legacy: Option<PathBuf>,
+) -> Result<SandboxState, mathscape_sandbox::SandboxError> {
+    let (root, overridden) = sandbox_root(mother);
+    let home = SandboxHome::open(root)?;
+    if !overridden
+        && let Some(legacy) = legacy.filter(|legacy| legacy.is_dir() && legacy != home.root())
+    {
+        match home.import_legacy_sessions(&legacy, mother) {
+            Ok(report) if !report.copied.is_empty() || !report.skipped.is_empty() => {
+                eprintln!(
+                    "mathscape: sandbox migration from {}: copied {:?}, skipped {:?} (originals kept)",
+                    legacy.display(),
+                    report.copied,
+                    report.skipped
+                );
+            }
+            Ok(_) => {}
+            Err(error) => eprintln!(
+                "mathscape: sandbox migration from {} failed (originals kept): {error}",
+                legacy.display()
+            ),
+        }
+    }
+    Ok(SandboxState {
+        home: Arc::new(Mutex::new(home)),
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -247,6 +286,7 @@ pub async fn sandbox_discard_session(
     // A still-running round is cancelled first; its late writes are refused
     // by SandboxHome once the directory is gone, so nothing is revived.
     dialogue.cancel_session_round(&sandbox_session_id).await;
+    dialogue.close_harness_session(&sandbox_session_id).await;
     sandbox
         .run("sandbox session discard", move |home| {
             home.discard_session(&sandbox_session_id)
@@ -302,8 +342,13 @@ pub fn sandbox_workspace_status(desktop: State<'_, DesktopState>) -> WorkspaceSt
 pub async fn sandbox_enter_session(
     sandbox: State<'_, SandboxState>,
     desktop: State<'_, DesktopState>,
+    dialogue: State<'_, SandboxDialogueState>,
     sandbox_session_id: String,
 ) -> Result<WorkspaceStatus, String> {
+    // Switching sessions stops the other sessions' idle app-servers.
+    dialogue
+        .close_other_harness_sessions(Some(&sandbox_session_id))
+        .await;
     let session = sandbox
         .run("sandbox session enter", move |home| {
             home.live_session(&sandbox_session_id)
@@ -335,7 +380,9 @@ pub async fn sandbox_enter_session(
 #[tauri::command]
 pub async fn sandbox_return_to_mother(
     desktop: State<'_, DesktopState>,
+    dialogue: State<'_, SandboxDialogueState>,
 ) -> Result<WorkspaceStatus, String> {
+    dialogue.close_other_harness_sessions(None).await;
     if desktop.in_window_sandbox().is_some() {
         desktop
             .switch_to(desktop.mother_root().to_path_buf(), None)
@@ -430,5 +477,75 @@ mod tests {
         assert!(state.in_window_sandbox().is_none());
         assert_eq!(state.service().workspace_root(), mother_root);
         state.service().snapshot().unwrap();
+    }
+
+    #[test]
+    fn sandbox_home_lives_in_the_mother_workspace_and_imports_legacy_sessions() {
+        if env::var_os(SANDBOX_ROOT_ENVIRONMENT_VARIABLE).is_some() {
+            return;
+        }
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = Dir(env::temp_dir().join(format!(
+            "mathscape-s1-migrate-{}-{nanos}",
+            std::process::id()
+        )));
+        let mother = DesktopService::open_with_credential_store(
+            dir.0.join("mother"),
+            Arc::new(mathscape_llm::MemoryCredentialResolver::default()),
+        )
+        .unwrap();
+        let mother_root = mother.workspace_root().to_path_buf();
+        // A session in the old `<app_data>/sandbox` home.
+        let legacy = dir.0.join("app-data/sandbox");
+        let legacy_home = SandboxHome::open(&legacy).unwrap();
+        let checkpoint = legacy_home.register_checkpoint(&mother_root, None).unwrap();
+        let session = legacy_home
+            .start_session(&checkpoint.checkpoint_id)
+            .unwrap();
+        drop(legacy_home);
+        let legacy_before = tree_snapshot(&legacy);
+
+        let state = open_for_workspace(&mother_root, Some(legacy.clone())).unwrap();
+        let home = state.home();
+        let home = home.lock().unwrap();
+        assert_eq!(
+            home.root(),
+            SandboxHome::workspace_root_for(&mother_root).as_path()
+        );
+        let sessions = home.list_sessions().unwrap();
+        assert!(
+            sessions
+                .iter()
+                .any(|view| view.sandbox_session_id == session.sandbox_session_id),
+            "{sessions:?}"
+        );
+        drop(home);
+        // Non-destructive: the legacy home is untouched.
+        assert_eq!(tree_snapshot(&legacy), legacy_before);
+        // Opening again does not copy twice.
+        let again = open_for_workspace(&mother_root, Some(legacy)).unwrap();
+        let count = again.home().lock().unwrap().list_sessions().unwrap().len();
+        assert_eq!(count, sessions.len());
+    }
+
+    fn tree_snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let bytes = std::fs::read(&path).unwrap();
+                    out.push((path.strip_prefix(root).unwrap().to_path_buf(), bytes));
+                }
+            }
+        }
+        out.sort();
+        out
     }
 }

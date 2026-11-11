@@ -13,10 +13,18 @@
 //! (skill version + hash, grants, Lean profile root) is appended to the
 //! session's `harness.jsonl`.
 //!
-//! Codex rounds are single-turn and ephemeral, so continuity comes from
-//! replaying recent transcript lines **of the active dialogue thread** into
-//! each new round ([`build_dialogue_prompt`]). 「新对话」 opens another thread
-//! on the same isolated copy: the agent context starts empty, workspace state
+//! Each sandbox session has one long-lived Codex app-server (a harness
+//! session keyed by the sandbox session id; tool allow-list fixed per
+//! session) and each dialogue thread is one persistent Codex thread
+//! (docs/codex-session-persistence.md). The thread binding lives in
+//! `session.json`, a copy of the rollout in `harness/codex/`, so a resumed
+//! or moved session continues the same agent context; only when the harness
+//! cannot reload the thread is the context rebuilt from recent transcript
+//! lines ([`build_dialogue_prompt`]) and the dialogue shows 「上下文已降级」.
+//! Per-turn notes (first-turn skill read, workspace moved, tool/skill
+//! updated, 「自上轮以来工作区变化」) go into a separate context item
+//! ([`crate::sandbox_continuity`]). 「新对话」 opens another thread on the
+//! same isolated copy: the agent context starts empty, workspace state
 //! carries over (docs/sandbox-flow.md §3.5). Everything the round produces stays inside the
 //! session directory: `transcript.jsonl` (user / agent / system lines) and
 //! `events.jsonl` (the raw event stream). The UI receives the same events
@@ -24,7 +32,7 @@
 //! the event stream (`turn_end` + [`AgentExecutor::final_text`]).
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -33,11 +41,12 @@ use std::{
 use futures::StreamExt;
 use mathscape_agent::{
     AgentBackend, AgentEffort, AgentExecutor, AgentModel, CapabilityProbe, CodexConfig,
-    CodexExecutor, EventPayload, HarnessContext, RoundId, StartRoundRequest, TurnOutcome,
+    CodexExecutor, EventPayload, HarnessContext, LoadThread, Prompt, RoundId, SessionSpec,
+    ThreadBinding, ThreadContinuity, TurnOutcome,
 };
 use mathscape_sandbox::{
-    DialogueThread, MAX_MESSAGE_CHARS, SandboxError, SandboxHome, TranscriptEntry, TranscriptRole,
-    build_dialogue_prompt,
+    DialogueThread, HarnessThreadBinding, MAX_MESSAGE_CHARS, SandboxError, SandboxHome,
+    TranscriptEntry, TranscriptRole, build_dialogue_prompt,
 };
 use mathscape_tool_lean::{LEAN_PROFILE_ROOT_ENV, discover_profile_root};
 use serde::Serialize;
@@ -45,7 +54,11 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::sandbox::SandboxState;
-use crate::skill_pack::{load_worknet_skill, locate_skills_root};
+use crate::sandbox_continuity::{
+    NoteInputs, WorkspaceDigest, context_notes, digest_workspace, keep_rollout_copy, load_digest,
+    save_digest,
+};
+use crate::skill_pack::{SkillPack, load_worknet_skill, locate_skills_root};
 
 /// Codex CLI used for dialogue rounds (default `codex` on `PATH`).
 pub(crate) const CODEX_PROGRAM_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_CODEX_PROGRAM";
@@ -152,6 +165,25 @@ struct Inner {
     mcp_program: PathBuf,
     /// One round at a time per session. `None` = reserved, round starting.
     active: Mutex<HashMap<String, Option<RoundId>>>,
+    /// Sandbox sessions with an open harness session (app-server).
+    opened: Mutex<HashSet<String>>,
+}
+
+/// Everything `send` gathers under the sandbox lock before talking to Codex.
+struct Prepared {
+    workspace: PathBuf,
+    user_entry: TranscriptEntry,
+    thread: String,
+    dialogue_thread: Option<DialogueThread>,
+    later_thread: bool,
+    history: Vec<TranscriptEntry>,
+    harness: HarnessContext,
+    harness_record: Value,
+    round_file: PathBuf,
+    state_dir: PathBuf,
+    skill: Option<SkillPack>,
+    before: Option<WorkspaceDigest>,
+    now: Option<WorkspaceDigest>,
 }
 
 /// Mathscape MCP tools mounted in sandbox rounds. Proposal writes are safe
@@ -280,7 +312,9 @@ where
 }
 
 impl SandboxDialogueState {
-    pub(crate) fn from_environment() -> Self {
+    /// `resident_log`: where app-server lifecycle events go
+    /// (`resident-processes.jsonl`, shared with the resident Loogle).
+    pub(crate) fn from_environment(resident_log: Option<PathBuf>) -> Self {
         let config = CodexConfig {
             program: env_path(CODEX_PROGRAM_ENVIRONMENT_VARIABLE)
                 .unwrap_or_else(|| PathBuf::from("codex")),
@@ -288,16 +322,17 @@ impl SandboxDialogueState {
                 .unwrap_or_else(default_mcp_program),
             ..CodexConfig::default()
         };
-        Self::with_config(config)
+        Self::with_config_and_sink(config, crate::resident_log::jsonl_sink(resident_log))
     }
 
-    fn with_config(config: CodexConfig) -> Self {
+    fn with_config_and_sink(config: CodexConfig, sink: mathscape_resident::EventSink) -> Self {
         Self {
             inner: Arc::new(Inner {
                 codex_program: config.program.clone(),
                 mcp_program: config.mcp_program.clone(),
-                executor: Arc::new(CodexExecutor::new(config)),
+                executor: Arc::new(CodexExecutor::new(config).with_event_sink(sink)),
                 active: Mutex::new(HashMap::new()),
+                opened: Mutex::new(HashSet::new()),
             }),
         }
     }
@@ -321,6 +356,40 @@ impl SandboxDialogueState {
         {
             active.remove(session_id);
         }
+    }
+
+    fn opened(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+        self.inner
+            .opened
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Stop the session's app-server (discard). Threads stay resumable.
+    pub(crate) async fn close_harness_session(&self, session_id: &str) {
+        self.opened().remove(session_id);
+        let _ = self.inner.executor.close_session(session_id).await;
+    }
+
+    /// Stop the app-servers of every idle session except `keep` (session
+    /// switch). A session with a streaming round keeps its process.
+    pub(crate) async fn close_other_harness_sessions(&self, keep: Option<&str>) {
+        let busy: HashSet<String> = self.active().keys().cloned().collect();
+        let victims: Vec<String> = self
+            .opened()
+            .iter()
+            .filter(|id| Some(id.as_str()) != keep && !busy.contains(*id))
+            .cloned()
+            .collect();
+        for id in victims {
+            self.close_harness_session(&id).await;
+        }
+    }
+
+    /// App exit: stop every app-server (blocking, bounded).
+    pub(crate) fn close_all(&self) {
+        self.opened().clear();
+        self.inner.executor.close_all();
     }
 
     /// Best-effort cancel of the session's running round (used by discard).
@@ -459,12 +528,17 @@ impl SandboxDialogueState {
                 let view = home.live_session(&session_id)?;
                 let threads = home.dialogue_threads(&session_id)?;
                 let thread = threads.active_thread_id.clone();
-                let continues_session = threads
+                let later_thread = threads
                     .threads
                     .first()
                     .is_some_and(|first| first.thread_id != thread);
+                let dialogue_thread = threads
+                    .threads
+                    .iter()
+                    .find(|candidate| candidate.thread_id == thread)
+                    .cloned();
                 let history = home.read_thread_transcript(&session_id, &thread)?;
-                let entry = home.append_thread_transcript(
+                let user_entry = home.append_thread_transcript(
                     &session_id,
                     &thread,
                     TranscriptRole::User,
@@ -484,47 +558,59 @@ impl SandboxDialogueState {
                     &tools,
                     Some(&investigation_id),
                 );
-                Ok((
-                    build_dialogue_prompt(&history, &text, continues_session),
-                    view.workspace_root
-                        .unwrap_or_else(|| home.session_workspace(&session_id)),
-                    entry,
+                let workspace = view
+                    .workspace_root
+                    .unwrap_or_else(|| home.session_workspace(&session_id));
+                let state_dir = home.ensure_harness_state_dir(&session_id, BACKEND_LABEL)?;
+                let before = load_digest(&state_dir, &thread);
+                let now = digest_workspace(&workspace, &investigation_id)
+                    .map_err(|error| eprintln!("mathscape: workspace digest failed: {error}"))
+                    .ok();
+                Ok(Prepared {
+                    round_file: home.current_round_path(&session_id),
+                    skill: locate_skills_root().and_then(|root| load_worknet_skill(&root).ok()),
+                    workspace,
+                    user_entry,
                     thread,
+                    dialogue_thread,
+                    later_thread,
+                    history,
                     harness,
                     harness_record,
-                ))
+                    state_dir,
+                    before,
+                    now,
+                })
             })
             .await
         };
-        let (prompt, workspace, user_entry, thread, harness, mut harness_record) = match prepared {
+        let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.release(&session_id, None);
                 return Err(error);
             }
         };
+        let user_entry = prepared.user_entry.clone();
+        let thread = prepared.thread.clone();
+        let workspace = prepared.workspace.clone();
+        let mut harness_record = prepared.harness_record.clone();
         sink(DialogueUpdate::Transcript {
             sandbox_session_id: session_id.clone(),
             entry: user_entry.clone(),
         });
 
+        // Session switch: idle app-servers of other sessions are stopped.
+        self.close_other_harness_sessions(Some(&session_id)).await;
         let executor = Arc::clone(&self.inner.executor);
-        let round_workspace = workspace.clone();
-        let started = executor
-            .start_round(StartRoundRequest {
-                backend: AgentBackend::Codex,
-                workspace,
-                input_ref: prompt,
-                tools_allow: tools,
-                harness,
-            })
+        let started = self
+            .start_turn(&home, &session_id, &text, tools, prepared, &sink)
             .await
-            .map_err(|error| error.to_string())
-            .and_then(|round| {
+            .and_then(|(round, binding, continuity)| {
                 let stream = executor.events(&round).map_err(|error| error.to_string())?;
-                Ok((round, stream))
+                Ok((round, binding, continuity, stream))
             });
-        let (round, mut stream) = match started {
+        let (round, binding, continuity, mut stream) = match started {
             Ok(started) => started,
             Err(error) => {
                 self.release(&session_id, None);
@@ -551,6 +637,12 @@ impl SandboxDialogueState {
                 return Err(message);
             }
         };
+        let round_workspace = workspace.clone();
+        harness_record["harness_thread"] = json!({
+            "backend": BACKEND_LABEL,
+            "thread_id": binding.thread_id,
+            "continuity": continuity,
+        });
         // Register round ↔ investigation in the session copy's store so the
         // MCP server can verify the adapter-supplied investigation id.
         {
@@ -602,6 +694,7 @@ impl SandboxDialogueState {
         let pump_round = round.clone();
         let pump_session = session_id.clone();
         let pump_thread = thread;
+        let pump_binding = binding;
         tauri::async_runtime::spawn(async move {
             let (session_id, round) = (pump_session, pump_round);
             let mut recording = true;
@@ -678,6 +771,10 @@ impl SandboxDialogueState {
                     });
                 }
             }
+            if recording {
+                this.persist_thread_state(&home, &session_id, &pump_thread, &pump_binding)
+                    .await;
+            }
             this.release(&session_id, Some(&round));
             sink(DialogueUpdate::RoundFinished {
                 sandbox_session_id: session_id,
@@ -689,6 +786,227 @@ impl SandboxDialogueState {
             round_id: round.as_str().to_owned(),
             user_entry,
         })
+    }
+
+    /// Open the harness session, continue (or start) the dialogue thread's
+    /// harness thread, record the binding and run the prompt.
+    async fn start_turn(
+        &self,
+        home: &Arc<Mutex<SandboxHome>>,
+        session_id: &str,
+        text: &str,
+        tools: Vec<String>,
+        prepared: Prepared,
+        sink: &Sink,
+    ) -> Result<(RoundId, HarnessThreadBinding, ThreadContinuity), String> {
+        let executor = Arc::clone(&self.inner.executor);
+        // Skill or tool schema changed since the thread's last turn: restart
+        // the app-server (and its MCP) so the new tools are listed; the
+        // thread is resumed by id below and told what changed.
+        let stale_tools = prepared
+            .dialogue_thread
+            .as_ref()
+            .and_then(|thread| thread.harness.as_ref())
+            .zip(prepared.skill.as_ref())
+            .is_some_and(|(binding, skill)| {
+                binding.skill_sha256.as_deref() != Some(skill.sha256.as_str())
+                    || binding.tool_schema_version != skill.tool_schema_version
+            });
+        if stale_tools && self.opened().contains(session_id) {
+            self.close_harness_session(session_id).await;
+        }
+        executor
+            .open_session(SessionSpec {
+                backend: AgentBackend::Codex,
+                session_key: session_id.to_owned(),
+                workspace: prepared.workspace.clone(),
+                tools_allow: tools,
+                harness: prepared.harness.clone(),
+                round_file: Some(prepared.round_file.clone()),
+                ephemeral: false,
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        self.opened().insert(session_id.to_owned());
+
+        let previous = prepared
+            .dialogue_thread
+            .as_ref()
+            .and_then(|thread| thread.harness.clone())
+            .filter(|binding| binding.backend == BACKEND_LABEL);
+        // A dialogue that already has replies but no harness thread predates
+        // persistent threads.
+        let earlier_replies = prepared
+            .history
+            .iter()
+            .any(|entry| entry.role == TranscriptRole::Agent);
+        let (bound, degraded): (ThreadBinding, Option<String>) = match &previous {
+            Some(previous) => {
+                let state_copy = previous
+                    .rollout_file
+                    .as_ref()
+                    .map(|name| prepared.state_dir.join(name));
+                match executor
+                    .load_thread(
+                        session_id,
+                        LoadThread {
+                            thread_id: previous.thread_id.clone(),
+                            state_copy,
+                        },
+                    )
+                    .await
+                {
+                    Ok(bound) => (bound, None),
+                    Err(error) => (
+                        executor
+                            .new_thread(session_id)
+                            .await
+                            .map_err(|error| error.to_string())?,
+                        Some(format!("Codex 无法续接原线程（{error}）")),
+                    ),
+                }
+            }
+            None => (
+                executor
+                    .new_thread(session_id)
+                    .await
+                    .map_err(|error| error.to_string())?,
+                // A dialogue from before harness threads were persisted.
+                earlier_replies.then(|| "这条对话来自旧版本，没有可续接的 Codex 线程".to_owned()),
+            ),
+        };
+        let rebuilt = bound.continuity == ThreadContinuity::Started && degraded.is_some();
+        if let Some(reason) = &degraded {
+            let note = format!(
+                "上下文已降级：{reason}。本轮起改用新线程，并从对话记录重建最近的上下文；之前轮次的工具结果不会回放。"
+            );
+            let (sid, tid) = (session_id.to_owned(), prepared.thread.clone());
+            if let Ok(entry) = with_home(home, move |home| {
+                home.append_thread_transcript(
+                    &sid,
+                    &tid,
+                    TranscriptRole::System,
+                    &note,
+                    None,
+                    Some("degraded"),
+                )
+            })
+            .await
+            {
+                sink(DialogueUpdate::Transcript {
+                    sandbox_session_id: session_id.to_owned(),
+                    entry,
+                });
+            }
+        }
+        let same_thread = previous
+            .as_ref()
+            .filter(|previous| previous.thread_id == bound.thread_id);
+        let notes = context_notes(&NoteInputs {
+            continuity: bound.continuity,
+            previous: same_thread,
+            workspace: &prepared.workspace,
+            skill: prepared.skill.as_ref(),
+            rebuilt,
+            later_thread: prepared.later_thread,
+            before: same_thread.and(prepared.before.as_ref()),
+            now: prepared.now.as_ref(),
+        });
+        let prompt_text = if rebuilt {
+            build_dialogue_prompt(&prepared.history, text, prepared.later_thread)
+        } else {
+            text.to_owned()
+        };
+        let binding = HarnessThreadBinding {
+            backend: BACKEND_LABEL.to_owned(),
+            thread_id: bound.thread_id.clone(),
+            rollout_file: same_thread.and_then(|previous| previous.rollout_file.clone()),
+            workspace: prepared.workspace.clone(),
+            tool_schema_version: prepared
+                .skill
+                .as_ref()
+                .and_then(|skill| skill.tool_schema_version.clone()),
+            skill_version: prepared
+                .skill
+                .as_ref()
+                .and_then(|skill| skill.version.clone()),
+            skill_sha256: prepared.skill.as_ref().map(|skill| skill.sha256.clone()),
+            last_turn_at: same_thread.and_then(|previous| previous.last_turn_at.clone()),
+        };
+        let round = executor
+            .prompt(
+                session_id,
+                Prompt {
+                    thread_id: bound.thread_id.clone(),
+                    text: prompt_text,
+                    context: notes,
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        // Bind before the turn ends so a crash mid-turn still resumes.
+        let (sid, tid, record) = (
+            session_id.to_owned(),
+            prepared.thread.clone(),
+            binding.clone(),
+        );
+        if let Err(error) = with_home(home, move |home| {
+            home.set_thread_harness(&sid, &tid, Some(record))
+                .map(|_| ())
+        })
+        .await
+        {
+            eprintln!("mathscape: failed to record harness thread: {error}");
+        }
+        Ok((round, binding, bound.continuity))
+    }
+
+    /// After a turn: keep a rollout copy in the session dir, snapshot the
+    /// workspace for the next 「自上轮以来工作区变化」, stamp the binding.
+    async fn persist_thread_state(
+        &self,
+        home: &Arc<Mutex<SandboxHome>>,
+        session_id: &str,
+        thread: &str,
+        binding: &HarnessThreadBinding,
+    ) {
+        let executor = Arc::clone(&self.inner.executor);
+        let (sid, harness_thread) = (session_id.to_owned(), binding.thread_id.clone());
+        let rollout = tauri::async_runtime::spawn_blocking(move || {
+            executor.thread_state_path(&sid, &harness_thread)
+        })
+        .await
+        .ok()
+        .flatten();
+        let (sid, tid, mut binding) = (session_id.to_owned(), thread.to_owned(), binding.clone());
+        let result = with_home(home, move |home| {
+            let state_dir = home.ensure_harness_state_dir(&sid, BACKEND_LABEL)?;
+            if let Some(rollout) = rollout {
+                match keep_rollout_copy(&rollout, &state_dir) {
+                    Ok(name) => binding.rollout_file = Some(name),
+                    Err(error) => eprintln!(
+                        "mathscape: failed to copy rollout {}: {error}",
+                        rollout.display()
+                    ),
+                }
+            }
+            let investigation_id = mathscape_mcp::investigation::sandbox_investigation_id(&sid);
+            match digest_workspace(&binding.workspace, &investigation_id) {
+                Ok(digest) => {
+                    if let Err(error) = save_digest(&state_dir, &tid, &digest) {
+                        eprintln!("mathscape: failed to save workspace digest: {error}");
+                    }
+                }
+                Err(error) => eprintln!("mathscape: workspace digest failed: {error}"),
+            }
+            binding.last_turn_at = Some(mathscape_sandbox::now_rfc3339());
+            home.set_thread_harness(&sid, &tid, Some(binding))
+                .map(|_| ())
+        })
+        .await;
+        if let Err(error) = result {
+            eprintln!("mathscape: failed to persist harness thread state: {error}");
+        }
     }
 
     /// 「新对话」: open a fresh thread on the same isolated copy. Refused
@@ -881,13 +1199,70 @@ mod tests {
         }
     }
 
-    fn dialogue(args: &[&str]) -> SandboxDialogueState {
-        SandboxDialogueState::with_config(CodexConfig {
-            program: fixture_program(),
-            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
-            mcp_program: PathBuf::from("mathscape"),
-            ..CodexConfig::default()
-        })
+    /// Dialogue state on the fixture with its own fake Codex home under the
+    /// fixture root (`codex_home` name lets one test simulate two machines)
+    /// and a request log at `<root>/<codex_home>.log`.
+    fn dialogue_in(fx: &Fixture, codex_home: &str, args: &[&str]) -> SandboxDialogueState {
+        dialogue_with_sink(fx, codex_home, args, mathscape_resident::null_sink())
+    }
+
+    fn dialogue_with_sink(
+        fx: &Fixture,
+        codex_home: &str,
+        args: &[&str],
+        sink: mathscape_resident::EventSink,
+    ) -> SandboxDialogueState {
+        let home = fx.root.join(codex_home);
+        std::fs::create_dir_all(&home).unwrap();
+        let mut all: Vec<String> = vec![
+            "--log".into(),
+            fx.root
+                .join(format!("{codex_home}.log"))
+                .display()
+                .to_string(),
+        ];
+        all.extend(args.iter().map(|arg| (*arg).to_owned()));
+        SandboxDialogueState::with_config_and_sink(
+            CodexConfig {
+                program: fixture_program(),
+                args: all,
+                mcp_program: PathBuf::from("mathscape"),
+                home: Some(home),
+                ..CodexConfig::default()
+            },
+            sink,
+        )
+    }
+
+    fn dialogue(fx: &Fixture, args: &[&str]) -> SandboxDialogueState {
+        dialogue_in(fx, "codex-home", args)
+    }
+
+    /// Inbound requests the fixture logged with `method`.
+    fn logged(fx: &Fixture, codex_home: &str, method: &str) -> Vec<Value> {
+        std::fs::read_to_string(fx.root.join(format!("{codex_home}.log")))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|line| line["method"] == method)
+            .collect()
+    }
+
+    fn send_and_wait(
+        state: &SandboxDialogueState,
+        fx: &Fixture,
+        text: &str,
+    ) -> (SendOutcome, Vec<DialogueUpdate>) {
+        let (sink, updates) = channel_sink();
+        let sent = tauri::async_runtime::block_on(state.send(
+            Arc::clone(&fx.home),
+            fx.session_id.clone(),
+            text.into(),
+            sink,
+        ))
+        .unwrap();
+        let seen = wait_for(&updates, finished);
+        (sent, seen)
     }
 
     fn channel_sink() -> (Sink, mpsc::Receiver<DialogueUpdate>) {
@@ -982,7 +1357,7 @@ mod tests {
     fn round_streams_events_and_records_reply_inside_session() {
         let fx = fixture("round");
         let before = fingerprint_workspace(&fx.checkpoint).unwrap();
-        let state = dialogue(&["app-server"]);
+        let state = dialogue(&fx, &["app-server"]);
         let (sink, updates) = channel_sink();
 
         let sent = tauri::async_runtime::block_on(state.send(
@@ -1024,7 +1399,8 @@ mod tests {
         assert_eq!(reply.round_id.as_deref(), Some(sent.round_id.as_str()));
         assert!(reply.text.ends_with("解释紧集"), "{}", reply.text);
 
-        // Second round replays the first exchange into its prompt.
+        // Second round continues the same Codex thread: no transcript
+        // replay, just the user text plus a turn-context item.
         tauri::async_runtime::block_on(state.send(
             Arc::clone(&fx.home),
             fx.session_id.clone(),
@@ -1033,13 +1409,48 @@ mod tests {
         ))
         .unwrap();
         wait_for(&updates, finished);
+        assert_eq!(logged(&fx, "codex-home", "initialize").len(), 1);
+        assert_eq!(logged(&fx, "codex-home", "thread/start").len(), 1);
+        let turns = logged(&fx, "codex-home", "turn/start");
+        assert_eq!(turns.len(), 2);
+        let first = turns[0]["params"]["input"].as_array().unwrap();
+        let first_context = first[0]["text"].as_str().unwrap();
+        assert!(first_context.contains("<mathscape_turn_context>"));
+        assert!(first_context.contains("沙箱探索会话"));
+        assert!(first_context.contains("SKILL.md"), "{first_context}");
+        assert_eq!(first[1]["text"], "解释紧集");
+        let second = turns[1]["params"]["input"].as_array().unwrap();
+        let second_context = second[0]["text"].as_str().unwrap();
+        assert!(
+            second_context.contains("工作区没有变化"),
+            "{second_context}"
+        );
+        assert!(
+            !second_context.contains("SKILL.md"),
+            "skill read only on turn 1"
+        );
+        assert_eq!(second[1]["text"], "再举个例子");
         let home = fx.home.lock().unwrap();
         let transcript = home.read_transcript(&fx.session_id).unwrap();
         assert_eq!(transcript.len(), 4);
-        assert!(
-            transcript[3].text.contains("[用户] 解释紧集"),
-            "{}",
-            transcript[3].text
+        assert_eq!(transcript[3].text, "再举个例子");
+        let binding = home.dialogue_threads(&fx.session_id).unwrap().threads[0]
+            .harness
+            .clone()
+            .expect("harness binding");
+        assert_eq!(binding.backend, "codex");
+        assert_eq!(binding.thread_id, "thr_fixture");
+        assert!(binding.last_turn_at.is_some());
+        let copy = home
+            .session_dir(&fx.session_id)
+            .join("harness/codex")
+            .join(binding.rollout_file.as_deref().expect("rollout copy"));
+        assert!(copy.is_file(), "{}", copy.display());
+        assert_eq!(
+            std::fs::read_to_string(home.current_round_path(&fx.session_id))
+                .unwrap()
+                .trim(),
+            transcript[3].round_id.as_deref().unwrap()
         );
         assert!(home.events_path(&fx.session_id).is_file());
         let record = home.session(&fx.session_id).unwrap();
@@ -1061,7 +1472,7 @@ mod tests {
     #[test]
     fn new_thread_starts_empty_context_on_same_copy() {
         let fx = fixture("thread");
-        let state = dialogue(&["app-server"]);
+        let state = dialogue(&fx, &["app-server"]);
         let (sink, updates) = channel_sink();
         tauri::async_runtime::block_on(state.send(
             Arc::clone(&fx.home),
@@ -1092,10 +1503,26 @@ mod tests {
         let home = fx.home.lock().unwrap();
         let d2 = home.read_thread_transcript(&fx.session_id, "d2").unwrap();
         assert_eq!(d2.len(), 2, "{d2:?}");
-        // The fixture echoes the prompt: old thread content is not replayed,
-        // and the agent is told the copy may hold earlier state.
-        assert!(!d2[1].text.contains("调试旧功能"), "{}", d2[1].text);
-        assert!(d2[1].text.contains("新开的一条对话"), "{}", d2[1].text);
+        // A new Codex thread: old thread content is not replayed, and the
+        // agent is told the copy may hold earlier state.
+        assert_eq!(d2[1].text, "新问题");
+        let starts = logged(&fx, "codex-home", "thread/start");
+        assert_eq!(starts.len(), 2);
+        let turns = logged(&fx, "codex-home", "turn/start");
+        let last = turns.last().unwrap();
+        assert_eq!(last["params"]["threadId"], "thr_fixture-2");
+        let context = last["params"]["input"][0]["text"].as_str().unwrap();
+        assert!(context.contains("新开的一条对话"), "{context}");
+        assert!(!last.to_string().contains("调试旧功能"));
+        let threads = home.dialogue_threads(&fx.session_id).unwrap().threads;
+        assert_eq!(
+            threads[0].harness.as_ref().unwrap().thread_id,
+            "thr_fixture"
+        );
+        assert_eq!(
+            threads[1].harness.as_ref().unwrap().thread_id,
+            "thr_fixture-2"
+        );
         assert_eq!(home.session_workspace(&fx.session_id), workspace);
         assert_eq!(
             home.read_thread_transcript(&fx.session_id, "d1")
@@ -1108,7 +1535,7 @@ mod tests {
     #[test]
     fn cancel_ends_round_with_system_line_and_blocks_overlap() {
         let fx = fixture("cancel");
-        let state = dialogue(&["--hold", "app-server"]);
+        let state = dialogue(&fx, &["--hold", "app-server"]);
         let (sink, updates) = channel_sink();
         tauri::async_runtime::block_on(state.send(
             Arc::clone(&fx.home),
@@ -1149,7 +1576,7 @@ mod tests {
     #[test]
     fn harness_failure_is_a_system_line_not_a_fake_reply() {
         let fx = fixture("auth");
-        let state = dialogue(&["--reject-auth", "app-server"]);
+        let state = dialogue(&fx, &["--reject-auth", "app-server"]);
         let (sink, updates) = channel_sink();
         let sent = tauri::async_runtime::block_on(state.send(
             Arc::clone(&fx.home),
@@ -1174,7 +1601,7 @@ mod tests {
     #[test]
     fn discard_mid_round_leaves_no_session_bytes() {
         let fx = fixture("discard");
-        let state = dialogue(&["--hold", "app-server"]);
+        let state = dialogue(&fx, &["--hold", "app-server"]);
         let (sink, updates) = channel_sink();
         tauri::async_runtime::block_on(state.send(
             Arc::clone(&fx.home),
@@ -1203,7 +1630,7 @@ mod tests {
     #[test]
     fn rejects_empty_and_oversized_messages() {
         let fx = fixture("limits");
-        let state = dialogue(&["app-server"]);
+        let state = dialogue(&fx, &["app-server"]);
         let (sink, _updates) = channel_sink();
         for text in ["   ".to_owned(), "长".repeat(MAX_MESSAGE_CHARS + 1)] {
             let result = tauri::async_runtime::block_on(state.send(
@@ -1217,5 +1644,204 @@ mod tests {
         assert!(state.active().is_empty());
         let home = fx.home.lock().unwrap();
         assert!(home.read_transcript(&fx.session_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn app_server_lifecycle_goes_to_the_resident_process_log() {
+        let fx = fixture("resident-log");
+        let log = crate::resident_log::log_file(Some(&fx.root.join("logs"))).unwrap();
+        let state = dialogue_with_sink(
+            &fx,
+            "codex-home",
+            &["app-server"],
+            crate::resident_log::jsonl_sink(Some(log.clone())),
+        );
+        send_and_wait(&state, &fx, "你好");
+        tauri::async_runtime::block_on(state.close_harness_session(&fx.session_id));
+        let lines: Vec<Value> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let instance = format!("codex-app-server:{}", fx.session_id);
+        let kinds: Vec<&str> = lines
+            .iter()
+            .inspect(|line| {
+                assert_eq!(line["schema"], "mathscape.resident_event.v0");
+                assert_eq!(line["event"]["instance"], instance.as_str());
+            })
+            .map(|line| line["event"]["kind"].as_str().unwrap())
+            .collect();
+        for kind in ["spawn", "ready", "shutdown", "exit"] {
+            assert!(kinds.contains(&kind), "{kind} missing in {kinds:?}");
+        }
+        let spawn = lines
+            .iter()
+            .find(|l| l["event"]["kind"] == "spawn")
+            .unwrap();
+        assert!(spawn["event"]["pid"].as_u64().is_some());
+        // The key names the session (Debug-formatted, like Loogle's).
+        assert!(
+            spawn["event"]["key"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("{}#", fx.session_id))
+        );
+        state.close_all();
+    }
+
+    #[test]
+    fn skill_change_restarts_the_app_server_and_tells_the_agent() {
+        let fx = fixture("skill-change");
+        let state = dialogue(&fx, &["app-server"]);
+        send_and_wait(&state, &fx, "记住 X");
+        if load_worknet_skill(&locate_skills_root().unwrap()).is_err() {
+            state.close_all();
+            return;
+        }
+        // Pretend the last turn ran with an older skill.
+        {
+            let home = fx.home.lock().unwrap();
+            let threads = home.dialogue_threads(&fx.session_id).unwrap();
+            let active = threads
+                .threads
+                .iter()
+                .find(|t| t.thread_id == threads.active_thread_id)
+                .unwrap();
+            let mut binding = active.harness.clone().expect("bound after a turn");
+            binding.skill_sha256 = Some("old".into());
+            binding.skill_version = Some("0.0.1".into());
+            home.set_thread_harness(&fx.session_id, &active.thread_id, Some(binding))
+                .unwrap();
+        }
+        send_and_wait(&state, &fx, "X 是什么");
+        // A fresh app-server (new handshake) resumed the same thread.
+        assert_eq!(logged(&fx, "codex-home", "initialize").len(), 2);
+        let resume = logged(&fx, "codex-home", "thread/resume");
+        assert_eq!(resume.len(), 1);
+        assert_eq!(resume[0]["params"]["threadId"], "thr_fixture");
+        let turns = logged(&fx, "codex-home", "turn/start");
+        let input = turns.last().unwrap()["params"]["input"].to_string();
+        assert!(input.contains("工具/skill 已更新到"), "{input}");
+        assert!(input.contains("0.0.1"), "{input}");
+        state.close_all();
+    }
+
+    #[test]
+    fn closed_session_resumes_the_thread_and_restores_on_another_machine() {
+        let fx = fixture("resume");
+        let state = dialogue(&fx, &["app-server"]);
+        send_and_wait(&state, &fx, "记住 X");
+        // Discard-free close (session switch / app exit).
+        tauri::async_runtime::block_on(state.close_harness_session(&fx.session_id));
+        let (_, seen) = send_and_wait(&state, &fx, "X 是什么");
+        assert!(!seen.iter().any(|u| matches!(
+            u,
+            DialogueUpdate::Transcript { entry, .. } if entry.text.contains("上下文已降级")
+        )));
+        let resume = logged(&fx, "codex-home", "thread/resume");
+        assert_eq!(resume.len(), 1);
+        assert_eq!(resume[0]["params"]["threadId"], "thr_fixture");
+        assert_eq!(logged(&fx, "codex-home", "thread/start").len(), 1);
+        state.close_all();
+
+        // Another machine: empty Codex home; the session dir's rollout copy
+        // is restored and the same thread continues.
+        let other = dialogue_in(&fx, "other-home", &["app-server"]);
+        send_and_wait(&other, &fx, "继续");
+        assert_eq!(logged(&fx, "other-home", "thread/start").len(), 0);
+        // First by id (not in this home), then after restoring the copy.
+        assert_eq!(logged(&fx, "other-home", "thread/resume").len(), 2);
+        let restored = fx.root.join("other-home/sessions/mathscape");
+        assert!(
+            std::fs::read_dir(&restored).unwrap().next().is_some(),
+            "rollout restored under {}",
+            restored.display()
+        );
+        let home = fx.home.lock().unwrap();
+        let transcript = home.read_transcript(&fx.session_id).unwrap();
+        assert!(!transcript.iter().any(|e| e.text.contains("上下文已降级")));
+        other.close_all();
+    }
+
+    #[test]
+    fn lost_harness_thread_degrades_to_a_rebuilt_prompt_with_a_notice() {
+        let fx = fixture("degraded");
+        let state = dialogue(&fx, &["app-server"]);
+        send_and_wait(&state, &fx, "第一问");
+        {
+            // The Codex thread is gone and no copy exists.
+            let home = fx.home.lock().unwrap();
+            let mut binding = home.dialogue_threads(&fx.session_id).unwrap().threads[0]
+                .harness
+                .clone()
+                .unwrap();
+            binding.thread_id = "thr_missing".into();
+            binding.rollout_file = None;
+            home.set_thread_harness(&fx.session_id, "d1", Some(binding))
+                .unwrap();
+        }
+        tauri::async_runtime::block_on(state.close_harness_session(&fx.session_id));
+        send_and_wait(&state, &fx, "第二问");
+        let home = fx.home.lock().unwrap();
+        let transcript = home.read_transcript(&fx.session_id).unwrap();
+        let notice = transcript
+            .iter()
+            .find(|entry| entry.text.starts_with("上下文已降级"))
+            .expect("degraded notice");
+        assert_eq!(notice.role, TranscriptRole::System);
+        assert_eq!(notice.outcome.as_deref(), Some("degraded"));
+        // The fixture echoes the rebuilt prompt: it carries the history.
+        let reply = transcript.last().unwrap();
+        assert_eq!(reply.role, TranscriptRole::Agent);
+        assert!(reply.text.contains("[用户] 第一问"), "{}", reply.text);
+        assert!(reply.text.ends_with("第二问"));
+        let binding = home.dialogue_threads(&fx.session_id).unwrap().threads[0]
+            .harness
+            .clone()
+            .unwrap();
+        assert_ne!(binding.thread_id, "thr_missing");
+        drop(home);
+        state.close_all();
+    }
+
+    #[test]
+    fn legacy_dialogue_without_binding_is_rebuilt_once() {
+        let fx = fixture("legacy");
+        {
+            let home = fx.home.lock().unwrap();
+            home.append_thread_transcript(
+                &fx.session_id,
+                "d1",
+                TranscriptRole::User,
+                "旧问题",
+                None,
+                None,
+            )
+            .unwrap();
+            home.append_thread_transcript(
+                &fx.session_id,
+                "d1",
+                TranscriptRole::Agent,
+                "旧回答",
+                Some("old-round"),
+                Some("completed"),
+            )
+            .unwrap();
+        }
+        let state = dialogue(&fx, &["app-server"]);
+        send_and_wait(&state, &fx, "新问题");
+        send_and_wait(&state, &fx, "再问");
+        let home = fx.home.lock().unwrap();
+        let transcript = home.read_transcript(&fx.session_id).unwrap();
+        let notices = transcript
+            .iter()
+            .filter(|entry| entry.text.starts_with("上下文已降级"))
+            .count();
+        assert_eq!(notices, 1, "{transcript:?}");
+        let last = transcript.last().unwrap();
+        assert_eq!(last.text, "再问", "second turn continues the new thread");
+        drop(home);
+        state.close_all();
     }
 }

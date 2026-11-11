@@ -103,7 +103,7 @@ pub(crate) fn approval_plan(method: &str, params: &Value, allow: &[String]) -> A
             json!({
                 "contentItems": [{
                     "type": "inputText",
-                    "text": "沙箱不执行 Codex 动态工具，请使用 mathscape MCP 的只读工具。"
+                    "text": "沙箱不执行 Codex 动态工具，请使用 mathscape MCP 工具。"
                 }],
                 "success": false
             }),

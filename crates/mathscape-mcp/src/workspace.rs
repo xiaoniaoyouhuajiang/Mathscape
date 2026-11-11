@@ -24,6 +24,9 @@ pub enum WorkspaceOpenError {
 pub struct McpWorkspace {
     root: WorkspaceRoot,
     round: Option<String>,
+    /// `--round-file`: a long-lived MCP process (one per harness session)
+    /// reads the current round token from this file on every call.
+    round_file: Option<PathBuf>,
     investigation: Option<String>,
     capability_runner: Box<dyn CommandRunner>,
     ensure_policy: EnsurePolicy,
@@ -39,6 +42,7 @@ impl McpWorkspace {
         Ok(Self {
             root,
             round: None,
+            round_file: None,
             investigation: std::env::var("MATHSCAPE_INVESTIGATION_ID")
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
@@ -52,6 +56,14 @@ impl McpWorkspace {
     /// write-like staging tools require a non-empty bound token.
     pub fn with_round(mut self, round: Option<String>) -> Self {
         self.round = round;
+        self
+    }
+
+    /// `--round-file <path>`: 常驻 MCP 进程（跟着一个 harness 会话活）每次
+    /// 工具调用时从这个文件读当前 round token（适配器在每轮 `turn/start`
+    /// 之前写入）。文件缺失或为空时回到 `--round` 的值。
+    pub fn with_round_file(mut self, path: Option<PathBuf>) -> Self {
+        self.round_file = path;
         self
     }
 
@@ -95,8 +107,17 @@ impl McpWorkspace {
         self.root.path()
     }
 
-    pub fn round(&self) -> Option<&str> {
-        self.round.as_deref()
+    /// Current round token: the round file's first line when set and
+    /// non-empty, otherwise the fixed `--round` value.
+    pub fn round(&self) -> Option<String> {
+        if let Some(path) = &self.round_file
+            && let Ok(text) = std::fs::read_to_string(path)
+            && let Some(line) = text.lines().next().map(str::trim)
+            && !line.is_empty()
+        {
+            return Some(line.to_owned());
+        }
+        self.round.clone()
     }
 
     pub fn investigation(&self) -> Option<&str> {

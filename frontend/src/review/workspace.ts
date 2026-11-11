@@ -7,7 +7,7 @@ import {
   acceptanceLabel, anchorPurposeLabel, completenessLabel, factStatusLabel, issueKindLabel,
   referenceStatusLabel, relationLabel, unitKindLabel, workflowStatusLabel,
 } from "./labels";
-import { ReviewGraph } from "./review-graph";
+import { ReviewGraph, type ReviewGraphExternal } from "./review-graph";
 import type { DiscoveryAcceptanceOutcome, DiscoveryOutcome, DiscoveryRun, ReviewRunMeta, SourceReviewProjection } from "./types";
 import { eventBus } from "../core/events";
 import { shortStableId } from "../core/stable-id";
@@ -15,7 +15,7 @@ import "./review.css";
 import { openSourceRegistrationReview } from "../discovery/registration-workspace";
 import {
   debtView, dependentsIndex, diagnosticLabel, discardPreview, impactSummary, keyOf, proposalDebts, stateLabel,
-  targetDiagnosticGroups, titleOf, type ImpactPreview, type PendingChangeSet, type ProposalWorkspaceMeta,
+  targetDiagnosticGroups, titleOf, type ImpactPreview, type OverviewRelation, type PendingChangeSet, type ProposalWorkspaceMeta,
 } from "./proposal-model";
 import { renderDiscardConfirm } from "./proposal-discard";
 
@@ -372,7 +372,33 @@ export class DiscoveryReviewWorkspace {
   }
 
   private title(ref: string): string {
-    return this.model?.unitByRef.get(ref)?.title ?? ref;
+    return this.model?.unitByRef.get(ref)?.title ?? this.meta.proposal?.overview.title(ref) ?? ref;
+  }
+
+  /** Proposal view: where a relation end lives relative to the shown snapshot. */
+  private relationEndTag(ref: string): string | null {
+    const proposal = this.meta.proposal;
+    if (!proposal || this.model?.unitByRef.has(ref)) return null;
+    const group = proposal.overview.groupOf(ref);
+    return group === null ? "已有对象" : `跨快照 · 快照 ${group + 1}/${proposal.groupCount}`;
+  }
+
+  /** Relation ends not among the shown units, drawn as dashed external nodes. */
+  private externalEnds(): ReviewGraphExternal[] {
+    const proposal = this.meta.proposal;
+    if (!proposal) return [];
+    const model = this.model!;
+    const ends = new Map<string, ReviewGraphExternal>();
+    for (const relation of model.relations) {
+      for (const ref of [relation.source, relation.target]) {
+        if (!ref || model.unitByRef.has(ref) || ends.has(ref)) continue;
+        const group = proposal.overview.groupOf(ref);
+        ends.set(ref, group === null
+          ? { ref, label: `${this.title(ref)}（已有）`, kind: "existing" }
+          : { ref, label: `${this.title(ref)}（快照 ${group + 1}）`, kind: "cross" });
+      }
+    }
+    return [...ends.values()];
   }
 
   private unitTarget(unit: WUnit): Target {
@@ -542,9 +568,9 @@ export class DiscoveryReviewWorkspace {
     const model = this.model!;
     const tabs: [Tab, string][] = [
       ["overview", "总览"],
-      ["units", `单元 ${model.units.length}`],
+      ["units", `${this.snapshotScope()}单元 ${model.units.length}`],
       ["references", `引用 ${model.references.length}`],
-      ["relations", `关系 ${model.relations.length}`],
+      ["relations", `${this.snapshotScope()}关系 ${model.relations.length}`],
       ["diagnostics", `诊断 ${model.issues.length + model.diagnostics.length}`],
       ["graph", "局部结构图"],
     ];
@@ -555,6 +581,11 @@ export class DiscoveryReviewWorkspace {
       item.setAttribute("aria-selected", String(tab === this.tab));
       return item;
     }));
+  }
+
+  /** Tab prefix when a proposal spans several snapshots: the tabs count only the shown one. */
+  private snapshotScope(): string {
+    return (this.meta.proposal?.groupCount ?? 1) > 1 ? "本快照" : "";
   }
 
   private renderList(): void {
@@ -728,9 +759,12 @@ export class DiscoveryReviewWorkspace {
     }
     for (const relation of this.model!.relations) {
       const item = el("article", "review-item review-relation");
+      const tags = [...new Set([this.relationEndTag(relation.source), this.relationEndTag(relation.target)].filter((tag): tag is string => tag !== null))];
+      item.classList.toggle("is-cross", tags.some(tag => tag.startsWith("跨快照")));
       item.append(
         el("strong", "", `${this.title(relation.source)} —${relationLabel(relation.relation)}→ ${this.title(relation.target)}`),
         el("span", "review-item-meta", `${relation.evidence.length} 处证据${relation.bases.length > 0 ? ` · ${relation.bases.join("；")}` : ""}`),
+        ...tags.map(tag => el("span", `review-relation-tag${tag.startsWith("跨快照") ? " is-cross-tag" : ""}`, tag)),
       );
       this.bindTarget(item, () => this.relationTarget(relation));
       this.list.append(item);
@@ -836,6 +870,7 @@ export class DiscoveryReviewWorkspace {
         },
         leave: () => this.unhover(),
       },
+      this.externalEnds(),
     );
     this.graph.setSelected(this.selected);
     if (this.evidenceMode) this.graph.setEvidence(evidenceItems());
@@ -1125,8 +1160,18 @@ export class DiscoveryReviewWorkspace {
       return box;
     };
     const debts = proposalDebts(item);
-    summary.append(stat(model.units.length, "单元"), stat(model.relations.length, "关系"), stat(debts.length, "Debt"));
-    this.list.append(summary, el("p", "review-note",
+    const overview = proposal.overview;
+    // Totals are change-set-wide; the shown snapshot only gets its own line.
+    summary.classList.add("review-proposal-totals");
+    summary.append(stat(overview.units, "单元"), stat(overview.relations, "关系"), stat(debts.length, "Debt"));
+    this.list.append(summary, el("p", "review-note review-proposal-scope",
+      `以上为整份提案（v${item.version}）的总数${overview.spans ? `，另含 ${overview.spans} 处原文证据` : ""}${proposal.groupCount > 1 ? `，分布在 ${proposal.groupCount} 个快照` : ""}。`));
+    const shown = overview.groups[proposal.groupIndex];
+    if (shown) {
+      this.list.append(el("p", "review-snapshot-scope",
+        `${proposal.groupCount > 1 ? `快照 ${proposal.groupIndex + 1}/${proposal.groupCount} · ` : ""}本快照 ${shown.units} 单元 / ${shown.relations} 关系${shown.crossRelations ? `（其中 ${shown.crossRelations} 条跨快照）` : ""}`));
+    }
+    this.list.append(el("p", "review-note",
       "提案按整个 change set 接受或丢弃。接受只表示写入当前工作区地图，不提升 Trust，也不代表数学上已验证。"));
     if (item.proposal.rationale) this.list.append(el("p", "review-proposal-rationale", item.proposal.rationale));
     if (this.stale) this.list.append(el("p", "review-warning", this.stale));
@@ -1158,14 +1203,17 @@ export class DiscoveryReviewWorkspace {
       }
     }
     if (proposal.groupCount > 1) {
-      const switcher = el("div", "review-graph-controls");
-      for (let index = 0; index < proposal.groupCount; index++) {
-        const choice = button(`快照 ${index + 1}`, () => void proposal.controller.open(keyOf(item), index));
-        choice.setAttribute("aria-pressed", String(index === proposal.groupIndex));
+      const switcher = el("div", "review-graph-controls review-snapshot-switcher");
+      for (const group of overview.groups) {
+        const choice = button(`快照 ${group.index + 1}/${proposal.groupCount}`, () => void proposal.controller.open(keyOf(item), group.index));
+        choice.append(el("small", "review-snapshot-counts", ` · ${group.units} 单元 / ${group.relations} 关系`));
+        choice.title = `本快照 ${group.units} 单元 / ${group.relations} 关系${group.crossRelations ? `，${group.crossRelations} 条跨快照` : ""}${group.artifact ? ` · ${group.artifact}` : ""}`;
+        choice.setAttribute("aria-pressed", String(group.index === proposal.groupIndex));
         switcher.append(choice);
       }
       this.list.append(el("h4", "review-subheading", `本提案涉及 ${proposal.groupCount} 个快照`), switcher);
     }
+    this.renderProposalRelations(proposal);
 
     // Dependencies both ways.
     const dependents = dependentsIndex(items).get(keyOf(item)) ?? [];
@@ -1216,6 +1264,72 @@ export class DiscoveryReviewWorkspace {
         this.list.append(card);
       }
     }
+  }
+
+  /** Every relation of the change set, across snapshots, with a small graph. */
+  private renderProposalRelations(proposal: ProposalWorkspaceMeta): void {
+    const { item, overview } = proposal;
+    this.list.append(el("h4", "review-subheading", `节点关系 ${overview.relations}（整份提案）`));
+    if (overview.relationList.length === 0) {
+      this.list.append(el("p", "review-empty", "本提案没有来源关系。"));
+      return;
+    }
+    const list = el("ul", "review-proposal-relations");
+    const where = (relation: OverviewRelation) => {
+      const tags: string[] = [];
+      if (relation.crossSnapshot) tags.push(`跨快照 · 快照 ${relation.source.group! + 1} → ${relation.target.group! + 1}`);
+      else if (relation.source.group !== null && proposal.groupCount > 1) tags.push(`快照 ${relation.source.group + 1}`);
+      if (relation.source.origin === "existing" || relation.target.origin === "existing") tags.push("连接已有对象");
+      if (relation.op !== "create") tags.push(relation.op === "edit" ? "修改" : relation.op);
+      return tags;
+    };
+    for (const relation of overview.relationList) {
+      const row = el("li", `review-proposal-relation${relation.crossSnapshot ? " is-cross" : ""}`);
+      const end = (endpoint: OverviewRelation["source"]) => el("span", `review-relation-end origin-${endpoint.origin}`, endpoint.title || "（未命名）");
+      const line = el("span", "review-relation-line");
+      line.append(end(relation.source), el("span", "review-relation-kind", ` —${relationLabel(relation.relation)}→ `), end(relation.target));
+      row.append(line, ...where(relation).map(tag => el("span", `review-relation-tag${tag.startsWith("跨快照") ? " is-cross-tag" : ""}`, tag)));
+      const group = relation.source.group ?? relation.target.group;
+      if (group !== null && group !== proposal.groupIndex) {
+        row.append(button(`到快照 ${group + 1}`, () => void proposal.controller.open(keyOf(item), group), "review-relation-jump"));
+      }
+      list.append(row);
+    }
+    this.list.append(list);
+    if (overview.unitList.length >= GRAPH_UNIT_LIMIT) {
+      this.list.append(el("p", "review-note", `本提案有 ${overview.unitList.length} 个单元，关系图从略；切到各快照的「局部结构图」查看。`));
+      return;
+    }
+    const legend = el("div", "review-graph-legend");
+    legend.append(el("span", "review-legend-item", "本提案单元"), el("span", "review-legend-item is-external", "已有对象"),
+      el("span", "review-legend-item is-cross", "跨快照关系（虚线）"));
+    const container = el("div", "review-graph review-proposal-graph");
+    this.list.append(legend, container);
+    const state = item.state === "staged" ? "selectable" as const : "blocked" as const;
+    const existing = new Map<string, ReviewGraphExternal>();
+    for (const relation of overview.relationList) {
+      for (const endpoint of [relation.source, relation.target]) {
+        if (endpoint.origin === "existing" && endpoint.ref && !existing.has(endpoint.ref)) {
+          existing.set(endpoint.ref, { ref: endpoint.ref, label: `${endpoint.title}（已有）`, kind: "existing" });
+        }
+      }
+    }
+    this.graph = new ReviewGraph(
+      container,
+      overview.unitList.map(unit => ({ ref: unit.ref, label: proposal.groupCount > 1 ? `${unit.title}（快照 ${unit.group + 1}）` : unit.title, state })),
+      [],
+      overview.relationList.map(relation => ({ id: relation.ref, source: relation.source.ref, target: relation.target.ref, label: relationLabel(relation.relation), cross: relation.crossSnapshot })),
+      {
+        unit: (ref, hover) => {
+          const group = overview.groupOf(ref);
+          if (!hover && group !== null && group !== proposal.groupIndex) void proposal.controller.open(keyOf(item), group);
+        },
+        relation: () => {},
+        evidence: () => {},
+        leave: () => {},
+      },
+      [...existing.values()],
+    );
   }
 
   private renderProposalFooter(proposal: ProposalWorkspaceMeta): void {

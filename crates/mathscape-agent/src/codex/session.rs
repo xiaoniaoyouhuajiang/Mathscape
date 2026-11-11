@@ -1,46 +1,34 @@
-//! Spawn `codex app-server` and drive one round over stdio JSON-RPC.
+//! [`CodexExecutor`]: the ACP-shaped [`AgentExecutor`] over long-lived
+//! `codex app-server` processes (one per [`SessionSpec::session_key`],
+//! driven by [`super::host`]), plus the JSON-RPC message builders.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use futures::channel::mpsc as futures_mpsc;
+use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
+use mathscape_resident::{EventSink, null_sink};
 use serde_json::{Value, json};
 
-use super::approval::{
-    APPROVAL_TIMEOUT, ApprovalPlan, SANDBOX_APPROVAL_POLICY, approval_event_raw, approval_plan,
-    enabled_tools, timeout_plan,
-};
-use super::map::{
-    CodexEventMapper, classify_codex_failure, mcp_ready_thread, mcp_status_list_message,
-};
+use super::approval::{APPROVAL_TIMEOUT, SANDBOX_APPROVAL_POLICY, enabled_tools};
+use super::host::{HostCommand, HostHandle, PromptJob, spawn_host};
 use crate::{
-    AgentBackend, AgentError, AgentEvent, AgentExecutor, Capability, CapabilityProbe,
-    CommandRunner, ErrorCode, HarnessContext, RoundId, StartRoundRequest, SystemCommandRunner,
+    AgentBackend, AgentError, AgentEvent, AgentExecutor, ApprovalHandler, Capability,
+    CapabilityProbe, CommandRunner, ContextNote, ErrorCode, HarnessContext, LoadThread,
+    PolicyApprovals, Prompt, RoundId, SessionSpec, SystemCommandRunner, ThreadBinding,
     probe_program,
 };
 
-const INITIALIZE_ID: u64 = 1;
-const THREAD_START_ID: u64 = 2;
-const TURN_START_ID: u64 = 3;
-/// `skills/extraRoots/set`, sent before `thread/start` when the round has skills.
-const SKILL_ROOTS_ID: u64 = 4;
-const STDERR_TAIL: usize = 4 * 1024;
-/// Upper bound between SIGTERM and SIGKILL for the app-server process group.
-const TERM_GRACE: Duration = Duration::from_secs(2);
-/// Upper bound for joining the stderr reader after the group is dead. A
-/// process that escaped the group (e.g. `setsid`) may still hold the pipe;
-/// the reader is then detached instead of blocking the session thread.
-const READER_JOIN: Duration = Duration::from_secs(2);
+/// `serviceName` / `threadSource` on threads Mathscape starts.
+pub(crate) const SERVICE_NAME: &str = "mathscape";
+/// How long `close_all` waits for each session to stop.
+const CLOSE_WAIT: Duration = Duration::from_secs(6);
 
 /// How [`CodexExecutor`] locates the Codex CLI and the Mathscape MCP binary.
 ///
@@ -55,16 +43,21 @@ pub struct CodexConfig {
     pub args: Vec<String>,
     /// `mathscape` binary registered as MCP server `mathscape`.
     pub mcp_program: PathBuf,
-    /// Bound for `initialize` + `thread/start` + `turn/start` acceptance.
-    /// The model run itself is not capped here.
+    /// Bound for `initialize`, `thread/start|resume` and `turn/start`
+    /// acceptance. The model run itself is not capped here.
     pub handshake_timeout: Duration,
     /// After `turn/interrupt`, how long to wait before killing the child.
     pub interrupt_grace: Duration,
     /// Unclassified approval requests are declined after this long.
     /// Default [`APPROVAL_TIMEOUT`] (60s). The dialogue shows 「等待审批已超时」.
     pub approval_timeout: Duration,
-    /// Override for Codex home (`config.toml` / `models_cache.json`).
-    /// `None` → `$CODEX_HOME` or `~/.codex`. Tests pass a temp dir.
+    /// A session's app-server is stopped after this long without a turn
+    /// (default 15 min; `None` keeps it until closed).
+    pub idle_timeout: Option<Duration>,
+    /// Override for Codex home (`config.toml` / `models_cache.json` /
+    /// `sessions/`). `None` → `$CODEX_HOME` or `~/.codex` and the child's
+    /// environment is left alone. Tests pass a temp dir; then the child gets
+    /// `CODEX_HOME` set to it.
     pub home: Option<PathBuf>,
 }
 
@@ -77,6 +70,7 @@ impl Default for CodexConfig {
             handshake_timeout: Duration::from_secs(20),
             interrupt_grace: Duration::from_secs(5),
             approval_timeout: APPROVAL_TIMEOUT,
+            idle_timeout: Some(Duration::from_secs(15 * 60)),
             home: None,
         }
     }
@@ -85,27 +79,19 @@ impl Default for CodexConfig {
 struct Shared {
     config: CodexConfig,
     runner: Arc<dyn CommandRunner>,
+    approvals: Arc<dyn ApprovalHandler>,
+    sink: EventSink,
+    sessions: Mutex<HashMap<String, HostHandle>>,
     rounds: Mutex<HashMap<RoundId, RoundSlot>>,
     next_round: AtomicU64,
 }
 
 struct RoundSlot {
     bus: Arc<EventBus>,
-    cancel: Sender<SessionCommand>,
+    session_key: String,
 }
 
-enum SessionCommand {
-    Cancel,
-}
-
-struct PendingApproval {
-    id: Value,
-    method: String,
-    params: Value,
-    deadline: Instant,
-}
-
-/// Local Codex backend. One app-server process per round.
+/// Local Codex backend: one long-lived app-server per harness session.
 pub struct CodexExecutor {
     shared: Arc<Shared>,
 }
@@ -120,10 +106,125 @@ impl CodexExecutor {
             shared: Arc::new(Shared {
                 config,
                 runner,
+                approvals: Arc::new(PolicyApprovals),
+                sink: null_sink(),
+                sessions: Mutex::new(HashMap::new()),
                 rounds: Mutex::new(HashMap::new()),
                 next_round: AtomicU64::new(0),
             }),
         }
+    }
+
+    fn shared_mut(&mut self) -> &mut Shared {
+        Arc::get_mut(&mut self.shared).expect("configure CodexExecutor before sharing it")
+    }
+
+    /// Host approval callback (ACP `session/request_permission`).
+    #[must_use]
+    pub fn with_approvals(mut self, approvals: Arc<dyn ApprovalHandler>) -> Self {
+        self.shared_mut().approvals = approvals;
+        self
+    }
+
+    /// Lifecycle events of the app-server processes (spawn / ready /
+    /// idle_reclaim / exit …), e.g. into `resident-processes.jsonl`.
+    #[must_use]
+    pub fn with_event_sink(mut self, sink: EventSink) -> Self {
+        self.shared_mut().sink = sink;
+        self
+    }
+
+    /// Process ids of running app-servers, by session key (diagnostics/tests).
+    pub fn live_sessions(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self
+            .shared
+            .sessions
+            .lock()
+            .expect("codex sessions")
+            .iter()
+            .filter(|(_, handle)| handle.alive.load(Ordering::Acquire))
+            .map(|(key, _)| key.clone())
+            .collect();
+        keys.sort();
+        keys
+    }
+}
+
+impl Drop for CodexExecutor {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.shared) == 1 {
+            self.close_all();
+        }
+    }
+}
+
+fn session_ended(key: &str) -> AgentError {
+    harness(
+        ErrorCode::Internal,
+        format!("codex session {key} ended before answering"),
+    )
+}
+
+impl Shared {
+    fn handle(&self, key: &str) -> Result<mpsc::Sender<HostCommand>, AgentError> {
+        let sessions = self.sessions.lock().expect("codex sessions");
+        match sessions.get(key) {
+            Some(handle) if handle.alive.load(Ordering::Acquire) => Ok(handle.tx.clone()),
+            _ => Err(AgentError::UnknownSession(key.to_owned())),
+        }
+    }
+
+    fn open(&self, spec: SessionSpec) -> Result<(), AgentError> {
+        if spec.backend != AgentBackend::Codex {
+            return Err(AgentError::BackendMismatch {
+                served: AgentBackend::Codex,
+                requested: spec.backend,
+            });
+        }
+        let mut sessions = self.sessions.lock().expect("codex sessions");
+        if let Some(handle) = sessions.get_mut(&spec.session_key)
+            && handle.alive.load(Ordering::Acquire)
+        {
+            if handle.spec != spec {
+                handle.spec = spec.clone();
+                if handle
+                    .tx
+                    .send(HostCommand::Update(Box::new(spec.clone())))
+                    .is_ok()
+                {
+                    return Ok(());
+                }
+            } else {
+                return Ok(());
+            }
+        }
+        let probe = probe_program(
+            self.runner.as_ref(),
+            Capability::Codex,
+            &self.config.program,
+        );
+        if !probe.is_available() {
+            return Err(AgentError::CapabilityUnavailable(probe));
+        }
+        let alive = Arc::new(AtomicBool::new(true));
+        let tx = spawn_host(
+            self.config.clone(),
+            spec.clone(),
+            Arc::clone(&self.approvals),
+            self.sink.clone(),
+            Arc::clone(&alive),
+        )?;
+        sessions.insert(spec.session_key.clone(), HostHandle { tx, spec, alive });
+        Ok(())
+    }
+
+    fn next_round_id(&self) -> RoundId {
+        let n = self.next_round.fetch_add(1, Ordering::Relaxed) + 1;
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        RoundId::parse(format!("codex-{millis}-{n}")).expect("round id has no whitespace")
     }
 }
 
@@ -132,12 +233,138 @@ impl AgentExecutor for CodexExecutor {
         AgentBackend::Codex
     }
 
-    fn start_round(
+    fn open_session(&self, spec: SessionSpec) -> BoxFuture<'_, Result<(), AgentError>> {
+        let result = self.shared.open(spec);
+        Box::pin(async move { result })
+    }
+
+    fn new_thread(&self, session_key: &str) -> BoxFuture<'_, Result<ThreadBinding, AgentError>> {
+        let key = session_key.to_owned();
+        Box::pin(async move {
+            let tx = self.shared.handle(&key)?;
+            let (reply, rx) = oneshot::channel();
+            tx.send(HostCommand::NewThread(reply))
+                .map_err(|_| session_ended(&key))?;
+            rx.await.map_err(|_| session_ended(&key))?
+        })
+    }
+
+    fn load_thread(
         &self,
-        request: StartRoundRequest,
+        session_key: &str,
+        load: LoadThread,
+    ) -> BoxFuture<'_, Result<ThreadBinding, AgentError>> {
+        let key = session_key.to_owned();
+        Box::pin(async move {
+            let tx = self.shared.handle(&key)?;
+            let (reply, rx) = oneshot::channel();
+            tx.send(HostCommand::LoadThread(load, reply))
+                .map_err(|_| session_ended(&key))?;
+            rx.await.map_err(|_| session_ended(&key))?
+        })
+    }
+
+    fn prompt(
+        &self,
+        session_key: &str,
+        prompt: Prompt,
     ) -> BoxFuture<'_, Result<RoundId, AgentError>> {
-        let shared = Arc::clone(&self.shared);
-        Box::pin(async move { start_round(shared, request).await })
+        let key = session_key.to_owned();
+        Box::pin(async move {
+            let tx = self.shared.handle(&key)?;
+            let round_id = self.shared.next_round_id();
+            let bus = Arc::new(EventBus::new());
+            self.shared.rounds.lock().expect("codex rounds").insert(
+                round_id.clone(),
+                RoundSlot {
+                    bus: Arc::clone(&bus),
+                    session_key: key.clone(),
+                },
+            );
+            let (reply, rx) = oneshot::channel();
+            let sent = tx.send(HostCommand::Prompt(Box::new(PromptJob {
+                prompt,
+                round_id: round_id.clone(),
+                bus,
+                reply,
+            })));
+            let result = match sent {
+                Ok(()) => rx.await.unwrap_or_else(|_| Err(session_ended(&key))),
+                Err(_) => Err(session_ended(&key)),
+            };
+            match result {
+                Ok(()) => Ok(round_id),
+                Err(error) => {
+                    self.shared
+                        .rounds
+                        .lock()
+                        .expect("codex rounds")
+                        .remove(&round_id);
+                    Err(error)
+                }
+            }
+        })
+    }
+
+    fn thread_state_path(&self, session_key: &str, thread_id: &str) -> Option<PathBuf> {
+        if let Ok(tx) = self.shared.handle(session_key) {
+            let (reply, rx) = mpsc::channel();
+            if tx
+                .send(HostCommand::StatePath(thread_id.to_owned(), reply))
+                .is_ok()
+                && let Ok(path) = rx.recv_timeout(Duration::from_secs(5))
+            {
+                return path;
+            }
+        }
+        let home = super::model::codex_home(self.shared.config.home.as_deref())?;
+        super::rollout::find_rollout(&home, thread_id)
+    }
+
+    fn close_session(&self, session_key: &str) -> BoxFuture<'_, Result<(), AgentError>> {
+        let handle = self
+            .shared
+            .sessions
+            .lock()
+            .expect("codex sessions")
+            .remove(session_key);
+        Box::pin(async move {
+            if let Some(handle) = handle {
+                let (ack, rx) = oneshot::channel();
+                if handle.tx.send(HostCommand::Close(Some(ack))).is_ok() {
+                    let _ = rx.await;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn close_all(&self) {
+        let handles: Vec<HostHandle> = self
+            .shared
+            .sessions
+            .lock()
+            .expect("codex sessions")
+            .drain()
+            .map(|(_, handle)| handle)
+            .collect();
+        let mut waits = Vec::new();
+        for handle in handles {
+            let (ack, rx) = oneshot::channel();
+            if handle.tx.send(HostCommand::Close(Some(ack))).is_ok() {
+                waits.push(rx);
+            }
+        }
+        // Sessions shut down in parallel on their own threads.
+        let deadline = std::time::Instant::now() + CLOSE_WAIT;
+        for mut rx in waits {
+            while std::time::Instant::now() < deadline {
+                match rx.try_recv() {
+                    Ok(Some(())) | Err(_) => break,
+                    Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                }
+            }
+        }
     }
 
     fn events(&self, round_id: &RoundId) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
@@ -154,7 +381,9 @@ impl AgentExecutor for CodexExecutor {
             match rounds.get(round_id) {
                 None => Err(AgentError::UnknownRound(round_id.clone())),
                 Some(slot) => {
-                    let _ = slot.cancel.send(SessionCommand::Cancel);
+                    if let Ok(tx) = self.shared.handle(&slot.session_key) {
+                        let _ = tx.send(HostCommand::Cancel(round_id.clone()));
+                    }
                     Ok(())
                 }
             }
@@ -224,736 +453,6 @@ impl AgentExecutor for CodexExecutor {
     }
 }
 
-async fn start_round(
-    shared: Arc<Shared>,
-    request: StartRoundRequest,
-) -> Result<RoundId, AgentError> {
-    if request.backend != AgentBackend::Codex {
-        return Err(AgentError::BackendMismatch {
-            served: AgentBackend::Codex,
-            requested: request.backend,
-        });
-    }
-    let probe = probe_program(
-        shared.runner.as_ref(),
-        Capability::Codex,
-        &shared.config.program,
-    );
-    if !probe.is_available() {
-        return Err(AgentError::CapabilityUnavailable(probe));
-    }
-    let n = shared.next_round.fetch_add(1, Ordering::Relaxed) + 1;
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
-    let round_id =
-        RoundId::parse(format!("codex-{millis}-{n}")).expect("round id has no whitespace");
-    let bus = Arc::new(EventBus::new());
-    let (cmd_tx, cmd_rx) = mpsc::channel();
-    let (ready_tx, ready_rx) = futures::channel::oneshot::channel();
-    let config = shared.config.clone();
-    let bus_thread = Arc::clone(&bus);
-    let round_for_thread = round_id.clone();
-    thread::Builder::new()
-        .name("codex-app-server".into())
-        .spawn(move || {
-            drive_child(
-                config,
-                request,
-                round_for_thread,
-                bus_thread,
-                cmd_rx,
-                Ready::new(ready_tx),
-            );
-        })
-        .map_err(|error| {
-            harness(
-                ErrorCode::Internal,
-                format!("failed to spawn session thread: {error}"),
-            )
-        })?;
-    match ready_rx.await {
-        Ok(Ok(())) => {
-            shared.rounds.lock().expect("codex rounds").insert(
-                round_id.clone(),
-                RoundSlot {
-                    bus,
-                    cancel: cmd_tx,
-                },
-            );
-            Ok(round_id)
-        }
-        Ok(Err(error)) => Err(error),
-        Err(_) => Err(harness(
-            ErrorCode::Internal,
-            "codex app-server session ended before the turn started",
-        )),
-    }
-}
-
-fn drive_child(
-    config: CodexConfig,
-    request: StartRoundRequest,
-    round_id: RoundId,
-    bus: Arc<EventBus>,
-    commands: Receiver<SessionCommand>,
-    mut ready: Ready,
-) {
-    let _finish = FinishBus(Arc::clone(&bus));
-    let mut child = match spawn_child(&config, &request.workspace, &request.harness.env) {
-        Ok(child) => child,
-        Err(error) => {
-            ready.fail(error);
-            return;
-        }
-    };
-    let grace = TERM_GRACE.min(config.interrupt_grace);
-    let Some(stdin) = child.stdin.take() else {
-        terminate_group(&mut child, grace);
-        ready.fail(harness(ErrorCode::Internal, "codex stdin was not piped"));
-        return;
-    };
-    let Some(stdout) = child.stdout.take() else {
-        drop(stdin);
-        terminate_group(&mut child, grace);
-        ready.fail(harness(ErrorCode::Internal, "codex stdout was not piped"));
-        return;
-    };
-    let Some(stderr) = child.stderr.take() else {
-        drop(stdin);
-        terminate_group(&mut child, grace);
-        ready.fail(harness(ErrorCode::Internal, "codex stderr was not piped"));
-        return;
-    };
-    let stderr_tail = Arc::new(Mutex::new(String::new()));
-    let tail_for_thread = Arc::clone(&stderr_tail);
-    let (stderr_done_tx, stderr_done) = mpsc::channel::<()>();
-    thread::spawn(move || {
-        collect_stderr(stderr, tail_for_thread);
-        let _ = stderr_done_tx.send(());
-    });
-    let (line_tx, line_rx) = mpsc::channel();
-    thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            match line {
-                Ok(line) => {
-                    if line_tx.send(line).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
-    let mut session = Session {
-        writer: Some(Box::new(stdin)),
-        lines: line_rx,
-        commands,
-        mapper: CodexEventMapper::new(round_id.clone(), request.input_ref.clone()),
-        bus,
-        handshake_timeout: config.handshake_timeout,
-        interrupt_grace: config.interrupt_grace,
-        stderr_tail,
-        next_id: SKILL_ROOTS_ID,
-        thread_id: None,
-        turn_id: None,
-        interrupt_rpc: None,
-        mcp_list_rpc: None,
-        child,
-        term_grace: grace,
-        reaped: false,
-        mcp_program: config.mcp_program.clone(),
-        tools_allow: request.tools_allow.clone(),
-        pending: Vec::new(),
-        approval_timeout: config.approval_timeout,
-        model: super::model::current_model(config.home.as_deref()),
-        effort: {
-            let home = config.home.as_deref();
-            super::model::effective_effort(
-                super::model::configured_effort(home).as_deref(),
-                super::model::current_model(home).as_deref(),
-                &super::model::cached_catalog(home),
-            )
-        },
-    };
-    if let Err(error) = session.handshake(&request, &round_id, &ready) {
-        // Kill the whole process group first, then unblock `start_round`.
-        // Joining the stderr reader must never gate `ready`.
-        session.shutdown();
-        ready.fail(error);
-        let _ = stderr_done.recv_timeout(READER_JOIN);
-        return;
-    }
-    ready.succeed();
-    session.run_until_closed();
-    session.shutdown();
-    // Pipes close once the process group is dead; bounded in case a process
-    // escaped the group and still holds stderr.
-    let _ = stderr_done.recv_timeout(READER_JOIN);
-}
-
-struct Session {
-    /// `None` after [`Session::shutdown`]: dropping it gives the app-server
-    /// (and any grandchild that inherited the pipe) EOF on stdin.
-    writer: Option<Box<dyn Write + Send>>,
-    lines: Receiver<String>,
-    commands: Receiver<SessionCommand>,
-    mapper: CodexEventMapper,
-    bus: Arc<EventBus>,
-    handshake_timeout: Duration,
-    interrupt_grace: Duration,
-    stderr_tail: Arc<Mutex<String>>,
-    next_id: u64,
-    thread_id: Option<String>,
-    turn_id: Option<String>,
-    interrupt_rpc: Option<u64>,
-    /// In-flight `mcpServerStatus/list` (MCP tool inventory probe), if sent.
-    mcp_list_rpc: Option<u64>,
-    /// Process-group leader (`process_group(0)` on Unix).
-    child: Child,
-    term_grace: Duration,
-    reaped: bool,
-    mcp_program: PathBuf,
-    /// Round allow-list. Empty means the fixed read-only Mathscape catalog.
-    tools_allow: Vec<String>,
-    /// Approval requests we could not accept or decline immediately.
-    pending: Vec<PendingApproval>,
-    approval_timeout: Duration,
-    /// Top-level Codex default at handshake time (forwarded on thread/start).
-    model: Option<String>,
-    /// Effective reasoning effort at handshake time (forwarded on turn/start).
-    effort: Option<String>,
-}
-
-impl Session {
-    /// Publishes mapped events. Before a `turn_end` goes out, the agent's
-    /// final message text is recorded on the bus so a consumer that sees
-    /// `turn_end.final_text_ref` can immediately resolve it with
-    /// [`AgentExecutor::final_text`].
-    fn publish(&self, events: Vec<AgentEvent>) {
-        if events
-            .iter()
-            .any(|event| matches!(event.payload, crate::EventPayload::TurnEnd(_)))
-        {
-            self.bus
-                .set_final_text(self.mapper.agent_text().map(str::to_owned));
-        }
-        self.bus.publish_all(events);
-    }
-
-    fn handshake(
-        &mut self,
-        request: &StartRoundRequest,
-        round_id: &RoundId,
-        ready: &Ready,
-    ) -> Result<(), AgentError> {
-        let deadline = Instant::now() + self.handshake_timeout;
-        self.write_value(&initialize_message())?;
-        self.write_value(&json!({"method": "initialized", "params": {}}))?;
-        if let Some(message) = skill_roots_message(SKILL_ROOTS_ID, &request.harness) {
-            self.write_value(&message)?;
-        }
-        // Collect `initialize` together with the skill registration so its
-        // response is never consumed and dropped while we wait.
-        let mut early = vec![INITIALIZE_ID];
-        if skill_roots_message(SKILL_ROOTS_ID, &request.harness).is_some() {
-            early.push(SKILL_ROOTS_ID);
-            let registered = self.collect_responses(&early, deadline, ready)?;
-            if let Some(message) = rpc_error_message(&registered[&INITIALIZE_ID]) {
-                return Err(harness(
-                    classify_codex_failure(&message),
-                    format!("initialize: {message}"),
-                ));
-            }
-            // Not fatal: developerInstructions still name the skill's stable
-            // path, so the agent can read it with its own file tools.
-            if let Some(message) = rpc_error_message(&registered[&SKILL_ROOTS_ID]) {
-                eprintln!("mathscape: skills/extraRoots/set failed: {message}");
-            }
-            early.clear();
-        }
-        self.write_value(&thread_start_message(
-            THREAD_START_ID,
-            request,
-            round_id,
-            &self.mcp_program,
-            self.model.as_deref(),
-        ))?;
-        early.push(THREAD_START_ID);
-        let opened = self.collect_responses(&early, deadline, ready)?;
-        if let Some(message) = opened.get(&INITIALIZE_ID).and_then(rpc_error_message) {
-            return Err(harness(
-                classify_codex_failure(&message),
-                format!("initialize: {message}"),
-            ));
-        }
-        if let Some(message) = rpc_error_message(&opened[&THREAD_START_ID]) {
-            return Err(harness(
-                classify_codex_failure(&message),
-                format!("thread/start: {message}"),
-            ));
-        }
-        let thread_result = opened[&THREAD_START_ID]
-            .get("result")
-            .cloned()
-            .unwrap_or(Value::Null);
-        let thread_id = thread_result
-            .pointer("/thread/id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| harness(ErrorCode::Protocol, "thread/start result has no thread.id"))?;
-        self.thread_id = Some(thread_id.to_owned());
-        self.mapper.note_thread_id(thread_id);
-        let cwd = absolute_path(&request.workspace);
-        self.write_value(&turn_start_message(
-            TURN_START_ID,
-            thread_id,
-            &request.input_ref,
-            &cwd.display().to_string(),
-            self.effort.as_deref(),
-        ))?;
-        let turn = self.collect_responses(&[TURN_START_ID], deadline, ready)?;
-        let turn = &turn[&TURN_START_ID];
-        if let Some(message) = rpc_error_message(turn) {
-            return Err(harness(
-                classify_codex_failure(&message),
-                format!("turn/start: {message}"),
-            ));
-        }
-        let result = turn.get("result").cloned().unwrap_or(Value::Null);
-        let turn_id = result
-            .pointer("/turn/id")
-            .and_then(Value::as_str)
-            .unwrap_or("turn-1")
-            .to_owned();
-        self.turn_id = Some(turn_id.clone());
-        let events = self.mapper.accept_turn(&turn_id, &result);
-        self.publish(events);
-        Ok(())
-    }
-
-    fn run_until_closed(&mut self) {
-        let mut interrupt_deadline: Option<Instant> = None;
-        while !self.mapper.turn_closed() {
-            if let Err(error) = self.expire_approvals() {
-                let events =
-                    self.mapper
-                        .force_stop("failed", &error_text(&error), error_code(&error));
-                self.publish(events);
-                break;
-            }
-            if interrupt_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                let events = self.mapper.force_stop(
-                    "interrupted",
-                    "turn/interrupt was not acknowledged before the grace period",
-                    ErrorCode::Internal,
-                );
-                self.publish(events);
-                break;
-            }
-            match self.lines.recv_timeout(Duration::from_millis(50)) {
-                Ok(line) => {
-                    if let Err(error) = self.handle_runtime_line(&line) {
-                        let events = self.mapper.force_stop(
-                            "failed",
-                            &error_text(&error),
-                            error_code(&error),
-                        );
-                        self.publish(events);
-                        break;
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    let message = format!(
-                        "codex app-server closed the event stream{}",
-                        self.tail_suffix()
-                    );
-                    let events = self.mapper.force_stop(
-                        "failed",
-                        &message,
-                        classify_codex_failure(&message),
-                    );
-                    self.publish(events);
-                    break;
-                }
-            }
-            while let Ok(command) = self.commands.try_recv() {
-                if !matches!(command, SessionCommand::Cancel) || self.mapper.turn_closed() {
-                    continue;
-                }
-                let events = self.mapper.on_cancel_request();
-                self.publish(events);
-                if let Err(error) = self.write_interrupt() {
-                    let events = self.mapper.force_stop(
-                        "interrupted",
-                        &error_text(&error),
-                        ErrorCode::Internal,
-                    );
-                    self.publish(events);
-                    break;
-                }
-                interrupt_deadline.get_or_insert_with(|| Instant::now() + self.interrupt_grace);
-            }
-        }
-    }
-
-    fn handle_runtime_line(&mut self, line: &str) -> Result<(), AgentError> {
-        match parse_incoming(line) {
-            Incoming::Empty | Incoming::Foreign => Ok(()),
-            Incoming::BadJson(message) => {
-                let events = self
-                    .mapper
-                    .note_protocol(format!("ignored invalid app-server json: {message}"));
-                self.publish(events);
-                Ok(())
-            }
-            Incoming::Notification(message) => {
-                self.on_notification(&message);
-                Ok(())
-            }
-            Incoming::Request { id, method, params } => self.answer(&id, &method, &params),
-            Incoming::Response(message) => {
-                let id = response_id(&message);
-                if self.take_mcp_inventory(id, &message) {
-                    return Ok(());
-                }
-                if id == self.interrupt_rpc
-                    && let Some(text) = rpc_error_message(&message)
-                {
-                    let events = self.mapper.force_stop(
-                        "interrupted",
-                        &format!("turn/interrupt: {text}"),
-                        classify_codex_failure(&text),
-                    );
-                    self.publish(events);
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn collect_responses(
-        &mut self,
-        wanted: &[u64],
-        deadline: Instant,
-        ready: &Ready,
-    ) -> Result<HashMap<u64, Value>, AgentError> {
-        let mut got = HashMap::new();
-        while got.len() < wanted.len() {
-            if ready.caller_gone() {
-                return Err(harness(
-                    ErrorCode::Internal,
-                    "start_round dropped before the turn started",
-                ));
-            }
-            match self.next_incoming(deadline)? {
-                Incoming::Empty | Incoming::Foreign => {}
-                Incoming::BadJson(message) => {
-                    return Err(harness(
-                        ErrorCode::Protocol,
-                        format!("codex app-server sent invalid json: {message}"),
-                    ));
-                }
-                Incoming::Notification(message) => self.on_notification(&message),
-                Incoming::Request { id, method, params } => self.answer(&id, &method, &params)?,
-                Incoming::Response(message) => {
-                    if self.take_mcp_inventory(response_id(&message), &message) {
-                        continue;
-                    }
-                    if let Some(id) = response_id(&message)
-                        && wanted.contains(&id)
-                    {
-                        got.insert(id, message);
-                    }
-                }
-            }
-        }
-        Ok(got)
-    }
-
-    fn on_notification(&mut self, message: &Value) {
-        let events = self.mapper.on_notification(message);
-        self.publish(events);
-        // Once Codex says the mathscape MCP server is ready, ask once for its
-        // tool inventory so the step can show e.g. "MCP 工具 7/7".
-        if self.mcp_list_rpc.is_none()
-            && let Some(thread_id) = mcp_ready_thread(message)
-        {
-            self.next_id += 1;
-            let id = self.next_id;
-            self.mcp_list_rpc = Some(id);
-            if self
-                .write_value(&mcp_status_list_message(id, &thread_id))
-                .is_err()
-            {
-                let events = self
-                    .mapper
-                    .on_mcp_inventory(&Value::Null, &self.tools_allow);
-                self.publish(events);
-            }
-        }
-    }
-
-    /// Routes the `mcpServerStatus/list` response; true when consumed.
-    fn take_mcp_inventory(&mut self, id: Option<u64>, message: &Value) -> bool {
-        if id.is_none() || id != self.mcp_list_rpc {
-            return false;
-        }
-        let events = self.mapper.on_mcp_inventory(message, &self.tools_allow);
-        self.publish(events);
-        true
-    }
-
-    fn next_incoming(&mut self, deadline: Instant) -> Result<Incoming, AgentError> {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(self.timed_out());
-        }
-        match self.lines.recv_timeout(remaining) {
-            Ok(line) => Ok(parse_incoming(&line)),
-            Err(RecvTimeoutError::Timeout) => Err(self.timed_out()),
-            Err(RecvTimeoutError::Disconnected) => Err(self.stream_closed()),
-        }
-    }
-
-    fn answer(&mut self, id: &Value, method: &str, params: &Value) -> Result<(), AgentError> {
-        match approval_plan(method, params, &self.tools_allow) {
-            ApprovalPlan::Respond(reply) => self.send_reply(id, method, params, reply),
-            ApprovalPlan::Hold { note } => {
-                let events = self.mapper.note_approval(
-                    note.message,
-                    approval_event_raw(note.phase, method, id, params),
-                );
-                self.publish(events);
-                self.pending.push(PendingApproval {
-                    id: id.clone(),
-                    method: method.to_owned(),
-                    params: params.clone(),
-                    deadline: Instant::now() + self.approval_timeout,
-                });
-                Ok(())
-            }
-        }
-    }
-
-    fn expire_approvals(&mut self) -> Result<(), AgentError> {
-        let now = Instant::now();
-        let mut waiting = Vec::new();
-        let mut due = Vec::new();
-        for pending in self.pending.drain(..) {
-            if now >= pending.deadline {
-                due.push(pending);
-            } else {
-                waiting.push(pending);
-            }
-        }
-        self.pending = waiting;
-        for pending in due {
-            let reply = timeout_plan(&pending.method);
-            self.send_reply(&pending.id, &pending.method, &pending.params, reply)?;
-        }
-        Ok(())
-    }
-
-    fn send_reply(
-        &mut self,
-        id: &Value,
-        method: &str,
-        params: &Value,
-        reply: super::approval::ApprovalReply,
-    ) -> Result<(), AgentError> {
-        if let Some(note) = &reply.note {
-            let events = self.mapper.note_approval(
-                note.message.clone(),
-                approval_event_raw(note.phase, method, id, params),
-            );
-            self.publish(events);
-        }
-        self.write_value(&json!({
-            "id": id,
-            "result": reply.result,
-        }))
-    }
-
-    fn write_interrupt(&mut self) -> Result<(), AgentError> {
-        let Some(thread_id) = self.thread_id.clone() else {
-            return Err(harness(ErrorCode::Protocol, "no codex thread to interrupt"));
-        };
-        let turn_id = self.turn_id.clone().unwrap_or_else(|| "turn-1".into());
-        self.next_id += 1;
-        let id = self.next_id;
-        self.interrupt_rpc = Some(id);
-        self.write_value(&json!({
-            "method": "turn/interrupt",
-            "id": id,
-            "params": { "threadId": thread_id, "turnId": turn_id }
-        }))
-    }
-
-    fn write_value(&mut self, value: &Value) -> Result<(), AgentError> {
-        let Some(writer) = self.writer.as_mut() else {
-            return Err(harness(
-                ErrorCode::Internal,
-                "codex app-server stdin is already closed",
-            ));
-        };
-        serde_json::to_writer(&mut *writer, value).map_err(|error| {
-            harness(
-                ErrorCode::Protocol,
-                format!("failed to write app-server message: {error}"),
-            )
-        })?;
-        writer.write_all(b"\n").map_err(|error| {
-            harness(
-                ErrorCode::Internal,
-                format!("failed to write app-server newline: {error}"),
-            )
-        })?;
-        writer.flush().map_err(|error| {
-            harness(
-                ErrorCode::Internal,
-                format!("failed to flush app-server: {error}"),
-            )
-        })
-    }
-
-    /// Idempotent. Drop stdin first, then SIGTERM the process group, wait up
-    /// to `term_grace` for the leader, SIGKILL the group, and reap the leader.
-    fn shutdown(&mut self) {
-        if self.reaped {
-            return;
-        }
-        drop(self.writer.take());
-        terminate_group(&mut self.child, self.term_grace);
-        self.reaped = true;
-    }
-
-    fn timed_out(&self) -> AgentError {
-        harness(
-            ErrorCode::BackendUnavailable,
-            format!(
-                "timed out waiting for codex app-server{}",
-                self.tail_suffix()
-            ),
-        )
-    }
-
-    fn stream_closed(&self) -> AgentError {
-        harness(
-            ErrorCode::BackendUnavailable,
-            format!(
-                "codex app-server closed stdout before the turn started{}",
-                self.tail_suffix()
-            ),
-        )
-    }
-
-    fn tail_suffix(&self) -> String {
-        let tail = self
-            .stderr_tail
-            .lock()
-            .expect("stderr tail")
-            .trim()
-            .to_owned();
-        if tail.is_empty() {
-            String::new()
-        } else {
-            format!(": {tail}")
-        }
-    }
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
-}
-
-/// Terminate `child` and every process in its process group.
-///
-/// npm's `codex` is a node wrapper that spawns the native `codex app-server`;
-/// killing only the direct child would orphan the native process (and its
-/// `mathscape mcp` grandchild) while it still holds our pipes. The workspace
-/// forbids `unsafe`, so signals go through the system `kill` utility.
-fn terminate_group(child: &mut Child, grace: Duration) {
-    #[cfg(unix)]
-    {
-        let group = format!("-{}", child.id());
-        signal_group("TERM", &group);
-        let deadline = Instant::now() + grace;
-        while Instant::now() < deadline {
-            if matches!(child.try_wait(), Ok(Some(_))) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        // Always KILL the group: grandchildren may ignore TERM or outlive the
-        // leader. A no-op when the group is already gone.
-        signal_group("KILL", &group);
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-#[cfg(unix)]
-fn signal_group(signal: &str, group: &str) {
-    let _ = Command::new("kill")
-        .args(["-s", signal, "--", group])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}
-
-fn spawn_child(
-    config: &CodexConfig,
-    workspace: &Path,
-    env: &[(String, String)],
-) -> Result<Child, AgentError> {
-    let mut command = Command::new(&config.program);
-    command
-        .args(&config.args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // Round-scoped, non-secret paths (e.g. the Lean profile root resolved
-    // from the real checkpoint, which the sandbox copy cannot rediscover).
-    command.envs(env.iter().map(|(key, value)| (key, value)));
-    if workspace.is_dir() {
-        command.current_dir(workspace);
-    }
-    // Own process group so shutdown can signal the wrapper and everything it
-    // spawned (see `terminate_group`).
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    // Otherwise inherit the environment unchanged. The Codex CLI reads its own login;
-    // Mathscape must not add OPENAI_API_KEY / ChatGPT tokens, and must not
-    // call account/login.
-    command.spawn().map_err(|error| {
-        let code = if error.kind() == std::io::ErrorKind::NotFound {
-            ErrorCode::BackendUnavailable
-        } else {
-            ErrorCode::Internal
-        };
-        harness(
-            code,
-            format!(
-                "failed to start {} {}: {error}",
-                config.program.display(),
-                config.args.join(" ")
-            ),
-        )
-    })
-}
-
-/// Environment variables Codex forwards to the Mathscape MCP child so the
-/// Marker and Lean profile lookups match the desktop. Names only; no
-/// credentials. `MATHSCAPE_LEAN_PROFILE_ROOT` matters most for sandbox
-/// rounds: the session copy has no parent `.mathscape/lean/profiles`.
 const MCP_FORWARDED_ENV_VARS: [&str; 4] = [
     "MATHSCAPE_MARKER_EXECUTABLE",
     "MATHSCAPE_MARKER_VENV",
@@ -994,7 +493,7 @@ fn session_filesystem_permissions(workspace: &str, harness: &HarnessContext) -> 
     Value::Object(grants)
 }
 
-fn skill_roots_message(id: u64, harness: &HarnessContext) -> Option<Value> {
+pub(crate) fn skill_roots_message(id: u64, harness: &HarnessContext) -> Option<Value> {
     if harness.skill_roots.is_empty() {
         return None;
     }
@@ -1016,52 +515,70 @@ fn skill_roots_message(id: u64, harness: &HarnessContext) -> Option<Value> {
 /// reports the timeout and clears its lease.
 const MCP_TOOL_TIMEOUT_SEC: u64 = 16 * 60;
 
-pub(crate) fn thread_start_message(
-    id: u64,
-    request: &StartRoundRequest,
-    round_id: &RoundId,
-    mcp_program: &Path,
-    model: Option<&str>,
-) -> Value {
-    let workspace = absolute_path(&request.workspace);
+/// `config` overrides shared by `thread/start` and `thread/resume`: the
+/// mathscape MCP registration and (with harness grants) the session
+/// permission profile. On resume Codex honours them and restarts the
+/// thread's MCP server, so a resumed thread gets the same tools.
+fn thread_base_params(spec: &SessionSpec, mcp_program: &Path, round_file: &Path) -> Value {
+    let workspace = absolute_path(&spec.workspace);
     let workspace = workspace.display().to_string();
     let mut params = json!({
         "cwd": workspace,
         "approvalPolicy": SANDBOX_APPROVAL_POLICY,
-        "ephemeral": true,
-        "serviceName": "mathscape",
-        "developerInstructions": developer_instructions(round_id, &request.tools_allow, &request.harness),
         "config": {
             "mcp_servers.mathscape.command": mcp_program.display().to_string(),
             "mcp_servers.mathscape.args": [
                 "mcp",
                 "--workspace",
                 workspace,
-                "--round",
-                round_id.as_str()
+                "--round-file",
+                absolute_path(round_file).display().to_string()
             ],
             "mcp_servers.mathscape.enabled": true,
             "mcp_servers.mathscape.default_tools_approval_mode": "approve",
-            "mcp_servers.mathscape.enabled_tools": enabled_tools(&request.tools_allow),
+            "mcp_servers.mathscape.enabled_tools": enabled_tools(&spec.tools_allow),
             // material.read may run a bounded Marker ensure on a scanned PDF:
             // forward only the Marker lookup variables (no secrets) and allow
             // the synchronous ensure wait plus margin.
-            "mcp_servers.mathscape.env_vars": forwarded_env_vars(&request.harness),
+            "mcp_servers.mathscape.env_vars": forwarded_env_vars(&spec.harness),
             "mcp_servers.mathscape.tool_timeout_sec": MCP_TOOL_TIMEOUT_SEC
         }
     });
-    if request.harness.uses_permission_profile() {
+    if spec.harness.uses_permission_profile() {
         // Do not also send `sandbox`: a legacy sandbox mode overrides the
         // profile (thread/start then reports `activePermissionProfile: null`).
-        let grants = session_filesystem_permissions(&workspace, &request.harness);
+        let grants = session_filesystem_permissions(&workspace, &spec.harness);
         params["config"]["default_permissions"] = json!(SESSION_PERMISSION_PROFILE);
         params["config"][format!("permissions.{SESSION_PERMISSION_PROFILE}.filesystem")] = grants;
     } else {
         params["sandbox"] = json!("read-only");
     }
+    params
+}
+
+fn with_model(params: &mut Value, model: Option<&str>) {
     if let Some(model) = model.map(str::trim).filter(|id| !id.is_empty()) {
         params["model"] = json!(model);
     }
+}
+
+/// `thread/start`. Persistent sessions start non-ephemeral threads (Codex
+/// writes a rollout under `$CODEX_HOME/sessions`); `threadSource` tags them
+/// as Mathscape's in the user's Codex history.
+pub(crate) fn thread_start_message(
+    id: u64,
+    spec: &SessionSpec,
+    mcp_program: &Path,
+    round_file: &Path,
+    model: Option<&str>,
+) -> Value {
+    let mut params = thread_base_params(spec, mcp_program, round_file);
+    params["ephemeral"] = json!(spec.ephemeral);
+    params["serviceName"] = json!(SERVICE_NAME);
+    params["threadSource"] = json!(SERVICE_NAME);
+    params["developerInstructions"] =
+        json!(developer_instructions(&spec.tools_allow, &spec.harness));
+    with_model(&mut params, model);
     json!({
         "method": "thread/start",
         "id": id,
@@ -1069,20 +586,75 @@ pub(crate) fn thread_start_message(
     })
 }
 
+/// `thread/resume` by id. Codex ignores `developerInstructions` on resume
+/// (the thread keeps its original prefix), so none are sent; `cwd` and the
+/// `config` overrides are honoured.
+pub(crate) fn thread_resume_message(
+    id: u64,
+    thread_id: &str,
+    spec: &SessionSpec,
+    mcp_program: &Path,
+    round_file: &Path,
+    model: Option<&str>,
+) -> Value {
+    let mut params = thread_base_params(spec, mcp_program, round_file);
+    params["threadId"] = json!(thread_id);
+    params["excludeTurns"] = json!(true);
+    with_model(&mut params, model);
+    json!({
+        "method": "thread/resume",
+        "id": id,
+        "params": params
+    })
+}
+
+/// Opening tag of the per-turn context item (docs/codex-session-persistence.md §2.5).
+pub(crate) const TURN_CONTEXT_OPEN: &str = "<mathscape_turn_context>";
+pub(crate) const TURN_CONTEXT_CLOSE: &str = "</mathscape_turn_context>";
+
+/// Per-turn context rendered as its own `input` text item placed before the
+/// user text. `turn/start.additionalContext` needs the experimental API, so
+/// the notes travel as ordinary user input; they are appended at the end of
+/// the conversation and never touch the cached prefix.
+pub(crate) fn turn_context_text(notes: &[ContextNote]) -> Option<String> {
+    let notes: Vec<&ContextNote> = notes
+        .iter()
+        .filter(|note| !note.text.trim().is_empty())
+        .collect();
+    if notes.is_empty() {
+        return None;
+    }
+    let mut text = String::from(TURN_CONTEXT_OPEN);
+    text.push('\n');
+    text.push_str("Mathscape-supplied context for this turn (not written by the user):\n");
+    for note in notes {
+        text.push_str(&format!("\n[{}]\n{}\n", note.key, note.text.trim()));
+    }
+    text.push_str(TURN_CONTEXT_CLOSE);
+    Some(text)
+}
+
 /// `effort` maps to app-server v2 `TurnStartParams.effort` ("Override the
-/// reasoning effort for this turn and subsequent turns").
+/// reasoning effort for this turn and subsequent turns"). `inputs` are text
+/// items in order; the user text is last.
 pub(crate) fn turn_start_message(
     id: u64,
     thread_id: &str,
-    input_ref: &str,
+    inputs: &[String],
     cwd: &str,
+    model: Option<&str>,
     effort: Option<&str>,
 ) -> Value {
+    let input: Vec<Value> = inputs
+        .iter()
+        .map(|text| json!({ "type": "text", "text": text }))
+        .collect();
     let mut params = json!({
         "threadId": thread_id,
         "cwd": cwd,
-        "input": [{ "type": "text", "text": input_ref }]
+        "input": input
     });
+    with_model(&mut params, model);
     if let Some(effort) = effort.map(str::trim).filter(|e| !e.is_empty()) {
         params["effort"] = json!(effort);
     }
@@ -1093,10 +665,10 @@ pub(crate) fn turn_start_message(
     })
 }
 
-fn initialize_message() -> Value {
+pub(crate) fn initialize_message(id: u64) -> Value {
     json!({
         "method": "initialize",
-        "id": INITIALIZE_ID,
+        "id": id,
         "params": {
             "clientInfo": {
                 "name": "mathscape",
@@ -1107,21 +679,19 @@ fn initialize_message() -> Value {
     })
 }
 
-fn developer_instructions(
-    round_id: &RoundId,
-    tools_allow: &[String],
-    harness: &HarnessContext,
-) -> String {
+/// Stable per-thread prefix: no round id or other per-turn values (those
+/// go into the turn context item), so the prompt cache survives turns.
+fn developer_instructions(tools_allow: &[String], harness: &HarnessContext) -> String {
     let tools = if tools_allow.is_empty() {
         "The mathscape MCP server exposes a fixed read-only tool list; call those tools when they help.".to_owned()
     } else {
         format!(
-            "Call only these mathscape tools in this round: {}.",
+            "Call only these mathscape tools in this session: {}.",
             tools_allow.join(", ")
         )
     };
     let mut text = format!(
-        "This is Mathscape round {round_id}. {tools} Mathscape does not provide model credentials; use this Codex process's existing local login. Do not ask the user for an API key."
+        "This is a Mathscape session. {tools} Mathscape does not provide model credentials; use this Codex process's existing local login. Do not ask the user for an API key."
     );
     if let Some(scratch) = &harness.scratch_dir {
         text.push_str(&format!(
@@ -1141,7 +711,7 @@ fn developer_instructions(
     text
 }
 
-fn absolute_path(path: &Path) -> PathBuf {
+pub(crate) fn absolute_path(path: &Path) -> PathBuf {
     if let Ok(canonical) = std::fs::canonicalize(path) {
         return canonical;
     }
@@ -1153,7 +723,7 @@ fn absolute_path(path: &Path) -> PathBuf {
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
-enum Incoming {
+pub(crate) enum Incoming {
     Empty,
     Foreign,
     BadJson(String),
@@ -1166,7 +736,7 @@ enum Incoming {
     },
 }
 
-fn parse_incoming(line: &str) -> Incoming {
+pub(crate) fn parse_incoming(line: &str) -> Incoming {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return Incoming::Empty;
@@ -1195,14 +765,14 @@ fn parse_incoming(line: &str) -> Incoming {
     }
 }
 
-fn response_id(value: &Value) -> Option<u64> {
+pub(crate) fn response_id(value: &Value) -> Option<u64> {
     value.get("id").and_then(|id| {
         id.as_u64()
             .or_else(|| id.as_i64().filter(|n| *n >= 0).map(|n| n as u64))
     })
 }
 
-fn rpc_error_message(value: &Value) -> Option<String> {
+pub(crate) fn rpc_error_message(value: &Value) -> Option<String> {
     let error = value.get("error")?;
     Some(
         error
@@ -1213,24 +783,7 @@ fn rpc_error_message(value: &Value) -> Option<String> {
     )
 }
 
-fn collect_stderr(stderr: impl std::io::Read, tail: Arc<Mutex<String>>) {
-    let mut reader = BufReader::new(stderr);
-    let mut chunk = String::new();
-    while reader.read_line(&mut chunk).unwrap_or(0) > 0 {
-        let mut buffer = tail.lock().expect("stderr tail");
-        buffer.push_str(&chunk);
-        if buffer.len() > STDERR_TAIL {
-            let mut cut = buffer.len() - STDERR_TAIL;
-            while cut < buffer.len() && !buffer.is_char_boundary(cut) {
-                cut += 1;
-            }
-            *buffer = buffer[cut..].to_owned();
-        }
-        chunk.clear();
-    }
-}
-
-fn harness(code: ErrorCode, message: impl Into<String>) -> AgentError {
+pub(crate) fn harness(code: ErrorCode, message: impl Into<String>) -> AgentError {
     AgentError::Harness {
         backend: AgentBackend::Codex,
         code,
@@ -1238,62 +791,15 @@ fn harness(code: ErrorCode, message: impl Into<String>) -> AgentError {
     }
 }
 
-fn error_text(error: &AgentError) -> String {
+pub(crate) fn error_text(error: &AgentError) -> String {
     error.to_string()
 }
 
-fn error_code(error: &AgentError) -> ErrorCode {
+pub(crate) fn error_code(error: &AgentError) -> ErrorCode {
     match error {
         AgentError::Harness { code, .. } => *code,
         AgentError::CapabilityUnavailable(_) => ErrorCode::BackendUnavailable,
         _ => ErrorCode::Internal,
-    }
-}
-
-struct Ready {
-    tx: Option<futures::channel::oneshot::Sender<Result<(), AgentError>>>,
-}
-
-impl Ready {
-    fn new(tx: futures::channel::oneshot::Sender<Result<(), AgentError>>) -> Self {
-        Self { tx: Some(tx) }
-    }
-
-    fn succeed(&mut self) {
-        if let Some(tx) = self.tx.take() {
-            let _ = tx.send(Ok(()));
-        }
-    }
-
-    fn fail(&mut self, error: AgentError) {
-        if let Some(tx) = self.tx.take() {
-            let _ = tx.send(Err(error));
-        }
-    }
-
-    fn caller_gone(&self) -> bool {
-        self.tx
-            .as_ref()
-            .is_some_and(futures::channel::oneshot::Sender::is_canceled)
-    }
-}
-
-impl Drop for Ready {
-    fn drop(&mut self) {
-        if let Some(tx) = self.tx.take() {
-            let _ = tx.send(Err(harness(
-                ErrorCode::Internal,
-                "codex app-server session ended before the turn started",
-            )));
-        }
-    }
-}
-
-struct FinishBus(Arc<EventBus>);
-
-impl Drop for FinishBus {
-    fn drop(&mut self) {
-        self.0.finish();
     }
 }
 
@@ -1304,12 +810,12 @@ struct BusInner {
     finished: bool,
 }
 
-struct EventBus {
+pub(crate) struct EventBus {
     inner: Mutex<BusInner>,
 }
 
 impl EventBus {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: Mutex::new(BusInner {
                 events: Vec::new(),
@@ -1320,13 +826,13 @@ impl EventBus {
         }
     }
 
-    fn publish_all(&self, events: Vec<AgentEvent>) {
+    pub(crate) fn publish_all(&self, events: Vec<AgentEvent>) {
         for event in events {
             self.publish(event);
         }
     }
 
-    fn publish(&self, event: AgentEvent) {
+    pub(crate) fn publish(&self, event: AgentEvent) {
         let mut guard = self.inner.lock().expect("event bus");
         if guard.finished {
             return;
@@ -1337,21 +843,21 @@ impl EventBus {
             .retain(|sender| sender.unbounded_send(event.clone()).is_ok());
     }
 
-    fn set_final_text(&self, text: Option<String>) {
+    pub(crate) fn set_final_text(&self, text: Option<String>) {
         self.inner.lock().expect("event bus").final_text = text;
     }
 
-    fn final_text(&self) -> Option<String> {
+    pub(crate) fn final_text(&self) -> Option<String> {
         self.inner.lock().expect("event bus").final_text.clone()
     }
 
-    fn finish(&self) {
+    pub(crate) fn finish(&self) {
         let mut guard = self.inner.lock().expect("event bus");
         guard.finished = true;
         guard.senders.clear();
     }
 
-    fn subscribe(&self) -> BoxStream<'static, AgentEvent> {
+    pub(crate) fn subscribe(&self) -> BoxStream<'static, AgentEvent> {
         let (sender, receiver) = futures_mpsc::unbounded();
         let snapshot = {
             let mut guard = self.inner.lock().expect("event bus");
@@ -1373,8 +879,8 @@ mod tests {
     use super::*;
     use crate::{CapabilityState, CommandOutput};
 
-    fn request(backend: AgentBackend) -> StartRoundRequest {
-        StartRoundRequest {
+    fn request(backend: AgentBackend) -> crate::StartRoundRequest {
+        crate::StartRoundRequest {
             backend,
             workspace: PathBuf::from("/tmp/mathscape-ws"),
             input_ref: "explain 紧集".into(),
@@ -1383,14 +889,27 @@ mod tests {
         }
     }
 
+    fn spec(ephemeral: bool) -> SessionSpec {
+        SessionSpec {
+            backend: AgentBackend::Codex,
+            session_key: "s1".into(),
+            workspace: PathBuf::from("/tmp/mathscape-ws"),
+            tools_allow: vec!["workspace.search".into(), "material.read".into()],
+            harness: HarnessContext::default(),
+            round_file: None,
+            ephemeral,
+        }
+    }
+
+    const ROUND_FILE: &str = "/tmp/mathscape-ws-session/current_round";
+
     #[test]
     fn thread_start_registers_mcp_without_credentials() {
-        let round = RoundId::parse("codex-1").unwrap();
         let message = thread_start_message(
             2,
-            &request(AgentBackend::Codex),
-            &round,
+            &spec(true),
             Path::new("mathscape"),
+            Path::new(ROUND_FILE),
             None,
         );
         let params = &message["params"];
@@ -1399,6 +918,7 @@ mod tests {
         assert_eq!(params["approvalPolicy"], "on-request");
         assert_eq!(params["ephemeral"], true);
         assert_eq!(params["serviceName"], "mathscape");
+        assert_eq!(params["threadSource"], "mathscape");
         assert!(message.get("params").unwrap().get("capabilities").is_none());
         let config = &params["config"];
         assert_eq!(config["mcp_servers.mathscape.command"], "mathscape");
@@ -1428,8 +948,8 @@ mod tests {
                 "mcp",
                 "--workspace",
                 "/tmp/mathscape-ws",
-                "--round",
-                "codex-1"
+                "--round-file",
+                ROUND_FILE
             ])
         );
         let text = message.to_string().to_ascii_lowercase();
@@ -1441,6 +961,80 @@ mod tests {
         assert!(instructions.contains("workspace.search"));
         assert!(instructions.contains("material.read"));
         assert!(instructions.contains("existing local login"));
+        // Stable prefix: no per-round values in developer instructions.
+        assert!(!instructions.contains("round"));
+    }
+
+    #[test]
+    fn persistent_threads_are_not_ephemeral_and_resume_keeps_the_config() {
+        let start = thread_start_message(
+            2,
+            &spec(false),
+            Path::new("mathscape"),
+            Path::new(ROUND_FILE),
+            Some("gpt-test"),
+        );
+        assert_eq!(start["params"]["ephemeral"], false);
+        let resume = thread_resume_message(
+            7,
+            "thr_1",
+            &spec(false),
+            Path::new("mathscape"),
+            Path::new(ROUND_FILE),
+            Some("gpt-test"),
+        );
+        assert_eq!(resume["method"], "thread/resume");
+        let params = &resume["params"];
+        assert_eq!(params["threadId"], "thr_1");
+        assert_eq!(params["cwd"], "/tmp/mathscape-ws");
+        assert_eq!(params["approvalPolicy"], "on-request");
+        assert_eq!(params["excludeTurns"], true);
+        assert_eq!(params["model"], "gpt-test");
+        // Same MCP registration as thread/start (Codex restarts the server).
+        assert_eq!(params["config"], start["params"]["config"]);
+        assert_eq!(params["sandbox"], start["params"]["sandbox"]);
+        // Ignored by Codex on resume; not sent.
+        assert!(params.get("developerInstructions").is_none());
+        assert!(params.get("path").is_none());
+    }
+
+    #[test]
+    fn turn_context_is_a_separate_input_item_before_the_user_text() {
+        assert!(turn_context_text(&[]).is_none());
+        assert!(
+            turn_context_text(&[ContextNote {
+                key: "k".into(),
+                text: "  ".into()
+            }])
+            .is_none()
+        );
+        let context = turn_context_text(&[
+            ContextNote {
+                key: "mathscape.workspace_delta".into(),
+                text: "图谱新增 2 个节点".into(),
+            },
+            ContextNote {
+                key: "mathscape.round".into(),
+                text: "round_id: codex-9".into(),
+            },
+        ])
+        .unwrap();
+        assert!(context.starts_with(TURN_CONTEXT_OPEN));
+        assert!(context.ends_with(TURN_CONTEXT_CLOSE));
+        assert!(context.contains("[mathscape.workspace_delta]\n图谱新增 2 个节点"));
+        let message = turn_start_message(
+            3,
+            "thr_1",
+            &[context.clone(), "下一步？".into()],
+            "/tmp/ws",
+            None,
+            None,
+        );
+        let input = message["params"]["input"].as_array().unwrap();
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0]["text"], context);
+        assert_eq!(input[1]["text"], "下一步？");
+        assert!(message["params"].get("additionalContext").is_none());
     }
 
     #[test]
@@ -1456,11 +1050,13 @@ mod tests {
             )],
             instructions: Some("Skill index: mathscape-worknet v0.6".into()),
         };
+        let mut spec = spec(true);
+        spec.harness = request.harness.clone();
         let message = thread_start_message(
             2,
-            &request,
-            &RoundId::parse("codex-1").unwrap(),
+            &spec,
             Path::new("mathscape"),
+            Path::new(ROUND_FILE),
             None,
         );
         let params = &message["params"];
@@ -1511,13 +1107,13 @@ mod tests {
 
     #[test]
     fn empty_tools_allow_does_not_invent_a_restriction_list() {
-        let mut request = request(AgentBackend::Codex);
-        request.tools_allow.clear();
+        let mut spec = spec(true);
+        spec.tools_allow.clear();
         let message = thread_start_message(
             2,
-            &request,
-            &RoundId::parse("codex-1").unwrap(),
+            &spec,
             Path::new("mathscape"),
+            Path::new(ROUND_FILE),
             None,
         );
         let instructions = message["params"]["developerInstructions"].as_str().unwrap();
@@ -1544,7 +1140,14 @@ mod tests {
 
     #[test]
     fn turn_start_forwards_input_ref_as_user_text() {
-        let message = turn_start_message(3, "thr_1", "explain 紧集", "/tmp/mathscape-ws", None);
+        let message = turn_start_message(
+            3,
+            "thr_1",
+            &["explain 紧集".into()],
+            "/tmp/mathscape-ws",
+            None,
+            None,
+        );
         assert_eq!(message["params"]["threadId"], "thr_1");
         assert_eq!(message["params"]["input"][0]["text"], "explain 紧集");
         assert!(message["params"].get("model").is_none());
@@ -1553,9 +1156,11 @@ mod tests {
 
     #[test]
     fn turn_start_forwards_selected_effort() {
-        let message = turn_start_message(3, "thr_1", "hi", "/tmp/ws", Some("xhigh"));
+        let hi = ["hi".to_owned()];
+        let message = turn_start_message(3, "thr_1", &hi, "/tmp/ws", Some("m"), Some("xhigh"));
         assert_eq!(message["params"]["effort"], "xhigh");
-        let blank = turn_start_message(3, "thr_1", "hi", "/tmp/ws", Some("  "));
+        assert_eq!(message["params"]["model"], "m");
+        let blank = turn_start_message(3, "thr_1", &hi, "/tmp/ws", None, Some("  "));
         assert!(blank["params"].get("effort").is_none());
     }
 
@@ -1563,9 +1168,9 @@ mod tests {
     fn thread_start_forwards_selected_model() {
         let message = thread_start_message(
             2,
-            &request(AgentBackend::Codex),
-            &RoundId::parse("codex-1").unwrap(),
+            &spec(true),
             Path::new("mathscape"),
+            Path::new(ROUND_FILE),
             Some("gpt-test"),
         );
         assert_eq!(message["params"]["model"], "gpt-test");
@@ -1573,7 +1178,7 @@ mod tests {
 
     #[test]
     fn initialize_does_not_opt_into_experimental_auth() {
-        let message = initialize_message();
+        let message = initialize_message(1);
         assert!(message["params"].get("capabilities").is_none());
         assert_eq!(message["params"]["clientInfo"]["name"], "mathscape");
     }

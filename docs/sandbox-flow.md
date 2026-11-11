@@ -81,7 +81,7 @@
 **v0 机制** [本文提议]：**会话级工作区副本**。
 
 1. 打开 session 时，把 checkpoint 工作区根 **完整复制**（或等价快照）到 Desktop 管理的沙箱目录，例如：  
-   `<app_data>/sandbox_sessions/<sandbox_session_id>/workspace/`  
+   `<app_data>/sandbox_sessions/<sandbox_session_id>/workspace/`（2026-11-10 起沙箱根默认为 `<母工作区>/.mathscape/sandbox`，见修订记录）  
    （具体根路径实现自定，契约只要求「独立目录 + 可整目录删除」。）
 2. `mathscape mcp --workspace` 与 Desktop 打开的图，均指向该副本根。
 3. Codex 侧继续沿用 Phase0：对 harness 文件系统的 **Codex sandbox** 仍为 `read-only`（防任意写宿主机）；Mathscape 工具读写的是**副本库**，不是源库。二者正交。
@@ -146,6 +146,7 @@ v0 实现另带 `transcript_entries`（行数）与 `dialogue_threads`（线程�
 - 一场会话可有多条对话线程（`d1`、`d2`…），**共享同一份隔离副本**。「新对话」只清空回放进 prompt 的历史，不动副本字节。
 - 同一时刻**只有一条活跃线程**可发消息；更早的线程是只读历史，可切过去看，不能续聊、不能并行。避免两条对话同时写一份副本、副作用归属不清。
 - 活跃线程仍在跑一轮时不能开新线程；跑在旧线程的迟到回复被拒写（不会混进新线程）。活跃线程还没有用户消息时，「新对话」幂等返回它本身。
+- 每条对话线程绑定一条 Codex 线程（`session.json` 的 `dialogue_threads[*].harness`）。「新对话」开新的 Codex 线程；同一对话的各轮在同一 Codex 线程里续接，只有线程无法恢复时才回到 transcript 重建（并提示「上下文已降级」）。
 - 新线程（非首条）的 prompt 明确告诉 Agent：副本里可能有更早对话留下的状态，但更早的对话内容不在上下文中，以工具查到的当前状态为准。
 - **丢弃 / 导出仍作用于整场会话**（全部线程 + 副本），不按线程拆。要撤掉副作用 → 丢弃，或从同一 checkpoint 新开会话（§3.4）。
 - 兼容：线程出现前写下的 `session.json` 无线程字段、transcript 行无 `thread_id`，一律视为 `d1`。
@@ -175,9 +176,9 @@ v0 实现另带 `transcript_entries`（行数）与 `dialogue_threads`（线程�
 
 ### 4.3 Agent 挂载 [锁定]
 
-- 本机 **Codex**（已有 `CodexExecutor`）+ `mathscape mcp --workspace <sandbox_copy> --round <round_id>`。
+- 本机 **Codex**（已有 `CodexExecutor`）+ `mathscape mcp --workspace <sandbox_copy> --round-file <session>/current_round`。2026-11-10 起每个沙箱会话一个常驻 app-server，对话线程对应持久化的 Codex 线程（`ephemeral: false`），跨轮保留工具结果；细节见 [codex-session-persistence.md](codex-session-persistence.md)。
 - 工具面 v0 = Phase1 已有 **10 个只读工具**；allowlist 可配置，默认全开只读集。
-- Codex sandbox `read-only`、`ephemeral: true` 沿用 Phase0 附。`approvalPolicy` 用 `on-request`（本机 Codex 的 serde 枚举是 kebab-case：`untrusted` | `on-request` | `granular` | `never`；`onRequest` 会被拒绝为 unknown variant），**不用** `never`：缺少 `readOnlyHint` 的 MCP 工具会被 Codex 当成破坏性调用，`never` 会直接拒绝并报 `approval policy is never`。Mathscape 10 个只读工具在 `tools/list` 上带注解 `readOnlyHint: true`、`destructiveHint: false`、`openWorldHint: false`；`thread/start` 另设 `mcp_servers.mathscape.default_tools_approval_mode = "approve"` 与 `enabled_tools` 白名单。适配器接受白名单内的只读 MCP；shell、文件写入、额外权限、动态工具与打开外链一律拒绝。未能归类的审批最多等 60 秒，超时记「等待审批已超时」并拒绝。以上不得写入源 checkpoint。
+- Codex sandbox `read-only` 沿用 Phase0 附；沙箱对话的线程自 2026-11-10 起为 `ephemeral: false`（一次性 `start_round` 仍为 `ephemeral: true`）。`approvalPolicy` 用 `on-request`（本机 Codex 的 serde 枚举是 kebab-case：`untrusted` | `on-request` | `granular` | `never`；`onRequest` 会被拒绝为 unknown variant），**不用** `never`：缺少 `readOnlyHint` 的 MCP 工具会被 Codex 当成破坏性调用，`never` 会直接拒绝并报 `approval policy is never`。Mathscape 10 个只读工具在 `tools/list` 上带注解 `readOnlyHint: true`、`destructiveHint: false`、`openWorldHint: false`；`thread/start` 另设 `mcp_servers.mathscape.default_tools_approval_mode = "approve"` 与 `enabled_tools` 白名单。适配器接受白名单内的只读 MCP；shell、文件写入、额外权限、动态工具与打开外链一律拒绝。未能归类的审批最多等 60 秒，超时记「等待审批已超时」并拒绝。以上不得写入源 checkpoint。
 
 ### 4.3.1 Skill 注入与会话权限 [2026-11-09 实现]
 
@@ -276,3 +277,5 @@ PR 描述固定三节（用户体感调试约定，保持简单）：
 | 2026-11-06 | `material.read` 按页拼接 + 只补缺口（`mob/read-stitch-coverage`）：PDF 精读不再要求单份快照完全包含请求。已有快照按页合起来盖住请求时直接拼接返回（`details.served_segments` 给每段物理快照的 `artifact_id` / `pages` / `md_byte_range`），不跑 Marker；有缺口时 Marker 逐个缺口运行（每段一份快照，缺口间已覆盖页不重解析），再与旧快照拼接。修复沙箱 `sbx-20261101T235040-bc83e994` 中已解析过 1–4 / 5–10 / 11–14 页、读 1–8 / 9–14 仍整段重解析的问题。幂等键策略版本 `ensure-v3`（键内范围为单个缺口）；`details.ensure.marker_range` 改为 `marker_ranges` + `runs`；`max_pages_per_request` 改按缺口页数之和计。工具数仍为 7，grep / search 不变。详见 `docs/canonical-markdown.md`。 |
 | 2026-11-09 | PR-B 契约修订（`feat/pr-b-staged-proposals`）：§3.3 试写表新增 PR-B 行与「round 与 investigation 绑定」开放条件；§3.5 切换确认由方向记录改为与正式工作区共用 Phase2 §5.5 批量审核（用户改定）；§4.3.1 记录白名单开放计划；§4.4 暂存对象「未审批」样式上图（用户改定）；T2 已定。接受只写副本，源 checkpoint 只读不变式不变。仅文档。 |
 | 2026-11-10 | Loogle 常驻（`feat/resident-process-loogle`）：新 crate `mathscape-resident` 管常驻子进程生命周期；常驻 Loogle 由 Desktop 进程持有（每轮的 `mathscape mcp` 随轮次结束，留不住常驻进程），经 0700 目录下的 Unix socket 提供给 MCP，路径以 `MATHSCAPE_LOOGLE_SOCKET` 写入每轮 harness 环境并记入 `harness.jsonl` 的 `loogle_resident_socket`。连不上或开关关闭时回到一次性调用。工作区设置新增「Loogle 常驻模式」（默认打开）。细节见 lean-tool-contract §3.4。MCP 工具输入不变，`mathscape-mcp/16` 不变。 |
+| 2026-11-10 | Codex 会话持久化（`feat/codex-session-persistence`，PR #48，设计见 [codex-session-persistence.md](codex-session-persistence.md)）：沙箱根默认改为 `<母工作区>/.mathscape/sandbox`（`MATHSCAPE_SANDBOX_ROOT` 仍优先），启动时把旧 `<app_data>/sandbox` 中属于本母工作区的会话复制过来（保留原件，记 `migrations.jsonl`）。每个沙箱会话一个常驻 `codex app-server`（`mathscape-resident` 管理，空闲 15 分钟回收；切换会话、回母工作区、丢弃、退出应用时关闭），对话线程绑定持久化 Codex 线程（`ephemeral: false`，来源标 mathscape，`CODEX_HOME` 不变），每轮后把 rollout 复制到会话目录 `harness/codex/`。续接顺序：进程内已加载 → 按 id `thread/resume` → 恢复副本到 `~/.codex/sessions/mathscape/` 再 resume → transcript 重建并写 System 行「上下文已降级」。MCP 改用 `--round-file`，round id 不再进 `developerInstructions`；每轮上下文（首轮读 skill、工作区迁移、工具/skill 更新、「自上轮以来工作区变化」）作为 `turn/start.input` 的首个文本项。skill v0.6.5。`agent_events v0` 未改；MCP 工具与 `mathscape-mcp/16` 未改。 |
+| 2026-11-11 | PR #48 Mac 验收修订：审核页总览改为整份 change set 的总数（单元 / 关系 / Debt），当前快照另标「快照 i/N · 本快照 x 单元 / y 关系」，并列出全部节点关系（含跨快照、连接已有对象）与关系图（详见 phase2-write-contract §5.6）；沙箱会话的 `codex app-server` 生命周期（spawn / ready / idle_reclaim / shutdown / exit，instance = `codex-app-server:<会话 id>`）与常驻 Loogle 一起写入 app 日志目录的 `resident-processes.jsonl`；转录重建提示与常驻会话开场说明共用工具描述（含 `propose_changes`，不再称「只读工具」）；skill v0.6.6 要求按 `staged_ids` 汇报提案数量。 |

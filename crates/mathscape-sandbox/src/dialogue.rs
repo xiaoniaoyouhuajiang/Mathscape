@@ -39,6 +39,13 @@ pub const HARNESS_FILE: &str = "harness.jsonl";
 /// Lives beside `workspace/`, so the workspace copy itself stays read-only to
 /// harness tools; discard deletes it with the session.
 pub const SCRATCH_DIR: &str = "scratch";
+/// Current round token for the session's long-lived MCP process
+/// (`mathscape mcp --round-file`). Written before every turn.
+pub const CURRENT_ROUND_FILE: &str = "current_round";
+/// Harness-owned thread state copies, one subdirectory per backend
+/// (`harness/codex/rollout-….jsonl`). A cache: the transcript stays the
+/// source of truth.
+pub const HARNESS_STATE_DIR: &str = "harness";
 /// Upper bound of one transcript message (user input or agent reply).
 pub const MAX_MESSAGE_CHARS: usize = 20_000;
 /// Implicit thread of every session (and of legacy untagged lines).
@@ -53,6 +60,38 @@ const MAX_THREADS: usize = 200;
 pub struct DialogueThread {
     pub thread_id: String,
     pub created_at: String,
+    /// The harness thread this dialogue continues (docs/codex-session-persistence.md §3).
+    /// `None` until the first turn ran on a persistent harness thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<HarnessThreadBinding>,
+}
+
+/// Which harness thread a dialogue thread is bound to, and what it was
+/// bound with. Compared on the next turn to detect tool / skill updates and
+/// a moved workspace.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessThreadBinding {
+    /// Backend label, e.g. `codex`.
+    pub backend: String,
+    /// Harness-native thread id (Codex thread UUID).
+    pub thread_id: String,
+    /// File name of the rollout copy under `harness/<backend>/`, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout_file: Option<String>,
+    /// Session workspace copy path the thread was last run against.
+    pub workspace: std::path::PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_schema_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_sha256: Option<String>,
+    /// When the last turn on this thread ended (RFC3339). The next turn's
+    /// 「自上轮以来工作区变化」summary compares the workspace digest saved
+    /// at that point (`harness/<backend>/<thread>.workspace.json`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_turn_at: Option<String>,
 }
 
 /// Threads of a session in creation order plus the active one.
@@ -69,6 +108,7 @@ pub(crate) fn effective_threads(record: &SessionRecord) -> DialogueThreads {
         vec![DialogueThread {
             thread_id: FIRST_THREAD_ID.to_owned(),
             created_at: record.created_at.clone(),
+            harness: None,
         }]
     } else {
         record.dialogue_threads.clone()
@@ -240,12 +280,65 @@ impl SandboxHome {
         let thread = DialogueThread {
             thread_id: format!("{THREAD_ID_PREFIX}{next}"),
             created_at: now_rfc3339(),
+            harness: None,
         };
         record.active_thread_id = Some(thread.thread_id.clone());
         record.dialogue_threads = current.threads;
         record.dialogue_threads.push(thread);
         write_json_atomic(&self.session_dir(session_id).join(SESSION_FILE), &record)?;
         Ok(effective_threads(&record))
+    }
+
+    /// Record (or replace) the harness thread a dialogue thread is bound to.
+    pub fn set_thread_harness(
+        &self,
+        session_id: &str,
+        thread_id: &str,
+        binding: Option<HarnessThreadBinding>,
+    ) -> Result<DialogueThreads> {
+        let mut record = self.session(session_id)?;
+        let mut current = effective_threads(&record);
+        let Some(thread) = current
+            .threads
+            .iter_mut()
+            .find(|thread| thread.thread_id == thread_id)
+        else {
+            return Err(SandboxError::Invalid(format!("未知对话：{thread_id}")));
+        };
+        thread.harness = binding;
+        record.dialogue_threads = current.threads;
+        if record.active_thread_id.is_none() {
+            record.active_thread_id = Some(current.active_thread_id);
+        }
+        write_json_atomic(&self.session_dir(session_id).join(SESSION_FILE), &record)?;
+        Ok(effective_threads(&record))
+    }
+
+    /// `<session>/current_round` (see [`CURRENT_ROUND_FILE`]).
+    pub fn current_round_path(&self, session_id: &str) -> std::path::PathBuf {
+        self.session_dir(session_id).join(CURRENT_ROUND_FILE)
+    }
+
+    /// `<session>/harness/<backend>/`, created on demand.
+    pub fn ensure_harness_state_dir(
+        &self,
+        session_id: &str,
+        backend: &str,
+    ) -> Result<std::path::PathBuf> {
+        self.session(session_id)?;
+        if backend.is_empty()
+            || !backend
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(SandboxError::Invalid(format!("非法 backend：{backend}")));
+        }
+        let path = self
+            .session_dir(session_id)
+            .join(HARNESS_STATE_DIR)
+            .join(backend);
+        std::fs::create_dir_all(&path).map_err(|e| SandboxError::io(&path, e))?;
+        Ok(path)
     }
 
     /// Append one raw `agent_events v0` event (already serialized as JSON).
@@ -309,6 +402,16 @@ const PROMPT_HISTORY_CHARS: usize = 12_000;
 /// `history` must already be the active thread only. `continues_session`
 /// marks a later thread: the copy may hold state from earlier threads whose
 /// conversation is deliberately *not* replayed.
+/// What the agent is and what its tools can do; shared by the persistent
+/// session preamble (Desktop) and the transcript rebuild below.
+pub const DIALOGUE_INTRO: &str = "你在 Mathscape 沙箱探索会话里与用户对话。可用 mathscape MCP 工具查阅当前（沙箱副本）工作区里的材料、图与手稿，并用 propose_changes 提交提案：提案只写入沙箱副本、等待用户审核，接受前不会改动地图。引用对象时尽量给出 object_id。";
+
+/// A later dialogue thread on the same copy.
+pub const NEW_THREAD_NOTE: &str = "这是本沙箱会话里新开的一条对话：工作区可能保留了更早对话留下的状态，但更早的对话内容不在本轮上下文中；以工具查到的当前状态为准，不要假设之前说过什么。";
+
+/// Rebuilt context: only the text of earlier turns survives.
+pub const REBUILT_CONTEXT_NOTE: &str = "本轮上下文由对话记录重建：之前轮次的工具调用与结果不在上下文中，提案 id 与状态请用 list_change_sets 重新查询，涉及具体对象时以本轮调用工具的结果为准。";
+
 pub fn build_dialogue_prompt(
     history: &[TranscriptEntry],
     message: &str,
@@ -331,13 +434,14 @@ pub fn build_dialogue_prompt(
         lines.push(line);
     }
     lines.reverse();
-    let mut prompt = String::from(
-        "你在 Mathscape 沙箱探索会话里与用户对话。可用 mathscape MCP 只读工具查阅当前（沙箱副本）工作区里的材料、图与手稿；引用对象时尽量给出 object_id。\n",
-    );
+    let mut prompt = format!("{DIALOGUE_INTRO}\n");
     if continues_session {
-        prompt.push_str(
-            "这是本沙箱会话里新开的一条对话：工作区可能保留了更早对话留下的状态，但更早的对话内容不在本轮上下文中；以工具查到的当前状态为准，不要假设之前说过什么。\n",
-        );
+        prompt.push_str(NEW_THREAD_NOTE);
+        prompt.push('\n');
+    }
+    if !lines.is_empty() {
+        prompt.push_str(REBUILT_CONTEXT_NOTE);
+        prompt.push('\n');
     }
     if !lines.is_empty() {
         prompt.push_str("\n此前的对话（按时间）：\n");

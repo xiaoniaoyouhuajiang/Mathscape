@@ -5,9 +5,10 @@
 //! The `mathscape-codex-fixture` binary is a thin wrapper around
 //! [`serve_codex_app_server_fixture_with`].
 
-use std::fs::OpenOptions;
+use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -41,6 +42,16 @@ pub struct CodexFixtureOptions {
     pub log_path: Option<PathBuf>,
     /// MCP startup notifications. `None` = Codex sends none (older CLI).
     pub mcp: Option<CodexFixtureMcp>,
+    /// Fake `$CODEX_HOME`: non-ephemeral threads append a rollout under
+    /// `sessions/2026/01/01/` after each turn, and `thread/resume` of a
+    /// thread this process does not know succeeds only when such a rollout
+    /// exists anywhere under `sessions/` (as real Codex 0.166 does).
+    pub codex_home: Option<PathBuf>,
+}
+
+struct FixtureThread {
+    ephemeral: bool,
+    rollout: Option<PathBuf>,
 }
 
 /// Scripted peer with no request log.
@@ -54,10 +65,11 @@ pub fn serve_codex_app_server_fixture_with(
     options: CodexFixtureOptions,
 ) -> io::Result<()> {
     let mut line = String::new();
-    let thread_id = "thr_fixture".to_owned();
-    let turn_id = "turn_fixture".to_owned();
-    let mut user_text = String::new();
-    let mut script_sent = false;
+    let mut threads: HashMap<String, FixtureThread> = HashMap::new();
+    let mut thread_count = 0_u32;
+    let mut turn_count = 0_u32;
+    let mut thread_id = String::new();
+    let mut turn_id = String::new();
     loop {
         line.clear();
         if reader.read_line(&mut line)? == 0 {
@@ -119,11 +131,36 @@ pub fn serve_codex_app_server_fixture_with(
                 }),
             )?,
             "thread/start" => {
+                thread_count += 1;
+                let id_text = if thread_count == 1 {
+                    "thr_fixture".to_owned()
+                } else {
+                    format!("thr_fixture-{thread_count}")
+                };
+                let ephemeral = message
+                    .pointer("/params/ephemeral")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                let rollout = (!ephemeral)
+                    .then(|| {
+                        options
+                            .codex_home
+                            .as_deref()
+                            .map(|home| rollout_path(home, &id_text))
+                    })
+                    .flatten();
+                threads.insert(
+                    id_text.clone(),
+                    FixtureThread {
+                        ephemeral,
+                        rollout: rollout.clone(),
+                    },
+                );
                 // Real Codex sends these right after `thread/started`. The
                 // fixture sends them first so the inventory answer lands
                 // before its instant scripted turn completes.
                 if let Some(mcp) = &options.mcp {
-                    write_mcp_startup(&mut writer, &thread_id, mcp)?;
+                    write_mcp_startup(&mut writer, &id_text, mcp)?;
                 }
                 write_json(
                     &mut writer,
@@ -131,9 +168,10 @@ pub fn serve_codex_app_server_fixture_with(
                         "id": id,
                         "result": {
                             "thread": {
-                                "id": thread_id,
-                                "sessionId": thread_id,
-                                "ephemeral": true,
+                                "id": id_text,
+                                "sessionId": id_text,
+                                "ephemeral": ephemeral,
+                                "path": rollout.map(|path| path.display().to_string()),
                                 "modelProvider": "openai"
                             }
                         }
@@ -143,22 +181,83 @@ pub fn serve_codex_app_server_fixture_with(
                     &mut writer,
                     &json!({
                         "method": "thread/started",
-                        "params": { "thread": { "id": thread_id } }
+                        "params": { "thread": { "id": id_text } }
+                    }),
+                )?;
+            }
+            "thread/resume" => {
+                let wanted = message
+                    .pointer("/params/threadId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                let found = if threads.contains_key(&wanted) {
+                    true
+                } else if let Some(path) = options
+                    .codex_home
+                    .as_deref()
+                    .and_then(|home| find_fixture_rollout(home, &wanted))
+                {
+                    threads.insert(
+                        wanted.clone(),
+                        FixtureThread {
+                            ephemeral: false,
+                            rollout: Some(path),
+                        },
+                    );
+                    true
+                } else {
+                    false
+                };
+                if !found {
+                    write_json(
+                        &mut writer,
+                        &json!({
+                            "id": id,
+                            "error": { "code": -32600,
+                                       "message": format!("no rollout found for thread id {wanted}") }
+                        }),
+                    )?;
+                    continue;
+                }
+                if let Some(mcp) = &options.mcp {
+                    write_mcp_startup(&mut writer, &wanted, mcp)?;
+                }
+                let path = threads
+                    .get(&wanted)
+                    .and_then(|thread| thread.rollout.clone());
+                write_json(
+                    &mut writer,
+                    &json!({
+                        "id": id,
+                        "result": {
+                            "thread": {
+                                "id": wanted,
+                                "ephemeral": false,
+                                "path": path.map(|path| path.display().to_string()),
+                                "turns": []
+                            }
+                        }
                     }),
                 )?;
             }
             "turn/start" => {
-                if let Some(text) = message
+                thread_id = message
+                    .pointer("/params/threadId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("thr_fixture")
+                    .to_owned();
+                let user_text = message
                     .pointer("/params/input")
                     .and_then(Value::as_array)
                     .and_then(|items| {
                         items
                             .iter()
+                            .rev()
                             .find_map(|item| item.get("text").and_then(Value::as_str))
                     })
-                {
-                    user_text = text.to_owned();
-                }
+                    .unwrap_or("")
+                    .to_owned();
                 if options.mode == CodexFixtureMode::RejectTurnAuth {
                     write_json(
                         &mut writer,
@@ -169,6 +268,22 @@ pub fn serve_codex_app_server_fixture_with(
                     )?;
                     continue;
                 }
+                if !threads.contains_key(&thread_id) {
+                    write_json(
+                        &mut writer,
+                        &json!({
+                            "id": id,
+                            "error": { "code": -32600, "message": format!("thread not found: {thread_id}") }
+                        }),
+                    )?;
+                    continue;
+                }
+                turn_count += 1;
+                turn_id = if turn_count == 1 {
+                    "turn_fixture".to_owned()
+                } else {
+                    format!("turn_fixture-{turn_count}")
+                };
                 write_json(
                     &mut writer,
                     &json!({
@@ -183,19 +298,22 @@ pub fn serve_codex_app_server_fixture_with(
                         }
                     }),
                 )?;
-                if !script_sent {
-                    script_sent = true;
-                    if options.mode == CodexFixtureMode::AskShell {
-                        ask_shell(
-                            &mut reader,
-                            &mut writer,
-                            &options.log_path,
-                            &thread_id,
-                            &turn_id,
-                        )?;
-                    } else {
-                        emit_script(&mut writer, options.mode, &thread_id, &turn_id, &user_text)?;
-                    }
+                if let Some(thread) = threads.get(&thread_id)
+                    && !thread.ephemeral
+                    && let Some(path) = &thread.rollout
+                {
+                    append_rollout(path, &thread_id, &user_text);
+                }
+                if options.mode == CodexFixtureMode::AskShell {
+                    ask_shell(
+                        &mut reader,
+                        &mut writer,
+                        &options.log_path,
+                        &thread_id,
+                        &turn_id,
+                    )?;
+                } else {
+                    emit_script(&mut writer, options.mode, &thread_id, &turn_id, &user_text)?;
                 }
             }
             "mcpServerStatus/list" => {
@@ -242,6 +360,41 @@ pub fn serve_codex_app_server_fixture_with(
             }
             _ => {}
         }
+    }
+}
+
+fn rollout_path(home: &Path, thread_id: &str) -> PathBuf {
+    home.join("sessions/2026/01/01")
+        .join(format!("rollout-2026-01-01T00-00-00-{thread_id}.jsonl"))
+}
+
+fn find_fixture_rollout(home: &Path, thread_id: &str) -> Option<PathBuf> {
+    let suffix = format!("-{thread_id}.jsonl");
+    let mut stack = vec![home.join("sessions")];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(&suffix))
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn append_rollout(path: &Path, thread_id: &str, user_text: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let line = json!({ "type": "fixture_turn", "threadId": thread_id, "text": user_text });
+        let _ = writeln!(file, "{line}");
     }
 }
 

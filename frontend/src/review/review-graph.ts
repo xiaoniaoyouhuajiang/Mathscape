@@ -11,6 +11,8 @@ export interface ReviewGraphRelation {
   source: string;
   target: string;
   label: string;
+  /** Drawn dashed: the relation crosses snapshots. */
+  cross?: boolean;
 }
 
 export interface ReviewGraphStructure {
@@ -22,6 +24,13 @@ export interface ReviewGraphEvidence {
   id: string;
   unit: string;
   label: string;
+}
+
+/** A relation end outside the shown units: an existing map object or a unit of another snapshot. */
+export interface ReviewGraphExternal {
+  ref: string;
+  label: string;
+  kind: "existing" | "cross";
 }
 
 export interface ReviewGraphCallbacks {
@@ -70,6 +79,16 @@ const STYLE: StylesheetJson = [
       color: "#bcd6ea", "text-background-color": "#131c24", "text-background-opacity": 0.85, "text-background-padding": "2px",
     },
   },
+  {
+    selector: "node.external",
+    style: {
+      label: "data(label)", "font-size": 9, color: "#a9bcc2", "text-wrap": "wrap", "text-max-width": "120px",
+      "text-valign": "bottom", "text-margin-y": 4, width: 16, height: 16, shape: "diamond",
+      "background-color": "#1b2a31", "border-width": 2, "border-style": "dashed", "border-color": "#8fa3aa",
+    },
+  },
+  { selector: "node.external-cross", style: { "border-color": "#b48ee0" } },
+  { selector: "edge.semantic.cross", style: { "line-style": "dashed", "line-color": "#b48ee0", "target-arrow-color": "#b48ee0" } },
   { selector: "edge.evidence", style: { "line-style": "dotted", "line-color": "#8a7d4a", "target-arrow-shape": "none", width: 1 } },
   { selector: "edge.is-current", style: { "line-color": "#ffd84a", "target-arrow-color": "#ffd84a", width: 3 } },
 ];
@@ -85,13 +104,21 @@ export class ReviewGraph {
     structure: ReviewGraphStructure[],
     relations: ReviewGraphRelation[],
     callbacks: ReviewGraphCallbacks,
+    external: ReviewGraphExternal[] = [],
   ) {
     const known = new Set(units.map(unit => unit.ref));
+    const outside = new Map(external.filter(node => !known.has(node.ref)).map(node => [node.ref, node]));
+    const shown = (ref: string) => known.has(ref) || outside.has(ref);
     const elements: ElementDefinition[] = [
       ...units.map(unit => ({
         group: "nodes" as const,
         data: { id: unitId(unit.ref), ref: unit.ref, label: unit.label },
         classes: `unit state-${unit.state}`,
+      })),
+      ...[...outside.values()].map(node => ({
+        group: "nodes" as const,
+        data: { id: unitId(node.ref), ref: node.ref, label: node.label },
+        classes: `external external-${node.kind}`,
       })),
       ...structure
         .filter(edge => known.has(edge.parent) && known.has(edge.child))
@@ -101,21 +128,23 @@ export class ReviewGraph {
           classes: "structure",
         })),
       ...relations
-        .filter(edge => known.has(edge.source) && known.has(edge.target))
+        .filter(edge => shown(edge.source) && shown(edge.target))
         .map(edge => ({
           group: "edges" as const,
           data: { id: relationId(edge.id), relation: edge.id, source: unitId(edge.source), target: unitId(edge.target), label: edge.label },
-          classes: "semantic",
+          classes: [outside.get(edge.source), outside.get(edge.target)].some(node => node?.kind === "cross") || edge.cross ? "semantic cross" : "semantic",
         })),
     ];
     host.dataset.unitCount = String(units.length);
+    host.dataset.externalCount = String(outside.size);
+    host.dataset.relationCount = String(elements.filter(element => element.classes?.toString().startsWith("semantic")).length);
     this.core = cytoscape({ container: host, elements, style: STYLE, minZoom: 0.2, maxZoom: 3 });
     const children = new Set(structure.map(edge => edge.child));
-    const roots = units.filter(unit => !children.has(unit.ref)).map(unit => unitId(unit.ref));
-    this.core.layout(roots.length > 0 && roots.length < units.length
+    const roots = [...units.filter(unit => !children.has(unit.ref)).map(unit => unitId(unit.ref)), ...[...outside.keys()].map(unitId)];
+    this.core.layout(roots.length > 0 && roots.length < units.length + outside.size
       ? { name: "breadthfirst", directed: true, roots, spacingFactor: 1.15, padding: 20, animate: false }
       : { name: "cose", padding: 20, animate: false, randomize: false }).run();
-    this.core.on("tap", "node.unit", event => callbacks.unit(event.target.data("ref"), false));
+    this.core.on("tap", "node.unit, node.external", event => callbacks.unit(event.target.data("ref"), false));
     this.core.on("mouseover", "node.unit", event => callbacks.unit(event.target.data("ref"), true));
     this.core.on("tap", "edge.semantic", event => callbacks.relation(event.target.data("relation"), false));
     this.core.on("mouseover", "edge.semantic", event => callbacks.relation(event.target.data("relation"), true));

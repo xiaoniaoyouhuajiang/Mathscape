@@ -214,7 +214,11 @@ fn fixture_round_trip_mirrors_mcp_calls_into_agent_events() {
     assert!(log_text.contains("default_tools_approval_mode"));
     assert!(log_text.contains("\"approve\""));
     assert!(log_text.contains("workspace.search"));
-    assert!(log_text.contains(&format!("\"--round\",\"{}\"", round.as_str())));
+    // The long-lived MCP reads the round from a file the adapter rewrites
+    // before every turn; no round id is baked into the MCP command line.
+    assert!(log_text.contains("\"--round-file\""));
+    assert!(!log_text.contains("\"--round\","));
+    assert!(log_text.contains("\"ephemeral\":true"));
     assert!(log_text.contains("mathscape"));
     let lower = log_text.to_ascii_lowercase();
     assert!(!lower.contains("account/login"));

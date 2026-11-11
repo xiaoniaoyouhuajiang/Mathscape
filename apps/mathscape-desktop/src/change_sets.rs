@@ -87,7 +87,8 @@ pub struct PendingChangeSetView {
     pub anchors: Vec<AnchorView>,
     /// Older versions of the same change set, newest first (folded in the UI).
     pub history: Vec<HistoryVersionView>,
-    /// Titles of head objects named by a diagnostic's `target_id`.
+    /// Titles of existing objects the version names (head first, else another
+    /// staged version): diagnostic targets, relation ends, parents, edit targets.
     pub target_titles: BTreeMap<String, String>,
 }
 
@@ -316,15 +317,14 @@ fn view(
         })
         .collect();
     history.sort_by_key(|item| std::cmp::Reverse(item.version));
-    let target_titles = item
-        .record
-        .result
-        .get("diagnostics")
-        .and_then(Value::as_array)
+    let target_titles = named_ids(item)
         .into_iter()
-        .flatten()
-        .filter_map(|diagnostic| diagnostic.get("target_id").and_then(Value::as_str))
-        .filter_map(|id| Some((id.to_owned(), anchors.head_title(id)?)))
+        .filter_map(|id| {
+            let title = anchors
+                .head_title(&id)
+                .or_else(|| staged_title(versions, &id))?;
+            Some((id, title))
+        })
         .collect();
     PendingChangeSetView {
         anchors: anchors.anchors(item),
@@ -351,6 +351,68 @@ fn view(
             })
             .collect(),
     }
+}
+
+/// Existing objects a version names: diagnostic targets, relation ends,
+/// parents and edit targets (stable ids, never `$new:` refs).
+fn named_ids(item: &PendingChangeSet) -> Vec<String> {
+    let record = &item.record;
+    let mut ids: Vec<String> = Vec::new();
+    let mut push = |value: Option<&Value>| {
+        if let Some(id) = value.and_then(Value::as_str)
+            && id.starts_with("mathscape:")
+            && !ids.iter().any(|known| known == id)
+        {
+            ids.push(id.to_owned());
+        }
+    };
+    let list = |value: &Value, key: &str| -> Vec<Value> {
+        value
+            .get(key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    for diagnostic in list(&record.result, "diagnostics") {
+        push(diagnostic.get("target_id"));
+    }
+    for relation in list(&record.proposal, "proposed_relations") {
+        push(relation.get("source"));
+        push(relation.get("target"));
+        push(relation.get("target_id"));
+    }
+    for object in list(&record.proposal, "proposed_objects") {
+        push(object.get("target_id"));
+        push(
+            object
+                .get("payload")
+                .and_then(|payload| payload.get("parent")),
+        );
+    }
+    ids
+}
+
+/// Title of an object another version of this investigation stages.
+fn staged_title(versions: &[PendingChangeSet], id: &str) -> Option<String> {
+    versions.iter().find_map(|version| {
+        let record = &version.record;
+        let (local_ref, _) = record
+            .result
+            .get("staged_ids")?
+            .as_object()?
+            .iter()
+            .find(|(_, staged)| staged.as_str() == Some(id))?;
+        record
+            .proposal
+            .get("proposed_objects")?
+            .as_array()?
+            .iter()
+            .find(|object| object.get("local_ref").and_then(Value::as_str) == Some(local_ref))?
+            .get("payload")?
+            .get("display_title")?
+            .as_str()
+            .map(str::to_owned)
+    })
 }
 
 pub fn list_queue(root: &Path, investigation_id: &str) -> Result<ChangeSetQueue, String> {
@@ -831,6 +893,39 @@ mod tests {
                 ]
             }),
         )
+    }
+
+    #[test]
+    fn queue_names_existing_relation_ends_with_titles() {
+        let fx = fixture();
+        let a = unit_proposal(&fx, "a", "定理 A", "第一段内容。", Value::Null);
+        let a_unit = a["staged_ids"]["u"].as_str().unwrap().to_owned();
+        let b = propose(
+            &fx,
+            json!({
+                "request_id": "b", "rationale": "登记定理 B",
+                "proposed_objects": [
+                    span(&fx, "s", "第二段内容。", "inline"),
+                    unit("u", "定理 B", Value::Null, json!(["$new:s"]))
+                ],
+                "proposed_relations": [{
+                    "local_ref": "r", "kind": "source_relation", "op": "create",
+                    "relation": "explains", "source": a_unit, "target": "$new:u",
+                    "evidence_spans": ["$new:s"]
+                }]
+            }),
+        );
+        assert_eq!(b["status"], "staged", "{b}");
+        let queue = list_queue(&fx.root, INV).unwrap();
+        let view = queue
+            .items
+            .iter()
+            .find(|item| item.change_set_id == b["change_set_id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            view.target_titles.get(&a_unit).map(String::as_str),
+            Some("定理 A")
+        );
     }
 
     fn sel(value: &Value) -> ChangeSetSelection {

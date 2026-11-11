@@ -1325,7 +1325,7 @@ fn projected_investigation(workspace: &McpWorkspace, scope: Scope) -> Option<Str
     workspace
         .store()
         .ok()?
-        .round_investigation(round)
+        .round_investigation(&round)
         .ok()
         .flatten()
 }

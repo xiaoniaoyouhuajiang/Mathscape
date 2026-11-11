@@ -13,17 +13,23 @@
 //! `events.jsonl`), both inside the session dir; Agent tools stay read-only
 //! (T2). The Codex mount itself lives in the Desktop app.
 //!
-//! On-disk layout under a [`SandboxHome`] root:
+//! On-disk layout under a [`SandboxHome`] root. Desktop puts the root inside
+//! the mother workspace (`<workspace>/.mathscape/sandbox`, see
+//! [`WORKSPACE_SANDBOX_DIR`]) so moving the workspace directory moves its
+//! sessions too (docs/codex-session-persistence.md §2.3):
 //!
 //! ```text
 //! <root>/
 //!   checkpoints.json                 # registered checkpoints (aliases → local roots)
 //!   discarded.jsonl                  # tombstones: one line per discarded session id
+//!   migrations.jsonl                 # sessions copied in from an older sandbox root
 //!   sessions/<sandbox_session_id>/   # the whole isolation layer; discard deletes it
 //!     session.json
 //!     transcript.jsonl               # user / agent / system lines (S1), tagged by dialogue thread
 //!     events.jsonl                   # raw agent_events v0 of every round (S1)
 //!     harness.jsonl                  # per-round harness context: skill version/hash, grants
+//!     current_round                  # round token read by the long-lived MCP (--round-file)
+//!     harness/<backend>/             # harness thread state copies (e.g. Codex rollouts)
 //!     scratch/                       # the only harness-writable dir (drafts)
 //!     workspace/                     # full copy of the checkpoint workspace root
 //!   exports/                         # default export destination (survives discard)
@@ -33,11 +39,15 @@
 mod copy;
 mod dialogue;
 mod fingerprint;
+mod migrate;
 
 pub use dialogue::{
-    DialogueThread, DialogueThreads, EVENTS_FILE, FIRST_THREAD_ID, HARNESS_FILE, MAX_MESSAGE_CHARS,
-    SCRATCH_DIR, TranscriptEntry, TranscriptRole, build_dialogue_prompt,
+    CURRENT_ROUND_FILE, DIALOGUE_INTRO, DialogueThread, DialogueThreads, EVENTS_FILE,
+    FIRST_THREAD_ID, HARNESS_FILE, HARNESS_STATE_DIR, HarnessThreadBinding, MAX_MESSAGE_CHARS,
+    NEW_THREAD_NOTE, REBUILT_CONTEXT_NOTE, SCRATCH_DIR, TranscriptEntry, TranscriptRole,
+    build_dialogue_prompt,
 };
+pub use migrate::{MigrationReport, legacy_sessions_for};
 
 pub use fingerprint::{
     CheckpointFingerprint, FINGERPRINT_ALGORITHM, FingerprintFile, fingerprint_workspace,
@@ -66,14 +76,16 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 pub const TRANSCRIPT_FILE: &str = "transcript.jsonl";
 pub const SESSION_FILE: &str = "session.json";
 pub const SESSION_WORKSPACE_DIR: &str = "workspace";
+/// Sandbox root relative to a mother workspace.
+pub const WORKSPACE_SANDBOX_DIR: &str = ".mathscape/sandbox";
 
-const CHECKPOINTS_FILE: &str = "checkpoints.json";
+pub(crate) const CHECKPOINTS_FILE: &str = "checkpoints.json";
 const TOMBSTONES_FILE: &str = "discarded.jsonl";
-const SESSIONS_DIR: &str = "sessions";
+pub(crate) const SESSIONS_DIR: &str = "sessions";
 const EXPORTS_DIR: &str = "exports";
-const STAGING_DIR: &str = ".staging";
+pub(crate) const STAGING_DIR: &str = ".staging";
 const TRASH_DIR: &str = ".trash";
-const SESSION_ID_PREFIX: &str = "sbx-";
+pub(crate) const SESSION_ID_PREFIX: &str = "sbx-";
 const MAX_NOTES_CHARS: usize = 2_000;
 const MAX_LABEL_CHARS: usize = 120;
 
@@ -163,6 +175,11 @@ pub struct CheckpointRecord {
 struct CheckpointRegistry {
     schema: String,
     checkpoints: Vec<CheckpointRecord>,
+    /// Sandbox root when this registry was last written. When the root has
+    /// moved (the workspace directory was moved), checkpoint roots that
+    /// contained the old root are rebased onto the new one on read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    home_root: Option<PathBuf>,
 }
 
 /// `session.json` inside the session isolation directory.
@@ -269,11 +286,17 @@ impl SandboxHome {
         let root = root.canonicalize().map_err(|e| SandboxError::io(root, e))?;
         let home = Self { root };
         home.sweep_internal();
+        home.adopt_moved_root()?;
         Ok(home)
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Sandbox root of a mother workspace: `<workspace>/.mathscape/sandbox`.
+    pub fn workspace_root_for(workspace: &Path) -> PathBuf {
+        workspace.join(WORKSPACE_SANDBOX_DIR)
     }
 
     pub fn default_export_dir(&self) -> PathBuf {
@@ -357,7 +380,10 @@ impl SandboxHome {
             return Err(SandboxError::NotADirectory(root.to_owned()));
         }
         let root = root.canonicalize().map_err(|e| SandboxError::io(root, e))?;
-        if root.starts_with(&self.root) || self.root.starts_with(&root) {
+        // A checkpoint may *contain* the sandbox root (the mother workspace
+        // holds `.mathscape/sandbox`); the copy skips it. A checkpoint inside
+        // the sandbox (e.g. a session copy) would never be isolated.
+        if root.starts_with(&self.root) {
             return Err(SandboxError::OverlappingRoots {
                 checkpoint: root,
                 sandbox: self.root.clone(),
@@ -375,13 +401,56 @@ impl SandboxHome {
             return Ok(CheckpointRegistry {
                 schema: CHECKPOINT_REGISTRY_SCHEMA.to_owned(),
                 checkpoints: Vec::new(),
+                home_root: None,
             });
         }
         read_json(&path)
     }
 
     fn write_registry(&self, registry: &CheckpointRegistry) -> Result<()> {
-        write_json_atomic(&self.root.join(CHECKPOINTS_FILE), registry)
+        let registry = CheckpointRegistry {
+            schema: registry.schema.clone(),
+            checkpoints: registry.checkpoints.clone(),
+            home_root: Some(self.root.clone()),
+        };
+        write_json_atomic(&self.root.join(CHECKPOINTS_FILE), &registry)
+    }
+
+    /// The workspace (and with it this root) was moved: rebase checkpoint
+    /// roots that contained the old root, and the sessions' recorded
+    /// `checkpoint_root`, onto the new location. Runs once per move at
+    /// [`SandboxHome::open`]; afterwards the registry records the new root.
+    /// Returns the previous root when a move was detected.
+    fn adopt_moved_root(&self) -> Result<Option<PathBuf>> {
+        let registry = self.read_registry()?;
+        let previous = registry.home_root.clone().filter(|old| old != &self.root);
+        if let Some(old) = &previous {
+            let sessions = self.root.join(SESSIONS_DIR);
+            for entry in fs::read_dir(&sessions).map_err(|e| SandboxError::io(&sessions, e))? {
+                let entry = entry.map_err(|e| SandboxError::io(&sessions, e))?;
+                let path = entry.path().join(SESSION_FILE);
+                if !path.is_file() {
+                    continue;
+                }
+                let mut record: SessionRecord = read_json(&path)?;
+                if let Some(moved) = rebase_ancestor(&record.checkpoint_root, old, &self.root) {
+                    record.checkpoint_root = moved;
+                    write_json_atomic(&path, &record)?;
+                }
+            }
+        }
+        if previous.is_some() || registry.home_root.is_none() {
+            let mut registry = registry;
+            if let Some(old) = &previous {
+                for checkpoint in &mut registry.checkpoints {
+                    if let Some(moved) = rebase_ancestor(&checkpoint.root, old, &self.root) {
+                        checkpoint.root = moved;
+                    }
+                }
+            }
+            self.write_registry(&registry)?;
+        }
+        Ok(previous)
     }
 
     // ---------------------------------------------------------------- sessions
@@ -400,7 +469,12 @@ impl SandboxHome {
         let result = (|| {
             let workspace = staging.join(SESSION_WORKSPACE_DIR);
             fs::create_dir_all(&workspace).map_err(|e| SandboxError::io(&workspace, e))?;
-            copy::copy_tree(&checkpoint_root, &workspace)?;
+            // The mother workspace holds this sandbox root: never copy it.
+            let exclude = self
+                .root
+                .starts_with(&checkpoint_root)
+                .then_some(self.root.as_path());
+            copy::copy_tree_excluding(&checkpoint_root, &workspace, exclude)?;
             let after = fingerprint_workspace(&checkpoint_root)?;
             if !after.same_content(&before) {
                 return Err(SandboxError::CheckpointChangedDuringCopy(
@@ -716,7 +790,8 @@ impl SandboxHome {
 
 // ---------------------------------------------------------------- helpers
 
-fn now_rfc3339() -> String {
+/// Local time, RFC3339 with milliseconds (the format of every sandbox timestamp).
+pub fn now_rfc3339() -> String {
     Local::now().to_rfc3339_opts(SecondsFormat::Millis, false)
 }
 
@@ -785,6 +860,18 @@ fn unique_checkpoint_id(label: &str, root: &Path, existing: &[CheckpointRecord])
         .map(|n| format!("{hashed}-{n}"))
         .find(|id| !taken(id))
         .expect("unbounded suffix search")
+}
+
+/// `path` contained `old_home` (it is an ancestor, e.g. the mother
+/// workspace of `<ws>/.mathscape/sandbox`). When `new_home` ends with the
+/// same relative suffix, return the matching ancestor of `new_home`.
+fn rebase_ancestor(path: &Path, old_home: &Path, new_home: &Path) -> Option<PathBuf> {
+    let suffix = old_home.strip_prefix(path).ok()?;
+    let mut candidate = new_home;
+    for _ in suffix.components() {
+        candidate = candidate.parent()?;
+    }
+    (candidate.join(suffix) == new_home).then(|| candidate.to_path_buf())
 }
 
 fn truncate_chars(value: &str, max: usize) -> String {

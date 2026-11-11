@@ -21,7 +21,7 @@ import { eventBus } from "../core/events";
 import type { AnchoredMarkdown } from "../reader/selection";
 import {
   debtLabel, defaultSelection, dependencyGroups, deselect, discardPreview, impactSummary, keyOf,
-  proposalDebts, proposalDiscoveryOutcome, proposalReviewProjection, select, selectionOf, selectionRefs, stateLabel, titleOf,
+  proposalDebts, proposalDiscoveryOutcome, proposalOverview, proposalReviewProjection, select, selectionOf, selectionRefs, stateLabel, titleOf,
   type BatchPlan, type ChangeSetQueue, type ChangeSetSelection, type ImpactPreview, type PendingChangeSet,
   type ProposalDecision, type ProposalWorkspaceController,
 } from "./proposal-model";
@@ -134,11 +134,12 @@ class ProposalWorkspaceSession implements ProposalWorkspaceController {
     return doc;
   }
 
-  async open(key: string, groupIndex = 0): Promise<void> {
+  async open(key: string, groupIndex?: number): Promise<void> {
     const item = this.items.find(candidate => keyOf(candidate) === key) ?? this.items[0];
     if (!item) return;
     const groups = proposalReviewProjection(item);
-    const index = Math.min(Math.max(groupIndex, 0), groups.length - 1);
+    const overview = proposalOverview(item, groups);
+    const index = Math.min(Math.max(groupIndex ?? overview.defaultGroup, 0), groups.length - 1);
     const group = groups[index];
     let document: AnchoredMarkdown | null = null;
     let documentError: string | null = null;
@@ -157,7 +158,7 @@ class ProposalWorkspaceSession implements ProposalWorkspaceController {
       title: titleOf(item),
       proposal: {
         changeSetId: item.changeSetId, version: item.version, state: item.state, proposedBy: item.proposedBy,
-        snapshot: group.source.artifact_id, item, items: this.items, groupIndex: index, groupCount: groups.length,
+        snapshot: group.source.artifact_id, item, items: this.items, groupIndex: index, groupCount: groups.length, overview,
         document, documentError, anchors: group.anchors, controller: this,
       },
     });
