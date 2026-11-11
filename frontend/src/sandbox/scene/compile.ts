@@ -15,15 +15,29 @@
  * a result carrying `details.map_signal` records the parse (done / failed).
  */
 import { shortStableId } from "../../core/stable-id";
+import { relationLabel } from "../../review/labels";
 import type { AgentEventLike } from "../format";
 import { MCP_STARTUP_TOOL } from "../steps";
 import {
+  LEAN_CODE_LINES,
+  LEAN_DIAGNOSTICS_CAP,
+  MATHLIB_ROWS_CAP,
+  MATHLIB_TYPE_MAX,
   OUTLINE_ROWS_CAP,
   SCENE_FOCUS_CAP,
   SCENE_TOOLS,
   PARSING_LABEL,
+  type LeanAct,
+  type LeanDiagnostic,
+  type LocateAct,
+  type MathlibAct,
   type OutlineRow,
   type ParsingAct,
+  type ProposeAct,
+  type ProposeBlock,
+  type ProposeEnd,
+  type ProposeItem,
+  type ProposeRelation,
   type SceneAct,
   type SceneDraft,
   type SceneResolve,
@@ -126,14 +140,26 @@ export function resultImage(result: AgentEventLike | undefined): string | undefi
   return undefined;
 }
 
-function resultStatus(result: AgentEventLike | undefined, payload: Json | undefined): SceneStatus {
+/**
+ * Tool statuses that are an answer, not a failure: a blocked proposal is a
+ * validated verdict (its diagnostics are the content), and a locate that
+ * found several / no matches says so on purpose.
+ */
+const ANSWER_STATUSES: Partial<Record<SceneToolName, readonly string[]>> = {
+  propose_changes: ["staged", "blocked"],
+  "material.locate": ["ambiguous", "not_found"],
+};
+
+function resultStatus(result: AgentEventLike | undefined, payload: Json | undefined, tool?: SceneToolName | null): SceneStatus {
   if (!result) return "running";
   const status = str(result.payload?.status);
   if (rawOf(result)?.error) return "error";
   // `truncated` is a successful, capped result (contract §2.2), not a failure.
-  if (status && !["ok", "completed", "success", "truncated"].includes(status)) return "error";
+  const ok = ["ok", "truncated", ...((tool && ANSWER_STATUSES[tool]) ?? [])];
+  if (status && ![...ok, "completed", "success"].includes(status)) return "error";
   const inner = str(payload?.status);
-  if (inner && inner !== "ok" && inner !== "truncated") return "error";
+  if (inner && !ok.includes(inner)) return "error";
+  if (isObject(payload?.error)) return "error";
   return "ok";
 }
 
@@ -156,8 +182,22 @@ function locatorLabel(locator: unknown): string | undefined {
   return undefined;
 }
 
+/** The tool's own error text: `{error:{message}}`, a capability reason, … */
+function payloadError(payload: Json | undefined): string | undefined {
+  const error = isObject(payload?.error) ? payload.error : undefined;
+  const details = isObject(payload?.details) ? payload.details : undefined;
+  const first = list(payload?.diagnostics).find(isObject);
+  return (
+    str(error?.message) ??
+    str(payload?.message) ??
+    str(payload?.error) ??
+    str(details?.reason) ??
+    (first ? str(first.message) : undefined)
+  );
+}
+
 function errorSummary(result: AgentEventLike | undefined, payload: Json | undefined): string {
-  const message = str(payload?.message) ?? str(payload?.error) ?? str(payload?.status);
+  const message = payloadError(payload) ?? str(payload?.status);
   const raw = rawOf(result)?.error;
   const rawMessage = isObject(raw) ? str(raw.message) : str(raw);
   return `调用失败${rawMessage ?? message ? `：${rawMessage ?? message}` : ""}`;
@@ -340,9 +380,405 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
       layers: [],
     };
   },
+  propose_changes: (args, payload, status) => {
+    const counts = stagedCounts(payload?.staged_ids);
+    const version = num(payload?.version);
+    const supersedes = supersedesOf(args, payload);
+    const blocks = proposalBlocks(payload);
+    const units = list(args.proposed_objects).filter((item) => isObject(item) && item.kind === "source_unit").length;
+    const relations = list(args.proposed_relations).length;
+    const verdict =
+      str(payload?.status) === "blocked"
+        ? `被阻塞 · ${blocks.length} 个问题${blocks[0] ? `：${blocks[0].code}` : ""}`
+        : `已暂存 · 单元 ${counts.units} · 关系 ${counts.relations} · 片段 ${counts.spans}`;
+    return {
+      verb: "提案",
+      subject: str(args.request_id),
+      detail: [version !== undefined ? `v${version}` : "", supersedes ? `取代 v${supersedes.version}` : ""].filter(Boolean).join(" · ") || undefined,
+      summary: status === "running" ? `正在校验 ${units} 个单元 · ${relations} 条关系…` : verdict,
+      seeds: proposalAnchors(args),
+      layers: [],
+    };
+  },
+  "mathlib.search": (args, payload, status) => {
+    const candidates = list(payload?.candidates).filter(isObject);
+    const total = num(payload?.total) ?? candidates.length;
+    const mode = backendMode(payload);
+    return {
+      verb: "Mathlib 检索",
+      subject: str(args.query) ?? "（空查询）",
+      summary:
+        status === "running"
+          ? "Loogle 检索中…"
+          : candidates.length === 0
+            ? "没有匹配的声明"
+            : `${total} 个候选${payload?.truncated ? "（已截断）" : ""}${mode ? ` · ${MODE_LABEL[mode]}` : ""}`,
+      seeds: [],
+      layers: [],
+    };
+  },
+  "lean.check": (args, payload, status) => {
+    const check = isObject(payload?.check) ? payload.check : undefined;
+    const diagnostics = list(check?.diagnostics).filter(isObject);
+    const errors = diagnostics.filter((item) => item.severity === "error").length;
+    const verdict = str(check?.status);
+    return {
+      verb: "Lean 检查",
+      subject: leanSubject(str(args.source_text)),
+      summary:
+        status === "running"
+          ? "Lean 编译中…"
+          : verdict === "checked" && errors === 0
+            ? "✓ 编译通过（编译通过 ≠ 证明忠实）"
+            : `未通过 · ${diagnostics.length} 条诊断${errors ? `（${errors} 个错误）` : ""}`,
+      seeds: [],
+      layers: [],
+    };
+  },
+  "material.locate": (args, payload, status) => {
+    const artifact = str(args.artifact_id) ?? str(payload?.artifact_id);
+    const page = locatePage(payload);
+    const inner = str(payload?.status);
+    const count = num(payload?.candidate_count) ?? list(payload?.candidates).length;
+    return {
+      verb: "定位原文",
+      subjectId: artifact,
+      detail: page !== undefined ? `第 ${page} 页` : undefined,
+      summary:
+        status === "running"
+          ? "正在原文中定位引文…"
+          : inner === "ambiguous"
+            ? `${count} 处候选，未唯一定位`
+            : inner === "not_found"
+              ? `未找到：${payloadError(payload) ?? "引文与原文不一致"}`
+              : `${MATCH_LABEL[str(payload?.match) ?? ""] ?? "已定位"}${page !== undefined ? ` · 第 ${page} 页` : ""}`,
+      seeds: artifact ? [artifact] : [],
+      layers: [],
+    };
+  },
+  list_change_sets: (args, payload, status) => {
+    const sets = list(payload?.change_sets).filter(isObject);
+    const total = num(payload?.total) ?? sets.length;
+    const first = sets[0];
+    const title = first ? str(first.title) : undefined;
+    return {
+      verb: "变更集",
+      subject: args.pending_only === true ? "待审" : undefined,
+      summary:
+        status === "running"
+          ? "正在列出变更集…"
+          : total === 0
+            ? "没有变更集"
+            : `${total} 个变更集${title ? `：${clip(title, 40)}` : ""}`,
+      seeds: [],
+      layers: [],
+    };
+  },
+  get_change_set: (args, payload, status) => {
+    const staged = isObject(payload?.staged_ids) ? payload.staged_ids : {};
+    const counts = stagedCounts(staged);
+    const version = num(payload?.version) ?? num(args.version);
+    const state = str(payload?.state);
+    return {
+      verb: "查看变更集",
+      subject: shortChangeSet(str(args.change_set_id) ?? str(payload?.change_set_id)),
+      detail: version !== undefined ? `v${version}` : undefined,
+      summary:
+        status === "running"
+          ? "正在读取变更集…"
+          : `${STATE_LABEL[state ?? ""] ?? state ?? "已读取"} · 单元 ${counts.units} · 关系 ${counts.relations} · 片段 ${counts.spans}`,
+      seeds: [],
+      // Briefly light the change set's staged units (relations / spans are not nodes).
+      layers: [Object.values(staged).map(str).filter((id): id is string => !!id && id.startsWith(UNIT_PREFIX))],
+    };
+  },
 };
 
-type ActCompiler = (args: Json, payload: Json | undefined, status: SceneStatus, result: AgentEventLike | undefined) => SceneAct | undefined;
+// ---------------------------------------------------------------------------
+// Fourth slice helpers (proposal / Lean / locate)
+
+const UNIT_PREFIX = "mathscape:source-unit/";
+const RELATION_PREFIX = "mathscape:source-relation/";
+const SPAN_PREFIX = "mathscape:source-span/";
+const MODE_LABEL = { resident: "常驻", oneshot: "一次性" } as const;
+const MATCH_LABEL: Record<string, string> = { exact: "精确匹配", normalized: "规范化后匹配" };
+const STATE_LABEL: Record<string, string> = { staged: "待审", blocked: "被阻塞", accepted: "已接受", discarded: "已丢弃", superseded: "已被取代" };
+
+const clip = (text: string, max: number): string => ([...text].length > max ? `${[...text].slice(0, max - 1).join("")}…` : text);
+
+const shortChangeSet = (id: string | undefined): string | undefined =>
+  id ? `change-set/${shortStableId(id.replace(/^mathscape:change-set\//, ""), { max: 12, head: 8, tail: 0 })}` : undefined;
+
+/** `staged_ids` values split by prefix — the review overview totals. */
+export function stagedCounts(staged: unknown): ProposeAct["counts"] {
+  const values = isObject(staged) ? Object.values(staged).map(str) : [];
+  const count = (prefix: string) => values.filter((id) => id?.startsWith(prefix)).length;
+  return { units: count(UNIT_PREFIX), relations: count(RELATION_PREFIX), spans: count(SPAN_PREFIX) };
+}
+
+function supersedesOf(args: Json, payload: Json | undefined): ProposeAct["supersedes"] {
+  const value = isObject(payload?.supersedes) ? payload.supersedes : isObject(args.supersedes) ? args.supersedes : undefined;
+  const changeSetId = str(value?.change_set_id);
+  const version = num(value?.version);
+  return changeSetId && version !== undefined ? { changeSetId, version } : undefined;
+}
+
+/** Error-level diagnostics of a proposal (debts duplicate them). */
+function proposalBlocks(payload: Json | undefined): (ProposeBlock & { localRef?: string })[] {
+  if (str(payload?.status) !== "blocked") return [];
+  return list(payload?.diagnostics)
+    .filter(isObject)
+    .filter((item) => (str(item.level) ?? "error") === "error")
+    .map((item) => ({
+      code: str(item.code) ?? "invalid",
+      message: str(item.message) ?? "",
+      ...(str(item.local_ref) ? { localRef: str(item.local_ref) } : {}),
+    }));
+}
+
+/** `$new:x` → this proposal's item, `mathscape:…` → an existing object. */
+function proposeEnd(value: unknown): ProposeEnd | undefined {
+  const ref = str(value);
+  if (!ref) return undefined;
+  if (ref.startsWith("$new:")) return { local: ref.slice(5) };
+  if (ref.startsWith("mathscape:")) return { id: ref };
+  return { local: ref };
+}
+
+/** Existing objects the proposal touches: span artifacts, relation ends, edit targets. */
+function proposalAnchors(args: Json): string[] {
+  const out = new Set<string>();
+  for (const item of list(args.proposed_objects).filter(isObject)) {
+    const payload = isObject(item.payload) ? item.payload : {};
+    const artifact = str(payload.artifact_id);
+    if (artifact) out.add(artifact);
+    const target = str(item.target_id);
+    if (target) out.add(target);
+  }
+  for (const relation of list(args.proposed_relations).filter(isObject)) {
+    for (const end of [proposeEnd(relation.source), proposeEnd(relation.target)]) {
+      if (end && "id" in end) out.add(end.id);
+    }
+  }
+  return [...out];
+}
+
+/** Staged ids of the version `supersedes` names, from earlier events. */
+function supersededIds(supersedes: ProposeAct["supersedes"], prior: readonly AgentEventLike[]): string[] {
+  if (!supersedes) return [];
+  for (let at = prior.length - 1; at >= 0; at -= 1) {
+    const event = prior[at];
+    if (event.type !== "tool_result") continue;
+    const payload = resultPayload(event);
+    if (!payload || str(payload.change_set_id) !== supersedes.changeSetId || num(payload.version) !== supersedes.version) continue;
+    if (!isObject(payload.staged_ids)) continue;
+    return Object.values(payload.staged_ids).map(str).filter((id): id is string => !!id);
+  }
+  return [];
+}
+
+function proposeAct(args: Json, payload: Json | undefined, status: SceneStatus, prior: readonly AgentEventLike[]): ProposeAct {
+  const staged = isObject(payload?.staged_ids) ? payload.staged_ids : {};
+  const stagedOf = (local: string) => str(staged[local]);
+  const blocks = proposalBlocks(payload);
+  const blocksOf = (local: string) => blocks.filter((block) => block.localRef === local).map(({ code, message }) => ({ code, message }));
+  const objects = list(args.proposed_objects).filter(isObject);
+  const spans = new Map<string, Json>();
+  for (const item of objects) if (item.kind === "source_span" && str(item.local_ref)) spans.set(str(item.local_ref)!, item);
+  const owned = new Set<string>();
+  const items: ProposeItem[] = [];
+  for (const item of objects) {
+    const local = str(item.local_ref);
+    if (!local || item.kind !== "source_unit") continue;
+    const body = isObject(item.payload) ? item.payload : isObject(item.changes) ? item.changes : {};
+    const spanRefs = ids(body.source_spans)
+      .map(proposeEnd)
+      .filter((end): end is { local: string } => !!end && "local" in end)
+      .map((end) => end.local);
+    spanRefs.forEach((ref) => owned.add(ref));
+    const anchors = new Set<string>();
+    for (const ref of spanRefs) {
+      const span = spans.get(ref);
+      const artifact = span && isObject(span.payload) ? str(span.payload.artifact_id) : undefined;
+      if (artifact) anchors.add(artifact);
+    }
+    const target = str(item.target_id);
+    if (target) anchors.add(target);
+    items.push({
+      localRef: local,
+      kind: "unit",
+      ...(stagedOf(local) ? { stagedId: stagedOf(local) } : {}),
+      label: str(body.display_title) ?? str(body.title) ?? local,
+      anchors: [...anchors],
+      blocked: [...blocksOf(local), ...spanRefs.flatMap(blocksOf)],
+    });
+  }
+  // A span no unit cites only shows up when something is wrong with it.
+  for (const [local, span] of spans) {
+    if (owned.has(local) || blocksOf(local).length === 0) continue;
+    const artifact = isObject(span.payload) ? str(span.payload.artifact_id) : undefined;
+    items.push({ localRef: local, kind: "span", label: `片段 ${local}`, anchors: artifact ? [artifact] : [], blocked: blocksOf(local) });
+  }
+  const relations: ProposeRelation[] = [];
+  for (const relation of list(args.proposed_relations).filter(isObject)) {
+    const local = str(relation.local_ref);
+    const source = proposeEnd(relation.source);
+    const target = proposeEnd(relation.target);
+    if (!local || !source || !target) continue;
+    const kind = str(relation.relation) ?? "relation";
+    relations.push({
+      localRef: local,
+      ...(stagedOf(local) ? { stagedId: stagedOf(local) } : {}),
+      relation: kind,
+      label: relationLabel(kind),
+      source,
+      target,
+      blocked: blocksOf(local),
+    });
+  }
+  // Relation ends that are existing objects anchor the ghost on the other end.
+  for (const relation of relations) {
+    for (const [mine, other] of [[relation.source, relation.target], [relation.target, relation.source]] as const) {
+      if (!("local" in mine) || !("id" in other)) continue;
+      const item = items.find((entry) => entry.localRef === mine.local);
+      if (item && !item.anchors.includes(other.id)) item.anchors.push(other.id);
+    }
+  }
+  const stagedIds = Object.values(staged).map(str).filter((id): id is string => !!id);
+  const supersedes = supersedesOf(args, payload);
+  const keep = new Set(stagedIds);
+  const verdict = str(payload?.status);
+  return {
+    kind: "propose",
+    phase: status === "running" ? "running" : status === "error" ? "error" : verdict === "blocked" ? "blocked" : "staged",
+    ...(str(payload?.change_set_id) ? { changeSetId: str(payload?.change_set_id) } : {}),
+    ...(num(payload?.version) !== undefined ? { version: num(payload?.version) } : {}),
+    items,
+    relations,
+    counts: stagedCounts(staged),
+    stagedIds,
+    blocks,
+    ...(supersedes ? { supersedes } : {}),
+    retired: verdict === "staged" ? supersededIds(supersedes, prior).filter((id) => !keep.has(id)) : [],
+  };
+}
+
+function backendMode(payload: Json | undefined): MathlibAct["mode"] {
+  const mode = str(payload?.backend_mode);
+  return mode === "resident" || mode === "oneshot" ? mode : undefined;
+}
+
+/** `did you mean: a, b` of a rejected Loogle query (the MCP error text). */
+function loogleSuggestions(message: string | undefined): string[] {
+  const match = message?.match(/did you mean:\s*([^.;]+)/i);
+  return match ? match[1].split(",").map((item) => item.trim()).filter(Boolean).slice(0, 6) : [];
+}
+
+function mathlibAct(args: Json, payload: Json | undefined, status: SceneStatus): MathlibAct {
+  const candidates = list(payload?.candidates)
+    .filter(isObject)
+    .slice(0, MATHLIB_ROWS_CAP)
+    .map((item) => {
+      const type = str(item.type);
+      return {
+        name: str(item.name) ?? "（未命名）",
+        ...(type ? { type: clip(type, MATHLIB_TYPE_MAX) } : {}),
+        ...(str(item.module) ? { module: str(item.module) } : {}),
+      };
+    });
+  const error = status === "error" ? payloadError(payload) : undefined;
+  const mode = backendMode(payload);
+  const fallback = str(payload?.backend_fallback);
+  const total = num(payload?.total);
+  return {
+    kind: "mathlib",
+    phase: status,
+    query: str(args.query) ?? "",
+    candidates,
+    ...(total !== undefined ? { total } : {}),
+    truncated: payload?.truncated === true || (total ?? 0) > candidates.length,
+    ...(mode ? { mode } : {}),
+    ...(fallback ? { fallback } : {}),
+    noMatches: status === "ok" && (hasDiagnostic(payload, "no_matches") || list(payload?.candidates).length === 0),
+    suggestions: loogleSuggestions(error),
+    ...(error ? { error } : {}),
+  };
+}
+
+/** `theorem foo …` → `foo` (else the profile is not interesting: no subject). */
+function leanSubject(source: string | undefined): string | undefined {
+  const match = source?.match(/\b(?:theorem|lemma|def|example|instance)\s+([^\s:({[]+)?/);
+  if (!match) return undefined;
+  return match[1] ?? "example";
+}
+
+function leanAct(args: Json, payload: Json | undefined, status: SceneStatus): LeanAct {
+  const source = str(args.source_text) ?? "";
+  const lines = source.replace(/\s+$/, "").split("\n");
+  const check = isObject(payload?.check) ? payload.check : undefined;
+  const all = list(check?.diagnostics).filter(isObject);
+  const diagnostics: LeanDiagnostic[] = all.slice(0, LEAN_DIAGNOSTICS_CAP).map((item) => ({
+    severity: str(item.severity) ?? "error",
+    ...(num(item.line) !== undefined ? { line: num(item.line) } : {}),
+    ...(num(item.column) !== undefined ? { column: num(item.column) } : {}),
+    message: clip(str(item.message)?.split("\n")[0] ?? "", 160),
+  }));
+  const verdict = str(check?.status);
+  const errors = all.some((item) => item.severity === "error");
+  const elapsed = num(check?.elapsed_ms);
+  return {
+    kind: "lean",
+    phase: status === "running" ? "running" : status === "error" ? "error" : verdict === "checked" && !errors ? "checked" : "failed",
+    code: lines.slice(0, LEAN_CODE_LINES).join("\n"),
+    codeLines: source ? lines.length : 0,
+    diagnostics,
+    diagnosticsTruncated: check?.diagnostics_truncated === true || all.length > diagnostics.length,
+    ...(elapsed !== undefined ? { elapsedMs: elapsed } : {}),
+    ...(status === "error" ? { error: payloadError(payload) ?? "调用失败" } : {}),
+  };
+}
+
+/** 1-based page of a locate match (`page.page_number`, else index + 1). */
+function locatePage(payload: Json | undefined): number | undefined {
+  const page = isObject(payload?.page) ? payload.page : undefined;
+  const number = num(page?.page_number);
+  if (number !== undefined) return number;
+  const index = num(page?.pdf_page_index);
+  return index !== undefined ? index + 1 : undefined;
+}
+
+function locateAct(args: Json, payload: Json | undefined, status: SceneStatus): LocateAct {
+  const inner = str(payload?.status);
+  const phase: LocateAct["phase"] =
+    status === "running" ? "running" : status === "error" ? "error" : inner === "ambiguous" ? "ambiguous" : inner === "not_found" ? "miss" : "ok";
+  const page = locatePage(payload);
+  const count = num(payload?.candidate_count);
+  const reason =
+    phase === "ok"
+      ? list(payload?.diagnostics).filter(isObject).map((item) => str(item.message)).find(Boolean)
+      : phase === "ambiguous"
+        ? `${count ?? list(payload?.candidates).length} 处候选：加长引文或用 within 缩小范围`
+        : phase === "running"
+          ? undefined
+          : payloadError(payload) ?? "引文与原文不一致";
+  return {
+    kind: "locate",
+    phase,
+    quote: str(args.quote) ?? "",
+    ...(str(payload?.match) ? { match: MATCH_LABEL[str(payload?.match)!] ?? str(payload?.match) } : {}),
+    ...(page !== undefined ? { page } : {}),
+    ...(count !== undefined ? { candidates: count } : {}),
+    ...(reason ? { reason } : {}),
+  };
+}
+
+type ActCompiler = (
+  args: Json,
+  payload: Json | undefined,
+  status: SceneStatus,
+  result: AgentEventLike | undefined,
+  prior: readonly AgentEventLike[],
+) => SceneAct | undefined;
 
 function outlineRows(entries: unknown[]): OutlineRow[] {
   const rows: OutlineRow[] = [];
@@ -470,28 +906,54 @@ const ACTS: Partial<Record<SceneToolName, ActCompiler>> = {
       height: num(image.height),
     };
   },
+  propose_changes: (args, payload, status, _result, prior) => proposeAct(args, payload, status, prior),
+  "mathlib.search": (args, payload, status) => mathlibAct(args, payload, status),
+  "lean.check": (args, payload, status) => leanAct(args, payload, status),
+  "material.locate": (args, payload, status) => locateAct(args, payload, status),
 };
 
 /** One tool step's Act overlay (exported for tests). */
-export function compileSceneAct(call: AgentEventLike | undefined, result?: AgentEventLike): SceneAct | undefined {
+export function compileSceneAct(
+  call: AgentEventLike | undefined,
+  result?: AgentEventLike,
+  prior: readonly AgentEventLike[] = [],
+): SceneAct | undefined {
   const tool = sceneToolName(call?.payload?.tool ?? rawOf(call)?.tool ?? rawOf(result)?.tool);
   const act = tool ? ACTS[tool] : undefined;
   if (!act) return undefined;
   const payload = resultPayload(result);
-  return act(callArgs(call ?? result), payload, resultStatus(result, payload), result);
+  return act(callArgs(call ?? result), payload, resultStatus(result, payload, tool), result, prior);
 }
 
-/** One tool step (call, plus its result once it arrived) → draft. */
-export function compileToolScene(call: AgentEventLike | undefined, result?: AgentEventLike): SceneDraft | null {
+/** Epoch ms of an event's `ts` (or the raw item's `startedAtMs`). */
+function startedAt(call: AgentEventLike | undefined): number | undefined {
+  const started = num(rawOf(call)?.startedAtMs);
+  if (started !== undefined) return started;
+  const ts = typeof call?.ts === "string" ? Date.parse(call.ts) : NaN;
+  return Number.isFinite(ts) ? ts : undefined;
+}
+
+/**
+ * One tool step (call, plus its result once it arrived) → draft. `prior` =
+ * earlier events of the session (a superseding proposal finds the staged
+ * ids of the version it replaces there).
+ */
+export function compileToolScene(
+  call: AgentEventLike | undefined,
+  result?: AgentEventLike,
+  prior: readonly AgentEventLike[] = [],
+): SceneDraft | null {
   const event = call ?? result;
   const tool = sceneToolName(call?.payload?.tool ?? rawOf(call)?.tool ?? rawOf(result)?.tool);
   const callId = str(event?.payload?.call_id);
   if (!tool || !callId) return null;
   const args = callArgs(call ?? result);
   const payload = resultPayload(result);
-  const status = resultStatus(result, payload);
+  const status = resultStatus(result, payload, tool);
   const parts = COMPILERS[tool](args, payload, status);
-  const act = ACTS[tool]?.(args, payload, status, result);
+  const act = ACTS[tool]?.(args, payload, status, result, prior);
+  const started = startedAt(call);
+  const duration = num(result?.payload?.duration_ms) ?? num(rawOf(result)?.durationMs);
   if ((tool === "ink.page_image" || tool === "pdf.page_image") && act?.kind === "page_image" && !act.src && status === "ok") {
     parts.summary = "仅元数据（无页图）";
   }
@@ -508,11 +970,17 @@ export function compileToolScene(call: AgentEventLike | undefined, result?: Agen
           : errorSummary(result, payload)
         : parts.summary,
     ...(act ? { act } : {}),
+    ...(started !== undefined ? { startedAt: started } : {}),
+    ...(duration !== undefined && result ? { durationMs: duration } : {}),
   };
 }
 
-/** Every tool step of a round's events, in call order. */
-export function compileRoundScenes(events: readonly AgentEventLike[]): SceneDraft[] {
+/**
+ * Every tool step of a round's events, in call order. `history` = the
+ * session's events (defaults to `events`): a step sees only what came before
+ * it, so a replay compiles exactly what the live round played.
+ */
+export function compileRoundScenes(events: readonly AgentEventLike[], history: readonly AgentEventLike[] = events): SceneDraft[] {
   const calls = new Map<string, AgentEventLike>();
   const results = new Map<string, AgentEventLike>();
   const order: string[] = [];
@@ -527,7 +995,11 @@ export function compileRoundScenes(events: readonly AgentEventLike[]): SceneDraf
     }
   }
   return order
-    .map((id) => compileToolScene(calls.get(id), results.get(id)))
+    .map((id) => {
+      const result = results.get(id);
+      const until = result ? history.indexOf(result) : -1;
+      return compileToolScene(calls.get(id), result, until >= 0 ? history.slice(0, until) : history);
+    })
     .filter((draft): draft is SceneDraft => draft !== null);
 }
 
@@ -567,7 +1039,8 @@ export function resolveScene(draft: SceneDraft, resolve: SceneResolve, cap = SCE
   const named = draft.seeds.length + draft.layers.reduce((sum, layer) => sum + layer.length, 0);
   const shown = focus.size;
   let summary = draft.summary;
-  if (draft.status !== "running" || shown > 0) {
+  // A proposal's map count is its staged nodes (the player finds those), not its anchors.
+  if (draft.act?.kind !== "propose" && (draft.status !== "running" || shown > 0)) {
     if (shown > 0) summary += ` · 地图上 ${shown} 个${capped ? `（上限 ${cap}）` : ""}`;
     else if (named > 0 && draft.status !== "error") summary += " · 不在当前地图上";
   }
@@ -584,6 +1057,8 @@ export function resolveScene(draft: SceneDraft, resolve: SceneResolve, cap = SCE
     capped,
     ...(draft.act ? { act: draft.act } : {}),
     ...(seeds[0] ? { anchor: seeds[0] } : {}),
+    ...(draft.startedAt !== undefined ? { startedAt: draft.startedAt } : {}),
+    ...(draft.durationMs !== undefined ? { durationMs: draft.durationMs } : {}),
   };
 }
 

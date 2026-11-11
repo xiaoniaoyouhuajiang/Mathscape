@@ -71,7 +71,7 @@ interface Visual {
   parsing?: boolean;
 }
 
-type WindowAct = Exclude<SceneAct, { kind: "typewriter" } | ParsingAct>;
+type WindowAct = Extract<SceneAct, { kind: "outline" | "page_image" }>;
 
 const isParsingRun = (scene: ToolScene): boolean => scene.act?.kind === "parsing" && scene.act.phase === "running";
 
@@ -288,7 +288,7 @@ export class ScenePlayer {
     const typed = act?.kind === "typewriter" ? act.text : undefined;
     // 目录 / 页图 windows need the result: never on a bare call segment.
     const windowAct: WindowAct | undefined =
-      act && act.kind !== "typewriter" && act.kind !== "parsing" && part !== "call" ? act : undefined;
+      act && (act.kind === "outline" || act.kind === "page_image") && part !== "call" ? act : undefined;
     const parsing = !!scene.act && isParsingRun(scene);
     if (typed === undefined) this.setTyped(null);
     else if (part === "result") this.setTyped(typed, true);
