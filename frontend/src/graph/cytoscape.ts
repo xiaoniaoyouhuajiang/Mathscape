@@ -578,6 +578,64 @@ const styles: StylesheetJson = [
     style: { "overlay-color": "#4fc3d9", "overlay-opacity": 0.22, "overlay-padding": 3 },
   },
   { selector: "edge.sandbox-echo-edge.sandbox-echo-fade", style: { "overlay-opacity": 0.08 } },
+  // propose_changes scene (scene-player.ts): transient ghosts for proposed
+  // units not yet on the map (same dashed yellow as the staged overlay),
+  // relations drawn one by one, blocked items in red, superseded ones faded.
+  {
+    selector: "node.scene-ghost",
+    style: {
+      shape: "round-rectangle",
+      width: "30px",
+      height: "22px",
+      "background-color": "#3a3416",
+      "background-opacity": 0.55,
+      "border-width": 2,
+      "border-style": "dashed",
+      "border-color": "#ffd84a",
+      color: "#fff1b0",
+      "font-size": "10px",
+      opacity: 0.9,
+    },
+  },
+  { selector: "node.scene-ghost-span", style: { width: "16px", height: "12px", "font-size": "9px" } },
+  {
+    selector: "edge.scene-ghost-edge",
+    style: {
+      label: "data(label)",
+      width: 1.6,
+      "line-style": "dashed",
+      "line-color": "#ffd84a",
+      "target-arrow-shape": "triangle",
+      "target-arrow-color": "#ffd84a",
+      color: "#fff1b0",
+      "font-size": "9px",
+      opacity: 0.85,
+    },
+  },
+  {
+    selector: "node.scene-propose-hit",
+    style: { "overlay-color": "#ffd84a", "overlay-opacity": 0.3, "overlay-padding": 7 },
+  },
+  {
+    selector: "edge.scene-propose-edge",
+    style: { "overlay-color": "#ffd84a", "overlay-opacity": 0.3, "overlay-padding": 3 },
+  },
+  {
+    selector: "node.scene-blocked",
+    style: { "border-color": "#e0564a", "border-style": "solid", "border-width": 3, color: "#ffb4ab" },
+  },
+  {
+    selector: "edge.scene-blocked",
+    style: { "line-color": "#e0564a", "target-arrow-color": "#e0564a" },
+  },
+  {
+    selector: ".scene-blocked-flash",
+    style: { "overlay-color": "#e0564a", "overlay-opacity": 0.45, "overlay-padding": 8 },
+  },
+  {
+    selector: ".scene-retired",
+    style: { opacity: 0.22, "transition-property": "opacity", "transition-duration": 400 },
+  },
 ];
 
 export const OUT_OF_FOCUS_CLASS = "is-out-of-focus";

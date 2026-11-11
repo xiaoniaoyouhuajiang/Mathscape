@@ -36,6 +36,27 @@
  * ending early once the next segment — normally the result — is queued).
  * Repeated running segments for one call replace each other in the queue.
  *
+ * Fourth slice: `propose_changes` plays on the map — the proposal's real
+ * staged nodes light up when the map already shows them (staged overlay),
+ * otherwise transient dashed ghost nodes appear beside their anchors;
+ * relations draw one by one, blocked items flash red with their code, a
+ * superseded version's nodes fade, and the HUD ends with the `staged_ids`
+ * counts. Ghosts are Cytoscape elements that live only inside the segment
+ * (removed on the next segment, Settle, 停止 and before any graph sync).
+ * `mathlib.search` / `lean.check` / `material.locate` open Act windows
+ * (call: running state; result: candidates / diagnostics / matched quote).
+ *
+ * Long-running tools: any in-flight call older than `RUNNING_SHOW_MS` shows
+ * the running pill with its elapsed time (Loogle 启动中 / Lean 编译中 /
+ * Marker 解析中 …), independent of the scene queue.
+ *
+ * Pacing (live only; a replay plays every step): a newer frame of a queued
+ * call replaces it, consecutive same-tool segments coalesce, the queue is
+ * capped, and when the head is far behind live progress the player skips to
+ * the latest (proposals are never dropped). Every segment has a time budget.
+ * 「减少动效」 (`host.reducedMotion`): no clump, camera glide, typewriter or
+ * one-by-one reveal — states switch instantly and are held to be read.
+ *
  * Animation state only: the landscape graph is never touched; clumped
  * coordinates live in Cytoscape for the duration of the scene and are never
  * written to the graph model or storage.
@@ -43,17 +64,29 @@
 import type { BoundingBox12, Core, NodeCollection, NodeSingular } from "cytoscape";
 import { OUT_OF_FOCUS_CLASS, applyFocusScope } from "./cytoscape";
 import { SCENE_CLUMP, clumpTargets, ease, lerp, satelliteShift, type Point } from "./scene-clump";
-import type { OutlineAct, PageImageAct, ParsingAct, SceneAct, ToolScene } from "../sandbox/scene/types";
+import {
+  SCENE_PACING,
+  capLayers,
+  catchUpLive,
+  elapsedLabel,
+  enqueueLive,
+  runningLabel,
+  type ScenePart,
+  type Segment,
+} from "./scene-pacing";
+import type {
+  LeanAct,
+  LocateAct,
+  MathlibAct,
+  OutlineAct,
+  PageImageAct,
+  ProposeAct,
+  SceneAct,
+  ToolScene,
+} from "../sandbox/scene/types";
+import { PROPOSE_STEP_CAP } from "../sandbox/scene/types";
 
-export type ScenePart = "call" | "result" | "full";
-
-interface Segment {
-  scene: ToolScene;
-  part: ScenePart;
-  /** 1-based position in a turn replay. */
-  step?: number;
-  total?: number;
-}
+export { SCENE_PACING, type ScenePart } from "./scene-pacing";
 
 interface Session {
   zoom: number;
@@ -69,9 +102,13 @@ interface Visual {
   layers: string[][];
   /** Seeds being parsed (sync ensure): `scene-parsing`. */
   parsing?: boolean;
+  /** Extra classes by element id (proposal: hits, ghost edges, blocked, retired). */
+  marks?: Map<string, string[]>;
 }
 
-type WindowAct = Extract<SceneAct, { kind: "outline" | "page_image" }>;
+type WindowAct = Extract<SceneAct, { kind: "outline" | "page_image" | "mathlib" | "lean" | "locate" }>;
+/** Acts whose window also opens on the call (running state). */
+const RUNNING_WINDOWS = new Set<SceneAct["kind"]>(["mathlib", "lean"]);
 
 const isParsingRun = (scene: ToolScene): boolean => scene.act?.kind === "parsing" && scene.act.phase === "running";
 
@@ -85,7 +122,14 @@ export interface ScenePlayerHost {
   canPlay: () => boolean;
   /** Put the map's own focus scope (focus mode) back after a scene. */
   restoreFocusScope: () => void;
+  /** 「减少动效」: instant state changes (read per segment). */
+  reducedMotion?: () => boolean;
 }
+
+/** In-flight calls older than this show the running pill. */
+export const RUNNING_SHOW_MS = 2000;
+/** Forget an in-flight call after this long (its result never came). */
+const RUNNING_FORGET_MS = 15 * 60_000;
 
 export const SCENE_TIMING = {
   fitMs: 420,
@@ -106,6 +150,16 @@ export const SCENE_TIMING = {
   actMs: 2200,
   /** A running parse segment holds this long unless something is queued. */
   parsingHoldMs: 4500,
+  /** A running Lean / Loogle window holds this long unless something is queued. */
+  runningHoldMs: 2400,
+  /** Proposal: per ghost / staged node, per relation. */
+  proposeItemMs: 220,
+  proposeRelationMs: 280,
+  /** Blocked flash: on/off phase, number of flashes. */
+  flashMs: 200,
+  flashes: 3,
+  /** Mathlib candidates / Lean diagnostics: one row every … */
+  rowMs: 160,
 };
 const ACT_GAP = 18;
 const ACT_MARGIN = 8;
@@ -113,7 +167,16 @@ const FIT_PADDING = 64;
 const FIT_MAX_ZOOM = 1.6;
 /** Nodes that hang off entities and follow them when they move. */
 const SATELLITE_SELECTOR = '[elementKind = "junction"], .ink-note-node';
-const SCENE_CLASSES = "sandbox-echo-seed sandbox-echo-hit sandbox-echo-fade sandbox-echo-edge scene-parsing";
+const MARK_CLASSES = "scene-propose-hit scene-propose-edge scene-blocked scene-blocked-flash scene-retired";
+const SCENE_CLASSES = `sandbox-echo-seed sandbox-echo-hit sandbox-echo-fade sandbox-echo-edge scene-parsing ${MARK_CLASSES}`;
+const GHOST_SELECTOR = ".scene-ghost, .scene-ghost-edge";
+const GHOST_SIZE = 34;
+
+interface Inflight {
+  tool: string;
+  label: string;
+  since: number;
+}
 
 export class ScenePlayer {
   private queue: Segment[] = [];
@@ -139,6 +202,17 @@ export class ScenePlayer {
   private tween: { frame: number; done: () => void } | null = null;
   /** The open Act mini-window, if any. */
   private actWindow: HTMLElement | null = null;
+  /** Long-running calls (live) and the pill that shows them. */
+  private inflight = new Map<string, Inflight>();
+  private ticker: ReturnType<typeof setInterval> | undefined;
+  private readonly runningPill: HTMLElement;
+  private readonly hudElapsed: HTMLElement;
+  /** Call id of the segment on the HUD. */
+  private hudCall: string | null = null;
+  /** 「减少动效」 for the segment being performed. */
+  private reduced = false;
+  /** Time budget of the segment being performed (epoch ms). */
+  private deadline = Infinity;
   /** Notified when a session starts/ends (tests, dock). */
   onChange?: (playing: boolean) => void;
 
@@ -176,26 +250,51 @@ export class ScenePlayer {
     this.hudParsing.className = "scene-hud-parsing";
     this.hudParsing.textContent = "解析中";
     this.hudParsing.hidden = true;
-    this.hud.append(tag, this.hudTitle, this.hudStep, this.hudParsing, this.hudType, this.hudSummary, stop);
+    this.hudElapsed = document.createElement("span");
+    this.hudElapsed.className = "scene-hud-elapsed";
+    this.hudElapsed.hidden = true;
+    this.hud.append(tag, this.hudTitle, this.hudStep, this.hudParsing, this.hudElapsed, this.hudType, this.hudSummary, stop);
     host.hudHost.append(this.hud);
+    this.runningPill = document.createElement("div");
+    this.runningPill.className = "scene-running";
+    this.runningPill.setAttribute("role", "status");
+    this.runningPill.setAttribute("aria-live", "off");
+    this.runningPill.hidden = true;
+    host.hudHost.append(this.runningPill);
   }
 
   isPlaying(): boolean {
     return this.session !== null;
   }
 
-  /** Live tool event: queue behind whatever is playing. */
+  /** Live tool event: queue behind whatever is playing (paced). */
   live(scene: ToolScene, part: "call" | "result"): void {
     if (!this.host.canPlay()) return;
-    // One pending 「解析中」 segment per call: a newer one replaces it.
-    if (isParsingRun(scene)) {
-      this.queue = this.queue.filter((queued) => !(queued.scene.callId === scene.callId && isParsingRun(queued.scene)));
-    }
-    this.queue.push({ scene, part });
+    this.track(scene, part);
+    this.enqueue({ scene, part, enqueuedAt: Date.now(), merged: new Set([scene.callId]) });
     void this.pump();
   }
 
-  /** Replay one step or a whole turn: replaces whatever is playing. */
+  /** The round ended / the session changed: nothing is in flight any more. */
+  clearRunning(): void {
+    this.inflight.clear();
+    this.renderRunning();
+  }
+
+  /** Test hook: call ids the running pill tracks. */
+  runningCalls(): string[] {
+    return [...this.inflight.keys()];
+  }
+
+  private enqueue(segment: Segment): void {
+    this.queue = enqueueLive(this.queue, segment);
+  }
+
+  private catchUp(): void {
+    this.queue = catchUpLive(this.queue, Date.now());
+  }
+
+  /** Replay one step or a whole turn: replaces whatever is playing (never paced). */
   replay(scenes: readonly ToolScene[]): void {
     if (!this.host.canPlay() || scenes.length === 0) return;
     this.token += 1;
@@ -206,6 +305,51 @@ export class ScenePlayer {
     }));
     this.running = false;
     void this.pump();
+  }
+
+  /** Running pill: track in-flight calls by their call / result events. */
+  private track(scene: ToolScene, part: "call" | "result"): void {
+    if (part === "result" || scene.status !== "running") {
+      this.inflight.delete(scene.callId);
+    } else {
+      const known = this.inflight.get(scene.callId);
+      this.inflight.set(scene.callId, {
+        tool: scene.tool,
+        label: runningLabel(scene),
+        since: known?.since ?? scene.startedAt ?? Date.now(),
+      });
+    }
+    this.renderRunning();
+  }
+
+  private renderRunning(): void {
+    const now = Date.now();
+    for (const [id, entry] of this.inflight) if (now - entry.since > RUNNING_FORGET_MS) this.inflight.delete(id);
+    if (this.inflight.size === 0) {
+      clearInterval(this.ticker);
+      this.ticker = undefined;
+    } else if (!this.ticker) {
+      this.ticker = setInterval(() => this.renderRunning(), 250);
+    }
+    const shown = [...this.inflight.entries()].filter(([, entry]) => now - entry.since >= RUNNING_SHOW_MS);
+    const oldest = shown.sort(([, a], [, b]) => a.since - b.since)[0];
+    this.runningPill.hidden = !oldest;
+    if (oldest) {
+      const [callId, entry] = oldest;
+      this.runningPill.dataset.tool = entry.tool;
+      this.runningPill.dataset.call = callId;
+      this.runningPill.textContent = `${entry.label} · ${elapsedLabel(now - entry.since)}${shown.length > 1 ? ` · 另有 ${shown.length - 1} 个` : ""}`;
+    } else {
+      delete this.runningPill.dataset.tool;
+      delete this.runningPill.dataset.call;
+    }
+    // The HUD / Act window of an in-flight call count up too.
+    const hud = this.hudCall ? this.inflight.get(this.hudCall) : undefined;
+    this.hudElapsed.hidden = !hud || this.hud.hidden;
+    if (hud) this.hudElapsed.textContent = elapsedLabel(now - hud.since);
+    const clock = this.actWindow?.querySelector<HTMLElement>(".scene-act-elapsed[data-running]");
+    const owner = this.actWindow?.dataset.call ? this.inflight.get(this.actWindow.dataset.call) : undefined;
+    if (clock && owner) clock.textContent = elapsedLabel(now - owner.since);
   }
 
   /** Stop now; Settle (camera back unless `restoreCamera` is false). */
@@ -231,6 +375,7 @@ export class ScenePlayer {
    */
   beforeGraphSync(): void {
     this.restorePositions(false);
+    this.clearGhosts();
   }
 
   /** Test hook: ids currently displaced by the clump. */
@@ -248,9 +393,13 @@ export class ScenePlayer {
         this.cancel();
         return;
       }
+      this.catchUp();
       const segment = this.queue.shift()!;
       this.begin();
+      const budget = segment.scene.act?.kind === "propose" ? SCENE_PACING.proposeMaxMs : SCENE_PACING.segmentMaxMs;
+      this.deadline = Date.now() + budget;
       await this.perform(segment, token);
+      this.deadline = Infinity;
     }
     if (token !== this.token) return;
     this.running = false;
@@ -282,30 +431,40 @@ export class ScenePlayer {
 
   private async perform(segment: Segment, token: number): Promise<void> {
     const { scene, part } = segment;
+    this.reduced = this.host.reducedMotion?.() ?? false;
+    this.host.hudHost.classList.toggle("is-reduced-motion", this.reduced);
     this.announce(segment);
     this.closeAct();
+    this.clearGhosts();
     const act = scene.act;
-    const typed = act?.kind === "typewriter" ? act.text : undefined;
-    // 目录 / 页图 windows need the result: never on a bare call segment.
+    if (act?.kind === "propose" && part !== "call") {
+      await this.performPropose(scene, act, token);
+      return;
+    }
+    // `material.locate` types its quote like a search query.
+    const typed = act?.kind === "typewriter" ? act.text : act?.kind === "locate" ? clip(act.quote.replace(/\s+/g, " "), 60) : undefined;
+    // 目录 / 页图 / 定位 windows need the result; Lean / Loogle also show their running state.
     const windowAct: WindowAct | undefined =
-      act && (act.kind === "outline" || act.kind === "page_image") && part !== "call" ? act : undefined;
+      act && isWindowAct(act) && (part !== "call" || RUNNING_WINDOWS.has(act.kind)) ? act : undefined;
     const parsing = !!scene.act && isParsingRun(scene);
+    const running = scene.status === "running" && !!windowAct;
     if (typed === undefined) this.setTyped(null);
-    else if (part === "result") this.setTyped(typed, true);
+    else if (part === "result" || this.reduced) this.setTyped(typed, true);
     else if (!(await this.typewrite(typed, token))) return;
     const core = this.host.core();
     const seeds = scene.seeds;
-    const layers = part === "call" ? [] : scene.layers;
+    const layers = part === "call" ? [] : capLayers(scene.layers, SCENE_PACING.layerCap);
     const all = [...seeds, ...layers.flat()];
     const nodes = core && all.length > 0 ? collect(core, all) : null;
     if (!core || !nodes || nodes.empty()) {
       this.visual = null;
       this.clearPaint();
       this.clumpFocus = [];
-      if (core) this.clump(core, [], true);
+      if (core) this.clump(core, [], !this.reduced);
       if (windowAct) {
-        this.openAct(windowAct, null);
-        await this.wait(Math.max(SCENE_TIMING.hudOnlyMs, SCENE_TIMING.actMs), token);
+        await this.showWindow(windowAct, null, scene, token);
+        if (running) await this.holdRunning(token);
+        else await this.wait(Math.max(SCENE_TIMING.hudOnlyMs, SCENE_TIMING.actMs), token);
         return;
       }
       if (parsing) {
@@ -319,23 +478,192 @@ export class ScenePlayer {
     const visual: Visual = { focus: new Set(seeds), seeds, layers: [], ...(parsing ? { parsing } : {}) };
     if (seeds.length > 0 || layers.length === 0) this.paint(visual);
     // Clump and fit move together; the camera aims at where nodes will be.
-    this.clumpFocus = nodes.map((node) => node.id());
-    const box = this.clump(core, this.clumpFocus, true);
+    // Reduced motion: nothing moves, the camera jumps.
+    this.clumpFocus = this.reduced ? [] : nodes.map((node) => node.id());
+    const box = this.clump(core, this.clumpFocus, !this.reduced);
     this.fit(core, box ?? nodes.boundingBox({}));
-    if (seeds.length > 0) {
+    if (this.reduced) {
+      if (!(await this.wait(80, token))) return;
+    } else if (seeds.length > 0) {
       if (!(await this.wait(part === "call" ? SCENE_TIMING.seedMs : SCENE_TIMING.layerMs, token))) return;
     } else if (!(await this.wait(Math.max(SCENE_TIMING.fitMs, SCENE_CLUMP.ms) + 40, token))) return;
     // The camera has landed: the window can sit beside its node.
-    if (windowAct) this.openAct(windowAct, scene.anchor ?? null);
-    for (const layer of layers) {
-      visual.layers = [...visual.layers, layer];
-      for (const id of layer) visual.focus.add(id);
+    const shown = windowAct ? this.showWindow(windowAct, scene.anchor ?? null, scene, token) : Promise.resolve(true);
+    if (this.reduced && layers.length > 0) {
+      visual.layers = [...layers];
+      for (const id of layers.flat()) visual.focus.add(id);
       this.paint(visual);
-      if (!(await this.wait(SCENE_TIMING.layerMs, token))) return;
+    } else {
+      for (const layer of layers) {
+        visual.layers = [...visual.layers, layer];
+        for (const id of layer) visual.focus.add(id);
+        this.paint(visual);
+        if (!(await this.wait(SCENE_TIMING.layerMs, token))) return;
+      }
     }
-    if (windowAct) await this.wait(SCENE_TIMING.actMs, token);
+    if (!(await shown)) return;
+    if (running) await this.holdRunning(token);
+    else if (windowAct) await this.wait(SCENE_TIMING.actMs, token);
     else if (parsing) await this.holdParsing(token);
     else if (layers.length > 0) await this.wait(SCENE_TIMING.holdMs, token);
+  }
+
+  /** Open an Act window and reveal its rows one by one (all at once when reduced). */
+  private async showWindow(act: WindowAct, anchor: string | null, scene: ToolScene, token: number): Promise<boolean> {
+    const win = this.openAct(act, anchor, scene);
+    const rows = [...win.querySelectorAll<HTMLElement>(".is-pending")];
+    if (this.reduced) {
+      rows.forEach((row) => row.classList.remove("is-pending"));
+      return true;
+    }
+    for (const row of rows) {
+      if (!(await this.wait(SCENE_TIMING.rowMs, token))) return false;
+      row.classList.remove("is-pending");
+    }
+    return true;
+  }
+
+  /** A running Lean / Loogle window: hold until the next segment (or the hold ends). */
+  private async holdRunning(token: number): Promise<void> {
+    const until = Date.now() + SCENE_TIMING.runningHoldMs;
+    while (Date.now() < until && this.queue.length === 0) {
+      if (!(await this.wait(Math.min(200, until - Date.now()), token))) return;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // propose_changes on the main map
+
+  private async performPropose(scene: ToolScene, act: ProposeAct, token: number): Promise<void> {
+    this.setTyped(null);
+    const core = this.host.core();
+    this.setCounts(act);
+    if (!core) {
+      await this.wait(SCENE_TIMING.hudOnlyMs, token);
+      return;
+    }
+    const reduced = this.reduced;
+    const exists = (id: string | undefined): id is string => !!id && core.getElementById(id).nonempty();
+    // Nothing moves in a proposal scene: send earlier clumps home.
+    this.clumpFocus = [];
+    this.clump(core, [], !reduced);
+    const anchors = scene.seeds.filter(exists);
+    const retired = (act.retiredNodes ?? []).filter(exists);
+    // Real staged nodes (staged overlay) are animated as they are; the rest get ghosts.
+    const items = act.items.map((item) => ({ item, id: exists(item.node) ? item.node : ghostId(item.localRef), ghost: !exists(item.node) }));
+    const spots = ghostSpots(core, items.filter((entry) => entry.ghost).map((entry) => entry.item), [
+      ...anchors,
+      ...items.filter((entry) => !entry.ghost).map((entry) => entry.id),
+    ]);
+    const nodeOf = (end: ProposeAct["relations"][number]["source"]): string | undefined => {
+      if ("local" in end) return items.find((entry) => entry.item.localRef === end.local)?.id;
+      return exists(end.node) ? end.node : undefined;
+    };
+    const relations = act.relations.map((relation) => ({
+      relation,
+      source: nodeOf(relation.source),
+      target: nodeOf(relation.target),
+      real: relation.stagedId ? relationElements(core, relation.stagedId) : core.collection(),
+    }));
+    const marks = new Map<string, string[]>();
+    const mark = (id: string, cls: string) => marks.set(id, [...(marks.get(id) ?? []), cls]);
+    const visual: Visual = { focus: new Set([...anchors, ...retired]), seeds: anchors, layers: [], marks };
+    for (const id of retired) mark(id, "scene-retired");
+    for (const entry of relations) for (const id of [entry.source, entry.target]) if (id && !id.startsWith("scene-ghost")) visual.focus.add(id);
+    for (const entry of items) if (!entry.ghost) visual.focus.add(entry.id);
+    this.paint(visual);
+    // The camera frames anchors, staged nodes and where the ghosts will appear.
+    const box = boxOf(core, [...visual.focus], [...spots.values()]);
+    if (box) this.fit(core, box);
+    if (!(await this.wait(reduced ? 80 : SCENE_TIMING.fitMs + 80, token))) return;
+    if (retired.length > 0 && !reduced && !(await this.wait(SCENE_TIMING.layerMs, token))) return;
+    // Units appear one by one (capped), then relations draw in one after another.
+    const itemStep = reduced ? 0 : SCENE_TIMING.proposeItemMs;
+    for (const [index, entry] of items.entries()) {
+      if (entry.ghost) {
+        const at = spots.get(entry.item.localRef);
+        core.add({
+          group: "nodes",
+          data: { id: entry.id, label: entry.item.label, elementKind: "scene-ghost", localRef: entry.item.localRef },
+          position: at ?? { x: 0, y: 0 },
+          classes: `scene-ghost${entry.item.kind === "span" ? " scene-ghost-span" : ""}`,
+        });
+      } else {
+        mark(entry.id, "scene-propose-hit");
+      }
+      visual.focus.add(entry.id);
+      if (entry.item.blocked.length > 0) mark(entry.id, "scene-blocked");
+      this.paint(visual);
+      if (itemStep && index < PROPOSE_STEP_CAP && !(await this.wait(itemStep, token))) return;
+    }
+    const relationStep = reduced ? 0 : SCENE_TIMING.proposeRelationMs;
+    for (const [index, entry] of relations.entries()) {
+      const blocked = entry.relation.blocked.length > 0;
+      if (entry.real.nonempty()) {
+        entry.real.forEach((element) => {
+          mark(element.id(), "scene-propose-edge");
+          if (element.isNode()) visual.focus.add(element.id());
+        });
+      } else if (entry.source && entry.target) {
+        const id = `scene-ghost-edge:${entry.relation.localRef}`;
+        core.add({
+          group: "edges",
+          data: { id, source: entry.source, target: entry.target, role: entry.relation.label, label: entry.relation.label },
+          classes: "scene-ghost-edge",
+        });
+        if (blocked) mark(id, "scene-blocked");
+      } else {
+        continue;
+      }
+      this.paint(visual);
+      if (relationStep && index < PROPOSE_STEP_CAP && !(await this.wait(relationStep, token))) return;
+    }
+    // Blocked: flash red with the diagnostic code (on the ghost label and in the window).
+    const blockedIds = [...marks].filter(([, classes]) => classes.includes("scene-blocked")).map(([id]) => id);
+    for (const id of blockedIds) {
+      const node = core.getElementById(id);
+      const entry = items.find((candidate) => candidate.id === id);
+      if (node.nonempty() && node.isNode() && entry?.ghost) node.data("label", `⚠ ${entry.item.blocked[0].code} · ${entry.item.label}`);
+    }
+    if (act.blocks.length > 0) this.openAct(act, null, scene);
+    if (blockedIds.length > 0 && !reduced) {
+      let flash = core.collection();
+      for (const id of blockedIds) flash = flash.union(core.getElementById(id));
+      for (let round = 0; round < SCENE_TIMING.flashes * 2; round += 1) {
+        flash.toggleClass("scene-blocked-flash", round % 2 === 0);
+        if (!(await this.wait(SCENE_TIMING.flashMs, token))) return;
+      }
+      flash.removeClass("scene-blocked-flash");
+    }
+    await this.wait(SCENE_TIMING.holdMs + (act.blocks.length > 0 ? SCENE_TIMING.actMs : 0), token);
+  }
+
+  /** HUD data of a proposal: the `staged_ids` counts (= review overview totals). */
+  private setCounts(act: ProposeAct | null): void {
+    if (!act) {
+      delete this.hud.dataset.units;
+      delete this.hud.dataset.relations;
+      delete this.hud.dataset.spans;
+      delete this.hud.dataset.blocked;
+      return;
+    }
+    this.hud.dataset.units = String(act.counts.units);
+    this.hud.dataset.relations = String(act.counts.relations);
+    this.hud.dataset.spans = String(act.counts.spans);
+    this.hud.dataset.blocked = String(act.blocks.length);
+  }
+
+  /** Remove transient ghost nodes / edges (proposal scenes). */
+  private clearGhosts(): void {
+    const core = this.host.core();
+    if (!core) return;
+    const ghosts = core.elements(GHOST_SELECTOR);
+    if (ghosts.nonempty()) core.remove(ghosts);
+  }
+
+  /** Test hook: ids of the ghost elements on the map right now. */
+  ghostIds(): string[] {
+    return this.host.core()?.elements(GHOST_SELECTOR).map((element) => element.id()) ?? [];
   }
 
   /** Hold a 「解析中」 frame until the next segment arrives (or the hold ends). */
@@ -370,18 +698,26 @@ export class ScenePlayer {
   }
 
   /** Open the Act mini-window beside `anchor` (else the stage corner). */
-  private openAct(act: WindowAct, anchor: string | null): void {
+  private openAct(act: WindowAct | ProposeAct, anchor: string | null, scene?: ToolScene): HTMLElement {
     this.closeAct();
     const win = document.createElement("section");
     win.className = "scene-act";
     win.dataset.act = act.kind;
+    if (scene) win.dataset.call = scene.callId;
     win.setAttribute("role", "dialog");
-    win.setAttribute("aria-label", act.kind === "outline" ? "PDF 目录" : "手稿页图");
+    win.setAttribute("aria-label", ACT_LABEL[act.kind]);
+    const elapsed = scene && scene.status !== "running" ? scene.durationMs : undefined;
     if (act.kind === "outline") fillOutline(win, act);
-    else fillPageImage(win, act);
+    else if (act.kind === "page_image") fillPageImage(win, act);
+    else if (act.kind === "mathlib") fillMathlib(win, act, elapsed);
+    else if (act.kind === "lean") fillLean(win, act, elapsed);
+    else if (act.kind === "locate") fillLocate(win, act);
+    else fillBlocked(win, act);
     this.host.hudHost.append(win);
     this.actWindow = win;
     if (!this.placeBeside(win, anchor)) win.classList.add("is-stage");
+    this.renderRunning();
+    return win;
   }
 
   private placeBeside(win: HTMLElement, anchor: string | null): boolean {
@@ -434,13 +770,22 @@ export class ScenePlayer {
     this.hud.classList.toggle("is-error", scene.status === "error");
     this.hudTitle.textContent = scene.title;
     this.hudSummary.textContent = scene.summary;
-    this.hudStep.textContent = segment.total ? `${segment.step}/${segment.total}` : "";
-    this.hudStep.hidden = !segment.total;
+    // Replay: `i/N`. Live pacing: merged / skipped segments say so.
+    const merged = scene.coalesced ? `合并 ${scene.coalesced + 1} 次` : "";
+    const skipped = segment.skipped ? `跳过 ${segment.skipped} 步` : "";
+    this.hudStep.textContent = segment.total ? `${segment.step}/${segment.total}` : [merged, skipped].filter(Boolean).join(" · ");
+    this.hudStep.hidden = !this.hudStep.textContent;
+    if (merged || skipped) this.hudStep.dataset.pacing = skipped ? "skip" : "merge";
+    else delete this.hudStep.dataset.pacing;
+    this.hudCall = scene.callId;
+    this.setCounts(scene.act?.kind === "propose" && segment.part !== "call" ? scene.act : null);
+    if (scene.act && scene.act.kind !== "typewriter" && scene.act.kind !== "parsing") this.hud.dataset.act = scene.act.kind;
     const parsing = isParsingRun(scene);
     this.hudParsing.hidden = !parsing;
     this.hud.classList.toggle("is-parsing", parsing);
     if (parsing) this.hud.dataset.act = "parsing";
-    else delete this.hud.dataset.act;
+    else if (!scene.act || scene.act.kind === "typewriter" || scene.act.kind === "parsing") delete this.hud.dataset.act;
+    this.renderRunning();
   }
 
   /** Dim out-of-focus elements, mark seeds / layers / edges between them. */
@@ -459,7 +804,11 @@ export class ScenePlayer {
       });
       if (visual.parsing) collect(core, visual.seeds).addClass("scene-parsing");
       // Edges (and semantic-mode junction edges) whose ends are both in focus.
-      core.edges().not(`.${OUT_OF_FOCUS_CLASS}`).addClass("sandbox-echo-edge");
+      core.edges().not(`.${OUT_OF_FOCUS_CLASS}`).not(".scene-ghost-edge").addClass("sandbox-echo-edge");
+      for (const [id, classes] of visual.marks ?? []) {
+        const element = core.getElementById(id);
+        if (element.nonempty()) element.addClass(classes.join(" "));
+      }
     });
   }
 
@@ -481,7 +830,9 @@ export class ScenePlayer {
     const cx = (box.x1 + box.x2) / 2;
     const cy = (box.y1 + box.y2) / 2;
     core.stop(true, false);
-    core.animate({ zoom, pan: { x: width / 2 - zoom * cx, y: height / 2 - zoom * cy } }, { duration: SCENE_TIMING.fitMs });
+    const pan = { x: width / 2 - zoom * cx, y: height / 2 - zoom * cy };
+    if (this.reduced) core.viewport({ zoom, pan });
+    else core.animate({ zoom, pan }, { duration: SCENE_TIMING.fitMs });
   }
 
   /**
@@ -631,13 +982,19 @@ export class ScenePlayer {
     this.visual = null;
     this.hud.hidden = true;
     this.hudParsing.hidden = true;
+    this.hudElapsed.hidden = true;
+    this.hudCall = null;
+    this.setCounts(null);
     this.hud.classList.remove("is-parsing");
     this.setTyped(null);
     this.closeAct();
+    this.clearGhosts();
     this.host.canvas.classList.remove("is-scene-playing");
     this.clumpFocus = [];
-    // Nodes glide home (instantly when a jump follows: restoreCamera false).
-    this.restorePositions(restoreCamera);
+    const reduced = this.host.reducedMotion?.() ?? false;
+    if (reduced) animate = false;
+    // Nodes glide home (instantly when a jump follows or motion is reduced).
+    this.restorePositions(restoreCamera && !reduced);
     const core = this.host.core();
     if (!core) return;
     core.elements().removeClass(SCENE_CLASSES);
@@ -665,8 +1022,10 @@ export class ScenePlayer {
     this.onChange?.(false);
   }
 
+  /** Sleep (cut to the segment's time budget); false when cancelled/replaced. */
   private wait(ms: number, token: number): Promise<boolean> {
-    return new Promise((resolve) => setTimeout(() => resolve(token === this.token), ms));
+    const capped = Math.max(0, Math.min(ms, this.deadline - Date.now()));
+    return new Promise((resolve) => setTimeout(() => resolve(token === this.token), capped));
   }
 }
 
@@ -732,6 +1091,230 @@ function fillPageImage(win: HTMLElement, act: PageImageAct): void {
   img.onerror = () => img.replaceWith(empty());
   img.src = act.src;
   win.append(img);
+}
+
+const ACT_LABEL: Record<WindowAct["kind"] | "propose", string> = {
+  outline: "PDF 目录",
+  page_image: "手稿页图",
+  mathlib: "Mathlib 检索",
+  lean: "Lean 检查",
+  locate: "原文定位",
+  propose: "提案诊断",
+};
+
+const isWindowAct = (act: SceneAct): act is WindowAct =>
+  act.kind === "outline" || act.kind === "page_image" || act.kind === "mathlib" || act.kind === "lean" || act.kind === "locate";
+
+function badge(className: string, text: string, data?: Record<string, string>): HTMLElement {
+  const node = element("span", `scene-act-badge ${className}`, text);
+  for (const [key, value] of Object.entries(data ?? {})) node.dataset[key] = value;
+  return node;
+}
+
+/** Running row with a live clock (the player's ticker fills it). */
+function runningRow(label: string): HTMLElement {
+  const row = element("p", "scene-act-running");
+  row.append(element("span", "scene-act-spinner"), element("span", "scene-act-running-label", label));
+  const clock = element("span", "scene-act-elapsed", "");
+  clock.dataset.running = "true";
+  row.append(clock);
+  return row;
+}
+
+function elapsedRow(ms: number | undefined): HTMLElement | null {
+  return ms === undefined ? null : element("p", "scene-act-foot scene-act-took", `用时 ${elapsedLabel(ms)}`);
+}
+
+/** Loogle window: query, backend badge, candidates (revealed one by one). */
+function fillMathlib(win: HTMLElement, act: MathlibAct, elapsed?: number): void {
+  actHead(win, "Mathlib · Loogle", act.total !== undefined ? `${act.total} 个候选` : undefined);
+  const meta = element("div", "scene-act-badges");
+  if (act.mode) meta.append(badge("scene-act-mode", act.mode === "resident" ? "常驻" : "一次性", { mode: act.mode }));
+  if (act.fallback) {
+    const flag = badge("scene-act-fallback", "已回退", { fallback: act.fallback });
+    flag.title = act.fallback;
+    meta.append(flag);
+  }
+  if (meta.childElementCount > 0) win.append(meta);
+  win.append(element("p", "scene-act-query", act.query || "（空查询）"));
+  if (act.phase === "running") {
+    win.append(runningRow("Loogle 启动中…"));
+    return;
+  }
+  if (act.error) {
+    win.append(element("p", "scene-act-error", act.error));
+  } else if (act.noMatches) {
+    win.append(element("p", "scene-act-empty", "没有匹配的声明"));
+  } else {
+    const list = element("ol", "scene-act-candidates");
+    for (const candidate of act.candidates) {
+      const row = element("li", "scene-act-candidate is-pending");
+      row.append(element("code", "scene-act-candidate-name", candidate.name));
+      if (candidate.type) row.append(element("span", "scene-act-candidate-type", candidate.type));
+      list.append(row);
+    }
+    win.append(list);
+    if (act.truncated) win.append(element("p", "scene-act-foot", `仅显示前 ${act.candidates.length} 个`));
+  }
+  if (act.suggestions.length > 0) {
+    const tips = element("p", "scene-act-suggestions", "你可能想找：");
+    for (const tip of act.suggestions) tips.append(element("code", "scene-act-suggestion", tip));
+    win.append(tips);
+  }
+  if (act.fallback) win.append(element("p", "scene-act-foot scene-act-fallback-note", `常驻 Loogle 未使用：${act.fallback}`));
+  const took = elapsedRow(elapsed);
+  if (took) win.append(took);
+}
+
+/** Lean window: the snippet, running clock, then ✓ or the diagnostics. */
+function fillLean(win: HTMLElement, act: LeanAct, elapsed?: number): void {
+  actHead(win, "Lean 检查", act.codeLines ? `${act.codeLines} 行` : undefined);
+  if (act.code) {
+    const pre = element("pre", "scene-act-code");
+    pre.textContent = act.code + (act.codeLines > act.code.split("\n").length ? "\n…" : "");
+    win.append(pre);
+  }
+  if (act.phase === "running") {
+    win.append(runningRow("Lean 编译中…"));
+    return;
+  }
+  if (act.phase === "error") {
+    win.append(element("p", "scene-act-error", act.error ?? "调用失败"));
+  } else if (act.phase === "checked") {
+    const verdict = element("p", "scene-act-verdict", "✓ 编译通过");
+    verdict.dataset.verdict = "checked";
+    win.append(verdict, element("p", "scene-act-note", "编译通过 ≠ 证明忠实：还需核对陈述与原文一致"));
+  } else {
+    const verdict = element("p", "scene-act-verdict", act.diagnostics.length ? `✗ ${act.diagnostics.length} 条诊断` : "✗ 未通过");
+    verdict.dataset.verdict = "failed";
+    win.append(verdict);
+    const list = element("ul", "scene-act-diagnostics");
+    for (const item of act.diagnostics) {
+      const row = element("li", "scene-act-diagnostic is-pending");
+      row.dataset.severity = item.severity;
+      const where = item.line !== undefined ? `${item.line}:${item.column ?? 0}` : "";
+      if (where) row.append(element("span", "scene-act-diagnostic-where", where));
+      row.append(element("span", "scene-act-diagnostic-message", item.message));
+      list.append(row);
+    }
+    win.append(list);
+    if (act.diagnosticsTruncated) win.append(element("p", "scene-act-foot", "诊断已截断"));
+  }
+  const took = elapsedRow(act.elapsedMs ?? elapsed);
+  if (took) win.append(took);
+}
+
+/** Locate window: the quote (highlighted when it matched), page, or why not. */
+function fillLocate(win: HTMLElement, act: LocateAct): void {
+  actHead(win, "原文定位", act.page !== undefined ? `第 ${act.page} 页` : undefined);
+  const quote = element("blockquote", "scene-act-quote");
+  const text = clip(act.quote, 240);
+  if (act.phase === "ok") quote.append(element("mark", "scene-act-mark", text));
+  else quote.textContent = text;
+  quote.dataset.phase = act.phase;
+  win.append(quote);
+  if (act.phase === "ok") {
+    const verdict = element("p", "scene-act-verdict", [act.match ?? "已定位", act.page !== undefined ? `第 ${act.page} 页` : ""].filter(Boolean).join(" · "));
+    verdict.dataset.verdict = "ok";
+    win.append(verdict);
+    if (act.reason) win.append(element("p", "scene-act-foot", act.reason));
+  } else if (act.phase !== "running") {
+    const verdict = element("p", "scene-act-reason", act.reason ?? "未定位");
+    verdict.dataset.verdict = act.phase;
+    win.append(verdict);
+  }
+}
+
+/** Blocked proposal: its diagnostics (code + message). */
+function fillBlocked(win: HTMLElement, act: ProposeAct): void {
+  actHead(win, "提案被阻塞", `${act.blocks.length} 个问题`);
+  const list = element("ul", "scene-act-diagnostics");
+  for (const block of act.blocks.slice(0, 8)) {
+    const row = element("li", "scene-act-diagnostic");
+    row.dataset.severity = "error";
+    row.append(element("code", "scene-act-diagnostic-code", block.code));
+    if (block.localRef) row.append(element("span", "scene-act-diagnostic-where", block.localRef));
+    row.append(element("span", "scene-act-diagnostic-message", block.message));
+    list.append(row);
+  }
+  win.append(list);
+  if (act.blocks.length > 8) win.append(element("p", "scene-act-foot", `另有 ${act.blocks.length - 8} 个问题`));
+}
+
+function clip(text: string, max: number): string {
+  const chars = [...text];
+  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : text;
+}
+
+const ghostId = (localRef: string): string => `scene-ghost:${localRef}`;
+
+/** Real map elements of a staged relation: its edges or its junction (and the junction's edges). */
+function relationElements(core: Core, relationId: string) {
+  const own = core.elements().filter((element) => element.data("relationId") === relationId || element.data("domainId") === relationId);
+  return own.union(own.nodes().connectedEdges());
+}
+
+/**
+ * Where each ghost appears: a golden-angle spiral around its anchors'
+ * centroid; anchorless ghosts spiral around the scene's known nodes (else
+ * the viewport centre).
+ */
+function ghostSpots(core: Core, items: readonly ProposeAct["items"][number][], known: readonly string[]): Map<string, Point> {
+  const spots = new Map<string, Point>();
+  const centroid = (ids: readonly string[]): Point | null => {
+    const nodes = collect(core, ids);
+    if (nodes.empty()) return null;
+    let x = 0;
+    let y = 0;
+    nodes.forEach((node) => {
+      x += node.position("x");
+      y += node.position("y");
+    });
+    return { x: x / nodes.length, y: y / nodes.length };
+  };
+  const pan = core.pan();
+  const zoom = core.zoom() || 1;
+  const fallback = centroid(known) ?? { x: (core.width() / 2 - pan.x) / zoom, y: (core.height() / 2 - pan.y) / zoom };
+  const groups = new Map<string, { center: Point; count: number }>();
+  for (const item of items) {
+    const anchors = item.anchorNodes ?? [];
+    const key = anchors.length > 0 ? [...anchors].sort().join("|") : "";
+    let group = groups.get(key);
+    if (!group) {
+      group = { center: (anchors.length > 0 ? centroid(anchors) : null) ?? fallback, count: 0 };
+      groups.set(key, group);
+    }
+    const index = group.count;
+    group.count += 1;
+    const angle = index * 2.39996 - Math.PI / 2;
+    const radius = 96 + 30 * Math.sqrt(index);
+    spots.set(item.localRef, { x: group.center.x + radius * Math.cos(angle), y: group.center.y + radius * Math.sin(angle) });
+  }
+  return spots;
+}
+
+/** Bounding box of `ids` plus ghost spots (model coordinates). */
+function boxOf(core: Core, ids: readonly string[], points: readonly Point[]): (BoundingBox12 & { w: number; h: number }) | null {
+  let x1 = Infinity;
+  let y1 = Infinity;
+  let x2 = -Infinity;
+  let y2 = -Infinity;
+  const nodes = collect(core, ids);
+  if (nodes.nonempty()) {
+    const b = nodes.boundingBox({});
+    x1 = b.x1;
+    y1 = b.y1;
+    x2 = b.x2;
+    y2 = b.y2;
+  }
+  for (const point of points) {
+    x1 = Math.min(x1, point.x - GHOST_SIZE);
+    y1 = Math.min(y1, point.y - GHOST_SIZE);
+    x2 = Math.max(x2, point.x + GHOST_SIZE);
+    y2 = Math.max(y2, point.y + GHOST_SIZE);
+  }
+  if (!Number.isFinite(x1)) return null;
+  return { x1, y1, x2, y2, w: x2 - x1, h: y2 - y1 };
 }
 
 function collect(core: Core, ids: readonly string[]): NodeCollection {

@@ -670,7 +670,8 @@ function backendMode(payload: Json | undefined): MathlibAct["mode"] {
 
 /** `did you mean: a, b` of a rejected Loogle query (the MCP error text). */
 function loogleSuggestions(message: string | undefined): string[] {
-  const match = message?.match(/did you mean:\s*([^.;]+)/i);
+  // Names contain dots; the list ends at `. ` / `;` / the end.
+  const match = message?.match(/did you mean:\s*(.+?)(?:\.\s|;|\.?$)/i);
   return match ? match[1].split(",").map((item) => item.trim()).filter(Boolean).slice(0, 6) : [];
 }
 
@@ -1003,6 +1004,23 @@ export function compileRoundScenes(events: readonly AgentEventLike[], history: r
     .filter((draft): draft is SceneDraft => draft !== null);
 }
 
+/** A proposal's ids on the map: real staged nodes, anchors, retired nodes. */
+function resolvePropose(act: ProposeAct, resolve: SceneResolve): ProposeAct {
+  const node = (id: string | undefined) => (id ? resolve(id)?.nodeId : undefined);
+  const nodes = (raw: readonly string[]) => [...new Set(raw.map(node).filter((id): id is string => !!id))];
+  const end = (value: ProposeEnd): ProposeEnd => ("id" in value ? { id: value.id, ...(node(value.id) ? { node: node(value.id) } : {}) } : value);
+  return {
+    ...act,
+    items: act.items.map((item) => ({
+      ...item,
+      ...(node(item.stagedId) ? { node: node(item.stagedId) } : {}),
+      anchorNodes: nodes(item.anchors),
+    })),
+    relations: act.relations.map((relation) => ({ ...relation, source: end(relation.source), target: end(relation.target) })),
+    retiredNodes: nodes(act.retired),
+  };
+}
+
 /** Resolve a draft's ids on the map: unique, seeds first, capped. */
 export function resolveScene(draft: SceneDraft, resolve: SceneResolve, cap = SCENE_FOCUS_CAP): ToolScene {
   // `focus` caps the scene; `lit` keeps a node in one layer only. A seed may
@@ -1055,7 +1073,7 @@ export function resolveScene(draft: SceneDraft, resolve: SceneResolve, cap = SCE
     layers,
     offMap,
     capped,
-    ...(draft.act ? { act: draft.act } : {}),
+    ...(draft.act ? { act: draft.act.kind === "propose" ? resolvePropose(draft.act, resolve) : draft.act } : {}),
     ...(seeds[0] ? { anchor: seeds[0] } : {}),
     ...(draft.startedAt !== undefined ? { startedAt: draft.startedAt } : {}),
     ...(draft.durationMs !== undefined ? { durationMs: draft.durationMs } : {}),

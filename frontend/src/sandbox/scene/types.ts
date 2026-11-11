@@ -175,6 +175,10 @@ export interface ProposeItem {
   anchors: string[];
   /** Blocking diagnostics attributed to this item (own or its spans'). */
   blocked: ProposeBlock[];
+  /** Resolved (`resolveScene`): the real staged node on the map, if any. */
+  node?: string;
+  /** Resolved: map nodes of `anchors`. */
+  anchorNodes?: string[];
 }
 
 export interface ProposeRelation {
@@ -189,7 +193,8 @@ export interface ProposeRelation {
   blocked: ProposeBlock[];
 }
 
-export type ProposeEnd = { local: string } | { id: string };
+/** `node` = the existing object's map node (set by `resolveScene`). */
+export type ProposeEnd = { local: string } | { id: string; node?: string };
 
 export interface ProposeBlock {
   code: string;
@@ -218,6 +223,8 @@ export interface ProposeAct {
   supersedes?: { changeSetId: string; version: number };
   /** Staged ids of the superseded version that this version no longer has. */
   retired: string[];
+  /** Resolved: map nodes of `retired`. */
+  retiredNodes?: string[];
 }
 
 export interface MathlibCandidate {

@@ -4,6 +4,7 @@ import { renderLeanStatus } from "./artifact/lean-status";
 import type { DesktopSnapshot } from "./artifact/types";
 import { eventBus } from "./core/events";
 import { errorMessage } from "./core/ipc";
+import { reducedMotion, watchMotion } from "./core/motion";
 import { DiscoveryLedgerController } from "./discovery/discovery-ledger";
 import { mountDiscoveryTask } from "./discovery-task";
 import { GraphController } from "./graph/graph-controller";
@@ -642,8 +643,10 @@ const player = new ScenePlayer({
   // Like the A-PR3 echo: nothing plays behind the open ink pad / 手稿 layer.
   canPlay: () => !inkOpen,
   restoreFocusScope: () => graphController.reapplyFocusScope(),
+  reducedMotion: () => reducedMotion(),
 });
 scenePlayer = player;
+watchMotion();
 const noNodes: never[] = [];
 sandboxDock.setCiteContext({
   nodes: () => currentSnapshot?.landscape_graph.nodes ?? noNodes,
@@ -671,6 +674,7 @@ sandboxDock.setCiteContext({
   },
   scenes: {
     live: (scene, part) => player.live(scene, part),
+    idle: () => player.clearRunning(),
     replay: (scenes) => {
       if (inkOpen) {
         shell.showToast("手稿打开时不能在地图上回放，请先返回地图。", "error");
