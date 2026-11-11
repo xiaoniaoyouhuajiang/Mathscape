@@ -1366,8 +1366,8 @@ code {
 /* Running pill: any tool call in flight for more than ~2s (live). */
 .scene-running {
   position: absolute;
-  top: 78px;
-  left: 16px;
+  right: 16px;
+  bottom: 16px;
   z-index: 3;
   display: inline-flex;
   align-items: center;
