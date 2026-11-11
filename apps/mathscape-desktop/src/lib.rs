@@ -24,6 +24,7 @@ mod loogle_host;
 mod map_edit;
 mod markdown_patch;
 mod registration;
+mod resident_log;
 mod sandbox;
 mod sandbox_continuity;
 mod sandbox_dialogue;
@@ -1056,7 +1057,9 @@ pub fn run() {
                 eprintln!("mathscape: {error}");
             }
             app.manage(DesktopState::new(service));
-            app.manage(sandbox_dialogue::SandboxDialogueState::from_environment());
+            app.manage(sandbox_dialogue::SandboxDialogueState::from_environment(
+                resident_log::log_file(log_dir.as_deref()),
+            ));
             let legacy_sandbox = sandbox::legacy_sandbox_root(app.handle());
             app.manage(sandbox::open_for_workspace(&mother, legacy_sandbox)?);
             Ok(())

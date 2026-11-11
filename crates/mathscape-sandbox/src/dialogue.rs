@@ -402,6 +402,16 @@ const PROMPT_HISTORY_CHARS: usize = 12_000;
 /// `history` must already be the active thread only. `continues_session`
 /// marks a later thread: the copy may hold state from earlier threads whose
 /// conversation is deliberately *not* replayed.
+/// What the agent is and what its tools can do; shared by the persistent
+/// session preamble (Desktop) and the transcript rebuild below.
+pub const DIALOGUE_INTRO: &str = "你在 Mathscape 沙箱探索会话里与用户对话。可用 mathscape MCP 工具查阅当前（沙箱副本）工作区里的材料、图与手稿，并用 propose_changes 提交提案：提案只写入沙箱副本、等待用户审核，接受前不会改动地图。引用对象时尽量给出 object_id。";
+
+/// A later dialogue thread on the same copy.
+pub const NEW_THREAD_NOTE: &str = "这是本沙箱会话里新开的一条对话：工作区可能保留了更早对话留下的状态，但更早的对话内容不在本轮上下文中；以工具查到的当前状态为准，不要假设之前说过什么。";
+
+/// Rebuilt context: only the text of earlier turns survives.
+pub const REBUILT_CONTEXT_NOTE: &str = "本轮上下文由对话记录重建：之前轮次的工具调用与结果不在上下文中，提案 id 与状态请用 list_change_sets 重新查询，涉及具体对象时以本轮调用工具的结果为准。";
+
 pub fn build_dialogue_prompt(
     history: &[TranscriptEntry],
     message: &str,
@@ -424,13 +434,14 @@ pub fn build_dialogue_prompt(
         lines.push(line);
     }
     lines.reverse();
-    let mut prompt = String::from(
-        "你在 Mathscape 沙箱探索会话里与用户对话。可用 mathscape MCP 只读工具查阅当前（沙箱副本）工作区里的材料、图与手稿；引用对象时尽量给出 object_id。\n",
-    );
+    let mut prompt = format!("{DIALOGUE_INTRO}\n");
     if continues_session {
-        prompt.push_str(
-            "这是本沙箱会话里新开的一条对话：工作区可能保留了更早对话留下的状态，但更早的对话内容不在本轮上下文中；以工具查到的当前状态为准，不要假设之前说过什么。\n",
-        );
+        prompt.push_str(NEW_THREAD_NOTE);
+        prompt.push('\n');
+    }
+    if !lines.is_empty() {
+        prompt.push_str(REBUILT_CONTEXT_NOTE);
+        prompt.push('\n');
     }
     if !lines.is_empty() {
         prompt.push_str("\n此前的对话（按时间）：\n");

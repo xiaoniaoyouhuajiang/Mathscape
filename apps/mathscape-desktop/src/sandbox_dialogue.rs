@@ -312,7 +312,9 @@ where
 }
 
 impl SandboxDialogueState {
-    pub(crate) fn from_environment() -> Self {
+    /// `resident_log`: where app-server lifecycle events go
+    /// (`resident-processes.jsonl`, shared with the resident Loogle).
+    pub(crate) fn from_environment(resident_log: Option<PathBuf>) -> Self {
         let config = CodexConfig {
             program: env_path(CODEX_PROGRAM_ENVIRONMENT_VARIABLE)
                 .unwrap_or_else(|| PathBuf::from("codex")),
@@ -320,15 +322,20 @@ impl SandboxDialogueState {
                 .unwrap_or_else(default_mcp_program),
             ..CodexConfig::default()
         };
-        Self::with_config(config)
+        Self::with_config_and_sink(config, crate::resident_log::jsonl_sink(resident_log))
     }
 
+    #[cfg(test)]
     fn with_config(config: CodexConfig) -> Self {
+        Self::with_config_and_sink(config, mathscape_resident::null_sink())
+    }
+
+    fn with_config_and_sink(config: CodexConfig, sink: mathscape_resident::EventSink) -> Self {
         Self {
             inner: Arc::new(Inner {
                 codex_program: config.program.clone(),
                 mcp_program: config.mcp_program.clone(),
-                executor: Arc::new(CodexExecutor::new(config)),
+                executor: Arc::new(CodexExecutor::new(config).with_event_sink(sink)),
                 active: Mutex::new(HashMap::new()),
                 opened: Mutex::new(HashSet::new()),
             }),
@@ -1201,6 +1208,15 @@ mod tests {
     /// fixture root (`codex_home` name lets one test simulate two machines)
     /// and a request log at `<root>/<codex_home>.log`.
     fn dialogue_in(fx: &Fixture, codex_home: &str, args: &[&str]) -> SandboxDialogueState {
+        dialogue_with_sink(fx, codex_home, args, mathscape_resident::null_sink())
+    }
+
+    fn dialogue_with_sink(
+        fx: &Fixture,
+        codex_home: &str,
+        args: &[&str],
+        sink: mathscape_resident::EventSink,
+    ) -> SandboxDialogueState {
         let home = fx.root.join(codex_home);
         std::fs::create_dir_all(&home).unwrap();
         let mut all: Vec<String> = vec![
@@ -1211,13 +1227,16 @@ mod tests {
                 .to_string(),
         ];
         all.extend(args.iter().map(|arg| (*arg).to_owned()));
-        SandboxDialogueState::with_config(CodexConfig {
-            program: fixture_program(),
-            args: all,
-            mcp_program: PathBuf::from("mathscape"),
-            home: Some(home),
-            ..CodexConfig::default()
-        })
+        SandboxDialogueState::with_config_and_sink(
+            CodexConfig {
+                program: fixture_program(),
+                args: all,
+                mcp_program: PathBuf::from("mathscape"),
+                home: Some(home),
+                ..CodexConfig::default()
+            },
+            sink,
+        )
     }
 
     fn dialogue(fx: &Fixture, args: &[&str]) -> SandboxDialogueState {
@@ -1630,6 +1649,50 @@ mod tests {
         assert!(state.active().is_empty());
         let home = fx.home.lock().unwrap();
         assert!(home.read_transcript(&fx.session_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn app_server_lifecycle_goes_to_the_resident_process_log() {
+        let fx = fixture("resident-log");
+        let log = crate::resident_log::log_file(Some(&fx.root.join("logs"))).unwrap();
+        let state = dialogue_with_sink(
+            &fx,
+            "codex-home",
+            &["app-server"],
+            crate::resident_log::jsonl_sink(Some(log.clone())),
+        );
+        send_and_wait(&state, &fx, "你好");
+        tauri::async_runtime::block_on(state.close_harness_session(&fx.session_id));
+        let lines: Vec<Value> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let instance = format!("codex-app-server:{}", fx.session_id);
+        let kinds: Vec<&str> = lines
+            .iter()
+            .inspect(|line| {
+                assert_eq!(line["schema"], "mathscape.resident_event.v0");
+                assert_eq!(line["event"]["instance"], instance.as_str());
+            })
+            .map(|line| line["event"]["kind"].as_str().unwrap())
+            .collect();
+        for kind in ["spawn", "ready", "shutdown", "exit"] {
+            assert!(kinds.contains(&kind), "{kind} missing in {kinds:?}");
+        }
+        let spawn = lines
+            .iter()
+            .find(|l| l["event"]["kind"] == "spawn")
+            .unwrap();
+        assert!(spawn["event"]["pid"].as_u64().is_some());
+        // The key names the session (Debug-formatted, like Loogle's).
+        assert!(
+            spawn["event"]["key"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("{}#", fx.session_id))
+        );
+        state.close_all();
     }
 
     #[test]

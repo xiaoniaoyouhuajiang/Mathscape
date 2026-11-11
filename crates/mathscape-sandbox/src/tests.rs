@@ -495,12 +495,18 @@ fn dialogue_prompt_replays_recent_history_without_system_lines() {
     );
     assert!(!prompt.contains("本轮已取消"));
     assert!(prompt.ends_with("用户本轮消息：\n第二问"));
+    // Same tool wording as the persistent session preamble: proposals included.
+    assert!(prompt.starts_with(DIALOGUE_INTRO), "{prompt}");
+    assert!(!prompt.contains("只读工具"), "{prompt}");
+    assert!(prompt.contains("propose_changes"), "{prompt}");
+    assert!(prompt.contains(REBUILT_CONTEXT_NOTE), "{prompt}");
 
     let long = "长".repeat(13_000);
     let prompt = build_dialogue_prompt(&[entry(TranscriptRole::User, &long)], "q", false);
     assert!(!prompt.contains("此前的对话"));
     assert!(build_dialogue_prompt(&[], "q", false).ends_with("q"));
     assert!(!build_dialogue_prompt(&[], "q", false).contains("新开的一条对话"));
+    assert!(!build_dialogue_prompt(&[], "q", false).contains(REBUILT_CONTEXT_NOTE));
     let later = build_dialogue_prompt(&[], "q", true);
     assert!(later.contains("新开的一条对话"), "{later}");
     assert!(later.ends_with("q"));

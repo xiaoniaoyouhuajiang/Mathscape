@@ -42,9 +42,10 @@ mod fingerprint;
 mod migrate;
 
 pub use dialogue::{
-    CURRENT_ROUND_FILE, DialogueThread, DialogueThreads, EVENTS_FILE, FIRST_THREAD_ID,
-    HARNESS_FILE, HARNESS_STATE_DIR, HarnessThreadBinding, MAX_MESSAGE_CHARS, SCRATCH_DIR,
-    TranscriptEntry, TranscriptRole, build_dialogue_prompt,
+    CURRENT_ROUND_FILE, DIALOGUE_INTRO, DialogueThread, DialogueThreads, EVENTS_FILE,
+    FIRST_THREAD_ID, HARNESS_FILE, HARNESS_STATE_DIR, HarnessThreadBinding, MAX_MESSAGE_CHARS,
+    NEW_THREAD_NOTE, REBUILT_CONTEXT_NOTE, SCRATCH_DIR, TranscriptEntry, TranscriptRole,
+    build_dialogue_prompt,
 };
 pub use migrate::{MigrationReport, legacy_sessions_for};
 

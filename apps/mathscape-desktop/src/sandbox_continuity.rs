@@ -23,9 +23,12 @@ use serde::{Deserialize, Serialize};
 use crate::skill_pack::SkillPack;
 
 /// Stable session preamble, sent once as first-turn context.
-pub(crate) const SESSION_PREAMBLE: &str = "你在 Mathscape 沙箱探索会话里与用户对话。可用 mathscape MCP 工具查阅当前（沙箱副本）工作区里的材料、图与手稿；引用对象时尽量给出 object_id。本对话的上下文会跨轮保留：之前轮次的工具结果仍在你的上下文里，但工作区可能已被用户改动，涉及具体对象时以本轮重新调用工具的结果为准。";
+pub(crate) const SESSION_PREAMBLE: &str = concat!(
+    "你在 Mathscape 沙箱探索会话里与用户对话。可用 mathscape MCP 工具查阅当前（沙箱副本）工作区里的材料、图与手稿，并用 propose_changes 提交提案：提案只写入沙箱副本、等待用户审核，接受前不会改动地图。引用对象时尽量给出 object_id。",
+    "本对话的上下文会跨轮保留：之前轮次的工具结果仍在你的上下文里，但工作区可能已被用户改动，涉及具体对象时以本轮重新调用工具的结果为准。"
+);
 /// A later dialogue thread on the same copy.
-pub(crate) const LATER_THREAD_NOTE: &str = "这是本沙箱会话里新开的一条对话：工作区可能保留了更早对话留下的状态，但更早的对话内容不在本轮上下文中；以工具查到的当前状态为准，不要假设之前说过什么。";
+pub(crate) const LATER_THREAD_NOTE: &str = mathscape_sandbox::NEW_THREAD_NOTE;
 const DELTA_SAMPLE: usize = 8;
 
 /// What the session copy looked like after a turn.
@@ -272,6 +275,12 @@ pub(crate) fn context_notes(inputs: &NoteInputs<'_>) -> Vec<ContextNote> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_preamble_shares_the_rebuild_tool_wording() {
+        assert!(SESSION_PREAMBLE.starts_with(mathscape_sandbox::DIALOGUE_INTRO));
+        assert!(!SESSION_PREAMBLE.contains("只读工具"));
+    }
 
     fn digest(objects: &[(&str, &str)], sets: &[(&str, i64, &str)]) -> WorkspaceDigest {
         WorkspaceDigest {
