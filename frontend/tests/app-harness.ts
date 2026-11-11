@@ -216,7 +216,10 @@ extraCommands.set("sandbox_set_effort", (args) => {
 /** `act` (Map Scene Player second slice): the round instead runs one
  * Act tool — search typewriter, pdf.outline 目录 window, ink/pdf.page_image 页图 window. */
 type SandboxAct = "" | "search" | "outline" | "outline_empty" | "page_image" | "page_image_meta" | "pdf_page_image" | "pdf_page_image_meta" | "parsing";
-const sandboxRound: { delayMs: number; gapMs: number; cite: boolean; act: SandboxAct; parsingNow: boolean } = { delayMs: 30, gapMs: 0, cite: false, act: "", parsingNow: false };
+/** `script` (fourth slice): the round replays real tool steps (from
+ * tests/fixtures/scene-tool-events.json) with their own call / result times. */
+interface ScriptStep { id: string; tool: string; args: unknown; result?: unknown; status?: string; callAt: number; resultAt?: number }
+const sandboxRound: { delayMs: number; gapMs: number; cite: boolean; act: SandboxAct; parsingNow: boolean; script: ScriptStep[] | null } = { delayMs: 30, gapMs: 0, cite: false, act: "", parsingNow: false, script: null };
 /** 1×1 PNG for the page-image window. */
 const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 function actStep(act: Exclude<SandboxAct, "">): { tool: string; args: Record<string, unknown>; result: Record<string, unknown> } {
@@ -292,6 +295,35 @@ extraCommands.set("sandbox_send_message", (args) => {
     emitDialogue({ kind: "agent_event", sandbox_session_id: id, event: value });
   };
   const gap = sandboxRound.gapMs > 0 ? sandboxRound.gapMs : Math.min(400, Math.max(80, sandboxRound.delayMs));
+  if (sandboxRound.script) {
+    const script = sandboxRound.script;
+    let seq = 0;
+    event(seq++, "turn_start", { input_ref: "x" });
+    const started = new Map<string, number>();
+    const timeline: Array<{ at: number; run: () => void }> = [];
+    for (const step of script) {
+      timeline.push({ at: step.callAt, run: () => {
+        started.set(step.id, Date.now());
+        const raw = { type: "mcpToolCall", id: step.id, server: "mathscape", tool: step.tool, arguments: step.args, startedAtMs: Date.now() };
+        event(seq++, "tool_call", { call_id: step.id, tool: step.tool, server: "mathscape", args_summary: "", raw });
+      } });
+      if (step.resultAt !== undefined) timeline.push({ at: step.resultAt, run: () => {
+        const duration = Date.now() - (started.get(step.id) ?? Date.now());
+        const raw = { type: "mcpToolCall", id: step.id, server: "mathscape", tool: step.tool, arguments: step.args, status: "completed", result: step.result, durationMs: duration };
+        event(seq++, "tool_result", { call_id: step.id, status: step.status ?? "ok", duration_ms: duration, raw });
+      } });
+    }
+    const end = Math.max(0, ...timeline.map((item) => item.at)) + 120;
+    for (const item of timeline) setTimeout(item.run, item.at);
+    setTimeout(() => {
+      event(seq++, "turn_end", { outcome: "completed" });
+      const reply = { ts: new Date().toISOString(), role: "agent", text: "完成。", round_id: rid, outcome: "completed", thread_id: thread };
+      transcript.push(reply);
+      emitDialogue({ kind: "transcript", sandbox_session_id: id, entry: reply });
+      emitDialogue({ kind: "round_finished", sandbox_session_id: id, round_id: rid });
+    }, end);
+    return { roundId: rid, userEntry };
+  }
   setTimeout(() => {
     const tools = ["workspace.search", "material.read", "material.grep", "pdf.outline", "graph.get", "graph.neighborhood", "ink.page_image", "pdf.page_image"];
     const mcp = { mcp: { server: "mathscape", status: "ready", tools, expected: tools, missing: [], error: null } };
@@ -479,6 +511,10 @@ const appHarness = {
   nodePosition: (id: string) => { const node = core().getElementById(id); if (node.empty()) return null; const p = node.position(); return { x: Math.round(p.x), y: Math.round(p.y) }; },
   /** Place a node (sets up a sparse focus before a scene). */
   setNodePosition: (id: string, x: number, y: number) => { core().getElementById(id).position({ x, y }); },
+  /** Proposal scene ghosts (transient Cytoscape elements). */
+  ghosts: () => core().nodes(".scene-ghost").map(node => ({ id: node.id(), label: String(node.data("label")), classes: node.classes(), x: node.position("x"), y: node.position("y") })),
+  ghostEdges: () => core().edges(".scene-ghost-edge").map(edge => ({ id: edge.id(), label: String(edge.data("label")), source: edge.source().id(), target: edge.target().id(), classes: edge.classes() })),
+  withClass: (cls: string) => core().elements(`.${cls}`).map(element => element.id()),
   /** Rounded zoom/pan, to check the scene player restores the camera. */
   viewport: () => { const cy = core(), pan = cy.pan(); return { zoom: Math.round(cy.zoom() * 1000) / 1000, x: Math.round(pan.x), y: Math.round(pan.y) }; },
 };
