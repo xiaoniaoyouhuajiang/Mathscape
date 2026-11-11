@@ -52,6 +52,51 @@ test.describe("Phase2 proposal review workspace", () => {
     expect(calls).toContain("accept");
   });
 
+  test("a proposal over several snapshots shows change-set totals, every relation and cross-snapshot links", async ({ page }) => {
+    await page.addInitScript(() => sessionStorage.setItem("harness.multiSnapshot", "1"));
+    await openReview(page);
+    const workspace = page.locator(".review-workspace");
+    const list = workspace.locator(".review-list");
+    // Totals are change-set-wide, not the shown snapshot's.
+    await expect(list.locator(".review-proposal-totals .review-stat")).toHaveText(["4单元", "4关系", "1Debt"]);
+    await expect(list.locator(".review-proposal-scope")).toContainText("整份提案（v2）的总数，另含 4 处原文证据，分布在 3 个快照");
+    // Default snapshot: the one with the most units + relations (md-a).
+    await expect(list.locator(".review-snapshot-scope")).toHaveText("快照 1/3 · 本快照 2 单元 / 3 关系（其中 1 条跨快照）");
+    const switcher = list.locator(".review-snapshot-switcher button");
+    await expect(switcher).toHaveCount(3);
+    await expect(switcher.nth(1)).toContainText("快照 2/3");
+    await expect(switcher.nth(1)).toContainText("1 单元 / 2 关系");
+    // Every relation of the change set, with both ends and the relation kind.
+    const relations = list.locator(".review-proposal-relation");
+    await expect(relations).toHaveCount(4);
+    await expect(relations.nth(0)).toContainText("定义 1");
+    await expect(relations.nth(0)).toContainText("定理 2");
+    await expect(relations.nth(1)).toContainText("跨快照 · 快照 1 → 2");
+    await expect(list.locator(".review-proposal-relation.is-cross")).toHaveCount(2);
+    await expect(relations.nth(3)).toContainText("旧定理");
+    await expect(relations.nth(3)).toContainText("连接已有对象");
+    const graph = list.locator(".review-proposal-graph");
+    await expect(graph).toHaveAttribute("data-relation-count", "4");
+    await expect(graph).toHaveAttribute("data-external-count", "1");
+    await page.screenshot({ path: "../.test-runs/reader/proposal-multi-snapshot-overview.png" });
+    await list.locator(".review-proposal-relations").scrollIntoViewIfNeeded();
+    await list.screenshot({ path: "../.test-runs/reader/proposal-multi-snapshot-relations.png" });
+
+    // Another snapshot: its own counts, cross-snapshot relations still visible.
+    await switcher.nth(1).click();
+    await expect(list.locator(".review-snapshot-scope")).toHaveText("快照 2/3 · 本快照 1 单元 / 2 关系（其中 2 条跨快照）");
+    await expect.poll(() => page.evaluate(() => window.appHarness.proposalReview.calls.filter(c => c.command === "snapshot").map(c => c.args.artifactId))).toContain("md-b");
+    await expect(list.locator(".review-proposal-totals .review-stat").first()).toHaveText("4单元");
+    await workspace.getByRole("tab", { name: "本快照关系 2" }).click();
+    await expect(list.locator(".review-relation")).toHaveCount(2);
+    await expect(list.locator(".review-relation.is-cross")).toHaveCount(2);
+    await expect(list.locator(".review-relation").first()).toContainText("跨快照 · 快照 1/3");
+    await workspace.getByRole("tab", { name: "局部结构图" }).click();
+    await expect(list.locator(".review-graph")).toHaveAttribute("data-external-count", "2");
+    await expect(list.locator(".review-graph")).toHaveAttribute("data-relation-count", "2");
+    await page.screenshot({ path: "../.test-runs/reader/proposal-multi-snapshot-graph.png" });
+  });
+
   test("a snapshot that cannot be read shows the real reason and an unchecked KaTeX quote", async ({ page }) => {
     await page.addInitScript(() => sessionStorage.setItem("harness.failSnapshot", "snapshot_not_referenced: 快照 md-sbx 未被调查引用"));
     await openReview(page);

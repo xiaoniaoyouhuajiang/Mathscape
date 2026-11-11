@@ -325,11 +325,6 @@ impl SandboxDialogueState {
         Self::with_config_and_sink(config, crate::resident_log::jsonl_sink(resident_log))
     }
 
-    #[cfg(test)]
-    fn with_config(config: CodexConfig) -> Self {
-        Self::with_config_and_sink(config, mathscape_resident::null_sink())
-    }
-
     fn with_config_and_sink(config: CodexConfig, sink: mathscape_resident::EventSink) -> Self {
         Self {
             inner: Arc::new(Inner {

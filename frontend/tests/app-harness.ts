@@ -372,6 +372,37 @@ const proposalItem = () => ({
   ],
   targetTitles: { "mathscape:source-unit/old": "旧定理" },
 });
+// Multi-snapshot proposal (sessionStorage harness.multiSnapshot = "1"): units in
+// three snapshots, two cross-snapshot relations and one from an existing object.
+const multiSnapshotItem = () => {
+  const spanOf = (ref: string, artifact: string) => ({ local_ref: ref, kind: "source_span", op: "create", payload: { artifact_id: artifact, md_byte_range: { start: proposalStart, end: proposalEnd }, granularity: "inline", quote: proposalQuote } });
+  const unitOf = (ref: string, title: string, span: string) => ({ local_ref: ref, kind: "source_unit", op: "create", payload: { kind: "lemma", display_title: title, parent: null, source_spans: [`$new:${span}`], completeness: "complete" } });
+  const relOf = (ref: string, relation: string, source: string, target: string) => ({ local_ref: ref, kind: "source_relation", op: "create", relation, source, target, evidence_spans: [] });
+  const anchorOf = (ref: string, artifact: string) => ({
+    span_ref: ref, span_id: `mathscape:source-span/${ref}`, origin: "new", artifact, conversion: null,
+    range: { start: proposalStart, end: proposalEnd }, block_ids: ["pb2"], page: null,
+    granularity: "inline", excerpt: proposalQuote, verified: true, compiled: true,
+  });
+  return {
+    ...proposalItem(),
+    changeSetId: "mathscape:change-set/multi", version: 2, proposalFingerprint: "fp-multi", history: [],
+    proposal: {
+      rationale: "习题 8 前置知识",
+      proposed_objects: [
+        spanOf("sa", "md-a"), spanOf("sb", "md-a"), spanOf("sc", "md-b"), spanOf("sd", "md-c"),
+        unitOf("a", "定义 1", "sa"), unitOf("b", "定理 2", "sb"), unitOf("c", "例 3", "sc"), unitOf("d", "推论 4", "sd"),
+      ],
+      proposed_relations: [
+        relOf("r_ab", "explains", "$new:a", "$new:b"),
+        relOf("r_bc", "applies_method", "$new:b", "$new:c"),
+        relOf("r_cd", "applies_method", "$new:c", "$new:d"),
+        relOf("r_old", "explains", "mathscape:source-unit/old", "$new:a"),
+      ],
+    },
+    result: { debts: [{ kind: "unresolved", value: { kind: "locator", summary: "页码待核" } }], diagnostics: [] },
+    anchors: [anchorOf("sa", "md-a"), anchorOf("sb", "md-a"), anchorOf("sc", "md-b"), anchorOf("sd", "md-c")],
+  };
+};
 extraCommands.set("get_change_set_investigation", (args) => {
   proposalReview.calls.push({ command: "investigation", args });
   return args.sandboxSessionId ? `sandbox:${String(args.sandboxSessionId)}` : (sessionStorage.getItem("harness.sandbox") === "1" ? "sandbox:sbx_demo" : null);
@@ -384,7 +415,8 @@ extraCommands.set("list_pending_change_sets", (args) => {
 const listPendingChangeSets = (args: Record<string, unknown>) => ({
   // Only specs that opt in (sessionStorage harness.proposals) see a pending proposal.
   investigationId: String(args.investigationId), baseCommit: null,
-  items: proposalReview.accepted || sessionStorage.getItem("harness.proposals") !== "1" ? [] : [proposalItem()],
+  items: proposalReview.accepted || sessionStorage.getItem("harness.proposals") !== "1" ? []
+    : [sessionStorage.getItem("harness.multiSnapshot") === "1" ? multiSnapshotItem() : proposalItem()],
 });
 extraCommands.set("get_change_set_snapshot", (args) => {
   proposalReview.calls.push({ command: "snapshot", args });
