@@ -179,7 +179,7 @@ function buildSemanticEdges(
       // relation has one or more evidence spans.
       result.push({
         group: "edges",
-        classes: `${edgeClasses(true, true)}${contractionClass(relationDomainKind)}${retiredClass(relationLifecycle)}`,
+        classes: `${edgeClasses(true, true)}${contractionClass(relationDomainKind)}${semanticLayerClass(relationDomainKind)}${retiredClass(relationLifecycle)}`,
         data: {
           id: `sem~${relationDomainId}`,
           source: sources[0].entity,
@@ -246,7 +246,7 @@ function buildSemanticEdges(
 
       result.push({
         group: "edges",
-        classes: `${edgeClasses(directed, true)}${retiredClass(relationLifecycle)}`,
+        classes: `${edgeClasses(directed, true)}${semanticLayerClass(relationDomainKind)}${retiredClass(relationLifecycle)}`,
         data: {
           id: `sem~${relationDomainId}`,
           source: edgeSource,
@@ -330,6 +330,21 @@ function addEvidenceEdge(
 
 function contractionClass(domainKind: string | null): string {
   return domainKind === FOCUS_CONTRACTION_KIND ? " contracted-edge" : "";
+}
+
+/** 语义层的连线样式：对齐线、挂账、星区 / 约定卡连接。 */
+export function semanticLayerClass(domainKind: string | null): string {
+  switch (domainKind) {
+    case "Alignment":
+      return " alignment-edge";
+    case "Debt":
+      return " debt-edge";
+    case "SemanticEntity":
+    case "DialectScope":
+      return " semantic-link-edge";
+    default:
+      return "";
+  }
 }
 
 function retiredLifecycle(lifecycle: string | null | undefined): boolean {
@@ -461,6 +476,35 @@ const styles: StylesheetJson = [
     style: {
       "target-arrow-shape": "none",
       "line-style": "dashed",
+    },
+  },
+  {
+    selector: "edge.alignment-edge",
+    style: {
+      width: 2.4,
+      "line-color": EDGE_TYPES.alignment.color,
+      "target-arrow-color": EDGE_TYPES.alignment.color,
+      color: "#eadc9a",
+    },
+  },
+  {
+    selector: "edge.debt-edge",
+    style: {
+      width: 1.4,
+      "line-style": "dashed",
+      "line-color": EDGE_TYPES.debt.color,
+      "target-arrow-shape": "none",
+      color: "#e9cc7f",
+      "font-size": "8px",
+    },
+  },
+  {
+    selector: "edge.semantic-link-edge",
+    style: {
+      width: 1.2,
+      "line-style": "dotted",
+      "target-arrow-shape": "none",
+      "font-size": "8px",
     },
   },
   // Declared last so a contracted path keeps its own weight and arrow colour

@@ -18,6 +18,9 @@ import {
   targetDiagnosticGroups, titleOf, type ImpactPreview, type OverviewRelation, type PendingChangeSet, type ProposalWorkspaceMeta,
 } from "./proposal-model";
 import { renderDiscardConfirm } from "./proposal-discard";
+import { feedbackButton, type FeedbackTarget } from "../semantic/feedback";
+import { proposalLevelReviewItems, reviewItemCode, reviewItemText, semanticReviewCards } from "../semantic/review-model";
+import { SEMANTIC_REVIEW_CODES } from "../semantic/labels";
 
 export const OPEN_REVIEW_EVENT = "mathscape:open-review";
 export type { OpenReviewDetail } from "../core/events";
@@ -1214,6 +1217,7 @@ export class DiscoveryReviewWorkspace {
       this.list.append(el("h4", "review-subheading", `本提案涉及 ${proposal.groupCount} 个快照`), switcher);
     }
     this.renderProposalRelations(proposal);
+    this.renderProposalSemantic(proposal);
 
     // Dependencies both ways.
     const dependents = dependentsIndex(items).get(keyOf(item)) ?? [];
@@ -1263,6 +1267,49 @@ export class DiscoveryReviewWorkspace {
         card.append(el("strong", "", diagnosticLabel(diagnostic.code)), el("span", "review-item-meta", diagnostic.message));
         this.list.append(card);
       }
+    }
+  }
+
+  /**
+   * 语义层：共享对象、对齐线、一笔账、约定卡的白话卡片和审核项。每项都有
+   * 「反馈给 agent」：只把引用插入对话输入框，不发送、不改提案状态。
+   */
+  private renderProposalSemantic(proposal: ProposalWorkspaceMeta): void {
+    const { item } = proposal;
+    const cards = semanticReviewCards(item);
+    const general = proposalLevelReviewItems(item);
+    if (cards.length === 0 && general.length === 0) return;
+    const proposalRef = { title: titleOf(item), version: item.version };
+    const feedback = (target: Omit<FeedbackTarget, "proposal">) => feedbackButton({ ...target, proposal: proposalRef }, (inserted) => {
+      this.list.querySelector(".semantic-feedback-result")?.remove();
+      this.list.prepend(el("p", "review-note semantic-feedback-result", inserted
+        ? "已把引用插入对话输入框（未发送）。补一句你的意见后再发送。"
+        : "没有打开可输入的沙箱对话；请先打开沙箱对话再反馈。"));
+    });
+    this.list.append(el("h4", "review-subheading", `语义层 ${cards.length}（共享对象 / 对齐线 / 账 / 约定卡）`));
+    this.list.append(el("p", "review-note", "状态只写到候选为止；审阅对齐线、确认还清是接受之后在地图上的对象级操作，和“接受本提案”分开。"));
+    for (const card of cards) {
+      const article = el("article", `review-item semantic-review-card kind-${card.kind}`);
+      const heading = el("div", "review-item-heading");
+      heading.append(el("span", "review-debt-tag", card.noun), el("strong", "", card.title));
+      if (card.op !== "create") heading.append(el("span", "review-relation-tag", card.op === "edit" ? "修改" : card.op === "retire" ? "退役" : card.op));
+      article.append(heading);
+      for (const line of card.lines) article.append(el("span", "review-item-meta", line));
+      for (const diagnostic of card.diagnostics) {
+        const review = SEMANTIC_REVIEW_CODES.has(diagnostic.code);
+        const row = el("div", `semantic-review-item severity-${diagnostic.level === "warn" ? "warning" : diagnostic.level ?? "error"}`);
+        row.append(el("span", "", `${review ? "审核项" : "问题"}：${review ? reviewItemText(diagnostic) : `${diagnosticLabel(diagnostic.code)}：${diagnostic.message}`}`));
+        row.append(feedback({ noun: "审核项", name: `${card.noun} ${card.localRef}`, detail: card.title, id: card.stagedId, code: reviewItemCode(diagnostic) }));
+        article.append(row);
+      }
+      article.append(feedback({ noun: card.noun, name: card.localRef, detail: card.title, id: card.stagedId }));
+      this.list.append(article);
+    }
+    for (const diagnostic of general) {
+      const row = el("article", "review-item semantic-review-item severity-info");
+      row.append(el("strong", "", `审核项：${reviewItemText(diagnostic)}`),
+        feedback({ noun: "审核项", name: "整份提案", detail: null, id: null, code: reviewItemCode(diagnostic) }));
+      this.list.append(row);
     }
   }
 

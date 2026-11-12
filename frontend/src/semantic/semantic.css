@@ -1,0 +1,44 @@
+/* 语义层：共享对象详情、约定卡、一笔账、学习视图、反馈按钮。 */
+.semantic-detail { display: grid; gap: 8px; margin-top: 10px; }
+.semantic-row { display: grid; grid-template-columns: 6.5em 1fr; gap: 6px; font-size: 12px; }
+.semantic-term { color: #8fa3ad; }
+.semantic-value { color: #dbe7e9; }
+.semantic-muted { color: #8fa3ad; font-size: 11px; margin: 2px 0; }
+.semantic-card { border: 1px solid #34505a; border-radius: 8px; padding: 8px 10px; background: rgba(20, 34, 42, 0.6); }
+.semantic-card h4 { margin: 0 0 6px; font-size: 12px; color: #c8d8de; }
+.semantic-dialect-card { border-color: #9cc3d1; background: rgba(63, 85, 96, 0.35); }
+.semantic-convention { margin: 2px 0; font-size: 12px; }
+.semantic-tag { color: #9cc3d1; }
+.semantic-table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.semantic-table caption { text-align: left; color: #8fa3ad; font-size: 11px; padding-bottom: 4px; }
+.semantic-table td { border-top: 1px solid #2b3f48; padding: 3px 4px; }
+.semantic-list { margin: 0; padding-left: 18px; font-size: 12px; }
+.semantic-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+/* 一笔账：暗金虚线小标签；已还清改金色实线（契约 S9.1）。 */
+.semantic-debt-badge { border: 1.5px dashed #c9a86a; border-radius: 6px; padding: 6px 8px; display: grid; gap: 2px; background: rgba(74, 61, 28, 0.35); }
+.semantic-debt-badge.status-paid { border-style: solid; border-color: #ffd89a; }
+.semantic-debt-badge.status-waived, .semantic-debt-badge.status-obsolete { opacity: 0.6; }
+.semantic-debt-status { color: #e9cc7f; font-size: 11px; }
+.semantic-debt-meta { color: #b9a77c; font-size: 11px; }
+.semantic-feedback-button { justify-self: start; border: 1px solid #9eb6ff; color: #cfdcff; background: transparent; border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
+.semantic-feedback-button:hover { background: rgba(158, 182, 255, 0.12); }
+.learning-view { position: fixed; inset: 8% 12%; z-index: 60; background: #0f1a21; border: 1px solid #34505a; border-radius: 12px; display: flex; flex-direction: column; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5); }
+.learning-view[hidden] { display: none; }
+.learning-view-header { display: flex; gap: 8px; align-items: center; padding: 12px 16px; border-bottom: 1px solid #2b3f48; }
+.learning-view-header h2 { margin: 0 auto 0 0; font-size: 16px; }
+.learning-view-body { overflow: auto; padding: 12px 16px; display: grid; gap: 10px; align-content: start; }
+.learning-view-units, .learning-view-conventions { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.learning-unit, .learning-convention { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; font-size: 13px; cursor: default; }
+.learning-label { border-radius: 999px; padding: 1px 8px; font-size: 11px; background: #2f6f73; color: #e6f5f5; }
+.learning-unit.is-seen .learning-label { background: #4c5d86; }
+.learning-label.is-convention { background: #3f5560; border: 1px solid #9cc3d1; }
+.learning-relation { color: #d8c46a; }
+.learning-seen-in, .learning-diff { color: #8fa3ad; }
+.learning-view-debts { border-top: 1px dashed #c9a86a; padding-top: 8px; font-size: 12px; }
+.semantic-review-card { display: grid; gap: 4px; }
+.semantic-review-card.kind-debt { border: 1.5px dashed #c9a86a; }
+.semantic-review-card.kind-alignment .review-debt-tag { background: rgba(158, 182, 255, 0.18); color: #cfdcff; }
+.semantic-review-item { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 12px; }
+.semantic-review-item.severity-warning { color: #f0c27d; }
+.semantic-review-item.severity-info { color: #9fb8c4; }
+.semantic-review-item.severity-error { color: #f09a8a; }

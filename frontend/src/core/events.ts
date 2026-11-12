@@ -42,6 +42,12 @@ export interface MathscapeEventMap {
   "reader-opened": void;
   "open-settings": void;
   "workspace-settings-changed": WorkspaceSettings;
+  /** 语义层「反馈给 agent」：对话框插入引用（从不发送），插入成功时调用 `accept`。 */
+  "insert-agent-feedback": { text: string; accept: () => void };
+  /** 打开学习视图（只读）。 */
+  "open-learning-view": void;
+  /** 打开只读教程「两本教材是不是同一颗星」。 */
+  "open-tutorial": void;
 }
 
 export type MathscapeEventName = keyof MathscapeEventMap;

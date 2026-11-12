@@ -46,6 +46,7 @@ export interface AppElements {
   sandboxButton: HTMLButtonElement;
   inkButton: HTMLButtonElement;
   searchButton: HTMLButtonElement;
+  learningViewButton: HTMLButtonElement;
   /** Outer overlay that may host the N3c split layout. */
   inkWorkspace: HTMLElement;
   inkSplitReader: HTMLElement;
@@ -90,6 +91,7 @@ export class AppShell {
           <span id="llm-settings-label">设置</span>
         </button>
         <button id="workspace-search-button" class="secondary-button workspace-search-button" type="button" title="搜索手稿、材料、来源单元和命名快照（⌘K / Ctrl+K）" aria-keyshortcuts="Meta+K Control+K">搜索</button>
+        <button id="learning-view-button" class="secondary-button" type="button" title="学习视图：每份材料里哪些内容是新的、哪些在别的材料里见过">学习视图</button>
         <button id="ink-button" class="secondary-button" type="button">手写</button>
         <button id="sandbox-button" class="secondary-button" type="button" title="沙箱：从检查点复制隔离工作区，可丢弃或导出">沙箱</button>
         <button id="import-pdf" class="primary-button" type="button">
@@ -179,6 +181,7 @@ export class AppShell {
               <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceArtifact"> 材料文件</label>
               <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceSemanticUnit"> 内容单元</label>
               <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceSpan"> 原文证据</label>
+              <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SemanticEntity"> 共享对象</label>
             </div>
             <span class="filter-divider">│</span>
             <label class="graph-evidence-toggle"><input id="render-mode-toggle" type="checkbox" checked> 语义边</label>
@@ -274,6 +277,7 @@ export class AppShell {
       sandboxButton: requiredElement<HTMLButtonElement>("#sandbox-button", root),
       inkButton: requiredElement<HTMLButtonElement>("#ink-button", root),
       searchButton: requiredElement<HTMLButtonElement>("#workspace-search-button", root),
+      learningViewButton: requiredElement<HTMLButtonElement>("#learning-view-button", root),
       inkWorkspace: requiredElement<HTMLElement>("#ink-workspace", root),
       inkSplitReader: requiredElement<HTMLElement>("#ink-split-reader", root),
       inkSplitResizer: requiredElement<HTMLElement>("#ink-split-resizer", root),

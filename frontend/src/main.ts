@@ -44,6 +44,8 @@ import { WorkspaceSearchPanel, installWorkspaceSearch, type SearchAction } from 
 import { installInkCloseGuard } from "./ink/close-guard";
 import { reviewBeforeLeaving } from "./review/change-sets";
 import "./styles.css";
+import "./semantic/semantic.css";
+import { LearningViewPanel } from "./semantic/learning-view";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (app === null) {
@@ -756,6 +758,23 @@ const workspaceSearch = new WorkspaceSearchPanel({
 });
 installWorkspaceSearch(workspaceSearch);
 el.searchButton.addEventListener("click", () => workspaceSearch.open());
+
+// 语义层学习视图（只读）。
+const learningView = new LearningViewPanel(el.shell, {
+  materialName: (artifactId) => {
+    const nodes = currentSnapshot?.landscape_graph.nodes ?? [];
+    const node = nodes.find(item => item.domain_id === artifactId && item.element_kind === "entity")
+      ?? findSourceArtifactNode(nodes.filter(item => item.element_kind === "entity"), artifactId);
+    return node?.label ?? artifactId.replace(/^mathscape:artifact\/sha256\//, "").slice(0, 12);
+  },
+  showToast: (msg, kind) => shell.showToast(msg, kind),
+  focusObject: (objectId) => {
+    learningView.close();
+    void locateOnMap(objectId, () => true);
+  },
+});
+el.learningViewButton.addEventListener("click", () => void learningView.open());
+eventBus.on("open-learning-view", () => void learningView.open());
 
 artifactController.startPolling(1000);
 

@@ -31,10 +31,30 @@ import {
 export type PresetName = "overview" | "material" | "source";
 
 export const PRESET_NODE_KINDS: Record<PresetName, ReadonlySet<string>> = {
-  overview: new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan"]),
+  overview: new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan", "SemanticEntity"]),
   material: new Set(["SourceArtifact"]),
-  source: new Set(["SourceArtifact", "SourceSemanticUnit"]),
+  source: new Set(["SourceArtifact", "SourceSemanticUnit", "SemanticEntity"]),
 };
+
+/** 「共享对象」开关同时控制语义层的约定卡、一笔账和它们的连线。 */
+export const SEMANTIC_NODE_KINDS: ReadonlySet<string> = new Set(["SemanticEntity", "DialectScope", "Debt"]);
+export const SEMANTIC_RELATION_KINDS: ReadonlySet<string> = new Set([
+  "Alignment",
+  "SemanticEntity",
+  "Debt",
+  "DialectScope",
+]);
+
+/** 语义层上线前保存的过滤设置：没有 SemanticEntity 时补上，保持原预设。 */
+function migrateSavedFilter(saved: Set<string>): Set<string> {
+  const legacy: string[][] = [
+    ["SourceArtifact", "SourceSemanticUnit", "SourceSpan"],
+    ["SourceArtifact", "SourceSemanticUnit"],
+  ];
+  const isLegacy = legacy.some((kinds) => kinds.length === saved.size && kinds.every((kind) => saved.has(kind)));
+  if (isLegacy) saved.add("SemanticEntity");
+  return saved;
+}
 
 export interface GraphControllerElements {
   graphContainer: HTMLElement;
@@ -155,7 +175,7 @@ export class GraphController {
       if (savedFilter !== null) {
         const parsed = JSON.parse(savedFilter) as string[];
         if (Array.isArray(parsed) && parsed.every((k: unknown) => typeof k === "string")) {
-          this.visibleNodeKinds = new Set(parsed);
+          this.visibleNodeKinds = migrateSavedFilter(new Set(parsed));
           const matchingPreset = (Object.keys(PRESET_NODE_KINDS) as PresetName[]).find((preset) =>
             this.setsEqual(PRESET_NODE_KINDS[preset], this.visibleNodeKinds),
           );
@@ -396,11 +416,12 @@ export class GraphController {
 
   private filterGraph(graph: IncidenceGraph): IncidenceGraph {
     graph=activityGraph(graph,this.showRetired);
-    const knownRelationKinds = new Set(["ConversionRun", "SourceUnitRelation"]);
+    const knownRelationKinds = new Set(["ConversionRun", "SourceUnitRelation", ...SEMANTIC_RELATION_KINDS]);
     const allowUnknownKinds = this.activePreset === "overview";
     const relationKinds = new Set<string>();
     if (this.visibleNodeKinds.has("SourceArtifact")) relationKinds.add("ConversionRun");
     if (this.visibleNodeKinds.has("SourceSemanticUnit")) relationKinds.add("SourceUnitRelation");
+    if (this.visibleNodeKinds.has("SemanticEntity")) SEMANTIC_RELATION_KINDS.forEach((kind) => relationKinds.add(kind));
 
     const nodes = graph.nodes.filter((node) => {
       if (node.element_kind === "group") return true;
@@ -421,7 +442,8 @@ export class GraphController {
 
   private isEntityVisible(node: IncidenceNode): boolean {
     if (node.domain_kind === null) return false;
-    const knownNodeKinds = new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan"]);
+    const knownNodeKinds = new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan", ...SEMANTIC_NODE_KINDS]);
+    if (SEMANTIC_NODE_KINDS.has(node.domain_kind)) return this.visibleNodeKinds.has("SemanticEntity");
     return (
       (this.activePreset === "overview" && !knownNodeKinds.has(node.domain_kind)) ||
       this.visibleNodeKinds.has(node.domain_kind)
@@ -550,6 +572,8 @@ export class GraphController {
     core.edges().forEach((edge) => {
       if (edge.hasClass("ink-note-edge")) return;
       if (edge.hasClass("contracted-edge")) edgeKeys.add("contracted");
+      else if (edge.hasClass("alignment-edge")) edgeKeys.add("alignment");
+      else if (edge.hasClass("debt-edge")) edgeKeys.add("debt");
       else if (edge.hasClass("evidence-edge")) edgeKeys.add("evidence");
       else if (edge.hasClass("semantic-edge")) edgeKeys.add("relation");
       else edgeKeys.add("incidence");
@@ -561,7 +585,7 @@ export class GraphController {
         items.push(this.legendItem(this.nodeSwatch(NODE_TYPES[key]), NODE_TYPES[key].label));
       }
     }
-    for (const key of ["relation", "evidence", "contracted", "incidence"] as EdgeTypeKey[]) {
+    for (const key of ["relation", "alignment", "debt", "evidence", "contracted", "incidence"] as EdgeTypeKey[]) {
       if (edgeKeys.has(key)) {
         items.push(this.legendItem(this.edgeSwatch(EDGE_TYPES[key]), EDGE_TYPES[key].label));
       }

@@ -36,6 +36,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { errorMessage } from "../core/ipc";
+import { eventBus } from "../core/events";
 import {
   agentStatusLine,
   effortOptionLabel,
@@ -336,6 +337,9 @@ export class SandboxDialogueDock {
     private readonly toast: Toast,
   ) {
     this.layoutHost = host.closest<HTMLElement>(".shell") ?? document.body;
+    eventBus.on("insert-agent-feedback", ({ text, accept }) => {
+      if (this.insertFeedback(text)) accept();
+    });
     this.root = el("aside", "sandbox-dock");
     this.root.hidden = true;
     this.root.setAttribute("aria-label", "沙箱对话");
@@ -504,6 +508,22 @@ export class SandboxDialogueDock {
       writePref(DIALOGUE_MODE_KEY, mode);
     }
     this.applyGeometry();
+  }
+
+  /**
+   * 「反馈给 agent」：把引用追加到输入框并聚焦。**只插入、不发送**；
+   * 没有打开的会话或正在看只读线程时返回 false。
+   */
+  insertFeedback(text: string): boolean {
+    if (!this.sessionId || this.viewThreadId !== this.activeThreadId) return false;
+    this.floatHandle.hidden = true;
+    this.root.hidden = false;
+    this.root.classList.remove("is-collapsed");
+    this.applyGeometry();
+    const current = this.input.value.trimEnd();
+    this.input.value = current ? `${current}\n\n${text}` : text;
+    this.input.focus();
+    return true;
   }
 
   get currentSessionId(): string | null {

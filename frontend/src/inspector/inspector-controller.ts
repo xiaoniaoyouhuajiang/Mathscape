@@ -32,6 +32,9 @@ import type { ReaderFocus } from "../reader/reader";
 import type { InkReaderFocus } from "../ink/snapshot-reader";
 import { eventBus } from "../core/events";
 import { listInkLinksToTarget, roleLabel, startInkCreateFromTarget } from "../ink/links";
+import { getSemanticObject, recheckMathlibBaselines, recheckSummary } from "../semantic/api";
+import { renderSemanticDetail } from "../semantic/detail";
+import { SEMANTIC_DOMAIN_KINDS } from "../semantic/labels";
 
 export interface InspectorControllerDelegate {
   getSnapshot: () => DesktopSnapshot | undefined;
@@ -161,6 +164,10 @@ export class InspectorController {
       void this.renderSourceDetail(node, sourceSlot, actions);
     }
 
+    if (!staged && node.domain_id !== null && node.domain_kind !== null && SEMANTIC_DOMAIN_KINDS.has(node.domain_kind)) {
+      void this.renderSemantic(node.domain_id, sourceSlot);
+    }
+
     if (this.delegate.canFocus(node)) {
       const focused = this.delegate.isFocusRoot(node.id);
       const focusButton = textElement(
@@ -216,6 +223,33 @@ export class InspectorController {
       technical.append(copy);
     }
     this.nodeDetail.append(technical);
+  }
+
+  /** 语义层对象（共享对象 / 对齐线 / 一笔账 / 约定卡）的详情。 */
+  private async renderSemantic(objectId: string, host: HTMLElement): Promise<void> {
+    try {
+      const detail = await getSemanticObject(objectId);
+      if (this.selectedNode?.domain_id !== objectId) return;
+      host.append(renderSemanticDetail(detail, {
+        showToast: this.delegate.showToast,
+        refresh: () => this.delegate.refreshSnapshot(),
+        recheck: async () => {
+          try {
+            const report = await recheckMathlibBaselines();
+            this.delegate.showToast(recheckSummary(report), report.status === "unavailable" ? "error" : "success");
+            if (report.status === "committed") await this.delegate.refreshSnapshot();
+          } catch (error) {
+            this.delegate.showToast(errorMessage(error), "error");
+          }
+        },
+        focusObject: (id) => {
+          const node = this.delegate.getSnapshot()?.landscape_graph.nodes.find((candidate) => candidate.domain_id === id);
+          if (node) this.selectNodeById(node.id);
+        },
+      }));
+    } catch (error) {
+      host.append(textElement("p", "runtime-problem", errorMessage(error)));
+    }
   }
 
   restoreNodeDetail(): void {

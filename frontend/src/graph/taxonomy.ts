@@ -21,10 +21,26 @@ export type NodeTypeKey =
   | "source_relation"
   | "evidence_relation"
   | "focus_contraction"
+  | "shared_entity"
+  | "shared_theory"
+  | "dialect_scope"
+  | "debt"
+  | "alignment_relation"
+  | "semantic_link"
   | "unknown_entity"
   | "unknown_relation";
 
-export type NodeShape = "round-rectangle" | "cut-rectangle" | "hexagon" | "barrel" | "rectangle" | "ellipse" | "diamond";
+export type NodeShape =
+  | "round-rectangle"
+  | "cut-rectangle"
+  | "hexagon"
+  | "barrel"
+  | "rectangle"
+  | "ellipse"
+  | "diamond"
+  | "star"
+  | "round-octagon"
+  | "tag";
 
 export type BorderStyle = "solid" | "dashed";
 
@@ -178,6 +194,73 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
     backgroundOpacity: 0.7,
     fontSize: 9,
   },
+  // 语义层（docs/semantic-write-contract.md S9）：白话名字只在这里定义。
+  shared_entity: {
+    label: "共享对象",
+    shape: "star",
+    width: 40,
+    height: 40,
+    background: "#c8b25a",
+    border: "#f1e2a0",
+    borderStyle: "solid",
+    backgroundOpacity: 1,
+    fontSize: 11,
+  },
+  shared_theory: {
+    label: "星区",
+    shape: "round-octagon",
+    width: 46,
+    height: 40,
+    background: "#4c5d86",
+    border: "#a9b8e0",
+    borderStyle: "solid",
+    backgroundOpacity: 0.85,
+    fontSize: 11,
+  },
+  dialect_scope: {
+    label: "约定卡",
+    shape: "rectangle",
+    width: 40,
+    height: 26,
+    background: "#3f5560",
+    border: "#9cc3d1",
+    borderStyle: "solid",
+    backgroundOpacity: 0.9,
+    fontSize: 10,
+  },
+  debt: {
+    label: "一笔账",
+    shape: "tag",
+    width: 30,
+    height: 22,
+    background: "#4a3d1c",
+    border: "#e0b84f",
+    borderStyle: "dashed",
+    backgroundOpacity: 0.85,
+    fontSize: 9,
+  },
+  alignment_relation: {
+    label: "对齐线",
+    shape: "diamond",
+    width: 28,
+    height: 28,
+    background: "#9c8a3c",
+    border: "#e8d78a",
+    borderStyle: "solid",
+    backgroundOpacity: 1,
+    fontSize: 10,
+  },
+  semantic_link: {
+    label: "语义连接",
+    shape: "diamond",
+    width: 22,
+    height: 22,
+    background: "#5b6475",
+    border: "#a3abba",
+    borderStyle: "dashed",
+    backgroundOpacity: 0.8,
+    fontSize: 9,
+  },
   unknown_entity: {
     label: "未分类对象",
     shape: "ellipse",
@@ -204,7 +287,13 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
 
 export const NODE_TYPE_ORDER = Object.keys(NODE_TYPES) as NodeTypeKey[];
 
-export type EdgeTypeKey = "relation" | "evidence" | "contracted" | "incidence";
+export type EdgeTypeKey =
+  | "relation"
+  | "alignment"
+  | "debt"
+  | "evidence"
+  | "contracted"
+  | "incidence";
 
 export interface EdgeTypeVisual {
   label: string;
@@ -214,6 +303,8 @@ export interface EdgeTypeVisual {
 
 export const EDGE_TYPES: Record<EdgeTypeKey, EdgeTypeVisual> = {
   relation: { label: "关系（箭头表示方向）", color: "#9a7b5a", dashed: false },
+  alignment: { label: "对齐线（教材内容 → 共享对象）", color: "#d8c46a", dashed: false },
+  debt: { label: "挂账（还欠的检查）", color: "#e0b84f", dashed: true },
   evidence: { label: "原文证据链接", color: "#82958e", dashed: true },
   contracted: { label: "派生自（路径已折叠）", color: "#7f93a6", dashed: true },
   incidence: { label: "超边端点连接", color: "#647987", dashed: false },
@@ -228,6 +319,10 @@ const DOMAIN_KIND_LABELS: Record<string, string> = {
   SourceUnitRelation: "来源关系",
   Evidence: "证据关系",
   FocusContraction: "已折叠的派生路径",
+  SemanticEntity: "共享对象",
+  Alignment: "对齐线",
+  Debt: "一笔账",
+  DialectScope: "约定卡",
 };
 
 export function domainKindLabel(kind: string | null): string {
@@ -246,6 +341,12 @@ export function nodeTypeKey(node: IncidenceNode): NodeTypeKey {
         return "evidence_relation";
       case FOCUS_CONTRACTION_KIND:
         return "focus_contraction";
+      case "Alignment":
+        return "alignment_relation";
+      case "SemanticEntity":
+      case "Debt":
+      case "DialectScope":
+        return "semantic_link";
       default:
         return "unknown_relation";
     }
@@ -257,6 +358,12 @@ export function nodeTypeKey(node: IncidenceNode): NodeTypeKey {
       return "source_span";
     case "SourceArtifact":
       return artifactTypeKey(node.summary);
+    case "SemanticEntity":
+      return node.summary?.startsWith("星区") ? "shared_theory" : "shared_entity";
+    case "DialectScope":
+      return "dialect_scope";
+    case "Debt":
+      return "debt";
     default:
       return "unknown_entity";
   }

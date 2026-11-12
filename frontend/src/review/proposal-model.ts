@@ -378,6 +378,25 @@ const DIAGNOSTIC_LABELS: Record<string, string> = {
   head_integrity: "工作区已有对象存在问题（不阻塞）",
   invalid_locator: "原文证据缺少物理定位",
   page_markers_absent: "快照没有分页标记",
+  // 语义层（docs/semantic-write-contract.md S5）
+  same_as_forbidden: "不能写“同一个”（same_as），请改写成说的就是 / 部分重合，并写清对不上的部分",
+  invalid_relation: "关系不在 11 种之内",
+  forbidden_alignment_status: "Agent 不能自设审阅结论",
+  forbidden_debt_status: "Agent 不能自设已还清 / 已免除",
+  forbidden_baseline_status: "mathlib 核对结果只能由本机核对写入",
+  forbidden_trust_claim: "提案不能写可信度",
+  identity_field_edit: "不能改身份字段（要改请新建对象）",
+  invalid_reference_kind: "引用的对象种类不对",
+  missing_required_field: "缺少必填内容",
+  relation_detail_missing: "特例 / 推广没写清参数对照或对不上的部分",
+  overlap_scope_missing: "部分重合没写清哪里对不上",
+  certificate_debt_suggested: "这种关系需要证明，建议补一笔账",
+  dialect_scope_mismatch: "约定卡不覆盖这条来源",
+  uncontextualized: "这条来源没有约定卡",
+  duplicate_alignment: "同一条来源对同一个共享对象有两条对齐线",
+  inferred_convention: "约定是推断出来的，书里没明说",
+  mathlib_baseline_unchecked: "mathlib 名称还没在本机核对",
+  multi_target_change_set: "一个提案涉及多个目标对象",
 };
 
 export function diagnosticLabel(code: string | undefined): string {

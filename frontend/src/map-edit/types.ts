@@ -95,6 +95,22 @@ export type UserChangeOperation =
       operation: "retire_object";
       object_id: string;
       expected_revision: string;
+    }
+  /** 用户专用：审阅一条对齐线（审核页 / Inspector 的对象级按钮）。 */
+  | {
+      operation: "set_alignment_review";
+      object_id: string;
+      expected_revision: string;
+      status: string;
+      note: string | null;
+    }
+  /** 用户专用：确认已还清、免除（需理由）或重新打开一笔账。 */
+  | {
+      operation: "set_debt_settlement";
+      object_id: string;
+      expected_revision: string;
+      settlement: "paid" | "waived" | "open";
+      note: string | null;
     };
 
 export interface UserChangeRequest {
