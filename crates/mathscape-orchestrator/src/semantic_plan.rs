@@ -885,18 +885,16 @@ pub fn review_items(
                     );
                 }
             }
-            "SemanticEntity" => {
+            "SemanticEntity"
                 if p["mathlib_baseline"]["decl"].is_string()
-                    && p["mathlib_baseline"]["status"] == "unchecked"
-                {
-                    item(
-                        "info",
-                        "mathlib_baseline_unchecked",
-                        id,
-                        "写了 mathlib 名称但尚未核对；接受后可在审核页「重新核对 mathlib 名称」"
-                            .into(),
-                    );
-                }
+                    && p["mathlib_baseline"]["status"] == "unchecked" =>
+            {
+                item(
+                    "info",
+                    "mathlib_baseline_unchecked",
+                    id,
+                    "写了 mathlib 名称但尚未核对；接受后可在审核页「重新核对 mathlib 名称」".into(),
+                );
             }
             _ => {}
         }

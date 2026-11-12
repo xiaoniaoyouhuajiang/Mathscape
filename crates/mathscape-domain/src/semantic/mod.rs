@@ -297,9 +297,9 @@ pub struct SemanticEntityDraft {
     #[serde(default)]
     pub mathlib_baseline: Option<MathlibBaseline>,
     #[serde(default)]
-    pub declaration: Option<DeclarationBody>,
+    pub declaration: Option<Box<DeclarationBody>>,
     #[serde(default)]
-    pub problem_schema: Option<ProblemSchemaBody>,
+    pub problem_schema: Option<Box<ProblemSchemaBody>>,
     #[serde(default)]
     pub description: Option<String>,
 }

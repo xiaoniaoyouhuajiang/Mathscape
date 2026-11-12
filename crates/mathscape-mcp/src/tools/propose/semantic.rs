@@ -132,14 +132,12 @@ pub(super) fn precheck(object: &ProposedObject, snapshot: &MapEditSnapshot) -> V
         "edit" => object.changes.as_ref(),
         _ => None,
     };
-    if object.op == "retire" {
-        if object.payload.is_some() || object.changes.is_some() {
-            out.push(error(
-                "invalid_arg",
-                "retire takes only target_id and expected_revision",
-                lr,
-            ));
-        }
+    if object.op == "retire" && (object.payload.is_some() || object.changes.is_some()) {
+        out.push(error(
+            "invalid_arg",
+            "retire takes only target_id and expected_revision",
+            lr,
+        ));
     }
     if matches!(object.op.as_str(), "edit" | "retire")
         && let Some(target) = object.target_id.as_deref()
