@@ -2173,6 +2173,22 @@ mod tests {
         let entity = semantic_payload(&fx, &entity_id);
         assert_eq!(entity["payload"]["mathlib_baseline"]["status"], "unchecked");
 
+        // 学习视图：只有一份材料对齐到这个共享对象 →「新的」；账未还清。
+        let snapshot = open_store(&fx.root).unwrap().map_edit_snapshot().unwrap();
+        let view = mathscape_orchestrator::semantic_view::learning_view(&snapshot);
+        assert_eq!(view.materials.len(), 1, "{view:?}");
+        assert_eq!(view.materials[0].artifact_id, fx.md);
+        assert_eq!(view.materials[0].units[0].label, "新的");
+        assert_eq!(view.materials[0].open_debts.len(), 1);
+        let detail =
+            mathscape_orchestrator::semantic_view::semantic_object_detail(&snapshot, &alignment_id)
+                .unwrap();
+        assert_eq!(
+            detail.titles.get(&entity_id).map(String::as_str),
+            Some("单调收敛定理")
+        );
+        assert_eq!(detail.debts.len(), 1);
+
         // 没有 profile：什么也不写。
         let unavailable =
             mathscape_mcp::mathlib_baseline::recheck_mathlib_baselines(&fx.root, now().unwrap())

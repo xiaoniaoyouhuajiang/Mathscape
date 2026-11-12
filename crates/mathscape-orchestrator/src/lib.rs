@@ -13,6 +13,7 @@ pub mod change_set_plan;
 pub mod map_edit;
 pub mod registration;
 pub mod semantic_plan;
+pub mod semantic_view;
 mod source_facts;
 pub mod source_integrity;
 mod source_locator;

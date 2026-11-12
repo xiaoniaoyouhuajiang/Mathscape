@@ -29,6 +29,7 @@ mod sandbox;
 mod sandbox_continuity;
 mod sandbox_dialogue;
 mod search;
+mod semantic;
 mod skill_pack;
 pub use registration::RegistrationSourceContext;
 mod workspace_settings;
@@ -1117,6 +1118,8 @@ pub fn run() {
             map_edit::plan_map_change,
             map_edit::commit_map_change,
             map_edit::recheck_mathlib_baselines,
+            semantic::get_semantic_object,
+            semantic::semantic_learning_view,
             get_desktop_snapshot,
             choose_and_import_pdf,
             get_active_parse,

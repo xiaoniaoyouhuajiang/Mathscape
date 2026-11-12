@@ -109,6 +109,10 @@ fn project_source_map_internal(
             EntityKind::SourceSpan
                 | EntityKind::SourceSemanticUnit
                 | EntityKind::SourceUnitRelation
+                | EntityKind::SemanticEntity
+                | EntityKind::Alignment
+                | EntityKind::Debt
+                | EntityKind::DialectScope
         ) {
             objects.insert(object.stable_id.clone(), object);
         }
@@ -302,6 +306,7 @@ fn project_source_map_internal(
             .lifecycle(object.lifecycle),
         );
     }
+    crate::semantic_graph::project_semantic_layer(&objects, &group_id, &mut nodes, &mut relations)?;
     let groups = if nodes.is_empty() {
         vec![]
     } else {
@@ -532,11 +537,15 @@ fn object_label(object: &StoredMapObject) -> (String, Option<String>, bool) {
     (label, summary, boundary)
 }
 
-fn object_payload(object: &StoredMapObject) -> &serde_json::Value {
+pub(crate) fn object_payload(object: &StoredMapObject) -> &serde_json::Value {
     object.payload.get("payload").unwrap_or(&object.payload)
 }
 
-fn synthetic_relation_id(prefix: &str, source: &StableId, target: &StableId) -> StableId {
+pub(crate) fn synthetic_relation_id(
+    prefix: &str,
+    source: &StableId,
+    target: &StableId,
+) -> StableId {
     let digest = sha2::Sha256::digest(format!("{prefix}:{source}:{target}").as_bytes());
     StableId::parse(format!("mathscape:projection-relation/{prefix}/{digest:x}"))
         .expect("synthetic projection relation IDs are valid")
