@@ -551,6 +551,7 @@ fn plan(
                     }
                     out.lifecycle = "deprecated".into();
                 }
+                _ => return Err("语义层操作尚未接入规划器".into()),
             }
             Ok(out)
         })();

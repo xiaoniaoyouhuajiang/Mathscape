@@ -503,14 +503,7 @@ fn closure_error(error: &mathscape_orchestrator::change_set_plan::ClosureError) 
 }
 
 fn operation_target(operation: &UserChangeOperation) -> &str {
-    match operation {
-        UserChangeOperation::CreateSourceUnit { object_id, .. }
-        | UserChangeOperation::CreateSourceRelation { object_id, .. }
-        | UserChangeOperation::CreateSourceSpan { object_id, .. }
-        | UserChangeOperation::EditSourceUnit { object_id, .. }
-        | UserChangeOperation::EditSourceRelation { object_id, .. }
-        | UserChangeOperation::RetireObject { object_id, .. } => object_id,
-    }
+    operation.object_id()
 }
 
 pub fn plan_batch(

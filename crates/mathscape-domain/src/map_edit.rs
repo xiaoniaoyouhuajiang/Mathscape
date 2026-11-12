@@ -43,6 +43,67 @@ pub enum UserChangeOperation {
         object_id: String,
         expected_revision: String,
     },
+    // ---- semantic layer (docs/semantic-write-contract.md S4.2)
+    CreateSemanticEntity {
+        object_id: String,
+        draft: SemanticEntityDraft,
+    },
+    EditSemanticEntity {
+        object_id: String,
+        expected_revision: String,
+        changes: SemanticEntityChanges,
+    },
+    CreateAlignment {
+        object_id: String,
+        draft: AlignmentDraft,
+    },
+    EditAlignment {
+        object_id: String,
+        expected_revision: String,
+        changes: AlignmentChanges,
+    },
+    CreateDebt {
+        object_id: String,
+        draft: DebtDraft,
+    },
+    EditDebt {
+        object_id: String,
+        expected_revision: String,
+        changes: DebtChanges,
+    },
+    CreateDialectScope {
+        object_id: String,
+        draft: DialectScopeDraft,
+    },
+    EditDialectScope {
+        object_id: String,
+        expected_revision: String,
+        changes: DialectScopeChanges,
+    },
+    /// User-only: explicit alignment review on the review page. Never the
+    /// side effect of accepting a proposal; no proposal compiles to it.
+    SetAlignmentReview {
+        object_id: String,
+        expected_revision: String,
+        status: AlignmentReviewStatus,
+        #[serde(default)]
+        note: Option<String>,
+    },
+    /// User-only: confirm, waive or re-open a map debt.
+    SetDebtSettlement {
+        object_id: String,
+        expected_revision: String,
+        settlement: DebtSettlement,
+        #[serde(default)]
+        note: Option<String>,
+    },
+    /// Server-only: result of a mathlib baseline lookup in the local
+    /// profile. Desktop mutation commands refuse it from the UI.
+    RecordMathlibBaseline {
+        object_id: String,
+        expected_revision: String,
+        outcome: BaselineCheckOutcome,
+    },
 }
 impl UserChangeOperation {
     pub fn object_id(&self) -> &str {
@@ -52,7 +113,43 @@ impl UserChangeOperation {
             | Self::CreateSourceSpan { object_id, .. }
             | Self::EditSourceUnit { object_id, .. }
             | Self::EditSourceRelation { object_id, .. }
-            | Self::RetireObject { object_id, .. } => object_id,
+            | Self::RetireObject { object_id, .. }
+            | Self::CreateSemanticEntity { object_id, .. }
+            | Self::EditSemanticEntity { object_id, .. }
+            | Self::CreateAlignment { object_id, .. }
+            | Self::EditAlignment { object_id, .. }
+            | Self::CreateDebt { object_id, .. }
+            | Self::EditDebt { object_id, .. }
+            | Self::CreateDialectScope { object_id, .. }
+            | Self::EditDialectScope { object_id, .. }
+            | Self::SetAlignmentReview { object_id, .. }
+            | Self::SetDebtSettlement { object_id, .. }
+            | Self::RecordMathlibBaseline { object_id, .. } => object_id,
+        }
+    }
+    /// Operations only an explicit user action on the review page may
+    /// produce. An Agent proposal never compiles to them.
+    pub fn is_user_only(&self) -> bool {
+        matches!(
+            self,
+            Self::SetAlignmentReview { .. } | Self::SetDebtSettlement { .. }
+        )
+    }
+    /// Operations only the server itself authors.
+    pub fn is_server_only(&self) -> bool {
+        matches!(self, Self::RecordMathlibBaseline { .. })
+    }
+    /// Object id created by this operation, if it creates one.
+    pub fn created_object_id(&self) -> Option<&str> {
+        match self {
+            Self::CreateSourceUnit { object_id, .. }
+            | Self::CreateSourceRelation { object_id, .. }
+            | Self::CreateSourceSpan { object_id, .. }
+            | Self::CreateSemanticEntity { object_id, .. }
+            | Self::CreateAlignment { object_id, .. }
+            | Self::CreateDebt { object_id, .. }
+            | Self::CreateDialectScope { object_id, .. } => Some(object_id),
+            _ => None,
         }
     }
     pub fn expected_revision(&self) -> Option<&str> {
@@ -64,6 +161,27 @@ impl UserChangeOperation {
                 expected_revision, ..
             }
             | Self::RetireObject {
+                expected_revision, ..
+            }
+            | Self::EditSemanticEntity {
+                expected_revision, ..
+            }
+            | Self::EditAlignment {
+                expected_revision, ..
+            }
+            | Self::EditDebt {
+                expected_revision, ..
+            }
+            | Self::EditDialectScope {
+                expected_revision, ..
+            }
+            | Self::SetAlignmentReview {
+                expected_revision, ..
+            }
+            | Self::SetDebtSettlement {
+                expected_revision, ..
+            }
+            | Self::RecordMathlibBaseline {
                 expected_revision, ..
             } => Some(expected_revision),
             _ => None,
@@ -88,7 +206,7 @@ pub struct SourceSpanDraft {
 }
 
 // Explicit tagged changes avoid serde's missing/null ambiguity for Option<Option<T>>.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(
     tag = "action",
     content = "value",
@@ -100,6 +218,22 @@ pub enum FieldChange<T> {
     Keep,
     Set(T),
     Clear,
+}
+impl<T> FieldChange<T> {
+    pub fn is_keep(&self) -> bool {
+        matches!(self, Self::Keep)
+    }
+    /// Applies the change to a nullable field.
+    pub fn apply_to(&self, field: &mut Option<T>)
+    where
+        T: Clone,
+    {
+        match self {
+            Self::Keep => {}
+            Self::Set(value) => *field = Some(value.clone()),
+            Self::Clear => *field = None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -264,7 +398,10 @@ impl EntityPayload for MapEditPayload {
         match self.0["payload_kind"].as_str() {
             Some("unit_relation") => EntityKind::SourceUnitRelation,
             Some("span") => EntityKind::SourceSpan,
-            _ => EntityKind::SourceSemanticUnit,
+            Some(kind) => {
+                SemanticPayload::entity_kind_of(kind).unwrap_or(EntityKind::SourceSemanticUnit)
+            }
+            None => EntityKind::SourceSemanticUnit,
         }
     }
     fn payload_shape(&self) -> PayloadShape {

@@ -678,13 +678,13 @@ mod tests {
             "repeated",
             vec![
                 ProjectionEndpoint::new(
-                    id("mathscape:semantic/a"),
+                    id("mathscape:semantic-entity/a"),
                     EndpointRole::parse("premise").unwrap(),
                     None,
                     IncidenceDirection::IntoRelation,
                 ),
                 ProjectionEndpoint::new(
-                    id("mathscape:semantic/b"),
+                    id("mathscape:semantic-entity/b"),
                     EndpointRole::parse("premise").unwrap(),
                     None,
                     IncidenceDirection::IntoRelation,
@@ -706,7 +706,7 @@ mod tests {
             ViewLayer::Alignment,
             "alignment",
             vec![ProjectionEndpoint::new(
-                id("mathscape:semantic/missing"),
+                id("mathscape:semantic-entity/missing"),
                 EndpointRole::parse("candidate").unwrap(),
                 None,
                 IncidenceDirection::Undirected,
@@ -716,7 +716,7 @@ mod tests {
         let error = GraphProjection::new(
             ProjectionLens::Alignment,
             vec![],
-            vec![node("mathscape:semantic/existing")],
+            vec![node("mathscape:semantic-entity/existing")],
             vec![relation],
         )
         .unwrap_err();
@@ -748,7 +748,10 @@ mod tests {
         let projection = GraphProjection::new(
             ProjectionLens::Landscape,
             vec![],
-            vec![node("mathscape:semantic/z"), node("mathscape:semantic/a")],
+            vec![
+                node("mathscape:semantic-entity/z"),
+                node("mathscape:semantic-entity/a"),
+            ],
             vec![],
         )
         .unwrap();
@@ -758,7 +761,7 @@ mod tests {
                 .iter()
                 .map(|node| node.entity_id().as_str())
                 .collect::<Vec<_>>(),
-            vec!["mathscape:semantic/a", "mathscape:semantic/z"]
+            vec!["mathscape:semantic-entity/a", "mathscape:semantic-entity/z"]
         );
     }
 }
