@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, searchForWorkspaceRoot } from "vite";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -31,6 +31,8 @@ export default defineConfig({
   }],
   server: {
     strictPort: true,
+    // 教程只读投影在仓库的 fixtures/ 下（frontend 之外）。
+    fs: { allow: [searchForWorkspaceRoot(process.cwd()), fileURLToPath(new URL("../fixtures/", import.meta.url))] },
     watch: {
       ignored: ["**/apps/mathscape-desktop/**"],
     },

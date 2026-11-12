@@ -47,6 +47,9 @@ export interface AppElements {
   inkButton: HTMLButtonElement;
   searchButton: HTMLButtonElement;
   learningViewButton: HTMLButtonElement;
+  helpButton: HTMLButtonElement;
+  helpMenu: HTMLElement;
+  tutorialMenuItem: HTMLButtonElement;
   /** Outer overlay that may host the N3c split layout. */
   inkWorkspace: HTMLElement;
   inkSplitReader: HTMLElement;
@@ -92,6 +95,12 @@ export class AppShell {
         </button>
         <button id="workspace-search-button" class="secondary-button workspace-search-button" type="button" title="搜索手稿、材料、来源单元和命名快照（⌘K / Ctrl+K）" aria-keyshortcuts="Meta+K Control+K">搜索</button>
         <button id="learning-view-button" class="secondary-button" type="button" title="学习视图：每份材料里哪些内容是新的、哪些在别的材料里见过">学习视图</button>
+        <div class="help-menu">
+          <button id="help-button" class="secondary-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="help-menu">帮助</button>
+          <div id="help-menu" class="help-menu-list" role="menu" hidden>
+            <button id="tutorial-menu-item" type="button" role="menuitem">教程：两本教材是不是同一颗星</button>
+          </div>
+        </div>
         <button id="ink-button" class="secondary-button" type="button">手写</button>
         <button id="sandbox-button" class="secondary-button" type="button" title="沙箱：从检查点复制隔离工作区，可丢弃或导出">沙箱</button>
         <button id="import-pdf" class="primary-button" type="button">
@@ -278,6 +287,9 @@ export class AppShell {
       inkButton: requiredElement<HTMLButtonElement>("#ink-button", root),
       searchButton: requiredElement<HTMLButtonElement>("#workspace-search-button", root),
       learningViewButton: requiredElement<HTMLButtonElement>("#learning-view-button", root),
+      helpButton: requiredElement<HTMLButtonElement>("#help-button", root),
+      helpMenu: requiredElement<HTMLElement>("#help-menu", root),
+      tutorialMenuItem: requiredElement<HTMLButtonElement>("#tutorial-menu-item", root),
       inkWorkspace: requiredElement<HTMLElement>("#ink-workspace", root),
       inkSplitReader: requiredElement<HTMLElement>("#ink-split-reader", root),
       inkSplitResizer: requiredElement<HTMLElement>("#ink-split-resizer", root),
