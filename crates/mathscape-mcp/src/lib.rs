@@ -44,6 +44,7 @@
 //! are tool results with `isError: true` and `{ "error": { … } }` content.
 
 pub mod investigation;
+pub mod mathlib_baseline;
 mod protocol;
 pub mod tools;
 mod workspace;

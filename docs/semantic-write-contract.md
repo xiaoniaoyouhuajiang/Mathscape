@@ -113,7 +113,7 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
   - `confirmed`：只能由服务端写入（`record_mathlib_baseline` 操作，Agent 无法编译出它）。服务端在本机 Lean profile 的 mathlib 源码里按“命名空间 + 声明名”确定性查找（或 Loogle），查到后写 `confirmed`，并在 `checked` 里记录 mathlib 版本、profile、模块和文件行号。
   - `not_found`：服务端查过这个 profile，没有该名字。
   - 本机没有 Lean profile，或 profile 未就绪时：**不改状态**，保持 `unchecked`，核对入口返回“不可用”的原因。
-  - **重新核对入口**：后端函数 `mathlib_baseline::recheck`（编排层纯函数 + Desktop 命令 `recheck_mathlib_baselines`）、审核页 / 学习视图上的「重新核对 mathlib 名称」按钮、CLI `mathscape-cli mathlib-baseline recheck`。核对结果以普通地图提交写入（新 revision、可回溯），作者是 `system:mathlib-baseline`。
+  - **重新核对入口**：后端函数 `mathlib_baseline::recheck`（编排层纯函数 + Desktop 命令 `recheck_mathlib_baselines`）、审核页 / 学习视图上的「重新核对 mathlib 名称」按钮、CLI `mathscape mathlib-baseline recheck --workspace <path>`。核对结果以普通地图提交写入（新 revision、可回溯），作者是 `system:mathlib-baseline`。
   - **基线引用不是证明，也不提升 proof 或 alignment 可信度。**`confirmed` 只说明“这个名字在你这份 mathlib 里存在”。
 - 共享对象不占有页码，也不带 `source_spans`（EMIR 不变量 9）。它和来源的连接**只走对齐线**（不变量 11）。
 
@@ -329,6 +329,8 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 | 10 | `term_index_map.index_shift`、`conventions[].value` 等结构化字段类型错误；`key` 不在受控词表 | `invalid_arg` |
 | 11 | P2 原有的全部检查（span、`unused_span`、依赖无环、最终图校验、幂等） | 同 P2 |
 | 12 | 非法悬挂：最终图里有活动对象指向已退役对象 | `inactive_or_invalid_reference` |
+
+另有两条规划器级的作者检查（不是 propose 预检，而是任何写路径都必经的结构约束）：用户专用操作（`SetAlignmentReview`、`SetDebtSettlement`）的作者是 `agent:*` 时阻塞为 `user_only_operation`；服务端专用操作 `RecordMathlibBaseline` 的作者不是 `system:mathlib-baseline` 时阻塞为 `server_only_operation`，Desktop 的地图编辑命令也直接拒收它。MCP 从不编出这三种操作。
 
 ### S5.2 不阻塞：数学判断类 → 地图 Debt 或审核项
 

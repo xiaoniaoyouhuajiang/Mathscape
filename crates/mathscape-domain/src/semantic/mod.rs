@@ -25,6 +25,10 @@ pub use changes::*;
 /// Schema version written in the header of every semantic map object.
 pub const SEMANTIC_SCHEMA_VERSION: &str = "mathscape-semantic-1";
 
+/// 唯一能写 `RecordMathlibBaseline` 的作者：服务端在本地 profile 的 mathlib
+/// 源码里核对名称后写入。
+pub const MATHLIB_BASELINE_ACTOR: &str = "system:mathlib-baseline";
+
 /// Stable id prefixes of server-generated semantic objects (contract S3).
 pub const SEMANTIC_ENTITY_ID_KIND: &str = "semantic-entity";
 pub const ALIGNMENT_ID_KIND: &str = "alignment";

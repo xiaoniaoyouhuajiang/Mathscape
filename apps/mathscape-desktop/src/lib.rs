@@ -1116,6 +1116,7 @@ pub fn run() {
             map_edit::get_map_object_edit_context,
             map_edit::plan_map_change,
             map_edit::commit_map_change,
+            map_edit::recheck_mathlib_baselines,
             get_desktop_snapshot,
             choose_and_import_pdf,
             get_active_parse,

@@ -4,6 +4,8 @@
 //! - `mathscape mcp --workspace <path> [--round <token>] [--round-file <path>]`: MCP server on
 //!   stdio. The default catalog is read-only and has a round-bound staging
 //!   exception.
+//! - `mathscape mathlib-baseline recheck --workspace <path>`: re-check every
+//!   mathlib name on the map against the local Lean profile's mathlib source.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -15,7 +17,7 @@ use mathscape_mcp::{McpServer, McpWorkspace};
 /// Help text. The tool list comes from [`TOOL_NAMES`] so it cannot drift.
 fn usage() -> String {
     format!(
-        "用法：\n  mathscape mcp --workspace <path> [--round <token>] [--round-file <path>]\n\n子命令：\n  mcp    以 stdio 运行 Mathscape MCP 服务（{} 个工具：{}）",
+        "用法：\n  mathscape mcp --workspace <path> [--round <token>] [--round-file <path>]\n  mathscape mathlib-baseline recheck --workspace <path>\n\n子命令：\n  mcp    以 stdio 运行 Mathscape MCP 服务（{} 个工具：{}）\n  mathlib-baseline recheck    在本地 Lean profile 的 mathlib 源码里重新核对地图上的 mathlib 名称",
         TOOL_NAMES.len(),
         TOOL_NAMES.join("、")
     )
@@ -28,6 +30,9 @@ enum Command {
         workspace: PathBuf,
         round: Option<String>,
         round_file: Option<PathBuf>,
+    },
+    MathlibRecheck {
+        workspace: PathBuf,
     },
 }
 
@@ -76,6 +81,28 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
                 round_file,
             })
         }
+        Some("mathlib-baseline") => {
+            match args.next().as_deref() {
+                Some("recheck") => {}
+                Some("-h" | "--help") | None => return Ok(Command::Help),
+                Some(other) => return Err(format!("未知子命令：mathlib-baseline {other}")),
+            }
+            let mut workspace = None;
+            while let Some(arg) = args.next() {
+                let path = match arg.split_once('=') {
+                    Some(("--workspace", value)) => value.to_owned(),
+                    None if arg == "--workspace" => args.next().ok_or("--workspace 需要一个值")?,
+                    _ if arg == "-h" || arg == "--help" => return Ok(Command::Help),
+                    _ => return Err(format!("未知参数：{arg}")),
+                };
+                if path.is_empty() {
+                    return Err("--workspace 需要一个非空路径".to_owned());
+                }
+                workspace = Some(PathBuf::from(path));
+            }
+            let workspace = workspace.ok_or("缺少 --workspace <path>")?;
+            Ok(Command::MathlibRecheck { workspace })
+        }
         Some(other) => Err(format!("未知子命令：{other}")),
     }
 }
@@ -98,6 +125,37 @@ fn main() -> ExitCode {
             round,
             round_file,
         } => run_mcp(workspace, round, round_file),
+        Command::MathlibRecheck { workspace } => run_mathlib_recheck(workspace),
+    }
+}
+
+fn run_mathlib_recheck(workspace: PathBuf) -> ExitCode {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let time = match mathscape_domain::Timestamp::parse(format!(
+        "unix:{}.{}",
+        elapsed.as_secs(),
+        elapsed.subsec_nanos()
+    )) {
+        Ok(time) => time,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match mathscape_mcp::mathlib_baseline::recheck_mathlib_baselines(&workspace, time) {
+        Ok(report) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("核对失败：{error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -169,6 +227,14 @@ mod tests {
         assert!(parse(&["mcp", "--workspace"]).is_err());
         assert!(parse(&["mcp", "--workspace", "/tmp/ws", "--bogus"]).is_err());
         assert!(parse(&["bogus"]).is_err());
+        assert_eq!(
+            parse(&["mathlib-baseline", "recheck", "--workspace", "/tmp/ws"]),
+            Ok(Command::MathlibRecheck {
+                workspace: PathBuf::from("/tmp/ws")
+            })
+        );
+        assert!(parse(&["mathlib-baseline", "recheck"]).is_err());
+        assert!(parse(&["mathlib-baseline", "bogus"]).is_err());
         assert_eq!(parse(&[]), Ok(Command::Help));
     }
 

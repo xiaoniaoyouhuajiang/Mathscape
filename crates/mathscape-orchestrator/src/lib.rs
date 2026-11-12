@@ -12,6 +12,7 @@ pub use ink::plan_ink_evidence;
 pub mod change_set_plan;
 pub mod map_edit;
 pub mod registration;
+pub mod semantic_plan;
 mod source_facts;
 pub mod source_integrity;
 mod source_locator;

@@ -15,6 +15,7 @@ mod loogle;
 #[cfg(unix)]
 mod loogle_ipc;
 mod loogle_resident;
+mod mathlib_source;
 mod probe;
 mod profile;
 mod receipt;
@@ -59,6 +60,10 @@ pub use loogle_resident::{
     LOOGLE_INSTANCE_NAME, LOOGLE_READY_LINE, LoogleResidentKey, LoogleTarget, RESIDENT_MAX_RESULTS,
     ResidentLoogle, ResidentLoogleOutcome, ResidentLoogleResult, loogle_resident_policy,
     validate_resident_query,
+};
+pub use mathlib_source::{
+    MathlibDeclarationLocation, MathlibSource, declarations as mathlib_declarations,
+    locate_in_package as locate_mathlib_declarations, mathlib_package_root, select_mathlib_source,
 };
 pub use probe::{LeanEnvironmentProbe, LeanEnvironmentState};
 pub use profile::{

@@ -899,10 +899,10 @@ fn phase2_source_proposals_stage_and_read_back_without_changing_the_map() {
         "propose_changes",
         json!({
             "request_id": "proposal-blocked",
-            "rationale": "尝试写入尚未支持的语义节点",
+            "rationale": "尝试写入尚未支持的节点种类",
             "proposed_objects": [{
                 "local_ref": "entity",
-                "kind": "semantic_entity",
+                "kind": "representation_binding",
                 "op": "create",
                 "payload": {}
             }]
@@ -2715,4 +2715,200 @@ fn locate_on_an_unmarked_multi_page_snapshot_reports_page_markers_absent() {
     );
     assert_eq!(plain["status"], "ok", "{plain}");
     assert_eq!(diagnostic_codes(&plain), ["page_unresolved"], "{plain}");
+}
+
+fn semantic_base(span: &str) -> Vec<Value> {
+    vec![
+        json!({
+            "local_ref": "u1",
+            "kind": "source_unit",
+            "op": "create",
+            "payload": {
+                "kind": "statement",
+                "display_title": "有界单调数列收敛",
+                "parent": null,
+                "source_spans": [span],
+                "completeness": "complete"
+            }
+        }),
+        json!({
+            "local_ref": "e.theory",
+            "kind": "semantic_entity",
+            "op": "create",
+            "payload": {
+                "semantic_kind": "theory",
+                "preferred_labels": [{ "lang": "zh", "label": "实数列" }]
+            }
+        }),
+        json!({
+            "local_ref": "e.mct",
+            "kind": "semantic_entity",
+            "op": "create",
+            "payload": {
+                "semantic_kind": "concept",
+                "home_theory": "$new:e.theory",
+                "preferred_labels": [{ "lang": "zh", "label": "单调收敛定理" }],
+                "plain_label": "单调又有界的数列一定收敛",
+                "mathlib_baseline": {
+                    "decl": "tendsto_atTop_ciSup",
+                    "status": "unchecked"
+                }
+            }
+        }),
+        json!({
+            "local_ref": "a1",
+            "kind": "alignment",
+            "op": "create",
+            "payload": {
+                "source": "$new:u1",
+                "target": "$new:e.mct",
+                "relation": "expresses",
+                "source_context": {
+                    "binding": "uncontextualized",
+                    "reason": "测试材料没有约定卡"
+                },
+                "evidence_spans": [span],
+                "status": "retrieved_candidate"
+            }
+        }),
+        json!({
+            "local_ref": "d1",
+            "kind": "debt",
+            "op": "create",
+            "payload": {
+                "debt_kind": "alignment_debt",
+                "attached_to": "$new:a1",
+                "status": "open",
+                "obligation": "核对教材里的“有界”是上有界",
+                "quantifier": "对所有实数列",
+                "failure_mode": "statement"
+            }
+        }),
+    ]
+}
+
+fn propose_semantic(f: &Fixture, request_id: &str, objects: Vec<Value>) -> Value {
+    let (result, is_error) = call(
+        &f.server,
+        "propose_changes",
+        json!({
+            "request_id": request_id,
+            "rationale": "语义层测试",
+            "target_object": "e.mct",
+            "proposed_objects": objects
+        }),
+    );
+    assert!(!is_error, "unexpected tool error: {result}");
+    result
+}
+
+fn codes(result: &Value) -> Vec<String> {
+    result["diagnostics"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|d| d["code"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn semantic_layer_proposals_stage_with_review_items_and_never_touch_the_map() {
+    let f = fixture();
+    let span = seed_source_span(&f.root, &f.markdown);
+    let initial_objects = map_object_count(&f.root);
+    let staged = propose_semantic(&f, "semantic-ok", semantic_base(&span));
+    assert_eq!(staged["status"], "staged", "{staged}");
+    for (local_ref, prefix) in [
+        ("e.theory", "mathscape:semantic-entity/"),
+        ("e.mct", "mathscape:semantic-entity/"),
+        ("a1", "mathscape:alignment/"),
+        ("d1", "mathscape:debt/"),
+    ] {
+        let id = staged["staged_ids"][local_ref].as_str().unwrap_or_default();
+        assert!(id.starts_with(prefix), "{local_ref}: {staged}");
+    }
+    let found = codes(&staged);
+    assert!(
+        found.contains(&"mathlib_baseline_unchecked".to_owned()),
+        "{staged}"
+    );
+    assert!(found.contains(&"uncontextualized".to_owned()), "{staged}");
+    assert_eq!(map_object_count(&f.root), initial_objects);
+}
+
+#[test]
+fn semantic_layer_proposals_block_with_contract_codes() {
+    let f = fixture();
+    let span = seed_source_span(&f.root, &f.markdown);
+    type Mutate = fn(&mut Vec<Value>);
+    let cases: Vec<(&str, Mutate, &str)> = vec![
+        (
+            "same-as",
+            |o| o[3]["payload"]["relation"] = json!("same_as"),
+            "same_as_forbidden",
+        ),
+        (
+            "bad-relation",
+            |o| o[3]["payload"]["relation"] = json!("restricts"),
+            "invalid_relation",
+        ),
+        (
+            "accepted-status",
+            |o| o[3]["payload"]["status"] = json!("accepted"),
+            "forbidden_alignment_status",
+        ),
+        (
+            "paid-debt",
+            |o| o[4]["payload"]["status"] = json!("paid"),
+            "forbidden_debt_status",
+        ),
+        (
+            "confirmed-baseline",
+            |o| o[2]["payload"]["mathlib_baseline"]["status"] = json!("confirmed"),
+            "forbidden_baseline_status",
+        ),
+        (
+            "trust-claim",
+            |o| o[2]["payload"]["trust"] = json!({ "alignment": "accepted" }),
+            "forbidden_trust_claim",
+        ),
+        (
+            "bare-ref",
+            |o| o[3]["payload"]["target"] = json!("e.mct"),
+            "dangling_new_ref",
+        ),
+        (
+            "target-is-source",
+            |o| o[3]["payload"]["target"] = json!("$new:u1"),
+            "invalid_reference_kind",
+        ),
+        (
+            "missing-home",
+            |o| {
+                o[2]["payload"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("home_theory");
+            },
+            "missing_required_field",
+        ),
+        (
+            "no-evidence",
+            |o| o[3]["payload"]["evidence_spans"] = json!([]),
+            "missing_required_field",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let mut objects = semantic_base(&span);
+        mutate(&mut objects);
+        let result = propose_semantic(&f, &format!("semantic-{name}"), objects);
+        assert_eq!(result["status"], "blocked", "{name}: {result}");
+        assert!(
+            codes(&result).contains(&expected.to_owned()),
+            "{name}: expected {expected}, got {result}"
+        );
+    }
 }

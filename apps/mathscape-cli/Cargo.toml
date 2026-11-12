@@ -17,6 +17,7 @@ mathscape-mcp.workspace = true
 mathscape-orchestrator.workspace = true
 mathscape-query.workspace = true
 mathscape-store-sqlite.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

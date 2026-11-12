@@ -71,7 +71,10 @@ pub const LIST_CHANGE_SETS: &str = "list_change_sets";
 /// find its own change sets and revise one with `supersedes`;
 /// `material.locate` documents `page_markers_absent` / `page_unresolved`;
 /// `propose_changes` documents page granularity and `supersedes`.
-pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/16";
+/// `/17`: `propose_changes` accepts the semantic layer (semantic_entity,
+/// alignment, debt, dialect_scope; retire of semantic objects) and
+/// `target_object` (docs/semantic-write-contract.md).
+pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/17";
 
 /// sha256 of the serialized [`tool_definitions`] with object keys sorted (so
 /// the value does not depend on serde_json's `preserve_order` feature), for
@@ -289,8 +292,8 @@ mod schema_version_tests {
     /// tool name, description or schema changes the fingerprint: bump
     /// `TOOL_SCHEMA_VERSION` (and the skill frontmatter) and re-pin.
     const PINNED: (&str, &str) = (
-        "mathscape-mcp/16",
-        "4b796a03d05280852dea48c22f94621072bcd0a422cab7891284155cd3c4e603",
+        "mathscape-mcp/17",
+        "0d4d054e83b9fb1679d6176791ed40d2584d3de7e8f9f8afaea7b8dd5f7c831a",
     );
 
     #[test]

@@ -36,6 +36,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+mod semantic;
+
 use super::{GET_CHANGE_SET, LIST_CHANGE_SETS, PROPOSE_CHANGES};
 use crate::McpWorkspace;
 use crate::investigation::staged_change_sets;
@@ -55,6 +57,10 @@ struct ProposeArgs {
     #[serde(default)]
     supersedes: Option<Supersedes>,
     rationale: String,
+    /// The one shared object (or section unit) this change set is about
+    /// (`local_ref`, `$new:local_ref` or an existing id). Review-page title.
+    #[serde(default)]
+    target_object: Option<String>,
     #[serde(default)]
     existing_refs: Vec<ExistingRef>,
     #[serde(default)]
@@ -186,7 +192,7 @@ impl Diagnostic {
 pub(super) fn definition() -> Value {
     json!({
         "name": PROPOSE_CHANGES,
-        "description": "Validate and persist a Phase2 source-layer proposal. It supports immutable source_span creation plus source_unit/source_relation create/edit, returns staged or blocked, and never changes the accepted map. A source_span payload is {artifact_id, md_byte_range, granularity, quote}: quote is the full text of that range, the range is at most 4096 bytes (span_too_long; split a chapter by problem or paragraph), and material.locate returns a range that passes the quote check. Use granularity page when material.locate returned a page (page_granularity_available true); inline records no page, so never claim a page number for an inline span. To revise an earlier proposal of this investigation, pass the supersedes object from list_change_sets; without it a new change set is created. Problems of existing workspace objects this proposal does not touch are warn head_integrity and never block. Requires a bound round token.",
+        "description": "Validate and persist a Phase2 proposal. It supports immutable source_span creation, source_unit/source_relation create/edit, and the semantic layer (docs/semantic-write-contract.md): semantic_entity (concept, declaration, theory, problem_schema), alignment, debt and dialect_scope create/edit, plus retire of semantic objects (op retire with target_id and expected_revision). It returns staged or blocked and never changes the accepted map; accepting later only writes to the map and never raises trust. Semantic payloads reference new items as $new:<local_ref>. Never set trust; alignment status at most partially_aligned / disputed / incompatible (reviewed and accepted are user actions; there is no same_as); debt status at most claimed_paid (with paid_by); mathlib_baseline.status always unchecked (confirmed / not_found are written by the server re-check). Set target_object to the one shared object (or section unit) the change set is about. Only deterministic checks block; warn / info diagnostics are review items for the user. A source_span payload is {artifact_id, md_byte_range, granularity, quote}: quote is the full text of that range, the range is at most 4096 bytes (span_too_long; split a chapter by problem or paragraph), and material.locate returns a range that passes the quote check. Use granularity page when material.locate returned a page (page_granularity_available true); inline records no page, so never claim a page number for an inline span. To revise an earlier proposal of this investigation, pass the supersedes object from list_change_sets; without it a new change set is created. Problems of existing workspace objects this proposal does not touch are warn head_integrity and never block. Requires a bound round token.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -202,6 +208,7 @@ pub(super) fn definition() -> Value {
                     "additionalProperties": false
                 },
                 "rationale": { "type": "string", "minLength": 1, "maxLength": MAX_RATIONALE_CHARS },
+                "target_object": { "type": "string", "minLength": 1 },
                 "existing_refs": {
                     "type": "array",
                     "items": {
@@ -305,6 +312,13 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
 
     let mut diagnostics = validate_refs(&args.existing_refs);
     diagnostics.extend(compile_diagnostics(&args, &ids));
+    for object in args
+        .proposed_objects
+        .iter()
+        .filter(|object| semantic::is_semantic(&object.kind))
+    {
+        diagnostics.extend(semantic::precheck(object, &snapshot));
+    }
     let (dependencies, dependency_diagnostics) = resolve_staged_dependencies(
         &versions,
         &snapshot,
@@ -363,6 +377,14 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
                     operations: combined_operations(closure, &operations),
                 };
                 let planned = plan_map_change_over_head(&snapshot, &request, &actor);
+                if planned.impact.diagnostics.is_empty() {
+                    diagnostics.extend(semantic::review_diagnostics(
+                        &snapshot,
+                        &planned.changed_objects,
+                        &args,
+                        &ids,
+                    ));
+                }
                 diagnostics.extend(planned.impact.diagnostics.into_iter().map(|diagnostic| {
                     let target_id = diagnostic.object_id.filter(|id| !id.is_empty());
                     Diagnostic {
@@ -824,11 +846,30 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
     let mut refs = BTreeSet::new();
     for object in &args.proposed_objects {
         check_local_ref(&mut result, &mut refs, &object.local_ref);
+        if semantic::is_semantic(&object.kind) {
+            if object.op != "create"
+                && (object.target_id.is_none() || object.expected_revision.is_none())
+            {
+                result.push(Diagnostic::error(
+                    "missing_revision_guard",
+                    "edit / retire requires target_id and expected_revision",
+                    Some(&object.local_ref),
+                ));
+            }
+            if object.op == "create" && object.payload.is_none() {
+                result.push(Diagnostic::error(
+                    "missing_payload",
+                    "create requires payload",
+                    Some(&object.local_ref),
+                ));
+            }
+            continue;
+        }
         if !matches!(object.kind.as_str(), "source_unit" | "source_span") {
             result.push(Diagnostic {
                 level: Level::Error,
                 code: "kind_not_supported".to_owned(),
-                message: "Phase2-0 only supports source_unit, source_span and source_relation"
+                message: "supported kinds: source_unit, source_span, source_relation, semantic_entity, alignment, debt, dialect_scope"
                     .to_owned(),
                 local_ref: Some(object.local_ref.clone()),
                 target_id: None,
@@ -838,7 +879,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
             result.push(Diagnostic {
                 level: Level::Error,
                 code: "operation_not_supported".to_owned(),
-                message: "Phase2-0 only supports create and edit".to_owned(),
+                message: "source items support create and edit; retiring source objects is a Desktop action".to_owned(),
                 local_ref: Some(object.local_ref.clone()),
                 target_id: None,
             });
@@ -950,6 +991,12 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
         .collect::<BTreeSet<_>>();
     let mut inspect = Vec::<(Option<String>, String)>::new();
     for object in &args.proposed_objects {
+        if semantic::is_semantic(&object.kind) {
+            for body in object.payload.iter().chain(object.changes.iter()) {
+                semantic_new_refs(body, &object.local_ref, &mut inspect);
+            }
+            continue;
+        }
         if let Some(payload) = &object.payload {
             inspect_refs(payload, Some(&object.local_ref), &mut inspect);
         }
@@ -974,7 +1021,17 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
         );
     }
     for (owner, value) in inspect {
-        if let Some(local) = value.strip_prefix("$new:") {
+        if let Some(local) = value.strip_prefix("bare:") {
+            result.push(Diagnostic {
+                level: Level::Error,
+                code: "dangling_new_ref".into(),
+                message: format!(
+                    "semantic items reference new objects as $new:{local} (or a stable id); bare local refs are not accepted"
+                ),
+                local_ref: owner,
+                target_id: None,
+            });
+        } else if let Some(local) = value.strip_prefix("$new:") {
             if !local_refs.contains(local) {
                 result.push(Diagnostic {
                     level: Level::Error,
@@ -1023,6 +1080,54 @@ fn inspect_refs(value: &Value, owner: Option<&str>, output: &mut Vec<(Option<Str
         Value::Array(values) => values
             .iter()
             .for_each(|value| inspect_refs(value, owner, output)),
+        _ => {}
+    }
+}
+
+/// `$new:` references anywhere in a semantic payload, plus bare local refs
+/// in reference positions (semantic items accept only `$new:` or ids).
+fn semantic_new_refs(value: &Value, owner: &str, output: &mut Vec<(Option<String>, String)>) {
+    match value {
+        Value::String(text) if text.starts_with("$new:") => {
+            output.push((Some(owner.to_owned()), text.clone()));
+        }
+        Value::Object(map) => {
+            for (key, value) in map {
+                let reference = semantic::REFERENCE_KEYS.contains(&key.as_str())
+                    || matches!(key.as_str(), "source" | "target" | "evidence_spans");
+                let bare = |text: &str| {
+                    !text.starts_with("$new:")
+                        && !text.starts_with("mathscape:")
+                        && !text.is_empty()
+                };
+                match value {
+                    // `source` / `target` inside parameter_map / term_index_map
+                    // are variable names, not references: only the top-level
+                    // alignment endpoints and evidence lists are references.
+                    Value::String(text)
+                        if reference
+                            && bare(text)
+                            && (map.contains_key("relation")
+                                || !matches!(key.as_str(), "source" | "target")) =>
+                    {
+                        output.push((Some(owner.to_owned()), format!("bare:{text}")));
+                    }
+                    Value::Array(items) if reference => {
+                        for text in items.iter().filter_map(Value::as_str) {
+                            if bare(text) {
+                                output.push((Some(owner.to_owned()), format!("bare:{text}")));
+                            } else if text.starts_with("$new:") {
+                                output.push((Some(owner.to_owned()), text.to_owned()));
+                            }
+                        }
+                    }
+                    _ => semantic_new_refs(value, owner, output),
+                }
+            }
+        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| semantic_new_refs(value, owner, output)),
         _ => {}
     }
 }
@@ -1543,6 +1648,15 @@ fn compile_operations(
 ) -> Result<Vec<UserChangeOperation>, String> {
     let mut operations = Vec::new();
     for object in &args.proposed_objects {
+        if semantic::is_semantic(&object.kind) {
+            let object_id = object
+                .target_id
+                .clone()
+                .or_else(|| ids.get(&object.local_ref).cloned())
+                .ok_or_else(|| format!("missing object id for {}", object.local_ref))?;
+            operations.push(semantic::compile(object, object_id, ids)?);
+            continue;
+        }
         if !matches!(object.kind.as_str(), "source_unit" | "source_span") {
             continue;
         }
@@ -1700,10 +1814,19 @@ fn allocate_ids(
 ) -> Result<BTreeMap<String, String>, ToolError> {
     let mut ids = BTreeMap::new();
     for object in &args.proposed_objects {
-        let id = if object.op == "edit" {
+        let id = if matches!(object.op.as_str(), "edit" | "retire") {
             object.target_id.clone().ok_or_else(|| {
-                ToolError::new(ToolErrorCode::InvalidArg, "edit requires target_id")
+                ToolError::new(
+                    ToolErrorCode::InvalidArg,
+                    "edit / retire requires target_id",
+                )
             })?
+        } else if semantic::is_semantic(&object.kind) {
+            generated_id(
+                semantic::id_kind(&object.kind),
+                change_set_id,
+                &object.local_ref,
+            )
         } else if object.kind == "source_span" {
             object
                 .payload
@@ -1996,14 +2119,7 @@ fn staged_ids_of(record: &ProposedChangeRecord) -> impl Iterator<Item = &str> {
 fn operation_targets(record: &ProposedChangeRecord) -> BTreeSet<String> {
     crate::investigation::record_operations(record)
         .iter()
-        .filter_map(|operation| match operation {
-            UserChangeOperation::CreateSourceSpan { object_id, .. }
-            | UserChangeOperation::CreateSourceUnit { object_id, .. }
-            | UserChangeOperation::CreateSourceRelation { object_id, .. } => {
-                Some(object_id.clone())
-            }
-            _ => None,
-        })
+        .filter_map(|operation| operation.created_object_id().map(str::to_owned))
         .collect()
 }
 
@@ -2045,6 +2161,7 @@ fn collect_string_refs(value: &Value, output: &mut Vec<String>) {
                 if matches!(key.as_str(), "parent" | "source" | "target")
                     || key == "source_spans"
                     || key == "evidence_spans"
+                    || semantic::REFERENCE_KEYS.contains(&key.as_str())
                 {
                     match value {
                         Value::String(value) => output.push(value.clone()),

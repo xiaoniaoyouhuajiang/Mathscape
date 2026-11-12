@@ -2109,4 +2109,206 @@ mod tests {
         let error = change_set_snapshot(&fx.root, &investigation, &new_md).unwrap_err();
         assert!(error.starts_with("snapshot_not_referenced"), "{error}");
     }
+
+    fn semantic_payload(fx: &Fx, id: &str) -> Value {
+        open_store(&fx.root)
+            .unwrap()
+            .map_edit_snapshot()
+            .unwrap()
+            .objects
+            .into_iter()
+            .find(|object| object.object_id == id)
+            .map(|object| {
+                json!({ "lifecycle": object.lifecycle, "payload": object.payload["payload"] })
+            })
+            .unwrap_or(Value::Null)
+    }
+
+    /// 语义层端到端：Agent 提案 → 用户接受 → 可信度不被提升 → 服务端核对
+    /// mathlib 名称 → 退役对齐线时挂着的账自动失效。
+    #[test]
+    fn semantic_change_set_accepts_without_raising_trust_and_baseline_is_server_checked() {
+        let fx = fixture();
+        let proposal = propose(
+            &fx,
+            json!({
+                "request_id": "semantic-1",
+                "rationale": "定理 A 说的就是共享的单调收敛定理",
+                "target_object": "e.mct",
+                "proposed_objects": [
+                    span(&fx, "s", "第一段内容。", "inline"),
+                    unit("u", "定理 A", Value::Null, json!(["$new:s"])),
+                    { "local_ref": "e.theory", "kind": "semantic_entity", "op": "create",
+                      "payload": { "semantic_kind": "theory",
+                                   "preferred_labels": [{ "lang": "zh", "label": "实数列" }] } },
+                    { "local_ref": "e.mct", "kind": "semantic_entity", "op": "create",
+                      "payload": { "semantic_kind": "concept", "home_theory": "$new:e.theory",
+                                   "preferred_labels": [{ "lang": "zh", "label": "单调收敛定理" }],
+                                   "mathlib_baseline": { "decl": "tendsto_atTop_ciSup", "status": "unchecked" } } },
+                    { "local_ref": "a", "kind": "alignment", "op": "create",
+                      "payload": { "source": "$new:u", "target": "$new:e.mct", "relation": "expresses",
+                                   "source_context": { "binding": "uncontextualized", "reason": "测试材料" },
+                                   "evidence_spans": ["$new:s"], "status": "context_checked" } },
+                    { "local_ref": "d", "kind": "debt", "op": "create",
+                      "payload": { "debt_kind": "alignment_debt", "attached_to": "$new:a", "status": "open",
+                                   "obligation": "核对“有界”指上有界", "quantifier": "对所有实数列",
+                                   "failure_mode": "statement" } }
+                ]
+            }),
+        );
+        assert_eq!(proposal["status"], "staged", "{proposal}");
+        accept(&fx, vec![sel(&proposal)]).unwrap();
+
+        let entity_id = staged_id(&proposal, "e.mct");
+        let alignment_id = staged_id(&proposal, "a");
+        let debt_id = staged_id(&proposal, "d");
+        let alignment = semantic_payload(&fx, &alignment_id);
+        // 接受只是写入地图：Agent 写的状态原样保留，可信度不升级。
+        assert_eq!(alignment["payload"]["status"], "context_checked");
+        assert_eq!(
+            alignment["payload"]["trust"]["curation"], "raw",
+            "{alignment}"
+        );
+        assert_eq!(alignment["payload"]["trust"]["proof"], "none");
+        let entity = semantic_payload(&fx, &entity_id);
+        assert_eq!(entity["payload"]["mathlib_baseline"]["status"], "unchecked");
+
+        // 没有 profile：什么也不写。
+        let unavailable =
+            mathscape_mcp::mathlib_baseline::recheck_mathlib_baselines(&fx.root, now().unwrap())
+                .unwrap();
+        assert!(
+            matches!(
+                unavailable.status.as_str(),
+                "unavailable" | "committed" | "unchanged"
+            ),
+            "{unavailable:?}"
+        );
+
+        // 假的 mathlib 源码目录：名称存在 → confirmed。
+        let mathlib = tempfile::tempdir().unwrap();
+        let module_dir = mathlib.path().join("Mathlib/Order");
+        std::fs::create_dir_all(&module_dir).unwrap();
+        std::fs::write(
+            module_dir.join("Monotone.lean"),
+            "namespace Foo\nend Foo\n\ntheorem tendsto_atTop_ciSup : True := trivial\n",
+        )
+        .unwrap();
+        let source = mathscape_tool_lean::MathlibSource {
+            profile_id: "test-profile".into(),
+            mathlib_version: "v4.33.1".into(),
+            package_root: mathlib.path().to_path_buf(),
+        };
+        let report =
+            mathscape_mcp::mathlib_baseline::recheck_with_source(&fx.root, &source, now().unwrap())
+                .unwrap();
+        assert_eq!(report.status, "committed", "{report:?}");
+        assert_eq!(report.confirmed, vec!["tendsto_atTop_ciSup".to_owned()]);
+        let baseline = &semantic_payload(&fx, &entity_id)["payload"]["mathlib_baseline"];
+        assert_eq!(baseline["status"], "confirmed");
+        assert_eq!(baseline["checked"]["mathlib_version"], "v4.33.1");
+        assert_eq!(baseline["checked"]["module"], "Mathlib.Order.Monotone");
+        assert_eq!(
+            baseline["checked"]["location"],
+            "Mathlib/Order/Monotone.lean:4"
+        );
+        let again =
+            mathscape_mcp::mathlib_baseline::recheck_with_source(&fx.root, &source, now().unwrap())
+                .unwrap();
+        assert_eq!(again.status, "unchanged");
+
+        // 审阅结论、结账只能由用户写；mathlib 核对结果只能由服务端写。
+        let snapshot = open_store(&fx.root).unwrap().map_edit_snapshot().unwrap();
+        let rev = |id: &str| {
+            snapshot
+                .objects
+                .iter()
+                .find(|object| object.object_id == id)
+                .unwrap()
+                .revision
+                .clone()
+        };
+        let plan_as = |actor: &str, operation: UserChangeOperation| {
+            let request = UserChangeRequest {
+                request_id: "mathscape:test/semantic-review".into(),
+                base_commit: snapshot.base_commit.clone(),
+                reason: "审阅".into(),
+                operations: vec![operation],
+            };
+            let impact =
+                plan_map_change_over_head(&snapshot, &request, &ActorRef::parse(actor).unwrap())
+                    .impact;
+            impact
+                .diagnostics
+                .iter()
+                .map(|d| d.code.clone())
+                .collect::<Vec<_>>()
+        };
+        let review = UserChangeOperation::SetAlignmentReview {
+            object_id: alignment_id.clone(),
+            expected_revision: rev(&alignment_id),
+            status: mathscape_domain::AlignmentReviewStatus::SemanticallyReviewed,
+            note: None,
+        };
+        assert!(plan_as("mathscape-desktop", review.clone()).is_empty());
+        assert!(plan_as("agent:codex", review).contains(&"user_only_operation".to_owned()));
+        let waive = |note: Option<&str>| UserChangeOperation::SetDebtSettlement {
+            object_id: debt_id.clone(),
+            expected_revision: rev(&debt_id),
+            settlement: mathscape_domain::DebtSettlement::Waived,
+            note: note.map(str::to_owned),
+        };
+        assert!(!plan_as("mathscape-desktop", waive(None)).is_empty());
+        assert!(plan_as("mathscape-desktop", waive(Some("课程不要求"))).is_empty());
+        let pay = UserChangeOperation::SetDebtSettlement {
+            object_id: debt_id.clone(),
+            expected_revision: rev(&debt_id),
+            settlement: mathscape_domain::DebtSettlement::Paid,
+            note: None,
+        };
+        // 只有 claimed_paid 的账才能确认已还清。
+        assert!(!plan_as("mathscape-desktop", pay).is_empty());
+        let record = UserChangeOperation::RecordMathlibBaseline {
+            object_id: entity_id.clone(),
+            expected_revision: rev(&entity_id),
+            outcome: mathscape_domain::BaselineCheckOutcome {
+                status: mathscape_domain::BaselineStatus::NotFound,
+                check: mathscape_domain::BaselineCheck {
+                    mathlib_version: "v0".into(),
+                    profile_id: "fake".into(),
+                    method: mathscape_domain::BaselineCheckMethod::MathlibSource,
+                    module: None,
+                    location: None,
+                },
+            },
+        };
+        assert!(plan_as("mathscape-desktop", record).contains(&"server_only_operation".to_owned()));
+
+        // Agent 提议退役对齐线；用户接受后挂在上面的账自动失效。
+        let revision = open_store(&fx.root)
+            .unwrap()
+            .map_edit_snapshot()
+            .unwrap()
+            .objects
+            .into_iter()
+            .find(|object| object.object_id == alignment_id)
+            .unwrap()
+            .revision;
+        let retire = propose(
+            &fx,
+            json!({
+                "request_id": "semantic-retire",
+                "rationale": "这条对齐线写错了",
+                "proposed_objects": [{ "local_ref": "x", "kind": "alignment", "op": "retire",
+                                       "target_id": alignment_id, "expected_revision": revision }]
+            }),
+        );
+        assert_eq!(retire["status"], "staged", "{retire}");
+        accept(&fx, vec![sel(&retire)]).unwrap();
+        assert_ne!(semantic_payload(&fx, &alignment_id)["lifecycle"], "active");
+        assert_eq!(
+            semantic_payload(&fx, &debt_id)["payload"]["status"],
+            "obsolete"
+        );
+    }
 }

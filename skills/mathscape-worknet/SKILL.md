@@ -2,11 +2,11 @@
 name: mathscape-worknet
 description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、对象卡、表示、证明上下文、失败见证）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
 metadata:
-  version: "0.6.6"
-  tool_schema_version: "mathscape-mcp/16"
+  version: "0.7.0"
+  tool_schema_version: "mathscape-mcp/17"
 ---
 
-# Mathscape 数学地图构建 skill v0.6.6
+# Mathscape 数学地图构建 skill v0.7.0
 
 这份 skill 给在 Mathscape 工作区中帮助用户搭建数学地图的 Agent 使用。它的任务很简单：从用户关心的原文、手稿或问题出发，逐步整理出可回溯的数学理解，并把仍然不确定的地方留下来。
 
@@ -142,9 +142,9 @@ workspace.search
 
 `artifact.stage` 是受 round 约束的文件暂存能力。它可以保存对象卡、工作网草案、Lean 文件和检查报告，但不会登记正式 Artifact、地图节点或关系。
 
-`propose_changes`、`get_change_set`、`list_change_sets` 和 `user.ask` 只有在本轮工具列表中实际出现时才能调用。语义层的 `emir.upsert_*`、`rdtx.upsert_*`、`rdtx.record_failure` 等目前属于契约草案，必须作为 `propose_changes` 的薄封装，不能另开一条绕过用户接受的写路径。
+`propose_changes`、`get_change_set`、`list_change_sets` 和 `user.ask` 只有在本轮工具列表中实际出现时才能调用。共享对象、对齐线、一笔账和约定卡直接用 `propose_changes` 提（§4.2）；其余语义层的 `emir.upsert_*`、`rdtx.upsert_*`、`rdtx.record_failure` 等目前属于契约草案，必须作为 `propose_changes` 的薄封装，不能另开一条绕过用户接受的写路径。
 
-### 4.1 `propose_changes` 怎么写（`mathscape-mcp/16`）
+### 4.1 `propose_changes` 怎么写（`mathscape-mcp/17`）
 
 只在本轮工具列表里有 `propose_changes` 时使用。它只产生 `staged` 或 `blocked` 的提案，从不改正式地图；`staged` 的对象会以「未审批」样式出现在用户地图上，用户之后在 Desktop 统一接受或丢弃。接受只表示写入地图，不代表数学上已验证，也不会提升 Trust。
 
@@ -193,7 +193,7 @@ workspace.search
 ```
 
 - 单元 `kind`：`section`、`definition`、`statement`、`proof`、`problem`、`hint`、`solution`、`example`、`remark`、`method`、`notation`、`narrative`；`completeness`：`complete`、`left_truncated`、`right_truncated`、`internally_missing`、`uncertain`。关系 `relation`：`proves`、`solves`、`hints`、`explains`、`cites`、`applies_method`。
-- 修改已有对象用 `op: "edit"`，带 `target_id`、`expected_revision` 和 `changes`；不能提议退役。
+- 修改已有对象用 `op: "edit"`，带 `target_id`、`expected_revision` 和 `changes`；来源对象不能提议退役（语义层对象可以，见 4.2）。
 - 顺序随意：服务端在最终图上统一校验，子单元写在父单元前面也可以。
 
 **引用规则**：
@@ -205,7 +205,7 @@ workspace.search
 
 **修订**：同一个沙箱对话通常延续同一条 Codex 线程，之前轮次的工具结果仍在你的上下文里；但线程可能在换机器、长时间闲置或版本升级后被恢复甚至降级为转录重建（届时会有「上下文已降级」提示），而且早先的结果可能已过时。所以不要凭记忆里的旧提案 id 或状态行事。**重提或修改之前的提案前，先调用 `list_change_sets`**（只列本调查 = 本沙箱会话的提案，新的在前；`pending_only: true` 只看 staged/blocked）。按 `title`、`request_id` 和 `active.blocking_codes` 找到要改的那份，把它的 `supersedes` 对象原样放进 `propose_changes`，重新提交**整份**提案；需要看旧内容时再用 `get_change_set` 读回。这样得到的是同一个 change set 的下一个版本（v2、v3…），旧版本被折叠；不带 `supersedes` 就会新建一个独立提案，旧的 blocked 版本还留在用户的审核队列里。`supersedes` 为 null 表示该提案已被接受或丢弃，不能再修订，需要的话新建提案。同名 `local_ref` 得到同一个 id。被替换的提案上，依赖它的其他提案会转为 `blocked`（`dependency_superseded`，更深一层是 `dependency_blocked`），不会自动改指新版本，需要你读回后重新提交。
 
-**汇报数量以返回结果为准**：告诉用户「提了多少单元 / 关系 / 证据」时，只按本次 `propose_changes` 的返回（或 `get_change_set` 读回）计数，不要凭记忆或按你打算写的条目估算。`staged` 时数 `staged_ids` 的值：前缀 `mathscape:source-unit/` 是单元、`mathscape:source-relation/` 是关系、`mathscape:source-span/` 是证据（`compiled_operations` 的条数应与之相同，可用来核对）；同时说明 `change_set_id` 与 `version`。`blocked` 时没有 `staged_ids`，只能说「提交了 N 条、全部未暂存」，并列出阻塞码。只说本次提案的数字；与地图里已有对象或其他提案的关系要单独说明，不要加进总数。审核界面按快照分组显示，一份提案可能跨多个快照，用户看到的总数以整份提案为准。
+**汇报数量以返回结果为准**：告诉用户「提了多少单元 / 关系 / 证据」时，只按本次 `propose_changes` 的返回（或 `get_change_set` 读回）计数，不要凭记忆或按你打算写的条目估算。`staged` 时数 `staged_ids` 的值：前缀 `mathscape:source-unit/` 是单元、`mathscape:source-relation/` 是关系、`mathscape:source-span/` 是证据，`mathscape:semantic-entity/` 是共享对象、`mathscape:alignment/` 是对齐线、`mathscape:debt/` 是一笔账、`mathscape:dialect-scope/` 是约定卡（`compiled_operations` 的条数应与之相同，可用来核对）；同时说明 `change_set_id` 与 `version`。`blocked` 时没有 `staged_ids`，只能说「提交了 N 条、全部未暂存」，并列出阻塞码。只说本次提案的数字；与地图里已有对象或其他提案的关系要单独说明，不要加进总数。审核界面按快照分组显示，一份提案可能跨多个快照，用户看到的总数以整份提案为准。
 
 **常见诊断码**（`blocked` 时整份提案保留，改好后用 `supersedes` 重提）：
 
@@ -229,13 +229,53 @@ workspace.search
 
 `span_already_exists`（info）、`page_granularity_available`（info：这个 inline 范围能落到唯一一页，改用 `page` 才会存页码）、`span_granularity_ignored`（warn）和 `head_integrity`（warn）不阻塞提案。`head_integrity` 表示工作区里**已有**、且本提案没有碰到的对象本身有问题（`target_id` 是该对象）：它与本提案无关，不要为此修改或重提提案，在交接时告诉用户即可。只有本提案及其依赖的提案新增或修改的对象出错，才会让提案 blocked。诊断里 `local_ref` 指本提案的条目，`target_id` 指地图对象 id。
 
+### 4.2 语义层：共享对象、对齐线、一笔账、约定卡（`mathscape-mcp/17`）
+
+契约见 `docs/semantic-write-contract.md`。语义对象和来源对象一样只进暂存，用户接受后才写入地图；**接受不提升任何可信度**。语义对象全部写在 `proposed_objects` 里，引用本次新建项一律写 `$new:<local_ref>`（不接受裸 `local_ref`），引用已有或其他暂存提案的对象写稳定 id。
+
+| `kind` | 白话 | 用途 |
+| --- | --- | --- |
+| `semantic_entity` | 共享对象（概念星 / 精确说法 / 星区 / 题型） | `semantic_kind` 只能是 `concept`、`declaration`、`theory`、`problem_schema`；除 theory 外都要有 `home_theory`（指向一个 theory） |
+| `alignment` | 对齐线 | 某条来源单元（`source`）说的就是 / 是特例 / 部分重合于某个共享对象（`target`）；至少 1 条 `evidence_spans` |
+| `debt` | 一笔账 | 还欠的证明或检查，挂在对齐线或共享对象上（`attached_to`），写明 `quantifier`（量词）和 `failure_mode`（不还清会坏在哪） |
+| `dialect_scope` | 约定卡 | 一本书 / 一节的编号与叫法约定（`anchor_unit` 是 section 单元，`applies_to: "anchor_subtree"`） |
+
+写法要点：
+
+- **共享对象按 mathlib 的写法**，在 `conventions` 里注明约定（如 `sequence_index_origin`，F₀ = 0），可在 `mathlib_baseline` 里写对应的 mathlib 名称。`mathlib_baseline.status` 只能写 `unchecked`：`confirmed` / `not_found` 只由服务端在用户本机的 mathlib 里查过之后写入。不确定名字时先用 `mathlib.search` 查；查不到就 `decl: null` 并在 `note` 里说明。
+- **关系**只有 11 种：`expresses`、`specializes`、`generalizes`、`instance_of`、`representation_of`、`logically_equivalent`、`definitionally_equivalent`、`exact_realization`、`notation_for`、`overlaps_with`、`incompatible_with`。**没有 `same_as`**（`same_as_forbidden`）。两边不完全一样时写 `overlaps_with` 或 `specializes`，并在 `lost_information` 里写清对不上的部分。
+- **参数对照与数列逐项对照分开写**：`parameter_map` 是“第几条恒等式 / 第几个参数对第几条”（如乙的第 n 条 ＝ 共享的第 n+1 条，`role: statement_parameter`）；`term_index_map` 是数列的项对项（`index_shift: 0` 表示 f_k = F_k，数列没有错开）。向用户解释时不要说“下标平移”“数列错开”。
+- **状态只写到候选为止**：对齐线 `status` 只能是 `unmatched`、`retrieved_candidate`、`context_checked`、`partially_aligned`、`ambiguous`、`disputed`、`incompatible`；`semantically_reviewed` / `accepted` 只能由用户在审核页确认。账的 `status` 只能是 `open`，或在你认为已还清时用 edit 改为 `claimed_paid` 并在 `paid_by` 里引用还清它的对象；`paid` / `waived` 只有用户能设。任何地方都不要写 `trust`（`forbidden_trust_claim`）。
+- **一个提案围绕一个目标**：填 `target_object`（本次某个 `local_ref` 或已有 id），提案里放这个共享对象、它第一次需要的上下文（星区、概念星）、连到它的对齐线和挂在上面的账。
+- **edit 只改白名单字段**（`identity_field_edit`）：共享对象可改名称、白话标签、约定的说明文字（不能改约定的值）、mathlib 基线（仍是 unchecked）、`description`、`uses_entities`；对齐线不能改 `source` / `target`；账不能改 `attached_to` / `debt_kind`；约定卡不能改 `anchor_unit`。要改身份字段就新建对象。
+- **语义对象可以提议退役**：`{ "local_ref": "x", "kind": "alignment", "op": "retire", "target_id": "<id>", "expected_revision": "<rev>" }`。仍需用户接受；挂在被退役对象上的账会自动标为已失效；还有活动对齐线指向的共享对象不能单独退役。
+
+```json
+{ "local_ref": "a.yi.thm", "kind": "alignment", "op": "create",
+  "payload": { "source": "mathscape:source-unit/…", "target": "$new:e.cassini",
+               "relation": "specializes",
+               "source_context": { "dialect_scope": "mathscape:dialect-scope/…" },
+               "target_context": "mathscape:semantic-entity/…",
+               "parameter_map": [ { "source": "n", "target": "n", "role": "statement_parameter",
+                                    "map": "n_共享 = n_乙 + 1" } ],
+               "term_index_map": [ { "source": "f_k", "target": "F_k", "index_shift": 0 } ],
+               "required_assumptions": [ { "text": "f_k = F_k（k ≥ 1）", "debt": "mathscape:debt/…" } ],
+               "lost_information": [ { "short": "缺共享的 n = 1", "claim": "…",
+                                       "direction": "target_has_source_lacks" } ],
+               "evidence_spans": [ "mathscape:source-span/…" ],
+               "status": "retrieved_candidate",
+               "map_label": "特例：乙的第 n 条 ＝ 共享的第 n+1 条" } }
+```
+
+语义层的阻塞码：`kind_not_supported`、`operation_not_supported`、`invalid_arg`、`invalid_relation`、`same_as_forbidden`、`invalid_reference_kind`、`missing_required_field`、`forbidden_trust_claim`、`forbidden_alignment_status`、`forbidden_debt_status`、`forbidden_baseline_status`、`identity_field_edit`、`revision_conflict`、`inactive_or_invalid_reference`，以及 4.1 的引用与依赖码。`relation_detail_missing`、`overlap_scope_missing`、`certificate_debt_suggested`、`dialect_scope_mismatch`、`duplicate_alignment`（warn）和 `uncontextualized`、`inferred_convention`、`mathlib_baseline_unchecked`、`multi_target_change_set`（info）是给用户看的审核项，不阻塞；用户可能在对话里引用它们（「反馈给 agent」），那时读回提案再用 `supersedes` 修订。
+
 如果某阶段所需能力不可用，输出应包含：
 
 ```text
 stage: S2
 status: blocked
 reason: capability_unavailable
-deferred_capability: emir.upsert_dialect_scope
+deferred_capability: emir.upsert_proof_context
 staged_artifact: mathscape:staged-artifact/…（如已暂存）
 ```
 
