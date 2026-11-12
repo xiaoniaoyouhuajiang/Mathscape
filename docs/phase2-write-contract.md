@@ -235,7 +235,7 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
                    "granularity": "inline|block|page",
                    "quote": "Let $G$ be a finite group …" } },
     { "local_ref": "u1", "kind": "source_unit", "op": "create",
-      "payload": { "unit_kind": "theorem", "display_title": "…", "parent": "<id|$new:local_ref>|null",
+      "payload": { "kind": "statement", "display_title": "…", "parent": "<id|$new:local_ref>|null",
                    "source_spans": ["$new:s1", "<已有 span id>"], "completeness": "…" },
       "evidence": [ { "kind": "material_locator", "artifact_id": "…", "locator": { "md_byte_range": {"start":0,"end":10} } } ],
       "debts": [ { "kind": "assumption_debt", "note": "…" } ] },
@@ -283,7 +283,7 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 | `source_unit` / `edit` | ✅ | `EditSourceUnit`（`expected_revision` 必填） |
 | `source_relation` / `create` | ✅ | `CreateSourceRelation` |
 | `source_relation` / `edit` | ✅ | `EditSourceRelation` |
-| 任意 `retire` | ❌ Agent 不可提议退役 | 退役只走 Desktop 手工编辑或 §6.2 |
+| 来源层 `retire` | ❌ Agent 不可提议退役 | 退役只走 Desktop 手工编辑或 §6.2；语义层对象的 retire 见 `docs/semantic-write-contract.md` §S4.4（2026-11-13 用户改定） |
 | `SemanticEntity` / `FormalArtifact` / `Alignment` / 解释 / 证明对象 | ❌ | 后续契约（语义层） |
 | `source_span` / `create` | ✅ [锁定·2026-11-09 用户改定；原口径 ❌，见 §10 待核 1] | 新增 `UserChangeOperation::CreateSourceSpan`（§4.2.5） |
 | `source_span` / `edit` | ❌ | span 是不可变定位；改定位 = 新建 span + 改引用 |
