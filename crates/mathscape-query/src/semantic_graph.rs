@@ -97,7 +97,10 @@ pub fn alignment_plain_label(payload: &Value) -> String {
                 let source = text(entry, "source").unwrap_or("");
                 let target = text(entry, "target").unwrap_or("");
                 let identity = source == target
-                    && (compact == format!("{source}={target}") || compact.is_empty());
+                    && (compact.is_empty()
+                        || ["=", "↦", "→"]
+                            .iter()
+                            .any(|arrow| compact == format!("{source}{arrow}{target}")));
                 (!identity && !map.is_empty()).then(|| map.to_owned())
             })
     };
@@ -527,6 +530,11 @@ mod tests {
         assert_eq!(
             alignment_plain_label(&json!({ "relation": "expresses",
                 "parameter_map": [{ "source": "n", "target": "n", "role": "statement_parameter", "map": "n = n" }] })),
+            "说的就是它"
+        );
+        assert_eq!(
+            alignment_plain_label(&json!({ "relation": "expresses",
+                "parameter_map": [{ "source": "n", "target": "n", "role": "statement_parameter", "map": "n ↦ n" }] })),
             "说的就是它"
         );
         assert_eq!(

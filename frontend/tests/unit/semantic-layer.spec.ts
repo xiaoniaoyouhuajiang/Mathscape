@@ -19,6 +19,8 @@ describe("semantic plain labels", () => {
       .toBe("特例：乙的第 n 条 ＝ 共享的第 n+1 条");
     expect(alignmentPlainLabel({ relation: "expresses", parameter_map: [{ source: "n", target: "n", role: "statement_parameter", map: "n = n" }] }))
       .toBe("说的就是它");
+    expect(alignmentPlainLabel({ relation: "expresses", parameter_map: [{ source: "n", target: "n", role: "statement_parameter", map: "n ↦ n" }] }))
+      .toBe("说的就是它");
     expect(alignmentPlainLabel({ relation: "overlaps_with", lost_information: [{ short: "缺 n = 1" }] })).toBe("部分重合：缺 n = 1");
     for (const relation of ["expresses", "specializes", "generalizes", "instance_of", "overlaps_with", "incompatible_with"]) {
       const label = alignmentPlainLabel({ relation });

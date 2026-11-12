@@ -435,7 +435,9 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 
 ## S11. 夹具与测试 [实现]
 
-`fixtures/emir/fibonacci-two-books/` 是本契约的**示例与测试夹具**：`materials/` 两份虚构教材原文、`objects.json` 6 个 change set、`tutorial-projection.json`（由 `build_tutorial_projection.py` 从 `objects.json` 生成的只读教程投影）。
+`fixtures/emir/fibonacci-two-books/` 是本契约的**示例与测试夹具**：`materials/` 两份虚构教材原文、`objects.json` 6 个 change set、`tutorial-projection.json`（只读教程投影：Desktop 测试 `emir_fixture_accepts_and_learning_view_marks_seen_material` 把 `objects.json` 走一遍真实的暂存 → 接受 → 地图投影后写出；平时逐字比对，过期时用 `MATHSCAPE_UPDATE_TUTORIAL_PROJECTION=1` 重跑该测试）。`build_objects.py` 生成 `objects.json`，`verify_fixtures.py` 做离线核对。
+
+接入的测试：MCP `emir_fixture_change_sets_all_stage_in_order`（6 个 change set 依次全部 staged，地图不变）；Desktop `emir_fixture_accepts_and_learning_view_marks_seen_material`（一次接受、状态与可信度不变、学习视图标签）；vitest `tutorial-projection.spec.ts`（投影里每条对齐线的白话标签与前端模板一致、不出现禁用词）。
 
 | 夹具内容 | 覆盖的契约条款 |
 |---|---|

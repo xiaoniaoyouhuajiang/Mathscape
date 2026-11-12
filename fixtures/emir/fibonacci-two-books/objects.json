@@ -1,0 +1,1518 @@
+{
+  "fixture": "emir-fib-two-books",
+  "fixture_version": "0.3",
+  "label": "示例材料（虚构教材）派生的 EMIR 对象；语义层第一条 PR 的测试与教程夹具",
+  "decisions_applied": {
+    "a": "共享对象写法以 mathlib 为基线，对象上带 conventions 与 mathlib_baseline",
+    "b": "Debt 是地图对象（kind=debt），挂在对齐或实体上，status ∈ open / claimed_paid / paid / waived / obsolete",
+    "c": "最小 DialectScope（kind=dialect_scope）：anchor_unit + conventions"
+  },
+  "investigation_id": "fixture-investigation/emir-fib-two-books",
+  "artifacts": {
+    "jia": {
+      "file": "materials/jia.md",
+      "artifact_id": "mathscape:artifact/sha256/90205fc2022d2be462fd72038b65c039c00348fbad014ebd53f40fc1d11887fc",
+      "role": "canonical Markdown 快照（占位）"
+    },
+    "yi": {
+      "file": "materials/yi.md",
+      "artifact_id": "mathscape:artifact/sha256/2211df1bb1f48a499e18742972cb5bb6d87dc657f11a97cb661eda7ffbd97b66",
+      "role": "canonical Markdown 快照（占位）"
+    }
+  },
+  "id_rules": {
+    "change_set_id": "mathscape:change-set/sha256(investigation_id \\0 request_id)",
+    "new_object": "mathscape:<kind>/sha256(change_set_id \\0 local_ref)",
+    "kinds": {
+      "source_unit": "source-unit",
+      "source_relation": "source-relation",
+      "semantic_entity": "semantic-entity",
+      "alignment": "alignment",
+      "debt": "debt",
+      "dialect_scope": "dialect-scope"
+    },
+    "source_span": "mathscape:source-span/sha256(json([\"markdown-source-span-1\", artifact_id, {start,end}]))",
+    "note": "id 不透明；可读名称只放在 display_title / preferred_labels / plain_label / label 中。"
+  },
+  "trust_policy": {
+    "on_propose": "payload 不写 trust；服务端填默认值 provenance=located, parse=raw, segmentation=proposed, typing=unchecked, proof=none, alignment=candidate, curation=raw",
+    "on_accept": "只写进地图（lifecycle=active）；trust 各轴、Alignment.status、Debt.status 都不变。"
+  },
+  "change_sets": [
+    {
+      "request_id": "fixture-req/src-jia",
+      "change_set_id": "mathscape:change-set/4563b86634871c63671f583a09de07697eb6e3811911bb4b9f23e2dfd6bd75a6",
+      "version": 1,
+      "target_object": "jia.u.sec",
+      "contract_status": "来源项为现行契约 ✅；dialect_scope 为本草案新增 🆕",
+      "rationale": "登记《星港数列讲义》（虚构）§3.2，并记下本节的编号约定（下标从 0 起）。",
+      "proposed_objects": [
+        {
+          "local_ref": "jia.s.sec",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/90205fc2022d2be462fd72038b65c039c00348fbad014ebd53f40fc1d11887fc",
+            "md_byte_range": {
+              "start": 275,
+              "end": 338
+            },
+            "granularity": "inline",
+            "quote": "## 《星港数列讲义》（虚构）§3.2　Fibonacci 数列"
+          }
+        },
+        {
+          "local_ref": "jia.s.def",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/90205fc2022d2be462fd72038b65c039c00348fbad014ebd53f40fc1d11887fc",
+            "md_byte_range": {
+              "start": 379,
+              "end": 603
+            },
+            "granularity": "inline",
+            "quote": "**定义 3.2.1（Fibonacci 数列）**　令 $F_0 = 0$，$F_1 = 1$，并对 $n \\ge 1$ 规定 $F_{n+1} = F_n + F_{n-1}$。数列 $(F_n)_{n \\ge 0}$ 称为 Fibonacci 数列，前几项为 $0, 1, 1, 2, 3, 5, 8, 13, 21, \\dots$。"
+          }
+        },
+        {
+          "local_ref": "jia.s.lem",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/90205fc2022d2be462fd72038b65c039c00348fbad014ebd53f40fc1d11887fc",
+            "md_byte_range": {
+              "start": 644,
+              "end": 817
+            },
+            "granularity": "inline",
+            "quote": "**引理 3.2.2**　记 $Q = \\begin{pmatrix} 1 & 1 \\\\ 1 & 0 \\end{pmatrix}$。对一切 $n \\ge 1$，有 $Q^n = \\begin{pmatrix} F_{n+1} & F_n \\\\ F_n & F_{n-1} \\end{pmatrix}$。"
+          }
+        },
+        {
+          "local_ref": "jia.s.lem_pf",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/90205fc2022d2be462fd72038b65c039c00348fbad014ebd53f40fc1d11887fc",
+            "md_byte_range": {
+              "start": 861,
+              "end": 1083
+            },
+            "granularity": "inline",
+            "quote": "*证明*　对 $n$ 归纳。$n = 1$ 时右端为 $\\begin{pmatrix} F_2 & F_1 \\\\ F_1 & F_0 \\end{pmatrix} = Q$。若结论对 $n$ 成立，则 $Q^{n+1} = Q^n Q$，按定义 3.2.1 逐项相加即得 $n+1$ 的情形。$\\square$"
+          }
+        },
+        {
+          "local_ref": "jia.s.thm",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/90205fc2022d2be462fd72038b65c039c00348fbad014ebd53f40fc1d11887fc",
+            "md_byte_range": {
+              "start": 1124,
+              "end": 1224
+            },
+            "granularity": "inline",
+            "quote": "**定理 3.2.3（Cassini 恒等式）**　对一切 $n \\ge 1$，$F_{n+1}F_{n-1} - F_n^2 = (-1)^n$。"
+          }
+        },
+        {
+          "local_ref": "jia.s.thm_pf",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/90205fc2022d2be462fd72038b65c039c00348fbad014ebd53f40fc1d11887fc",
+            "md_byte_range": {
+              "start": 1268,
+              "end": 1404
+            },
+            "granularity": "inline",
+            "quote": "*证明*　对引理 3.2.2 两端取行列式：左端 $\\det Q^n = (\\det Q)^n = (-1)^n$，右端为 $F_{n+1}F_{n-1} - F_n^2$。$\\square$"
+          }
+        },
+        {
+          "local_ref": "jia.s.rem",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/90205fc2022d2be462fd72038b65c039c00348fbad014ebd53f40fc1d11887fc",
+            "md_byte_range": {
+              "start": 1445,
+              "end": 1595
+            },
+            "granularity": "inline",
+            "quote": "**注 3.2.4**　取 $n = 1$ 得 $F_2F_0 - F_1^2 = -1$。这一情形用到了 $F_0 = 0$；若数列从第 1 项起算，这一情形就无从谈起。"
+          }
+        },
+        {
+          "local_ref": "jia.u.sec",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "section",
+            "display_title": "§3.2 Fibonacci 数列（甲）",
+            "parent": null,
+            "source_spans": [
+              "$new:jia.s.sec"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "jia.u.def",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "definition",
+            "display_title": "定义 3.2.1 Fibonacci 数列（F₀=0, F₁=1）",
+            "parent": "$new:jia.u.sec",
+            "source_spans": [
+              "$new:jia.s.def"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "jia.u.lem",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "statement",
+            "display_title": "引理 3.2.2 Qⁿ 的矩阵形式",
+            "parent": "$new:jia.u.sec",
+            "source_spans": [
+              "$new:jia.s.lem"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "jia.u.lem_pf",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "proof",
+            "display_title": "引理 3.2.2 的证明（归纳）",
+            "parent": "$new:jia.u.sec",
+            "source_spans": [
+              "$new:jia.s.lem_pf"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "jia.u.thm",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "statement",
+            "display_title": "定理 3.2.3 Cassini 恒等式",
+            "parent": "$new:jia.u.sec",
+            "source_spans": [
+              "$new:jia.s.thm"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "jia.u.thm_pf",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "proof",
+            "display_title": "定理 3.2.3 的证明（取行列式）",
+            "parent": "$new:jia.u.sec",
+            "source_spans": [
+              "$new:jia.s.thm_pf"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "jia.u.rem",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "remark",
+            "display_title": "注 3.2.4 n=1 的情形用到 F₀",
+            "parent": "$new:jia.u.sec",
+            "source_spans": [
+              "$new:jia.s.rem"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "ds.jia",
+          "kind": "dialect_scope",
+          "op": "create",
+          "payload": {
+            "label": "《星港》§3.2 的约定",
+            "anchor_unit": "$new:jia.u.sec",
+            "applies_to": "anchor_subtree",
+            "parent_scope": null,
+            "introduced_by_unit": "$new:jia.u.def",
+            "conventions": [
+              {
+                "key": "sequence_index_origin",
+                "subject": "F",
+                "value": 0,
+                "text": "数列 $(F_n)_{n\\ge 0}$，从第 0 项 $F_0=0$ 起编",
+                "explicitness": "explicit",
+                "evidence_spans": [
+                  "$new:jia.s.def"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "proposed_relations": [
+        {
+          "local_ref": "jia.r.lem_proof",
+          "kind": "source_relation",
+          "op": "create",
+          "relation": "proves",
+          "source": "$new:jia.u.lem_pf",
+          "target": "$new:jia.u.lem",
+          "evidence_spans": [
+            "$new:jia.s.lem_pf"
+          ]
+        },
+        {
+          "local_ref": "jia.r.thm_proof",
+          "kind": "source_relation",
+          "op": "create",
+          "relation": "proves",
+          "source": "$new:jia.u.thm_pf",
+          "target": "$new:jia.u.thm",
+          "evidence_spans": [
+            "$new:jia.s.thm_pf"
+          ]
+        },
+        {
+          "local_ref": "jia.r.thm_cites_lem",
+          "kind": "source_relation",
+          "op": "create",
+          "relation": "cites",
+          "source": "$new:jia.u.thm_pf",
+          "target": "$new:jia.u.lem",
+          "evidence_spans": [
+            "$new:jia.s.thm_pf"
+          ]
+        },
+        {
+          "local_ref": "jia.r.rem_explains",
+          "kind": "source_relation",
+          "op": "create",
+          "relation": "explains",
+          "source": "$new:jia.u.rem",
+          "target": "$new:jia.u.thm",
+          "evidence_spans": [
+            "$new:jia.s.rem"
+          ]
+        }
+      ],
+      "unresolved": [],
+      "staged_ids": {
+        "jia.s.sec": "mathscape:source-span/553d76a1f5451bbfefe7c6058004924255a4a843dbad69bef1fb720e6c1adc50",
+        "jia.s.def": "mathscape:source-span/70c9eafe3ca77fb0b7e16829943f1ea7bcb51f4fbc061806058c79c091aea1fe",
+        "jia.s.lem": "mathscape:source-span/db92534778b14199ee064f75d2a82b011523d679165775ac67b7cac1fd9ccc7b",
+        "jia.s.lem_pf": "mathscape:source-span/d573dc22151736c10c1e3b12284cc9c625b4ecdd4b578dd9c313a94c437b0b11",
+        "jia.s.thm": "mathscape:source-span/5c8aff5fbb327cf21af9bbaced625c6e3958ddce33e5e7ca73bbe87fa481d159",
+        "jia.s.thm_pf": "mathscape:source-span/9065f8c865cb96334db0b6ac0a409cc3b1fc6aee9e314825eeed63f5b175821d",
+        "jia.s.rem": "mathscape:source-span/a3f9674e18836d8fee38d4ec35d2201acc8ac2d2d2c9477906ba40d0d79ec72f",
+        "jia.u.sec": "mathscape:source-unit/b7c2df63fe8c084866d2c85eda0e55600ac5b2ff51c69a31e136f432362a1703",
+        "jia.u.def": "mathscape:source-unit/7e90cbafa709585abe944ddfe6dac4d29d87440e850eda606a5a9b5083498912",
+        "jia.u.lem": "mathscape:source-unit/9a4926d85644cd6c1b170c6dba63df6f75f6b36faa6cac95cce79a0ef1b03ce0",
+        "jia.u.lem_pf": "mathscape:source-unit/a69ab2bcabec0ef2400715381f36dfc1063813bb54e6a78e12880d2683e9705a",
+        "jia.u.thm": "mathscape:source-unit/e00b4b1aabe99e7d41eeae922fd099087fefcb91c812d61f1cc84dd8fe346425",
+        "jia.u.thm_pf": "mathscape:source-unit/5570576b650d5a93402525f86852423aed89911fb48137039f9942b435c088da",
+        "jia.u.rem": "mathscape:source-unit/aca60842c2297b63f195a179c26a7e842be296647a9f61c097458853928654d6",
+        "ds.jia": "mathscape:dialect-scope/63a99068f6a786af9923b00ac51198a58f41109b43cb35bf233feb34f65be35b",
+        "jia.r.lem_proof": "mathscape:source-relation/74aeeeb4ad56624f0f9526c3d96f2fdbd75144467b0bec0c62ed922e132d1415",
+        "jia.r.thm_proof": "mathscape:source-relation/8ff056dbc053de2c1d3eec4a13780ef50be8318bee2eeb666cfff2bf207f9b1d",
+        "jia.r.thm_cites_lem": "mathscape:source-relation/2824f40a3c43a88a5cf22e6a8205cf397c6103124e7353d98f07cc837ebb82ec",
+        "jia.r.rem_explains": "mathscape:source-relation/91b89721c003af17e0b9f06908b0d39cf03b104c75abdef73d01aafe84043507"
+      },
+      "depends_on_change_sets": []
+    },
+    {
+      "request_id": "fixture-req/src-yi",
+      "change_set_id": "mathscape:change-set/80d3d86780d5a995946d03f90fec2fac29fa0843f3dc9a724bfeec7ad6ec766b",
+      "version": 1,
+      "target_object": "yi.u.sec",
+      "contract_status": "来源项为现行契约 ✅；dialect_scope 为本草案新增 🆕",
+      "rationale": "登记《灯塔组合数学初步》（虚构）§2.4，并记下本节约定：下标从 1 起、不用第 0 项；“兔子数列”是本书对 Fibonacci 数列的叫法。",
+      "proposed_objects": [
+        {
+          "local_ref": "yi.s.sec",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/2211df1bb1f48a499e18742972cb5bb6d87dc657f11a97cb661eda7ffbd97b66",
+            "md_byte_range": {
+              "start": 280,
+              "end": 345
+            },
+            "granularity": "inline",
+            "quote": "## 《灯塔组合数学初步》（虚构）§2.4　兔子数列"
+          }
+        },
+        {
+          "local_ref": "yi.s.def",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/2211df1bb1f48a499e18742972cb5bb6d87dc657f11a97cb661eda7ffbd97b66",
+            "md_byte_range": {
+              "start": 385,
+              "end": 614
+            },
+            "granularity": "inline",
+            "quote": "**定义 2.4.1**　兔子数列 $(f_n)_{n \\ge 1}$ 由 $f_1 = f_2 = 1$ 及 $f_{n+2} = f_{n+1} + f_n$（$n \\ge 1$）给出，前几项为 $1, 1, 2, 3, 5, 8, 13, 21, \\dots$。本书的下标一律从 1 开始，不使用第 0 项。"
+          }
+        },
+        {
+          "local_ref": "yi.s.lem",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/2211df1bb1f48a499e18742972cb5bb6d87dc657f11a97cb661eda7ffbd97b66",
+            "md_byte_range": {
+              "start": 654,
+              "end": 835
+            },
+            "granularity": "inline",
+            "quote": "**命题 2.4.2**　记 $M = \\begin{pmatrix} 1 & 1 \\\\ 1 & 0 \\end{pmatrix}$。对一切 $n \\ge 1$，有 $M^{n+1} = \\begin{pmatrix} f_{n+2} & f_{n+1} \\\\ f_{n+1} & f_n \\end{pmatrix}$。"
+          }
+        },
+        {
+          "local_ref": "yi.s.thm",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/2211df1bb1f48a499e18742972cb5bb6d87dc657f11a97cb661eda7ffbd97b66",
+            "md_byte_range": {
+              "start": 875,
+              "end": 970
+            },
+            "granularity": "inline",
+            "quote": "**命题 2.4.3（Cassini）**　对一切 $n \\ge 1$，$f_n f_{n+2} - f_{n+1}^2 = (-1)^{n+1}$。"
+          }
+        },
+        {
+          "local_ref": "yi.s.ex",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/2211df1bb1f48a499e18742972cb5bb6d87dc657f11a97cb661eda7ffbd97b66",
+            "md_byte_range": {
+              "start": 1009,
+              "end": 1889
+            },
+            "granularity": "inline",
+            "quote": "**习题 2.4.7（剪拼悖论）**　设 $n \\ge 3$。把边长为 $f_{n+1}$ 的正方形平行于一边分成 $f_{n-1} \\times f_{n+1}$ 和 $f_n \\times f_{n+1}$ 两个长条。前一条沿对角线剪成两个全等的直角三角形，直角边为 $f_{n+1}$ 与 $f_{n-1}$；后一条从一条长边上距端点 $f_n$ 处，剪到对边上距同侧端点 $f_{n-1}$ 处，得到两个全等的直角梯形，两底为 $f_{n-1}$ 与 $f_n$，高为 $f_n$。再把四块拼成一个看上去是 $f_n \\times f_{n+2}$ 的“长方形”。(1) 验证四块面积之和等于 $f_{n+1}^2$；(2) 证明 $f_n f_{n+2} - f_{n+1}^2 = \\pm 1$，并说明：$n$ 为奇数时，四块之间沿对角线留出一条细长的平行四边形缝，面积为 1；$n$ 为偶数时，四块沿对角线互相重叠出一条细长的平行四边形，面积也为 1；(3) 取 $n = 5$，写出具体数字。"
+          }
+        },
+        {
+          "local_ref": "yi.s.hint",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/2211df1bb1f48a499e18742972cb5bb6d87dc657f11a97cb661eda7ffbd97b66",
+            "md_byte_range": {
+              "start": 1930,
+              "end": 1997
+            },
+            "granularity": "inline",
+            "quote": "**提示**　(1) 直接计算面积；(2) 由命题 2.4.3 立得。"
+          }
+        },
+        {
+          "local_ref": "yi.u.sec",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "section",
+            "display_title": "§2.4 兔子数列（乙）",
+            "parent": null,
+            "source_spans": [
+              "$new:yi.s.sec"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "yi.u.def",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "definition",
+            "display_title": "定义 2.4.1 兔子数列（f₁=f₂=1，无第 0 项）",
+            "parent": "$new:yi.u.sec",
+            "source_spans": [
+              "$new:yi.s.def"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "yi.u.lem",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "statement",
+            "display_title": "命题 2.4.2 Mⁿ⁺¹ 的矩阵形式",
+            "parent": "$new:yi.u.sec",
+            "source_spans": [
+              "$new:yi.s.lem"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "yi.u.thm",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "statement",
+            "display_title": "命题 2.4.3 Cassini（乙的写法）",
+            "parent": "$new:yi.u.sec",
+            "source_spans": [
+              "$new:yi.s.thm"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "yi.u.ex",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "problem",
+            "display_title": "习题 2.4.7 剪拼悖论",
+            "parent": "$new:yi.u.sec",
+            "source_spans": [
+              "$new:yi.s.ex"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "yi.u.hint",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "hint",
+            "display_title": "习题 2.4.7 的提示",
+            "parent": "$new:yi.u.sec",
+            "source_spans": [
+              "$new:yi.s.hint"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "ds.yi",
+          "kind": "dialect_scope",
+          "op": "create",
+          "payload": {
+            "label": "《灯塔》§2.4 的约定",
+            "anchor_unit": "$new:yi.u.sec",
+            "applies_to": "anchor_subtree",
+            "parent_scope": null,
+            "introduced_by_unit": "$new:yi.u.def",
+            "conventions": [
+              {
+                "key": "sequence_index_origin",
+                "subject": "f",
+                "value": 1,
+                "text": "本书的下标一律从 1 开始，不使用第 0 项",
+                "explicitness": "explicit",
+                "evidence_spans": [
+                  "$new:yi.s.def"
+                ]
+              },
+              {
+                "key": "terminology",
+                "subject": "兔子数列",
+                "value": "Fibonacci 数列",
+                "text": "本节把 Fibonacci 数列叫作“兔子数列”",
+                "explicitness": "inferred",
+                "evidence_spans": [
+                  "$new:yi.s.def"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "proposed_relations": [
+        {
+          "local_ref": "yi.r.hint",
+          "kind": "source_relation",
+          "op": "create",
+          "relation": "hints",
+          "source": "$new:yi.u.hint",
+          "target": "$new:yi.u.ex",
+          "evidence_spans": [
+            "$new:yi.s.hint"
+          ]
+        },
+        {
+          "local_ref": "yi.r.hint_cites_thm",
+          "kind": "source_relation",
+          "op": "create",
+          "relation": "cites",
+          "source": "$new:yi.u.hint",
+          "target": "$new:yi.u.thm",
+          "evidence_spans": [
+            "$new:yi.s.hint"
+          ]
+        }
+      ],
+      "unresolved": [
+        "命题 2.4.2、2.4.3 在本摘录中没有证明；不补写。"
+      ],
+      "staged_ids": {
+        "yi.s.sec": "mathscape:source-span/bd6029782f0038f955179eec3b7ec4b8d1207269f57ab3b23bdae38d815c4ae1",
+        "yi.s.def": "mathscape:source-span/874619128250365cdddf1175542b9db826f7750e34efb44b13b630f97491b0cf",
+        "yi.s.lem": "mathscape:source-span/55791a062d2ab328dafd75b73a8c6f674fd74669036cfec6a580db99532b0326",
+        "yi.s.thm": "mathscape:source-span/0b54e6354c4300ff3178f4966e16ff0a387dbe69b0f491dd2e5eb0cc87dacd0e",
+        "yi.s.ex": "mathscape:source-span/4e40f60fe8542fc71f0c8bc0905b6b517f72812e39d81cdb2c102565830e060c",
+        "yi.s.hint": "mathscape:source-span/0e777c3f6a8b17e6597762ff590090c81195e8305ee6f65f663222f8edca72f3",
+        "yi.u.sec": "mathscape:source-unit/7c6af5e506c807aa378d5f1164d135d4052ed3e0ecc2563c93b9751066dfc0b0",
+        "yi.u.def": "mathscape:source-unit/5c5d3fe54a646390a021e1b5702d35bbd63fb9d89b31896b4ac6c41fcc7e8263",
+        "yi.u.lem": "mathscape:source-unit/81254a1c3e6bac298d971c3af9e34650975cc3b6fd0c528f9dc5afe34c9bf507",
+        "yi.u.thm": "mathscape:source-unit/00257ea5b7bdea37a3dc89fba21fa2c5870dd15e0d6536c8fbad69e0b138127a",
+        "yi.u.ex": "mathscape:source-unit/f321a99298e4a4c8af5cd05f2414ef30f9db3ed313505281312d3c758eb774bd",
+        "yi.u.hint": "mathscape:source-unit/55125b3f478cff836a15b317d957e35b45cc19f54ebd5f08ae23fffcc0f7a953",
+        "ds.yi": "mathscape:dialect-scope/ac6c7681d99469e264f8644a894ebb2f7de32d356f36dad81f9b721dafd2dbd2",
+        "yi.r.hint": "mathscape:source-relation/526686faf81307a3d7d7d0096375105cdb7f1eddd8fe5bd205be15d1b7abffe3",
+        "yi.r.hint_cites_thm": "mathscape:source-relation/d6732d273d5336f3793f73119c4fbbfa72ba56cb48b68e117a30303f94617498"
+      },
+      "depends_on_change_sets": []
+    },
+    {
+      "request_id": "fixture-req/fib",
+      "change_set_id": "mathscape:change-set/d6a21f3a7dfb916a60010961325c01feb42b3a0f79ea1a3a8ae088101d1d2242",
+      "version": 2,
+      "target_object": "e.fib",
+      "supersedes": {
+        "change_set_id": "mathscape:change-set/d6a21f3a7dfb916a60010961325c01feb42b3a0f79ea1a3a8ae088101d1d2242",
+        "version": 1,
+        "proposal_fingerprint": "sha256:<v1 指纹，由服务端给出>"
+      },
+      "contract_status": "🆕 语义层契约草案",
+      "rationale": "建立“Fibonacci 数列”这颗概念星、它所在的星区和精确定义（写法同 mathlib Nat.fib），并把两本书的定义分别连上。乙的定义只部分重合：它没有第 0 项。",
+      "proposed_objects": [
+        {
+          "local_ref": "e.theory",
+          "kind": "semantic_entity",
+          "op": "create",
+          "payload": {
+            "semantic_kind": "theory",
+            "home_theory": null,
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "整数数列与二阶线性递推（初等）"
+              }
+            ],
+            "plain_label": "星区：线性递推",
+            "conventions": [
+              {
+                "key": "baseline",
+                "subject": "*",
+                "value": "mathlib",
+                "text": "本星区的共享写法以 mathlib 为参照基线",
+                "basis": "mathlib"
+              }
+            ],
+            "mathlib_baseline": null
+          }
+        },
+        {
+          "local_ref": "e.fib",
+          "kind": "semantic_entity",
+          "op": "create",
+          "payload": {
+            "semantic_kind": "concept",
+            "home_theory": "$new:e.theory",
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "Fibonacci 数列"
+              },
+              {
+                "lang": "en",
+                "label": "Fibonacci sequence"
+              }
+            ],
+            "plain_label": "概念星：Fibonacci 数列",
+            "conventions": [],
+            "mathlib_baseline": null,
+            "description": "“每项是前两项之和、以 1, 1 开头”的那一串数这个概念本身；精确写法见 e.fib_def。"
+          }
+        },
+        {
+          "local_ref": "e.fib_def",
+          "kind": "semantic_entity",
+          "op": "create",
+          "payload": {
+            "semantic_kind": "declaration",
+            "home_theory": "$new:e.theory",
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "Fibonacci 数列的定义"
+              }
+            ],
+            "plain_label": "精确说法：Fibonacci 数列（F₀ = 0 起编，同 mathlib）",
+            "conventions": [
+              {
+                "key": "sequence_index_origin",
+                "subject": "F",
+                "value": 0,
+                "text": "F₀ = 0，F₁ = 1，从第 0 项起编（同 mathlib Nat.fib）。采用这一写法只为与基线一致，不表示哪本书更正统。",
+                "basis": "mathlib"
+              }
+            ],
+            "mathlib_baseline": {
+              "decl": "Nat.fib",
+              "module": "Mathlib.Data.Nat.Fib.Basic",
+              "relation_hint": "exact_realization",
+              "note": "mathlib 取值 ℕ，共享对象取值 ℤ（便于写减法），差一个自然数到整数的强制转换",
+              "status": "unchecked"
+            },
+            "declaration": {
+              "declaration_kind": "definition",
+              "binders": [
+                {
+                  "name": "n",
+                  "type": "ℕ",
+                  "role": "index"
+                }
+              ],
+              "assumptions": [],
+              "statement": null,
+              "definiens": {
+                "text": "$F:\\mathbb N\\to\\mathbb Z$，$F_0=0$，$F_1=1$，$F_{n+1}=F_n+F_{n-1}\\ (n\\ge 1)$",
+                "format": "markdown+tex",
+                "evidence_spans": [
+                  "mathscape:source-span/70c9eafe3ca77fb0b7e16829943f1ea7bcb51f4fbc061806058c79c091aea1fe"
+                ]
+              },
+              "uses_entities": [],
+              "concept": "$new:e.fib"
+            }
+          }
+        },
+        {
+          "local_ref": "a.jia.def.fib",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/7e90cbafa709585abe944ddfe6dac4d29d87440e850eda606a5a9b5083498912",
+            "target": "$new:e.fib",
+            "relation": "expresses",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/63a99068f6a786af9923b00ac51198a58f41109b43cb35bf233feb34f65be35b"
+            },
+            "target_context": "$new:e.theory",
+            "parameter_map": [],
+            "term_index_map": [],
+            "required_assumptions": [],
+            "lost_information": [],
+            "evidence_spans": [
+              "mathscape:source-span/70c9eafe3ca77fb0b7e16829943f1ea7bcb51f4fbc061806058c79c091aea1fe"
+            ],
+            "status": "retrieved_candidate",
+            "map_label": "说的就是它",
+            "plain_note": "甲的定义 3.2.1 说的就是这颗概念星。"
+          }
+        },
+        {
+          "local_ref": "a.yi.def.fib",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/5c5d3fe54a646390a021e1b5702d35bbd63fb9d89b31896b4ac6c41fcc7e8263",
+            "target": "$new:e.fib",
+            "relation": "expresses",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/ac6c7681d99469e264f8644a894ebb2f7de32d356f36dad81f9b721dafd2dbd2"
+            },
+            "target_context": "$new:e.theory",
+            "parameter_map": [],
+            "term_index_map": [],
+            "required_assumptions": [],
+            "lost_information": [],
+            "evidence_spans": [
+              "mathscape:source-span/874619128250365cdddf1175542b9db826f7750e34efb44b13b630f97491b0cf"
+            ],
+            "status": "retrieved_candidate",
+            "map_label": "说的就是它",
+            "plain_note": "乙的“兔子数列”也是这颗星：名字不同，概念相同。"
+          }
+        },
+        {
+          "local_ref": "a.jia.def",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/7e90cbafa709585abe944ddfe6dac4d29d87440e850eda606a5a9b5083498912",
+            "target": "$new:e.fib_def",
+            "relation": "expresses",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/63a99068f6a786af9923b00ac51198a58f41109b43cb35bf233feb34f65be35b"
+            },
+            "target_context": "$new:e.theory",
+            "parameter_map": [],
+            "term_index_map": [
+              {
+                "source": "F_k",
+                "target": "F_k",
+                "index_shift": 0,
+                "valid_for": "k ≥ 0",
+                "note": "逐字相同"
+              }
+            ],
+            "required_assumptions": [],
+            "lost_information": [],
+            "evidence_spans": [
+              "mathscape:source-span/70c9eafe3ca77fb0b7e16829943f1ea7bcb51f4fbc061806058c79c091aea1fe"
+            ],
+            "status": "retrieved_candidate",
+            "map_label": "说的就是它",
+            "plain_note": "甲的定义与共享定义逐字一致。"
+          }
+        },
+        {
+          "local_ref": "a.yi.def",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/5c5d3fe54a646390a021e1b5702d35bbd63fb9d89b31896b4ac6c41fcc7e8263",
+            "target": "$new:e.fib_def",
+            "relation": "overlaps_with",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/ac6c7681d99469e264f8644a894ebb2f7de32d356f36dad81f9b721dafd2dbd2"
+            },
+            "target_context": "$new:e.theory",
+            "parameter_map": [],
+            "term_index_map": [
+              {
+                "source": "f_k",
+                "target": "F_k",
+                "index_shift": 0,
+                "valid_for": "k ≥ 1",
+                "note": "数列项下标对齐：乙的第 k 项就是共享的第 k 项（数列本身没有错开）"
+              }
+            ],
+            "required_assumptions": [
+              {
+                "text": "f_k = F_k（k ≥ 1）",
+                "debt": "$new:d.yi.f_eq_F"
+              }
+            ],
+            "lost_information": [
+              {
+                "short": "乙没有第 0 项",
+                "claim": "共享定义含第 0 项 F₀ = 0；乙不使用第 0 项，乙的任何陈述都不能谈论 F₀。",
+                "direction": "target_has_source_lacks"
+              }
+            ],
+            "evidence_spans": [
+              "mathscape:source-span/874619128250365cdddf1175542b9db826f7750e34efb44b13b630f97491b0cf"
+            ],
+            "status": "partially_aligned",
+            "map_label": "部分重合：乙没有第 0 项",
+            "plain_note": "从第 1 项起两边逐项相同；乙没有第 0 项。乙定义的是共享数列在 k ≥ 1 上的部分，不是特例。"
+          }
+        },
+        {
+          "local_ref": "d.yi.f_eq_F",
+          "kind": "debt",
+          "op": "create",
+          "payload": {
+            "debt_kind": "alignment_debt",
+            "attached_to": "$new:a.yi.def",
+            "status": "open",
+            "obligation": "证明 $f_k = F_k$ 对一切 $k\\ge 1$ 成立（两者 k = 1, 2 取值相同、递推相同，对 k 归纳）",
+            "quantifier": "∀ k ≥ 1",
+            "failure_mode": "statement",
+            "failure_note": "若不成立，乙的命题 2.4.2、2.4.3 与习题 2.4.7 三条对齐都不再适用",
+            "evidence_spans": [
+              "mathscape:source-span/874619128250365cdddf1175542b9db826f7750e34efb44b13b630f97491b0cf",
+              "mathscape:source-span/70c9eafe3ca77fb0b7e16829943f1ea7bcb51f4fbc061806058c79c091aea1fe"
+            ]
+          }
+        }
+      ],
+      "proposed_relations": [],
+      "unresolved": [],
+      "staged_ids": {
+        "e.theory": "mathscape:semantic-entity/9c3f43434dee16d9f8459b010b669ea943e2637145de62cb69c77739b00b3e7f",
+        "e.fib": "mathscape:semantic-entity/d98fec4be6e810ba5e65f2be56d477efd14ab0e2539e2d2ff8620879846ca04f",
+        "e.fib_def": "mathscape:semantic-entity/76790a9c75bf603b6418409f7817118a2e55fcee8a6eb73a10bdbb2d9396ce39",
+        "a.jia.def.fib": "mathscape:alignment/9c920b0b0d62ee81b3f453a2bf6f1cf896150cca5e74c5d5b0c96f13f6365404",
+        "a.yi.def.fib": "mathscape:alignment/ed8d1c7027e57f428ce52ab4d83ae3a0fa2b59617d9b8c1a2f07e4cb103e991d",
+        "a.jia.def": "mathscape:alignment/9dc42f1e80d3cb28833868305c07d6a5484b4f1bb17ccf9850cd59951451815d",
+        "a.yi.def": "mathscape:alignment/f9088157a50c619fcdb29b93f679ca35a84ac60674703d0b17fb4c01f9be4207",
+        "d.yi.f_eq_F": "mathscape:debt/108dde31d24f00ae493a3a13fe327f13adc4b598e9f353c6f1d07750f72d1478"
+      },
+      "depends_on_change_sets": [
+        "mathscape:change-set/4563b86634871c63671f583a09de07697eb6e3811911bb4b9f23e2dfd6bd75a6",
+        "mathscape:change-set/80d3d86780d5a995946d03f90fec2fac29fa0843f3dc9a724bfeec7ad6ec766b"
+      ]
+    },
+    {
+      "request_id": "fixture-req/qpow",
+      "change_set_id": "mathscape:change-set/ce74840189c728490dad86f7f326d8ae5c0300ce444ce6c800c11bbfb4594366",
+      "version": 1,
+      "target_object": "e.qpow",
+      "contract_status": "🆕 语义层契约草案",
+      "rationale": "建立共享的矩阵幂公式，并连上甲的引理 3.2.2（说的就是它）和乙的命题 2.4.2（特例：乙的第 n 条 = 共享的第 n+1 条）。",
+      "proposed_objects": [
+        {
+          "local_ref": "e.qpow",
+          "kind": "semantic_entity",
+          "op": "create",
+          "payload": {
+            "semantic_kind": "declaration",
+            "home_theory": "mathscape:semantic-entity/9c3f43434dee16d9f8459b010b669ea943e2637145de62cb69c77739b00b3e7f",
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "Fibonacci 矩阵幂公式"
+              }
+            ],
+            "plain_label": "精确说法：Q 的 n 次方里是三个相邻的 Fibonacci 数（n ≥ 1）",
+            "conventions": [
+              {
+                "key": "sequence_index_origin",
+                "subject": "F",
+                "value": 0,
+                "text": "项下标按 F₀ = 0 约定（同 mathlib）",
+                "basis": "mathlib"
+              }
+            ],
+            "mathlib_baseline": {
+              "decl": null,
+              "module": null,
+              "relation_hint": null,
+              "note": "未在 mathlib 文档中定位到同形引理；名称留空，等本机核对入口或用户补名",
+              "status": "unchecked"
+            },
+            "declaration": {
+              "declaration_kind": "lemma",
+              "binders": [
+                {
+                  "name": "n",
+                  "type": "ℕ",
+                  "role": "universal"
+                }
+              ],
+              "assumptions": [
+                {
+                  "text": "$n\\ge 1$",
+                  "format": "markdown+tex",
+                  "evidence_spans": [
+                    "mathscape:source-span/db92534778b14199ee064f75d2a82b011523d679165775ac67b7cac1fd9ccc7b"
+                  ]
+                }
+              ],
+              "statement": {
+                "text": "$\\begin{pmatrix}1&1\\\\1&0\\end{pmatrix}^n=\\begin{pmatrix}F_{n+1}&F_n\\\\F_n&F_{n-1}\\end{pmatrix}$",
+                "format": "markdown+tex",
+                "evidence_spans": [
+                  "mathscape:source-span/db92534778b14199ee064f75d2a82b011523d679165775ac67b7cac1fd9ccc7b"
+                ]
+              },
+              "definiens": null,
+              "uses_entities": [
+                "mathscape:semantic-entity/76790a9c75bf603b6418409f7817118a2e55fcee8a6eb73a10bdbb2d9396ce39"
+              ]
+            }
+          }
+        },
+        {
+          "local_ref": "a.jia.lem",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/9a4926d85644cd6c1b170c6dba63df6f75f6b36faa6cac95cce79a0ef1b03ce0",
+            "target": "$new:e.qpow",
+            "relation": "expresses",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/63a99068f6a786af9923b00ac51198a58f41109b43cb35bf233feb34f65be35b"
+            },
+            "target_context": "mathscape:semantic-entity/9c3f43434dee16d9f8459b010b669ea943e2637145de62cb69c77739b00b3e7f",
+            "parameter_map": [
+              {
+                "source": "n",
+                "target": "n",
+                "role": "statement_parameter",
+                "map": "n ↦ n",
+                "source_range": "n ≥ 1",
+                "target_range": "n ≥ 1"
+              }
+            ],
+            "term_index_map": [
+              {
+                "source": "F_k",
+                "target": "F_k",
+                "index_shift": 0,
+                "valid_for": "k ≥ 0",
+                "note": "逐字相同"
+              }
+            ],
+            "required_assumptions": [],
+            "lost_information": [],
+            "evidence_spans": [
+              "mathscape:source-span/db92534778b14199ee064f75d2a82b011523d679165775ac67b7cac1fd9ccc7b"
+            ],
+            "status": "retrieved_candidate",
+            "map_label": "说的就是它",
+            "plain_note": ""
+          }
+        },
+        {
+          "local_ref": "a.yi.lem",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/81254a1c3e6bac298d971c3af9e34650975cc3b6fd0c528f9dc5afe34c9bf507",
+            "target": "$new:e.qpow",
+            "relation": "specializes",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/ac6c7681d99469e264f8644a894ebb2f7de32d356f36dad81f9b721dafd2dbd2"
+            },
+            "target_context": "mathscape:semantic-entity/9c3f43434dee16d9f8459b010b669ea943e2637145de62cb69c77739b00b3e7f",
+            "parameter_map": [
+              {
+                "source": "n",
+                "target": "n",
+                "role": "statement_parameter",
+                "map": "乙的第 n 条 ＝ 共享的第 n+1 条",
+                "source_range": "n_乙 ≥ 1",
+                "target_range": "n_共享 ≥ 2",
+                "note": "n_共享 = n_乙 + 1。移动的是命题参数（第几条公式），不是数列：项下标 f_k = F_k 对齐"
+              }
+            ],
+            "term_index_map": [
+              {
+                "source": "f_k",
+                "target": "F_k",
+                "index_shift": 0,
+                "valid_for": "k ≥ 1",
+                "note": "数列项下标对齐：乙的第 k 项就是共享的第 k 项（数列本身没有错开）"
+              }
+            ],
+            "required_assumptions": [
+              {
+                "text": "f_k = F_k（k ≥ 1）",
+                "debt": "mathscape:debt/108dde31d24f00ae493a3a13fe327f13adc4b598e9f353c6f1d07750f72d1478"
+              }
+            ],
+            "lost_information": [
+              {
+                "short": "缺共享的 n = 1",
+                "claim": "共享公式在 n = 1 时 Q¹ = [[F₂, F₁], [F₁, F₀]] 用到 F₀，乙的命题 2.4.2 不覆盖这一条。",
+                "direction": "target_has_source_lacks"
+              }
+            ],
+            "evidence_spans": [
+              "mathscape:source-span/55791a062d2ab328dafd75b73a8c6f674fd74669036cfec6a580db99532b0326"
+            ],
+            "status": "retrieved_candidate",
+            "map_label": "特例：乙的第 n 条 ＝ 共享的第 n+1 条",
+            "plain_note": ""
+          }
+        },
+        {
+          "local_ref": "d.yi.lem.forward",
+          "kind": "debt",
+          "op": "create",
+          "payload": {
+            "debt_kind": "alignment_debt",
+            "attached_to": "$new:a.yi.lem",
+            "status": "open",
+            "obligation": "前向证书：在共享公式中取 n = n_乙 + 1，并用 f_k = F_k 改写，即得乙的命题 2.4.2",
+            "quantifier": "∀ n_乙 ≥ 1",
+            "failure_mode": "statement",
+            "failure_note": "若不成立，这条“特例”对齐作废",
+            "evidence_spans": [
+              "mathscape:source-span/55791a062d2ab328dafd75b73a8c6f674fd74669036cfec6a580db99532b0326",
+              "mathscape:source-span/db92534778b14199ee064f75d2a82b011523d679165775ac67b7cac1fd9ccc7b"
+            ]
+          }
+        }
+      ],
+      "proposed_relations": [],
+      "unresolved": [],
+      "staged_ids": {
+        "e.qpow": "mathscape:semantic-entity/f7ceb67ebabed23b1179356eda6875d2ae90f044a9f9e3b783ffabe73175181e",
+        "a.jia.lem": "mathscape:alignment/fd1cacd0e02c4e45cbd377c9520112c90f8b5e297674097cc09dba5e0552a7d8",
+        "a.yi.lem": "mathscape:alignment/d6c06e509eb454376038f5caf32247f0b733367e0a4f6fd2fa850ffd939926f8",
+        "d.yi.lem.forward": "mathscape:debt/d97bf93a5d30e267f41c6c80df3568d18fa68578f0d26c68b97bff2596e4732b"
+      },
+      "depends_on_change_sets": [
+        "mathscape:change-set/4563b86634871c63671f583a09de07697eb6e3811911bb4b9f23e2dfd6bd75a6",
+        "mathscape:change-set/80d3d86780d5a995946d03f90fec2fac29fa0843f3dc9a724bfeec7ad6ec766b",
+        "mathscape:change-set/d6a21f3a7dfb916a60010961325c01feb42b3a0f79ea1a3a8ae088101d1d2242"
+      ]
+    },
+    {
+      "request_id": "fixture-req/cassini",
+      "change_set_id": "mathscape:change-set/36edb3219128a5d9f4670cef43286decdea190d4c3cc695e90d041ac54708c46",
+      "version": 2,
+      "target_object": "e.cassini",
+      "supersedes": {
+        "change_set_id": "mathscape:change-set/36edb3219128a5d9f4670cef43286decdea190d4c3cc695e90d041ac54708c46",
+        "version": 1,
+        "proposal_fingerprint": "sha256:<v1 指纹，由服务端给出>"
+      },
+      "contract_status": "🆕 语义层契约草案",
+      "rationale": "建立共享 Cassini 恒等式（n ≥ 1，mathlib Int 版本的 n ≥ 1 部分），甲的定理 3.2.3 说的就是它；乙的命题 2.4.3 是特例：乙的第 n 条 = 共享的第 n+1 条，缺共享的 n = 1 那一条（它要用 F₀，即甲的注 3.2.4）。",
+      "proposed_objects": [
+        {
+          "local_ref": "e.cassini",
+          "kind": "semantic_entity",
+          "op": "create",
+          "payload": {
+            "semantic_kind": "declaration",
+            "home_theory": "mathscape:semantic-entity/9c3f43434dee16d9f8459b010b669ea943e2637145de62cb69c77739b00b3e7f",
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "Cassini 恒等式"
+              },
+              {
+                "lang": "en",
+                "label": "Cassini's identity"
+              }
+            ],
+            "plain_label": "精确说法：Cassini 恒等式（对一切 n ≥ 1）",
+            "conventions": [
+              {
+                "key": "sequence_index_origin",
+                "subject": "F",
+                "value": 0,
+                "text": "项下标按 F₀ = 0 约定（同 mathlib）",
+                "basis": "mathlib"
+              }
+            ],
+            "mathlib_baseline": {
+              "decl": "Int.fib_succ_mul_fib_pred_sub_fib_sq",
+              "module": "Mathlib.Data.Int.Fib.Lemmas",
+              "relation_hint": "specializes",
+              "note": "mathlib 版本对一切整数 n 成立（Int.fib 延拓到负下标，右端为 (−1)^|n|）；共享对象取其 n ≥ 1 的部分",
+              "status": "unchecked"
+            },
+            "declaration": {
+              "declaration_kind": "theorem",
+              "binders": [
+                {
+                  "name": "n",
+                  "type": "ℕ",
+                  "role": "universal"
+                }
+              ],
+              "assumptions": [
+                {
+                  "text": "$n\\ge 1$",
+                  "format": "markdown+tex",
+                  "evidence_spans": [
+                    "mathscape:source-span/5c8aff5fbb327cf21af9bbaced625c6e3958ddce33e5e7ca73bbe87fa481d159"
+                  ]
+                }
+              ],
+              "statement": {
+                "text": "$F_{n+1}F_{n-1}-F_n^2=(-1)^n$",
+                "format": "markdown+tex",
+                "evidence_spans": [
+                  "mathscape:source-span/5c8aff5fbb327cf21af9bbaced625c6e3958ddce33e5e7ca73bbe87fa481d159"
+                ],
+                "note": "在 ℤ 中计算"
+              },
+              "definiens": null,
+              "uses_entities": [
+                "mathscape:semantic-entity/76790a9c75bf603b6418409f7817118a2e55fcee8a6eb73a10bdbb2d9396ce39"
+              ]
+            }
+          }
+        },
+        {
+          "local_ref": "a.jia.thm",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/e00b4b1aabe99e7d41eeae922fd099087fefcb91c812d61f1cc84dd8fe346425",
+            "target": "$new:e.cassini",
+            "relation": "expresses",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/63a99068f6a786af9923b00ac51198a58f41109b43cb35bf233feb34f65be35b"
+            },
+            "target_context": "mathscape:semantic-entity/9c3f43434dee16d9f8459b010b669ea943e2637145de62cb69c77739b00b3e7f",
+            "parameter_map": [
+              {
+                "source": "n",
+                "target": "n",
+                "role": "statement_parameter",
+                "map": "n ↦ n",
+                "source_range": "n ≥ 1",
+                "target_range": "n ≥ 1"
+              }
+            ],
+            "term_index_map": [
+              {
+                "source": "F_k",
+                "target": "F_k",
+                "index_shift": 0,
+                "valid_for": "k ≥ 0",
+                "note": "逐字相同"
+              }
+            ],
+            "required_assumptions": [],
+            "lost_information": [],
+            "evidence_spans": [
+              "mathscape:source-span/5c8aff5fbb327cf21af9bbaced625c6e3958ddce33e5e7ca73bbe87fa481d159"
+            ],
+            "status": "retrieved_candidate",
+            "map_label": "说的就是它",
+            "plain_note": ""
+          }
+        },
+        {
+          "local_ref": "a.yi.thm",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/00257ea5b7bdea37a3dc89fba21fa2c5870dd15e0d6536c8fbad69e0b138127a",
+            "target": "$new:e.cassini",
+            "relation": "specializes",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/ac6c7681d99469e264f8644a894ebb2f7de32d356f36dad81f9b721dafd2dbd2"
+            },
+            "target_context": "mathscape:semantic-entity/9c3f43434dee16d9f8459b010b669ea943e2637145de62cb69c77739b00b3e7f",
+            "parameter_map": [
+              {
+                "source": "n",
+                "target": "n",
+                "role": "statement_parameter",
+                "map": "乙的第 n 条 ＝ 共享的第 n+1 条",
+                "source_range": "n_乙 ≥ 1",
+                "target_range": "n_共享 ≥ 2",
+                "note": "移动的是第几条恒等式，不是数列：项下标 f_k = F_k 对齐"
+              }
+            ],
+            "term_index_map": [
+              {
+                "source": "f_k",
+                "target": "F_k",
+                "index_shift": 0,
+                "valid_for": "k ≥ 1",
+                "note": "数列项下标对齐：乙的第 k 项就是共享的第 k 项（数列本身没有错开）"
+              }
+            ],
+            "required_assumptions": [
+              {
+                "text": "f_k = F_k（k ≥ 1）",
+                "debt": "mathscape:debt/108dde31d24f00ae493a3a13fe327f13adc4b598e9f353c6f1d07750f72d1478"
+              }
+            ],
+            "lost_information": [
+              {
+                "short": "缺共享的 n = 1",
+                "claim": "共享 Cassini 在 n = 1 时 F₂F₀ − F₁² = −1（即甲的注 3.2.4）在乙里写不出来，因为乙没有第 0 项。",
+                "direction": "target_has_source_lacks",
+                "see_also": "mathscape:source-unit/aca60842c2297b63f195a179c26a7e842be296647a9f61c097458853928654d6"
+              }
+            ],
+            "evidence_spans": [
+              "mathscape:source-span/0b54e6354c4300ff3178f4966e16ff0a387dbe69b0f491dd2e5eb0cc87dacd0e"
+            ],
+            "status": "retrieved_candidate",
+            "map_label": "特例：乙的第 n 条 ＝ 共享的第 n+1 条",
+            "plain_note": "乙的 Cassini 看上去和甲不一样（乘积的下标、指数都不同），其实乙的第 n 条就是共享的第 n+1 条，只少了共享 n = 1 那一条。"
+          }
+        },
+        {
+          "local_ref": "d.yi.thm.forward",
+          "kind": "debt",
+          "op": "create",
+          "payload": {
+            "debt_kind": "alignment_debt",
+            "attached_to": "$new:a.yi.thm",
+            "status": "open",
+            "obligation": "前向证书：在共享 Cassini 中取 n = n_乙 + 1，得 $F_{n+2}F_n-F_{n+1}^2=(-1)^{n+1}$，再用 $f_k=F_k$ 即得乙的命题 2.4.3",
+            "quantifier": "∀ n_乙 ≥ 1",
+            "failure_mode": "statement",
+            "failure_note": "若不成立，这条“特例”对齐作废",
+            "evidence_spans": [
+              "mathscape:source-span/0b54e6354c4300ff3178f4966e16ff0a387dbe69b0f491dd2e5eb0cc87dacd0e",
+              "mathscape:source-span/5c8aff5fbb327cf21af9bbaced625c6e3958ddce33e5e7ca73bbe87fa481d159"
+            ]
+          }
+        }
+      ],
+      "proposed_relations": [],
+      "unresolved": [],
+      "staged_ids": {
+        "e.cassini": "mathscape:semantic-entity/6ae73220aa2ea946f7bd03cf8d62ebb126612b823383f70675bf17d67ce80477",
+        "a.jia.thm": "mathscape:alignment/1b64ab1af2d447ad61428fdd103dd5bab62957a51fbe11e17b9b09a939d24056",
+        "a.yi.thm": "mathscape:alignment/d1d5ccc5a3b6bc02dc8228ddf8601e8860c2d929f2b200fc1a9114181dd79f76",
+        "d.yi.thm.forward": "mathscape:debt/a5db805815877621f09665edf966f6478f4ae638605f84282c14df7fedbfc657"
+      },
+      "depends_on_change_sets": [
+        "mathscape:change-set/4563b86634871c63671f583a09de07697eb6e3811911bb4b9f23e2dfd6bd75a6",
+        "mathscape:change-set/80d3d86780d5a995946d03f90fec2fac29fa0843f3dc9a724bfeec7ad6ec766b",
+        "mathscape:change-set/d6a21f3a7dfb916a60010961325c01feb42b3a0f79ea1a3a8ae088101d1d2242"
+      ]
+    },
+    {
+      "request_id": "fixture-req/puzzle",
+      "change_set_id": "mathscape:change-set/10adcf2e3e527d51661c59d94c3e1bed518ca7c94fb9539c1616ff8a6341063a",
+      "version": 1,
+      "target_object": "e.puzzle",
+      "contract_status": "🆕 语义层契约草案",
+      "rationale": "建立“64 = 65 剪拼族”题型（参数 k ≥ 4，动画里的 8×8 是 k = 6），连上乙的习题 2.4.7（乙的 n 对应 k = n+1），并把动画第 2 幕的那笔账记为地图上的 Debt。",
+      "proposed_objects": [
+        {
+          "local_ref": "e.puzzle",
+          "kind": "semantic_entity",
+          "op": "create",
+          "payload": {
+            "semantic_kind": "problem_schema",
+            "home_theory": "mathscape:semantic-entity/9c3f43434dee16d9f8459b010b669ea943e2637145de62cb69c77739b00b3e7f",
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "Fibonacci 剪拼悖论（参数化题型）"
+              }
+            ],
+            "plain_label": "题型：64 = 65 这一族剪拼题",
+            "conventions": [
+              {
+                "key": "sequence_index_origin",
+                "subject": "F",
+                "value": 0,
+                "text": "参数 k 是正方形边长 F_k 的项下标，按 F₀ = 0 约定",
+                "basis": "mathlib"
+              }
+            ],
+            "mathlib_baseline": null,
+            "problem_schema": {
+              "parameters": [
+                {
+                  "name": "k",
+                  "type": "ℕ",
+                  "role": "parameter"
+                }
+              ],
+              "assumptions": [
+                {
+                  "text": "$k\\ge 4$",
+                  "format": "markdown+tex",
+                  "evidence_spans": [
+                    "mathscape:source-span/4e40f60fe8542fc71f0c8bc0905b6b517f72812e39d81cdb2c102565830e060c"
+                  ],
+                  "note": "k = 3 时梯形退化为矩形"
+                }
+              ],
+              "task": {
+                "text": "边长 $F_k$ 的正方形平行于一边分成 $F_{k-2}\\times F_k$ 与 $F_{k-1}\\times F_k$ 两个长条：前者沿对角线剪成两个直角三角形（直角边 $F_k, F_{k-2}$），后者从长边上距端点 $F_{k-1}$ 处剪到对边上距同侧端点 $F_{k-2}$ 处，得两个全等直角梯形（两底 $F_{k-2}, F_{k-1}$，高 $F_{k-1}$），拼成看上去是 $F_{k-1}\\times F_{k+1}$ 的图形；说明面积差 $F_{k+1}F_{k-1}-F_k^2=(-1)^k$：$k$ 为偶数时四块之间沿对角线留出一条面积为 1 的细长平行四边形缝，$k$ 为奇数时四块沿对角线重叠出一条面积为 1 的细长平行四边形。",
+                "format": "markdown+tex",
+                "evidence_spans": [
+                  "mathscape:source-span/4e40f60fe8542fc71f0c8bc0905b6b517f72812e39d81cdb2c102565830e060c"
+                ]
+              },
+              "known_instances": [
+                {
+                  "k": 6,
+                  "label": "8×8 → 5×13（引导动画用的那一张）"
+                }
+              ],
+              "uses_entities": [
+                "mathscape:semantic-entity/76790a9c75bf603b6418409f7817118a2e55fcee8a6eb73a10bdbb2d9396ce39",
+                "mathscape:semantic-entity/6ae73220aa2ea946f7bd03cf8d62ebb126612b823383f70675bf17d67ce80477"
+              ]
+            }
+          }
+        },
+        {
+          "local_ref": "a.yi.ex",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/f321a99298e4a4c8af5cd05f2414ef30f9db3ed313505281312d3c758eb774bd",
+            "target": "$new:e.puzzle",
+            "relation": "expresses",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/ac6c7681d99469e264f8644a894ebb2f7de32d356f36dad81f9b721dafd2dbd2"
+            },
+            "target_context": "mathscape:semantic-entity/9c3f43434dee16d9f8459b010b669ea943e2637145de62cb69c77739b00b3e7f",
+            "parameter_map": [
+              {
+                "source": "n",
+                "target": "k",
+                "role": "problem_parameter",
+                "map": "乙的 n 对应题型的 k = n+1",
+                "source_range": "n ≥ 3",
+                "target_range": "k ≥ 4",
+                "note": "k = n + 1。正方形边长 f_{n+1} = F_{n+1} = F_k；数列项下标不变"
+              }
+            ],
+            "term_index_map": [
+              {
+                "source": "f_k",
+                "target": "F_k",
+                "index_shift": 0,
+                "valid_for": "k ≥ 1",
+                "note": "数列项下标对齐：乙的第 k 项就是共享的第 k 项（数列本身没有错开）"
+              }
+            ],
+            "required_assumptions": [
+              {
+                "text": "f_k = F_k（k ≥ 1）",
+                "debt": "mathscape:debt/108dde31d24f00ae493a3a13fe327f13adc4b598e9f353c6f1d07750f72d1478"
+              }
+            ],
+            "lost_information": [],
+            "evidence_spans": [
+              "mathscape:source-span/4e40f60fe8542fc71f0c8bc0905b6b517f72812e39d81cdb2c102565830e060c"
+            ],
+            "status": "retrieved_candidate",
+            "map_label": "说的就是它：乙的 n 对应题型的 k = n+1",
+            "plain_note": "乙的习题 2.4.7 就是这一族题：乙写 n = 5 的那一张，在题型里是 k = 6，也就是动画里的 8×8。"
+          }
+        },
+        {
+          "local_ref": "d.puzzle.all_k",
+          "kind": "debt",
+          "op": "create",
+          "payload": {
+            "debt_kind": "proof_debt",
+            "attached_to": "$new:e.puzzle",
+            "status": "open",
+            "obligation": "对一切 $k\\ge 4$，面积差恰为 $\\pm 1$，即 $F_{k+1}F_{k-1}-F_k^2=(-1)^k$",
+            "quantifier": "∀ k ≥ 4",
+            "failure_mode": "statement",
+            "failure_note": "不还清，就只剩 k = 6 一个个例",
+            "evidence_spans": [
+              "mathscape:source-span/4e40f60fe8542fc71f0c8bc0905b6b517f72812e39d81cdb2c102565830e060c"
+            ],
+            "payoff_hint": "引导动画第 2 幕开出、第 4 幕由 det→Cassini 还清的那笔账。第一条 PR 没有 D 对象：Agent 可把状态提议为 claimed_paid 并以 e.cassini 为证据，paid 须用户在审核页确认。"
+          }
+        }
+      ],
+      "proposed_relations": [],
+      "unresolved": [],
+      "staged_ids": {
+        "e.puzzle": "mathscape:semantic-entity/eb90fd6aec1ac729bb9eeb291e6adb3226f052fc19ed5aef6c785df561dc25a1",
+        "a.yi.ex": "mathscape:alignment/01e95e05284cb2a8514235d51e8fe4d1e0aaf968e2e704751f71b2ad94377736",
+        "d.puzzle.all_k": "mathscape:debt/07b714050f6baefbb8cb07d30dcd139c1d00bdbe9ba63f0adb65f26e6f0de2ca"
+      },
+      "depends_on_change_sets": [
+        "mathscape:change-set/36edb3219128a5d9f4670cef43286decdea190d4c3cc695e90d041ac54708c46",
+        "mathscape:change-set/80d3d86780d5a995946d03f90fec2fac29fa0843f3dc9a724bfeec7ad6ec766b",
+        "mathscape:change-set/d6a21f3a7dfb916a60010961325c01feb42b3a0f79ea1a3a8ae088101d1d2242"
+      ]
+    }
+  ],
+  "revision_history": [
+    {
+      "change_set_id": "mathscape:change-set/d6a21f3a7dfb916a60010961325c01feb42b3a0f79ea1a3a8ae088101d1d2242",
+      "version": 1,
+      "state_after_v2": "superseded",
+      "summary": "v1 把乙的定义写成 definitionally_equivalent。用户在对话里指出“乙没有第 0 项”，双方同意后 Agent 用 supersedes 提交 v2。",
+      "diff_v1_to_v2": [
+        {
+          "local_ref": "a.yi.def",
+          "v1": {
+            "relation": "definitionally_equivalent",
+            "lost_information": []
+          },
+          "v2": {
+            "relation": "overlaps_with",
+            "lost_information": [
+              "共享定义含第 0 项 F₀ = 0；乙不使用第 0 项，乙的任何陈述都不能谈论 F₀。"
+            ],
+            "status": "partially_aligned"
+          },
+          "why": "定义等价要求两边定义出同一个对象；共享定义在 n = 0 有值，乙没有。"
+        }
+      ],
+      "dependents_note": "cs.qpow / cs.cassini / cs.puzzle 在 v2 之后才提交，所以没有触发 dependency_superseded。"
+    },
+    {
+      "change_set_id": "mathscape:change-set/36edb3219128a5d9f4670cef43286decdea190d4c3cc695e90d041ac54708c46",
+      "version": 1,
+      "state_after_v2": "superseded",
+      "summary": "v1 把乙的 Cassini 写成 logically_equivalent；用户反馈后改为 specializes。",
+      "diff_v1_to_v2": [
+        {
+          "local_ref": "a.yi.thm",
+          "v1": {
+            "relation": "logically_equivalent",
+            "map_label": "说的就是它"
+          },
+          "v2": {
+            "relation": "specializes",
+            "map_label": "特例：乙的第 n 条 ＝ 共享的第 n+1 条"
+          },
+          "why": "乙的陈述只推出共享陈述 n ≥ 2 的部分，推不出 n = 1。"
+        }
+      ],
+      "id_note": "local_ref 不变，v1、v2 中这条对齐的 staged id 相同。"
+    }
+  ],
+  "map_debts": [
+    {
+      "local_ref": "d.yi.f_eq_F",
+      "id": "mathscape:debt/108dde31d24f00ae493a3a13fe327f13adc4b598e9f353c6f1d07750f72d1478",
+      "change_set_id": "mathscape:change-set/d6a21f3a7dfb916a60010961325c01feb42b3a0f79ea1a3a8ae088101d1d2242",
+      "debt_kind": "alignment_debt",
+      "attached_to": "$new:a.yi.def",
+      "status": "open",
+      "obligation": "证明 $f_k = F_k$ 对一切 $k\\ge 1$ 成立（两者 k = 1, 2 取值相同、递推相同，对 k 归纳）"
+    },
+    {
+      "local_ref": "d.yi.lem.forward",
+      "id": "mathscape:debt/d97bf93a5d30e267f41c6c80df3568d18fa68578f0d26c68b97bff2596e4732b",
+      "change_set_id": "mathscape:change-set/ce74840189c728490dad86f7f326d8ae5c0300ce444ce6c800c11bbfb4594366",
+      "debt_kind": "alignment_debt",
+      "attached_to": "$new:a.yi.lem",
+      "status": "open",
+      "obligation": "前向证书：在共享公式中取 n = n_乙 + 1，并用 f_k = F_k 改写，即得乙的命题 2.4.2"
+    },
+    {
+      "local_ref": "d.yi.thm.forward",
+      "id": "mathscape:debt/a5db805815877621f09665edf966f6478f4ae638605f84282c14df7fedbfc657",
+      "change_set_id": "mathscape:change-set/36edb3219128a5d9f4670cef43286decdea190d4c3cc695e90d041ac54708c46",
+      "debt_kind": "alignment_debt",
+      "attached_to": "$new:a.yi.thm",
+      "status": "open",
+      "obligation": "前向证书：在共享 Cassini 中取 n = n_乙 + 1，得 $F_{n+2}F_n-F_{n+1}^2=(-1)^{n+1}$，再用 $f_k=F_k$ 即得乙的命题 2.4.3"
+    },
+    {
+      "local_ref": "d.puzzle.all_k",
+      "id": "mathscape:debt/07b714050f6baefbb8cb07d30dcd139c1d00bdbe9ba63f0adb65f26e6f0de2ca",
+      "change_set_id": "mathscape:change-set/10adcf2e3e527d51661c59d94c3e1bed518ca7c94fb9539c1616ff8a6341063a",
+      "debt_kind": "proof_debt",
+      "attached_to": "$new:e.puzzle",
+      "status": "open",
+      "obligation": "对一切 $k\\ge 4$，面积差恰为 $\\pm 1$，即 $F_{k+1}F_{k-1}-F_k^2=(-1)^k$"
+    }
+  ],
+  "beyond_current_contract": [
+    "kind = semantic_entity / alignment / debt / dialect_scope 的 proposed_objects（现行 §4.2.3 为 ❌，见 docs/semantic-write-contract.md §S4）",
+    "来源 change set 中附带的 dialect_scope",
+    "plain_label / plain_note / map_label（白话展示字段；map_label 以前端模板为准，夹具里预先算出供测试）",
+    "depends_on_change_sets 为派生字段，服务端自行计算，不由 Agent 提交"
+  ]
+}

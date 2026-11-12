@@ -1,0 +1,29 @@
+> **示例材料（虚构教材）**：本段为 Mathscape 教程与测试夹具自行编写。书名《星港数列讲义》、章节号均为虚构，不摘录、不模仿任何真实教材。数学内容已由 `verify_fixtures.py` 数值核对。
+
+<!-- span:jia.s.sec -->
+## 《星港数列讲义》（虚构）§3.2　Fibonacci 数列
+<!-- /span -->
+
+<!-- span:jia.s.def -->
+**定义 3.2.1（Fibonacci 数列）**　令 $F_0 = 0$，$F_1 = 1$，并对 $n \ge 1$ 规定 $F_{n+1} = F_n + F_{n-1}$。数列 $(F_n)_{n \ge 0}$ 称为 Fibonacci 数列，前几项为 $0, 1, 1, 2, 3, 5, 8, 13, 21, \dots$。
+<!-- /span -->
+
+<!-- span:jia.s.lem -->
+**引理 3.2.2**　记 $Q = \begin{pmatrix} 1 & 1 \\ 1 & 0 \end{pmatrix}$。对一切 $n \ge 1$，有 $Q^n = \begin{pmatrix} F_{n+1} & F_n \\ F_n & F_{n-1} \end{pmatrix}$。
+<!-- /span -->
+
+<!-- span:jia.s.lem_pf -->
+*证明*　对 $n$ 归纳。$n = 1$ 时右端为 $\begin{pmatrix} F_2 & F_1 \\ F_1 & F_0 \end{pmatrix} = Q$。若结论对 $n$ 成立，则 $Q^{n+1} = Q^n Q$，按定义 3.2.1 逐项相加即得 $n+1$ 的情形。$\square$
+<!-- /span -->
+
+<!-- span:jia.s.thm -->
+**定理 3.2.3（Cassini 恒等式）**　对一切 $n \ge 1$，$F_{n+1}F_{n-1} - F_n^2 = (-1)^n$。
+<!-- /span -->
+
+<!-- span:jia.s.thm_pf -->
+*证明*　对引理 3.2.2 两端取行列式：左端 $\det Q^n = (\det Q)^n = (-1)^n$，右端为 $F_{n+1}F_{n-1} - F_n^2$。$\square$
+<!-- /span -->
+
+<!-- span:jia.s.rem -->
+**注 3.2.4**　取 $n = 1$ 得 $F_2F_0 - F_1^2 = -1$。这一情形用到了 $F_0 = 0$；若数列从第 1 项起算，这一情形就无从谈起。
+<!-- /span -->

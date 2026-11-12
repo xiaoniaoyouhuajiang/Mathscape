@@ -2327,4 +2327,192 @@ mod tests {
             "obsolete"
         );
     }
+
+    fn remap_ids(value: &mut Value, ids: &std::collections::BTreeMap<String, String>) {
+        match value {
+            Value::String(text) => {
+                if let Some(actual) = ids.get(text.as_str()) {
+                    *text = actual.clone();
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| remap_ids(item, ids)),
+            Value::Object(map) => map.values_mut().for_each(|item| remap_ids(item, ids)),
+            _ => {}
+        }
+    }
+
+    /// 夹具 fixtures/emir/fibonacci-two-books（契约 S11）：6 个 change set
+    /// 依次暂存、一次接受，学习视图给出「别的材料里见过」/「新的」/「新约定」，
+    /// 接受后对齐状态、账的状态和可信度都原样不动。
+    #[test]
+    fn emir_fixture_accepts_and_learning_view_marks_seen_material() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/emir/fibonacci-two-books");
+        let objects: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("objects.json")).unwrap()).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("ws");
+        let mut pool = ArtifactPool::create(&root).unwrap();
+        let mut artifact = std::collections::BTreeMap::new();
+        for (key, entry) in objects["artifacts"].as_object().unwrap() {
+            let bytes = std::fs::read(dir.join(entry["file"].as_str().unwrap())).unwrap();
+            let metadata = ArtifactMetadata::new(
+                None,
+                MediaType::parse("text/markdown").unwrap(),
+                Some(format!("{key}.md")),
+                None,
+                RightsRecord::new(RightsStatus::NotAssessed, vec![], None).unwrap(),
+            );
+            let id = pool
+                .import_bytes(&bytes, metadata, ActorRef::parse("test").unwrap())
+                .unwrap()
+                .stable_id()
+                .to_string();
+            assert_eq!(id, entry["artifact_id"]);
+            artifact.insert(key.clone(), id);
+        }
+        drop(pool);
+        let fx = Fx {
+            _dir: temp,
+            root,
+            md: artifact["jia"].clone(),
+        };
+
+        let mut ids = std::collections::BTreeMap::new();
+        let mut selections = Vec::new();
+        for change_set in objects["change_sets"].as_array().unwrap() {
+            let mut body = json!({
+                "request_id": change_set["request_id"],
+                "rationale": change_set["rationale"],
+                "target_object": change_set["target_object"],
+                "proposed_objects": change_set["proposed_objects"],
+                "proposed_relations": change_set["proposed_relations"],
+            });
+            remap_ids(&mut body, &ids);
+            let result = propose(&fx, body);
+            assert_eq!(result["status"], "staged", "{result}");
+            for (local, fixture_id) in change_set["staged_ids"].as_object().unwrap() {
+                ids.insert(
+                    fixture_id.as_str().unwrap().to_owned(),
+                    staged_id(&result, local),
+                );
+            }
+            selections.push(sel(&result));
+        }
+        accept(&fx, selections).unwrap();
+        assert_eq!(commit_count(&fx), 1);
+
+        let actual = |local: &str| -> String {
+            let fixture_id = objects["change_sets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find_map(|cs| cs["staged_ids"][local].as_str())
+                .unwrap();
+            ids[fixture_id].clone()
+        };
+        // 接受只写入地图：Agent 写的状态与可信度原样保留。
+        let yi_def = semantic_payload(&fx, &actual("a.yi.def"));
+        assert_eq!(yi_def["lifecycle"], "active");
+        assert_eq!(yi_def["payload"]["relation"], "overlaps_with");
+        assert_eq!(yi_def["payload"]["trust"]["curation"], "raw");
+        assert_eq!(yi_def["payload"]["trust"]["proof"], "none");
+        let debt = semantic_payload(&fx, &actual("d.yi.f_eq_F"));
+        assert_eq!(debt["payload"]["status"], "open");
+        let cassini = semantic_payload(&fx, &actual("e.cassini"));
+        assert_eq!(
+            cassini["payload"]["mathlib_baseline"]["status"],
+            "unchecked"
+        );
+
+        let snapshot = open_store(&fx.root).unwrap().map_edit_snapshot().unwrap();
+        let view = mathscape_orchestrator::semantic_view::learning_view(&snapshot);
+        let material = |key: &str| {
+            view.materials
+                .iter()
+                .find(|m| m.artifact_id == artifact[key])
+                .unwrap_or_else(|| panic!("{key} missing: {view:?}"))
+        };
+        let yi = material("yi");
+        let label_of = |entity: &str| -> Vec<&str> {
+            let id = actual(entity);
+            yi.units
+                .iter()
+                .filter(|u| u.entity_id == id)
+                .map(|u| u.label.as_str())
+                .collect()
+        };
+        // 乙的 Cassini 在甲里也对齐到同一个共享对象 → 见过；剪拼题只有乙有 → 新的。
+        assert_eq!(label_of("e.cassini"), ["别的材料里见过"], "{yi:?}");
+        assert_eq!(label_of("e.puzzle"), ["新的"], "{yi:?}");
+        let cassini_unit = yi
+            .units
+            .iter()
+            .find(|u| u.entity_id == actual("e.cassini"))
+            .unwrap();
+        assert_eq!(cassini_unit.seen_in, vec![artifact["jia"].clone()]);
+        assert!(!cassini_unit.only_differs_by.is_empty(), "{cassini_unit:?}");
+        assert!(
+            yi.new_conventions.iter().any(|c| c.text.contains('1')),
+            "{yi:?}"
+        );
+        assert!(!yi.open_debts.is_empty());
+        assert!(material("jia").units.iter().all(|u| !u.label.is_empty()));
+
+        // 只读教程投影：由同一条真实路径（暂存 → 接受 → 地图投影）生成。
+        // MATHSCAPE_UPDATE_TUTORIAL_PROJECTION=1 时重写文件，否则逐字比对。
+        let graph = serde_json::to_value(
+            crate::DesktopService::open(&fx.root)
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .landscape_graph,
+        )
+        .unwrap();
+        let mut refs = serde_json::Map::new();
+        let mut payloads = serde_json::Map::new();
+        for change_set in objects["change_sets"].as_array().unwrap() {
+            for (local, fixture_id) in change_set["staged_ids"].as_object().unwrap() {
+                let id = ids[fixture_id.as_str().unwrap()].clone();
+                let object = semantic_payload(&fx, &id);
+                let proposed = change_set["proposed_objects"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|o| o["local_ref"] == local.as_str())
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let mut entry =
+                    json!({ "id": id, "kind": proposed["kind"], "payload": object["payload"] });
+                // 原文片段在地图里只存字节范围；教程卡片要显示原文，附上提案里的 quote。
+                if let Some(quote) = proposed["payload"]["quote"].as_str() {
+                    entry["quote"] = json!(quote);
+                }
+                payloads.insert(local.clone(), entry);
+                refs.insert(local.clone(), json!(id));
+            }
+        }
+        let projection = json!({
+            "schema": "mathscape.tutorial-projection.v1",
+            "label": "示例材料（虚构教材）",
+            "note": "只读教程投影：由 objects.json 经真实的暂存、接受与地图投影生成（apps/mathscape-desktop 测试 emir_fixture_accepts_and_learning_view_marks_seen_material）。教程只读这个文件，不调用 propose_changes，不写任何工作区。",
+            "fixture_version": objects["fixture_version"],
+            "artifacts": artifact,
+            "refs": refs,
+            "objects": payloads,
+            "graph": graph,
+            "learning": serde_json::to_value(&view).unwrap(),
+        });
+        let text = serde_json::to_string_pretty(&projection).unwrap() + "\n";
+        let path = dir.join("tutorial-projection.json");
+        if std::env::var_os("MATHSCAPE_UPDATE_TUTORIAL_PROJECTION").is_some() {
+            std::fs::write(&path, &text).unwrap();
+        } else {
+            let current = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(
+                current == text,
+                "tutorial-projection.json 过期：用 MATHSCAPE_UPDATE_TUTORIAL_PROJECTION=1 重跑本测试"
+            );
+        }
+    }
 }

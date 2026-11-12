@@ -79,7 +79,7 @@ export function alignmentPlainLabel(payload: Json): string {
       const map = (str(entry.map) ?? "").trim();
       const source = str(entry.source) ?? "", target = str(entry.target) ?? "";
       const compact = map.replace(/\s+/g, "");
-      const identity = source === target && (compact === `${source}=${target}` || compact === "");
+      const identity = source === target && (compact === "" || ["=", "↦", "→"].some(arrow => compact === `${source}${arrow}${target}`));
       if (!identity && map) return map;
     }
     return null;

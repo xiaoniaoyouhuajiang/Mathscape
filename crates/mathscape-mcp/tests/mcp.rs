@@ -2912,3 +2912,112 @@ fn semantic_layer_proposals_block_with_contract_codes() {
         );
     }
 }
+
+// ------------------------------------------------ EMIR fixture (S11)
+
+fn emir_fixture_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/emir/fibonacci-two-books")
+}
+
+/// Rewrites every fixture-computed id the earlier change sets staged into
+/// the id this workspace actually staged (the fixture ids are derived from
+/// the fixture's own investigation id).
+fn remap_ids(value: &mut Value, ids: &std::collections::BTreeMap<String, String>) {
+    match value {
+        Value::String(text) => {
+            if let Some(actual) = ids.get(text.as_str()) {
+                *text = actual.clone();
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|item| remap_ids(item, ids)),
+        Value::Object(map) => map.values_mut().for_each(|item| remap_ids(item, ids)),
+        _ => {}
+    }
+}
+
+#[test]
+fn emir_fixture_change_sets_all_stage_in_order() {
+    let dir = emir_fixture_dir();
+    let objects: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("objects.json")).unwrap()).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("ws");
+    let mut pool = ArtifactPool::create(&root).unwrap();
+    for (key, artifact) in objects["artifacts"].as_object().unwrap() {
+        let file = artifact["file"].as_str().unwrap();
+        let bytes = std::fs::read(dir.join(file)).unwrap();
+        let id = import(
+            &mut pool,
+            bytes,
+            "text/markdown",
+            &format!("{key}.md"),
+            None,
+        );
+        assert_eq!(
+            id, artifact["artifact_id"],
+            "content-addressed artifact id of {file}"
+        );
+    }
+    drop(pool);
+    let workspace = McpWorkspace::open(&root)
+        .unwrap()
+        .with_round(Some("placeholder".into()))
+        .with_capability_runner(Box::new(NothingInstalled));
+    let server = McpServer::new(workspace);
+    let initial_objects = map_object_count(&root);
+
+    let mut ids = std::collections::BTreeMap::new();
+    let mut targets = Vec::new();
+    for change_set in objects["change_sets"].as_array().unwrap() {
+        let mut proposed = change_set["proposed_objects"].clone();
+        remap_ids(&mut proposed, &ids);
+        let mut relations = change_set["proposed_relations"].clone();
+        remap_ids(&mut relations, &ids);
+        let (result, is_error) = call(
+            &server,
+            "propose_changes",
+            json!({
+                "request_id": change_set["request_id"],
+                "rationale": change_set["rationale"],
+                "target_object": change_set["target_object"],
+                "proposed_objects": proposed,
+                "proposed_relations": relations,
+            }),
+        );
+        assert!(!is_error, "{}: {result}", change_set["request_id"]);
+        assert_eq!(
+            result["status"], "staged",
+            "{}: {result}",
+            change_set["request_id"]
+        );
+        assert!(
+            !codes(&result)
+                .iter()
+                .any(|code| code == "same_as_forbidden"),
+            "{result}"
+        );
+        let expected = change_set["staged_ids"].as_object().unwrap();
+        for (local_ref, fixture_id) in expected {
+            let actual = result["staged_ids"][local_ref]
+                .as_str()
+                .unwrap_or_else(|| panic!("{local_ref} not staged: {result}"));
+            let prefix = fixture_id.as_str().unwrap().rsplit_once('/').unwrap().0;
+            assert!(actual.starts_with(prefix), "{local_ref}: {actual}");
+            ids.insert(fixture_id.as_str().unwrap().to_owned(), actual.to_owned());
+        }
+        targets.push(change_set["target_object"].as_str().unwrap().to_owned());
+    }
+    assert_eq!(
+        targets,
+        [
+            "jia.u.sec",
+            "yi.u.sec",
+            "e.fib",
+            "e.qpow",
+            "e.cassini",
+            "e.puzzle"
+        ]
+    );
+    // Staging never touches the accepted map.
+    assert_eq!(map_object_count(&root), initial_objects);
+}
