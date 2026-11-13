@@ -1,5 +1,5 @@
 //! 语义层在来源图上的投影：共享对象、约定卡、一笔账是节点；对齐线、
-//! “属于星区”、“挂账”、“约定适用于”是关系。
+//! “属于理论”、“挂账”、“约定适用于”是关系。
 //!
 //! 只读投影：文字全部来自已接受的地图对象，不推断、不提升可信度。
 
@@ -17,9 +17,9 @@ use crate::source_graph::{SourceGraphProjectionError, object_payload, synthetic_
 
 pub fn semantic_kind_label(kind: &str) -> &'static str {
     match kind {
-        "concept" => "概念星",
+        "concept" => "概念",
         "declaration" => "精确说法",
-        "theory" => "星区",
+        "theory" => "理论",
         "problem_schema" => "题型",
         _ => "共享对象",
     }
@@ -355,8 +355,8 @@ pub(crate) fn project_semantic_layer(
                 "in-theory",
                 EntityKind::SemanticEntity,
                 ProjectionRelationKind::InTheory,
-                "属于星区",
-                "共享对象所在的星区".to_owned(),
+                "属于理论",
+                "共享对象所在的理论".to_owned(),
                 (&object.stable_id, "member"),
                 (&theory, "theory"),
                 object.lifecycle,
@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(fib.label(), "斐波那契数");
         assert_eq!(
             fib.summary_ref(),
-            Some("概念星 · mathlib：Nat.fib（已在本机 mathlib 中找到）")
+            Some("概念 · mathlib：Nat.fib（已在本机 mathlib 中找到）")
         );
         let kinds: Vec<ProjectionRelationKind> = projection
             .relations()

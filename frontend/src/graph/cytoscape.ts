@@ -332,7 +332,7 @@ function contractionClass(domainKind: string | null): string {
   return domainKind === FOCUS_CONTRACTION_KIND ? " contracted-edge" : "";
 }
 
-/** 语义层的连线样式：对齐线、挂账、星区 / 约定卡连接。 */
+/** 语义层的连线样式：对齐线、挂账、理论 / 约定卡连接。 */
 export function semanticLayerClass(domainKind: string | null): string {
   switch (domainKind) {
     case "Alignment":

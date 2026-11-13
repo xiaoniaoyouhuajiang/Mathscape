@@ -8,7 +8,7 @@ const lookup = (table: Record<string, string>, fallback: string) => (value: stri
   (value && table[value]) || fallback;
 
 export const semanticKindLabel = lookup({
-  concept: "概念星", declaration: "精确说法", theory: "星区", problem_schema: "题型",
+  concept: "概念", declaration: "精确说法", theory: "理论", problem_schema: "题型",
 }, "共享对象");
 
 export const relationLabel = lookup({

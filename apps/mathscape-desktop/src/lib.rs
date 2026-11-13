@@ -5,6 +5,7 @@ mod change_sets;
 mod content;
 mod discovery;
 mod discovery_view;
+mod external_link;
 mod ink;
 mod ink_lan;
 mod ink_link;
@@ -1120,6 +1121,7 @@ pub fn run() {
             map_edit::recheck_mathlib_baselines,
             semantic::get_semantic_object,
             semantic::semantic_learning_view,
+            external_link::open_external_link,
             get_desktop_snapshot,
             choose_and_import_pdf,
             get_active_parse,

@@ -2359,7 +2359,10 @@ mod tests {
             let metadata = ArtifactMetadata::new(
                 None,
                 MediaType::parse("text/markdown").unwrap(),
-                Some(format!("{key}.md")),
+                std::path::Path::new(entry["file"].as_str().unwrap())
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_owned),
                 None,
                 RightsRecord::new(RightsStatus::NotAssessed, vec![], None).unwrap(),
             );
@@ -2442,7 +2445,7 @@ mod tests {
                 .map(|u| u.label.as_str())
                 .collect()
         };
-        // 乙的 Cassini 在甲里也对齐到同一个共享对象 → 见过；剪拼题只有乙有 → 新的。
+        // 灯塔的 Cassini 在星港里也对齐到同一个共享对象 → 见过；剪拼题只有灯塔有 → 新的。
         assert_eq!(label_of("e.cassini"), ["别的材料里见过"], "{yi:?}");
         assert_eq!(label_of("e.puzzle"), ["新的"], "{yi:?}");
         let cassini_unit = yi
@@ -2494,7 +2497,7 @@ mod tests {
         }
         let projection = json!({
             "schema": "mathscape.tutorial-projection.v1",
-            "label": "示例材料（虚构教材）",
+            "label": "两本数学书（教程夹具）",
             "note": "只读教程投影：由 objects.json 经真实的暂存、接受与地图投影生成（apps/mathscape-desktop 测试 emir_fixture_accepts_and_learning_view_marks_seen_material）。教程只读这个文件，不调用 propose_changes，不写任何工作区。",
             "fixture_version": objects["fixture_version"],
             "artifacts": artifact,
@@ -2502,6 +2505,8 @@ mod tests {
             "objects": payloads,
             "graph": graph,
             "learning": serde_json::to_value(&view).unwrap(),
+            // 修订记录（v1 → v2）：教程第 8 镜讲“反馈给 agent → 提交 v2”。
+            "revisions": objects["revision_history"],
         });
         let text = serde_json::to_string_pretty(&projection).unwrap() + "\n";
         let path = dir.join("tutorial-projection.json");

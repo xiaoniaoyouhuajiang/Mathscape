@@ -15,8 +15,8 @@ const BANNED = ["平移", "错开", "滑动"];
 describe("semantic plain labels", () => {
   it("follow the S9.1 templates and never use the banned words", () => {
     expect(alignmentPlainLabel({ relation: "specializes", parameter_map: [
-      { source: "n", target: "n", role: "statement_parameter", map: "乙的第 n 条 ＝ 共享的第 n+1 条" }] }))
-      .toBe("特例：乙的第 n 条 ＝ 共享的第 n+1 条");
+      { source: "n", target: "n", role: "statement_parameter", map: "灯塔的第 n 条 ＝ 共享的第 n+1 条" }] }))
+      .toBe("特例：灯塔的第 n 条 ＝ 共享的第 n+1 条");
     expect(alignmentPlainLabel({ relation: "expresses", parameter_map: [{ source: "n", target: "n", role: "statement_parameter", map: "n = n" }] }))
       .toBe("说的就是它");
     expect(alignmentPlainLabel({ relation: "expresses", parameter_map: [{ source: "n", target: "n", role: "statement_parameter", map: "n ↦ n" }] }))
@@ -35,9 +35,9 @@ describe("feedback to agent", () => {
   it("builds the S9.2 quote", () => {
     const text = feedbackQuote({
       noun: "对齐线", proposal: { title: "Cassini 恒等式", version: 2 }, name: "a.yi.thm",
-      detail: "特例：乙的第 n 条 ＝ 共享的第 n+1 条", id: "mathscape:alignment/d1d5", code: "warn:relation_detail_missing",
+      detail: "特例：灯塔的第 n 条 ＝ 共享的第 n+1 条", id: "mathscape:alignment/d1d5", code: "warn:relation_detail_missing",
     });
-    expect(text).toBe("> [审核项] 提案「Cassini 恒等式」v2 · 对齐线 a.yi.thm（特例：乙的第 n 条 ＝ 共享的第 n+1 条）\n> id: mathscape:alignment/d1d5  · 码: warn:relation_detail_missing\n");
+    expect(text).toBe("> [审核项] 提案「Cassini 恒等式」v2 · 对齐线 a.yi.thm（特例：灯塔的第 n 条 ＝ 共享的第 n+1 条）\n> id: mathscape:alignment/d1d5  · 码: warn:relation_detail_missing\n");
   });
 
   it("only inserts through the composer event and never sends", () => {
@@ -53,13 +53,13 @@ describe("feedback to agent", () => {
 const proposal = (): PendingChangeSet => ({
   changeSetId: "mathscape:change-set/x", version: 2, state: "staged", investigationId: "inv", roundId: "r", proposedBy: "agent:codex",
   createdAt: "", proposalFingerprint: "", baseCommit: null, dependencies: [],
-  targetTitles: { "mathscape:source-unit/yi-thm": "乙 · 定理 3" },
+  targetTitles: { "mathscape:source-unit/yi-thm": "灯塔 · 定理 3" },
   proposal: { proposed_objects: [
     { local_ref: "e.cassini", kind: "semantic_entity", op: "create", payload: { semantic_kind: "declaration", plain_label: "Cassini 恒等式",
       mathlib_baseline: { decl: "Nat.fib_add_two_mul_fib_sub_sq", status: "unchecked" } } },
     { local_ref: "a.yi.thm", kind: "alignment", op: "create", payload: { source: "mathscape:source-unit/yi-thm", target: "$new:e.cassini",
       relation: "specializes", status: "retrieved_candidate",
-      parameter_map: [{ source: "n", target: "n", role: "statement_parameter", map: "乙的第 n 条 ＝ 共享的第 n+1 条" }] } },
+      parameter_map: [{ source: "n", target: "n", role: "statement_parameter", map: "灯塔的第 n 条 ＝ 共享的第 n+1 条" }] } },
     { local_ref: "d1", kind: "debt", op: "create", payload: { obligation: "证明对一切 n 成立", quantifier: "对一切 n ≥ 1", failure_mode: "theorem",
       status: "open", attached_to: "$new:a.yi.thm" } },
     { local_ref: "u", kind: "source_unit", op: "create", payload: {} },
@@ -78,7 +78,7 @@ describe("semantic review cards", () => {
     const cards = semanticReviewCards(proposal());
     expect(cards.map(card => card.noun)).toEqual(["共享对象", "对齐线", "一笔账"]);
     expect(cards[0].lines).toContain("mathlib：Nat.fib_add_two_mul_fib_sub_sq（未核对）");
-    expect(cards[1].title).toBe("乙 · 定理 3 —特例：乙的第 n 条 ＝ 共享的第 n+1 条→ Cassini 恒等式");
+    expect(cards[1].title).toBe("灯塔 · 定理 3 —特例：灯塔的第 n 条 ＝ 共享的第 n+1 条→ Cassini 恒等式");
     expect(cards[1].stagedId).toBe("mathscape:alignment/abc");
     expect(reviewItemCode(cards[1].diagnostics[0])).toBe("warn:certificate_debt_suggested");
     expect(cards[2].lines).toContain("挂在：a.yi.thm");
@@ -94,7 +94,7 @@ describe("learning view and recheck summaries", () => {
         label: "别的材料里见过", seen_in: ["b"], only_differs_by: [] },
       { unit_id: "u2", unit_title: "例题", alignment_id: "y", entity_id: "p", entity_label: "铺砖", relation: "instance_of",
         label: "新的", seen_in: [], only_differs_by: [] },
-    ], new_conventions: [{ scope_id: "s", scope_label: "乙", text: "下标从 1 开始" }], open_debts: [] }))
+    ], new_conventions: [{ scope_id: "s", scope_label: "灯塔", text: "下标从 1 开始" }], open_debts: [] }))
       .toBe("新的 1 · 别的材料里见过 1 · 新约定 1 · 未还清的账 0");
   });
 
@@ -113,8 +113,8 @@ describe("semantic taxonomy", () => {
     lifecycle: "active", parent: null, boundary: false,
   });
   it("maps semantic kinds to their own visuals", () => {
-    expect(nodeTypeKey(node("SemanticEntity", "entity", "概念星 · mathlib：Nat.fib（未核对）"))).toBe("shared_entity");
-    expect(nodeTypeKey(node("SemanticEntity", "entity", "星区"))).toBe("shared_theory");
+    expect(nodeTypeKey(node("SemanticEntity", "entity", "概念 · mathlib：Nat.fib（未核对）"))).toBe("shared_entity");
+    expect(nodeTypeKey(node("SemanticEntity", "entity", "理论"))).toBe("shared_theory");
     expect(nodeTypeKey(node("Debt"))).toBe("debt");
     expect(nodeTypeKey(node("DialectScope"))).toBe("dialect_scope");
     expect(nodeTypeKey(node("Alignment", "relation"))).toBe("alignment_relation");

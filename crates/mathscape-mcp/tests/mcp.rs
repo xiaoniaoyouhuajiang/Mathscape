@@ -2943,14 +2943,18 @@ fn emir_fixture_change_sets_all_stage_in_order() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("ws");
     let mut pool = ArtifactPool::create(&root).unwrap();
-    for (key, artifact) in objects["artifacts"].as_object().unwrap() {
+    for artifact in objects["artifacts"].as_object().unwrap().values() {
         let file = artifact["file"].as_str().unwrap();
         let bytes = std::fs::read(dir.join(file)).unwrap();
         let id = import(
             &mut pool,
             bytes,
             "text/markdown",
-            &format!("{key}.md"),
+            std::path::Path::new(file)
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
             None,
         );
         assert_eq!(

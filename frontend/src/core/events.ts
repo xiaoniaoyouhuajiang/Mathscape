@@ -46,7 +46,7 @@ export interface MathscapeEventMap {
   "insert-agent-feedback": { text: string; accept: () => void };
   /** 打开学习视图（只读）。 */
   "open-learning-view": void;
-  /** 打开只读教程「两本教材是不是同一颗星」。 */
+  /** 打开只读教程「两本书讲的是不是同一个东西」。 */
   "open-tutorial": void;
 }
 

@@ -19,9 +19,9 @@ def section(t):
     print("\n" + "=" * 64 + "\n" + t + "\n" + "=" * 64)
 
 # ---------------- 数学 ----------------
-F = [0, 1]                       # 甲：F_0 = 0, F_1 = 1, F_{n+1} = F_n + F_{n-1}
+F = [0, 1]                       # 星港：F_0 = 0, F_1 = 1, F_{n+1} = F_n + F_{n-1}
 while len(F) < N + 4: F.append(F[-1] + F[-2])
-f = {1: 1, 2: 1}                 # 乙：f_1 = f_2 = 1, f_{n+2} = f_{n+1} + f_n，无 f_0
+f = {1: 1, 2: 1}                 # 灯塔：f_1 = f_2 = 1, f_{n+2} = f_{n+1} + f_n，无 f_0
 for n in range(1, N + 2): f[n + 2] = f[n + 1] + f[n]
 
 def mat_mul(A, B):
@@ -34,42 +34,42 @@ def mpow(n):
     return R
 
 section("1. 两本书的定义与“前几项”")
-print("  甲 F_0..F_10 =", F[:11])
-print("  乙 f_1..f_10 =", [f[k] for k in range(1, 11)])
-check(F[:9] == [0, 1, 1, 2, 3, 5, 8, 13, 21], "甲列出的前几项")
-check([f[k] for k in range(1, 9)] == [1, 1, 2, 3, 5, 8, 13, 21], "乙列出的前几项")
+print("  星港 F_0..F_10 =", F[:11])
+print("  灯塔 f_1..f_10 =", [f[k] for k in range(1, 11)])
+check(F[:9] == [0, 1, 1, 2, 3, 5, 8, 13, 21], "星港列出的前几项")
+check([f[k] for k in range(1, 9)] == [1, 1, 2, 3, 5, 8, 13, 21], "灯塔列出的前几项")
 check(all(f[k] == F[k] for k in range(1, N + 1)), "符号对照 f_k = F_k (k≥1)")
-check(0 not in f, "乙没有第 0 项")
-print(f"  符号对照 f_k = F_k 对 k = 1..{N} 成立 ✓；乙的定义域不含 0 ✓（F_0 = {F[0]} 在乙中无对应）")
+check(0 not in f, "灯塔没有第 0 项")
+print(f"  符号对照 f_k = F_k 对 k = 1..{N} 成立 ✓；灯塔的定义域不含 0 ✓（F_0 = {F[0]} 在灯塔中无对应）")
 
-section("2. 矩阵幂：甲 引理 3.2.2 / 乙 命题 2.4.2 / 共享 e.qpow")
+section("2. 矩阵幂：星港 引理 3.2.2 / 灯塔 命题 2.4.2 / 共享 e.qpow")
 for n in range(1, N + 1):
-    check(mpow(n) == [[F[n+1], F[n]], [F[n], F[n-1]]], f"甲 Q^{n}")
+    check(mpow(n) == [[F[n+1], F[n]], [F[n], F[n-1]]], f"星港 Q^{n}")
 for n in range(1, N):
-    check(mpow(n + 1) == [[f[n+2], f[n+1]], [f[n+1], f[n]]], f"乙 M^{n+1}")
-print(f"  甲：Q^n = [[F_(n+1),F_n],[F_n,F_(n-1)]]，n = 1..{N} ✓（n=1 用到 F_0：Q^1 = {mpow(1)}）")
-print(f"  乙：M^(n+1) = [[f_(n+2),f_(n+1)],[f_(n+1),f_n]]，n = 1..{N-1} ✓")
+    check(mpow(n + 1) == [[f[n+2], f[n+1]], [f[n+1], f[n]]], f"灯塔 M^{n+1}")
+print(f"  星港：Q^n = [[F_(n+1),F_n],[F_n,F_(n-1)]]，n = 1..{N} ✓（n=1 用到 F_0：Q^1 = {mpow(1)}）")
+print(f"  灯塔：M^(n+1) = [[f_(n+2),f_(n+1)],[f_(n+1),f_n]]，n = 1..{N-1} ✓")
 shared_cover_yi = sorted({n + 1 for n in range(1, N)})
-check(shared_cover_yi[0] == 2 and 1 not in shared_cover_yi, "乙经 n_共享 = n_乙+1 只覆盖 n_共享 ≥ 2")
-print("  binder 对照 n_共享 = n_乙 + 1：乙覆盖共享的 n ≥ 2，缺 n = 1 → specializes ✓")
+check(shared_cover_yi[0] == 2 and 1 not in shared_cover_yi, "灯塔经 n_共享 = n_灯塔+1 只覆盖 n_共享 ≥ 2")
+print("  binder 对照 n_共享 = n_灯塔 + 1：灯塔覆盖共享的 n ≥ 2，缺 n = 1 → specializes ✓")
 
-section("3. Cassini：甲 定理 3.2.3 / 乙 命题 2.4.3 / 共享 e.cassini")
+section("3. Cassini：星港 定理 3.2.3 / 灯塔 命题 2.4.3 / 共享 e.cassini")
 for n in range(1, N + 1):
-    check(F[n+1]*F[n-1] - F[n]**2 == (-1)**n, f"甲 Cassini n={n}")
+    check(F[n+1]*F[n-1] - F[n]**2 == (-1)**n, f"星港 Cassini n={n}")
 for n in range(1, N):
     lhs_yi = f[n]*f[n+2] - f[n+1]**2
-    check(lhs_yi == (-1)**(n+1), f"乙 Cassini n={n}")
+    check(lhs_yi == (-1)**(n+1), f"灯塔 Cassini n={n}")
     m = n + 1   # binder map
-    check(lhs_yi == F[m+1]*F[m-1] - F[m]**2 and (-1)**(n+1) == (-1)**m, f"乙 n={n} ↔ 共享 n={m}")
-print(f"  甲：F_(n+1)F_(n-1) − F_n² = (−1)^n，n = 1..{N} ✓")
-print(f"  乙：f_n f_(n+2) − f_(n+1)² = (−1)^(n+1)，n = 1..{N-1} ✓")
-print("  乙第 n 条 = 共享第 n+1 条（两边逐项相等）✓")
-print(f"  共享 n = 1：F_2·F_0 − F_1² = {F[2]}·{F[0]} − {F[1]}² = {F[2]*F[0]-F[1]**2}（= 甲 注 3.2.4，用到 F_0，乙无法写出）")
+    check(lhs_yi == F[m+1]*F[m-1] - F[m]**2 and (-1)**(n+1) == (-1)**m, f"灯塔 n={n} ↔ 共享 n={m}")
+print(f"  星港：F_(n+1)F_(n-1) − F_n² = (−1)^n，n = 1..{N} ✓")
+print(f"  灯塔：f_n f_(n+2) − f_(n+1)² = (−1)^(n+1)，n = 1..{N-1} ✓")
+print("  灯塔第 n 条 = 共享第 n+1 条（两边逐项相等）✓")
+print(f"  共享 n = 1：F_2·F_0 − F_1² = {F[2]}·{F[0]} − {F[1]}² = {F[2]*F[0]-F[1]**2}（= 星港 注 3.2.4，用到 F_0，灯塔无法写出）")
 check(F[2]*F[0] - F[1]**2 == -1, "注 3.2.4")
 # 反例：v1 的“逻辑等价 / 定义等价”为何不成立
-print("  v1→v2 理由：若把乙的式子硬套到 n = 0 以得到 n_共享 = 1，需要 f_0，乙未定义 → 不能写成 logically_equivalent ✓")
+print("  v1→v2 理由：若把灯塔的式子硬套到 n = 0 以得到 n_共享 = 1，需要 f_0，灯塔未定义 → 不能写成 logically_equivalent ✓")
 
-section("4. 剪拼悖论：乙 习题 2.4.7 / 共享题型 e.puzzle（k = n + 1）")
+section("4. 剪拼悖论：灯塔 习题 2.4.7 / 共享题型 e.puzzle（k = n + 1）")
 def shoelace(P):
     s = sum(Fraction(P[i][0]) * P[(i+1) % len(P)][1] - Fraction(P[(i+1) % len(P)][0]) * P[i][1] for i in range(len(P)))
     return abs(s) / 2
@@ -113,7 +113,7 @@ print("  n = 3..30：四块面积和 = f_(n+1)²；长方形 f_n × f_(n+2)；�
 print(f"  (3) n = 5：正方形 {f[6]}×{f[6]} = {f[6]**2}，三角形直角边 {f[6]}, {f[4]}，梯形两底 {f[4]}, {f[5]} 高 {f[5]}，"
       f"拼成 {f[5]}×{f[7]} = {f[5]*f[7]}，差 +1（缝）")
 check((f[6], f[5], f[7]) == (8, 5, 13), "n=5 即 8×8→5×13")
-print(f"  与引导动画（verify.py）一致：乙 n=5 ↔ 共享 k=6 ↔ 动画 8×8→5×13 ✓；乙 n=4：5×5→{f[4]}×{f[6]}={f[4]*f[6]}（−1）✓；乙 n=7：{f[8]}×{f[8]}→{f[7]}×{f[9]}={f[7]*f[9]}（+1）✓")
+print(f"  与引导动画（verify.py）一致：灯塔 n=5 ↔ 共享 k=6 ↔ 动画 8×8→5×13 ✓；灯塔 n=4：5×5→{f[4]}×{f[6]}={f[4]*f[6]}（−1）✓；灯塔 n=7：{f[8]}×{f[8]}→{f[7]}×{f[9]}={f[7]*f[9]}（+1）✓")
 check(f[4]*f[6] == 24 and f[7]*f[9] == 442 and f[8] == 21, "与动画同族数字")
 print("  k = 3 时梯形两底 F_1 = F_2 = 1，退化 → 题型取 k ≥ 4 ✓")
 check(F[1] == F[2], "k=3 退化")
@@ -128,16 +128,16 @@ def _strings(x):
         for v in x: yield from _strings(v)
 check(not any(c in t for t in _strings(doc0) for c in "\t\b\f\r\v"), "TeX 字符串里没有被误转义的控制字符（如 \\times → 制表符）")
 check("$k$ 为偶数时" in task and "缝" in task and "$k$ 为奇数时" in task and "重叠" in task and task.index("偶数") < task.index("奇数"), "题型 task 写明 k 偶数缝 / k 奇数重叠")
-yi = (ROOT / "materials" / "yi.md").read_text(encoding="utf-8")
-check("距端点 $f_n$ 处" in yi and "距同侧端点 $f_{n-1}$ 处" in yi and "面积为 1" in yi, "乙习题含剪法与缝/重叠说明")
-print("  共享题型 task：“k 为偶数时有缝，k 为奇数时重叠”与几何判定一致 ✓；乙习题已写明剪法与面积为 1 的平行四边形 ✓")
+yi = (ROOT / "materials" / "灯塔组合数学初步.md").read_text(encoding="utf-8")
+check("距端点 $f_n$ 处" in yi and "距同侧端点 $f_{n-1}$ 处" in yi and "面积为 1" in yi, "灯塔习题含剪法与缝/重叠说明")
+print("  共享题型 task：“k 为偶数时有缝，k 为奇数时重叠”与几何判定一致 ✓；灯塔习题已写明剪法与面积为 1 的平行四边形 ✓")
 
 section("4b. 教程分镜里出现的数字（tutorial-storyboard.md 镜 5、6、9、11）")
 check([F[k] for k in range(7)] == [0, 1, 1, 2, 3, 5, 8] and [f[k] for k in range(1, 7)] == [1, 1, 2, 3, 5, 8], "镜 5 数表")
-check(f[1]*f[3] - f[2]**2 == 1 == F[3]*F[1] - F[2]**2, "镜 6：乙第 1 条 = 共享第 2 条 = 1")
-check(f[2]*f[4] - f[3]**2 == -1 == F[4]*F[2] - F[3]**2, "镜 6：乙第 2 条 = 共享第 3 条 = −1")
+check(f[1]*f[3] - f[2]**2 == 1 == F[3]*F[1] - F[2]**2, "镜 6：灯塔第 1 条 = 共享第 2 条 = 1")
+check(f[2]*f[4] - f[3]**2 == -1 == F[4]*F[2] - F[3]**2, "镜 6：灯塔第 2 条 = 共享第 3 条 = −1")
 check(F[2]*F[0] - F[1]**2 == -1, "镜 6：共享第 1 条 = −1，要用 F_0")
-check(f[6] == F[6] == 8, "镜 9：乙 n=5 的正方形边长 f_6 = F_6 = 8（k = 6）")
+check(f[6] == F[6] == 8, "镜 9：灯塔 n=5 的正方形边长 f_6 = F_6 = 8（k = 6）")
 print("  镜 5 数表、镜 6 三组具体数字、镜 9 的 8×8 ↔ k = 6 ✓")
 
 # ---------------- 结构不变量 ----------------
@@ -148,7 +148,7 @@ inv = doc["investigation_id"]
 files = {v["artifact_id"]: (ROOT / v["file"]).read_bytes() for v in doc["artifacts"].values()}
 for aid, data in files.items():
     check(aid == "mathscape:artifact/sha256/" + sha(data), "artifact_id = 文件 sha256")
-    check("示例材料（虚构教材）".encode() in data[:400], "材料开头标注 示例材料（虚构教材）")
+    check("自行编写".encode() in data[:400], "材料开头的注释标明是自行编写的")
 
 PREFIX = doc["id_rules"]["kinds"]
 CSS = doc["change_sets"]
@@ -313,7 +313,7 @@ for cs in CSS:
 names = {cs["staged_ids"][lr]: lr for cs in CSS for lr in cs["staged_ids"]}
 multi = sorted(names[t] for t, b in tgt_books.items() if len(b) >= 2)
 check(set(multi) >= {"e.fib", "e.fib_def", "e.qpow", "e.cassini"}, "同一共享实体被两本书分别对齐（不合并）")
-# 乙的约定可被机器读到
+# 灯塔的约定可被机器读到
 ds_yi = [o for cs in CSS for o in cs["proposed_objects"] if o["local_ref"] == "ds.yi"][0]["payload"]
 check(any(c["key"] == "sequence_index_origin" and c["value"] == 1 for c in ds_yi["conventions"]), "ds.yi 记下“从第 1 项起编”")
 # 修订：v1 → v2 local_ref 不变
@@ -326,7 +326,7 @@ print("  " + "、".join(f"{k} {v}" for k, v in sorted(count.items())))
 print(f"  change set {len(CSS)} 个，每个围绕一个目标对象：" + "、".join(c["target_object"] for c in CSS))
 print("  quote 与字节范围一致；全部 id 可按规则重算；引用闭合且种类正确；依赖边一致且无环；无 unused_span ✓")
 print("  无 same_as；无自设可信终态；对齐状态 / Debt 状态都在 Agent 可设范围内；数列项下标映射 index_shift 全为 0 ✓")
-print("  白话标签：特例 = “乙的第 n 条 ＝ 共享的第 n+1 条”；不出现“平移 / 错开 / 滑动” ✓")
+print("  白话标签：特例 = “灯塔的第 n 条 ＝ 共享的第 n+1 条”；不出现“平移 / 错开 / 滑动” ✓")
 print("  ds.yi 记下“从第 1 项起编”；共享对象都注明 F₀ = 0 约定与 mathlib 基线 ✓")
 print("  被两本书分别对齐的共享实体：" + "、".join(multi))
 

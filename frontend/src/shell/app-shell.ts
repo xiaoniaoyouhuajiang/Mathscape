@@ -98,7 +98,7 @@ export class AppShell {
         <div class="help-menu">
           <button id="help-button" class="secondary-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" class="help-menu-list" role="menu" hidden>
-            <button id="tutorial-menu-item" type="button" role="menuitem">教程：两本教材是不是同一颗星</button>
+            <button id="tutorial-menu-item" type="button" role="menuitem">教程：两本书讲的是不是同一个东西</button>
           </div>
         </div>
         <button id="ink-button" class="secondary-button" type="button">手写</button>

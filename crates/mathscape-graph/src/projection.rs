@@ -58,7 +58,7 @@ pub enum ProjectionRelationKind {
     Cites,
     /// Semantic layer: a source unit aligned to a shared object.
     Aligns,
-    /// Semantic layer: a shared object's home theory (星区).
+    /// Semantic layer: a shared object's home theory (理论).
     InTheory,
     /// Semantic layer: a debt hung on a shared object or alignment.
     DebtOn,

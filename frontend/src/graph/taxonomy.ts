@@ -207,7 +207,7 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
     fontSize: 11,
   },
   shared_theory: {
-    label: "星区",
+    label: "理论",
     shape: "round-octagon",
     width: 46,
     height: 40,
@@ -359,7 +359,7 @@ export function nodeTypeKey(node: IncidenceNode): NodeTypeKey {
     case "SourceArtifact":
       return artifactTypeKey(node.summary);
     case "SemanticEntity":
-      return node.summary?.startsWith("星区") ? "shared_theory" : "shared_entity";
+      return node.summary?.startsWith("理论") ? "shared_theory" : "shared_entity";
     case "DialectScope":
       return "dialect_scope";
     case "Debt":

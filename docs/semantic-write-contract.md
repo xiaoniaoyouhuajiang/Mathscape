@@ -15,7 +15,7 @@
 **本延伸锁定 / 确认**：
 1. [锁定·2026-11-13 用户定 a] 共享对象的写法跟 **mathlib** 保持一致，对象上注明所用约定（如 F₀ = 0），并引用 mathlib 中的对应声明作为参照基线。
 2. [锁定·2026-11-13 用户定 b] **Debt 是地图对象**：有身份、有地图节点，挂在对齐线或共享对象上，有状态（open / claimed_paid / paid / waived / obsolete）。
-3. [锁定·2026-11-13 用户定 c] 第一条 PR 提前做**最小 DialectScope**，只含第一期必需的字段，让“乙从第 1 项起编”这类约定能被机器读到。
+3. [锁定·2026-11-13 用户定 c] 第一条 PR 提前做**最小 DialectScope**，只含第一期必需的字段，让“灯塔从第 1 项起编”这类约定能被机器读到。
 4. [已确认] DomainPayload 包裹 SourcePayload（实现：untagged 包裹，存储形状不变，见 S2.1）；SemanticEntity 只开 concept / declaration / theory / problem_schema；Declaration 扩展；Alignment 是有修订的实体，不设 `same_as`；复用 TrustRecord；id 不透明，由 `(change_set_id, local_ref)` 派生；接受 ≠ 提升可信度或对齐状态；R/D/T/X 只作派生视图。
 5. [已确认] **只有确定性检查阻塞**；数学判断只生成 Debt 或审核项。
 6. [锁定·S13-1] **语义层对象允许 Agent 提议 retire**（选项 B），仍只是提案，须用户接受；来源层 retire 仍禁止 Agent 提议。Debt 的 `paid` / `waived` 只能由用户设置，Agent 最多写 `claimed_paid`。
@@ -34,19 +34,19 @@
 | SourceSpan | 原文片段 | 书上这一段在哪儿 |
 | SourceSemanticUnit | 来源单元 / 来源卡片 | 书里的一条定义、定理或习题 |
 | SourceUnitRelation | 书内关系 | “这段证明那条”“这条提示那题” |
-| SemanticEntity · concept | 概念星 | 大家都在说的那个东西 |
+| SemanticEntity · concept | 概念 | 大家都在说的那个东西 |
 | SemanticEntity · declaration | 精确说法（铭牌） | 带前提、带变量范围的那一句 |
-| SemanticEntity · theory | 星区 | 它属于哪一片 |
+| SemanticEntity · theory | 理论 | 它属于哪一片 |
 | SemanticEntity · problem_schema | 题型 | 一族题，带参数 |
 | `conventions` / `mathlib_baseline` | 约定注记 / 参照基线 | “本对象按 F₀ = 0 写，同 mathlib `Nat.fib`；不表示哪本书更正统” |
-| Alignment | 对齐线 | 这段话说的就是那颗星，以及哪里不一样 |
+| Alignment | 对齐线 | 这段话说的就是那个共享对象，以及哪里不一样 |
 | relation = expresses | 说的就是它 | |
-| relation = specializes | 特例 | 例：“特例：乙的第 n 条 ＝ 共享的第 n+1 条” |
-| relation = overlaps_with | 部分重合 | 例：“部分重合：乙没有第 0 项” |
+| relation = specializes | 特例 | 例：“特例：灯塔的第 n 条 ＝ 共享的第 n+1 条” |
+| relation = overlaps_with | 部分重合 | 例：“部分重合：灯塔没有第 0 项” |
 | relation = generalizes / instance_of / representation_of / logically_equivalent / definitionally_equivalent / exact_realization / notation_for / incompatible_with | 推广 / 是…的一例 / 换了一种表示 / 互相推出 / 定义展开后一样 / 同一结构的实现 / 只是记号 / 互不相容 | |
 | `parameter_map` | 第几条对第几条 | **命题参数**（如 Cassini 的 n）的对应 |
 | `term_index_map` | 数列逐项对齐 | 数列**项下标**的对应；`index_shift = 0` 时说“f_k = F_k，数列没有错开” |
-| `lost_information` | 对不上的部分 | “乙这里没有” |
+| `lost_information` | 对不上的部分 | “灯塔这里没有” |
 | Debt（地图对象） | 一笔账 | 还欠一个证明或检查；状态：未还清 / 待确认已还 / 已还清 / 已豁免 / 已失效 |
 | DialectScope | 约定卡 | 这本书 / 这一节的编号和叫法约定 |
 | TrustRecord | 可信度徽章 | 分好几项，不是一个分数 |
@@ -127,7 +127,7 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
   "statement":  { "text": "…", "format": "markdown+tex", "evidence_spans": ["…"], "note": "在 ℤ 中计算" } | null,
   "definiens":  { …同上… } | null,          // definition 必填 definiens，其余必填 statement
   "uses_entities": ["<semantic-entity id>"],
-  "concept": "<concept id> | null"          // 可选：这条精确说法属于哪颗概念星
+  "concept": "<concept id> | null"          // 可选：这条精确说法属于哪颗概念
 }
 "problem_schema": {
   "parameters":  [ { "name": "k", "type": "ℕ", "role": "parameter" } ],
@@ -151,7 +151,7 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
   "source_context": { "dialect_scope": "<dialect-scope id>" } | { "binding": "uncontextualized", "reason": "…" },
   "target_context": "<theory id>",
   "parameter_map": [ { "source": "n", "target": "n", "role": "statement_parameter | problem_parameter",
-                       "map": "n_共享 = n_乙 + 1", "source_range": "n_乙 ≥ 1", "target_range": "n_共享 ≥ 2", "note": "…" } ],
+                       "map": "n_共享 = n_灯塔 + 1", "source_range": "n_灯塔 ≥ 1", "target_range": "n_共享 ≥ 2", "note": "…" } ],
   "term_index_map": [ { "source": "f_k", "target": "F_k", "index_shift": 0, "valid_for": "k ≥ 1", "note": "…" } ],
   "required_assumptions": [ { "text": "f_k = F_k（k ≥ 1）", "debt": "<debt id> | null" } ],
   "lost_information": [ { "short": "缺共享的 n = 1", "claim": "…", "direction": "target_has_source_lacks | source_has_target_lacks", "see_also": "<id> | null" } ],
@@ -181,7 +181,7 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
   "obligation": "证明 $f_k = F_k$ 对一切 $k\\ge 1$ 成立",
   "quantifier": "∀ k ≥ 1",                       // primer §4：写明量词
   "failure_mode": "theorem | statement | route",  // primer §4：不还清会坏在哪
-  "failure_note": "若不成立，乙的三条对齐都不再适用",
+  "failure_note": "若不成立，灯塔的三条对齐都不再适用",
   "evidence_spans": ["…"],
   "paid_by": [ { "ref": "<id>", "note": "…" } ],  // claimed_paid / paid 时必填
   "payoff_hint": "string | null"
@@ -354,7 +354,7 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 
 1. change set 层：完全沿用 P2 §4.2.4。Agent 以 `supersedes{change_set_id, version, proposal_fingerprint}` 提交新 version；指纹不匹配则 `supersede_conflict`；旧 version → `superseded`；同 `local_ref` 得到同一 id。
 2. 对象层：**暂存**对象的修订 = change set 的新 version（对象 id 不变，内容随 version 变）；**已接受**对象的修订 = `edit` 产生新 revision（S4.3），旧 revision 可解析。
-3. 对齐线的典型路径（夹具 `revision_history`）：用户在对话里反馈“乙没有第 0 项”→ Agent `get_change_set` 读回 → 双方同意 → Agent 以 supersedes 提交 v2，把 `definitionally_equivalent` 改成 `overlaps_with`，补上 `lost_information`。审核页显示 v1 / v2 的差异。
+3. 对齐线的典型路径（夹具 `revision_history`）：用户在对话里反馈“灯塔没有第 0 项”→ Agent `get_change_set` 读回 → 双方同意 → Agent 以 supersedes 提交 v2，把 `definitionally_equivalent` 改成 `overlaps_with`，补上 `lost_information`。审核页显示 v1 / v2 的差异。
 4. 依赖者：A 被 supersede 后，依赖 A 的 B 转 `blocked`（`dependency_superseded`），**不自动改指**（P2 §4.2.8 R5）。夹具里 `cs.fib` v2 先于 `cs.qpow` 等提交，所以没有触发。
 5. Debt 跟随：对齐线新 revision 若删除了某个 `required_assumptions[].debt` 引用，被删的 Debt 不自动关闭；若对齐线被退役，挂在它上面的 Debt → `obsolete`（系统，预览中列出）。
 
@@ -373,7 +373,7 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 ## S8. 约定：每个 change set 围绕一个目标对象 [实现]
 
 - 输入新增 `target_object`（本 version 的 `local_ref` 或已有 id），审核页标题以它为准，例如“提案：Cassini 恒等式”。
-- 一个语义 change set = **一个目标共享对象** + 它的**必要上下文**（它的星区 theory、它的 concept，第一次出现时）+ **连到它的对齐线** + **挂在这些对齐线或该对象上的 Debt**。
+- 一个语义 change set = **一个目标共享对象** + 它的**必要上下文**（它的理论 theory、它的 concept，第一次出现时）+ **连到它的对齐线** + **挂在这些对齐线或该对象上的 Debt**。
 - 来源 change set 以 section 单元为目标，可以附带该节的约定卡。
 - 不满足时只给审核项（`info: multi_target_change_set`），不阻塞（确定性可判，但这是组织建议而不是正确性要求）。
 - 夹具的 6 个 change set：`jia.u.sec`、`yi.u.sec`、`e.fib`（附 `e.theory`、`e.fib_def`）、`e.qpow`、`e.cassini`、`e.puzzle`。
@@ -385,10 +385,10 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 
 ### S9.1 地图
 
-- **节点**：概念星（星光 `#e8f1ff`）、精确说法铭牌、题型卡、星区背景；约定卡挂在 section 来源卡片上（书封展开）；Debt 为暗金虚线小标签（`#c9a86a`），挂在对齐线中点或对象角上，状态文字常显（“未还清 / 待确认已还 / 已还清”），已还清改为金色实线框（`#ffd89a`），与动画一致。
+- **节点**：概念（星光 `#e8f1ff`）、精确说法铭牌、题型卡、理论背景；约定卡挂在 section 来源卡片上（书封展开）；Debt 为暗金虚线小标签（`#c9a86a`），挂在对齐线中点或对象角上，状态文字常显（“未还清 / 待确认已还 / 已还清”），已还清改为金色实线框（`#ffd89a`），与动画一致。
 - **对齐线**：连线色 `#9eb6ff`。暂存为虚线，已接受为实线；**线型只表示是否已接受，不表示可信度**。可信度看徽章。
 - **白话标签**由前端模板生成，Agent 给的 `map_label` 只作备选：
-  - expresses →「说的就是它」；有非恒等 `parameter_map` 时加「：乙的 n 对应题型的 k = n+1」这类说明
+  - expresses →「说的就是它」；有非恒等 `parameter_map` 时加「：灯塔的 n 对应题型的 k = n+1」这类说明
   - specializes / generalizes →「特例 / 推广」；有 `statement_parameter` 映射时加「：〈书〉的第 n 条 ＝ 共享的第 n+1 条」
   - overlaps_with →「部分重合：」+ `lost_information[0].short`
   - 有 `term_index_map.index_shift = 0` 时，悬浮卡加一行「数列逐项对齐：f_k = F_k」
@@ -406,7 +406,7 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 - 对齐线详情并排显示：来源原文（按 span 高亮 + KaTeX）| 共享对象的精确说法 | 参数对照表（第几条 ↔ 第几条）| 数列项对照（index_shift）| 对不上的部分。
 - **「反馈给 agent」按钮**：每个审核项、每条对齐线、每笔账、每张约定卡都有。点击后向对话输入框插入一段引用（不自动发送），格式：
   ```text
-  > [审核项] 提案「Cassini 恒等式」v2 · 对齐线 a.yi.thm（特例：乙的第 n 条 ＝ 共享的第 n+1 条）
+  > [审核项] 提案「Cassini 恒等式」v2 · 对齐线 a.yi.thm（特例：灯塔的第 n 条 ＝ 共享的第 n+1 条）
   > id: mathscape:alignment/d1d5…  · 码: warn:relation_detail_missing
   ```
   用户补一句意见后发送。Agent 据此 `get_change_set` 读回并用 supersedes 修订（S6.3）。按钮只拼引用文本，不改提案状态。

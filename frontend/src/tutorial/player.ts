@@ -7,16 +7,29 @@
  *   HUD 显示「下一步 ›」；字幕照常。
  */
 import type { Core, ElementDefinition, NodeSingular } from "cytoscape";
+import { openExternalLink } from "../core/external-link";
 import { reducedMotion as defaultReducedMotion } from "../core/motion";
 import { mountCytoscapeGraph } from "../graph/cytoscape";
 import { SCENE_TIMING } from "../graph/scene-player";
-import { inlineMathHtml } from "./math";
+import { EDGE_TYPES, NODE_TYPES, type NodeTypeVisual } from "../graph/taxonomy";
+import { inlineMathHtml, markdownHtml } from "./math";
 import type { TutorialProjection } from "./projection";
 import { loadTutorialProjection, tutorialGraph } from "./projection";
 import type { ShotExtra, TutorialShot } from "./script";
-import { buildTutorialShots } from "./script";
+import { TYPE_NOTES, buildTutorialShots, stripTypePrefix } from "./script";
 
-export const TUTORIAL_TITLE = "教程：两本教材是不是同一颗星";
+export const TUTORIAL_TITLE = "教程：两本书讲的是不是同一个东西";
+
+/** 两条派生虚线：材料 → 从它切出来的那条定义（只标两个“中心”）。 */
+const DERIVED: Record<string, string> = { jia: "jia.u.def", yi: "yi.u.def" };
+const DERIVED_COLOR = "#7fc5c6";
+
+const SEMANTIC_KIND: Record<string, { name: string; code: string }> = {
+  concept: { name: TYPE_NOTES.concept.name, code: "concept" },
+  declaration: { name: TYPE_NOTES.declaration.name, code: "declaration" },
+  theory: { name: TYPE_NOTES.theory.name, code: "theory" },
+  problem_schema: { name: TYPE_NOTES.problem.name, code: "problem_schema" },
+};
 
 export interface TutorialPlayerDeps {
   load?: () => Promise<TutorialProjection>;
@@ -40,6 +53,7 @@ export class TutorialPlayer {
   readonly root: HTMLElement;
   private readonly canvas: HTMLElement;
   private readonly card: HTMLElement;
+  private readonly legend: HTMLElement;
   private readonly caption: HTMLElement;
   private readonly counter: HTMLElement;
   private readonly provenance: HTMLElement;
@@ -70,11 +84,22 @@ export class TutorialPlayer {
     close.addEventListener("click", () => this.close());
     header.append(this.provenance, this.counter, close);
     const stage = el("div", "tutorial-stage");
+    const mapWrap = el("div", "tutorial-map-wrap");
     this.canvas = el("div", "tutorial-map");
-    this.canvas.setAttribute("aria-label", "教程地图（只读）");
+    this.canvas.setAttribute("aria-label", "教程地图");
+    this.legend = el("div", "map-legend tutorial-legend");
+    this.legend.setAttribute("aria-label", "图例");
+    mapWrap.append(this.canvas, this.legend);
     this.card = el("aside", "tutorial-card");
     this.card.setAttribute("aria-live", "polite");
-    stage.append(this.canvas, this.card);
+    // 说明页里的外部链接（mathlib 的维基百科）交给系统浏览器，不在应用窗口里跳转。
+    this.card.addEventListener("click", (event) => {
+      const link = (event.target as HTMLElement | null)?.closest<HTMLAnchorElement>("a[data-external]");
+      if (!link) return;
+      event.preventDefault();
+      void openExternalLink(link.href).catch(() => undefined);
+    });
+    stage.append(mapWrap, this.card);
     this.caption = el("p", "tutorial-caption");
     this.caption.setAttribute("aria-live", "polite");
     const hud = el("footer", "tutorial-hud");
@@ -85,8 +110,7 @@ export class TutorialPlayer {
     this.prevButton.addEventListener("click", () => this.go(this.index - 1));
     this.nextButton.addEventListener("click", () => (this.index >= this.shots.length - 1 ? this.close() : this.go(this.index + 1)));
     this.playButton.addEventListener("click", () => this.setPlaying(!this.playing));
-    const note = el("span", "tutorial-note", "只读教程 · 示例材料（虚构教材）· 不会写入你的工作区");
-    hud.append(this.prevButton, this.playButton, this.nextButton, note);
+    hud.append(this.prevButton, this.playButton, this.nextButton);
     this.root.append(header, stage, this.caption, hud);
     this.root.addEventListener("keydown", (event) => {
       if (event.key === "Escape") this.close();
@@ -124,11 +148,18 @@ export class TutorialPlayer {
     }
     this.core?.destroy();
     this.core = mountCytoscapeGraph(this.canvas, tutorialGraph(this.projection), "semantic");
+    this.decorate(this.core);
     this.core.style().selector(`.${HIDDEN}`).style({ display: "none" })
+      .selector("edge.tutorial-derived-edge").style({
+        label: "data(label)", width: 1.6, "line-style": "dashed", "line-color": DERIVED_COLOR,
+        "target-arrow-color": DERIVED_COLOR, "target-arrow-shape": "triangle", color: DERIVED_COLOR, "font-size": "9px",
+      })
       .selector(`.${DIM}`).style({ opacity: 0.35 })
       .selector(`node.${FOCUS}`).style({ "border-width": 4, "border-color": "#ffd89a", "underlay-color": "#ffd89a", "underlay-opacity": 0.25, "underlay-padding": 6 })
       .update();
     this.core.autoungrabify(true);
+    // 画面上对象少时（前两镜）不要放得太大，节点标签留在画布里。
+    this.core.maxZoom(1.4);
     this.go(0);
     this.setPlaying(!this.reduced());
   }
@@ -171,11 +202,55 @@ export class TutorialPlayer {
     }, ms);
   }
 
-  /** local_ref（或 artifact:<key>）→ 地图上的领域 id。 */
+  /** local_ref（或 artifact:<key>、derived:<key>）→ 地图上的领域 id。 */
   private domainId(local: string): string | undefined {
     const projection = this.projection!;
     if (local.startsWith("artifact:")) return projection.artifacts[local.slice("artifact:".length)];
+    if (local.startsWith("derived:")) return local;
     return projection.refs[local];
+  }
+
+  /**
+   * 地图标注：每个节点第一行写类型名（共享对象再加类型代码），对齐线写
+   * 关系类型代码 + 白话；再补上两条“派生”虚线。只改教程自己的画布。
+   */
+  private decorate(core: Core): void {
+    const projection = this.projection!;
+    const byId = new Map(Object.values(projection.objects).map((object) => [object.id, object]));
+    core.batch(() => {
+      core.nodes().forEach((node: NodeSingular) => {
+        const label = String(node.data("label") ?? "");
+        const domainKind = node.data("domainKind") as string | null;
+        let type = "";
+        if (domainKind === "SourceArtifact") type = TYPE_NOTES.material.name;
+        else if (domainKind === "SourceSemanticUnit") type = TYPE_NOTES.unit.name;
+        else if (domainKind === "DialectScope") type = `${TYPE_NOTES.dialect.name} · dialect scope`;
+        else if (domainKind === "Debt") type = `${TYPE_NOTES.debt.name} · debt`;
+        else if (domainKind === "SemanticEntity") {
+          const kind = SEMANTIC_KIND[String(byId.get(node.data("domainId"))?.payload.semantic_kind ?? "")];
+          if (kind) type = `${kind.name} · ${kind.code}`;
+        }
+        if (!type) return;
+        const body = domainKind === "Debt" ? label.replace(/^一笔账：/, "") : stripTypePrefix(label);
+        node.data("label", `〔${type}〕\n${body}`);
+      });
+      core.edges(".alignment-edge").forEach((edge) => {
+        const relation = String(byId.get(edge.data("relationId"))?.payload.relation ?? "");
+        if (relation) edge.data("label", `${relation} · ${edge.data("label")}`);
+      });
+      const left = core.nodes().boundingBox().x1;
+      for (const [artifact, unit] of Object.entries(DERIVED)) {
+        const source = core.nodes().filter((node) => node.data("domainId") === projection.artifacts[artifact])[0] as NodeSingular | undefined;
+        const target = core.nodes().filter((node) => node.data("domainId") === projection.refs[unit])[0] as NodeSingular | undefined;
+        if (!source || !target) continue;
+        // 每份材料放在它派生出的那条定义左边，两本书上下分开，标签不重叠。
+        source.position({ x: left - 160, y: target.position("y") });
+        core.add({
+          group: "edges", classes: "tutorial-derived-edge",
+          data: { id: `derived~${artifact}`, source: source.id(), target: target.id(), label: "派生", relationId: `derived:${artifact}` },
+        });
+      }
+    });
   }
 
   go(index: number): void {
@@ -214,48 +289,136 @@ export class TutorialPlayer {
       core.edges().forEach((edge) => {
         const relation = edge.data("relationId") as string | undefined;
         const endpointsVisible = !edge.source().hasClass(HIDDEN) && !edge.target().hasClass(HIDDEN);
-        // 有 local_ref 的关系（对齐线、书内关系）按镜头出现；派生的连线（星区、挂账、约定适用）随两端出现。
-        const allowed = !relation || !referenced.has(relation) || revealed.has(relation);
+        // 有 local_ref 的关系（对齐线、书内关系）和两条派生虚线按镜头出现；
+        // 投影算出的连线（属于理论、挂账、约定适用）随两端出现。
+        const scripted = relation !== undefined && (referenced.has(relation) || relation.startsWith("derived:"));
+        const allowed = !relation || !scripted || revealed.has(relation);
         edge.toggleClass(HIDDEN, !(endpointsVisible && allowed));
       });
       core.nodes(`[elementKind = "junction"]`).forEach((node) => {
         node.toggleClass(HIDDEN, node.connectedEdges().filter(`.${HIDDEN}`).length === node.connectedEdges().length);
       });
     });
+    this.renderLegend(core);
     const target = core.elements().filter((element) => !element.hasClass(HIDDEN));
     const fitTo = focus.size
       ? core.nodes().filter((node) => focus.has(node.data("domainId") as string))
       : target;
     if (fitTo.empty()) return;
-    if (this.reduced()) core.fit(fitTo, 48);
-    else core.animate({ fit: { eles: fitTo, padding: 48 } }, { duration: SCENE_TIMING.fitMs });
+    if (this.reduced()) core.fit(fitTo, 72);
+    else core.animate({ fit: { eles: fitTo, padding: 72 } }, { duration: SCENE_TIMING.fitMs });
+  }
+
+  /** 图例：和主地图底栏同一套样式，只列当前画面上出现的类型。 */
+  private renderLegend(core: Core): void {
+    const projection = this.projection!;
+    const byId = new Map(Object.values(projection.objects).map((object) => [object.id, object]));
+    const visibleNodes = core.nodes().filter((node) => !node.hasClass(HIDDEN) && node.data("elementKind") !== "junction");
+    const visibleEdges = core.edges().filter((edge) => !edge.hasClass(HIDDEN));
+    const nodeTypes = new Set(visibleNodes.map((node) => String(node.data("nodeType"))));
+    const sharedKinds = new Set(visibleNodes
+      .filter((node) => node.data("domainKind") === "SemanticEntity")
+      .map((node) => String(byId.get(node.data("domainId"))?.payload.semantic_kind ?? "")));
+    const items: HTMLElement[] = [];
+    const node = (key: keyof typeof NODE_TYPES, text: string) => {
+      if (nodeTypes.has(key)) items.push(this.legendItem(this.nodeSwatch(NODE_TYPES[key]), text));
+    };
+    node("markdown", TYPE_NOTES.material.name);
+    node("semantic_unit", TYPE_NOTES.unit.name);
+    const shared = ["concept", "declaration", "problem_schema"].filter((kind) => sharedKinds.has(kind))
+      .map((kind) => `${SEMANTIC_KIND[kind].name} ${kind}`);
+    if (nodeTypes.has("shared_entity") && shared.length) {
+      items.push(this.legendItem(this.nodeSwatch(NODE_TYPES.shared_entity), `共享对象：${shared.join(" · ")}`));
+    }
+    node("shared_theory", `${TYPE_NOTES.theory.name} theory`);
+    node("dialect_scope", `${TYPE_NOTES.dialect.name} dialect scope`);
+    node("debt", `${TYPE_NOTES.debt.name} debt`);
+    const special = ["tutorial-derived-edge", "alignment-edge", "debt-edge", "semantic-link-edge", "evidence-edge"];
+    const edge = (match: (classes: string[]) => boolean, color: string, dashed: boolean, text: string) => {
+      if (visibleEdges.some((item) => match(item.classes()))) items.push(this.legendItem(this.edgeSwatch(color, dashed), text));
+    };
+    const has = (name: string) => (classes: string[]) => classes.includes(name);
+    edge(has("tutorial-derived-edge"), DERIVED_COLOR, true, "派生（虚线：来自哪份材料）");
+    edge((classes) => classes.includes("semantic-edge") && !special.some((name) => classes.includes(name)), EDGE_TYPES.relation.color, false, "书内关系（箭头表示方向）");
+    edge(has("alignment-edge"), EDGE_TYPES.alignment.color, false, "对齐线 alignment（线上：关系类型 · 白话）");
+    edge(has("semantic-link-edge"), EDGE_TYPES.relation.color, true, "属于理论 / 约定适用于");
+    edge(has("debt-edge"), EDGE_TYPES.debt.color, true, "挂账");
+    this.legend.replaceChildren(...items);
+  }
+
+  private legendItem(swatch: HTMLElement, label: string): HTMLElement {
+    const item = el("span", "legend-item");
+    item.append(swatch, document.createTextNode(label));
+    return item;
+  }
+
+  private nodeSwatch(visual: NodeTypeVisual): HTMLElement {
+    const shape = visual.shape === "ellipse" ? "is-round" : visual.shape === "diamond" ? "is-diamond" : "is-rect";
+    const swatch = el("span", `legend-dot ${shape}${visual.borderStyle === "dashed" ? " is-dashed" : ""}`);
+    swatch.style.backgroundColor = visual.background;
+    swatch.style.borderColor = visual.border;
+    return swatch;
+  }
+
+  private edgeSwatch(color: string, dashed: boolean): HTMLElement {
+    const swatch = el("span", `legend-line${dashed ? " is-dashed" : ""}`);
+    swatch.style.color = color;
+    return swatch;
+  }
+
+  private html<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, html: string): HTMLElementTagNameMap[K] {
+    const node = el(tag, className);
+    node.innerHTML = html;
+    return node;
   }
 
   private renderShot(shot: TutorialShot): void {
     this.counter.textContent = `第 ${this.index + 1} / ${this.shots.length} 镜 · ${shot.title}`;
     this.provenance.textContent = `数据：${shot.provenance.join(" + ")}`;
-    this.caption.textContent = shot.narration;
+    this.caption.innerHTML = inlineMathHtml(shot.narration);
     this.card.replaceChildren();
     this.card.dataset.shot = shot.id;
-    this.card.append(el("h3", "tutorial-card-caption", shot.caption));
-    const title = el("strong", "tutorial-card-title");
-    title.innerHTML = inlineMathHtml(shot.card.title);
-    this.card.append(title);
+    this.card.append(this.html("h3", "tutorial-card-caption", inlineMathHtml(shot.caption)));
+    this.card.append(this.html("strong", "tutorial-card-title", inlineMathHtml(shot.card.title)));
     if (shot.card.lines.length) {
       const ul = el("ul", "tutorial-card-lines");
-      for (const line of shot.card.lines) {
-        const li = el("li");
-        li.innerHTML = inlineMathHtml(line);
-        ul.append(li);
-      }
+      for (const line of shot.card.lines) ul.append(this.html("li", "", inlineMathHtml(line)));
       this.card.append(ul);
     }
     if (shot.extra) this.card.append(this.renderExtra(shot.extra));
+    for (const tag of shot.tags ?? []) {
+      const box = el("div", "tutorial-tag-intro");
+      box.append(el("span", `tutorial-learning-label${tag.tag === "新的" ? " is-new" : ""}`, tag.tag), this.html("p", "", inlineMathHtml(tag.text)));
+      this.card.append(box);
+    }
+    if (shot.types.length) {
+      const section = el("section", "tutorial-types");
+      section.append(el("h4", "", "这一镜出现的类型"));
+      const dl = el("dl");
+      for (const type of shot.types) {
+        const dt = el("dt");
+        dt.append(el("span", "tutorial-type-name", type.name), el("code", "tutorial-type-code", type.code));
+        dl.append(dt, this.html("dd", "", inlineMathHtml(type.plain)));
+      }
+      section.append(dl);
+      this.card.append(section);
+    }
   }
 
   private renderExtra(extra: ShotExtra): HTMLElement {
     const reduced = this.reduced();
     switch (extra.kind) {
+      case "materials": {
+        const wrap = el("div", "tutorial-extra tutorial-materials");
+        for (const item of extra.items) {
+          const page = el("article", "tutorial-material");
+          const head = el("header", "tutorial-material-head");
+          head.append(el("strong", "", item.book), el("code", "tutorial-material-file", item.file));
+          page.append(head, this.html("div", "tutorial-material-body markdown-body", markdownHtml(item.markdown)));
+          wrap.append(page);
+        }
+        return wrap;
+      }
       case "sequence": {
         const table = el("table", "tutorial-sequence");
         const head = el("tr");
@@ -276,7 +439,17 @@ export class TutorialPlayer {
       }
       case "numbering": {
         const wrap = el("div", `tutorial-extra tutorial-numbering${reduced ? " is-static" : ""}`);
-        wrap.append(el("p", "tutorial-sequence-fixed", extra.sequenceNote));
+        const formulas = el("div", "tutorial-formulas");
+        for (const formula of extra.formulas) {
+          const row = el("div", "tutorial-formula");
+          row.append(this.html("span", "tutorial-formula-book", inlineMathHtml(`${formula.book}（${formula.range}）`)),
+            this.html("span", "tutorial-formula-tex", inlineMathHtml(`$${formula.tex}$`)));
+          formulas.append(row);
+        }
+        wrap.append(formulas);
+        const explain = el("ul", "tutorial-formula-explain");
+        for (const line of extra.explain) explain.append(this.html("li", "", inlineMathHtml(line)));
+        wrap.append(explain, el("p", "tutorial-sequence-fixed", extra.sequenceNote));
         const grid = el("div", "tutorial-plates");
         grid.style.setProperty("--columns", String(extra.shared.length));
         const shared = el("div", "tutorial-plate-row is-shared");
@@ -291,24 +464,43 @@ export class TutorialPlayer {
           yi.append(el("span", "tutorial-plate", `${plate.text}${ok ? " ✓" : ""}`));
         }
         grid.append(shared, yi);
-        wrap.append(grid, el("p", "tutorial-missing", `${extra.missing.text} · ${extra.missing.note}`));
+        wrap.append(grid, this.html("p", "tutorial-missing", inlineMathHtml(`${extra.missing.text} · ${extra.missing.note}`)));
         // 默认：编号牌先放在第 1 列，再整排右移到对应的共享编号下；减少动效时直接放在终位。
         if (reduced) yi.classList.add("is-shifted");
         else this.timers.push(window.setTimeout(() => yi.classList.add("is-shifted"), SCENE_TIMING.holdMs));
         return wrap;
       }
-      case "merge": {
-        const wrap = el("div", `tutorial-extra tutorial-merge${reduced ? " is-static" : ""}`);
-        for (const branch of extra.branches) {
-          const card = el("div", "tutorial-merge-branch");
-          card.append(el("span", "tutorial-merge-x", "✕"), el("strong", "", branch.title), el("p", "", branch.reason));
-          wrap.append(card);
-        }
+      case "revision": {
+        const wrap = el("div", `tutorial-extra tutorial-revision${reduced ? " is-static" : ""}`);
+        const v1 = el("div", "tutorial-revision-step is-v1");
+        v1.append(el("span", "tutorial-revision-version", "v1"), el("code", "", extra.v1.relation), el("span", "", ` · ${extra.v1.plain}`), el("p", "", extra.v1.note));
+        const feedback = el("div", "tutorial-revision-step is-feedback");
+        const button = el("button", "secondary-button tutorial-feedback-demo", "反馈给 agent");
+        button.type = "button";
+        button.disabled = true;
+        button.title = "教程里只演示，不会真的发送";
+        feedback.append(button, el("p", "", `「${extra.feedback}」`));
+        const v2 = el("div", "tutorial-revision-step is-v2");
+        v2.append(el("span", "tutorial-revision-version", "v2"), el("code", "", extra.v2.relation), el("span", "", ` · ${extra.v2.plain}`),
+          this.html("p", "", inlineMathHtml(`对不上的部分：${extra.v2.lost}`)), el("p", "tutorial-revision-note", extra.v2.note));
+        wrap.append(v1, el("span", "tutorial-revision-arrow", "↓"), feedback, el("span", "tutorial-revision-arrow", "↓"), v2,
+          this.html("p", "tutorial-extra-note", inlineMathHtml(`为什么改：${extra.why}`)));
+        return wrap;
+      }
+      case "accept": {
+        const wrap = el("div", "tutorial-extra tutorial-accept");
+        const button = el("button", "primary-button tutorial-accept-demo", "接受本提案");
+        button.type = "button";
+        button.disabled = true;
+        button.title = "教程里只演示，不会写入地图";
+        wrap.append(button, el("p", "tutorial-banner", extra.banner), el("span", "tutorial-badge", extra.badge));
+        const ul = el("ul", "tutorial-trust-axes");
+        for (const axis of extra.axes) ul.append(el("li", "", axis));
+        wrap.append(ul);
         return wrap;
       }
       case "learning": {
         const wrap = el("div", "tutorial-extra tutorial-learning");
-        wrap.append(el("p", "tutorial-banner", extra.banner), el("span", "tutorial-badge", extra.badge));
         const ul = el("ul", "tutorial-learning-units");
         for (const unit of extra.units) {
           const li = el("li");
@@ -317,7 +509,11 @@ export class TutorialPlayer {
           ul.append(li);
         }
         wrap.append(ul);
-        for (const text of extra.conventions) wrap.append(el("p", "tutorial-learning-convention", text));
+        for (const text of extra.conventions) {
+          const p = el("p", "tutorial-learning-convention");
+          p.append(el("span", "tutorial-learning-label is-convention", "新约定"), document.createTextNode(` ${text}`));
+          wrap.append(p);
+        }
         wrap.append(el("p", "tutorial-learning-summary", extra.summary));
         return wrap;
       }

@@ -130,7 +130,7 @@ export function renderSemanticDetail(detail: SemanticObjectDetail, deps: Semanti
     root.append(row("种类", semanticKindLabel(str(p.semantic_kind))));
     const labels = arr(p.preferred_labels).map(label => `${str(label.label) ?? ""}（${str(label.lang) ?? "?"}）`);
     if (labels.length) root.append(row("名称", labels.join(" / ")));
-    if (p.home_theory) root.append(row("所在星区", title(detail, str(p.home_theory))));
+    if (p.home_theory) root.append(row("所在理论", title(detail, str(p.home_theory))));
     if (str(p.description)) root.append(textElement("p", "semantic-description", str(p.description)!));
     const declaration = p.declaration as Json | null | undefined;
     if (declaration) {

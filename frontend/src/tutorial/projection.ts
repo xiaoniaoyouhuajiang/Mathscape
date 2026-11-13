@@ -27,6 +27,8 @@ export interface TutorialProjection {
   objects: Record<string, TutorialObject>;
   graph: IncidenceGraph;
   learning: LearningView;
+  /** 夹具的修订记录（v1 → v2），教程“修订”一镜用。 */
+  revisions?: Array<Record<string, unknown>>;
 }
 
 /** 按需加载（单独分包，打开教程时才读）。 */

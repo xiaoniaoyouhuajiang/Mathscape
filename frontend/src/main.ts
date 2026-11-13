@@ -778,7 +778,7 @@ const learningView = new LearningViewPanel(el.shell, {
 el.learningViewButton.addEventListener("click", () => void learningView.open());
 eventBus.on("open-learning-view", () => void learningView.open());
 
-// 帮助菜单 → 只读教程「两本教材是不是同一颗星」（不写工作区）。
+// 帮助菜单 → 只读教程「两本书讲的是不是同一个东西」（不写工作区）。
 const tutorial = new TutorialPlayer(document.body);
 const setHelpMenu = (open: boolean) => {
   el.helpMenu.hidden = !open;

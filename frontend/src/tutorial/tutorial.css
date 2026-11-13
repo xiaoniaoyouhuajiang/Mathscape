@@ -5,14 +5,16 @@
 .tutorial-provenance, .tutorial-counter { font-size: 12px; color: #9eb6ff; }
 .tutorial-close { margin-left: auto; }
 .tutorial-stage { position: relative; display: grid; grid-template-columns: 1fr minmax(280px, 380px); min-height: 0; }
-.tutorial-map { position: relative; min-height: 0; }
+.tutorial-map-wrap { position: relative; min-height: 0; }
+.tutorial-map { position: absolute; inset: 0; }
+/* 图例沿用主地图底栏（.map-legend），只调整位置。 */
+.tutorial-legend { left: 12px; bottom: 10px; max-width: calc(100% - 24px); }
 .tutorial-card { overflow: auto; margin: 12px; padding: 12px 14px; border-radius: 10px; background: rgba(18, 28, 61, 0.78); border: 1px solid rgba(158, 182, 255, 0.28); backdrop-filter: blur(6px); font-size: 13px; }
 .tutorial-card-caption { margin: 0 0 6px; font-size: 14px; color: #ffd89a; }
 .tutorial-card-title { display: block; margin-bottom: 6px; }
 .tutorial-card-lines { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
 .tutorial-caption { margin: 0; padding: 10px 18px; background: rgba(7, 11, 26, 0.85); font-size: 14px; line-height: 1.6; }
 .tutorial-hud { display: flex; gap: 8px; align-items: center; padding: 8px 16px 12px; }
-.tutorial-note { margin-left: auto; font-size: 12px; color: #7f8db3; }
 .tutorial-extra { margin-top: 10px; display: grid; gap: 6px; }
 .tutorial-extra-note, .tutorial-missing, .tutorial-sequence-fixed { margin: 0; font-size: 12px; color: #9fb8c4; }
 .tutorial-sequence { border-collapse: collapse; font-variant-numeric: tabular-nums; }
@@ -26,12 +28,6 @@
 .tutorial-plate-row.is-yi .tutorial-plate { transition: transform 600ms ease; transform: translateX(0); }
 .tutorial-plate-row.is-yi.is-shifted .tutorial-plate { transform: translateX(calc(var(--shift, 1) * (100% + 4px))); }
 .tutorial-numbering.is-static .tutorial-plate-row.is-yi .tutorial-plate { transition: none; }
-.tutorial-merge { grid-template-columns: 1fr 1fr; }
-.tutorial-merge-branch { padding: 8px; border-radius: 8px; border: 1px solid rgba(208, 98, 106, 0.6); font-size: 12px; }
-.tutorial-merge-branch p { margin: 4px 0 0; color: #c8d0e6; }
-.tutorial-merge-x { color: #d0626a; font-weight: 700; margin-right: 6px; }
-.tutorial-merge:not(.is-static) .tutorial-merge-x { animation: tutorial-flash 400ms ease 3; }
-@keyframes tutorial-flash { 50% { opacity: 0.2; } }
 .tutorial-banner { margin: 0; padding: 6px 8px; border-radius: 6px; background: rgba(255, 216, 154, 0.12); color: #ffd89a; font-size: 12px; }
 .tutorial-badge { justify-self: start; padding: 2px 8px; border-radius: 999px; border: 1px solid #9eb6ff; font-size: 11px; }
 .tutorial-learning-units { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 4px; }
@@ -46,3 +42,35 @@ html.reduce-motion .tutorial-overlay * { transition: none !important; animation:
 .help-menu-list button:hover, .help-menu-list button:focus-visible { background: rgba(158, 182, 255, 0.18); }
 /* 顶栏有 backdrop-filter（自成层叠上下文），菜单打开时把顶栏抬到地图之上。 */
 .topbar:has(.help-menu-list:not([hidden])) { position: relative; z-index: 30; }
+.tutorial-card a.tutorial-link { color: #9eb6ff; text-decoration: underline; }
+.tutorial-card code { font-size: 11px; padding: 0 4px; border-radius: 4px; background: rgba(158, 182, 255, 0.14); }
+.tutorial-materials { gap: 10px; }
+.tutorial-material { padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(255, 216, 154, 0.5); background: rgba(7, 11, 26, 0.45); }
+.tutorial-material-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
+.tutorial-material-body.markdown-body { margin: 0; padding: 0; background: transparent; color: inherit; font-size: 13px; box-shadow: none; border: 0; max-width: none; }
+.tutorial-material-body p { margin: 0; line-height: 1.7; }
+.tutorial-tag-intro { margin-top: 10px; padding: 8px; border-radius: 8px; border: 1px dashed rgba(90, 168, 154, 0.7); display: grid; gap: 4px; justify-items: start; }
+.tutorial-tag-intro p { margin: 0; font-size: 12px; }
+.tutorial-learning-label.is-convention { background: rgba(158, 182, 255, 0.25); }
+.tutorial-types { margin-top: 12px; padding-top: 8px; border-top: 1px solid rgba(158, 182, 255, 0.2); }
+.tutorial-types h4 { margin: 0 0 6px; font-size: 12px; color: #9eb6ff; font-weight: 600; }
+.tutorial-types dl { margin: 0; display: grid; gap: 4px; }
+.tutorial-types dt { display: flex; gap: 6px; align-items: baseline; font-weight: 600; }
+.tutorial-types dd { margin: 0 0 4px; font-size: 12px; color: #c8d0e6; line-height: 1.6; }
+.tutorial-formulas { display: grid; gap: 6px; }
+.tutorial-formula { display: grid; gap: 2px; padding: 6px 8px; border-radius: 6px; background: rgba(7, 11, 26, 0.45); }
+.tutorial-formula-book { font-size: 12px; color: #ffd89a; }
+.tutorial-formula-tex { font-size: 15px; }
+.tutorial-formula-explain { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12px; line-height: 1.6; }
+.tutorial-revision { justify-items: stretch; }
+.tutorial-revision-step { padding: 8px; border-radius: 8px; border: 1px solid rgba(158, 182, 255, 0.35); font-size: 12px; }
+.tutorial-revision-step p { margin: 4px 0 0; }
+.tutorial-revision-step.is-v1 { opacity: 0.7; border-style: dashed; }
+.tutorial-revision-step.is-v1 code { text-decoration: line-through; }
+.tutorial-revision-step.is-v2 { border-color: rgba(255, 216, 154, 0.7); }
+.tutorial-revision-version { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 999px; background: rgba(158, 182, 255, 0.25); font-weight: 700; }
+.tutorial-revision-arrow { justify-self: center; color: #9eb6ff; }
+.tutorial-revision-note { color: #9fb8c4; }
+.tutorial-feedback-demo:disabled, .tutorial-accept-demo:disabled { opacity: 1; cursor: default; }
+.tutorial-accept { justify-items: start; }
+.tutorial-trust-axes { margin: 0; padding-left: 18px; font-size: 12px; }

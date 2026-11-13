@@ -619,7 +619,7 @@ pub fn graph_diagnostics(final_map: &BTreeMap<String, MapEditObject>) -> Vec<Imp
                 }
                 let kind = p["semantic_kind"].as_str().unwrap_or_default();
                 if kind != "theory" && p["home_theory"].is_null() {
-                    out.push(missing("home_theory（除 theory 外都要挂在一个星区下）"));
+                    out.push(missing("home_theory（除 theory 外都要挂在一个理论下）"));
                 }
                 match kind {
                     "declaration" => {
@@ -658,7 +658,7 @@ pub fn graph_diagnostics(final_map: &BTreeMap<String, MapEditObject>) -> Vec<Imp
                     out.push(fail(
                         id,
                         "invalid_reference_kind",
-                        "declaration.concept 必须指向概念星（concept）",
+                        "declaration.concept 必须指向概念（concept）",
                     ));
                 }
             }
