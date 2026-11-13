@@ -12,6 +12,7 @@ import { reducedMotion as defaultReducedMotion } from "../core/motion";
 import { mountCytoscapeGraph } from "../graph/cytoscape";
 import { SCENE_TIMING } from "../graph/scene-player";
 import { EDGE_TYPES, NODE_TYPES, type NodeTypeVisual } from "../graph/taxonomy";
+import { texToPlain, truncatePlain } from "../graph/tex-plain";
 import { inlineMathHtml, markdownHtml } from "./math";
 import type { TutorialProjection } from "./projection";
 import { loadTutorialProjection, tutorialGraph } from "./projection";
@@ -41,6 +42,51 @@ export interface TutorialPlayerDeps {
 const HIDDEN = "tutorial-hidden";
 const FOCUS = "tutorial-focus";
 const DIM = "tutorial-dim";
+/** 连线：这一镜要读的线才显示文字。 */
+const EDGE_FOCUS = "tutorial-edge-focus";
+/** 鼠标悬停：节点显示完整标签、连线显示文字。 */
+const HOVER = "tutorial-hover";
+/** 非焦点节点的短标签最多几个字。 */
+const COMPACT_CHARS = 12;
+/** 焦点一笔账的标签最多几个字（全文在说明页）。 */
+const DEBT_FULL_CHARS = 40;
+
+/**
+ * 教程地图的固定布局（模型坐标）：材料 | 内容单元（星港在上、灯塔在下）|
+ * 共享对象与理论 | 一笔账（和它挂的对象同一行）。夹具是固定的，手排比力导向
+ * 稳定，也能按标签大小留够间距：列宽 ≥ 焦点标签宽度，行距 ≥ 焦点标签高度。
+ */
+const UNIT_STEP = 96;
+const COL = { material: -470, section: -230, unit: 0, shared: 440, debt: 800 } as const;
+const TUTORIAL_LAYOUT: Record<string, [number, number]> = {
+  "artifact:jia": [COL.material, -520],
+  "artifact:yi": [COL.material, 90],
+  "ds.jia": [COL.section, -480],
+  "jia.u.sec": [COL.section, -280],
+  "jia.u.def": [COL.unit, -520],
+  "jia.u.lem": [COL.unit, -520 + UNIT_STEP],
+  "jia.u.lem_pf": [COL.unit, -520 + UNIT_STEP * 2],
+  "jia.u.thm": [COL.unit, -520 + UNIT_STEP * 3],
+  "jia.u.thm_pf": [COL.unit, -520 + UNIT_STEP * 4],
+  "jia.u.rem": [COL.unit, -520 + UNIT_STEP * 5],
+  "ds.yi": [COL.section, 110],
+  "yi.u.sec": [COL.section, 300],
+  "yi.u.def": [COL.unit, 90],
+  "yi.u.lem": [COL.unit, 90 + UNIT_STEP],
+  "yi.u.thm": [COL.unit, 90 + UNIT_STEP * 2],
+  "yi.u.ex": [COL.unit, 90 + UNIT_STEP * 3],
+  "yi.u.hint": [COL.unit, 90 + UNIT_STEP * 4],
+  "e.theory": [COL.shared, -420],
+  "e.fib": [COL.shared, -290],
+  "e.fib_def": [COL.shared, -160],
+  "e.qpow": [COL.shared, -30],
+  "e.cassini": [COL.shared, 100],
+  "e.puzzle": [COL.shared, 240],
+  "d.yi.f_eq_F": [COL.debt, -160],
+  "d.yi.lem.forward": [COL.debt, -30],
+  "d.yi.thm.forward": [COL.debt, 100],
+  "d.puzzle.all_k": [COL.debt, 240],
+};
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = ""): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -155,8 +201,38 @@ export class TutorialPlayer {
         "target-arrow-color": DERIVED_COLOR, "target-arrow-shape": "triangle", color: DERIVED_COLOR, "font-size": "9px",
       })
       .selector(`.${DIM}`).style({ opacity: 0.35 })
+      // 节点：默认一行短名（小字、不换行），焦点 / 悬停才显示〔类型〕+ 全名。
+      // 字号、换行宽度、垫底留白在各状态下保持一致：只换文字（syncLabel），
+      // 不让 Cytoscape 沿用旧的标签尺寸把新文字裁掉。
+      .selector("node").style({
+        "font-size": "12px", "text-wrap": "wrap", "text-max-width": "220px",
+        "text-background-shape": "roundrectangle", "text-background-padding": "3px", "z-index": 1,
+      })
+      .selector(`node.${FOCUS}, node.${HOVER}`).style({
+        color: "#f4f1e4", "text-background-color": "#0c131a", "text-background-opacity": 0.94, "z-index": 30,
+      })
       .selector(`node.${FOCUS}`).style({ "border-width": 4, "border-color": "#ffd89a", "underlay-color": "#ffd89a", "underlay-opacity": 0.25, "underlay-padding": 6 })
+      .selector(`node.${HOVER}`).style({ opacity: 1, "z-index": 40 })
+      // 连线：默认不显示文字；这一镜要读的线（或悬停的线）才显示，水平放、垫深色圆角底。
+      .selector("edge").style({ label: "", "text-rotation": "none", "z-index": 0 })
+      .selector(`edge.${EDGE_FOCUS}, edge.${HOVER}`).style({
+        label: "data(label)", "font-size": "12px", "text-wrap": "wrap", "text-max-width": "220px",
+        color: "#ffe6a6", "text-background-color": "#0c131a", "text-background-opacity": 0.94,
+        "text-background-shape": "roundrectangle", "text-background-padding": "3px",
+        "text-border-color": "#6e5a2a", "text-border-width": 1, "text-border-opacity": 1, "z-index": 20,
+      })
+      .selector(`edge.${HOVER}`).style({ opacity: 1, "z-index": 40 })
+      .selector(`edge.tutorial-derived-edge.${EDGE_FOCUS}`).style({ color: DERIVED_COLOR, "text-border-color": "#2f5b5c" })
       .update();
+    // 悬停：完整标签浮到最上层。
+    this.core.on("mouseover", "node, edge", (event) => {
+      event.target.addClass(HOVER);
+      if (event.target.isNode() && syncLabel(event.target)) refreshLabels(this.core!, event.target);
+    });
+    this.core.on("mouseout", "node, edge", (event) => {
+      event.target.removeClass(HOVER);
+      if (event.target.isNode() && syncLabel(event.target)) refreshLabels(this.core!, event.target);
+    });
     this.core.autoungrabify(true);
     // 画面上对象少时（前两镜）不要放得太大，节点标签留在画布里。
     this.core.maxZoom(1.4);
@@ -230,26 +306,57 @@ export class TutorialPlayer {
           const kind = SEMANTIC_KIND[String(byId.get(node.data("domainId"))?.payload.semantic_kind ?? "")];
           if (kind) type = `${kind.name} · ${kind.code}`;
         }
-        if (!type) return;
-        const body = domainKind === "Debt" ? label.replace(/^一笔账：/, "") : stripTypePrefix(label);
-        node.data("label", `〔${type}〕\n${body}`);
+        if (!type) {
+          node.data({ fullLabel: label, compactLabel: truncatePlain(label, COMPACT_CHARS), label: truncatePlain(label, COMPACT_CHARS) });
+          return;
+        }
+        let body = stripTypePrefix(label);
+        if (domainKind === "Debt") {
+          // 投影标签在 24 个字处截断；焦点时用对象里的原文（转成纯文字）重新截。
+          const obligation = byId.get(node.data("domainId"))?.payload.obligation;
+          body = typeof obligation === "string"
+            ? truncatePlain(texToPlain(obligation), DEBT_FULL_CHARS)
+            : label.replace(/^一笔账：/, "");
+        }
+        // 焦点：〔类型〕+ 全名；其他：一行短名（一笔账只写“一笔账”），悬停看全文。
+        const compact = domainKind === "Debt" ? TYPE_NOTES.debt.name : truncatePlain(body, COMPACT_CHARS);
+        node.data({ fullLabel: `〔${type}〕\n${body}`, compactLabel: compact, label: compact });
       });
       core.edges(".alignment-edge").forEach((edge) => {
         const relation = String(byId.get(edge.data("relationId"))?.payload.relation ?? "");
-        if (relation) edge.data("label", `${relation} · ${edge.data("label")}`);
+        // 两行：关系类型代码 / 白话。
+        if (relation) edge.data("label", `${relation}\n${edge.data("label")}`);
       });
-      const left = core.nodes().boundingBox().x1;
+      this.layout(core);
       for (const [artifact, unit] of Object.entries(DERIVED)) {
         const source = core.nodes().filter((node) => node.data("domainId") === projection.artifacts[artifact])[0] as NodeSingular | undefined;
         const target = core.nodes().filter((node) => node.data("domainId") === projection.refs[unit])[0] as NodeSingular | undefined;
         if (!source || !target) continue;
-        // 每份材料放在它派生出的那条定义左边，两本书上下分开，标签不重叠。
-        source.position({ x: left - 160, y: target.position("y") });
         core.add({
           group: "edges", classes: "tutorial-derived-edge",
           data: { id: `derived~${artifact}`, source: source.id(), target: target.id(), label: "派生", relationId: `derived:${artifact}` },
         });
       }
+    });
+  }
+
+  /** 按 TUTORIAL_LAYOUT 摆放；表里没有的节点（夹具以后加的）留在力导向的位置。 */
+  private layout(core: Core): void {
+    const projection = this.projection!;
+    const local = new Map<string, string>();
+    for (const [key, id] of Object.entries(projection.refs)) local.set(id, key);
+    for (const [key, id] of Object.entries(projection.artifacts)) local.set(id, `artifact:${key}`);
+    core.nodes().forEach((node: NodeSingular) => {
+      const key = local.get(String(node.data("domainId") ?? ""));
+      const at = key ? TUTORIAL_LAYOUT[key] : undefined;
+      if (at) node.position({ x: at[0], y: at[1] });
+    });
+    // 汇合点（多端关系）放在它连着的节点中间。
+    core.nodes(`[elementKind = "junction"]`).forEach((junction: NodeSingular) => {
+      const around = junction.neighborhood().nodes();
+      if (around.empty()) return;
+      const sum = around.reduce((acc, node) => ({ x: acc.x + node.position("x"), y: acc.y + node.position("y") }), { x: 0, y: 0 });
+      junction.position({ x: sum.x / around.length, y: sum.y / around.length });
     });
   }
 
@@ -277,6 +384,8 @@ export class TutorialPlayer {
     }
     const referenced = new Set(Object.values(this.projection!.refs));
     const focus = new Set(this.shots[index].focus.map((local) => this.domainId(local)).filter(Boolean) as string[]);
+    let relabeled = core.collection();
+    const revealedNow = new Set(this.shots[index].reveal.map((local) => this.domainId(local)).filter(Boolean) as string[]);
     core.batch(() => {
       core.nodes().forEach((node: NodeSingular) => {
         const domain = node.data("domainId") as string | null;
@@ -285,6 +394,7 @@ export class TutorialPlayer {
         node.toggleClass(HIDDEN, !visible);
         node.toggleClass(FOCUS, domain !== null && focus.has(domain));
         node.toggleClass(DIM, focus.size > 0 && visible && !(domain !== null && focus.has(domain)));
+        if (syncLabel(node)) relabeled = relabeled.union(node);
       });
       core.edges().forEach((edge) => {
         const relation = edge.data("relationId") as string | undefined;
@@ -293,20 +403,54 @@ export class TutorialPlayer {
         // 投影算出的连线（属于理论、挂账、约定适用）随两端出现。
         const scripted = relation !== undefined && (referenced.has(relation) || relation.startsWith("derived:"));
         const allowed = !relation || !scripted || revealed.has(relation);
-        edge.toggleClass(HIDDEN, !(endpointsVisible && allowed));
+        const shown = endpointsVisible && allowed;
+        edge.toggleClass(HIDDEN, !shown);
+        // 线上的文字：这一镜新出现的对齐线 / 派生线，或两端都是焦点的线。
+        const ends = [edge.source().data("domainId"), edge.target().data("domainId")] as Array<string | null>;
+        const bothFocused = ends.every((id) => id !== null && focus.has(id));
+        const newHere = scripted && revealedNow.has(relation!);
+        edge.toggleClass(EDGE_FOCUS, shown && (newHere || bothFocused));
+        edge.toggleClass(DIM, shown && focus.size > 0 && !(newHere || bothFocused));
       });
       core.nodes(`[elementKind = "junction"]`).forEach((node) => {
         node.toggleClass(HIDDEN, node.connectedEdges().filter(`.${HIDDEN}`).length === node.connectedEdges().length);
       });
     });
+    refreshLabels(core, relabeled.nodes());
     this.renderLegend(core);
     const target = core.elements().filter((element) => !element.hasClass(HIDDEN));
     const fitTo = focus.size
       ? core.nodes().filter((node) => focus.has(node.data("domainId") as string))
       : target;
     if (fitTo.empty()) return;
-    if (this.reduced()) core.fit(fitTo, 72);
-    else core.animate({ fit: { eles: fitTo, padding: 72 } }, { duration: SCENE_TIMING.fitMs });
+    const view = this.viewportFor(core, fitTo);
+    if (this.reduced()) core.viewport(view);
+    else core.animate(view, { duration: SCENE_TIMING.fitMs });
+  }
+
+  /**
+   * 像 `fit` 一样把焦点（含标签）放进画面，但不放到底部图例下面：
+   * 可用高度扣掉图例，标签整块留在图例上方。
+   */
+  private viewportFor(core: Core, eles: ReturnType<Core["elements"]>): { zoom: number; pan: { x: number; y: number } } {
+    const pad = 56;
+    const width = this.canvas.clientWidth || core.width();
+    const height = this.canvas.clientHeight || core.height();
+    const legend = this.legend.offsetHeight ? this.legend.offsetHeight + 16 : 0;
+    // 不用 includeLabels：标签文字刚换过，此时 Cytoscape 量到的还是旧标签的尺寸，
+    // 而且会把这个旧尺寸缓存下来，导致新标签被裁掉。按标签的最大尺寸手动留边：
+    // 标签在节点上方，最宽 text-max-width（220px）。
+    const nodes = eles.boundingBox({ includeLabels: false, includeOverlays: false });
+    const box = { x1: nodes.x1 - 110, x2: nodes.x2 + 110, y1: nodes.y1 - 72, y2: nodes.y2 + 8, w: 0, h: 0 };
+    box.w = box.x2 - box.x1;
+    box.h = box.y2 - box.y1;
+    const availW = Math.max(40, width - pad * 2);
+    const availH = Math.max(40, height - legend - pad * 2);
+    const zoom = Math.min(core.maxZoom(), Math.max(core.minZoom(), Math.min(availW / Math.max(box.w, 1), availH / Math.max(box.h, 1))));
+    return {
+      zoom,
+      pan: { x: width / 2 - zoom * (box.x1 + box.w / 2), y: pad + availH / 2 - zoom * (box.y1 + box.h / 2) },
+    };
   }
 
   /** 图例：和主地图底栏同一套样式，只列当前画面上出现的类型。 */
@@ -519,6 +663,33 @@ export class TutorialPlayer {
       }
     }
   }
+}
+
+/** 焦点或悬停：〔类型〕+ 全名；其他：一行短名。直接改 `label`，让 Cytoscape 重算标签尺寸。 */
+function syncLabel(node: NodeSingular): boolean {
+  const full = node.hasClass(FOCUS) || node.hasClass(HOVER);
+  const next = String(node.data(full ? "fullLabel" : "compactLabel") ?? node.data("label") ?? "");
+  if (node.data("label") === next) return false;
+  node.data("label", next);
+  return true;
+}
+
+/**
+ * 换过文字的节点要重算样式：Cytoscape 3.34 只改 `label` 数据时，标签的包围盒
+ * 还沿用旧文字的宽度（渲染尺寸下一帧才更新，包围盒却已按旧尺寸缓存），新标签会被裁成旧宽度（截图里「Fibonacci 数列」显示不全）。
+ * `updateStyle` 是公开方法，只是没写进类型声明。
+ */
+function refreshLabels(core: Core, nodes: ReturnType<Core["nodes"]>): void {
+  if (nodes.empty()) return;
+  const update = () => {
+    if (core.destroyed()) return;
+    // 先量一次（让渲染器按新文字重算标签尺寸），再作废包围盒缓存。
+    nodes.boundingBox({ includeLabels: true });
+    (nodes as unknown as { updateStyle(): void }).updateStyle();
+  };
+  update();
+  // 新文字的渲染尺寸要等画过一帧才稳定，之后再来一次。
+  requestAnimationFrame(() => requestAnimationFrame(update));
 }
 
 /** 测试与调试：教程地图的元素（不含隐藏）。 */

@@ -14,6 +14,7 @@ import {
 } from "./projection";
 import { FOCUS_CONTRACTION_KIND } from "./focus";
 import { EDGE_TYPES, NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
+import { graphLabelText, texToPlain } from "./tex-plain";
 
 export type RenderMode = "semantic" | "hyperedge";
 
@@ -87,7 +88,19 @@ export function toCytoscapeElements(
     }));
   }
 
-  return [...nodes, ...edges];
+  return [...nodes, ...edges].map(plainLabels);
+}
+
+/**
+ * 画布只能画纯文字：标签里的 TeX 换成可读的 Unicode（`$k\ge 4$` → `k ≥ 4`），
+ * 在公式中间截断的标签先从摘要找回原文再截断。没有 TeX 的标签原样不动。
+ */
+function plainLabels(element: ElementDefinition): ElementDefinition {
+  const label = element.data.label;
+  if (typeof label !== "string" || !/[$\\]/.test(label)) return element;
+  const summary = typeof element.data.summary === "string" ? element.data.summary : null;
+  const plain = element.group === "nodes" ? graphLabelText(label, summary) : texToPlain(label);
+  return { ...element, data: { ...element.data, label: plain } };
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +451,12 @@ const styles: StylesheetJson = [
       "target-arrow-shape": "triangle",
       "font-size": "9px",
       color: "#9aa9b4",
-      "text-rotation": "autorotate",
+      // 连线上的字水平放、垫深色圆角底：不跟着线转，压在线上和交叉处也读得清。
+      "text-rotation": "none",
+      "text-background-color": "#0c131a",
+      "text-background-opacity": 0.88,
+      "text-background-shape": "roundrectangle",
+      "text-background-padding": "2px",
     },
   },
   {

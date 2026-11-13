@@ -133,4 +133,61 @@ test.describe("teaser tutorial", () => {
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
   });
+
+  test("map labels: focused labels never overlap, edge labels are horizontal pills on the shot's lines only", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("mathscape:reduce-motion", "on"));
+    await page.goto("/tests/app.html");
+    await expect(page.locator("#ink-button")).toBeVisible();
+    const dialog = await openTutorial(page);
+    const card = dialog.locator(".tutorial-card");
+    // 读教程画布里的 Cytoscape 实例（容器上的注册表），量标签的包围盒（模型坐标）。
+    const measure = () => page.evaluate(() => {
+      type Box = { x1: number; x2: number; y1: number; y2: number; w: number; h: number };
+      type Ele = {
+        boundingBox(o: object): Box; data(k: string): string; visible(): boolean; hasClass(c: string): boolean;
+        style(k: string): string; id(): string;
+      };
+      type Coll = { filter(f: (e: Ele) => boolean): Ele[] };
+      const cy = (document.querySelector(".tutorial-map") as unknown as { _cyreg: { cy: { nodes(): Coll; edges(): Coll } } })._cyreg.cy;
+      const box = (e: Ele) => e.boundingBox({ includeNodes: false, includeEdges: false, includeLabels: true, includeOverlays: false, includeUnderlays: false });
+      const hit = (a: Box, b: Box) => a.x1 < b.x2 && b.x1 < a.x2 && a.y1 < b.y2 && b.y1 < a.y2;
+      const nodes = cy.nodes().filter((n) => n.visible() && Boolean(n.data("label")));
+      const labeledEdges = cy.edges().filter((e) => e.visible() && e.style("label") !== "");
+      const overlaps: string[] = [];
+      for (const f of nodes.filter((n) => n.hasClass("tutorial-focus"))) {
+        for (const o of nodes) if (o !== f && hit(box(f), box(o))) overlaps.push(`${f.data("label")} × ${o.data("label")}`);
+        for (const e of labeledEdges) if (hit(box(f), box(e))) overlaps.push(`${f.data("label")} × ${e.data("label")}`);
+      }
+      const fib = nodes.filter((n) => n.data("label").includes("〔概念 · concept〕"))[0];
+      return {
+        overlaps,
+        fib: fib ? { label: fib.data("label"), focused: fib.hasClass("tutorial-focus"), h: box(fib).h } : null,
+        edges: labeledEdges.map((e) => ({ focus: e.hasClass("tutorial-edge-focus"), rotation: e.style("text-rotation"), label: e.data("label") })),
+        raw: nodes.filter((n) => /[$\\]/.test(n.data("label"))).map((n) => n.data("label")),
+      };
+    });
+    for (let i = 0; i < 13; i++) {
+      const shot = (await card.getAttribute("data-shot"))!;
+      // 换过文字的标签下一帧才重算尺寸。
+      await page.waitForTimeout(150);
+      const m = await measure();
+      expect(m.overlaps, shot).toEqual([]);
+      expect(m.raw, shot).toEqual([]);
+      // 线上的字：只在这一镜要读的线上，水平放。
+      for (const edge of m.edges) {
+        expect(edge.focus, `${shot}: ${edge.label}`).toBe(true);
+        expect(edge.rotation).toBe("none");
+      }
+      if (m.fib?.focused) {
+        // 焦点的概念节点：〔类型〕和全名两行都在，没有被裁成一行。
+        expect(m.fib.label).toBe("〔概念 · concept〕\nFibonacci 数列");
+        expect(m.fib.h).toBeGreaterThan(26);
+      }
+      if (shot === "cassini") {
+        expect(m.edges.map((e) => e.label).sort()).toEqual(["expresses\n说的就是它", "specializes\n特例：灯塔的第 n 条 ＝ 共享的第 n+1 条"]);
+      }
+      if (shot === "same-concept") expect(m.fib?.focused).toBe(true);
+      if (i < 12) await dialog.locator(".tutorial-next").click();
+    }
+  });
 });
