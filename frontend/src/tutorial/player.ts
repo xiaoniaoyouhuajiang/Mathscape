@@ -12,6 +12,7 @@ import { reducedMotion as defaultReducedMotion } from "../core/motion";
 import { mountCytoscapeGraph } from "../graph/cytoscape";
 import { SCENE_TIMING } from "../graph/scene-player";
 import { EDGE_TYPES, NODE_TYPES, type NodeTypeVisual } from "../graph/taxonomy";
+import { LABEL_HOVER, LABEL_RECESS, LABEL_HOVER_STYLE, LABEL_RECESS_STYLE, refreshLabels, syncNodeLabel } from "../graph/label-hover";
 import { texToPlain, truncatePlain } from "../graph/tex-plain";
 import { inlineMathHtml, markdownHtml } from "./math";
 import type { TutorialProjection } from "./projection";
@@ -44,8 +45,6 @@ const FOCUS = "tutorial-focus";
 const DIM = "tutorial-dim";
 /** 连线：这一镜要读的线才显示文字。 */
 const EDGE_FOCUS = "tutorial-edge-focus";
-/** 鼠标悬停：节点显示完整标签、连线显示文字。 */
-const HOVER = "tutorial-hover";
 /** 非焦点节点的短标签最多几个字。 */
 const COMPACT_CHARS = 12;
 /** 焦点一笔账的标签最多几个字（全文在说明页）。 */
@@ -193,7 +192,9 @@ export class TutorialPlayer {
       this.shots = buildTutorialShots(this.projection);
     }
     this.core?.destroy();
-    this.core = mountCytoscapeGraph(this.canvas, tutorialGraph(this.projection), "semantic");
+    this.core = mountCytoscapeGraph(this.canvas, tutorialGraph(this.projection), "semantic", {
+      labelHover: { isFull: (node) => node.hasClass(FOCUS) },
+    });
     this.decorate(this.core);
     this.core.style().selector(`.${HIDDEN}`).style({ display: "none" })
       .selector("edge.tutorial-derived-edge").style({
@@ -208,31 +209,23 @@ export class TutorialPlayer {
         "font-size": "12px", "text-wrap": "wrap", "text-max-width": "220px",
         "text-background-shape": "roundrectangle", "text-background-padding": "3px", "z-index": 1,
       })
-      .selector(`node.${FOCUS}, node.${HOVER}`).style({
-        color: "#f4f1e4", "text-background-color": "#0c131a", "text-background-opacity": 0.94, "z-index": 30,
-      })
-      .selector(`node.${FOCUS}`).style({ "border-width": 4, "border-color": "#ffd89a", "underlay-color": "#ffd89a", "underlay-opacity": 0.25, "underlay-padding": 6 })
-      .selector(`node.${HOVER}`).style({ opacity: 1, "z-index": 40 })
+      .selector(`node.${FOCUS}, node.${LABEL_HOVER}`).style(LABEL_HOVER_STYLE)
+      .selector(`node.${FOCUS}`).style({ "border-width": 4, "border-color": "#ffd89a", "underlay-color": "#ffd89a", "underlay-opacity": 0.25, "underlay-padding": 6, "z-index": 30 })
+      .selector(`node.${LABEL_HOVER}`).style({ "z-index": 1000, "z-index-compare": "manual", "z-compound-depth": "top", opacity: 1 })
+      .selector(`.${LABEL_RECESS}`).style(LABEL_RECESS_STYLE)
       // 连线：默认不显示文字；这一镜要读的线（或悬停的线）才显示，水平放、垫深色圆角底。
       .selector("edge").style({ label: "", "text-rotation": "none", "z-index": 0 })
-      .selector(`edge.${EDGE_FOCUS}, edge.${HOVER}`).style({
+      .selector(`edge.${EDGE_FOCUS}, edge.${LABEL_HOVER}`).style({
         label: "data(label)", "font-size": "12px", "text-wrap": "wrap", "text-max-width": "220px",
         color: "#ffe6a6", "text-background-color": "#0c131a", "text-background-opacity": 0.94,
         "text-background-shape": "roundrectangle", "text-background-padding": "3px",
         "text-border-color": "#6e5a2a", "text-border-width": 1, "text-border-opacity": 1, "z-index": 20,
       })
-      .selector(`edge.${HOVER}`).style({ opacity: 1, "z-index": 40 })
+      .selector(`edge.${LABEL_HOVER}`).style({ opacity: 1, "z-index": 1000, "z-index-compare": "manual", "z-compound-depth": "top" })
       .selector(`edge.tutorial-derived-edge.${EDGE_FOCUS}`).style({ color: DERIVED_COLOR, "text-border-color": "#2f5b5c" })
       .update();
-    // 悬停：完整标签浮到最上层。
-    this.core.on("mouseover", "node, edge", (event) => {
-      event.target.addClass(HOVER);
-      if (event.target.isNode() && syncLabel(event.target)) refreshLabels(this.core!, event.target);
-    });
-    this.core.on("mouseout", "node, edge", (event) => {
-      event.target.removeClass(HOVER);
-      if (event.target.isNode() && syncLabel(event.target)) refreshLabels(this.core!, event.target);
-    });
+    // 悬停由 mountCytoscapeGraph 绑定：完整标签用和焦点一样的深色底，浮到最上层；
+    // 会挡住它的邻接短标签暂时藏起。
     this.core.autoungrabify(true);
     // 画面上对象少时（前两镜）不要放得太大，节点标签留在画布里。
     this.core.maxZoom(1.4);
@@ -394,7 +387,7 @@ export class TutorialPlayer {
         node.toggleClass(HIDDEN, !visible);
         node.toggleClass(FOCUS, domain !== null && focus.has(domain));
         node.toggleClass(DIM, focus.size > 0 && visible && !(domain !== null && focus.has(domain)));
-        if (syncLabel(node)) relabeled = relabeled.union(node);
+        if (syncNodeLabel(node, node.hasClass(FOCUS))) relabeled = relabeled.union(node);
       });
       core.edges().forEach((edge) => {
         const relation = edge.data("relationId") as string | undefined;
@@ -416,7 +409,7 @@ export class TutorialPlayer {
         node.toggleClass(HIDDEN, node.connectedEdges().filter(`.${HIDDEN}`).length === node.connectedEdges().length);
       });
     });
-    refreshLabels(core, relabeled.nodes());
+    refreshLabels(core, relabeled.nodes() as unknown as Parameters<typeof refreshLabels>[1]);
     this.renderLegend(core);
     const target = core.elements().filter((element) => !element.hasClass(HIDDEN));
     const fitTo = focus.size
@@ -663,33 +656,6 @@ export class TutorialPlayer {
       }
     }
   }
-}
-
-/** 焦点或悬停：〔类型〕+ 全名；其他：一行短名。直接改 `label`，让 Cytoscape 重算标签尺寸。 */
-function syncLabel(node: NodeSingular): boolean {
-  const full = node.hasClass(FOCUS) || node.hasClass(HOVER);
-  const next = String(node.data(full ? "fullLabel" : "compactLabel") ?? node.data("label") ?? "");
-  if (node.data("label") === next) return false;
-  node.data("label", next);
-  return true;
-}
-
-/**
- * 换过文字的节点要重算样式：Cytoscape 3.34 只改 `label` 数据时，标签的包围盒
- * 还沿用旧文字的宽度（渲染尺寸下一帧才更新，包围盒却已按旧尺寸缓存），新标签会被裁成旧宽度（截图里「Fibonacci 数列」显示不全）。
- * `updateStyle` 是公开方法，只是没写进类型声明。
- */
-function refreshLabels(core: Core, nodes: ReturnType<Core["nodes"]>): void {
-  if (nodes.empty()) return;
-  const update = () => {
-    if (core.destroyed()) return;
-    // 先量一次（让渲染器按新文字重算标签尺寸），再作废包围盒缓存。
-    nodes.boundingBox({ includeLabels: true });
-    (nodes as unknown as { updateStyle(): void }).updateStyle();
-  };
-  update();
-  // 新文字的渲染尺寸要等画过一帧才稳定，之后再来一次。
-  requestAnimationFrame(() => requestAnimationFrame(update));
 }
 
 /** 测试与调试：教程地图的元素（不含隐藏）。 */

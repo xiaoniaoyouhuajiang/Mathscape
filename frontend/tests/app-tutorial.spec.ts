@@ -190,4 +190,106 @@ test.describe("teaser tutorial", () => {
       if (i < 12) await dialog.locator(".tutorial-next").click();
     }
   });
+
+  test("map labels: hovering a compact node shows a full uncropped pill that does not overlap other visible labels", async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.addInitScript(() => localStorage.setItem("mathscape:reduce-motion", "on"));
+    await page.goto("/tests/app.html");
+    await expect(page.locator("#ink-button")).toBeVisible();
+    const dialog = await openTutorial(page);
+    const card = dialog.locator(".tutorial-card");
+    const dense = new Set(["units", "same-concept", "declaration", "index-zero", "cassini", "matrix", "plain-labels", "debts", "recap"]);
+
+    type NodeHit = { id: string; x: number; y: number };
+    const listNodes = () => page.evaluate(() => {
+      const host = document.querySelector(".tutorial-map") as HTMLElement & { _cyreg: { cy: Cy } };
+      type Cy = { nodes(): NodeEle[] };
+      type NodeEle = {
+        visible(): boolean; data(k: string): string; id(): string;
+        renderedBoundingBox(o: object): { x1: number; x2: number; y1: number; y2: number };
+      };
+      const cy = host._cyreg.cy;
+      const r = host.getBoundingClientRect();
+      const hits: NodeHit[] = [];
+      for (const n of cy.nodes()) {
+        if (!n.visible() || n.data("elementKind") === "junction" || !n.data("compactLabel")) continue;
+        const bb = n.renderedBoundingBox({ includeNodes: true, includeLabels: false, includeOverlays: false });
+        const x = r.left + (bb.x1 + bb.x2) / 2;
+        const y = r.top + (bb.y1 + bb.y2) / 2;
+        if (x < r.left + 4 || x > r.right - 4 || y < r.top + 4 || y > r.bottom - 4) continue;
+        hits.push({ id: n.id(), x, y });
+      }
+      return hits;
+    });
+
+    const inspect = (id: string) => page.evaluate((nodeId) => {
+      type Box = { x1: number; x2: number; y1: number; y2: number; w: number; h: number };
+      type Ele = {
+        boundingBox(o: object): Box; data(k: string): string; visible(): boolean; hasClass(c: string): boolean;
+        style(k: string): string; id(): string; numericStyle(k: string): number;
+      };
+      const host = document.querySelector(".tutorial-map") as HTMLElement & { _cyreg: { cy: { nodes(): Ele[]; edges(): Ele[]; getElementById(id: string): Ele } } };
+      const cy = host._cyreg.cy;
+      const boxOf = (e: Ele) => e.boundingBox({ includeNodes: false, includeEdges: false, includeLabels: true, includeOverlays: false, includeUnderlays: false });
+      const hit = (a: Box, b: Box) => a.x1 < b.x2 && b.x1 < a.x2 && a.y1 < b.y2 && b.y1 < a.y2;
+      const node = cy.getElementById(nodeId);
+      const label = String(node.data("label") ?? "");
+      const hovered = node.hasClass("label-hover");
+      const bg = Number.parseFloat(node.style("text-background-opacity") || "0");
+      const others = [...cy.nodes(), ...cy.edges()].filter((e) => {
+        if (e.id() === nodeId || !e.visible() || e.hasClass("label-recess")) return false;
+        const text = e.style("label") || e.data("label") || "";
+        const opacity = Number.parseFloat(e.style("text-opacity") || "1");
+        return Boolean(text) && opacity > 0.05;
+      });
+      const overlaps = others.filter((e) => hit(boxOf(node), boxOf(e))).map((e) => `${label} × ${e.data("label") || e.style("label")}`);
+      const ctx = document.createElement("canvas").getContext("2d")!;
+      ctx.font = `${node.style("font-size") || "12px"} ${node.style("font-family") || "sans-serif"}`;
+      const measure = (s: string) => ctx.measureText(s).width;
+      const maxW = Number.parseFloat(node.style("text-max-width") || "220") || 220;
+      const lines: string[] = [];
+      for (const para of label.split("\n")) {
+        if (measure(para) <= maxW) { lines.push(para); continue; }
+        const words = para.split(/[ \t]+/);
+        let line = "";
+        for (const word of words) {
+          const trial = line ? `${line} ${word}` : word;
+          if (measure(trial) <= maxW) line = trial;
+          else { if (line) lines.push(line); line = word; }
+        }
+        if (line) lines.push(line);
+      }
+      const textW = Math.max(0, ...lines.map(measure));
+      const size = node.numericStyle("font-size") || 12;
+      const textH = Math.max(1, lines.length) * size * 1.2;
+      const bb = boxOf(node);
+      const cropped = bb.w + 4 < textW || bb.h + 4 < textH;
+      const full = String(node.data("fullLabel") ?? "");
+      return {
+        hovered, overlaps, cropped, backgroundOpacity: bg, label, full,
+        expanded: !full || label === full, bb: { w: bb.w, h: bb.h }, textW, textH,
+      };
+    }, id);
+
+    for (let i = 0; i < 13; i++) {
+      const shot = (await card.getAttribute("data-shot"))!;
+      await page.waitForTimeout(150);
+      if (dense.has(shot)) {
+        const nodes = await listNodes();
+        for (const node of nodes) {
+          await page.mouse.move(node.x, node.y);
+          await page.waitForTimeout(120);
+          const m = await inspect(node.id);
+          expect(m.hovered, `${shot} ${node.id}`).toBe(true);
+          expect(m.expanded, `${shot}: ${m.label}`).toBe(true);
+          expect(m.overlaps, `${shot}: ${m.label}`).toEqual([]);
+          expect(m.cropped, `${shot}: ${m.label} box=${JSON.stringify(m.bb)} text=${m.textW}x${m.textH}`).toBe(false);
+          expect(m.backgroundOpacity, `${shot}: ${m.label}`).toBeGreaterThan(0.8);
+        }
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(150);
+      }
+      if (i < 12) await dialog.locator(".tutorial-next").click();
+    }
+  });
 });

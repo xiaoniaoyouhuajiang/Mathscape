@@ -114,43 +114,67 @@ export function texMathToPlain(src: string): string {
   return out.replace(RELATIONS, " $1 ").replace(/([±∓])\s+/g, "$1").replace(/\s+/g, " ").trim();
 }
 
+/** Cytoscape 按 `\\s` 折行，而 JS 的 `\\s` 包含 NBSP，所以短公式改成去掉空格（k=n+1），不能靠不断行空格。 */
+const BARE_SUB = /(?<![A-Za-z0-9])([A-Za-z])_((?:[A-Za-z]|\d+))(?![A-Za-z0-9])/g;
+const MATH_ATOM = String.raw`\p{L}[\p{L}\p{N}_₀-₉₊₋₌₍₎ₐ-ₓ⁰-⁹⁺⁻⁼⁽⁾ᵃ-ᶻᴬ-ᵂ]*|\d+|\(-?\d+\)[₀-₉⁺⁻ᵏⁿᵐⁱʲ]*|…`;
+const MATH_OP = String.raw`[=≥≤≠≈≡±+−–]`;
+const MATH_RUN = new RegExp(`(?:${MATH_ATOM})(?:\\s+${MATH_OP}\\s+(?:${MATH_ATOM}))+`, "gu");
+
+/** 无 `$` 的 `f_k` / `F_k` / `F_0` 也换成 Unicode 下标（只处理单字母或纯数字下标）。 */
+export function convertBareSubscripts(text: string): string {
+  return text.replace(BARE_SUB, (all, base: string, sub: string) => {
+    const chars = Array.from(sub);
+    if (chars.every((ch) => SUB[ch] !== undefined)) return base + chars.map((ch) => SUB[ch]).join("");
+    return all;
+  });
+}
+
+/** 把短公式里运算符两侧的空格去掉，整段公式不会在等号处被 Cytoscape 折行。 */
+export function glueShortMath(text: string): string {
+  return text.replace(MATH_RUN, (run) => run.replace(/\s+/g, ""));
+}
+
 /**
  * 一段文字里的 `$…$` / `$$…$$` / `\(…\)` 换成纯文字。被截断、没有收尾的
- * `$…`（投影标签可能已经切在公式中间）当作公式读到结尾。
+ * `$…`（投影标签可能已经切在公式中间）当作公式读到结尾。没有 `$` 的
+ * `f_k = F_k`、`k = n+1` 也会转成下标并去掉空格，避免在等号处折行。
  */
 export function texToPlain(text: string): string {
-  if (!/[$\\]/.test(text)) return text;
-  let out = "";
-  let i = 0;
-  while (i < text.length) {
-    if (text.startsWith("\\(", i)) {
-      const end = text.indexOf("\\)", i + 2);
-      const stop = end < 0 ? text.length : end;
-      out += texMathToPlain(text.slice(i + 2, stop));
-      i = end < 0 ? text.length : end + 2;
-      continue;
+  let out = text;
+  if (/[$\\]/.test(text)) {
+    out = "";
+    let i = 0;
+    while (i < text.length) {
+      if (text.startsWith("\\(", i)) {
+        const end = text.indexOf("\\)", i + 2);
+        const stop = end < 0 ? text.length : end;
+        out += texMathToPlain(text.slice(i + 2, stop));
+        i = end < 0 ? text.length : end + 2;
+        continue;
+      }
+      if (text.startsWith("\\$", i)) {
+        out += "$";
+        i += 2;
+        continue;
+      }
+      if (text[i] === "$") {
+        const fence = text.startsWith("$$", i) ? "$$" : "$";
+        const end = text.indexOf(fence, i + fence.length);
+        const stop = end < 0 ? text.length : end;
+        let body = text.slice(i + fence.length, stop);
+        // 截断的公式：末尾的省略号留在公式外面。
+        let tail = "";
+        if (end < 0 && body.endsWith("…")) { body = body.slice(0, -1); tail = "…"; }
+        out += texMathToPlain(body) + tail;
+        i = end < 0 ? text.length : end + fence.length;
+        continue;
+      }
+      out += text[i];
+      i++;
     }
-    if (text.startsWith("\\$", i)) {
-      out += "$";
-      i += 2;
-      continue;
-    }
-    if (text[i] === "$") {
-      const fence = text.startsWith("$$", i) ? "$$" : "$";
-      const end = text.indexOf(fence, i + fence.length);
-      const stop = end < 0 ? text.length : end;
-      let body = text.slice(i + fence.length, stop);
-      // 截断的公式：末尾的省略号留在公式外面。
-      let tail = "";
-      if (end < 0 && body.endsWith("…")) { body = body.slice(0, -1); tail = "…"; }
-      out += texMathToPlain(body) + tail;
-      i = end < 0 ? text.length : end + fence.length;
-      continue;
-    }
-    out += text[i];
-    i++;
+    out = out.replace(/ +…/g, "…").replace(/ {2,}/g, " ");
   }
-  return out.replace(/ +…/g, "…").replace(/ {2,}/g, " ");
+  return glueShortMath(convertBareSubscripts(out));
 }
 
 /** 按字符（不是 UTF-16 码元）截断纯文字，超长时末尾加 “…”。 */

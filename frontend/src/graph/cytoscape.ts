@@ -14,6 +14,14 @@ import {
 } from "./projection";
 import { FOCUS_CONTRACTION_KIND } from "./focus";
 import { EDGE_TYPES, NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
+import {
+  bindLabelHover,
+  LABEL_HOVER,
+  LABEL_RECESS,
+  LABEL_HOVER_STYLE,
+  LABEL_RECESS_STYLE,
+  type LabelHoverOptions,
+} from "./label-hover";
 import { graphLabelText, texToPlain } from "./tex-plain";
 
 export type RenderMode = "semantic" | "hyperedge";
@@ -93,14 +101,19 @@ export function toCytoscapeElements(
 
 /**
  * 画布只能画纯文字：标签里的 TeX 换成可读的 Unicode（`$k\ge 4$` → `k ≥ 4`），
- * 在公式中间截断的标签先从摘要找回原文再截断。没有 TeX 的标签原样不动。
+ * 在公式中间截断的标签先从摘要找回原文再截断。没有 `$` 的 `f_k = F_k` 也会转成下标。
+ * 节点同时存下全文和短名，悬停时展开全文。
  */
 function plainLabels(element: ElementDefinition): ElementDefinition {
   const label = element.data.label;
-  if (typeof label !== "string" || !/[$\\]/.test(label)) return element;
+  if (typeof label !== "string") return element;
   const summary = typeof element.data.summary === "string" ? element.data.summary : null;
-  const plain = element.group === "nodes" ? graphLabelText(label, summary) : texToPlain(label);
-  return { ...element, data: { ...element.data, label: plain } };
+  if (element.group === "nodes") {
+    const full = graphLabelText(label, summary, Number.POSITIVE_INFINITY);
+    const compact = graphLabelText(label, summary);
+    return { ...element, data: { ...element.data, label: compact, fullLabel: full, compactLabel: compact } };
+  }
+  return { ...element, data: { ...element.data, label: texToPlain(label) } };
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +711,31 @@ const styles: StylesheetJson = [
     selector: ".scene-retired",
     style: { opacity: 0.22, "transition-property": "opacity", "transition-duration": 400 },
   },
+
+  {
+    selector: `node.${LABEL_HOVER}`,
+    style: { ...LABEL_HOVER_STYLE },
+  },
+  {
+    selector: `edge.${LABEL_HOVER}`,
+    style: {
+      "text-background-color": "#0c131a",
+      "text-background-opacity": 0.94,
+      "text-background-shape": "roundrectangle",
+      "text-background-padding": "3px",
+      "text-border-color": "#6e5a2a",
+      "text-border-width": 1,
+      "text-border-opacity": 1,
+      "z-index": 1000,
+      "z-index-compare": "manual",
+      "z-compound-depth": "top",
+      opacity: 1,
+    },
+  },
+  {
+    selector: `.${LABEL_RECESS}`,
+    style: { ...LABEL_RECESS_STYLE },
+  },
 ];
 
 export const OUT_OF_FOCUS_CLASS = "is-out-of-focus";
@@ -710,6 +748,7 @@ export function mountCytoscapeGraph(
   container: HTMLElement,
   graph: IncidenceGraph,
   renderMode: RenderMode = "semantic",
+  options?: { labelHover?: LabelHoverOptions },
 ): Core {
   const core = cytoscape({
     container,
@@ -719,6 +758,7 @@ export function mountCytoscapeGraph(
     maxZoom: 4,
   });
   runLayout(core, core.elements(), true);
+  bindLabelHover(core, options?.labelHover);
   return core;
 }
 
