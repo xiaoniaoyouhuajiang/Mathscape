@@ -5,7 +5,8 @@ import { toCytoscapeElements } from "../../src/graph/cytoscape";
 import { alignmentPlainLabel } from "../../src/semantic/labels";
 import { TUTORIAL_PROJECTION_SCHEMA, tutorialGraph, type TutorialProjection } from "../../src/tutorial/projection";
 import { inlineMathHtml, markdownHtml } from "../../src/tutorial/math";
-import { MATHLIB_WIKI_URL, buildTutorialShots, fib, shotText } from "../../src/tutorial/script";
+import { MATHLIB_WIKI_URL, buildTutorialShots, debtAxisLine, debtsAttachedTo, fib, shotText } from "../../src/tutorial/script";
+import { formatMergedUnitDetail, mergeLearningUnits } from "../../src/semantic/learning-view";
 
 const projection = JSON.parse(
   readFileSync(resolve(__dirname, "../../../fixtures/emir/fibonacci-two-books/tutorial-projection.json"), "utf8"),
@@ -151,12 +152,50 @@ describe("tutorial script", () => {
   });
 
   it("ends with a recap of the learning labels of 灯塔", () => {
-    const last = shots[12].extra!;
-    expect(last.kind).toBe("learning");
-    if (last.kind === "learning") {
-      expect(last.units.some((u) => u.label === "别的材料里见过")).toBe(true);
-      expect(last.units.some((u) => u.label === "新的")).toBe(true);
-      expect(last.summary).toMatch(/^新的 \d+ · 别的材料里见过 \d+ · 新约定 2 · 未还清的账 4$/);
+    const last = shots[12];
+    const extra = last.extra!;
+    expect(extra.kind).toBe("learning");
+    if (extra.kind === "learning") {
+      expect(extra.units.map((u) => u.title)).toEqual([
+        "习题 2.4.7 剪拼悖论",
+        "命题 2.4.2 Mⁿ⁺¹ 的矩阵形式",
+        "命题 2.4.3 Cassini（灯塔的写法）",
+        "定义 2.4.1 兔子数列（f₁=f₂=1，无第 0 项）",
+      ]);
+      const definition = extra.units.find((u) => u.title.includes("定义 2.4.1"))!;
+      expect(definition.label).toBe("别的材料里见过");
+      expect(definition.detail).toContain("见过：");
+      expect(definition.detail).toContain("Fibonacci 数列");
+      expect(definition.detail).toContain("只差：灯塔没有第 0 项");
+      const exercise = extra.units.find((u) => u.title.includes("习题 2.4.7"))!;
+      expect(exercise.label).toBe("新的");
+      expect(exercise.note).toContain("习题 2.4.7 的提示");
+      expect(exercise.focus).toEqual(expect.arrayContaining(["yi.u.ex", "yi.u.hint", "e.puzzle"]));
+      expect(extra.units.filter((u) => u.note).map((u) => u.title)).toEqual(["习题 2.4.7 剪拼悖论"]);
+      expect(extra.units.filter((u) => u.title.includes("定义 2.4.1"))).toHaveLength(1);
+      expect(extra.summary).toBe("新的 1 · 别的材料里见过 3 · 新约定 2 · 未还清的账 4");
+    }
+    expect(last.focus).toEqual(expect.arrayContaining(["yi.u.def", "yi.u.lem", "yi.u.thm", "yi.u.ex", "yi.u.hint"]));
+    expect(last.seen).toEqual(expect.arrayContaining(["yi.u.def", "yi.u.lem", "yi.u.thm"]));
+    expect(last.fresh).toEqual(expect.arrayContaining(["yi.u.ex", "yi.u.hint"]));
+    expect(last.accent).toEqual(expect.arrayContaining(["e.fib", "e.fib_def", "e.qpow", "e.cassini", "e.puzzle", "ds.yi", ...["d.yi.f_eq_F", "d.yi.lem.forward", "d.yi.thm.forward", "d.puzzle.all_k"]]));
+    expect(last.legendNote).toBe("绿框＝别的材料里见过　黄框＝新的");
+  });
+
+  it("counts only the open debts attached to the accepted alignment", () => {
+    const attached = debtsAttachedTo(projection.objects, projection.refs["a.yi.thm"]);
+    expect(attached).toHaveLength(1);
+    expect(attached[0].key).toBe("d.yi.thm.forward");
+    expect(attached[0].shortLabel).toBe("前向证书");
+    expect(debtAxisLine(attached)).toBe("这条线上的账：1 笔还欠着（前向证书）");
+    expect(debtsAttachedTo(projection.objects, projection.refs["a.yi.def"]).map((d) => d.key)).toEqual(["d.yi.f_eq_F"]);
+    const accept = shots.find((s) => s.id === "accept")!;
+    expect(accept.focus).toEqual(expect.arrayContaining(["yi.u.thm", "e.cassini", "d.yi.thm.forward"]));
+    expect(accept.narration).toContain("这条线上的那一笔账也还挂着");
+    expect(accept.narration).not.toContain("那几笔账");
+    if (accept.extra?.kind === "accept") {
+      expect(accept.extra.button).toBe("接受这条对齐");
+      expect(accept.extra.axes).toContain("这条线上的账：1 笔还欠着（前向证书）");
     }
   });
 });

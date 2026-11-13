@@ -10,7 +10,7 @@
  * 「星港」「灯塔」。卡片文字是 Markdown + TeX（`$…$`），由播放器渲染。
  */
 import { debtStatusLabel, relationLabel } from "../semantic/labels";
-import { materialSummary } from "../semantic/learning-view";
+import { formatMergedUnitDetail, materialSummary, mergeLearningUnits, stripEntityTypePrefix } from "../semantic/learning-view";
 import type { TutorialProjection } from "./projection";
 import { graphLabel, payloadOf } from "./projection";
 
@@ -73,14 +73,16 @@ export interface AcceptPanel {
   banner: string;
   badge: string;
   axes: string[];
+  button: string;
 }
 
 /** 镜 13：回顾：读灯塔时的学习视图。 */
 export interface LearningPanel {
   kind: "learning";
-  units: Array<{ title: string; label: string; detail: string }>;
-  conventions: string[];
+  units: Array<{ title: string; label: string; detail: string; note?: string; focus: string[] }>;
+  conventions: Array<{ text: string; focus: string[] }>;
   summary: string;
+  summaryFocus: string[];
 }
 
 export type ShotExtra = MaterialsPanel | SequenceTable | NumberingTable | RevisionPanel | AcceptPanel | LearningPanel;
@@ -94,6 +96,14 @@ export interface TutorialShot {
   reveal: string[];
   /** 本镜高亮的对象。 */
   focus: string[];
+  /** 回顾镜：别的材料里见过的内容单元，绿色描边。 */
+  seen?: string[];
+  /** 回顾镜：新的内容单元，黄色描边。 */
+  fresh?: string[];
+  /** 一并点亮并收入镜头、但不展开成长标签的对象（约定卡、账、见过的共享对象）。 */
+  accent?: string[];
+  /** 本镜图例下的补充说明（例如回顾镜的绿/黄框）。 */
+  legendNote?: string;
   caption: string;
   narration: string;
   card: { title: string; lines: string[] };
@@ -184,7 +194,40 @@ function shiftOf(projection: TutorialProjection, alignment: string): number {
 
 /** 去掉标签前的类型前缀（“概念：”“精确说法：”……），地图上类型另起一行标注。 */
 export function stripTypePrefix(label: string): string {
-  return label.replace(/^(概念|精确说法|理论|题型)：/, "");
+  return stripEntityTypePrefix(label);
+}
+
+/** 挂在某条对齐线上、状态为还欠着的账。shortLabel 取义务原文在第一个冒号前的短名。 */
+export function debtsAttachedTo(
+  objects: Record<string, { payload: Record<string, unknown> }>,
+  alignmentId: string,
+): Array<{ key: string; obligation: string; status: string; shortLabel: string }> {
+  return Object.entries(objects).flatMap(([key, object]) => {
+    if (object.payload.attached_to !== alignmentId) return [];
+    const obligation = typeof object.payload.obligation === "string" ? object.payload.obligation : "";
+    const status = typeof object.payload.status === "string" ? object.payload.status : "";
+    if (status && status !== "open") return [];
+    const colon = obligation.indexOf("：");
+    const shortLabel = (colon >= 0 ? obligation.slice(0, colon) : obligation).trim();
+    return [{ key, obligation, status, shortLabel }];
+  });
+}
+
+/** 接受面板上“这条线上的账”这一行，由挂在该对齐线上的未还清账推导，不写死笔数。 */
+export function debtAxisLine(debts: Array<{ shortLabel: string }>): string {
+  if (!debts.length) return "这条线上的账：没有还欠着的";
+  const detail = debts.map((debt) => debt.shortLabel).filter(Boolean).join("、");
+  return `这条线上的账：${debts.length} 笔还欠着${detail ? `（${detail}）` : ""}`;
+}
+
+function localOf(projection: TutorialProjection, id: string): string | undefined {
+  return Object.entries(projection.refs).find(([, value]) => value === id)?.[0];
+}
+
+function hintLocalFor(projection: TutorialProjection, unitLocal: string | undefined): string | undefined {
+  if (!unitLocal?.endsWith(".ex")) return undefined;
+  const hint = unitLocal.replace(/\.ex$/, ".hint");
+  return projection.refs[hint] ? hint : undefined;
 }
 
 export function buildTutorialShots(projection: TutorialProjection): TutorialShot[] {
@@ -206,6 +249,7 @@ export function buildTutorialShots(projection: TutorialProjection): TutorialShot
   const yiMaterial = projection.learning.materials.find((m) => m.artifact_id === yiArtifact);
   const seenFib = yiMaterial?.units.find((unit) => unit.entity_id === projection.refs["e.fib"]);
   const debts = ["d.yi.f_eq_F", "d.yi.lem.forward", "d.yi.thm.forward", "d.puzzle.all_k"];
+  const lineDebts = debtsAttachedTo(projection.objects, projection.refs["a.yi.thm"]);
   const trust = record(payloadOf(projection, "a.yi.thm").trust);
   const quote = (local: string) => str(projection.objects[local]?.quote);
   const firstDebt = payloadOf(projection, "d.yi.f_eq_F");
@@ -389,39 +433,70 @@ export function buildTutorialShots(projection: TutorialProjection): TutorialShot
     },
     {
       id: "accept", title: "接受 ≠ 证明", seconds: 10, provenance: ["演示", "真实"],
-      reveal: [], focus: ["yi.u.thm", "e.cassini"],
+      reveal: [], focus: ["yi.u.thm", "e.cassini", ...lineDebts.map((debt) => debt.key)],
       caption: "接受只是认可这条对应",
-      narration: "最后，你在审核页点接受。接受只是认可这条对应，把它写进地图；可信度不会因此变成“已证明”，那几笔账也还挂着。",
+      narration: `最后，你在审核页点接受。接受只是认可这条对应，把它写进地图；可信度不会因此变成“已证明”，这条线上的${lineDebts.length === 1 ? "那一笔账" : ` ${lineDebts.length} 笔账`}也还挂着。`,
       card: { title: "点「接受」以后", lines: [] },
       types: [TYPE_NOTES.trust],
       extra: {
         kind: "accept",
         banner: "接受只是认可这条对应，不会把可信度变成“已证明”",
         badge: trust.alignment === "candidate" ? "可信度：候选" : `可信度：${str(trust.alignment)}`,
+        button: "接受这条对齐",
         axes: [
           `对齐：${trust.alignment === "candidate" ? "候选" : str(trust.alignment)}`,
           `证明：${trust.proof === "none" ? "还没有" : str(trust.proof)}`,
-          `账：${debts.length} 笔还欠着`,
+          debtAxisLine(lineDebts),
         ],
       },
     },
-    {
-      id: "recap", title: "回顾：读灯塔时", seconds: 10, provenance: ["派生"],
-      reveal: [], focus: ["yi.u.def", "yi.u.lem", "yi.u.thm", "yi.u.ex"],
-      caption: "回顾：地图告诉你哪些见过、哪些是新的",
-      narration: "回顾一下：以后读灯塔，地图告诉你哪些在别的材料里见过、只差在哪儿，哪些才是新的，有哪些新约定，以及还有哪几笔账没还。",
-      card: { title: "读《灯塔组合数学初步》时", lines: [] },
-      types: [],
-      extra: {
-        kind: "learning",
-        units: (yiMaterial?.units ?? []).map((unit) => ({
-          title: unit.unit_title, label: unit.label,
-          detail: unit.only_differs_by.length ? `只差：${unit.only_differs_by.join("；")}` : stripTypePrefix(unit.entity_label),
-        })),
-        conventions: (yiMaterial?.new_conventions ?? []).map((c) => c.text),
-        summary: yiMaterial ? materialSummary(yiMaterial) : "",
-      },
-    },
+    (() => {
+      const merged = mergeLearningUnits(yiMaterial?.units ?? []);
+      const recapUnits = merged.map((unit) => {
+        const unitLocal = localOf(projection, unit.unit_id);
+        const hint = hintLocalFor(projection, unitLocal);
+        const focus = [
+          unitLocal,
+          hint,
+          ...unit.targets.flatMap((target) => [localOf(projection, target.entity_id), localOf(projection, target.alignment_id)]),
+        ].filter((local): local is string => Boolean(local));
+        return {
+          title: unit.unit_title,
+          label: unit.label,
+          detail: formatMergedUnitDetail(unit, stripTypePrefix),
+          note: hint ? `含「${stripTypePrefix(label(hint))}」` : undefined,
+          focus,
+        };
+      });
+      const seenUnits = recapUnits.filter((unit) => unit.label === "别的材料里见过").flatMap((unit) => unit.focus.filter((local) => local.startsWith("yi.u.")));
+      const freshUnits = recapUnits.filter((unit) => unit.label === "新的").flatMap((unit) => unit.focus.filter((local) => local.startsWith("yi.u.")));
+      const sharedAndAlignments = recapUnits.flatMap((unit) => unit.focus.filter((local) => !local.startsWith("yi.u.")));
+      const conventionLocals = [...new Set((yiMaterial?.new_conventions ?? []).map((c) => localOf(projection, c.scope_id)).filter((local): local is string => Boolean(local)))];
+      const debtLocals = (yiMaterial?.open_debts ?? []).map((debt) => localOf(projection, debt.debt_id)).filter((local): local is string => Boolean(local));
+      return {
+        id: "recap", title: "回顾：读灯塔时", seconds: 10, provenance: ["派生"] as const,
+        reveal: [] as string[],
+        focus: ["yi.u.def", "yi.u.lem", "yi.u.thm", "yi.u.ex", "yi.u.hint"],
+        seen: seenUnits,
+        fresh: freshUnits,
+        accent: [...new Set([...sharedAndAlignments, ...conventionLocals, ...debtLocals])],
+        legendNote: "绿框＝别的材料里见过　黄框＝新的",
+        caption: "回顾：地图告诉你哪些见过、哪些是新的",
+        narration: "回顾一下：以后读灯塔，地图告诉你哪些在别的材料里见过、只差在哪儿，哪些才是新的，有哪些新约定，以及还有哪几笔账没还。",
+        card: { title: "读《灯塔组合数学初步》时", lines: [] as string[] },
+        types: [],
+        extra: {
+          kind: "learning" as const,
+          units: recapUnits,
+          conventions: (yiMaterial?.new_conventions ?? []).map((c) => ({
+            text: c.text,
+            focus: [localOf(projection, c.scope_id)].filter((local): local is string => Boolean(local)),
+          })),
+          summary: yiMaterial ? materialSummary(yiMaterial) : "",
+          summaryFocus: debtLocals,
+        },
+      };
+    })(),
   ];
 }
 
@@ -434,7 +509,10 @@ export function shotText(shot: TutorialShot): string[] {
   if (extra?.kind === "sequence") out.push(extra.note, ...extra.rows.map((row) => row.label));
   if (extra?.kind === "numbering") out.push(extra.sequenceNote, extra.missing.text, extra.missing.note, ...extra.explain, ...extra.formulas.flatMap((f) => [f.book, f.range]), ...extra.shared.map((s) => s.text), ...extra.yi.map((s) => s.text));
   if (extra?.kind === "revision") out.push(extra.v1.plain, extra.v1.note, extra.feedback, extra.v2.plain, extra.v2.lost, extra.v2.note, extra.why);
-  if (extra?.kind === "accept") out.push(extra.banner, extra.badge, ...extra.axes);
-  if (extra?.kind === "learning") out.push(extra.summary, ...extra.conventions, ...extra.units.flatMap((u) => [u.title, u.label, u.detail]));
+  if (shot.legendNote) out.push(shot.legendNote);
+  if (extra?.kind === "accept") out.push(extra.banner, extra.badge, extra.button, ...extra.axes);
+  if (extra?.kind === "learning") {
+    out.push(extra.summary, ...extra.conventions.map((c) => c.text), ...extra.units.flatMap((u) => [u.title, u.label, u.detail, u.note ?? ""]));
+  }
   return out;
 }

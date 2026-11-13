@@ -74,3 +74,13 @@ html.reduce-motion .tutorial-overlay * { transition: none !important; animation:
 .tutorial-feedback-demo:disabled, .tutorial-accept-demo:disabled { opacity: 1; cursor: default; }
 .tutorial-accept { justify-items: start; }
 .tutorial-trust-axes { margin: 0; padding-left: 18px; font-size: 12px; }
+
+.tutorial-legend-note { flex-basis: 100%; font-size: 11px; color: #c8d0e6; margin-top: 2px; }
+.tutorial-learning-units li, .tutorial-learning-convention, .tutorial-learning-summary {
+  cursor: pointer; border-radius: 6px; padding: 4px 6px;
+}
+.tutorial-learning-units li:hover, .tutorial-learning-convention:hover, .tutorial-learning-summary:hover,
+.tutorial-learning-units li.is-active, .tutorial-learning-convention.is-active, .tutorial-learning-summary.is-active {
+  background: rgba(158, 182, 255, 0.16);
+}
+.tutorial-learning-note { font-size: 11px; color: #9fb8c4; }

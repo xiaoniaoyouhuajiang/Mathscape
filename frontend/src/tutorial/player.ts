@@ -45,6 +45,16 @@ const FOCUS = "tutorial-focus";
 const DIM = "tutorial-dim";
 /** 连线：这一镜要读的线才显示文字。 */
 const EDGE_FOCUS = "tutorial-edge-focus";
+/** 连线：显示关系文字（回顾镜默认只加粗高亮，不写字，避免和单元标签挤在一起）。 */
+const EDGE_LABELED = "tutorial-edge-labeled";
+/** 回顾镜：别的材料里见过，绿色描边。 */
+const SEEN = "tutorial-seen";
+/** 回顾镜：新的，黄色描边。 */
+const FRESH = "tutorial-new";
+/** 回顾镜：约定卡、账、共享对象等一并点亮，但不展开成长标签。 */
+const ACCENT = "tutorial-accent";
+/** 面板行悬停 / 点击时，对应的地图元素。 */
+const ROW_FOCUS = "tutorial-row-focus";
 /** 非焦点节点的短标签最多几个字。 */
 const COMPACT_CHARS = 12;
 /** 焦点一笔账的标签最多几个字（全文在说明页）。 */
@@ -211,18 +221,24 @@ export class TutorialPlayer {
       })
       .selector(`node.${FOCUS}, node.${LABEL_HOVER}`).style(LABEL_HOVER_STYLE)
       .selector(`node.${FOCUS}`).style({ "border-width": 4, "border-color": "#ffd89a", "underlay-color": "#ffd89a", "underlay-opacity": 0.25, "underlay-padding": 6, "z-index": 30 })
+      .selector(`node.${SEEN}`).style({ "border-width": 4, "border-color": "#7fd0a8", "underlay-color": "#7fd0a8", "underlay-opacity": 0.3, "underlay-padding": 6, "z-index": 32 })
+      .selector(`node.${FRESH}`).style({ "border-width": 4, "border-color": "#ffd89a", "underlay-color": "#e8c15a", "underlay-opacity": 0.32, "underlay-padding": 6, "z-index": 32 })
+      .selector(`node.${ACCENT}`).style({ "border-width": 3, "border-color": "#9eb6ff", "underlay-color": "#9eb6ff", "underlay-opacity": 0.22, "underlay-padding": 5, "z-index": 28, opacity: 1 })
+      .selector(`node.${ROW_FOCUS}`).style({ "underlay-color": "#ffffff", "underlay-opacity": 0.35, "underlay-padding": 8, "z-index": 50, opacity: 1 })
       .selector(`node.${LABEL_HOVER}`).style({ "z-index": 1000, "z-index-compare": "manual", "z-compound-depth": "top", opacity: 1 })
       .selector(`.${LABEL_RECESS}`).style(LABEL_RECESS_STYLE)
       // 连线：默认不显示文字；这一镜要读的线（或悬停的线）才显示，水平放、垫深色圆角底。
       .selector("edge").style({ label: "", "text-rotation": "none", "z-index": 0 })
-      .selector(`edge.${EDGE_FOCUS}, edge.${LABEL_HOVER}`).style({
+      .selector(`edge.${EDGE_FOCUS}`).style({ width: 3.2, opacity: 1 })
+      .selector(`edge.${EDGE_LABELED}, edge.${LABEL_HOVER}, edge.${ROW_FOCUS}`).style({
         label: "data(label)", "font-size": "12px", "text-wrap": "wrap", "text-max-width": "220px",
         color: "#ffe6a6", "text-background-color": "#0c131a", "text-background-opacity": 0.94,
         "text-background-shape": "roundrectangle", "text-background-padding": "3px",
         "text-border-color": "#6e5a2a", "text-border-width": 1, "text-border-opacity": 1, "z-index": 20,
       })
       .selector(`edge.${LABEL_HOVER}`).style({ opacity: 1, "z-index": 1000, "z-index-compare": "manual", "z-compound-depth": "top" })
-      .selector(`edge.tutorial-derived-edge.${EDGE_FOCUS}`).style({ color: DERIVED_COLOR, "text-border-color": "#2f5b5c" })
+      .selector(`edge.${ROW_FOCUS}`).style({ opacity: 1, width: 3.4, "z-index": 40 })
+      .selector(`edge.tutorial-derived-edge.${EDGE_LABELED}`).style({ color: DERIVED_COLOR, "text-border-color": "#2f5b5c" })
       .update();
     // 悬停由 mountCytoscapeGraph 绑定：完整标签用和焦点一样的深色底，浮到最上层；
     // 会挡住它的邻接短标签暂时藏起。
@@ -375,18 +391,29 @@ export class TutorialPlayer {
         if (id) revealed.add(id);
       }
     }
+    const shot = this.shots[index];
     const referenced = new Set(Object.values(this.projection!.refs));
-    const focus = new Set(this.shots[index].focus.map((local) => this.domainId(local)).filter(Boolean) as string[]);
+    const focus = new Set(shot.focus.map((local) => this.domainId(local)).filter(Boolean) as string[]);
+    const seen = new Set((shot.seen ?? []).map((local) => this.domainId(local)).filter(Boolean) as string[]);
+    const fresh = new Set((shot.fresh ?? []).map((local) => this.domainId(local)).filter(Boolean) as string[]);
+    const accent = new Set((shot.accent ?? []).map((local) => this.domainId(local)).filter(Boolean) as string[]);
+    const emphasized = new Set([...focus, ...seen, ...fresh, ...accent]);
     let relabeled = core.collection();
-    const revealedNow = new Set(this.shots[index].reveal.map((local) => this.domainId(local)).filter(Boolean) as string[]);
+    const revealedNow = new Set(shot.reveal.map((local) => this.domainId(local)).filter(Boolean) as string[]);
     core.batch(() => {
       core.nodes().forEach((node: NodeSingular) => {
         const domain = node.data("domainId") as string | null;
         const junction = node.data("elementKind") === "junction";
         const visible = junction || (domain !== null && revealed.has(domain));
+        const inFocus = domain !== null && focus.has(domain);
+        const inEmphasized = domain !== null && emphasized.has(domain);
         node.toggleClass(HIDDEN, !visible);
-        node.toggleClass(FOCUS, domain !== null && focus.has(domain));
-        node.toggleClass(DIM, focus.size > 0 && visible && !(domain !== null && focus.has(domain)));
+        node.toggleClass(FOCUS, inFocus);
+        node.toggleClass(SEEN, domain !== null && seen.has(domain));
+        node.toggleClass(FRESH, domain !== null && fresh.has(domain));
+        node.toggleClass(ACCENT, domain !== null && accent.has(domain));
+        node.toggleClass(ROW_FOCUS, false);
+        node.toggleClass(DIM, emphasized.size > 0 && visible && !inEmphasized);
         if (syncNodeLabel(node, node.hasClass(FOCUS))) relabeled = relabeled.union(node);
       });
       core.edges().forEach((edge) => {
@@ -398,22 +425,26 @@ export class TutorialPlayer {
         const allowed = !relation || !scripted || revealed.has(relation);
         const shown = endpointsVisible && allowed;
         edge.toggleClass(HIDDEN, !shown);
-        // 线上的文字：这一镜新出现的对齐线 / 派生线，或两端都是焦点的线。
+        // 线上加粗：两端都被点亮，或这一镜新出现的对齐线 / 派生线。
+        // 线上的文字：只在两端都是焦点时显示（回顾镜共享对象只点亮不展开，避免和单元标签挤在一起）。
         const ends = [edge.source().data("domainId"), edge.target().data("domainId")] as Array<string | null>;
         const bothFocused = ends.every((id) => id !== null && focus.has(id));
+        const bothEmphasized = ends.every((id) => id !== null && emphasized.has(id));
         const newHere = scripted && revealedNow.has(relation!);
-        edge.toggleClass(EDGE_FOCUS, shown && (newHere || bothFocused));
-        edge.toggleClass(DIM, shown && focus.size > 0 && !(newHere || bothFocused));
+        edge.toggleClass(EDGE_FOCUS, shown && (newHere || bothEmphasized));
+        edge.toggleClass(EDGE_LABELED, shown && (newHere || bothFocused));
+        edge.toggleClass(ROW_FOCUS, false);
+        edge.toggleClass(DIM, shown && emphasized.size > 0 && !(newHere || bothEmphasized));
       });
       core.nodes(`[elementKind = "junction"]`).forEach((node) => {
         node.toggleClass(HIDDEN, node.connectedEdges().filter(`.${HIDDEN}`).length === node.connectedEdges().length);
       });
     });
     refreshLabels(core, relabeled.nodes() as unknown as Parameters<typeof refreshLabels>[1]);
-    this.renderLegend(core);
+    this.renderLegend(core, shot);
     const target = core.elements().filter((element) => !element.hasClass(HIDDEN));
-    const fitTo = focus.size
-      ? core.nodes().filter((node) => focus.has(node.data("domainId") as string))
+    const fitTo = emphasized.size
+      ? core.nodes().filter((node) => emphasized.has(node.data("domainId") as string))
       : target;
     if (fitTo.empty()) return;
     const view = this.viewportFor(core, fitTo);
@@ -447,7 +478,7 @@ export class TutorialPlayer {
   }
 
   /** 图例：和主地图底栏同一套样式，只列当前画面上出现的类型。 */
-  private renderLegend(core: Core): void {
+  private renderLegend(core: Core, shot?: TutorialShot): void {
     const projection = this.projection!;
     const byId = new Map(Object.values(projection.objects).map((object) => [object.id, object]));
     const visibleNodes = core.nodes().filter((node) => !node.hasClass(HIDDEN) && node.data("elementKind") !== "junction");
@@ -480,6 +511,11 @@ export class TutorialPlayer {
     edge(has("alignment-edge"), EDGE_TYPES.alignment.color, false, "对齐线 alignment（线上：关系类型 · 白话）");
     edge(has("semantic-link-edge"), EDGE_TYPES.relation.color, true, "属于理论 / 约定适用于");
     edge(has("debt-edge"), EDGE_TYPES.debt.color, true, "挂账");
+    if (shot?.legendNote) {
+      const note = el("span", "tutorial-legend-note");
+      note.textContent = shot.legendNote;
+      items.push(note);
+    }
     this.legend.replaceChildren(...items);
   }
 
@@ -626,7 +662,7 @@ export class TutorialPlayer {
       }
       case "accept": {
         const wrap = el("div", "tutorial-extra tutorial-accept");
-        const button = el("button", "primary-button tutorial-accept-demo", "接受本提案");
+        const button = el("button", "primary-button tutorial-accept-demo", extra.button);
         button.type = "button";
         button.disabled = true;
         button.title = "教程里只演示，不会写入地图";
@@ -638,23 +674,66 @@ export class TutorialPlayer {
       }
       case "learning": {
         const wrap = el("div", "tutorial-extra tutorial-learning");
+        const bind = (node: HTMLElement, focus: string[]) => {
+          node.dataset.focus = focus.join(",");
+          node.tabIndex = 0;
+          node.addEventListener("mouseenter", () => this.highlightRow(node, focus));
+          node.addEventListener("mouseleave", () => this.clearRowHighlight());
+          node.addEventListener("click", () => this.highlightRow(node, focus));
+          node.addEventListener("focus", () => this.highlightRow(node, focus));
+          node.addEventListener("blur", () => this.clearRowHighlight());
+        };
         const ul = el("ul", "tutorial-learning-units");
         for (const unit of extra.units) {
           const li = el("li");
           li.append(el("span", `tutorial-learning-label${unit.label === "新的" ? " is-new" : ""}`, unit.label), el("span", "", ` ${unit.title}`));
           if (unit.detail) li.append(el("small", "", ` · ${unit.detail}`));
+          if (unit.note) li.append(el("small", "tutorial-learning-note", ` · ${unit.note}`));
+          bind(li, unit.focus);
           ul.append(li);
         }
         wrap.append(ul);
-        for (const text of extra.conventions) {
-          const p = el("p", "tutorial-learning-convention");
-          p.append(el("span", "tutorial-learning-label is-convention", "新约定"), document.createTextNode(` ${text}`));
-          wrap.append(p);
+        for (const convention of extra.conventions) {
+          const row = el("p", "tutorial-learning-convention");
+          row.append(el("span", "tutorial-learning-label is-convention", "新约定"), document.createTextNode(` ${convention.text}`));
+          bind(row, convention.focus);
+          wrap.append(row);
         }
-        wrap.append(el("p", "tutorial-learning-summary", extra.summary));
+        const summary = el("p", "tutorial-learning-summary", extra.summary);
+        bind(summary, extra.summaryFocus);
+        wrap.append(summary);
         return wrap;
       }
     }
+  }
+
+  private highlightRow(row: HTMLElement, locals: string[]): void {
+    const core = this.core;
+    this.card.querySelectorAll(".is-active").forEach((node) => node.classList.remove("is-active"));
+    row.classList.add("is-active");
+    if (!core) return;
+    const ids = new Set(locals.map((local) => this.domainId(local)).filter((id): id is string => Boolean(id)));
+    core.batch(() => {
+      core.nodes().forEach((node: NodeSingular) => {
+        node.toggleClass(ROW_FOCUS, ids.has(node.data("domainId") as string));
+      });
+      core.edges().forEach((edge) => {
+        const relation = edge.data("relationId") as string | undefined;
+        const ends = [edge.source().data("domainId"), edge.target().data("domainId")] as Array<string | null>;
+        const both = ends.every((id) => id !== null && ids.has(id));
+        const related = Boolean(relation && ids.has(relation));
+        edge.toggleClass(ROW_FOCUS, !edge.hasClass(HIDDEN) && (both || related));
+      });
+    });
+  }
+
+  private clearRowHighlight(): void {
+    this.card.querySelectorAll(".is-active").forEach((node) => node.classList.remove("is-active"));
+    const core = this.core;
+    if (!core) return;
+    core.batch(() => {
+      core.elements().forEach((element) => { element.toggleClass(ROW_FOCUS, false); });
+    });
   }
 }
 

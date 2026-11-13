@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { alignmentPlainLabel, entityPlainLabel, reviewItemLabel } from "../../src/semantic/labels";
 import { feedbackQuote, sendFeedbackToComposer } from "../../src/semantic/feedback";
 import { semanticReviewCards, proposalLevelReviewItems, reviewItemCode } from "../../src/semantic/review-model";
-import { materialSummary } from "../../src/semantic/learning-view";
+import { formatMergedUnitDetail, materialSummary, mergeLearningUnits } from "../../src/semantic/learning-view";
 import { recheckSummary } from "../../src/semantic/api";
 import { nodeTypeKey, NODE_TYPES } from "../../src/graph/taxonomy";
 import { semanticLayerClass } from "../../src/graph/cytoscape";
@@ -96,6 +96,31 @@ describe("learning view and recheck summaries", () => {
         label: "新的", seen_in: [], only_differs_by: [] },
     ], new_conventions: [{ scope_id: "s", scope_label: "灯塔", text: "下标从 1 开始" }], open_debts: [] }))
       .toBe("新的 1 · 别的材料里见过 1 · 新约定 1 · 未还清的账 0");
+  });
+
+  it("merges multiple alignments of the same unit into one row", () => {
+    const merged = mergeLearningUnits([
+      { unit_id: "u-def", unit_title: "定义 2.4.1", alignment_id: "a1", entity_id: "e1", entity_label: "概念：Fibonacci 数列", relation: "expresses",
+        label: "别的材料里见过", seen_in: ["jia"], only_differs_by: [] },
+      { unit_id: "u-def", unit_title: "定义 2.4.1", alignment_id: "a2", entity_id: "e2", entity_label: "精确说法：Fibonacci 数列（F₀ = 0 起编，同 mathlib）", relation: "overlaps_with",
+        label: "别的材料里见过", seen_in: ["jia"], only_differs_by: ["灯塔没有第 0 项"] },
+      { unit_id: "u-ex", unit_title: "习题 2.4.7", alignment_id: "a3", entity_id: "e3", entity_label: "题型：剪拼悖论", relation: "expresses",
+        label: "新的", seen_in: [], only_differs_by: [] },
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0].unit_title).toBe("定义 2.4.1");
+    expect(merged[0].targets).toHaveLength(2);
+    expect(formatMergedUnitDetail(merged[0])).toBe("见过：Fibonacci 数列；Fibonacci 数列（F₀ = 0 起编，同 mathlib）（只差：灯塔没有第 0 项）");
+    expect(materialSummary({ artifact_id: "yi", units: [
+      { unit_id: "u-def", unit_title: "定义 2.4.1", alignment_id: "a1", entity_id: "e1", entity_label: "Fibonacci 数列", relation: "expresses",
+        label: "别的材料里见过", seen_in: [], only_differs_by: [] },
+      { unit_id: "u-def", unit_title: "定义 2.4.1", alignment_id: "a2", entity_id: "e2", entity_label: "精确说法", relation: "overlaps_with",
+        label: "别的材料里见过", seen_in: [], only_differs_by: ["灯塔没有第 0 项"] },
+      { unit_id: "u-ex", unit_title: "习题 2.4.7", alignment_id: "a3", entity_id: "e3", entity_label: "剪拼悖论", relation: "expresses",
+        label: "新的", seen_in: [], only_differs_by: [] },
+    ], new_conventions: [{ scope_id: "s", scope_label: "灯塔", text: "下标从 1 开始" }, { scope_id: "s", scope_label: "灯塔", text: "叫作兔子数列" }],
+      open_debts: [{ debt_id: "d1", obligation: "x", status: "open" }, { debt_id: "d2", obligation: "y", status: "open" }, { debt_id: "d3", obligation: "z", status: "open" }, { debt_id: "d4", obligation: "w", status: "open" }] }))
+      .toBe("新的 1 · 别的材料里见过 1 · 新约定 2 · 未还清的账 4");
   });
 
   it("explain recheck outcomes without claiming faithfulness", () => {

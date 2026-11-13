@@ -292,4 +292,84 @@ test.describe("teaser tutorial", () => {
       if (i < 12) await dialog.locator(".tutorial-next").click();
     }
   });
+
+  test("accept shot shows this alignment's debt; recap merges units and highlights on row hover", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("mathscape:reduce-motion", "on"));
+    await page.goto("/tests/app.html");
+    await expect(page.locator("#ink-button")).toBeVisible();
+    const dialog = await openTutorial(page);
+    const card = dialog.locator(".tutorial-card");
+    for (let i = 0; i < 11; i++) await dialog.locator(".tutorial-next").click();
+    await expect(card).toHaveAttribute("data-shot", "accept");
+    await expect(card.locator(".tutorial-accept-demo")).toHaveText("接受这条对齐");
+    await expect(card.locator(".tutorial-accept-demo")).toBeDisabled();
+    await expect(card.locator(".tutorial-trust-axes")).toContainText("这条线上的账：1 笔还欠着（前向证书）");
+    await expect(dialog.locator(".tutorial-caption")).toContainText("这条线上的那一笔账也还挂着");
+    await expect(dialog.locator(".tutorial-caption")).not.toContainText("那几笔账");
+
+    const inspect = () => page.evaluate(() => {
+      type Ele = {
+        visible(): boolean; hasClass(c: string): boolean; data(k: string): string;
+        boundingBox(o: object): { x1: number; x2: number; y1: number; y2: number };
+        classes(): string[];
+      };
+      type Coll = { filter(f: (e: Ele) => boolean): Ele[] };
+      const cy = (document.querySelector(".tutorial-map") as unknown as {
+        _cyreg: { cy: { nodes(): Coll; edges(): Coll; extent(): { x1: number; x2: number; y1: number; y2: number } } };
+      })._cyreg.cy;
+      const extent = cy.extent();
+      const inView = (bb: { x1: number; x2: number; y1: number; y2: number }) =>
+        bb.x1 < extent.x2 && bb.x2 > extent.x1 && bb.y1 < extent.y2 && bb.y2 > extent.y1;
+      const nodes = cy.nodes().filter((n) => n.visible()).map((n) => ({
+        label: n.data("label"),
+        domainKind: n.data("domainKind"),
+        focus: n.hasClass("tutorial-focus"),
+        seen: n.hasClass("tutorial-seen"),
+        fresh: n.hasClass("tutorial-new"),
+        accent: n.hasClass("tutorial-accent"),
+        row: n.hasClass("tutorial-row-focus"),
+        hidden: n.hasClass("tutorial-hidden"),
+        inView: inView(n.boundingBox({ includeLabels: true, includeNodes: true, includeEdges: false, includeOverlays: false, includeUnderlays: false })),
+      }));
+      const edges = cy.edges().filter((e) => e.visible()).map((e) => ({
+        classes: e.classes(),
+        focus: e.hasClass("tutorial-edge-focus"),
+        row: e.hasClass("tutorial-row-focus"),
+        hidden: e.hasClass("tutorial-hidden"),
+        labeled: e.hasClass("tutorial-edge-labeled"),
+      }));
+      return { nodes, edges };
+    });
+
+    const accept = await inspect();
+    const debt = accept.nodes.find((n) => n.domainKind === "Debt" && n.focus);
+    expect(debt, "focused debt on accept shot").toBeTruthy();
+    expect(debt!.hidden).toBe(false);
+    expect(debt!.inView).toBe(true);
+    expect(accept.edges.some((e) => e.classes.includes("debt-edge") && e.focus && !e.hidden)).toBe(true);
+
+    await dialog.locator(".tutorial-next").click();
+    await expect(card).toHaveAttribute("data-shot", "recap");
+    const rows = card.locator(".tutorial-learning-units li");
+    await expect(rows).toHaveCount(4);
+    await expect(rows.filter({ hasText: "定义 2.4.1" })).toHaveCount(1);
+    await expect(rows.filter({ hasText: "定义 2.4.1" })).toContainText("见过：");
+    await expect(rows.filter({ hasText: "习题 2.4.7" })).toContainText("含「习题 2.4.7 的提示」");
+    await expect(dialog.locator(".tutorial-legend-note")).toHaveText("绿框＝别的材料里见过　黄框＝新的");
+
+    const recap = await inspect();
+    expect(recap.nodes.filter((n) => n.seen).length).toBeGreaterThanOrEqual(3);
+    expect(recap.nodes.filter((n) => n.fresh).length).toBeGreaterThanOrEqual(2);
+    expect(recap.nodes.some((n) => n.seen && n.label.includes("定义"))).toBe(true);
+    expect(recap.nodes.some((n) => n.fresh && n.label.includes("习题 2.4.7") && !n.label.includes("提示"))).toBe(true);
+    expect(recap.nodes.some((n) => n.fresh && n.label.includes("提示"))).toBe(true);
+    expect(recap.nodes.filter((n) => n.domainKind === "Debt" && n.accent && n.inView)).toHaveLength(4);
+    expect(recap.nodes.some((n) => n.accent && n.domainKind === "DialectScope" && n.inView)).toBe(true);
+
+    await rows.filter({ hasText: "定义 2.4.1" }).hover();
+    const hovered = await inspect();
+    expect(hovered.nodes.filter((n) => n.row).length).toBeGreaterThan(0);
+    expect(hovered.nodes.some((n) => n.row && n.label.includes("定义 2.4.1"))).toBe(true);
+    expect(card.locator(".tutorial-learning-units li.is-active")).toHaveCount(1);
+  });
 });
