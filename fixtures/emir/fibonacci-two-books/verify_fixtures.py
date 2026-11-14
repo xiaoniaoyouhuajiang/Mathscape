@@ -232,7 +232,11 @@ for cs in CSS:
             check(p["semantic_kind"] in {"concept", "declaration", "theory", "problem_schema"}, f"{lr} kind_not_supported")
             check(not any(x in p for x in ("page", "source_spans")), f"{lr} 共享实体不占有来源（不变量 9）")
             if p["home_theory"]: resolve(p["home_theory"], {"semantic_entity"})
-            else: check(p["semantic_kind"] == "theory", f"{lr} 非 theory 必须有 home_theory")
+            else:
+                check(p["semantic_kind"] == "theory", f"{lr} 非 theory 必须有 home_theory")
+                check(len(p.get("aliases", [])) >= 1, f"{lr} 理论带检索同义词 aliases")
+                for lab in [l["label"] for l in p["preferred_labels"]] + ([p["plain_label"]] if p.get("plain_label") else []):
+                    check(not any(ch in lab for ch in ("=", "＝", "$", "\\")), f"{lr} 理论按专题命名，不写具体公式")
             check("conventions" in p and "mathlib_baseline" in p, f"{lr} 带 conventions / mathlib_baseline 字段（决定 a）")
             for c in p["conventions"]: check(c["key"] in CONV_KEYS and c.get("basis") == "mathlib", f"{lr} 约定注明 mathlib 基线")
             if p["semantic_kind"] in ("declaration", "problem_schema"):

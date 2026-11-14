@@ -6,9 +6,9 @@ skill 不能假设文档里写出的工具已经存在。每次启动一个工�
 
 通常包括：
 
-- `workspace.search`
-- `graph.get`
-- `graph.neighborhood`
+- `workspace.search`（支持 `note`、`source_unit`、`theory`、`semantic_entity`、`material`、`snapshot`，以及 `scope: "investigation"` 检索本会话暂存）
+- `graph.get`（支持来源层与语义层节点/关系，语义对象在 `semantic` 字段返回结构化内容）
+- `graph.neighborhood`（`edge_types` 除结构边和书内关系外，支持按需遍历 `aligns`、`in_theory`、`debt_on`、`scope_of`）
 - `material.read`
 - `material.grep`
 - `material.locate`（把一段原文换成快照里的精确 `md_byte_range`，供 `propose_changes` 的 source_span 使用）

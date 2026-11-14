@@ -370,6 +370,6 @@ test.describe("teaser tutorial", () => {
     const hovered = await inspect();
     expect(hovered.nodes.filter((n) => n.row).length).toBeGreaterThan(0);
     expect(hovered.nodes.some((n) => n.row && n.label.includes("定义 2.4.1"))).toBe(true);
-    expect(card.locator(".tutorial-learning-units li.is-active")).toHaveCount(1);
+    await expect(card.locator(".tutorial-learning-units li.is-active")).toHaveCount(1);
   });
 });

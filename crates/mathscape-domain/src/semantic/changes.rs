@@ -9,8 +9,12 @@ use crate::FieldChange;
 pub struct SemanticEntityChanges {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_labels: Option<Vec<PreferredLabel>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aliases: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "FieldChange::is_keep")]
     pub plain_label: FieldChange<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_theory: Option<String>,
     /// Same keys, subjects and values as before, in the same order; only
     /// the wording (`text`, `basis`, …) may change or new entries be added.
     #[serde(default, skip_serializing_if = "Option::is_none")]

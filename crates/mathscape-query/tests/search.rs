@@ -3,7 +3,8 @@ use mathscape_query::search::{
     SearchCandidate, SearchKind, SearchProvider, SearchQuery, SearchRegistry, SearchTarget, search,
 };
 use mathscape_store_sqlite::{
-    SearchArtifactRow, SearchCorpus, SearchNoteRow, SearchSnapshotRow, SearchSourceUnitRow,
+    SearchArtifactRow, SearchCorpus, SearchNoteRow, SearchSemanticEntityRow, SearchSnapshotRow,
+    SearchSourceUnitRow,
 };
 
 fn corpus() -> SearchCorpus {
@@ -78,6 +79,38 @@ fn corpus() -> SearchCorpus {
                 display_title: Some("一致连续 被拒".into()),
                 source_title: None,
                 source_labels: vec![],
+            },
+        ],
+        semantic_entities: vec![
+            SearchSemanticEntityRow {
+                object_id: "theory-1".into(),
+                lifecycle: "active".into(),
+                semantic_kind: Some("theory".into()),
+                plain_label: Some("线性递推数列".into()),
+                preferred_labels: vec!["线性递推数列".into(), "Linear recurrences".into()],
+                aliases: vec!["常系数线性递推".into()],
+                mathlib_decl: None,
+                home_theory_id: None,
+            },
+            SearchSemanticEntityRow {
+                object_id: "entity-1".into(),
+                lifecycle: "active".into(),
+                semantic_kind: Some("declaration".into()),
+                plain_label: Some("Cassini 恒等式".into()),
+                preferred_labels: vec!["Cassini's identity".into()],
+                aliases: vec!["Simson identity".into()],
+                mathlib_decl: Some("Int.fib_succ_mul_fib_pred_sub_fib_sq".into()),
+                home_theory_id: Some("theory-1".into()),
+            },
+            SearchSemanticEntityRow {
+                object_id: "entity-retired".into(),
+                lifecycle: "deprecated".into(),
+                semantic_kind: Some("concept".into()),
+                plain_label: Some("Cassini 旧版".into()),
+                preferred_labels: vec![],
+                aliases: vec![],
+                mathlib_decl: None,
+                home_theory_id: Some("theory-1".into()),
             },
         ],
         canonical_markdown: vec![],
@@ -403,5 +436,54 @@ fn folded_markdown_snapshots_collapse_into_one_canonical_hit() {
             .iter()
             .flat_map(|group| &group.hits)
             .any(|hit| hit.id == "mathscape:artifact/md-loose")
+    );
+}
+
+#[test]
+fn theories_and_shared_objects_search_separately_by_labels_aliases_and_mathlib() {
+    let by_alias = search(
+        &SearchRegistry::with_defaults(),
+        &corpus(),
+        &SearchQuery {
+            text: "常系数线性递推".into(),
+            kinds: vec![SearchKind::Theory],
+            ..SearchQuery::default()
+        },
+    );
+    assert_eq!(ids(&by_alias, SearchKind::Theory), vec!["theory-1"]);
+    assert_eq!(by_alias.groups[0].label, "理论");
+
+    let by_en = run("Linear recurrences", false);
+    assert_eq!(ids(&by_en, SearchKind::Theory), vec!["theory-1"]);
+
+    let by_simson = run("Simson", false);
+    assert_eq!(
+        ids(&by_simson, SearchKind::SemanticEntity),
+        vec!["entity-1"]
+    );
+    let hit = &by_simson.groups[0].hits[0];
+    assert_eq!(by_simson.groups[0].label, "共享对象");
+    assert_eq!(
+        hit.subtitle.as_deref(),
+        Some("精确说法 · 线性递推数列 · Int.fib_succ_mul_fib_pred_sub_fib_sq")
+    );
+    assert_eq!(
+        hit.target,
+        SearchTarget::MapNode {
+            node_id: "entity-1".into()
+        }
+    );
+
+    let by_mathlib = run("fib_succ_mul_fib_pred", false);
+    assert_eq!(
+        ids(&by_mathlib, SearchKind::SemanticEntity),
+        vec!["entity-1"]
+    );
+
+    let cassini = run("Cassini", false);
+    assert_eq!(
+        ids(&cassini, SearchKind::SemanticEntity),
+        vec!["entity-1"],
+        "retired shared objects are hidden"
     );
 }

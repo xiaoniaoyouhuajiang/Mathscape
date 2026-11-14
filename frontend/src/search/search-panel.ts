@@ -39,7 +39,7 @@ export class WorkspaceSearchPanel {
     this.root.hidden = true;
     this.root.innerHTML =
       '<div class="workspace-search-box" role="dialog" aria-modal="true" aria-label="搜索工作区">' +
-      '<div class="workspace-search-head"><input id="workspace-search-input" class="workspace-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="workspace-search-results" autocomplete="off" spellcheck="false" placeholder="搜索手稿、材料、来源单元、命名快照…">' +
+      '<div class="workspace-search-head"><input id="workspace-search-input" class="workspace-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="workspace-search-results" autocomplete="off" spellcheck="false" placeholder="搜索手稿、材料、来源单元、理论、共享对象、命名快照…">' +
       '<label class="workspace-search-trash"><input id="workspace-search-trash" type="checkbox"> 包含回收站</label></div>' +
       '<p id="workspace-search-status" class="workspace-search-status" role="status" aria-live="polite"></p>' +
       '<div id="workspace-search-results" class="workspace-search-results" role="listbox" aria-label="搜索结果"></div>' +
@@ -124,7 +124,7 @@ export class WorkspaceSearchPanel {
     this.hits = [];
     this.active = -1;
     if (!response) {
-      this.status("输入名称查找：手稿标题、材料文件名、来源单元标题与编号、命名快照。");
+      this.status("输入名称查找：手稿标题、材料文件名、来源单元、理论与共享对象、命名快照。");
       this.input.setAttribute("aria-expanded", "false");
       this.input.removeAttribute("aria-activedescendant");
       return;

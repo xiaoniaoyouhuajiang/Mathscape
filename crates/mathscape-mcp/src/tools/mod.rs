@@ -72,8 +72,11 @@ pub const LIST_CHANGE_SETS: &str = "list_change_sets";
 /// `material.locate` documents `page_markers_absent` / `page_unresolved`;
 /// `propose_changes` documents page granularity and `supersedes`.
 /// `/17`: `propose_changes` accepts the semantic layer (semantic_entity,
-/// alignment, debt, dialect_scope; retire of semantic objects) and
-/// `target_object` (docs/semantic-write-contract.md).
+/// alignment, debt, dialect_scope; retire of semantic objects; editable
+/// `home_theory` and `aliases`), `workspace.search` searches `theory` and
+/// `semantic_entity` (incl. `scope="investigation"`), and `graph.get` /
+/// `graph.neighborhood` navigate semantic nodes and relations
+/// (docs/semantic-write-contract.md).
 pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/17";
 
 /// sha256 of the serialized [`tool_definitions`] with object keys sorted (so
@@ -293,7 +296,7 @@ mod schema_version_tests {
     /// `TOOL_SCHEMA_VERSION` (and the skill frontmatter) and re-pin.
     const PINNED: (&str, &str) = (
         "mathscape-mcp/17",
-        "0d4d054e83b9fb1679d6176791ed40d2584d3de7e8f9f8afaea7b8dd5f7c831a",
+        "cfe83e8ce650a13f8a694f6dcd2116b02a0c3eac668b076efe9229f6f6942589",
     );
 
     #[test]

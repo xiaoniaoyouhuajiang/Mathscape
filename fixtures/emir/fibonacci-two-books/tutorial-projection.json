@@ -1478,7 +1478,7 @@
         "domain_kind": "SemanticEntity",
         "element_kind": "entity",
         "id": "entity:mathscape:semantic-entity/970cde35909daa7eb09b40519becda160ad69adbb14e0fbeb54db7288c3641b6",
-        "label": "理论：线性递推",
+        "label": "理论：线性递推数列",
         "layer": "global_semantic",
         "lifecycle": "active",
         "parent": "group:source-map-landscape",
@@ -3561,6 +3561,10 @@
       "id": "mathscape:semantic-entity/f1584df51252afaffcd44712ed566662a2fb6664faba1659842d9ee12e4b1a21",
       "kind": "semantic_entity",
       "payload": {
+        "aliases": [
+          "斐波那契数列",
+          "兔子数列"
+        ],
         "conventions": [],
         "declaration": null,
         "description": "“每项是前两项之和、以 1, 1 开头”的那一串数这个概念本身；精确写法见 e.fib_def。",
@@ -3821,24 +3825,33 @@
       "id": "mathscape:semantic-entity/970cde35909daa7eb09b40519becda160ad69adbb14e0fbeb54db7288c3641b6",
       "kind": "semantic_entity",
       "payload": {
+        "aliases": [
+          "常系数线性递推",
+          "线性递推",
+          "linear recurrences"
+        ],
         "conventions": [
           {
             "basis": "mathlib",
             "key": "baseline",
             "subject": "*",
-            "text": "本理论的共享写法以 mathlib 为参照基线",
+            "text": "本理论下的共享写法以 mathlib 为参照基线",
             "value": "mathlib"
           }
         ],
         "declaration": null,
-        "description": null,
+        "description": "常系数线性递推数列及其基本性质这一专题书架；其中每条精确说法各自注明所用约定与取值范围。",
         "home_theory": null,
         "mathlib_baseline": null,
-        "plain_label": "理论：线性递推",
+        "plain_label": "理论：线性递推数列",
         "preferred_labels": [
           {
-            "label": "整数数列与二阶线性递推（初等）",
+            "label": "线性递推数列",
             "lang": "zh"
+          },
+          {
+            "label": "Linear recurrence sequences",
+            "lang": "en"
           }
         ],
         "problem_schema": null,

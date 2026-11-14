@@ -36,7 +36,7 @@
 | SourceUnitRelation | 书内关系 | “这段证明那条”“这条提示那题” |
 | SemanticEntity · concept | 概念 | 大家都在说的那个东西 |
 | SemanticEntity · declaration | 精确说法（铭牌） | 带前提、带变量范围的那一句 |
-| SemanticEntity · theory | 理论 | 它属于哪一片 |
+| SemanticEntity · theory | 理论 | 共享对象的专题书架：“这几个概念和定理大概是哪一块儿的” |
 | SemanticEntity · problem_schema | 题型 | 一族题，带参数 |
 | `conventions` / `mathlib_baseline` | 约定注记 / 参照基线 | “本对象按 F₀ = 0 写，同 mathlib `Nat.fib`；不表示哪本书更正统” |
 | Alignment | 对齐线 | 这段话说的就是那个共享对象，以及哪里不一样 |
@@ -87,8 +87,9 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
 ```jsonc
 {
   "semantic_kind": "concept | declaration | theory | problem_schema",
-  "home_theory": "<semantic-entity id | $new:…> | null",   // 仅 theory 可为 null
+  "home_theory": "<semantic-entity id | $new:…> | null",   // 仅 theory 必须为 null；其余必填，且允许后续 edit 迁移
   "preferred_labels": [ { "lang": "zh", "label": "Cassini 恒等式" } ],
+  "aliases": ["Cassini's identity", "Simson identity"],      // 可选：中英文同义检索词（尤其推荐给 theory 填写）
   "plain_label": "精确说法：Cassini 恒等式（对一切 n ≥ 1）",  // 可选，Agent 补充；展示以前端模板为准（S9.1）
   "conventions": [                                           // 决定 a：约定注记
     { "key": "sequence_index_origin", "subject": "F", "value": 0,
@@ -139,7 +140,8 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
 ```
 
 - statement 是**结构化文本**，没有表达式 AST [已确认]；`evidence_spans` 是**措辞来源证据**，不表示归属（[锁定·S13-4]）。
-- **身份字段**：`semantic_kind`、`home_theory`、`declaration_kind`、`binders`、`assumptions`、`statement`、`definiens`、`parameters`、`task`。按 EMIR §7.3，改变它们就是另一条精确说法，必须**新建**，不能 edit（S4.3）。
+- **理论（`theory`）的定位**：理论保持扁平（`theory` 本身 `home_theory = null`，不建父子树，也不绑定外部分类编码），定位为共享对象的**专题书架**（尺度类似课本一章/一个专题，如「线性递推数列」「数列极限」），只回答“这几个概念和定理大概是哪一块儿的”。每条精确说法的前提、变量范围和约定由对象自身记录，因此换书架不改变对象本身的数学含义。
+- **身份字段**：`semantic_kind`、`declaration_kind`、`binders`、`assumptions`、`statement`、`definiens`、`parameters`、`task`、`conventions[].value`。改变它们就是另一条精确说法，必须**新建**，不能 edit（S4.3）。`home_theory` 与 `aliases` 可 edit，以便随着地图增长把对象平滑迁移到更合适的理论书架。
 
 ### S2.4 Alignment（有修订的实体）
 
@@ -285,7 +287,7 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
 
 | 对象 | 可 edit | 不可 edit（改了就要新建） |
 |---|---|---|
-| SemanticEntity | `preferred_labels`、`plain_label`、`conventions`（只能增补说明，不能改 `value`）、`mathlib_baseline`（`status` 只能写 `unchecked`，不得带 `checked`）、`description`、`uses_entities` | S2.3 列出的身份字段；`conventions[].value` |
+| SemanticEntity | `preferred_labels`、`aliases`、`plain_label`、`home_theory`（仅非 theory 对象）、`conventions`（只能增补说明，不能改 `value`）、`mathlib_baseline`（`status` 只能写 `unchecked`，不得带 `checked`）、`description`、`uses_entities` | S2.3 列出的身份字段；`conventions[].value` |
 | Alignment | `relation`、`parameter_map`、`term_index_map`、`required_assumptions`、`lost_information`、`evidence_spans`、`status`（仅 Agent 可写的值）、`map_label`、`plain_note`、`source_context` | `source`、`target` |
 | Debt | `status`（open ↔ claimed_paid）、`paid_by`、`obligation` 的措辞、`failure_note`、`payoff_hint` | `attached_to`、`debt_kind` |
 | DialectScope | `label`、`conventions` | `anchor_unit` |
@@ -344,6 +346,8 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 | `source_context.dialect_scope` 不覆盖 `source` 单元，或缺约定卡 | 审核项 | `warn: dialect_scope_mismatch` / `info: uncontextualized` |
 | 约定卡的约定是 `inferred` / `conventional` | 审核项 | `info: inferred_convention` |
 | 共享对象写了 `mathlib_baseline.decl`，状态是 `unchecked` | 审核项（提醒接受后可用核对入口确认） | `info: mathlib_baseline_unchecked` |
+| 理论对象未写 `aliases` 同义检索词 | 审核项（提醒补几个中英文别称便于后续检索复用） | `info: theory_aliases_missing` |
+| 理论名称带有 `=`、`$`、`\` 等具体公式符号 | 审核项（提醒理论应按一类专题命名，不要写具体式子） | `warn: theory_name_too_specific` |
 | 同一来源单元对同一共享对象有两条活动对齐线 | 审核项 | `warn: duplicate_alignment` |
 | 共享 declaration 未写 `sequence_index_origin` 之类约定，而文本涉及下标 | 不检测（服务端不解析数学） | — |
 | 关系选得对不对、映射对不对、对不上的部分有没有写全 | **用户审核 + Debt**，服务端不检查 | — |

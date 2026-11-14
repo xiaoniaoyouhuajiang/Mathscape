@@ -28,6 +28,8 @@ describe("semantic plain labels", () => {
     }
     expect(entityPlainLabel({ preferred_labels: [{ lang: "en", label: "Fib" }, { lang: "zh", label: "斐波那契数" }] })).toBe("斐波那契数");
     expect(reviewItemLabel("mathlib_baseline_unchecked")).toContain("mathlib");
+    expect(reviewItemLabel("theory_name_too_specific")).toContain("专题名");
+    expect(reviewItemLabel("theory_aliases_missing")).toContain("同义词");
   });
 });
 

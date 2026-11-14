@@ -111,6 +111,19 @@ pub fn apply(
                 if let Some(labels) = &changes.preferred_labels {
                     entity.draft.preferred_labels = labels.clone();
                 }
+                if let Some(aliases) = &changes.aliases {
+                    entity.draft.aliases = aliases.clone();
+                }
+                if let Some(home_theory) = &changes.home_theory {
+                    if entity.draft.semantic_kind == SemanticKind::Theory {
+                        return Err(fail(
+                            &id,
+                            "invalid_arg",
+                            "理论本身不能挂在另一个 home_theory 下",
+                        ));
+                    }
+                    entity.draft.home_theory = Some(home_theory.clone());
+                }
                 changes.plain_label.apply_to(&mut entity.draft.plain_label);
                 changes.description.apply_to(&mut entity.draft.description);
                 if let Some(conventions) = &changes.conventions {
@@ -618,8 +631,21 @@ pub fn graph_diagnostics(final_map: &BTreeMap<String, MapEditObject>) -> Vec<Imp
                     out.push(missing("preferred_labels"));
                 }
                 let kind = p["semantic_kind"].as_str().unwrap_or_default();
+                if kind == "theory" && !p["home_theory"].is_null() {
+                    out.push(fail(
+                        id,
+                        "invalid_arg",
+                        "理论本身不能设置 home_theory（理论保持扁平，不建父子树）",
+                    ));
+                }
                 if kind != "theory" && p["home_theory"].is_null() {
                     out.push(missing("home_theory（除 theory 外都要挂在一个理论下）"));
+                }
+                if p["aliases"]
+                    .as_array()
+                    .is_some_and(|aliases| aliases.iter().any(blank))
+                {
+                    out.push(fail(id, "invalid_arg", "aliases 不能包含空字符串"));
                 }
                 match kind {
                     "declaration" => {
@@ -885,16 +911,50 @@ pub fn review_items(
                     );
                 }
             }
-            "SemanticEntity"
+            "SemanticEntity" => {
                 if p["mathlib_baseline"]["decl"].is_string()
-                    && p["mathlib_baseline"]["status"] == "unchecked" =>
-            {
-                item(
-                    "info",
-                    "mathlib_baseline_unchecked",
-                    id,
-                    "写了 mathlib 名称但尚未核对；接受后可在审核页「重新核对 mathlib 名称」".into(),
-                );
+                    && p["mathlib_baseline"]["status"] == "unchecked"
+                {
+                    item(
+                        "info",
+                        "mathlib_baseline_unchecked",
+                        id,
+                        "写了 mathlib 名称但尚未核对；接受后可在审核页「重新核对 mathlib 名称」"
+                            .into(),
+                    );
+                }
+                if p["semantic_kind"] == "theory" {
+                    let aliases = p["aliases"].as_array().map_or(0, Vec::len);
+                    if aliases == 0 {
+                        item(
+                            "info",
+                            "theory_aliases_missing",
+                            id,
+                            "理论没有写检索同义词（aliases），后续按中英文别称搜索可能不容易找到它"
+                                .into(),
+                        );
+                    }
+                    let names: Vec<&str> = p["preferred_labels"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|l| l["label"].as_str())
+                        .chain(p["plain_label"].as_str())
+                        .collect();
+                    let formula_like = names.iter().any(|name| {
+                        ["=", "＝", "$", "\\", "≤", "≥", "<", ">"]
+                            .iter()
+                            .any(|mark| name.contains(mark))
+                    });
+                    if formula_like {
+                        item(
+                            "warn",
+                            "theory_name_too_specific",
+                            id,
+                            "理论名称里带有具体算式或公式符号；理论应按一类专题命名（如「线性递推数列」），不要写具体式子".into(),
+                        );
+                    }
+                }
             }
             _ => {}
         }

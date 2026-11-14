@@ -45,6 +45,8 @@ pub const MAX_QUERY_CHARS: usize = 200;
 pub enum SearchKind {
     Note,
     SourceUnit,
+    Theory,
+    SemanticEntity,
     Material,
     Snapshot,
 }
@@ -55,6 +57,8 @@ impl SearchKind {
         match self {
             Self::Note => "手稿",
             Self::SourceUnit => "来源单元",
+            Self::Theory => "理论",
+            Self::SemanticEntity => "共享对象",
             Self::Material => "材料",
             Self::Snapshot => "命名快照",
         }
@@ -125,11 +129,14 @@ impl SearchRegistry {
         Self { providers: vec![] }
     }
 
-    /// Built-in N3d providers: notes, source units, materials, named snapshots.
+    /// Built-in providers: notes, source units, theories, shared objects,
+    /// materials, named snapshots.
     pub fn with_defaults() -> Self {
         let mut registry = Self::empty();
         registry.register(Box::new(providers::NoteProvider));
         registry.register(Box::new(providers::SourceUnitProvider));
+        registry.register(Box::new(providers::TheoryProvider));
+        registry.register(Box::new(providers::SemanticEntityProvider));
         registry.register(Box::new(providers::MaterialProvider));
         registry.register(Box::new(providers::SnapshotProvider));
         registry

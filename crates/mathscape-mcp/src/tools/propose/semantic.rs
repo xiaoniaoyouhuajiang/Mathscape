@@ -66,7 +66,9 @@ const EDITABLE: [(&str, &[&str]); 4] = [
         "semantic_entity",
         &[
             "preferred_labels",
+            "aliases",
             "plain_label",
+            "home_theory",
             "conventions",
             "mathlib_baseline",
             "description",

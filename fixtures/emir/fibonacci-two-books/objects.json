@@ -618,20 +618,30 @@
             "preferred_labels": [
               {
                 "lang": "zh",
-                "label": "整数数列与二阶线性递推（初等）"
+                "label": "线性递推数列"
+              },
+              {
+                "lang": "en",
+                "label": "Linear recurrence sequences"
               }
             ],
-            "plain_label": "理论：线性递推",
+            "plain_label": "理论：线性递推数列",
             "conventions": [
               {
                 "key": "baseline",
                 "subject": "*",
                 "value": "mathlib",
-                "text": "本理论的共享写法以 mathlib 为参照基线",
+                "text": "本理论下的共享写法以 mathlib 为参照基线",
                 "basis": "mathlib"
               }
             ],
-            "mathlib_baseline": null
+            "mathlib_baseline": null,
+            "aliases": [
+              "常系数线性递推",
+              "线性递推",
+              "linear recurrences"
+            ],
+            "description": "常系数线性递推数列及其基本性质这一专题书架；其中每条精确说法各自注明所用约定与取值范围。"
           }
         },
         {
@@ -654,6 +664,10 @@
             "plain_label": "概念：Fibonacci 数列",
             "conventions": [],
             "mathlib_baseline": null,
+            "aliases": [
+              "斐波那契数列",
+              "兔子数列"
+            ],
             "description": "“每项是前两项之和、以 1, 1 开头”的那一串数这个概念本身；精确写法见 e.fib_def。"
           }
         },

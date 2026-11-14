@@ -2,21 +2,21 @@
 
 # 逐类创建、调整与废弃规则
 
-以下“创建”都表示提出草案。语义层工具均标为【假定】，实际写入仍是 propose_changes → staged/blocked → 用户 accept/discard。任何 edit 都带 target_id 和 expected_revision；不要自带正式 id。
+以下“创建”都表示提出草案，实际写入走 `propose_changes` → `staged/blocked` → 用户 `accept/discard`。已开放写入的包括来源层（`source_span`、`source_unit`、`source_relation`）与语义层第一期对象（`semantic_entity`、`alignment`、`debt`、`dialect_scope`）；其余 R/D/T/X 与证明状态工具仍标为【假定】。任何 `edit` / `retire` 都带 `target_id` 和 `expected_revision`；不要自带正式 id。
 
 ## 通用前置
 
-先用 workspace.search、graph.get、必要时 graph.neighborhood 和 material.read 找到来源与邻域，避免重复建同名对象。所有对象带来源引用、revision、scope 和 rationale。没有 locator 就不能声称已核对原文。proves 是来源中的证明关系，不是内核证书。
+先用 `workspace.search`（查理论与共享对象时可带 `kinds: ["theory"]` / `["semantic_entity"]` 和 `scope: "investigation"`）、`graph.get`、必要时 `graph.neighborhood` 和 `material.read` 找到来源与邻域，避免重复建同名对象。所有对象带来源证据、revision、scope 和 rationale。没有 locator 就不能声称已核对原文。`proves` 是来源中的证明关系，不是内核证书。
 
 ## 来源层
 
 ### 来源单元与来源关系
 
-- **什么时候创建**：发现一个能独立解释、引用和回链的定义、定理、证明步骤、方法或问题时创建 source_unit；只有来源本身表达了“由……得到/包含/位于”等关系时创建 source_relation。
-- **前置条件**：已有 Artifact/Span 或可靠 content_ref；先查同一材料和 revision。当前 Phase2-0 只支持 source_unit/source_relation 的 create/edit。
-- **关键字段**：kind、标题/来源标签、content_ref、artifact/span 定位、来源 revision、父单元、关系类型、端点和原文摘要；摘要不能替代正文回链。
-- **常见错误**：把整章当单元；把解析修正当原文；把相似文字直接合成一个共享实体；无锚点凭记忆建 span。
-- **工具**：已确认 workspace.search、graph.get、graph.neighborhood、material.read、propose_changes。
+- **什么时候创建**：发现一个能独立解释、引用和回链的定义、定理、证明步骤、方法或问题时创建 `source_unit`；只有来源本身表达了“由……得到/包含/位于”等关系时创建 `source_relation`；缺少原文片段锚点时先用 `material.locate` 取精确范围并创建 `source_span`。
+- **前置条件**：已有 Artifact/Span 或可靠 `content_ref`；先查同一材料和 revision。来源对象支持 `create` 与 `edit`（`source_span` 不可变，只支持 `create`；来源对象不支持 Agent 提议 `retire`）。
+- **关键字段**：kind、标题/来源标签、source_spans、父单元、关系类型、端点和证据片段；摘要不能替代正文回链。
+- **常见错误**：把整章当单元或单个超长 span；把解析修正当原文；把相似文字直接合成一个共享实体；无锚点凭记忆建 span。
+- **工具**：已确认 `workspace.search`、`graph.get`、`graph.neighborhood`、`material.read`、`material.locate`、`propose_changes`。
 
 ## 对象卡、上下文与守卫
 
@@ -26,23 +26,24 @@
 - **前置条件**：读过对应 object.md 和来源；确认目标的形式结论、全局前提、分支、量词域、排除项和路线标识。
 - **关键字段**：object_ref、工具一句话、逐分支结论承诺、全局标量/域/正则性、参数和极限次序、分支 guard、排除项、来源和 revision。
 - **常见错误**：把“已有 R”当结论；漏写 B-up 的有限正质量；把对象外路线扩展塞进核心结论；每个实体单独造卡。
-- **工具**：当前没有可编译的对象卡写入工具；用 propose_changes 的 rationale、proposed_objects 和 unresolved 保存规划草案。不能伪装成正式语义对象。
+- **工具**：当前没有独立的对象卡节点类型；核心精确声明直接建为 `semantic_entity (declaration)`，路线级规划保存在 `propose_changes` 的 `rationale`、`unresolved` 或会话 scratch 中。
 
-### SemanticEntity 与 Alignment（可选语义层）
+### SemanticEntity（含 Theory）与 Alignment
 
-- **什么时候创建**：不同来源单元确实指向同一可复用数学对象/命题时，先建立带 namespace 的 SemanticEntity，再建立带类型、作用域和证据的 Alignment；相似措辞本身不够。
-- **前置条件**：来源单元已锚定；能区分 expresses、instance_of 等对齐类型和 candidate/accepted 状态；不确定时保留 candidate/disputed，不覆盖已有实体。
-- **关键字段**：实体稳定 id、semantic_kind、preferred labels、来源 unit、alignment type、scope、证据、状态和 revision；禁止无作用域 same_as。
-- **常见错误**：把两本书的 SourceSemanticUnit 直接合并；把 Alignment 当 T；用模型 confidence 代替证据；忽略 K、标量域、量词等差异。
-- **工具**：emir.upsert_semantic_entity / emir.upsert_alignment【假定】；当前语义层不可写时，随 propose_changes 保留为 blocked 草案。semantic_entity 输入 stable id、kind、labels 和来源说明；alignment 输入 source_unit、entity_ref、对齐类型、scope 和 evidence；输出通用 staged/blocked change set；前置是来源已读、引用闭合且不使用无作用域 same_as。
+- **什么时候创建**：不同来源单元确实指向同一可复用数学概念、精确说法或题型时，先查已有 `theory`（专题书架）与 `semantic_entity`，缺少时建立 `SemanticEntity`，再建立带关系类型、作用域、参数/项下标对照和证据的 `Alignment`；相似措辞本身不够。
+- **理论（`theory`）书架规则**：理论保持扁平（`home_theory: null`），尺度类似课本一章/一个专题（如「线性递推数列」），只回答“这几个概念和定理大概是哪一块儿的”。建前先 `workspace.search`（`kinds: ["theory"]`, `scope: "investigation"`）；新建时填好中英文 `aliases`，不用单个概念名或带 `=`/`$` 的具体算式起名。关于某类对象的定理跟该对象挂同一主书架；日后需重组时，可通过 `edit` 修改非 theory 对象的 `home_theory` 平滑迁移。
+- **前置条件**：来源单元已锚定；能区分 `expresses`、`specializes`、`overlaps_with` 等 11 种对齐关系和候选状态；不确定时保留 `retrieved_candidate` / `partially_aligned` / `disputed`，不覆盖已有实体。
+- **关键字段**：`semantic_kind`（`concept | declaration | theory | problem_schema`）、`home_theory`、`preferred_labels`、`aliases`、`conventions`、`mathlib_baseline`（`status: "unchecked"`）；对齐线的 `source`、`target`、`relation`、`source_context`、`parameter_map`、`term_index_map`、`lost_information`、`evidence_spans`、`status`；禁止 `same_as`。
+- **常见错误**：把两本书的 `SourceSemanticUnit` 直接合并；把 `parameter_map`（第几条命题）说成数列错开；把 Alignment 当 T；自设 `accepted` 或 `trust`；用具体算式给理论起名。
+- **工具**：已确认 `propose_changes`（`kind: "semantic_entity" | "alignment"`，支持 `create` / `edit` / `retire`）、`workspace.search`、`graph.get`、`graph.neighborhood`（`edge_types: ["aligns", "in_theory"]`）。
 
-### DialectScope
+### DialectScope（约定卡）
 
-- **什么时候创建**：来源在一段范围内固定符号约定、标量域、量词习惯、自然数起点或术语含义时创建；同一方言可被多个来源单元复用。
-- **前置条件**：来源范围可定位；未知书目信息保持 uncontextualized，不要用空环境冒充已解析。
-- **关键字段**：覆盖的 edition/artifact/unit 集、符号与量词规则、标量域、版本、未上下文化标记、来源证据。
-- **常见错误**：每一步证明复制一份 scope；用 ProofContext 的临时假设污染来源方言；看到同名符号就全局统一。
-- **工具**：emir.upsert_dialect_scope【假定】；读工具仍用 graph.get/neighborhood。
+- **什么时候创建**：来源在某一节范围内固定编号起点（如从第 1 项起编）、符号约定或术语叫法（如把 Fibonacci 数列叫“兔子数列”）时创建；锚定在章节 `section` 单元上（`applies_to: "anchor_subtree"`），其下所有子单元自动复用。
+- **前置条件**：来源范围可定位，每条约定至少有一条 `evidence_spans`；没有约定卡时对齐线写 `uncontextualized` 并注明原因，不要用空壳约定冒充已解析。
+- **关键字段**：`label`、`anchor_unit`、`applies_to`、`introduced_by_unit`、`conventions`（含 `key`、`subject`、`value`、`text`、`explicitness`、`evidence_spans`）。
+- **常见错误**：每一步证明复制一份 scope；用 ProofContext 的临时假设污染来源方言；推断出来的约定（`inferred`）不标明。
+- **工具**：已确认 `propose_changes`（`kind: "dialect_scope"`，支持 `create` / `edit` / `retire`）、`graph.get`、`graph.neighborhood`（`edge_types: ["scope_of"]`）。
 
 ### guard_registry 与实例 guard
 
@@ -112,7 +113,7 @@
 - **route-Debt**：只说明当前路线需要它。例如 T12 RD-μpos 仅服务 B-up 的平移截断路线；见证域写扩展域 D_up^0，并记录 proof_route / route_failure / normalization_route_failure。若是对象外域扩展且不是被移除的域条件，标 route-extension note，不进核心 I2/I6。
 - **前置条件**：每条写 debt_kind、failure_target、scope/量词、consumer、保持其余 Debt/guard/结论前提不变的具体 witness；不同分支类型不同就拆 ID。跨分支消费要把被消费 Debt/guard 和传递 consumer 放进偏序，不能默认全局清偿。
 - **常见错误**：把 guard/L 当 Debt；写一个“所有 Debt”大债；把 B-up 消费 B-lo 的 Debt；用不满足其他前提的反例；把 route-Debt 写成定理失败。
-- **工具**：rdtx.upsert_debt、rdtx.record_failure【假定】。
+- **工具**：挂在对齐线或共享对象上的地图 Debt 已支持 `propose_changes`（`kind: "debt"`，`status` 最多写 `claimed_paid` 并附 `paid_by`，`paid`/`waived` 由用户确认）；路线级失败见证 `rdtx.record_failure`【假定】。
 
 ### 派生引理 L
 

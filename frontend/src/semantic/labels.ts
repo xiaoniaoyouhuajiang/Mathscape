@@ -50,12 +50,14 @@ export const reviewItemLabel = lookup({
   inferred_convention: "约定是推断出来的，书里没明说",
   mathlib_baseline_unchecked: "mathlib 名称还没在本机核对",
   multi_target_change_set: "一个提案涉及多个目标对象",
+  theory_aliases_missing: "理论没有写检索同义词，后续按别称可能不容易搜到",
+  theory_name_too_specific: "理论名称里带有具体算式或公式符号，建议改成专题名",
 }, "");
 
 export const SEMANTIC_REVIEW_CODES = new Set([
   "relation_detail_missing", "overlap_scope_missing", "certificate_debt_suggested", "dialect_scope_mismatch",
   "uncontextualized", "duplicate_alignment", "inferred_convention", "mathlib_baseline_unchecked",
-  "multi_target_change_set",
+  "multi_target_change_set", "theory_aliases_missing", "theory_name_too_specific",
 ]);
 
 export const SEMANTIC_PROPOSAL_KINDS = new Set(["semantic_entity", "alignment", "debt", "dialect_scope"]);

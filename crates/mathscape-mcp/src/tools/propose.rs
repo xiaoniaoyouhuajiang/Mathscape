@@ -192,7 +192,7 @@ impl Diagnostic {
 pub(super) fn definition() -> Value {
     json!({
         "name": PROPOSE_CHANGES,
-        "description": "Validate and persist a Phase2 proposal. It supports immutable source_span creation, source_unit/source_relation create/edit, and the semantic layer (docs/semantic-write-contract.md): semantic_entity (concept, declaration, theory, problem_schema), alignment, debt and dialect_scope create/edit, plus retire of semantic objects (op retire with target_id and expected_revision). It returns staged or blocked and never changes the accepted map; accepting later only writes to the map and never raises trust. Semantic payloads reference new items as $new:<local_ref>. Never set trust; alignment status at most partially_aligned / disputed / incompatible (reviewed and accepted are user actions; there is no same_as); debt status at most claimed_paid (with paid_by); mathlib_baseline.status always unchecked (confirmed / not_found are written by the server re-check). Set target_object to the one shared object (or section unit) the change set is about. Only deterministic checks block; warn / info diagnostics are review items for the user. A source_span payload is {artifact_id, md_byte_range, granularity, quote}: quote is the full text of that range, the range is at most 4096 bytes (span_too_long; split a chapter by problem or paragraph), and material.locate returns a range that passes the quote check. Use granularity page when material.locate returned a page (page_granularity_available true); inline records no page, so never claim a page number for an inline span. To revise an earlier proposal of this investigation, pass the supersedes object from list_change_sets; without it a new change set is created. Problems of existing workspace objects this proposal does not touch are warn head_integrity and never block. Requires a bound round token.",
+        "description": "Validate and persist a Phase2 proposal. It supports immutable source_span creation, source_unit/source_relation create/edit, and the semantic layer (docs/semantic-write-contract.md): semantic_entity (concept, declaration, theory, problem_schema), alignment, debt and dialect_scope create/edit, plus retire of semantic objects (op retire with target_id and expected_revision). Theories are flat topic shelves (search existing/staged ones with workspace.search kinds=[\"theory\"] before creating one; give aliases and topic-level names without concrete formulas; home_theory on non-theory entities can be edited later to reorganize). It returns staged or blocked and never changes the accepted map; accepting later only writes to the map and never raises trust. Semantic payloads reference new items as $new:<local_ref>. Never set trust; alignment status at most partially_aligned / disputed / incompatible (reviewed and accepted are user actions; there is no same_as); debt status at most claimed_paid (with paid_by); mathlib_baseline.status always unchecked (confirmed / not_found are written by the server re-check). Set target_object to the one shared object (or section unit) the change set is about. Only deterministic checks block; warn / info diagnostics are review items for the user. A source_span payload is {artifact_id, md_byte_range, granularity, quote}: quote is the full text of that range, the range is at most 4096 bytes (span_too_long; split a chapter by problem or paragraph), and material.locate returns a range that passes the quote check. Use granularity page when material.locate returned a page (page_granularity_available true); inline records no page, so never claim a page number for an inline span. To revise an earlier proposal of this investigation, pass the supersedes object from list_change_sets; without it a new change set is created. Problems of existing workspace objects this proposal does not touch are warn head_integrity and never block. Requires a bound round token.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1599,6 +1599,12 @@ fn is_retired(lifecycle: &str) -> bool {
 fn collect_span_references(args: &ProposeArgs) -> BTreeSet<String> {
     let mut refs = BTreeSet::new();
     for object in &args.proposed_objects {
+        if semantic::is_semantic(&object.kind) {
+            for body in object.payload.iter().chain(object.changes.iter()) {
+                collect_evidence_span_refs(body, &mut refs);
+            }
+            continue;
+        }
         if object.kind != "source_unit" {
             continue;
         }
@@ -1632,6 +1638,33 @@ fn collect_span_references(args: &ProposeArgs) -> BTreeSet<String> {
         );
     }
     refs
+}
+
+fn collect_evidence_span_refs(value: &Value, refs: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if key == "evidence_spans"
+                    && let Some(values) = child.as_array()
+                {
+                    refs.extend(
+                        values
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .filter_map(reference_local_key),
+                    );
+                } else {
+                    collect_evidence_span_refs(child, refs);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_evidence_span_refs(item, refs);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn reference_local_key(value: &str) -> Option<String> {

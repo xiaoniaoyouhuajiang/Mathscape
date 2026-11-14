@@ -82,7 +82,8 @@ pub use proposals::{
 };
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use search::{
-    SearchArtifactRow, SearchCorpus, SearchNoteRow, SearchSnapshotRow, SearchSourceUnitRow,
+    SearchArtifactRow, SearchCorpus, SearchNoteRow, SearchSemanticEntityRow, SearchSnapshotRow,
+    SearchSourceUnitRow, search_semantic_entity_row_from_payload,
 };
 pub use source_map::{
     MapObjectOutcome, SOURCE_REGISTRATION_RECEIPT_VERSION, SourceMapSnapshot,

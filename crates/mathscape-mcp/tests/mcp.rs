@@ -2836,7 +2836,21 @@ fn semantic_layer_proposals_stage_with_review_items_and_never_touch_the_map() {
         "{staged}"
     );
     assert!(found.contains(&"uncontextualized".to_owned()), "{staged}");
+    assert!(
+        found.contains(&"theory_aliases_missing".to_owned()),
+        "{staged}"
+    );
     assert_eq!(map_object_count(&f.root), initial_objects);
+
+    let mut formula_theory = semantic_base(&span);
+    formula_theory[1]["payload"]["preferred_labels"] =
+        json!([{ "lang": "zh", "label": "递推 a_{n+1} = 3n + 1" }]);
+    let formula_res = propose_semantic(&f, "semantic-formula-theory", formula_theory);
+    assert_eq!(formula_res["status"], "staged", "{formula_res}");
+    assert!(
+        codes(&formula_res).contains(&"theory_name_too_specific".to_owned()),
+        "{formula_res}"
+    );
 }
 
 #[test]
@@ -3024,4 +3038,186 @@ fn emir_fixture_change_sets_all_stage_in_order() {
     );
     // Staging never touches the accepted map.
     assert_eq!(map_object_count(&root), initial_objects);
+
+    // Search with scope=accepted sees no semantic objects yet; scope=investigation
+    // finds the staged theory and shared objects by labels, aliases and mathlib name.
+    let (accepted_search, err) = call(
+        &server,
+        "workspace.search",
+        json!({ "query": "Cassini", "scope": "accepted" }),
+    );
+    assert!(!err);
+    assert_eq!(accepted_search["scope"], "accepted");
+    assert_eq!(accepted_search["total"], 0);
+
+    let (theory_search, err) = call(
+        &server,
+        "workspace.search",
+        json!({ "query": "线性递推", "kinds": ["theory"], "scope": "investigation" }),
+    );
+    assert!(!err);
+    assert_eq!(theory_search["scope"], "investigation");
+    let theory_id = ids
+        .iter()
+        .find_map(|(_, actual)| {
+            let (node, _) = call(
+                &server,
+                "graph.get",
+                json!({ "node_id": actual, "scope": "investigation" }),
+            );
+            (node["node"]["semantic_kind"] == "theory").then(|| actual.clone())
+        })
+        .expect("staged theory");
+    assert_eq!(theory_search["groups"][0]["kind"], "theory");
+    assert_eq!(theory_search["groups"][0]["hits"][0]["id"], theory_id);
+
+    let (entity_search, err) = call(
+        &server,
+        "workspace.search",
+        json!({
+            "query": "fib_succ_mul_fib_pred",
+            "kinds": ["semantic_entity"],
+            "scope": "investigation"
+        }),
+    );
+    assert!(!err);
+    assert_eq!(entity_search["groups"][0]["kind"], "semantic_entity");
+    let cassini_id = entity_search["groups"][0]["hits"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // graph.get returns semantic payload details and edge_summary (not unsupported).
+    let (got, err) = call(
+        &server,
+        "graph.get",
+        json!({ "node_id": cassini_id, "scope": "investigation" }),
+    );
+    assert!(!err);
+    assert_eq!(got["node"]["kind"], "semantic_entity");
+    assert_eq!(got["node"]["semantic_kind"], "declaration");
+    assert_eq!(got["node"]["semantic"]["home_theory"], theory_id);
+    assert!(
+        got["node"]["edge_summary"]["aligns"]["in"]
+            .as_u64()
+            .unwrap()
+            >= 2
+    );
+    assert_eq!(got["node"]["edge_summary"]["in_theory"]["out"], 1);
+
+    // graph.neighborhood traverses aligns, in_theory and debt_on when requested.
+    let (hood, err) = call(
+        &server,
+        "graph.neighborhood",
+        json!({
+            "node_id": cassini_id,
+            "depth": 1,
+            "direction": "both",
+            "edge_types": ["aligns", "in_theory", "debt_on"],
+            "scope": "investigation"
+        }),
+    );
+    assert!(!err, "{hood}");
+    assert_eq!(hood["status"], "ok");
+    let kinds: Vec<&str> = hood["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|n| n["kind"].as_str())
+        .collect();
+    assert!(kinds.contains(&"semantic_entity"), "{hood}");
+    assert!(kinds.contains(&"source_unit"), "{hood}");
+    assert!(kinds.contains(&"debt"), "{hood}");
+
+    // home_theory can be edited later to move an entity to another theory shelf,
+    // while theory-name warnings fire when formulas are stuffed into a theory label.
+    let (reorg, err) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "reorg-theory-shelf",
+            "rationale": "新建「平面几何剪拼」理论书架，把剪拼题迁过去",
+            "target_object": "t.geom",
+            "proposed_objects": [
+                {
+                    "local_ref": "t.geom",
+                    "kind": "semantic_entity",
+                    "op": "create",
+                    "payload": {
+                        "semantic_kind": "theory",
+                        "preferred_labels": [{ "lang": "zh", "label": "平面几何剪拼" }],
+                        "aliases": ["dissection puzzles", "几何剪拼", "面积悖论"],
+                        "plain_label": "理论：平面几何剪拼"
+                    }
+                },
+                {
+                    "local_ref": "move.puzzle",
+                    "kind": "semantic_entity",
+                    "op": "edit",
+                    "target_id": got["node"]["semantic"]["home_theory"],
+                    "expected_revision": got["node"]["revision"],
+                    "changes": {}
+                }
+            ]
+        }),
+    );
+    assert!(!err);
+    // Editing the wrong revision blocks cleanly; editing with the live staged
+    // revision of e.puzzle succeeds.
+    assert_eq!(reorg["status"], "blocked");
+    let puzzle_id = objects["change_sets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|cs| cs["staged_ids"]["e.puzzle"].as_str())
+        .map(|fid| ids[fid].clone())
+        .unwrap();
+    let (puzzle_node, _) = call(
+        &server,
+        "graph.get",
+        json!({ "node_id": puzzle_id, "scope": "investigation" }),
+    );
+    let puzzle_rev = puzzle_node["node"]["revision"].as_str().unwrap();
+    let (moved, err) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "reorg-theory-shelf-ok",
+            "rationale": "新建「平面几何剪拼」理论书架，把剪拼题迁过去",
+            "target_object": "t.geom",
+            "proposed_objects": [
+                {
+                    "local_ref": "t.geom",
+                    "kind": "semantic_entity",
+                    "op": "create",
+                    "payload": {
+                        "semantic_kind": "theory",
+                        "preferred_labels": [{ "lang": "zh", "label": "平面几何剪拼" }],
+                        "aliases": ["dissection puzzles", "几何剪拼", "面积悖论"],
+                        "plain_label": "理论：平面几何剪拼"
+                    }
+                },
+                {
+                    "local_ref": "move.puzzle",
+                    "kind": "semantic_entity",
+                    "op": "edit",
+                    "target_id": puzzle_id,
+                    "expected_revision": puzzle_rev,
+                    "changes": { "home_theory": "$new:t.geom" }
+                }
+            ]
+        }),
+    );
+    assert!(!err);
+    assert_eq!(moved["status"], "staged", "{moved}");
+    let new_theory_id = moved["staged_ids"]["t.geom"].as_str().unwrap();
+    let (puzzle_after, _) = call(
+        &server,
+        "graph.get",
+        json!({ "node_id": puzzle_id, "scope": "investigation" }),
+    );
+    assert_eq!(
+        puzzle_after["node"]["semantic"]["home_theory"],
+        new_theory_id
+    );
 }

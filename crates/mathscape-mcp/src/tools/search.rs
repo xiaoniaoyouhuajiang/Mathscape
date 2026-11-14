@@ -12,8 +12,9 @@ use serde_json::{Value, json};
 use super::canonical::CanonicalIndex;
 use super::{WORKSPACE_SEARCH, diagnostic, parse_args, to_object};
 use crate::McpWorkspace;
+use crate::investigation::{investigation_overlay, overlay_search_corpus};
 
-const DESCRIPTION: &str = "Search the Mathscape workspace (notes, source units, materials, snapshots) with the same unified matcher as the desktop search box. Returns hits grouped by kind; highlights are UTF-16 [start,end) offsets into each hit title. Material hits that belong to a canonical markdown view include canonical_id, coverage and partial. Read-only; this tool never runs Marker.";
+const DESCRIPTION: &str = "Search the Mathscape workspace (notes, source units, theories, shared objects, materials, snapshots) with the same unified matcher as the desktop search box. Returns hits grouped by kind; highlights are UTF-16 [start,end) offsets into each hit title. Material hits that belong to a canonical markdown view include canonical_id, coverage and partial. Use kinds=[\"theory\"] (often with scope=\"investigation\") to find existing or staged theories before proposing a new one. Read-only; this tool never runs Marker.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -42,14 +43,14 @@ pub(super) fn definition() -> Value {
                 },
                 "kinds": {
                     "type": "array",
-                    "items": { "type": "string", "enum": ["note", "source_unit", "material", "snapshot"] },
+                    "items": { "type": "string", "enum": ["note", "source_unit", "theory", "semantic_entity", "material", "snapshot"] },
                     "description": "Restrict to these kinds; empty or omitted means all.",
                 },
                 "scope": {
                     "type": "string",
                     "enum": ["accepted", "investigation"],
                     "default": "accepted",
-                    "description": "Phase1 implements only accepted; investigation is answered as accepted with a scope_not_supported diagnostic.",
+                    "description": "accepted searches the formal map; investigation also includes active staged source units, theories and shared objects of the current investigation.",
                 },
                 "include_trashed": {
                     "type": "boolean",
@@ -69,13 +70,30 @@ pub(super) fn definition() -> Value {
     })
 }
 
+fn projected_investigation(workspace: &McpWorkspace, scope: Scope) -> Option<String> {
+    if scope != Scope::Investigation {
+        return None;
+    }
+    if let Some(investigation) = workspace.investigation() {
+        return Some(investigation.to_owned());
+    }
+    let round = workspace.round().filter(|round| !round.trim().is_empty())?;
+    workspace
+        .store()
+        .ok()?
+        .round_investigation(&round)
+        .ok()
+        .flatten()
+}
+
 pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, ToolError> {
     let args: SearchArgs = parse_args(arguments)?;
     let mut diagnostics = Vec::new();
-    if args.scope == Scope::Investigation {
+    let investigation = projected_investigation(workspace, args.scope);
+    if args.scope == Scope::Investigation && investigation.is_none() {
         diagnostics.push(diagnostic(
             "scope_not_supported",
-            "scope=investigation is not implemented in Phase1; answered with scope=accepted",
+            "no investigation is bound to this session; answered with scope=accepted",
         ));
     }
     let query = SearchQuery {
@@ -85,12 +103,22 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
         limit_per_group: args.limit_per_group,
     };
 
-    let corpus = workspace.store()?.read_search_corpus().map_err(|error| {
+    let store = workspace.store()?;
+    let mut corpus = store.read_search_corpus().map_err(|error| {
         ToolError::new(
             ToolErrorCode::Internal,
             format!("failed to read search corpus: {error}"),
         )
     })?;
+    if let Some(investigation_id) = investigation.as_deref() {
+        let overlay = investigation_overlay(&store, investigation_id).map_err(|error| {
+            ToolError::new(
+                ToolErrorCode::Internal,
+                format!("failed to project the investigation: {error}"),
+            )
+        })?;
+        overlay_search_corpus(&mut corpus, &overlay);
+    }
     let mut response = search(&SearchRegistry::with_defaults(), &corpus, &query);
     let index = CanonicalIndex::load(workspace)?;
     for group in &mut response.groups {
@@ -114,7 +142,14 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
         "status".into(),
         serde_json::to_value(ToolStatus::Ok).unwrap_or_default(),
     );
-    result.insert("scope".into(), json!("accepted"));
+    result.insert(
+        "scope".into(),
+        json!(if investigation.is_some() {
+            "investigation"
+        } else {
+            "accepted"
+        }),
+    );
     if !diagnostics.is_empty() {
         result.insert("diagnostics".into(), Value::Array(diagnostics));
     }

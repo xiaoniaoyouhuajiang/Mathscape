@@ -290,6 +290,8 @@ pub struct SemanticEntityDraft {
     #[serde(default)]
     pub home_theory: Option<String>,
     pub preferred_labels: Vec<PreferredLabel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
     #[serde(default)]
     pub plain_label: Option<String>,
     #[serde(default)]

@@ -102,6 +102,13 @@ fn edit_changes_have_no_identity_fields() {
         serde_json::from_value::<SemanticEntityChanges>(json!({ "semantic_kind": "theory" }))
             .is_err()
     );
+    assert!(
+        serde_json::from_value::<SemanticEntityChanges>(json!({
+            "home_theory": "mathscape:semantic-entity/new-theory",
+            "aliases": ["linear recurrence", "递推数列"]
+        }))
+        .is_ok()
+    );
     assert!(serde_json::from_value::<DebtChanges>(json!({ "attached_to": "x" })).is_err());
     let changes: AlignmentChanges = serde_json::from_value(json!({
         "relation": "overlaps_with",

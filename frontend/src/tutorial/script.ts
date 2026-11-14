@@ -154,7 +154,7 @@ export const TYPE_NOTES = {
     name: "精确说法", code: "declaration",
     plain: "把概念写成一句带前提、带下标范围的话。它由四部分组成：约束变量（binders，例如 $n : \\mathbb N$）、定义体或陈述（definiens / statement）、原文证据（evidence spans，指回书上的原句）和约定（conventions，例如从第 0 项起编）。",
   },
-  theory: { name: "理论", code: "theory", plain: "共享对象所在的那一片数学（home theory），像一个容器；这里的概念、精确说法和题型都挂在「线性递推」下面。" },
+  theory: { name: "理论", code: "theory", plain: "共享对象的专题书架（home theory），用来说明这几个概念和定理大概是哪一块儿的；这里的概念、精确说法和题型都放在「线性递推数列」下面，以后也可以迁移。" },
   dialect: { name: "约定卡", code: "DialectScope", plain: "一本书在某一节里的写法约定，比如下标从几开始、把什么叫什么。地图读得懂它，并用它解释两本书的差别。" },
   problem: { name: "题型", code: "problem_schema", plain: "一族带参数的题。剪拼题是参数 $k \\ge 4$ 的一族，动画里的 8×8 是 $k = 6$ 那一张。" },
   debt: { name: "一笔账", code: "Debt", plain: "还欠的一个证明或检查，挂在具体的线或对象上；只有你能确认它还清了。" },
@@ -323,7 +323,7 @@ export function buildTutorialShots(projection: TutorialProjection): TutorialShot
       id: "declaration", title: "精确说法与理论", seconds: 12, provenance: ["真实"],
       reveal: ["e.theory", "e.fib_def", "a.jia.def"], focus: ["e.fib_def", "e.theory", "jia.u.def"],
       caption: "精确说法：把概念写成一句带前提的话",
-      narration: "再往下一层，是精确说法：带约束变量、定义体和原文证据的那一句。它属于“线性递推”这个理论。地图用 mathlib 的统一写法作参照基线。",
+      narration: "再往下一层，是精确说法：带约束变量、定义体和原文证据的那一句。它放在“线性递推数列”这个理论书架上。地图用 mathlib 的统一写法作参照基线。",
       card: { title: label("e.fib_def"), lines: [
         `约束变量：$${str(binder.name)} : ${str(binder.type) === "ℕ" ? "\\mathbb N" : str(binder.type)}$`,
         `定义体：${definiens}`,

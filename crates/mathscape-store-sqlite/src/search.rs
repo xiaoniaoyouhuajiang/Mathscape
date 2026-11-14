@@ -23,6 +23,8 @@ pub struct SearchCorpus {
     pub snapshots: Vec<SearchSnapshotRow>,
     pub artifacts: Vec<SearchArtifactRow>,
     pub source_units: Vec<SearchSourceUnitRow>,
+    #[serde(default)]
+    pub semantic_entities: Vec<SearchSemanticEntityRow>,
     /// Registered canonical markdown lineages (the same rows the map folds),
     /// so the material provider collapses folded snapshots into one hit.
     #[serde(default)]
@@ -69,6 +71,18 @@ pub struct SearchSourceUnitRow {
     pub display_title: Option<String>,
     pub source_title: Option<String>,
     pub source_labels: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SearchSemanticEntityRow {
+    pub object_id: String,
+    pub lifecycle: String,
+    pub semantic_kind: Option<String>,
+    pub plain_label: Option<String>,
+    pub preferred_labels: Vec<String>,
+    pub aliases: Vec<String>,
+    pub mathlib_decl: Option<String>,
+    pub home_theory_id: Option<String>,
 }
 
 fn unsigned(value: i64, column: usize) -> rusqlite::Result<u64> {
@@ -218,6 +232,101 @@ fn source_units(connection: &Connection) -> Result<Vec<SearchSourceUnitRow>, Sql
     Ok(result)
 }
 
+pub fn search_semantic_entity_row_from_payload(
+    object_id: String,
+    lifecycle: String,
+    payload: &Value,
+) -> SearchSemanticEntityRow {
+    let inner = payload.get("payload").unwrap_or(payload);
+    let str_field = |key: &str| {
+        inner
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let mut preferred_labels = Vec::new();
+    if let Some(items) = inner.get("preferred_labels").and_then(Value::as_array) {
+        // Put Chinese preferred labels first so fallback titles match map display.
+        for only_zh in [true, false] {
+            for item in items {
+                let is_zh = item.get("lang").and_then(Value::as_str) == Some("zh");
+                if is_zh != only_zh {
+                    continue;
+                }
+                if let Some(label) = item
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|label| !label.is_empty())
+                    && !preferred_labels.iter().any(|existing| existing == label)
+                {
+                    preferred_labels.push(label.to_owned());
+                }
+            }
+        }
+    }
+    let aliases = inner
+        .get("aliases")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|alias| !alias.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mathlib_decl = inner
+        .get("mathlib_baseline")
+        .and_then(|baseline| baseline.get("decl"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|decl| !decl.is_empty())
+        .map(str::to_owned);
+    SearchSemanticEntityRow {
+        object_id,
+        lifecycle,
+        semantic_kind: str_field("semantic_kind"),
+        plain_label: str_field("plain_label"),
+        preferred_labels,
+        aliases,
+        mathlib_decl,
+        home_theory_id: str_field("home_theory"),
+    }
+}
+
+fn semantic_entities(
+    connection: &Connection,
+) -> Result<Vec<SearchSemanticEntityRow>, SqliteStoreError> {
+    let mut statement = connection.prepare(
+        "SELECT o.object_id, r.lifecycle, r.payload_json
+         FROM map_objects o
+         JOIN map_object_revisions r ON r.object_id=o.object_id AND r.revision_id=o.current_revision
+         WHERE o.entity_kind='SemanticEntity' AND o.object_shape='entity'
+         ORDER BY o.object_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut result = Vec::new();
+    for row in rows {
+        let (object_id, lifecycle, payload_json) = row?;
+        let payload: Value = serde_json::from_str(&payload_json)?;
+        result.push(search_semantic_entity_row_from_payload(
+            object_id, lifecycle, &payload,
+        ));
+    }
+    Ok(result)
+}
+
 impl SqliteArtifactStore {
     /// Every searchable row, read in one transaction (N3d).
     pub fn read_search_corpus(&self) -> Result<SearchCorpus, SqliteStoreError> {
@@ -227,6 +336,7 @@ impl SqliteArtifactStore {
             snapshots: snapshots(&transaction)?,
             artifacts: artifacts(&transaction)?,
             source_units: source_units(&transaction)?,
+            semantic_entities: semantic_entities(&transaction)?,
             canonical_markdown: crate::canonical_markdown::list_canonical_markdown(&transaction)?,
         };
         transaction.commit()?;

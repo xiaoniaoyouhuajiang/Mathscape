@@ -15,8 +15,9 @@ use mathscape_orchestrator::change_set_plan::{
     InvestigationOverlay, StagedChangeSet, project_investigation,
 };
 use mathscape_store_sqlite::{
-    LandscapeSnapshot, PendingChangeSet, ProposedChangeRecord, SourceMapSnapshot,
-    SqliteArtifactStore, SqliteStoreError, StoredMapEndpoint, StoredMapObject,
+    LandscapeSnapshot, PendingChangeSet, ProposedChangeRecord, SearchCorpus, SearchSourceUnitRow,
+    SourceMapSnapshot, SqliteArtifactStore, SqliteStoreError, StoredMapEndpoint, StoredMapObject,
+    search_semantic_entity_row_from_payload,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -181,4 +182,85 @@ pub fn investigation_landscape(
     let mut sources = landscape.sources().clone();
     let marks = overlay_source_map(&mut sources, &overlay);
     Ok((landscape.with_sources(sources), marks))
+}
+
+fn staged_source_unit_row(object: &MapEditObject) -> SearchSourceUnitRow {
+    let inner = object.payload.get("payload").unwrap_or(&object.payload);
+    let str_field = |key: &str| {
+        inner
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let source_title = inner
+        .get("source_title")
+        .and_then(|title| title.get("text"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let source_labels = inner
+        .get("source_labels")
+        .and_then(Value::as_array)
+        .map(|labels| {
+            labels
+                .iter()
+                .filter_map(|label| label.get("text").and_then(Value::as_str))
+                .map(str::trim)
+                .filter(|label| !label.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    SearchSourceUnitRow {
+        object_id: object.object_id.clone(),
+        lifecycle: object.lifecycle.clone(),
+        unit_kind: str_field("kind"),
+        display_title: str_field("display_title"),
+        source_title,
+        source_labels,
+    }
+}
+
+/// Overlays active staged versions of `investigation_id` onto an accepted
+/// [`SearchCorpus`], so `workspace.search` with `scope="investigation"` can
+/// find theories, shared objects and source units staged earlier in the same
+/// investigation.
+pub fn overlay_search_corpus(corpus: &mut SearchCorpus, overlay: &InvestigationOverlay) {
+    for staged in &overlay.objects {
+        let obj = &staged.object;
+        match obj.kind.as_str() {
+            "SourceSemanticUnit" => {
+                let row = staged_source_unit_row(obj);
+                if let Some(pos) = corpus
+                    .source_units
+                    .iter()
+                    .position(|existing| existing.object_id == obj.object_id)
+                {
+                    corpus.source_units[pos] = row;
+                } else {
+                    corpus.source_units.push(row);
+                }
+            }
+            "SemanticEntity" => {
+                let row = search_semantic_entity_row_from_payload(
+                    obj.object_id.clone(),
+                    obj.lifecycle.clone(),
+                    &obj.payload,
+                );
+                if let Some(pos) = corpus
+                    .semantic_entities
+                    .iter()
+                    .position(|existing| existing.object_id == obj.object_id)
+                {
+                    corpus.semantic_entities[pos] = row;
+                } else {
+                    corpus.semantic_entities.push(row);
+                }
+            }
+            _ => {}
+        }
+    }
 }

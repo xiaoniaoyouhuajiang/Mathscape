@@ -382,20 +382,28 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
   },
   propose_changes: (args, payload, status) => {
     const counts = stagedCounts(payload?.staged_ids);
+    const semantic = semanticTotal(payload?.staged_ids);
     const version = num(payload?.version);
     const supersedes = supersedesOf(args, payload);
     const blocks = proposalBlocks(payload);
     const units = list(args.proposed_objects).filter((item) => isObject(item) && item.kind === "source_unit").length;
+    const semanticArgs = list(args.proposed_objects).filter((item) => isObject(item) && typeof item.kind === "string" && ["semantic_entity", "alignment", "debt", "dialect_scope"].includes(item.kind)).length;
     const relations = list(args.proposed_relations).length;
+    const stagedTail = semantic > 0 && counts.units === 0 && counts.relations === 0 && counts.spans === 0
+      ? `语义项 ${semantic}`
+      : `单元 ${counts.units} · 关系 ${counts.relations} · 片段 ${counts.spans}${semantic > 0 ? ` · 语义 ${semantic}` : ""}`;
+    const runningSummary = semanticArgs > 0 && units === 0 && relations === 0
+      ? `正在校验 ${semanticArgs} 个语义项…`
+      : `正在校验 ${units} 个单元 · ${relations} 条关系${semanticArgs > 0 ? ` · ${semanticArgs} 个语义项` : ""}…`;
     const verdict =
       str(payload?.status) === "blocked"
         ? `被阻塞 · ${blocks.length} 个问题${blocks[0] ? `：${blocks[0].code}` : ""}`
-        : `已暂存 · 单元 ${counts.units} · 关系 ${counts.relations} · 片段 ${counts.spans}`;
+        : `已暂存 · ${stagedTail}`;
     return {
       verb: "提案",
       subject: str(args.request_id),
       detail: [version !== undefined ? `v${version}` : "", supersedes ? `取代 v${supersedes.version}` : ""].filter(Boolean).join(" · ") || undefined,
-      summary: status === "running" ? `正在校验 ${units} 个单元 · ${relations} 条关系…` : verdict,
+      summary: status === "running" ? runningSummary : verdict,
       seeds: proposalAnchors(args),
       layers: [],
     };
@@ -488,8 +496,8 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
           ? "正在读取变更集…"
           : `${STATE_LABEL[state ?? ""] ?? state ?? "已读取"} · 单元 ${counts.units} · 关系 ${counts.relations} · 片段 ${counts.spans}`,
       seeds: [],
-      // Briefly light the change set's staged units (relations / spans are not nodes).
-      layers: [Object.values(staged).map(str).filter((id): id is string => !!id && id.startsWith(UNIT_PREFIX))],
+      // Briefly light the change set's staged units and semantic nodes (relations / spans are not nodes).
+      layers: [Object.values(staged).map(str).filter((id): id is string => !!id && STAGED_NODE_PREFIXES.some((prefix) => id.startsWith(prefix)))],
     };
   },
 };
@@ -498,6 +506,11 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
 // Fourth slice helpers (proposal / Lean / locate)
 
 const UNIT_PREFIX = "mathscape:source-unit/";
+const SEMANTIC_ENTITY_PREFIX = "mathscape:semantic-entity/";
+const DEBT_PREFIX = "mathscape:debt/";
+const DIALECT_SCOPE_PREFIX = "mathscape:dialect-scope/";
+const ALIGNMENT_PREFIX = "mathscape:alignment/";
+const STAGED_NODE_PREFIXES = [UNIT_PREFIX, SEMANTIC_ENTITY_PREFIX, DEBT_PREFIX, DIALECT_SCOPE_PREFIX];
 const RELATION_PREFIX = "mathscape:source-relation/";
 const SPAN_PREFIX = "mathscape:source-span/";
 const MODE_LABEL = { resident: "常驻", oneshot: "一次性" } as const;
@@ -509,7 +522,12 @@ const clip = (text: string, max: number): string => ([...text].length > max ? `$
 const shortChangeSet = (id: string | undefined): string | undefined =>
   id ? `change-set/${shortStableId(id.replace(/^mathscape:change-set\//, ""), { max: 12, head: 8, tail: 0 })}` : undefined;
 
-/** `staged_ids` values split by prefix — the review overview totals. */
+function semanticTotal(staged: unknown): number {
+  const values = isObject(staged) ? Object.values(staged).map(str) : [];
+  return values.filter((id) =>
+    !!id && [SEMANTIC_ENTITY_PREFIX, ALIGNMENT_PREFIX, DEBT_PREFIX, DIALECT_SCOPE_PREFIX].some((prefix) => id.startsWith(prefix)),
+  ).length;
+}
 export function stagedCounts(staged: unknown): ProposeAct["counts"] {
   const values = isObject(staged) ? Object.values(staged).map(str) : [];
   const count = (prefix: string) => values.filter((id) => id?.startsWith(prefix)).length;
@@ -550,8 +568,10 @@ function proposalAnchors(args: Json): string[] {
   const out = new Set<string>();
   for (const item of list(args.proposed_objects).filter(isObject)) {
     const payload = isObject(item.payload) ? item.payload : {};
-    const artifact = str(payload.artifact_id);
-    if (artifact) out.add(artifact);
+    for (const key of ["artifact_id", "source", "target", "home_theory", "anchor_unit", "attached_to"]) {
+      const end = proposeEnd(payload[key]);
+      if (end && "id" in end) out.add(end.id);
+    }
     const target = str(item.target_id);
     if (target) out.add(target);
   }

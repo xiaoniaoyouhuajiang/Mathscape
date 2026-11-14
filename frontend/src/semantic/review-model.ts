@@ -49,6 +49,9 @@ function lineFor(item: PendingChangeSet, object: ProposedObject, body: Json): { 
   switch (object.kind) {
     case "semantic_entity": {
       if (body.semantic_kind) lines.push(semanticKindLabel(str(body.semantic_kind)));
+      if (body.home_theory) lines.push(`所在理论：${refTitle(item, str(body.home_theory))}`);
+      const aliases = Array.isArray(body.aliases) ? body.aliases.map(str).filter((v): v is string => !!v) : [];
+      if (aliases.length) lines.push(`检索词：${aliases.join("、")}`);
       for (const convention of arr(body.conventions)) if (str(convention.text)) lines.push(`约定：${str(convention.text)}`);
       const baseline = body.mathlib_baseline as Json | null | undefined;
       if (baseline && str(baseline.decl)) lines.push(`mathlib：${str(baseline.decl)}（${baselineStatusLabel(str(baseline.status))}）`);
