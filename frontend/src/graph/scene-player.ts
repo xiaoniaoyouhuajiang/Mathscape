@@ -81,6 +81,8 @@ import type {
   OutlineAct,
   PageImageAct,
   ProposeAct,
+  ProposeItem,
+  ProposeRelation,
   SceneAct,
   ToolScene,
 } from "../sandbox/scene/types";
@@ -167,7 +169,7 @@ const FIT_PADDING = 64;
 const FIT_MAX_ZOOM = 1.6;
 /** Nodes that hang off entities and follow them when they move. */
 const SATELLITE_SELECTOR = '[elementKind = "junction"], .ink-note-node';
-const MARK_CLASSES = "scene-propose-hit scene-propose-edge scene-blocked scene-blocked-flash scene-retired";
+const MARK_CLASSES = "scene-propose-hit scene-propose-edge scene-propose-semantic-hit scene-propose-theory-hit scene-propose-concept-hit scene-propose-declaration-hit scene-propose-problem-schema-hit scene-propose-debt-hit scene-propose-dialect-scope-hit scene-propose-alignment-edge scene-propose-theory-edge scene-propose-uses-edge scene-propose-debt-edge scene-propose-scope-edge scene-blocked scene-blocked-flash scene-retired";
 const SCENE_CLASSES = `sandbox-echo-seed sandbox-echo-hit sandbox-echo-fade sandbox-echo-edge scene-parsing ${MARK_CLASSES}`;
 const GHOST_SELECTOR = ".scene-ghost, .scene-ghost-edge";
 const GHOST_SIZE = 34;
@@ -176,6 +178,38 @@ interface Inflight {
   tool: string;
   label: string;
   since: number;
+}
+
+function visualKindClass(visualKind: string): string {
+  return visualKind.replace(/_/g, "-");
+}
+
+export function proposeItemMarkClass(item: ProposeItem): string {
+  if (item.kind !== "semantic" || !item.visualKind) return "";
+  return `scene-propose-semantic-hit scene-propose-${visualKindClass(item.visualKind)}-hit`;
+}
+
+export function proposeGhostClass(item: ProposeItem): string {
+  const classes = ["scene-ghost"];
+  if (item.kind === "span") classes.push("scene-ghost-span");
+  if (item.kind === "semantic" && item.visualKind) classes.push("scene-ghost-semantic", `scene-ghost-${visualKindClass(item.visualKind)}`);
+  return classes.join(" ");
+}
+
+export function proposeRelationMarkClass(relation: ProposeRelation): string {
+  switch (relation.relationKind) {
+    case "alignment": return "scene-propose-alignment-edge";
+    case "in_theory": return "scene-propose-theory-edge";
+    case "uses_entity": return "scene-propose-uses-edge";
+    case "debt_on": return "scene-propose-debt-edge";
+    case "scope_of": return "scene-propose-scope-edge";
+    default: return "";
+  }
+}
+
+export function proposeRelationGhostClass(relation: ProposeRelation): string {
+  const extra = proposeRelationMarkClass(relation).replace("scene-propose-", "scene-ghost-");
+  return extra ? `scene-ghost-edge ${extra}` : "scene-ghost-edge";
 }
 
 export class ScenePlayer {
@@ -532,6 +566,7 @@ export class ScenePlayer {
   }
 
   // -------------------------------------------------------------------------
+
   // propose_changes on the main map
 
   private async performPropose(scene: ToolScene, act: ProposeAct, token: number): Promise<void> {
@@ -564,12 +599,16 @@ export class ScenePlayer {
       source: nodeOf(relation.source),
       target: nodeOf(relation.target),
       real: relation.stagedId ? relationElements(core, relation.stagedId) : core.collection(),
+      targetRelation: "id" in relation.target ? relationElements(core, relation.target.id) : core.collection(),
     }));
     const marks = new Map<string, string[]>();
     const mark = (id: string, cls: string) => marks.set(id, [...(marks.get(id) ?? []), cls]);
     const visual: Visual = { focus: new Set([...anchors, ...retired]), seeds: anchors, layers: [], marks };
     for (const id of retired) mark(id, "scene-retired");
-    for (const entry of relations) for (const id of [entry.source, entry.target]) if (id && !id.startsWith("scene-ghost")) visual.focus.add(id);
+    for (const entry of relations) {
+      for (const id of [entry.source, entry.target]) if (id && !id.startsWith("scene-ghost")) visual.focus.add(id);
+      entry.targetRelation.connectedNodes().forEach((node) => { visual.focus.add(node.id()); });
+    }
     for (const entry of items) if (!entry.ghost) visual.focus.add(entry.id);
     this.paint(visual);
     // The camera frames anchors, staged nodes and where the ghosts will appear.
@@ -584,12 +623,14 @@ export class ScenePlayer {
         const at = spots.get(entry.item.localRef);
         core.add({
           group: "nodes",
-          data: { id: entry.id, label: entry.item.label, elementKind: "scene-ghost", localRef: entry.item.localRef },
+          data: { id: entry.id, label: entry.item.label, elementKind: "scene-ghost", localRef: entry.item.localRef, visualKind: entry.item.visualKind ?? null },
           position: at ?? { x: 0, y: 0 },
-          classes: `scene-ghost${entry.item.kind === "span" ? " scene-ghost-span" : ""}`,
+          classes: proposeGhostClass(entry.item),
         });
       } else {
         mark(entry.id, "scene-propose-hit");
+        const semanticMark = proposeItemMarkClass(entry.item);
+        if (semanticMark) mark(entry.id, semanticMark);
       }
       visual.focus.add(entry.id);
       if (entry.item.blocked.length > 0) mark(entry.id, "scene-blocked");
@@ -600,18 +641,31 @@ export class ScenePlayer {
     for (const [index, entry] of relations.entries()) {
       const blocked = entry.relation.blocked.length > 0;
       if (entry.real.nonempty()) {
+        const semanticClass = proposeRelationMarkClass(entry.relation);
         entry.real.forEach((element) => {
           mark(element.id(), "scene-propose-edge");
+          if (semanticClass) mark(element.id(), semanticClass);
+          if (blocked) mark(element.id(), "scene-blocked");
           if (element.isNode()) visual.focus.add(element.id());
         });
       } else if (entry.source && entry.target) {
         const id = `scene-ghost-edge:${entry.relation.localRef}`;
         core.add({
           group: "edges",
-          data: { id, source: entry.source, target: entry.target, role: entry.relation.label, label: entry.relation.label },
-          classes: "scene-ghost-edge",
+          data: { id, source: entry.source, target: entry.target, role: entry.relation.label, label: entry.relation.label, relationKind: entry.relation.relationKind ?? null },
+          classes: proposeRelationGhostClass(entry.relation),
         });
         if (blocked) mark(id, "scene-blocked");
+      } else if (entry.source && entry.targetRelation.nonempty()) {
+        // A Debt attached to an existing Alignment has no node endpoint in semantic mode;
+        // pulse the holder edge while the debt node is shown separately.
+        const semanticClass = proposeRelationMarkClass(entry.relation);
+        entry.targetRelation.forEach((element) => {
+          mark(element.id(), "scene-propose-edge");
+          if (semanticClass) mark(element.id(), semanticClass);
+          if (blocked) mark(element.id(), "scene-blocked");
+        });
+        if (blocked) mark(entry.source, "scene-blocked");
       } else {
         continue;
       }
@@ -644,12 +698,14 @@ export class ScenePlayer {
       delete this.hud.dataset.units;
       delete this.hud.dataset.relations;
       delete this.hud.dataset.spans;
+      delete this.hud.dataset.semantic;
       delete this.hud.dataset.blocked;
       return;
     }
     this.hud.dataset.units = String(act.counts.units);
     this.hud.dataset.relations = String(act.counts.relations);
     this.hud.dataset.spans = String(act.counts.spans);
+    this.hud.dataset.semantic = String(act.counts.semantic);
     this.hud.dataset.blocked = String(act.blocks.length);
   }
 

@@ -15,7 +15,7 @@
  * a result carrying `details.map_signal` records the parse (done / failed).
  */
 import { shortStableId } from "../../core/stable-id";
-import { relationLabel } from "../../review/labels";
+import { relationLabel, unitKindLabel } from "../../review/labels";
 import type { AgentEventLike } from "../format";
 import { MCP_STARTUP_TOOL } from "../steps";
 import {
@@ -38,6 +38,8 @@ import {
   type ProposeEnd,
   type ProposeItem,
   type ProposeRelation,
+  type ProposeRelationKind,
+  type ProposeVisualKind,
   type SceneAct,
   type SceneDraft,
   type SceneResolve,
@@ -382,7 +384,7 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
   },
   propose_changes: (args, payload, status) => {
     const counts = stagedCounts(payload?.staged_ids);
-    const semantic = semanticTotal(payload?.staged_ids);
+    const semantic = counts.semantic;
     const version = num(payload?.version);
     const supersedes = supersedesOf(args, payload);
     const blocks = proposalBlocks(payload);
@@ -494,7 +496,7 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
       summary:
         status === "running"
           ? "正在读取变更集…"
-          : `${STATE_LABEL[state ?? ""] ?? state ?? "已读取"} · 单元 ${counts.units} · 关系 ${counts.relations} · 片段 ${counts.spans}`,
+          : `${STATE_LABEL[state ?? ""] ?? state ?? "已读取"} · 单元 ${counts.units} · 关系 ${counts.relations} · 片段 ${counts.spans}${counts.semantic > 0 ? ` · 语义 ${counts.semantic}` : ""}`,
       seeds: [],
       // Briefly light the change set's staged units and semantic nodes (relations / spans are not nodes).
       layers: [Object.values(staged).map(str).filter((id): id is string => !!id && STAGED_NODE_PREFIXES.some((prefix) => id.startsWith(prefix)))],
@@ -522,16 +524,17 @@ const clip = (text: string, max: number): string => ([...text].length > max ? `$
 const shortChangeSet = (id: string | undefined): string | undefined =>
   id ? `change-set/${shortStableId(id.replace(/^mathscape:change-set\//, ""), { max: 12, head: 8, tail: 0 })}` : undefined;
 
-function semanticTotal(staged: unknown): number {
-  const values = isObject(staged) ? Object.values(staged).map(str) : [];
-  return values.filter((id) =>
-    !!id && [SEMANTIC_ENTITY_PREFIX, ALIGNMENT_PREFIX, DEBT_PREFIX, DIALECT_SCOPE_PREFIX].some((prefix) => id.startsWith(prefix)),
-  ).length;
-}
+const semanticPrefixes = [SEMANTIC_ENTITY_PREFIX, ALIGNMENT_PREFIX, DEBT_PREFIX, DIALECT_SCOPE_PREFIX];
+
 export function stagedCounts(staged: unknown): ProposeAct["counts"] {
   const values = isObject(staged) ? Object.values(staged).map(str) : [];
   const count = (prefix: string) => values.filter((id) => id?.startsWith(prefix)).length;
-  return { units: count(UNIT_PREFIX), relations: count(RELATION_PREFIX), spans: count(SPAN_PREFIX) };
+  return {
+    units: count(UNIT_PREFIX),
+    relations: count(RELATION_PREFIX),
+    spans: count(SPAN_PREFIX),
+    semantic: values.filter((id) => !!id && semanticPrefixes.some((prefix) => id.startsWith(prefix))).length,
+  };
 }
 
 function supersedesOf(args: Json, payload: Json | undefined): ProposeAct["supersedes"] {
@@ -563,23 +566,27 @@ function proposeEnd(value: unknown): ProposeEnd | undefined {
   return { local: ref };
 }
 
-/** Existing objects the proposal touches: span artifacts, relation ends, edit targets. */
+/** Existing objects the proposal touches, including nested semantic references. */
 function proposalAnchors(args: Json): string[] {
   const out = new Set<string>();
-  for (const item of list(args.proposed_objects).filter(isObject)) {
-    const payload = isObject(item.payload) ? item.payload : {};
-    for (const key of ["artifact_id", "source", "target", "home_theory", "anchor_unit", "attached_to"]) {
-      const end = proposeEnd(payload[key]);
-      if (end && "id" in end) out.add(end.id);
+  const collect = (value: unknown): void => {
+    if (typeof value === "string") {
+      if (value.startsWith("mathscape:")) out.add(value);
+      return;
     }
+    if (Array.isArray(value)) {
+      value.forEach(collect);
+      return;
+    }
+    if (isObject(value)) Object.values(value).forEach(collect);
+  };
+  list(args.proposed_objects).filter(isObject).forEach((item) => {
+    collect(item.payload);
+    collect(item.changes);
     const target = str(item.target_id);
     if (target) out.add(target);
-  }
-  for (const relation of list(args.proposed_relations).filter(isObject)) {
-    for (const end of [proposeEnd(relation.source), proposeEnd(relation.target)]) {
-      if (end && "id" in end) out.add(end.id);
-    }
-  }
+  });
+  list(args.proposed_relations).filter(isObject).forEach(collect);
   return [...out];
 }
 
@@ -597,6 +604,80 @@ function supersededIds(supersedes: ProposeAct["supersedes"], prior: readonly Age
   return [];
 }
 
+function semanticBody(item: Json): Json {
+  return isObject(item.payload) ? item.payload : isObject(item.changes) ? item.changes : {};
+}
+
+function collectKeyStrings(value: unknown, key: string, out: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectKeyStrings(item, key, out));
+    return out;
+  }
+  if (!isObject(value)) return out;
+  for (const [name, child] of Object.entries(value)) {
+    if (name === key) {
+      if (typeof child === "string") out.push(child);
+      else if (Array.isArray(child)) child.forEach((item) => { if (typeof item === "string") out.push(item); });
+    } else {
+      collectKeyStrings(child, key, out);
+    }
+  }
+  return out;
+}
+
+function semanticVisualKind(kind: string, body: Json): ProposeVisualKind {
+  if (kind === "debt") return "debt";
+  if (kind === "dialect_scope") return "dialect_scope";
+  const semanticKind = str(body.semantic_kind);
+  if (semanticKind === "theory" || semanticKind === "concept" || semanticKind === "declaration" || semanticKind === "problem_schema") return semanticKind;
+  return "concept";
+}
+
+function semanticLabel(kind: string, body: Json, local: string): string {
+  if (kind === "debt") return str(body.obligation) ?? local;
+  if (kind === "dialect_scope") return str(body.label) ?? local;
+  const labels = list(body.preferred_labels).filter(isObject);
+  const preferred = labels.find((label) => label.lang === "zh") ?? labels[0];
+  return str(body.plain_label) ?? str(preferred?.label) ?? unitKindLabel(str(body.semantic_kind) ?? "概念") ?? local;
+}
+
+function semanticAnchors(body: Json, spans: Map<string, Json>): string[] {
+  const out = new Set<string>();
+  for (const raw of collectKeyStrings(body, "evidence_spans")) {
+    const end = proposeEnd(raw);
+    if (!end) continue;
+    if ("id" in end) out.add(end.id);
+    else {
+      const span = spans.get(end.local);
+      const artifact = span && isObject(span.payload) ? str(span.payload.artifact_id) : undefined;
+      if (artifact) out.add(artifact);
+    }
+  }
+  for (const key of ["home_theory", "target_context", "anchor_unit", "introduced_by_unit", "attached_to"]) {
+    const end = proposeEnd(body[key]);
+    if (end && "id" in end) out.add(end.id);
+  }
+  return [...out];
+}
+
+function proposalSelf(local: string, item: Json): ProposeEnd {
+  const target = str(item.target_id);
+  return item.op !== "create" && target ? { id: target } : { local };
+}
+
+function addSemanticRelation(
+  relations: ProposeRelation[], item: Json, localRef: string, relationKind: ProposeRelationKind,
+  relation: string, source: ProposeEnd | undefined, target: ProposeEnd | undefined,
+  stagedId: string | undefined, blocks: (local: string) => ProposeBlock[],
+): void {
+  if (!source || !target) return;
+  relations.push({
+    localRef, ...(stagedId ? { stagedId } : {}), relation, relationKind,
+    label: relationLabel(relation), source, target,
+    blocked: blocks(str(item.local_ref) ?? localRef),
+  });
+}
+
 function proposeAct(args: Json, payload: Json | undefined, status: SceneStatus, prior: readonly AgentEventLike[]): ProposeAct {
   const staged = isObject(payload?.staged_ids) ? payload.staged_ids : {};
   const stagedOf = (local: string) => str(staged[local]);
@@ -607,10 +688,11 @@ function proposeAct(args: Json, payload: Json | undefined, status: SceneStatus, 
   for (const item of objects) if (item.kind === "source_span" && str(item.local_ref)) spans.set(str(item.local_ref)!, item);
   const owned = new Set<string>();
   const items: ProposeItem[] = [];
+
   for (const item of objects) {
     const local = str(item.local_ref);
     if (!local || item.kind !== "source_unit") continue;
-    const body = isObject(item.payload) ? item.payload : isObject(item.changes) ? item.changes : {};
+    const body = semanticBody(item);
     const spanRefs = ids(body.source_spans)
       .map(proposeEnd)
       .filter((end): end is { local: string } => !!end && "local" in end)
@@ -627,19 +709,47 @@ function proposeAct(args: Json, payload: Json | undefined, status: SceneStatus, 
     items.push({
       localRef: local,
       kind: "unit",
+      visualKind: "source_unit",
       ...(stagedOf(local) ? { stagedId: stagedOf(local) } : {}),
       label: str(body.display_title) ?? str(body.title) ?? local,
       anchors: [...anchors],
       blocked: [...blocksOf(local), ...spanRefs.flatMap(blocksOf)],
     });
   }
-  // A span no unit cites only shows up when something is wrong with it.
+
+  for (const item of objects) {
+    const local = str(item.local_ref);
+    if (!local || !["semantic_entity", "debt", "dialect_scope"].includes(String(item.kind))) continue;
+    const body = semanticBody(item);
+    const anchors = new Set(semanticAnchors(body, spans));
+    const target = str(item.target_id);
+    if (target) anchors.add(target);
+    items.push({
+      localRef: local,
+      kind: "semantic",
+      visualKind: semanticVisualKind(String(item.kind), body),
+      ...(stagedOf(local) ? { stagedId: stagedOf(local) } : {}),
+      label: semanticLabel(String(item.kind), body, local),
+      anchors: [...anchors],
+      blocked: [...blocksOf(local), ...collectKeyStrings(body, "evidence_spans").flatMap(blocksOf)],
+    });
+  }
+
   for (const [local, span] of spans) {
     if (owned.has(local) || blocksOf(local).length === 0) continue;
     const artifact = isObject(span.payload) ? str(span.payload.artifact_id) : undefined;
-    items.push({ localRef: local, kind: "span", label: `片段 ${local}`, anchors: artifact ? [artifact] : [], blocked: blocksOf(local) });
+    items.push({ localRef: local, kind: "span", visualKind: "source_span", label: `片段 ${local}`, anchors: artifact ? [artifact] : [], blocked: blocksOf(local) });
   }
+
   const relations: ProposeRelation[] = [];
+  const alignmentTargets = new Map<string, ProposeEnd>();
+  for (const item of objects) {
+    if (item.kind !== "alignment") continue;
+    const local = str(item.local_ref);
+    const target = proposeEnd(semanticBody(item).target);
+    if (local && target) alignmentTargets.set(local, target);
+  }
+
   for (const relation of list(args.proposed_relations).filter(isObject)) {
     const local = str(relation.local_ref);
     const source = proposeEnd(relation.source);
@@ -650,13 +760,37 @@ function proposeAct(args: Json, payload: Json | undefined, status: SceneStatus, 
       localRef: local,
       ...(stagedOf(local) ? { stagedId: stagedOf(local) } : {}),
       relation: kind,
+      relationKind: "source_relation",
       label: relationLabel(kind),
       source,
       target,
       blocked: blocksOf(local),
     });
   }
-  // Relation ends that are existing objects anchor the ghost on the other end.
+
+  for (const item of objects) {
+    const local = str(item.local_ref);
+    if (!local || !["semantic_entity", "alignment", "debt", "dialect_scope"].includes(String(item.kind))) continue;
+    const body = semanticBody(item);
+    const self = proposalSelf(local, item);
+    const stagedId = stagedOf(local);
+    if (item.kind === "alignment") {
+      addSemanticRelation(relations, item, local, "alignment", str(body.relation) ?? "expresses", proposeEnd(body.source), proposeEnd(body.target), stagedId, blocksOf);
+    } else if (item.kind === "semantic_entity") {
+      addSemanticRelation(relations, item, `${local}:in_theory`, "in_theory", "in_theory", self, proposeEnd(body.home_theory), undefined, blocksOf);
+      const declaration = isObject(body.declaration) ? body.declaration : undefined;
+      const problem = isObject(body.problem_schema) ? body.problem_schema : undefined;
+      const uses = [declaration?.concept, ...ids(declaration?.uses_entities), ...ids(problem?.uses_entities)];
+      uses.forEach((target, index) => addSemanticRelation(relations, item, `${local}:uses_entity:${index}`, "uses_entity", "uses_entity", self, proposeEnd(target), undefined, blocksOf));
+    } else if (item.kind === "debt") {
+      const attached = proposeEnd(body.attached_to);
+      const holder = attached && "local" in attached ? alignmentTargets.get(attached.local) ?? attached : attached;
+      addSemanticRelation(relations, item, `${local}:debt_on`, "debt_on", "debt_on", self, holder, undefined, blocksOf);
+    } else {
+      addSemanticRelation(relations, item, `${local}:scope_of`, "scope_of", "scope_of", self, proposeEnd(body.anchor_unit), undefined, blocksOf);
+    }
+  }
+
   for (const relation of relations) {
     for (const [mine, other] of [[relation.source, relation.target], [relation.target, relation.source]] as const) {
       if (!("local" in mine) || !("id" in other)) continue;
@@ -664,6 +798,7 @@ function proposeAct(args: Json, payload: Json | undefined, status: SceneStatus, 
       if (item && !item.anchors.includes(other.id)) item.anchors.push(other.id);
     }
   }
+
   const stagedIds = Object.values(staged).map(str).filter((id): id is string => !!id);
   const supersedes = supersedesOf(args, payload);
   const keep = new Set(stagedIds);

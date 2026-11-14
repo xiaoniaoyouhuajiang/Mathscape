@@ -40,6 +40,32 @@ const stagedId = (name: string, local: string): string => {
   const raw = fixtures[name].result!.payload.raw.result as { structuredContent: { staged_ids: Record<string, string> } };
   return raw.structuredContent.staged_ids[local];
 };
+function semanticStep(callAt = 30, resultAt = 220) {
+  const staged_ids = {
+    span: "mathscape:source-span/" + "11aa".repeat(16),
+    theory: "mathscape:semantic-entity/" + "22bb".repeat(16),
+    concept: "mathscape:semantic-entity/" + "33cc".repeat(16),
+    declaration: "mathscape:semantic-entity/" + "44dd".repeat(16),
+    alignment: "mathscape:alignment/" + "55ee".repeat(16),
+    debt: "mathscape:debt/" + "66ff".repeat(16),
+    scope: "mathscape:dialect-scope/" + "7788".repeat(16),
+  };
+  const args = {
+    request_id: "semantic-scene-playwright",
+    rationale: "构建语义对象",
+    proposed_objects: [
+      { local_ref: "span", kind: "source_span", op: "create", payload: { artifact_id: CITE_ART, md_byte_range: { start: 0, end: 8 }, granularity: "inline", quote: "语义证据" } },
+      { local_ref: "theory", kind: "semantic_entity", op: "create", payload: { semantic_kind: "theory", home_theory: null, preferred_labels: [{ lang: "zh", label: "生成函数" }] } },
+      { local_ref: "concept", kind: "semantic_entity", op: "create", payload: { semantic_kind: "concept", home_theory: "$new:theory", preferred_labels: [{ lang: "zh", label: "母函数" }], conventions: [{ evidence_spans: ["$new:span"] }] } },
+      { local_ref: "declaration", kind: "semantic_entity", op: "create", payload: { semantic_kind: "declaration", home_theory: "$new:theory", plain_label: "定理：形式幂级数的相等", declaration: { statement: { text: "A = B", evidence_spans: ["$new:span"] } } } },
+      { local_ref: "alignment", kind: "alignment", op: "create", payload: { source: CITE_UNIT, target: "$new:declaration", relation: "expresses", evidence_spans: ["$new:span"] } },
+      { local_ref: "debt", kind: "debt", op: "create", payload: { attached_to: "$new:alignment", obligation: "补充证明", evidence_spans: ["$new:span"] } },
+      { local_ref: "scope", kind: "dialect_scope", op: "create", payload: { label: "本节约定", anchor_unit: CITE_UNIT, conventions: [{ text: "记号约定", evidence_spans: ["$new:span"] }] } },
+    ],
+  };
+  return { id: `semantic-${callAt}`, tool: "propose_changes", args, result: { structuredContent: { status: "staged", staged_ids } }, status: "ok", callAt, resultAt };
+}
+
 
 async function enterSandbox(page: Page, reduceMotion = false) {
   await page.locator("#sandbox-button").click();
@@ -111,6 +137,27 @@ test.describe("Scene tools (fourth slice)", () => {
     await hud.getByRole("button", { name: "停止" }).click();
     await expect(hud).toBeHidden();
     expect(await ghosts(page)).toHaveLength(0);
+  });
+
+  test("propose_changes: semantic objects get differentiated ghosts and relation feedback", async ({ page }) => {
+    const dock = await enterSandbox(page);
+    await run(page, dock, [semanticStep()]);
+    const hud = page.locator(".canvas-panel .scene-hud");
+    await expect(hud).toHaveAttribute("data-semantic", "6", { timeout: 8000 });
+    await expect.poll(async () => (await ghosts(page)).length, { timeout: 10000 }).toBe(5);
+    const semanticGhosts = await ghosts(page);
+    expect(semanticGhosts.map((ghost) => ghost.label)).toEqual(expect.arrayContaining(["生成函数", "母函数", "定理：形式幂级数的相等", "补充证明", "本节约定"]));
+    expect(semanticGhosts.find((ghost) => ghost.label === "生成函数")?.classes).toContain("scene-ghost-theory");
+    expect(semanticGhosts.find((ghost) => ghost.label === "补充证明")?.classes).toContain("scene-ghost-debt");
+    await expect.poll(async () => (await ghostEdges(page)).length, { timeout: 12000 }).toBe(5);
+    const edgeClasses = (await ghostEdges(page)).map((edge) => edge.classes);
+    expect(edgeClasses.some((classes) => classes.includes("scene-ghost-alignment-edge"))).toBe(true);
+    expect(edgeClasses.some((classes) => classes.includes("scene-ghost-theory-edge"))).toBe(true);
+    expect(edgeClasses.some((classes) => classes.includes("scene-ghost-debt-edge"))).toBe(true);
+    expect(edgeClasses.some((classes) => classes.includes("scene-ghost-scope-edge"))).toBe(true);
+    await expect(hud).toBeHidden({ timeout: 15000 });
+    expect(await ghosts(page)).toHaveLength(0);
+    expect(await ghostEdges(page)).toHaveLength(0);
   });
 
   test("propose_changes: a staged unit already on the map is animated in place (no duplicate ghost)", async ({ page }) => {
