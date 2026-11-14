@@ -6,6 +6,8 @@
  * decides acceptability — it only groups, selects and explains.
  */
 import type { AnchoredMarkdown } from "../reader/selection";
+import { alignmentPlainLabel, entityPlainLabel } from "../semantic/labels";
+import { collectSemanticSpanRefs } from "../semantic/review-model";
 import type { DiscoveryOutcome, SourceReviewAnchor, SourceReviewProjection, SourceReviewUnit } from "./types";
 
 export interface ChangeSetSelection {
@@ -378,7 +380,7 @@ const DIAGNOSTIC_LABELS: Record<string, string> = {
   head_integrity: "工作区已有对象存在问题（不阻塞）",
   invalid_locator: "原文证据缺少物理定位",
   page_markers_absent: "快照没有分页标记",
-  // 语义层（docs/semantic-write-contract.md S5）
+  // SemanticLayer (docs/semantic-write-contract.md S5)
   same_as_forbidden: "不能写“同一个”（same_as），请改写成说的就是 / 部分重合，并写清对不上的部分",
   invalid_relation: "关系不在 11 种之内",
   forbidden_alignment_status: "Agent 不能自设审阅结论",
@@ -397,6 +399,8 @@ const DIAGNOSTIC_LABELS: Record<string, string> = {
   inferred_convention: "约定是推断出来的，书里没明说",
   mathlib_baseline_unchecked: "mathlib 名称还没在本机核对",
   multi_target_change_set: "一个提案涉及多个目标对象",
+  theory_aliases_missing: "理论没有写检索同义词，后续按别称可能不容易搜到",
+  theory_name_too_specific: "理论名称里带有具体算式或公式符号，建议改成专题名",
 };
 
 export function diagnosticLabel(code: string | undefined): string {
@@ -425,6 +429,98 @@ function spanRefs(fields: Record<string, unknown>): string[] {
 
 function reviewAnchorOf(anchor: ProposalAnchor, purpose: string): SourceReviewAnchor {
   return { purpose, range: { start: anchor.range.start, end: anchor.range.end }, block_ids: anchor.block_ids, excerpt: anchor.excerpt };
+}
+
+function semanticNodeTitle(object: ProposedObject, fields: Record<string, unknown>, targetTitles?: Record<string, string>): string {
+  if (object.op !== "create" && object.target_id && targetTitles?.[object.target_id]) {
+    return targetTitles[object.target_id];
+  }
+  if (object.kind === "semantic_entity") return entityPlainLabel(fields);
+  if (object.kind === "dialect_scope") return typeof fields.label === "string" ? fields.label : object.local_ref;
+  if (object.kind === "debt") return typeof fields.obligation === "string" ? fields.obligation : object.local_ref;
+  return object.local_ref;
+}
+
+function semanticNodeKind(object: ProposedObject, fields: Record<string, unknown>): string {
+  if (object.kind === "semantic_entity") {
+    return typeof fields.semantic_kind === "string" ? fields.semantic_kind : "concept";
+  }
+  return object.kind;
+}
+
+interface SemanticEdgeSpec {
+  ref: string;
+  source: string;
+  target: string;
+  relation: string;
+  op: string;
+  label?: string;
+  evidenceRefs: string[];
+}
+
+function extractSemanticEdges(objects: ProposedObject[]): SemanticEdgeSpec[] {
+  const alignmentTargets = new Map<string, string>();
+  for (const object of objects) {
+    if (object.kind === "alignment" && object.op !== "retire") {
+      const fields = (object.op === "edit" ? object.changes : object.payload) ?? {};
+      const target = newRef(fields.target);
+      if (target) alignmentTargets.set(object.local_ref, target);
+    }
+  }
+  const out: SemanticEdgeSpec[] = [];
+  for (const object of objects) {
+    if (object.op === "retire") continue;
+    const fields = (object.op === "edit" ? object.changes : object.payload) ?? {};
+    if (object.kind === "alignment") {
+      const source = newRef(fields.source) ?? object.target_id ?? "";
+      const target = newRef(fields.target) ?? "";
+      if (source && target) {
+        out.push({
+          ref: object.local_ref,
+          source,
+          target,
+          relation: typeof fields.relation === "string" ? fields.relation : "expresses",
+          op: object.op,
+          label: alignmentPlainLabel(fields),
+          evidenceRefs: collectSemanticSpanRefs(fields),
+        });
+      }
+    } else if (object.kind === "semantic_entity") {
+      const home = newRef(fields.home_theory);
+      const selfRef = object.op === "create" ? object.local_ref : (object.target_id ?? object.local_ref);
+      if (home && selfRef) {
+        out.push({ ref: `${object.local_ref}:in_theory`, source: selfRef, target: home, relation: "in_theory", op: object.op, evidenceRefs: [] });
+      }
+    } else if (object.kind === "dialect_scope") {
+      const anchor = newRef(fields.anchor_unit);
+      const selfRef = object.op === "create" ? object.local_ref : (object.target_id ?? object.local_ref);
+      if (anchor && selfRef) {
+        out.push({
+          ref: `${object.local_ref}:scope_of`,
+          source: selfRef,
+          target: anchor,
+          relation: "scope_of",
+          op: object.op,
+          evidenceRefs: collectSemanticSpanRefs(fields),
+        });
+      }
+    } else if (object.kind === "debt") {
+      const attached = newRef(fields.attached_to);
+      const selfRef = object.op === "create" ? object.local_ref : (object.target_id ?? object.local_ref);
+      if (attached && selfRef) {
+        const holder = alignmentTargets.get(attached) ?? attached;
+        out.push({
+          ref: `${object.local_ref}:debt_on`,
+          source: selfRef,
+          target: holder,
+          relation: "debt_on",
+          op: object.op,
+          evidenceRefs: collectSemanticSpanRefs(fields),
+        });
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -459,6 +555,7 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
     return group;
   };
   const unitGroup = new Map<string, string | null>();
+  const objectArtifact = new Map<string, string>();
   for (const object of objects) {
     if (object.kind !== "source_unit") continue;
     const fields = (object.op === "edit" ? object.changes : object.payload) ?? {};
@@ -484,11 +581,66 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
       source_excerpt: local.map(anchor => anchor.excerpt).join("\n"),
     };
     unitGroup.set(object.local_ref, first?.artifact ?? null);
+    if (first?.artifact) objectArtifact.set(object.local_ref, first.artifact);
     const group = groupFor(first);
     local.forEach(anchor => groupFor(anchor));
     group.units.push(unit);
     if (unit.parent) group.structure_relations.push({ relation_ref: `${object.local_ref}:parent`, parent: unit.parent, child: unit.unit_ref });
   }
+
+  // Semantic objects that cite spans in a snapshot also surface in that snapshot's
+  // unit/graph list so snapshots 3..N (which only hold referenced head spans) can
+  // inspect their anchored Markdown excerpts and local graph directly.
+  const semanticNodeHomes = new Map<string, Set<string | null>>();
+  const recordSemanticHome = (ref: string, artifact: string | null) => {
+    let set = semanticNodeHomes.get(ref);
+    if (!set) { set = new Set(); semanticNodeHomes.set(ref, set); }
+    set.add(artifact);
+  };
+  for (const object of objects) {
+    if (!["semantic_entity", "dialect_scope", "debt", "alignment"].includes(object.kind)) continue;
+    const fields = (object.op === "edit" ? object.changes : object.payload) ?? {};
+    const semAnchors = collectSemanticSpanRefs(fields).flatMap(ref => anchors.get(ref) ?? []);
+    if (semAnchors[0]?.artifact) objectArtifact.set(object.local_ref, semAnchors[0].artifact);
+    else if (object.kind === "alignment") {
+      const src = newRef(fields.source);
+      const srcArt = src ? unitGroup.get(src) ?? objectArtifact.get(src) : undefined;
+      if (srcArt) objectArtifact.set(object.local_ref, srcArt);
+    } else if (object.kind === "dialect_scope") {
+      const anc = newRef(fields.anchor_unit);
+      const ancArt = anc ? unitGroup.get(anc) ?? objectArtifact.get(anc) : undefined;
+      if (ancArt) objectArtifact.set(object.local_ref, ancArt);
+    }
+    if (object.kind === "alignment" || semAnchors.length === 0) continue;
+    const byArtifact = new Map<string, ProposalAnchor[]>();
+    for (const anchor of semAnchors) {
+      const list = byArtifact.get(anchor.artifact) ?? [];
+      if (!list.includes(anchor)) list.push(anchor);
+      byArtifact.set(anchor.artifact, list);
+    }
+    const title = semanticNodeTitle(object, fields, item.targetTitles);
+    const kind = semanticNodeKind(object, fields);
+    for (const [artifact, local] of byArtifact) {
+      const group = groupFor(local[0]);
+      local.forEach(anchor => groupFor(anchor));
+      recordSemanticHome(object.local_ref, artifact);
+      if (!unitGroup.has(object.local_ref)) unitGroup.set(object.local_ref, artifact);
+      group.units.push({
+        unit_ref: object.local_ref,
+        unit_kind: kind,
+        display_title: title,
+        source_title: null,
+        source_labels: [],
+        parent: null,
+        completeness: "complete",
+        fact_status: "processed",
+        acceptance: object.op === "edit" ? "edit" : "create",
+        anchors: local.map(anchor => reviewAnchorOf(anchor, "semantic_evidence")),
+        source_excerpt: local.map(anchor => anchor.excerpt).join("\n"),
+      });
+    }
+  }
+
   const sampleFor = (artifact: string | null) => artifact === null ? null : (item.anchors ?? []).find(anchor => anchor.artifact === artifact) ?? null;
   for (const relation of relations) {
     const source = newRef(relation.source) ?? relation.target_id ?? "";
@@ -509,12 +661,70 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
       });
     }
   }
+  const semanticObjectsByRef = new Map(
+    objects
+      .filter(o => ["semantic_entity", "dialect_scope", "debt"].includes(o.kind))
+      .map(o => [o.op === "create" ? o.local_ref : (o.target_id ?? o.local_ref), o]),
+  );
+  const ensureSemanticNodeInGroup = (group: ProposalReviewProjection, ref: string) => {
+    if (group.units.some(u => u.unit_ref === ref)) return;
+    const obj = semanticObjectsByRef.get(ref);
+    if (!obj) return;
+    const fields = (obj.op === "edit" ? obj.changes : obj.payload) ?? {};
+    recordSemanticHome(ref, group.source.artifact_id);
+    if (!unitGroup.has(ref)) unitGroup.set(ref, group.source.artifact_id);
+    group.units.push({
+      unit_ref: ref,
+      unit_kind: semanticNodeKind(obj, fields),
+      display_title: semanticNodeTitle(obj, fields, item.targetTitles),
+      source_title: null,
+      source_labels: [],
+      parent: null,
+      completeness: "complete",
+      fact_status: "processed",
+      acceptance: obj.op === "edit" ? "edit" : "create",
+      anchors: [],
+      source_excerpt: typeof fields.description === "string" ? fields.description : "",
+    });
+  };
+  for (const edge of extractSemanticEdges(objects)) {
+    const evidence = edge.evidenceRefs.flatMap(ref => anchors.get(ref) ?? []);
+    const homeArtifacts = new Set<string | null>();
+    for (const anchor of evidence) homeArtifacts.add(anchor.artifact);
+    if (unitGroup.has(edge.source)) homeArtifacts.add(unitGroup.get(edge.source)!);
+    if (unitGroup.has(edge.target)) homeArtifacts.add(unitGroup.get(edge.target)!);
+    for (const art of semanticNodeHomes.get(edge.source) ?? []) homeArtifacts.add(art);
+    for (const art of semanticNodeHomes.get(edge.target) ?? []) homeArtifacts.add(art);
+    if (homeArtifacts.size === 0 && (item.anchors ?? []).length === 0) homeArtifacts.add(null);
+    for (const artifact of homeArtifacts) {
+      const group = groups.get(artifact) ?? (artifact !== null ? groupFor(sampleFor(artifact)) : groupFor(null));
+      ensureSemanticNodeInGroup(group, edge.source);
+      ensureSemanticNodeInGroup(group, edge.target);
+      if (!group.relations.some(r => r.relation_ref === edge.ref)) {
+        group.relations.push({
+          relation_ref: edge.ref,
+          source: edge.source,
+          target: edge.target,
+          relation: edge.relation,
+          evidence: evidence.filter(anchor => anchor.artifact === group.source.artifact_id).map(anchor => reviewAnchorOf(anchor, "relation_evidence")),
+          bases: edge.label ? [edge.label] : [],
+          origins: [],
+        });
+      }
+    }
+  }
   // Anchors no unit or relation claimed still belong to their snapshot.
   for (const anchor of item.anchors ?? []) groupFor(anchor);
   for (const diagnostic of item.result.diagnostics ?? []) {
     if (!diagnostic.local_ref) continue;
-    const artifact = unitGroup.get(diagnostic.local_ref) ?? anchors.get(diagnostic.local_ref)?.artifact ?? null;
-    const group = groups.get(artifact) ?? groupFor(null);
+    const artifact = unitGroup.get(diagnostic.local_ref)
+      ?? objectArtifact.get(diagnostic.local_ref)
+      ?? anchors.get(diagnostic.local_ref)?.artifact
+      ?? null;
+    // Never fabricate a phantom `artifact = null` snapshot group when the
+    // proposal already has real Markdown snapshots: attach unanchored semantic
+    // diagnostics to the first real snapshot group instead.
+    const group = groups.get(artifact) ?? (groups.size > 0 ? groups.values().next().value! : groupFor(null));
     group.diagnostics.push({
       diagnostic_ref: `${diagnostic.code}:${diagnostic.local_ref}`,
       severity: diagnostic.level ?? "error", stage: "proposal", code: diagnostic.code, path: diagnostic.local_ref,
@@ -539,6 +749,8 @@ export interface OverviewRelation {
   ref: string;
   relation: string;
   op: string;
+  /** Optional plain-language edge label (e.g. an alignment's template label). */
+  label?: string;
   source: OverviewEndpoint;
   target: OverviewEndpoint;
   /** Both ends are new units in different snapshot groups. */
@@ -548,21 +760,27 @@ export interface OverviewRelation {
 export interface OverviewGroup {
   index: number;
   artifact: string | null;
-  /** Units shown in this snapshot. */
+  /** Units (and anchored semantic entries) shown in this snapshot. */
   units: number;
   /** Relations listed in this snapshot (cross-snapshot ones appear in both). */
   relations: number;
   crossRelations: number;
+  /** Distinct server anchors pointing into this snapshot. */
+  anchors: number;
+  /** 1-based PDF page span of the anchors in this snapshot, when known. */
+  pages: { from: number; to: number } | null;
 }
 
 /** Change-set-wide numbers and every relation, independent of the shown snapshot. */
 export interface ProposalOverview {
   units: number;
+  /** Semantic nodes (`semantic_entity`, `dialect_scope`, `debt`) in the proposal. */
+  semanticNodes: number;
   spans: number;
   relations: number;
   debts: number;
   groups: OverviewGroup[];
-  /** Every unit of the proposal with its snapshot group. */
+  /** Every unit / semantic node of the proposal with its primary snapshot group. */
   unitList: { ref: string; title: string; group: number }[];
   relationList: OverviewRelation[];
   /** Group shown first: the one with the most units + relations. */
@@ -584,24 +802,44 @@ export function proposalOverview(item: PendingChangeSet, groups: ProposalReviewP
     if (!unitGroup.has(unit.unit_ref)) unitGroup.set(unit.unit_ref, index);
     titles.set(unit.unit_ref, unit.display_title ?? unit.unit_ref);
   }));
+  for (const object of objects) {
+    if (!["semantic_entity", "dialect_scope", "debt"].includes(object.kind)) continue;
+    const fields = (object.op === "edit" ? object.changes : object.payload) ?? {};
+    const key = object.op === "create" ? object.local_ref : (object.target_id ?? object.local_ref);
+    if (!titles.has(key)) titles.set(key, semanticNodeTitle(object, fields, item.targetTitles));
+    if (!unitGroup.has(key)) unitGroup.set(key, 0);
+  }
   const title = (ref: string) => titles.get(ref) ?? item.targetTitles?.[ref] ?? shortRef(ref);
   const groupOf = (ref: string) => unitGroup.get(ref) ?? null;
   const endpoint = (ref: string): OverviewEndpoint => ({ ref, title: title(ref), origin: unitGroup.has(ref) ? "new" : "existing", group: groupOf(ref) });
-  const relationList = relations.map(relation => {
-    const sourceRef = newRef(relation.source) ?? relation.target_id ?? "";
-    const targetRef = newRef(relation.target) ?? "";
-    const source = endpoint(sourceRef), target = endpoint(targetRef);
-    return {
-      ref: relation.local_ref, relation: relation.relation ?? relation.op, op: relation.op, source, target,
-      crossSnapshot: source.group !== null && target.group !== null && source.group !== target.group,
-    };
-  });
+  const relationList: OverviewRelation[] = [
+    ...relations.map(relation => {
+      const sourceRef = newRef(relation.source) ?? relation.target_id ?? "";
+      const targetRef = newRef(relation.target) ?? "";
+      const source = endpoint(sourceRef), target = endpoint(targetRef);
+      return {
+        ref: relation.local_ref, relation: relation.relation ?? relation.op, op: relation.op, source, target,
+        crossSnapshot: source.group !== null && target.group !== null && source.group !== target.group,
+      };
+    }),
+    ...extractSemanticEdges(objects).map(edge => {
+      const source = endpoint(edge.source), target = endpoint(edge.target);
+      return {
+        ref: edge.ref, relation: edge.relation, op: edge.op, ...(edge.label ? { label: edge.label } : {}), source, target,
+        crossSnapshot: source.group !== null && target.group !== null && source.group !== target.group,
+      };
+    }),
+  ];
   const overviewGroups = groups.map((group, index) => {
     const refs = new Set(group.units.map(unit => unit.unit_ref));
+    const pageNums = group.anchors.map(a => a.page?.page_number).filter((p): p is number => typeof p === "number");
+    const pages = pageNums.length ? { from: Math.min(...pageNums), to: Math.max(...pageNums) } : null;
     return {
       index, artifact: group.source.artifact_id, units: group.units.length, relations: group.relations.length,
       crossRelations: group.relations.filter(relation => !refs.has(relation.source) || !refs.has(relation.target))
         .filter(relation => unitGroup.has(relation.source) && unitGroup.has(relation.target)).length,
+      anchors: group.anchors.length,
+      pages,
     };
   });
   let defaultGroup = 0;
@@ -609,10 +847,12 @@ export function proposalOverview(item: PendingChangeSet, groups: ProposalReviewP
     const best = overviewGroups[defaultGroup];
     if (group.units + group.relations > best.units + best.relations) defaultGroup = group.index;
   });
+  const semanticNodes = objects.filter(object => ["semantic_entity", "dialect_scope", "debt"].includes(object.kind)).length;
   return {
     units: objects.filter(object => object.kind === "source_unit").length,
+    semanticNodes,
     spans: objects.filter(object => object.kind === "source_span").length,
-    relations: relations.length,
+    relations: relationList.length,
     debts: proposalDebts(item).length,
     groups: overviewGroups, relationList, defaultGroup, title, groupOf,
     unitList: [...unitGroup].map(([ref, group]) => ({ ref, title: title(ref), group })),
@@ -726,7 +966,7 @@ export interface ProposalDecision {
 export interface ProposalWorkspaceController {
   readonly investigationId: string;
   /** Opens another pending version (or another snapshot of the same one); no index ⇒ the overview's default group. */
-  open(key: string, groupIndex?: number): Promise<void>;
+  open(key: string, groupIndex?: number, focusTarget?: string): Promise<void>;
   preview(item: PendingChangeSet): Promise<ImpactPreview>;
   /** Accepts one version through the batch accept (plan → accept, one commit). */
   accept(item: PendingChangeSet): Promise<ProposalDecision>;
@@ -752,6 +992,8 @@ export interface ProposalWorkspaceMeta {
   documentError: string | null;
   /** Server anchors of the shown group (verified flag, page). */
   anchors: ProposalAnchor[];
+  /** Optional target key (`semantic:local_ref`, `unit:ref`, …) to focus after switching snapshots. */
+  focusTarget?: string | null;
   controller: ProposalWorkspaceController;
 }
 

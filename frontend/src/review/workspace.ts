@@ -19,7 +19,7 @@ import {
 } from "./proposal-model";
 import { renderDiscardConfirm } from "./proposal-discard";
 import { feedbackButton, type FeedbackTarget } from "../semantic/feedback";
-import { proposalLevelReviewItems, reviewItemCode, reviewItemText, semanticReviewCards } from "../semantic/review-model";
+import { proposalLevelReviewItems, reviewItemCode, reviewItemText, semanticReviewCards, type SemanticReviewCard } from "../semantic/review-model";
 import { SEMANTIC_REVIEW_CODES } from "../semantic/labels";
 
 export const OPEN_REVIEW_EVENT = "mathscape:open-review";
@@ -52,7 +52,7 @@ interface Model {
   pending: { task_ref: string; owner: string | null; reason: string | null }[];
 }
 
-type TargetKind = "unit" | "fact" | "reference" | "relation" | "issue" | "diagnostic";
+type TargetKind = "unit" | "fact" | "reference" | "relation" | "issue" | "diagnostic" | "semantic";
 interface Target {
   kind: TargetKind; id: string; label: string; anchors: ReviewAnchor[];
   units: string[]; relation: string | null; note?: string;
@@ -296,9 +296,11 @@ export class DiscoveryReviewWorkspace {
     }
     this.renderHeader();
     this.renderFooter();
-    const restored = draft?.target ? this.findTarget(draft.target) : null;
+    const restored = (proposal?.focusTarget ? this.findTarget(proposal.focusTarget) : null)
+      ?? (draft?.target ? this.findTarget(draft.target) : null);
     const first = this.model.units.find(unit => unit.anchors.length > 0);
-    this.lock(restored ?? (first ? this.unitTarget(first) : null), false);
+    const firstRel = !first ? this.model.relations.find(rel => rel.evidence.length > 0) : undefined;
+    this.lock(restored ?? (first ? this.unitTarget(first) : firstRel ? this.relationTarget(firstRel) : null), false);
   }
 
   /**
@@ -451,6 +453,44 @@ export class DiscoveryReviewWorkspace {
     };
   }
 
+  private semanticCardTarget(proposal: ProposalWorkspaceMeta, card: SemanticReviewCard): { target: Target; jumpGroup: number | null } {
+    const allAnchors = new Map<string, import("./proposal-model").ProposalAnchor>();
+    for (const anchor of proposal.item.anchors ?? []) {
+      allAnchors.set(anchor.span_ref, anchor);
+      if (anchor.span_id && !allAnchors.has(anchor.span_id)) allAnchors.set(anchor.span_id, anchor);
+    }
+    const resolved = card.evidenceRefs.flatMap(ref => allAnchors.get(ref) ?? []);
+    const local = resolved.filter(anchor => anchor.artifact === proposal.snapshot);
+    let jumpGroup: number | null = null;
+    if (local.length === 0 && resolved.length > 0) {
+      const targetGroup = proposal.overview.groups.find(g => g.artifact === resolved[0].artifact);
+      if (targetGroup && targetGroup.index !== proposal.groupIndex) jumpGroup = targetGroup.index;
+    }
+    const anchors = local.map(anchor => reviewAnchor({
+      purpose: "semantic_evidence",
+      range: { start: anchor.range.start, end: anchor.range.end },
+      block_ids: anchor.block_ids,
+      excerpt: anchor.excerpt,
+    }));
+    const note = card.evidenceRefs.length === 0
+      ? "该语义对象没有直接引用原文片段（如理论或概念节点）；请点击连向它的对齐线或精确说法查看原文。"
+      : jumpGroup !== null
+        ? `该对象的原文证据位于快照 ${jumpGroup + 1}/${proposal.groupCount}；点击此卡片可自动切过去查看原文。`
+        : undefined;
+    return {
+      target: {
+        kind: "semantic",
+        id: card.localRef,
+        label: `${card.noun} · ${card.title}`,
+        anchors,
+        units: [card.localRef],
+        relation: card.kind === "alignment" ? card.localRef : null,
+        note,
+      },
+      jumpGroup,
+    };
+  }
+
   private findTarget(key: string): Target | null {
     const model = this.model!;
     const [kind, ...rest] = key.split(":");
@@ -460,6 +500,10 @@ export class DiscoveryReviewWorkspace {
     if (kind === "relation") { const item = model.relations.find(r => r.id === id); return item ? this.relationTarget(item) : null; }
     if (kind === "issue") { const item = model.issues.find(r => r.id === id); return item ? this.issueTarget(item) : null; }
     if (kind === "diagnostic") { const item = model.diagnostics.find(r => r.id === id); return item ? this.diagnosticTarget(item) : null; }
+    if (kind === "semantic" && this.meta.proposal) {
+      const card = semanticReviewCards(this.meta.proposal.item).find(c => c.localRef === id);
+      return card ? this.semanticCardTarget(this.meta.proposal, card).target : null;
+    }
     return null;
   }
 
@@ -572,7 +616,7 @@ export class DiscoveryReviewWorkspace {
     const tabs: [Tab, string][] = [
       ["overview", "总览"],
       ["units", `${this.snapshotScope()}单元 ${model.units.length}`],
-      ["references", `引用 ${model.references.length}`],
+      ...(this.meta.proposal ? [] as [Tab, string][] : [["references", `引用 ${model.references.length}`] as [Tab, string]]),
       ["relations", `${this.snapshotScope()}关系 ${model.relations.length}`],
       ["diagnostics", `诊断 ${model.issues.length + model.diagnostics.length}`],
       ["graph", "局部结构图"],
@@ -1166,13 +1210,21 @@ export class DiscoveryReviewWorkspace {
     const overview = proposal.overview;
     // Totals are change-set-wide; the shown snapshot only gets its own line.
     summary.classList.add("review-proposal-totals");
-    summary.append(stat(overview.units, "单元"), stat(overview.relations, "关系"), stat(debts.length, "Debt"));
+    summary.append(
+      stat(overview.units, "单元"),
+      ...(overview.semanticNodes > 0 ? [stat(overview.semanticNodes, "语义对象")] : []),
+      stat(overview.relations, "关系"),
+      stat(debts.length, "Debt"),
+    );
     this.list.append(summary, el("p", "review-note review-proposal-scope",
       `以上为整份提案（v${item.version}）的总数${overview.spans ? `，另含 ${overview.spans} 处原文证据` : ""}${proposal.groupCount > 1 ? `，分布在 ${proposal.groupCount} 个快照` : ""}。`));
     const shown = overview.groups[proposal.groupIndex];
     if (shown) {
+      const pageHint = shown.pages
+        ? `（PDF 第 ${shown.pages.from === shown.pages.to ? shown.pages.from : `${shown.pages.from}–${shown.pages.to}`} 页）`
+        : "";
       this.list.append(el("p", "review-snapshot-scope",
-        `${proposal.groupCount > 1 ? `快照 ${proposal.groupIndex + 1}/${proposal.groupCount} · ` : ""}本快照 ${shown.units} 单元 / ${shown.relations} 关系${shown.crossRelations ? `（其中 ${shown.crossRelations} 条跨快照）` : ""}`));
+        `${proposal.groupCount > 1 ? `快照 ${proposal.groupIndex + 1}/${proposal.groupCount}${pageHint} · ` : ""}本快照 ${shown.units} 单元 / ${shown.relations} 关系${shown.crossRelations ? `（其中 ${shown.crossRelations} 条跨快照）` : ""}`));
     }
     this.list.append(el("p", "review-note",
       "提案按整个 change set 接受或丢弃。接受只表示写入当前工作区地图，不提升 Trust，也不代表数学上已验证。"));
@@ -1208,9 +1260,12 @@ export class DiscoveryReviewWorkspace {
     if (proposal.groupCount > 1) {
       const switcher = el("div", "review-graph-controls review-snapshot-switcher");
       for (const group of overview.groups) {
-        const choice = button(`快照 ${group.index + 1}/${proposal.groupCount}`, () => void proposal.controller.open(keyOf(item), group.index));
+        const pageTag = group.pages
+          ? `（第 ${group.pages.from === group.pages.to ? group.pages.from : `${group.pages.from}–${group.pages.to}`} 页）`
+          : "";
+        const choice = button(`快照 ${group.index + 1}/${proposal.groupCount}${pageTag}`, () => void proposal.controller.open(keyOf(item), group.index));
         choice.append(el("small", "review-snapshot-counts", ` · ${group.units} 单元 / ${group.relations} 关系`));
-        choice.title = `本快照 ${group.units} 单元 / ${group.relations} 关系${group.crossRelations ? `，${group.crossRelations} 条跨快照` : ""}${group.artifact ? ` · ${group.artifact}` : ""}`;
+        choice.title = `本快照 ${group.units} 单元 / ${group.relations} 关系 · ${group.anchors} 处证据${group.crossRelations ? `，${group.crossRelations} 条跨快照` : ""}${group.artifact ? ` · ${group.artifact}` : ""}`;
         choice.setAttribute("aria-pressed", String(group.index === proposal.groupIndex));
         switcher.append(choice);
       }
@@ -1287,12 +1342,17 @@ export class DiscoveryReviewWorkspace {
         : "没有打开可输入的沙箱对话；请先打开沙箱对话再反馈。"));
     });
     this.list.append(el("h4", "review-subheading", `语义层 ${cards.length}（共享对象 / 对齐线 / 账 / 约定卡）`));
-    this.list.append(el("p", "review-note", "状态只写到候选为止；审阅对齐线、确认还清是接受之后在地图上的对象级操作，和“接受本提案”分开。"));
+    this.list.append(el("p", "review-note", "点击任意带证据的卡片可在右侧查看原文（跨快照时自动跳转）。状态只写到候选为止；审阅对齐线、确认还清是接受之后在地图上的对象级操作，和“接受本提案”分开。"));
     for (const card of cards) {
       const article = el("article", `review-item semantic-review-card kind-${card.kind}`);
+      const { target, jumpGroup } = this.semanticCardTarget(proposal, card);
       const heading = el("div", "review-item-heading");
       heading.append(el("span", "review-debt-tag", card.noun), el("strong", "", card.title));
       if (card.op !== "create") heading.append(el("span", "review-relation-tag", card.op === "edit" ? "修改" : card.op === "retire" ? "退役" : card.op));
+      if (card.evidenceRefs.length > 0) {
+        heading.append(el("span", `review-relation-tag${jumpGroup !== null ? " is-cross-tag" : ""}`,
+          jumpGroup !== null ? `${card.evidenceRefs.length} 处证据 · 到快照 ${jumpGroup + 1}` : `${target.anchors.length} 处证据`));
+      }
       article.append(heading);
       for (const line of card.lines) article.append(el("span", "review-item-meta", line));
       for (const diagnostic of card.diagnostics) {
@@ -1303,6 +1363,24 @@ export class DiscoveryReviewWorkspace {
         article.append(row);
       }
       article.append(feedback({ noun: card.noun, name: card.localRef, detail: card.title, id: card.stagedId }));
+      article.dataset.target = `${target.kind}:${target.id}`;
+      article.tabIndex = 0;
+      const activate = () => {
+        if (jumpGroup !== null) {
+          void proposal.controller.open(keyOf(item), jumpGroup, `semantic:${card.localRef}`);
+        } else {
+          this.lock(this.semanticCardTarget(proposal, card).target);
+        }
+      };
+      article.addEventListener("click", event => {
+        if ((event.target as HTMLElement).closest("input, button:not(.review-item-main)")) return;
+        activate();
+      });
+      article.addEventListener("keydown", event => {
+        if (event.target === article && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); activate(); }
+      });
+      article.addEventListener("mouseenter", () => this.hover(this.semanticCardTarget(proposal, card).target));
+      article.addEventListener("mouseleave", () => this.unhover());
       this.list.append(article);
     }
     for (const diagnostic of general) {
@@ -1334,7 +1412,8 @@ export class DiscoveryReviewWorkspace {
       const row = el("li", `review-proposal-relation${relation.crossSnapshot ? " is-cross" : ""}`);
       const end = (endpoint: OverviewRelation["source"]) => el("span", `review-relation-end origin-${endpoint.origin}`, endpoint.title || "（未命名）");
       const line = el("span", "review-relation-line");
-      line.append(end(relation.source), el("span", "review-relation-kind", ` —${relationLabel(relation.relation)}→ `), end(relation.target));
+      const relLabel = relation.label ?? relationLabel(relation.relation);
+      line.append(end(relation.source), el("span", "review-relation-kind", ` —${relLabel}→ `), end(relation.target));
       row.append(line, ...where(relation).map(tag => el("span", `review-relation-tag${tag.startsWith("跨快照") ? " is-cross-tag" : ""}`, tag)));
       const group = relation.source.group ?? relation.target.group;
       if (group !== null && group !== proposal.groupIndex) {
@@ -1365,7 +1444,7 @@ export class DiscoveryReviewWorkspace {
       container,
       overview.unitList.map(unit => ({ ref: unit.ref, label: proposal.groupCount > 1 ? `${unit.title}（快照 ${unit.group + 1}）` : unit.title, state })),
       [],
-      overview.relationList.map(relation => ({ id: relation.ref, source: relation.source.ref, target: relation.target.ref, label: relationLabel(relation.relation), cross: relation.crossSnapshot })),
+      overview.relationList.map(relation => ({ id: relation.ref, source: relation.source.ref, target: relation.target.ref, label: relation.label ?? relationLabel(relation.relation), cross: relation.crossSnapshot })),
       {
         unit: (ref, hover) => {
           const group = overview.groupOf(ref);

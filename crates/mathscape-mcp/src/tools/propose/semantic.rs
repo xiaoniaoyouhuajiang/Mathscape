@@ -421,10 +421,11 @@ pub(super) fn review_diagnostics(
         .filter(|o| is_semantic(&o.kind))
         .filter_map(|o| ids.get(&o.local_ref).cloned())
         .collect();
-    let target = args.target_object.as_deref().map(|t| {
-        ids.get(t.strip_prefix("$new:").unwrap_or(t))
+    let target = args.target_object.as_deref().and_then(|t| {
+        let bare = t.strip_prefix("$new:").unwrap_or(t);
+        ids.get(bare)
             .cloned()
-            .unwrap_or_else(|| t.to_owned())
+            .or_else(|| t.starts_with("mathscape:").then(|| t.to_owned()))
     });
     mathscape_orchestrator::semantic_plan::review_items(&final_map, &own, target.as_deref())
         .into_iter()
@@ -439,7 +440,13 @@ pub(super) fn review_diagnostics(
                 item.message,
                 super::reverse_lookup(ids, Some(&item.object_id)).as_deref(),
             );
-            d.target_id = Some(item.object_id);
+            // Proposal-wide organisational hints (such as multi_target_change_set)
+            // are not complaints about an existing workspace object: keep
+            // `target_id` only when `local_ref` points at an item of this proposal
+            // or the code is specifically about an external object.
+            if d.local_ref.is_some() || item.code != "multi_target_change_set" {
+                d.target_id = Some(item.object_id);
+            }
             d
         })
         .collect()

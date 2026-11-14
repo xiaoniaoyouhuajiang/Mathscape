@@ -2064,7 +2064,6 @@ fn resolve_staged_dependencies(
     args: &ProposeArgs,
     ids: &BTreeMap<String, String>,
 ) -> (Vec<ChangeSetDependency>, Vec<Diagnostic>) {
-    let own: BTreeSet<&String> = ids.values().collect();
     let in_head: BTreeSet<&str> = snapshot
         .objects
         .iter()
@@ -2092,7 +2091,13 @@ fn resolve_staged_dependencies(
     let mut dependencies = BTreeMap::<ChangeSetKey, BTreeSet<String>>::new();
     let mut diagnostics = Vec::new();
     for value in proposal_reference_values(args) {
-        if own.contains(&value) || in_head.contains(value.as_str()) {
+        let created_here = args.proposed_objects.iter().any(|o| {
+            !matches!(o.op.as_str(), "edit" | "retire") && ids.get(&o.local_ref) == Some(&value)
+        }) || args
+            .proposed_relations
+            .iter()
+            .any(|r| r.op != "edit" && ids.get(&r.local_ref) == Some(&value));
+        if created_here || in_head.contains(value.as_str()) {
             continue;
         }
         let target = candidates.iter().find(|candidate| {

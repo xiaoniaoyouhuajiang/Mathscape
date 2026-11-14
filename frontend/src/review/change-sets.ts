@@ -134,7 +134,7 @@ class ProposalWorkspaceSession implements ProposalWorkspaceController {
     return doc;
   }
 
-  async open(key: string, groupIndex?: number): Promise<void> {
+  async open(key: string, groupIndex?: number, focusTarget?: string): Promise<void> {
     const item = this.items.find(candidate => keyOf(candidate) === key) ?? this.items[0];
     if (!item) return;
     const groups = proposalReviewProjection(item);
@@ -159,7 +159,7 @@ class ProposalWorkspaceSession implements ProposalWorkspaceController {
       proposal: {
         changeSetId: item.changeSetId, version: item.version, state: item.state, proposedBy: item.proposedBy,
         snapshot: group.source.artifact_id, item, items: this.items, groupIndex: index, groupCount: groups.length, overview,
-        document, documentError, anchors: group.anchors, controller: this,
+        document, documentError, anchors: group.anchors, focusTarget: focusTarget ?? null, controller: this,
       },
     });
   }

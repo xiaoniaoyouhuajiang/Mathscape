@@ -354,41 +354,31 @@ fn view(
 }
 
 /// Existing objects a version names: diagnostic targets, relation ends,
-/// parents and edit targets (stable ids, never `$new:` refs).
+/// parents, edit targets and semantic references (stable ids, never `$new:`).
 fn named_ids(item: &PendingChangeSet) -> Vec<String> {
     let record = &item.record;
     let mut ids: Vec<String> = Vec::new();
-    let mut push = |value: Option<&Value>| {
-        if let Some(id) = value.and_then(Value::as_str)
-            && id.starts_with("mathscape:")
-            && !ids.iter().any(|known| known == id)
-        {
-            ids.push(id.to_owned());
+    fn walk(value: &Value, skip_spans: bool, ids: &mut Vec<String>) {
+        match value {
+            Value::String(id)
+                if id.starts_with("mathscape:")
+                    && !(skip_spans && id.starts_with("mathscape:source-span/"))
+                    && !id.starts_with("mathscape:artifact/")
+                    && !id.starts_with("mathscape:change-set/") =>
+            {
+                if !ids.iter().any(|known| known == id) {
+                    ids.push(id.clone());
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| walk(item, skip_spans, ids)),
+            Value::Object(map) => map.values().for_each(|item| walk(item, skip_spans, ids)),
+            _ => {}
         }
-    };
-    let list = |value: &Value, key: &str| -> Vec<Value> {
-        value
-            .get(key)
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-    };
-    for diagnostic in list(&record.result, "diagnostics") {
-        push(diagnostic.get("target_id"));
     }
-    for relation in list(&record.proposal, "proposed_relations") {
-        push(relation.get("source"));
-        push(relation.get("target"));
-        push(relation.get("target_id"));
+    if let Some(diagnostics) = record.result.get("diagnostics") {
+        walk(diagnostics, false, &mut ids);
     }
-    for object in list(&record.proposal, "proposed_objects") {
-        push(object.get("target_id"));
-        push(
-            object
-                .get("payload")
-                .and_then(|payload| payload.get("parent")),
-        );
-    }
+    walk(&record.proposal, true, &mut ids);
     ids
 }
 
@@ -402,16 +392,29 @@ fn staged_title(versions: &[PendingChangeSet], id: &str) -> Option<String> {
             .as_object()?
             .iter()
             .find(|(_, staged)| staged.as_str() == Some(id))?;
-        record
+        let object = record
             .proposal
             .get("proposed_objects")?
             .as_array()?
             .iter()
-            .find(|object| object.get("local_ref").and_then(Value::as_str) == Some(local_ref))?
-            .get("payload")?
-            .get("display_title")?
-            .as_str()
-            .map(str::to_owned)
+            .find(|object| object.get("local_ref").and_then(Value::as_str) == Some(local_ref))?;
+        let payload = object.get("payload")?;
+        let str_at = |key: &str| payload.get(key).and_then(Value::as_str).map(str::to_owned);
+        str_at("display_title")
+            .or_else(|| str_at("plain_label"))
+            .or_else(|| {
+                let labels = payload.get("preferred_labels")?.as_array()?;
+                labels
+                    .iter()
+                    .find(|l| l.get("lang").and_then(Value::as_str) == Some("zh"))
+                    .or_else(|| labels.first())?
+                    .get("label")?
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .or_else(|| str_at("label"))
+            .or_else(|| str_at("map_label"))
+            .or_else(|| str_at("obligation"))
     })
 }
 
@@ -2300,6 +2303,53 @@ mod tests {
         };
         assert!(plan_as("mathscape-desktop", record).contains(&"server_only_operation".to_owned()));
 
+        // Agent 提议新建理论书架，并用 edit 修改已接受共享对象的 home_theory 迁过去。
+        let entity_rev = open_store(&fx.root)
+            .unwrap()
+            .map_edit_snapshot()
+            .unwrap()
+            .objects
+            .into_iter()
+            .find(|object| object.object_id == entity_id)
+            .unwrap()
+            .revision;
+        let move_shelf = propose(
+            &fx,
+            json!({
+                "request_id": "semantic-move-home-theory",
+                "rationale": "新建更合适的理论书架并迁移共享对象",
+                "target_object": "t.new",
+                "proposed_objects": [
+                    {
+                        "local_ref": "t.new",
+                        "kind": "semantic_entity",
+                        "op": "create",
+                        "payload": {
+                            "semantic_kind": "theory",
+                            "preferred_labels": [{ "lang": "zh", "label": "数列与单调收敛" }],
+                            "aliases": ["monotone convergence", "数列极限"],
+                            "plain_label": "理论：数列与单调收敛"
+                        }
+                    },
+                    {
+                        "local_ref": "move.mct",
+                        "kind": "semantic_entity",
+                        "op": "edit",
+                        "target_id": entity_id,
+                        "expected_revision": entity_rev,
+                        "changes": { "home_theory": "$new:t.new" }
+                    }
+                ]
+            }),
+        );
+        assert_eq!(move_shelf["status"], "staged", "{move_shelf}");
+        let new_theory_id = staged_id(&move_shelf, "t.new");
+        accept(&fx, vec![sel(&move_shelf)]).unwrap();
+        assert_eq!(
+            semantic_payload(&fx, &entity_id)["payload"]["home_theory"],
+            new_theory_id
+        );
+
         // Agent 提议退役对齐线；用户接受后挂在上面的账自动失效。
         let revision = open_store(&fx.root)
             .unwrap()
@@ -2402,6 +2452,35 @@ mod tests {
             }
             selections.push(sel(&result));
         }
+        // 在接受前核对队列视图：跨提案引用的来源单元、理论、共享对象与账都能拿到中文标题。
+        let pending_queue = list_queue(&fx.root, INV).unwrap();
+        let cassini_view = pending_queue
+            .items
+            .iter()
+            .find(|item| item.proposal["target_object"] == "e.cassini")
+            .expect("cassini pending view");
+        let jia_thm_id = ids[objects["change_sets"][0]["staged_ids"]["jia.u.thm"]
+            .as_str()
+            .unwrap()]
+        .as_str();
+        let theory_id = ids[objects["change_sets"][2]["staged_ids"]["e.theory"]
+            .as_str()
+            .unwrap()]
+        .as_str();
+        assert_eq!(
+            cassini_view
+                .target_titles
+                .get(jia_thm_id)
+                .map(String::as_str),
+            Some("定理 3.2.3 Cassini 恒等式")
+        );
+        assert_eq!(
+            cassini_view
+                .target_titles
+                .get(theory_id)
+                .map(String::as_str),
+            Some("理论：线性递推数列")
+        );
         accept(&fx, selections).unwrap();
         assert_eq!(commit_count(&fx), 1);
 

@@ -21,10 +21,33 @@ export interface SemanticReviewCard {
   title: string;
   /** 白话说明行。 */
   lines: string[];
+  /** 这张卡引用的全部原文片段（去掉 `$new:` 后的 `span_ref` 或稳定 id）。 */
+  evidenceRefs: string[];
   /** 这张卡上的审核项（warn / info）与阻塞诊断。 */
   diagnostics: ProposalDiagnostic[];
   /** 已暂存的稳定 id（有的话）。 */
   stagedId: string | null;
+}
+
+export function collectSemanticSpanRefs(value: unknown, out: string[] = []): string[] {
+  if (!value || typeof value !== "object") return out;
+  if (Array.isArray(value)) {
+    for (const item of value) collectSemanticSpanRefs(item, out);
+    return out;
+  }
+  const map = value as Json;
+  for (const [key, child] of Object.entries(map)) {
+    if (key === "evidence_spans" && Array.isArray(child)) {
+      for (const raw of child) {
+        if (typeof raw !== "string") continue;
+        const ref = raw.replace(/^\$new:/, "");
+        if (ref && !out.includes(ref)) out.push(ref);
+      }
+    } else {
+      collectSemanticSpanRefs(child, out);
+    }
+  }
+  return out;
 }
 
 function bodyOf(object: ProposedObject): Json {
@@ -102,6 +125,7 @@ export function semanticReviewCards(item: PendingChangeSet): SemanticReviewCard[
         noun: semanticObjectNoun(object.kind),
         title,
         lines,
+        evidenceRefs: collectSemanticSpanRefs(body),
         diagnostics: diagnostics.filter(diagnostic => diagnostic.local_ref === object.local_ref),
         stagedId: item.result.staged_ids?.[object.local_ref] ?? null,
       };

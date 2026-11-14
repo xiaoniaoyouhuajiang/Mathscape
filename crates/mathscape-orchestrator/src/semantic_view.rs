@@ -326,10 +326,20 @@ pub fn semantic_object_detail(
     })
 }
 
+pub fn semantic_object_title(o: &MapEditObject) -> String {
+    title(o)
+}
+
 fn title(o: &MapEditObject) -> String {
     let p = payload(o);
     match o.kind.as_str() {
         "SemanticEntity" => entity_label(o),
+        "Alignment" => p
+            .get("map_label")
+            .and_then(Value::as_str)
+            .or_else(|| p.get("relation").and_then(Value::as_str))
+            .unwrap_or("对齐线")
+            .to_owned(),
         "DialectScope" => text(p, "label").unwrap_or("约定卡").to_owned(),
         "Debt" => text(p, "obligation").unwrap_or("一笔账").to_owned(),
         "SourceSpan" => text(p, "quote")
@@ -337,6 +347,14 @@ fn title(o: &MapEditObject) -> String {
             .unwrap_or("原文证据")
             .to_owned(),
         _ => text(p, "display_title")
+            .or_else(|| p.pointer("/source_title/text").and_then(Value::as_str))
+            .or_else(|| {
+                p.get("source_labels")?
+                    .as_array()?
+                    .first()?
+                    .get("text")?
+                    .as_str()
+            })
             .or_else(|| text(p, "map_label"))
             .unwrap_or(&o.object_id)
             .to_owned(),
