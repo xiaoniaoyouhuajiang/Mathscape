@@ -16,8 +16,14 @@ import {
 import { focusSubgraph, type FocusDepth, type FocusResult } from "./focus";
 import { applyInkOverlay, clearInkOverlay, INK_NOTE_NODE_CLASS, type InkOverlayResult } from "./ink-overlay";
 import type { InkLinkOverlay } from "../ink/links";
-import type { IncidenceGraph, IncidenceNode } from "./projection";
+import type { IncidenceEdge, IncidenceGraph, IncidenceNode } from "./projection";
 import { activityGraph } from "./lifecycle";
+import {
+  computeLandscapeLayout,
+  landscapeLayoutKey,
+  resolveIncrementalPositions,
+  type MapPoint,
+} from "./layout";
 import {
   EDGE_TYPES,
   NODE_TYPES,
@@ -98,6 +104,12 @@ export class GraphController {
   private showInkNotes = false;
   private inkOverlayResult: InkOverlayResult = { drawn: 0, hidden: 0 };
   private inkToggleLabel: HTMLElement | undefined;
+  /** Full-landscape coordinates reused by every filtered/render-mode view. */
+  private basePositions = new Map<string, MapPoint>();
+  /** Manual positions survive filter changes until the user asks to relayout. */
+  private userPinnedPositions = new Map<string, MapPoint>();
+  private lastWorkspaceId: string | null = null;
+  private lastLayoutKey: string | null = null;
 
   constructor(
     private readonly elements: GraphControllerElements,
@@ -217,6 +229,13 @@ export class GraphController {
     this.inkToggleLabel = inkText;
     this.renderInkToggle();
     retiredLabel.after(inkLabel);
+    const relayoutButton = document.createElement("button");
+    relayoutButton.type = "button";
+    relayoutButton.className = "graph-relayout-button";
+    relayoutButton.textContent = "整理布局";
+    relayoutButton.title = "按确定性物理布局重新整理全图";
+    relayoutButton.onclick = () => this.relayout();
+    inkLabel.after(relayoutButton);
     document.querySelectorAll<HTMLButtonElement>(".preset-button").forEach((button) => {
       button.onclick = () => {
         const preset = button.dataset.preset as PresetName;
@@ -334,15 +353,44 @@ export class GraphController {
     this.inkToggleLabel.textContent = ` 我的手稿${hidden}`;
   }
 
-  renderCurrentGraph(snapshot = this.delegate.getSnapshot()): void {
+  relayout(): void {
+    this.basePositions.clear();
+    this.userPinnedPositions.clear();
+    this.lastLayoutKey = null;
+    this.renderCurrentGraph(this.delegate.getSnapshot(), { forceRelayout: true, fit: true });
+  }
+
+  renderCurrentGraph(
+    snapshot = this.delegate.getSnapshot(),
+    options?: { forceRelayout?: boolean; fit?: boolean },
+  ): void {
     if (snapshot === undefined) return;
     this.delegate.onBeforeRenderGraph?.();
     hideContextMenu();
-    const landscape=activityGraph(snapshot.landscape_graph,this.showRetired);
+
+    if (this.lastWorkspaceId !== null && this.lastWorkspaceId !== snapshot.workspace_id) {
+      this.basePositions.clear();
+      this.userPinnedPositions.clear();
+      this.lastLayoutKey = null;
+    }
+    this.lastWorkspaceId = snapshot.workspace_id;
+
+    const landscape = activityGraph(snapshot.landscape_graph, this.showRetired);
+    const nextLayoutKey = landscapeLayoutKey(landscape);
+    if (options?.forceRelayout || this.lastLayoutKey !== nextLayoutKey || this.basePositions.size === 0) {
+      const fullPositions = computeLandscapeLayout(landscape);
+      this.basePositions = resolveIncrementalPositions(
+        landscape,
+        options?.forceRelayout ? new Map() : this.basePositions,
+        this.userPinnedPositions,
+        fullPositions,
+      );
+      this.lastLayoutKey = nextLayoutKey;
+    }
 
     if (
       this.focusRootId !== null &&
-      !landscape.nodes.some((n) => n.id === this.focusRootId)
+      !landscape.nodes.some((node) => node.id === this.focusRootId)
     ) {
       this.focusRootId = null;
     }
@@ -357,6 +405,7 @@ export class GraphController {
 
     const filtered = this.filterGraph(landscape);
     this.displayedGraph = focus === null ? filtered : this.mergeGraphs(filtered, focus.graph);
+    const positions = this.positionsWithSynthetics(this.displayedGraph, this.basePositions);
     const focusScope =
       focus === null ? null : new Set(focus.graph.nodes.map((node) => node.id));
 
@@ -364,9 +413,9 @@ export class GraphController {
     this.renderFocusBar(focus, landscape);
 
     const entityCount = (focus === null ? filtered : focus.graph).nodes.filter(
-      (n) => n.element_kind === "entity",
+      (node) => node.element_kind === "entity",
     ).length;
-    const hasAnyData = snapshot.landscape_graph.nodes.some((n) => n.element_kind !== "group");
+    const hasAnyData = snapshot.landscape_graph.nodes.some((node) => node.element_kind !== "group");
 
     if (focus !== null) {
       this.elements.emptyStateTitle.textContent = "聚焦范围内没有可显示的节点";
@@ -374,7 +423,7 @@ export class GraphController {
         "该来源尚未派生出内容，或当前过滤条件隐藏了全部后代。";
     } else {
       this.elements.emptyStateTitle.textContent = hasAnyData
-        ? "当前过滤条件下无可见节点"
+        ? "当前过滤条件下无可显示节点"
         : "尚未导入材料";
       this.elements.emptyStateMessage.textContent = hasAnyData
         ? "尝试切换显示预设或勾选更多节点类型。"
@@ -387,10 +436,15 @@ export class GraphController {
         this.elements.graphContainer,
         this.displayedGraph,
         this.renderMode,
+        { positions },
       );
       this.bindGraphInteractions(this.graphCore);
     } else {
-      syncCytoscapeGraph(this.graphCore, this.displayedGraph, this.renderMode);
+      syncCytoscapeGraph(this.graphCore, this.displayedGraph, this.renderMode, {
+        positions,
+        fit: options?.fit,
+        updateExistingPositions: options?.forceRelayout === true,
+      });
     }
 
     this.focusScope = focusScope;
@@ -404,6 +458,34 @@ export class GraphController {
       entityCount > (focus === null ? 0 : 1),
     );
     this.delegate.onGraphRendered?.();
+  }
+
+  private positionsWithSynthetics(
+    displayed: IncidenceGraph,
+    base: ReadonlyMap<string, MapPoint>,
+  ): Map<string, MapPoint> {
+    const out = new Map(base);
+    const byRelation = new Map<string, IncidenceEdge[]>();
+    for (const edge of displayed.edges) {
+      const list = byRelation.get(edge.relation_id) ?? [];
+      list.push(edge);
+      byRelation.set(edge.relation_id, list);
+    }
+    for (const node of displayed.nodes) {
+      if (node.element_kind !== "relation" || out.has(node.id)) continue;
+      const relationKey = node.domain_id ?? node.id;
+      const points = (byRelation.get(relationKey) ?? [])
+        .map((edge) => out.get(edge.source === node.id ? edge.target : edge.source))
+        .filter((point): point is MapPoint => point !== undefined);
+      if (points.length === 0) continue;
+      const center = {
+        x: Math.round(points.reduce((sum, point) => sum + point.x, 0) / points.length),
+        y: Math.round(points.reduce((sum, point) => sum + point.y, 0) / points.length),
+      };
+      out.set(node.id, center);
+      out.set(`junc~${relationKey}`, center);
+    }
+    return out;
   }
 
   private mergeGraphs(base: IncidenceGraph, overlay: IncidenceGraph): IncidenceGraph {
@@ -497,6 +579,14 @@ export class GraphController {
         bounds.top + position.y,
         this.nodeMenuItems(node.id()),
       );
+    });
+    core.on("dragfreeon", "node", (event) => {
+      const node = event.target as NodeSingular;
+      if (node.hasClass(INK_NOTE_NODE_CLASS) || node.data("elementKind") === "junction") return;
+      const position = node.position();
+      const point = { x: Math.round(position.x), y: Math.round(position.y) };
+      this.userPinnedPositions.set(node.id(), point);
+      this.basePositions.set(node.id(), point);
     });
 
     core.on("cxttap", (event) => {

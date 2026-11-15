@@ -13,6 +13,7 @@ import {
   type IncidenceNode,
 } from "./projection";
 import { FOCUS_CONTRACTION_KIND } from "./focus";
+import { type MapPoint } from "./layout";
 import { EDGE_TYPES, NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
 import {
   bindLabelHover,
@@ -772,44 +773,71 @@ export const OUT_OF_FOCUS_CLASS = "is-out-of-focus";
 // Graph mounting
 // ---------------------------------------------------------------------------
 
+function withPositions(
+  elements: ElementDefinition[],
+  positions: ReadonlyMap<string, MapPoint> | undefined,
+): ElementDefinition[] {
+  if (positions === undefined) return elements;
+  return elements.map((element) => {
+    if (element.group !== "nodes") return element;
+    const point = positions.get(String(element.data.id));
+    return point === undefined ? element : { ...element, position: { x: point.x, y: point.y } };
+  });
+}
+
+function fitPositionedGraph(core: Core, padding: number): void {
+  if (core.nodes().empty() || core.width() <= 0 || core.height() <= 0) return;
+  core.fit(undefined, padding);
+}
+
 export function mountCytoscapeGraph(
   container: HTMLElement,
   graph: IncidenceGraph,
   renderMode: RenderMode = "semantic",
-  options?: { labelHover?: LabelHoverOptions },
+  options?: { labelHover?: LabelHoverOptions; positions?: ReadonlyMap<string, MapPoint> },
 ): Core {
+  const positions = options?.positions;
   const core = cytoscape({
     container,
-    elements: toCytoscapeElements(graph, renderMode),
+    elements: withPositions(toCytoscapeElements(graph, renderMode), positions),
     style: styles,
+    layout: positions === undefined ? undefined : { name: "preset", fit: false },
     minZoom: 0.08,
     maxZoom: 4,
   });
-  runLayout(core, core.elements(), true);
+  if (positions === undefined) runLayout(core, core.elements(), true);
+  else fitPositionedGraph(core, 24);
   bindLabelHover(core, options?.labelHover);
   return core;
 }
 
 /**
  * Brings an already-mounted instance in line with `graph` without tearing it
- * down, so nodes the user has already located on screen keep their position.
- *
- * Only newly added nodes are laid out: everything that survives the diff is
- * locked for the duration of the layout run, and the viewport is left alone
- * unless the element set was replaced wholesale (a render-mode switch, or the
- * first graph after an empty canvas).
+ * down. When deterministic positions are supplied, additions are inserted at
+ * their cached coordinates and no incremental physical layout is run.
  */
 export function syncCytoscapeGraph(
   core: Core,
   graph: IncidenceGraph,
   renderMode: RenderMode = "semantic",
+  options?: {
+    positions?: ReadonlyMap<string, MapPoint>;
+    fit?: boolean;
+    updateExistingPositions?: boolean;
+  },
 ): void {
+  const positions = options?.positions;
   const desired = new Map(
-    toCytoscapeElements(graph, renderMode).map(
-      (element) => [String(element.data.id), element] as const,
-    ),
+    toCytoscapeElements(graph, renderMode).map((element) => {
+      if (element.group === "nodes" && positions !== undefined) {
+        const point = positions.get(String(element.data.id));
+        if (point !== undefined) return [String(element.data.id), { ...element, position: point }] as const;
+      }
+      return [String(element.data.id), element] as const;
+    }),
   );
 
+  const wasEmpty = core.nodes().empty();
   const staleIds: string[] = [];
   const additions: ElementDefinition[] = [];
   core.elements().forEach((element) => {
@@ -834,12 +862,15 @@ export function syncCytoscapeGraph(
     }
     existing.data(element.data);
     existing.classes(element.classes ?? "");
+    if (positions !== undefined && options?.updateExistingPositions && existing.isNode()) {
+      const point = positions.get(id);
+      if (point !== undefined) existing.position({ x: point.x, y: point.y });
+    }
   }
 
   const replacedWholesale =
-    core.nodes().empty() ||
-    staleIds.filter((id) => core.getElementById(id).isNode()).length ===
-      core.nodes().length;
+    !wasEmpty &&
+    staleIds.filter((id) => core.getElementById(id).isNode()).length === core.nodes().length;
 
   let added = core.collection();
   core.batch(() => {
@@ -851,6 +882,12 @@ export function syncCytoscapeGraph(
     );
     added = core.add(additions);
   });
+
+  if (positions !== undefined) {
+    const shouldFit = options?.fit ?? (wasEmpty || replacedWholesale);
+    if (shouldFit) fitPositionedGraph(core, 24);
+    return;
+  }
 
   const addedNodes = added.nodes();
   if (addedNodes.empty()) return;
