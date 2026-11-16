@@ -39,6 +39,10 @@ export type RelationKind =
   | "explains"
   | "applies_method"
   | "cites"
+  | "aligns"
+  | "in_theory"
+  | "debt_on"
+  | "scope_of"
   | "unknown";
 
 export type IncidenceDirection =

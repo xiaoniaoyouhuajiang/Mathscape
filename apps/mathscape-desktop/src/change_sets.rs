@@ -354,41 +354,31 @@ fn view(
 }
 
 /// Existing objects a version names: diagnostic targets, relation ends,
-/// parents and edit targets (stable ids, never `$new:` refs).
+/// parents, edit targets and semantic references (stable ids, never `$new:`).
 fn named_ids(item: &PendingChangeSet) -> Vec<String> {
     let record = &item.record;
     let mut ids: Vec<String> = Vec::new();
-    let mut push = |value: Option<&Value>| {
-        if let Some(id) = value.and_then(Value::as_str)
-            && id.starts_with("mathscape:")
-            && !ids.iter().any(|known| known == id)
-        {
-            ids.push(id.to_owned());
+    fn walk(value: &Value, skip_spans: bool, ids: &mut Vec<String>) {
+        match value {
+            Value::String(id)
+                if id.starts_with("mathscape:")
+                    && !(skip_spans && id.starts_with("mathscape:source-span/"))
+                    && !id.starts_with("mathscape:artifact/")
+                    && !id.starts_with("mathscape:change-set/") =>
+            {
+                if !ids.iter().any(|known| known == id) {
+                    ids.push(id.clone());
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| walk(item, skip_spans, ids)),
+            Value::Object(map) => map.values().for_each(|item| walk(item, skip_spans, ids)),
+            _ => {}
         }
-    };
-    let list = |value: &Value, key: &str| -> Vec<Value> {
-        value
-            .get(key)
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-    };
-    for diagnostic in list(&record.result, "diagnostics") {
-        push(diagnostic.get("target_id"));
     }
-    for relation in list(&record.proposal, "proposed_relations") {
-        push(relation.get("source"));
-        push(relation.get("target"));
-        push(relation.get("target_id"));
+    if let Some(diagnostics) = record.result.get("diagnostics") {
+        walk(diagnostics, false, &mut ids);
     }
-    for object in list(&record.proposal, "proposed_objects") {
-        push(object.get("target_id"));
-        push(
-            object
-                .get("payload")
-                .and_then(|payload| payload.get("parent")),
-        );
-    }
+    walk(&record.proposal, true, &mut ids);
     ids
 }
 
@@ -402,16 +392,29 @@ fn staged_title(versions: &[PendingChangeSet], id: &str) -> Option<String> {
             .as_object()?
             .iter()
             .find(|(_, staged)| staged.as_str() == Some(id))?;
-        record
+        let object = record
             .proposal
             .get("proposed_objects")?
             .as_array()?
             .iter()
-            .find(|object| object.get("local_ref").and_then(Value::as_str) == Some(local_ref))?
-            .get("payload")?
-            .get("display_title")?
-            .as_str()
-            .map(str::to_owned)
+            .find(|object| object.get("local_ref").and_then(Value::as_str) == Some(local_ref))?;
+        let payload = object.get("payload")?;
+        let str_at = |key: &str| payload.get(key).and_then(Value::as_str).map(str::to_owned);
+        str_at("display_title")
+            .or_else(|| str_at("plain_label"))
+            .or_else(|| {
+                let labels = payload.get("preferred_labels")?.as_array()?;
+                labels
+                    .iter()
+                    .find(|l| l.get("lang").and_then(Value::as_str) == Some("zh"))
+                    .or_else(|| labels.first())?
+                    .get("label")?
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .or_else(|| str_at("label"))
+            .or_else(|| str_at("map_label"))
+            .or_else(|| str_at("obligation"))
     })
 }
 
@@ -503,14 +506,7 @@ fn closure_error(error: &mathscape_orchestrator::change_set_plan::ClosureError) 
 }
 
 fn operation_target(operation: &UserChangeOperation) -> &str {
-    match operation {
-        UserChangeOperation::CreateSourceUnit { object_id, .. }
-        | UserChangeOperation::CreateSourceRelation { object_id, .. }
-        | UserChangeOperation::CreateSourceSpan { object_id, .. }
-        | UserChangeOperation::EditSourceUnit { object_id, .. }
-        | UserChangeOperation::EditSourceRelation { object_id, .. }
-        | UserChangeOperation::RetireObject { object_id, .. } => object_id,
-    }
+    operation.object_id()
 }
 
 pub fn plan_batch(
@@ -2115,5 +2111,492 @@ mod tests {
         // reason instead of silently showing nothing.
         let error = change_set_snapshot(&fx.root, &investigation, &new_md).unwrap_err();
         assert!(error.starts_with("snapshot_not_referenced"), "{error}");
+    }
+
+    fn semantic_payload(fx: &Fx, id: &str) -> Value {
+        open_store(&fx.root)
+            .unwrap()
+            .map_edit_snapshot()
+            .unwrap()
+            .objects
+            .into_iter()
+            .find(|object| object.object_id == id)
+            .map(|object| {
+                json!({ "lifecycle": object.lifecycle, "payload": object.payload["payload"] })
+            })
+            .unwrap_or(Value::Null)
+    }
+
+    /// 语义层端到端：Agent 提案 → 用户接受 → 可信度不被提升 → 服务端核对
+    /// mathlib 名称 → 退役对齐线时挂着的账自动失效。
+    #[test]
+    fn semantic_change_set_accepts_without_raising_trust_and_baseline_is_server_checked() {
+        let fx = fixture();
+        let proposal = propose(
+            &fx,
+            json!({
+                "request_id": "semantic-1",
+                "rationale": "定理 A 说的就是共享的单调收敛定理",
+                "target_object": "e.mct",
+                "proposed_objects": [
+                    span(&fx, "s", "第一段内容。", "inline"),
+                    unit("u", "定理 A", Value::Null, json!(["$new:s"])),
+                    { "local_ref": "e.theory", "kind": "semantic_entity", "op": "create",
+                      "payload": { "semantic_kind": "theory",
+                                   "preferred_labels": [{ "lang": "zh", "label": "实数列" }] } },
+                    { "local_ref": "e.mct", "kind": "semantic_entity", "op": "create",
+                      "payload": { "semantic_kind": "concept", "home_theory": "$new:e.theory",
+                                   "preferred_labels": [{ "lang": "zh", "label": "单调收敛定理" }],
+                                   "mathlib_baseline": { "decl": "tendsto_atTop_ciSup", "status": "unchecked" } } },
+                    { "local_ref": "a", "kind": "alignment", "op": "create",
+                      "payload": { "source": "$new:u", "target": "$new:e.mct", "relation": "expresses",
+                                   "source_context": { "binding": "uncontextualized", "reason": "测试材料" },
+                                   "evidence_spans": ["$new:s"], "status": "context_checked" } },
+                    { "local_ref": "d", "kind": "debt", "op": "create",
+                      "payload": { "debt_kind": "alignment_debt", "attached_to": "$new:a", "status": "open",
+                                   "obligation": "核对“有界”指上有界", "quantifier": "对所有实数列",
+                                   "failure_mode": "statement" } }
+                ]
+            }),
+        );
+        assert_eq!(proposal["status"], "staged", "{proposal}");
+        accept(&fx, vec![sel(&proposal)]).unwrap();
+
+        let entity_id = staged_id(&proposal, "e.mct");
+        let alignment_id = staged_id(&proposal, "a");
+        let debt_id = staged_id(&proposal, "d");
+        let alignment = semantic_payload(&fx, &alignment_id);
+        // 接受只是写入地图：Agent 写的状态原样保留，可信度不升级。
+        assert_eq!(alignment["payload"]["status"], "context_checked");
+        assert_eq!(
+            alignment["payload"]["trust"]["curation"], "raw",
+            "{alignment}"
+        );
+        assert_eq!(alignment["payload"]["trust"]["proof"], "none");
+        let entity = semantic_payload(&fx, &entity_id);
+        assert_eq!(entity["payload"]["mathlib_baseline"]["status"], "unchecked");
+
+        // 学习视图：只有一份材料对齐到这个共享对象 →「新的」；账未还清。
+        let snapshot = open_store(&fx.root).unwrap().map_edit_snapshot().unwrap();
+        let view = mathscape_orchestrator::semantic_view::learning_view(&snapshot);
+        assert_eq!(view.materials.len(), 1, "{view:?}");
+        assert_eq!(view.materials[0].artifact_id, fx.md);
+        assert_eq!(view.materials[0].units[0].label, "新的");
+        assert_eq!(view.materials[0].open_debts.len(), 1);
+        let detail =
+            mathscape_orchestrator::semantic_view::semantic_object_detail(&snapshot, &alignment_id)
+                .unwrap();
+        assert_eq!(
+            detail.titles.get(&entity_id).map(String::as_str),
+            Some("单调收敛定理")
+        );
+        assert_eq!(detail.debts.len(), 1);
+
+        // 没有 profile：什么也不写。
+        let unavailable =
+            mathscape_mcp::mathlib_baseline::recheck_mathlib_baselines(&fx.root, now().unwrap())
+                .unwrap();
+        assert!(
+            matches!(
+                unavailable.status.as_str(),
+                "unavailable" | "committed" | "unchanged"
+            ),
+            "{unavailable:?}"
+        );
+
+        // 假的 mathlib 源码目录：名称存在 → confirmed。
+        let mathlib = tempfile::tempdir().unwrap();
+        let module_dir = mathlib.path().join("Mathlib/Order");
+        std::fs::create_dir_all(&module_dir).unwrap();
+        std::fs::write(
+            module_dir.join("Monotone.lean"),
+            "namespace Foo\nend Foo\n\ntheorem tendsto_atTop_ciSup : True := trivial\n",
+        )
+        .unwrap();
+        let source = mathscape_tool_lean::MathlibSource {
+            profile_id: "test-profile".into(),
+            mathlib_version: "v4.33.1".into(),
+            package_root: mathlib.path().to_path_buf(),
+        };
+        let report =
+            mathscape_mcp::mathlib_baseline::recheck_with_source(&fx.root, &source, now().unwrap())
+                .unwrap();
+        assert_eq!(report.status, "committed", "{report:?}");
+        assert_eq!(report.confirmed, vec!["tendsto_atTop_ciSup".to_owned()]);
+        let baseline = &semantic_payload(&fx, &entity_id)["payload"]["mathlib_baseline"];
+        assert_eq!(baseline["status"], "confirmed");
+        assert_eq!(baseline["checked"]["mathlib_version"], "v4.33.1");
+        assert_eq!(baseline["checked"]["module"], "Mathlib.Order.Monotone");
+        assert_eq!(
+            baseline["checked"]["location"],
+            "Mathlib/Order/Monotone.lean:4"
+        );
+        let again =
+            mathscape_mcp::mathlib_baseline::recheck_with_source(&fx.root, &source, now().unwrap())
+                .unwrap();
+        assert_eq!(again.status, "unchanged");
+
+        // 审阅结论、结账只能由用户写；mathlib 核对结果只能由服务端写。
+        let snapshot = open_store(&fx.root).unwrap().map_edit_snapshot().unwrap();
+        let rev = |id: &str| {
+            snapshot
+                .objects
+                .iter()
+                .find(|object| object.object_id == id)
+                .unwrap()
+                .revision
+                .clone()
+        };
+        let plan_as = |actor: &str, operation: UserChangeOperation| {
+            let request = UserChangeRequest {
+                request_id: "mathscape:test/semantic-review".into(),
+                base_commit: snapshot.base_commit.clone(),
+                reason: "审阅".into(),
+                operations: vec![operation],
+            };
+            let impact =
+                plan_map_change_over_head(&snapshot, &request, &ActorRef::parse(actor).unwrap())
+                    .impact;
+            impact
+                .diagnostics
+                .iter()
+                .map(|d| d.code.clone())
+                .collect::<Vec<_>>()
+        };
+        let review = UserChangeOperation::SetAlignmentReview {
+            object_id: alignment_id.clone(),
+            expected_revision: rev(&alignment_id),
+            status: mathscape_domain::AlignmentReviewStatus::SemanticallyReviewed,
+            note: None,
+        };
+        assert!(plan_as("mathscape-desktop", review.clone()).is_empty());
+        assert!(plan_as("agent:codex", review).contains(&"user_only_operation".to_owned()));
+        let waive = |note: Option<&str>| UserChangeOperation::SetDebtSettlement {
+            object_id: debt_id.clone(),
+            expected_revision: rev(&debt_id),
+            settlement: mathscape_domain::DebtSettlement::Waived,
+            note: note.map(str::to_owned),
+        };
+        assert!(!plan_as("mathscape-desktop", waive(None)).is_empty());
+        assert!(plan_as("mathscape-desktop", waive(Some("课程不要求"))).is_empty());
+        let pay = UserChangeOperation::SetDebtSettlement {
+            object_id: debt_id.clone(),
+            expected_revision: rev(&debt_id),
+            settlement: mathscape_domain::DebtSettlement::Paid,
+            note: None,
+        };
+        // 只有 claimed_paid 的账才能确认已还清。
+        assert!(!plan_as("mathscape-desktop", pay).is_empty());
+        let record = UserChangeOperation::RecordMathlibBaseline {
+            object_id: entity_id.clone(),
+            expected_revision: rev(&entity_id),
+            outcome: mathscape_domain::BaselineCheckOutcome {
+                status: mathscape_domain::BaselineStatus::NotFound,
+                check: mathscape_domain::BaselineCheck {
+                    mathlib_version: "v0".into(),
+                    profile_id: "fake".into(),
+                    method: mathscape_domain::BaselineCheckMethod::MathlibSource,
+                    module: None,
+                    location: None,
+                },
+            },
+        };
+        assert!(plan_as("mathscape-desktop", record).contains(&"server_only_operation".to_owned()));
+
+        // Agent 提议新建理论书架，并用 edit 修改已接受共享对象的 home_theory 迁过去。
+        let entity_rev = open_store(&fx.root)
+            .unwrap()
+            .map_edit_snapshot()
+            .unwrap()
+            .objects
+            .into_iter()
+            .find(|object| object.object_id == entity_id)
+            .unwrap()
+            .revision;
+        let move_shelf = propose(
+            &fx,
+            json!({
+                "request_id": "semantic-move-home-theory",
+                "rationale": "新建更合适的理论书架并迁移共享对象",
+                "target_object": "t.new",
+                "proposed_objects": [
+                    {
+                        "local_ref": "t.new",
+                        "kind": "semantic_entity",
+                        "op": "create",
+                        "payload": {
+                            "semantic_kind": "theory",
+                            "preferred_labels": [{ "lang": "zh", "label": "数列与单调收敛" }],
+                            "aliases": ["monotone convergence", "数列极限"],
+                            "plain_label": "理论：数列与单调收敛"
+                        }
+                    },
+                    {
+                        "local_ref": "move.mct",
+                        "kind": "semantic_entity",
+                        "op": "edit",
+                        "target_id": entity_id,
+                        "expected_revision": entity_rev,
+                        "changes": { "home_theory": "$new:t.new" }
+                    }
+                ]
+            }),
+        );
+        assert_eq!(move_shelf["status"], "staged", "{move_shelf}");
+        let new_theory_id = staged_id(&move_shelf, "t.new");
+        accept(&fx, vec![sel(&move_shelf)]).unwrap();
+        assert_eq!(
+            semantic_payload(&fx, &entity_id)["payload"]["home_theory"],
+            new_theory_id
+        );
+
+        // Agent 提议退役对齐线；用户接受后挂在上面的账自动失效。
+        let revision = open_store(&fx.root)
+            .unwrap()
+            .map_edit_snapshot()
+            .unwrap()
+            .objects
+            .into_iter()
+            .find(|object| object.object_id == alignment_id)
+            .unwrap()
+            .revision;
+        let retire = propose(
+            &fx,
+            json!({
+                "request_id": "semantic-retire",
+                "rationale": "这条对齐线写错了",
+                "proposed_objects": [{ "local_ref": "x", "kind": "alignment", "op": "retire",
+                                       "target_id": alignment_id, "expected_revision": revision }]
+            }),
+        );
+        assert_eq!(retire["status"], "staged", "{retire}");
+        accept(&fx, vec![sel(&retire)]).unwrap();
+        assert_ne!(semantic_payload(&fx, &alignment_id)["lifecycle"], "active");
+        assert_eq!(
+            semantic_payload(&fx, &debt_id)["payload"]["status"],
+            "obsolete"
+        );
+    }
+
+    fn remap_ids(value: &mut Value, ids: &std::collections::BTreeMap<String, String>) {
+        match value {
+            Value::String(text) => {
+                if let Some(actual) = ids.get(text.as_str()) {
+                    *text = actual.clone();
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| remap_ids(item, ids)),
+            Value::Object(map) => map.values_mut().for_each(|item| remap_ids(item, ids)),
+            _ => {}
+        }
+    }
+
+    /// 夹具 fixtures/emir/fibonacci-two-books（契约 S11）：6 个 change set
+    /// 依次暂存、一次接受，学习视图给出「别的材料里见过」/「新的」/「新约定」，
+    /// 接受后对齐状态、账的状态和可信度都原样不动。
+    #[test]
+    fn emir_fixture_accepts_and_learning_view_marks_seen_material() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/emir/fibonacci-two-books");
+        let objects: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("objects.json")).unwrap()).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("ws");
+        let mut pool = ArtifactPool::create(&root).unwrap();
+        let mut artifact = std::collections::BTreeMap::new();
+        for (key, entry) in objects["artifacts"].as_object().unwrap() {
+            let bytes = std::fs::read(dir.join(entry["file"].as_str().unwrap())).unwrap();
+            let metadata = ArtifactMetadata::new(
+                None,
+                MediaType::parse("text/markdown").unwrap(),
+                std::path::Path::new(entry["file"].as_str().unwrap())
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_owned),
+                None,
+                RightsRecord::new(RightsStatus::NotAssessed, vec![], None).unwrap(),
+            );
+            let id = pool
+                .import_bytes(&bytes, metadata, ActorRef::parse("test").unwrap())
+                .unwrap()
+                .stable_id()
+                .to_string();
+            assert_eq!(id, entry["artifact_id"]);
+            artifact.insert(key.clone(), id);
+        }
+        drop(pool);
+        let fx = Fx {
+            _dir: temp,
+            root,
+            md: artifact["jia"].clone(),
+        };
+
+        let mut ids = std::collections::BTreeMap::new();
+        let mut selections = Vec::new();
+        for change_set in objects["change_sets"].as_array().unwrap() {
+            let mut body = json!({
+                "request_id": change_set["request_id"],
+                "rationale": change_set["rationale"],
+                "target_object": change_set["target_object"],
+                "proposed_objects": change_set["proposed_objects"],
+                "proposed_relations": change_set["proposed_relations"],
+            });
+            remap_ids(&mut body, &ids);
+            let result = propose(&fx, body);
+            assert_eq!(result["status"], "staged", "{result}");
+            for (local, fixture_id) in change_set["staged_ids"].as_object().unwrap() {
+                ids.insert(
+                    fixture_id.as_str().unwrap().to_owned(),
+                    staged_id(&result, local),
+                );
+            }
+            selections.push(sel(&result));
+        }
+        // 在接受前核对队列视图：跨提案引用的来源单元、理论、共享对象与账都能拿到中文标题。
+        let pending_queue = list_queue(&fx.root, INV).unwrap();
+        let cassini_view = pending_queue
+            .items
+            .iter()
+            .find(|item| item.proposal["target_object"] == "e.cassini")
+            .expect("cassini pending view");
+        let jia_thm_id = ids[objects["change_sets"][0]["staged_ids"]["jia.u.thm"]
+            .as_str()
+            .unwrap()]
+        .as_str();
+        let theory_id = ids[objects["change_sets"][2]["staged_ids"]["e.theory"]
+            .as_str()
+            .unwrap()]
+        .as_str();
+        assert_eq!(
+            cassini_view
+                .target_titles
+                .get(jia_thm_id)
+                .map(String::as_str),
+            Some("定理 3.2.3 Cassini 恒等式")
+        );
+        assert_eq!(
+            cassini_view
+                .target_titles
+                .get(theory_id)
+                .map(String::as_str),
+            Some("理论：线性递推数列")
+        );
+        accept(&fx, selections).unwrap();
+        assert_eq!(commit_count(&fx), 1);
+
+        let actual = |local: &str| -> String {
+            let fixture_id = objects["change_sets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find_map(|cs| cs["staged_ids"][local].as_str())
+                .unwrap();
+            ids[fixture_id].clone()
+        };
+        // 接受只写入地图：Agent 写的状态与可信度原样保留。
+        let yi_def = semantic_payload(&fx, &actual("a.yi.def"));
+        assert_eq!(yi_def["lifecycle"], "active");
+        assert_eq!(yi_def["payload"]["relation"], "overlaps_with");
+        assert_eq!(yi_def["payload"]["trust"]["curation"], "raw");
+        assert_eq!(yi_def["payload"]["trust"]["proof"], "none");
+        let debt = semantic_payload(&fx, &actual("d.yi.f_eq_F"));
+        assert_eq!(debt["payload"]["status"], "open");
+        let cassini = semantic_payload(&fx, &actual("e.cassini"));
+        assert_eq!(
+            cassini["payload"]["mathlib_baseline"]["status"],
+            "unchecked"
+        );
+
+        let snapshot = open_store(&fx.root).unwrap().map_edit_snapshot().unwrap();
+        let view = mathscape_orchestrator::semantic_view::learning_view(&snapshot);
+        let material = |key: &str| {
+            view.materials
+                .iter()
+                .find(|m| m.artifact_id == artifact[key])
+                .unwrap_or_else(|| panic!("{key} missing: {view:?}"))
+        };
+        let yi = material("yi");
+        let label_of = |entity: &str| -> Vec<&str> {
+            let id = actual(entity);
+            yi.units
+                .iter()
+                .filter(|u| u.entity_id == id)
+                .map(|u| u.label.as_str())
+                .collect()
+        };
+        // 灯塔的 Cassini 在星港里也对齐到同一个共享对象 → 见过；剪拼题只有灯塔有 → 新的。
+        assert_eq!(label_of("e.cassini"), ["别的材料里见过"], "{yi:?}");
+        assert_eq!(label_of("e.puzzle"), ["新的"], "{yi:?}");
+        let cassini_unit = yi
+            .units
+            .iter()
+            .find(|u| u.entity_id == actual("e.cassini"))
+            .unwrap();
+        assert_eq!(cassini_unit.seen_in, vec![artifact["jia"].clone()]);
+        assert!(!cassini_unit.only_differs_by.is_empty(), "{cassini_unit:?}");
+        assert!(
+            yi.new_conventions.iter().any(|c| c.text.contains('1')),
+            "{yi:?}"
+        );
+        assert!(!yi.open_debts.is_empty());
+        assert!(material("jia").units.iter().all(|u| !u.label.is_empty()));
+
+        // 只读教程投影：由同一条真实路径（暂存 → 接受 → 地图投影）生成。
+        // MATHSCAPE_UPDATE_TUTORIAL_PROJECTION=1 时重写文件，否则逐字比对。
+        let graph = serde_json::to_value(
+            crate::DesktopService::open(&fx.root)
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .landscape_graph,
+        )
+        .unwrap();
+        let mut refs = serde_json::Map::new();
+        let mut payloads = serde_json::Map::new();
+        for change_set in objects["change_sets"].as_array().unwrap() {
+            for (local, fixture_id) in change_set["staged_ids"].as_object().unwrap() {
+                let id = ids[fixture_id.as_str().unwrap()].clone();
+                let object = semantic_payload(&fx, &id);
+                let proposed = change_set["proposed_objects"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|o| o["local_ref"] == local.as_str())
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let mut entry =
+                    json!({ "id": id, "kind": proposed["kind"], "payload": object["payload"] });
+                // 原文片段在地图里只存字节范围；教程卡片要显示原文，附上提案里的 quote。
+                if let Some(quote) = proposed["payload"]["quote"].as_str() {
+                    entry["quote"] = json!(quote);
+                }
+                payloads.insert(local.clone(), entry);
+                refs.insert(local.clone(), json!(id));
+            }
+        }
+        let projection = json!({
+            "schema": "mathscape.tutorial-projection.v1",
+            "label": "两本数学书（教程夹具）",
+            "note": "只读教程投影：由 objects.json 经真实的暂存、接受与地图投影生成（apps/mathscape-desktop 测试 emir_fixture_accepts_and_learning_view_marks_seen_material）。教程只读这个文件，不调用 propose_changes，不写任何工作区。",
+            "fixture_version": objects["fixture_version"],
+            "artifacts": artifact,
+            "refs": refs,
+            "objects": payloads,
+            "graph": graph,
+            "learning": serde_json::to_value(&view).unwrap(),
+            // 修订记录（v1 → v2）：教程第 8 镜讲“反馈给 agent → 提交 v2”。
+            "revisions": objects["revision_history"],
+        });
+        let text = serde_json::to_string_pretty(&projection).unwrap() + "\n";
+        let path = dir.join("tutorial-projection.json");
+        if std::env::var_os("MATHSCAPE_UPDATE_TUTORIAL_PROJECTION").is_some() {
+            std::fs::write(&path, &text).unwrap();
+        } else {
+            let current = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(
+                current == text,
+                "tutorial-projection.json 过期：用 MATHSCAPE_UPDATE_TUTORIAL_PROJECTION=1 重跑本测试"
+            );
+        }
     }
 }

@@ -37,9 +37,9 @@ use super::{GRAPH_GET, GRAPH_NEIGHBORHOOD, diagnostic, parse_args};
 use crate::McpWorkspace;
 use crate::investigation::{InvestigationMarks, investigation_landscape};
 
-const GET_DESCRIPTION: &str = "Resolve one id from the material landscape graph (artifacts, source units, source spans, ink snapshots, plus notes from the ink store) without expanding neighbors. Accepts any workspace.search hit id as-is (a snapshot_id is canonicalized to its snapshot artifact id; use canonical_id afterwards) and any graph id (source-span, source-relation, projection-relation, conversion run). Returns kind (artifact|source_span|source_unit|snapshot|note|relation|unsupported), entity_kind, label, lifecycle, parent_artifact_id and content_ref, plus edge_summary counts per relation and direction. No body text: when content_ref is not null, call material.read with content_ref.artifact_id and content_ref.locator unchanged (md_byte_range, or pdf_pages 1-based). Notes, snapshots and ink spans get content_ref.type=ink_page (tool ink.page_image, node_id, page_id, stroke_ids for spans): pass content_ref.node_id and page_id to ink.page_image. content_ref is null with a content_unavailable diagnostic for units without located spans (no_span_locator; do not guess byte ranges), unsupported media, and relations. A missing id is status not_found with node null; an existing id of an unsupported kind is status ok with kind unsupported. Read-only.";
+const GET_DESCRIPTION: &str = "Resolve one id from the material & semantic landscape graph (artifacts, source units, source spans, ink snapshots, notes, plus semantic_entity, alignment, debt and dialect_scope) without expanding neighbors. Accepts any workspace.search hit id as-is (a snapshot_id is canonicalized to its snapshot artifact id; use canonical_id afterwards) and any graph id (source-span, source-relation, semantic-entity, alignment, debt, dialect-scope, projection-relation, conversion run). Returns kind (artifact|source_span|source_unit|semantic_entity|debt|dialect_scope|snapshot|note|relation|unsupported), entity_kind, label, lifecycle, parent_artifact_id, content_ref, semantic payload details (`semantic` for semantic_entity/debt/dialect_scope/alignment), plus edge_summary counts per relation and direction. No source body text: when content_ref is not null, call material.read with content_ref.artifact_id and content_ref.locator unchanged (md_byte_range, or pdf_pages 1-based). Notes, snapshots and ink spans get content_ref.type=ink_page (tool ink.page_image, node_id, page_id, stroke_ids for spans): pass content_ref.node_id and page_id to ink.page_image. content_ref is null with a content_unavailable diagnostic for units without located spans (no_span_locator; do not guess byte ranges), semantic objects (semantic_node), unsupported media, and relations. A missing id is status not_found with node null; an existing id of an unsupported kind is status ok with kind unsupported. Read-only.";
 
-const NEIGHBORHOOD_DESCRIPTION: &str = "Bounded BFS from one node_id or 1-8 seed_ids over the material landscape graph (a read-time projection with synthetic bridges: contains_span unit->span, has_part parent->child, located_in span->artifact, conversion pdf->markdown, has_snapshot note->ink snapshot; note_link note->linked source unit/span/artifact, Markdown range or note, with attrs role, is_primary, target_status and locator for Markdown ranges). Relations are returned in edges[] (each counts toward max_edges, keeps every endpoint with role and side; from/to are null for multi-endpoint relations, so read endpoints) and do not consume depth: unit->span->artifact is 2 hops. depth defaults to 1 (max 3; 0 = seeds only). direction defaults to both; out follows from-side to to-side (unit out -> spans -> artifact), in goes the other way (markdown artifact in -> spans -> units); undirected roles such as evidence are only reached with both. edge_types defaults to the structural five [conversion, located_in, contains_span, has_part, has_snapshot]; note_link and semantic relations (states, proves, poses, hints, solves, explains, applies_method, cites) are opt-in and must be listed together with any structural ones you still want; [] walks no edges. Prefer depth <= 2 and an explicit max_nodes when adding cites. node_kinds (artifact|source_span|source_unit|snapshot|note) filters the output only; traversal still passes through filtered nodes. max_nodes defaults to 40 (max 100), max_edges to 80 (max 200); values over the hard cap are invalid_arg. Over a cap the result is status truncated with truncated true, shallower layers first, and never a dangling edge. Retired (superseded|rejected|deprecated) and trashed ink nodes are hidden unless include_trashed; include_virtual must be false. Nodes carry depth, via_edge, parent_artifact_id and content_ref for material.read, never body text. Any missing seed makes the whole result not_found. Read-only.";
+const NEIGHBORHOOD_DESCRIPTION: &str = "Bounded BFS from one node_id or 1-8 seed_ids over the material & semantic landscape graph (a read-time projection with synthetic bridges: contains_span unit->span, has_part parent->child, located_in span->artifact, conversion pdf->markdown, has_snapshot note->ink snapshot, in_theory entity->theory, debt_on debt->holder, scope_of dialect_scope->anchor_unit; note_link note->linked source unit/span/artifact, Markdown range or note; aligns unit->semantic_entity). Relations are returned in edges[] (each counts toward max_edges, keeps every endpoint with role and side; from/to are null for multi-endpoint relations, so read endpoints) and do not consume depth: unit->span->artifact is 2 hops. depth defaults to 1 (max 3; 0 = seeds only). direction defaults to both; out follows from-side to to-side (unit out -> spans -> artifact), in goes the other way (markdown artifact in -> spans -> units); undirected roles such as evidence are only reached with both. edge_types defaults to the structural five [conversion, located_in, contains_span, has_part, has_snapshot]; note_link, source relations (states, proves, poses, hints, solves, explains, applies_method, cites) and semantic relations (aligns, in_theory, debt_on, scope_of) are opt-in and must be listed together with any structural ones you still want; [] walks no edges. Prefer depth <= 2 and an explicit max_nodes when adding cites. node_kinds (artifact|source_span|source_unit|semantic_entity|debt|dialect_scope|snapshot|note) filters the output only; traversal still passes through filtered nodes. max_nodes defaults to 40 (max 100), max_edges to 80 (max 200); values over the hard cap are invalid_arg. Over a cap the result is status truncated with truncated true, shallower layers first, and never a dangling edge. Retired (superseded|rejected|deprecated) and trashed ink nodes are hidden unless include_trashed; include_virtual must be false. Nodes carry depth, via_edge, parent_artifact_id and content_ref for material.read, never body text. Any missing seed makes the whole result not_found. Read-only.";
 
 const SNAPSHOT_MEDIA_TYPE: &str = "application/vnd.mathscape.ink-snapshot+json";
 const SYNTHETIC_PREFIX: &str = "mathscape:projection-relation/";
@@ -60,7 +60,7 @@ const ARTIFACT_HEAD_BYTES: u64 = 32 * 1024;
 const MAX_DANGLING_LISTED: usize = 20;
 
 /// Closed relation enum (contract §7), in contract order.
-pub const RELATION_TYPES: [&str; 14] = [
+pub const RELATION_TYPES: [&str; 18] = [
     "conversion",
     "located_in",
     "contains_span",
@@ -75,6 +75,10 @@ pub const RELATION_TYPES: [&str; 14] = [
     "explains",
     "applies_method",
     "cites",
+    "aligns",
+    "in_theory",
+    "debt_on",
+    "scope_of",
 ];
 pub const DEFAULT_EDGE_TYPES: [&str; 5] = [
     "conversion",
@@ -87,7 +91,16 @@ pub const DEFAULT_EDGE_TYPES: [&str; 5] = [
 const INK_PAGE_TOOL: &str = "ink.page_image";
 /// Most stroke ids carried by one `ink_page` content ref.
 const MAX_CONTENT_STROKE_IDS: usize = 50;
-const NODE_KINDS: [&str; 5] = ["artifact", "source_span", "source_unit", "snapshot", "note"];
+const NODE_KINDS: [&str; 8] = [
+    "artifact",
+    "source_span",
+    "source_unit",
+    "semantic_entity",
+    "debt",
+    "dialect_scope",
+    "snapshot",
+    "note",
+];
 const DIRECTIONS: [&str; 3] = ["both", "in", "out"];
 
 // ---------------------------------------------------------------------------
@@ -538,7 +551,12 @@ fn load(workspace: &McpWorkspace, investigation: Option<&str>) -> Result<Graph, 
         .map(|object| (object.stable_id.to_string(), object.clone()))
         .collect::<HashMap<_, _>>();
     let mut relation_revisions = HashMap::new();
-    for object in landscape.sources().objects.iter().filter(|o| o.relation) {
+    for object in landscape
+        .sources()
+        .objects
+        .iter()
+        .filter(|o| o.relation || o.kind == EntityKind::Alignment)
+    {
         relation_revisions.insert(object.stable_id.to_string(), object.revision_id.to_string());
     }
     for conversion in landscape.artifacts().conversions() {
@@ -734,6 +752,9 @@ impl Graph {
             EntityKind::SourceArtifact => "artifact",
             EntityKind::SourceSpan => "source_span",
             EntityKind::SourceSemanticUnit => "source_unit",
+            EntityKind::SemanticEntity => "semantic_entity",
+            EntityKind::Debt => "debt",
+            EntityKind::DialectScope => "dialect_scope",
             _ => "unsupported",
         }
     }
@@ -1039,6 +1060,19 @@ impl Graph {
                             Err(r) => reason = Some(r),
                         }
                     }
+                    "semantic_entity" | "debt" | "dialect_scope" => {
+                        node.insert("lifecycle".into(), json!(projected.lifecycle_status()));
+                        if let Some(object) = self.objects.get(canonical) {
+                            let inner = inner_payload(&object.payload);
+                            if kind == "semantic_entity"
+                                && let Some(semantic_kind) = str_at(inner, "/semantic_kind")
+                            {
+                                node.insert("semantic_kind".into(), json!(semantic_kind));
+                            }
+                            node.insert("semantic".into(), inner.clone());
+                        }
+                        reason = Some("semantic_node");
+                    }
                     _ => {
                         node.insert("lifecycle".into(), json!(projected.lifecycle_status()));
                     }
@@ -1079,21 +1113,57 @@ impl Graph {
                     json!(canonical.starts_with(SYNTHETIC_PREFIX)),
                 );
                 node.insert("endpoints".into(), self.endpoints_json(index));
+                if relation.kind() == EntityKind::Alignment
+                    && let Some(object) = self.objects.get(canonical)
+                {
+                    node.insert("semantic".into(), inner_payload(&object.payload).clone());
+                }
                 reason = Some("relation_node");
             }
             Target::Object => {
                 let object = &self.objects[canonical];
                 let payload = inner_payload(&object.payload);
-                let label = str_at(payload, "/display_title")
-                    .or_else(|| str_at(payload, "/local_title"))
-                    .or_else(|| str_at(payload, "/title"))
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| id_tail(canonical));
-                node.insert("kind".into(), json!("unsupported"));
-                node.insert("entity_kind".into(), json!(object.kind));
-                node.insert("label".into(), json!(label));
-                node.insert("lifecycle".into(), json!(object.lifecycle));
-                node.insert("revision".into(), json!(object.revision_id.to_string()));
+                if object.kind == EntityKind::Alignment {
+                    let label = mathscape_query::semantic_graph::alignment_plain_label(payload);
+                    node.insert("kind".into(), json!("relation"));
+                    node.insert("entity_kind".into(), json!(object.kind));
+                    node.insert("label".into(), json!(label));
+                    node.insert("lifecycle".into(), json!(object.lifecycle));
+                    node.insert("revision".into(), json!(object.revision_id.to_string()));
+                    node.insert("relation".into(), json!("aligns"));
+                    node.insert("synthetic".into(), json!(false));
+                    let mut endpoints = Vec::new();
+                    if let Some(source) = str_at(payload, "/source") {
+                        endpoints.push(json!({
+                            "node_id": source,
+                            "role": "source",
+                            "side": "from",
+                            "ordinal": Value::Null,
+                        }));
+                    }
+                    if let Some(target) = str_at(payload, "/target") {
+                        endpoints.push(json!({
+                            "node_id": target,
+                            "role": "target",
+                            "side": "to",
+                            "ordinal": Value::Null,
+                        }));
+                    }
+                    node.insert("endpoints".into(), Value::Array(endpoints));
+                    node.insert("semantic".into(), payload.clone());
+                    reason = Some("relation_node");
+                } else {
+                    let label = str_at(payload, "/display_title")
+                        .or_else(|| str_at(payload, "/local_title"))
+                        .or_else(|| str_at(payload, "/title"))
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| id_tail(canonical));
+                    node.insert("kind".into(), json!("unsupported"));
+                    node.insert("entity_kind".into(), json!(object.kind));
+                    node.insert("label".into(), json!(label));
+                    node.insert("lifecycle".into(), json!(object.lifecycle));
+                    node.insert("revision".into(), json!(object.revision_id.to_string()));
+                }
             }
         }
         node.insert("parent_artifact_id".into(), parent);
@@ -1280,6 +1350,9 @@ fn content_unavailable(reason: &str, node_ids: Vec<String>) -> Value {
         }
         "unsupported_media_type" => "material.read does not support this media type",
         "canonical_head_missing" => "canonical markdown has no head snapshot to read",
+        "semantic_node" => {
+            "semantic objects do not own a single source file; inspect `semantic` and any `evidence_spans` or aligned source units"
+        }
         _ => "relations have no readable content; inspect their endpoints",
     };
     json!({

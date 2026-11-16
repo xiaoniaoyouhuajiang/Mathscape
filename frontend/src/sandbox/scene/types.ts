@@ -164,17 +164,42 @@ export interface ParsingAct {
 // ---------------------------------------------------------------------------
 // Fourth slice: proposal / Lean / locate tools
 
-/** A proposed source unit (or an orphan span) of a `propose_changes` call. */
+/** A proposal item kind: source evidence, source unit or shared semantic object. */
+export type ProposeItemKind = "unit" | "span" | "semantic";
+
+/** Visual distinction used by proposal ghosts / highlights. */
+export type ProposeVisualKind =
+  | "source_unit"
+  | "source_span"
+  | "theory"
+  | "concept"
+  | "declaration"
+  | "problem_schema"
+  | "debt"
+  | "dialect_scope";
+
+export type ProposeRelationKind =
+  | "source_relation"
+  | "alignment"
+  | "in_theory"
+  | "uses_entity"
+  | "debt_on"
+  | "scope_of";
+
+/** A proposed source / semantic item. */
 export interface ProposeItem {
   localRef: string;
-  kind: "unit" | "span";
-  /** `mathscape:source-unit/…` from `staged_ids` (absent while running / blocked). */
+  kind: ProposeItemKind;
+  /** Stable id when the staged object is already projected on the map. */
   stagedId?: string;
+  /** Display label for a ghost or HUD. */
   label: string;
-  /** Existing raw ids the ghost sits near (span artifacts, relation ends, edit target). */
+  /** Existing raw ids the ghost sits near. */
   anchors: string[];
-  /** Blocking diagnostics attributed to this item (own or its spans'). */
+  /** Blocking diagnostics attributed to this item. */
   blocked: ProposeBlock[];
+  /** Semantic kind / visual role for semantic items. */
+  visualKind?: ProposeVisualKind;
   /** Resolved (`resolveScene`): the real staged node on the map, if any. */
   node?: string;
   /** Resolved: map nodes of `anchors`. */
@@ -184,8 +209,9 @@ export interface ProposeItem {
 export interface ProposeRelation {
   localRef: string;
   stagedId?: string;
-  /** Relation kind (`proves`, `applies_method`, …) and its Chinese label. */
+  /** Relation kind (`proves`, `in_theory`, `debt_on`, …) and its label. */
   relation: string;
+  relationKind?: ProposeRelationKind;
   label: string;
   /** Endpoint: `{ local }` = an item of this proposal, `{ id }` = an existing object. */
   source: ProposeEnd;
@@ -193,7 +219,7 @@ export interface ProposeRelation {
   blocked: ProposeBlock[];
 }
 
-/** `node` = the existing object's map node (set by `resolveScene`). */
+/** Proposal endpoint: a local item or an existing map object. */
 export type ProposeEnd = { local: string } | { id: string; node?: string };
 
 export interface ProposeBlock {
@@ -201,12 +227,7 @@ export interface ProposeBlock {
   message: string;
 }
 
-/**
- * `propose_changes` on the main map: ghosts (or the real staged nodes) for
- * the proposed units, relations drawn one by one, blocked items flash red,
- * a superseded version's nodes fade. Counts come from `staged_ids` prefixes
- * (the review overview totals).
- */
+/** `propose_changes` on the main map. */
 export interface ProposeAct {
   kind: "propose";
   phase: "running" | "staged" | "blocked" | "error";
@@ -215,8 +236,8 @@ export interface ProposeAct {
   items: ProposeItem[];
   relations: ProposeRelation[];
   /** `staged_ids` split by id prefix. */
-  counts: { units: number; relations: number; spans: number };
-  /** Every staged id (units, relations, spans). */
+  counts: { units: number; relations: number; spans: number; semantic: number };
+  /** Every staged id (units, relations, spans and semantic objects). */
   stagedIds: string[];
   /** All blocking diagnostics (incl. ones without a local ref). */
   blocks: (ProposeBlock & { localRef?: string })[];

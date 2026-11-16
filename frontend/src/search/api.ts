@@ -2,7 +2,14 @@ import { safeInvoke } from "../core/ipc";
 
 /** Mirrors `mathscape_query::search` (N3d). Kinds and targets are open-ended:
  * new providers add values without changing this contract's shape. */
-export type SearchKind = "note" | "source_unit" | "material" | "snapshot" | (string & {});
+export type SearchKind =
+  | "note"
+  | "source_unit"
+  | "theory"
+  | "semantic_entity"
+  | "material"
+  | "snapshot"
+  | (string & {});
 
 export type SearchTarget =
   | { kind: "map_node"; node_id: string }

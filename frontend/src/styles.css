@@ -597,6 +597,8 @@ code {
 .preset-group { display: flex; gap: 4px; }
 .preset-button { background: #20353e; color: #e9edf2; border: 1px solid #45606c; border-radius: 5px; padding: 5px 10px; font-size: 11px; cursor: pointer; }
 .preset-button.is-active { border-color: #8fc8b7; background: #31534e; color: #f3fffb; }
+.graph-relayout-button { background: #182830; color: #c7dde0; border: 1px solid #3d5662; border-radius: 5px; padding: 4px 9px; font-size: 11px; cursor: pointer; }
+.graph-relayout-button:hover { border-color: #77b5a8; color: #f3fffb; }
 .filter-group { display: flex; align-items: center; gap: 8px; }
 .filter-divider { color: #3a4f5c; font-size: 14px; user-select: none; }
 .source-preview { max-height: 260px; overflow: auto; padding: 10px; border: 1px solid #294047; border-radius: 6px; color: #25303c; background: #f7f8fa; }
@@ -1769,4 +1771,48 @@ code {
 @keyframes scene-hud-in {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: none; }
+}
+
+/* ------------------------------------------------------------ 顶栏布局
+ * 左：品牌 + 沙箱横幅（副本 id 截断，悬停看全文）；中：视图切换（分段按钮组，
+ * 窄窗口收进「视图」下拉）；右：状态、搜索、设置 / 帮助（图标按钮）、导入 PDF。
+ * 所有按钮文字单行，不换行。 */
+.topbar { gap: 16px; min-width: 0; }
+.topbar button { white-space: nowrap; }
+.brand-block { flex: 0 0 auto; }
+.brand, .tagline { white-space: nowrap; }
+.topbar .sandbox-banner { flex: 0 1 auto; max-width: 380px; margin-left: 0; }
+.topbar .sandbox-banner .sandbox-btn { flex: 0 0 auto; white-space: nowrap; }
+.topbar .sandbox-banner-tag { flex: 0 0 auto; }
+.topbar-center { position: relative; display: flex; flex: 1 1 auto; justify-content: center; min-width: 0; }
+.view-switch { display: inline-flex; padding: 3px; border: 1px solid #34434e; border-radius: 10px; background: #111b23; }
+.view-switch-button { min-height: 30px; padding: 0 14px; border: 0; border-radius: 7px; color: #a9bcc2; background: transparent; cursor: pointer; font-size: 13px; }
+.view-switch-button + .view-switch-button { margin-left: 2px; }
+.view-switch-button:hover:not(:disabled) { color: #e4f2ee; background: #203a42; }
+.view-switch-button:focus-visible { outline: 2px solid #78aa9e; outline-offset: -2px; }
+.view-switch-button[aria-pressed="true"] { color: #e9f8f4; background: #255e56; }
+.view-menu-button { display: none; min-height: 34px; padding: 0 12px; border: 1px solid #405563; border-radius: 8px; color: #d6e9e4; background: #182932; cursor: pointer; }
+.topbar-actions { flex: 0 0 auto; gap: 10px; }
+.service-state { white-space: nowrap; }
+.workspace-search-button { display: inline-flex; align-items: center; gap: 6px; }
+.topbar-icon { width: 14px; height: 14px; flex: 0 0 auto; }
+.topbar .icon-button { display: inline-grid; place-items: center; width: 34px; min-width: 34px; height: 34px; min-height: 34px; padding: 0; gap: 0; border: 1px solid #34434e; border-radius: 9px; color: #a9b5be; background: #111b23; cursor: pointer; font-size: 15px; line-height: 1; }
+.topbar .icon-button:hover { border-color: #54726f; color: #d6e3e0; }
+.topbar #import-pdf { white-space: nowrap; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+@media (max-width: 1180px) {
+  .tagline { display: none; }
+  .view-menu-button { display: inline-flex; align-items: center; gap: 4px; }
+  .view-switch { display: none; }
+  .topbar-center.is-open .view-switch {
+    position: absolute; top: calc(100% + 6px); left: 50%; z-index: 40; transform: translateX(-50%);
+    display: grid; min-width: 140px; box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  }
+  .topbar-center.is-open .view-switch-button { text-align: left; margin-left: 0; }
+  .topbar:has(.topbar-center.is-open) { position: relative; z-index: 30; }
+}
+
+@media (max-width: 900px) {
+  .service-state { max-width: 18px; overflow: hidden; color: transparent; }
 }

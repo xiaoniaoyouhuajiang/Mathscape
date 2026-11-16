@@ -35,7 +35,7 @@ fn write_rank(final_map: &BTreeMap<String, MapEditObject>, o: &MapEditObject) ->
             (1, depth)
         }
         "SourceUnitRelation" => (2, 0),
-        _ => (3, 0),
+        _ => crate::semantic_plan::write_rank(final_map, o),
     }
 }
 /// Order in which [`plan_map_change`] applies one request's operations.
@@ -190,6 +190,7 @@ fn final_graph_diagnostics(
     retired: &BTreeSet<String>,
 ) -> Vec<ImpactDiagnostic> {
     let mut diagnostics = crate::source_integrity::validate_live_references(final_map);
+    diagnostics.extend(crate::semantic_plan::graph_diagnostics(final_map));
     for o in final_map.values().filter(|o| active(o)) {
         if o.kind == "SourceSemanticUnit" {
             let p = body(o);
@@ -404,6 +405,25 @@ fn plan(
             diagnostics.push(error(id, "existing_target", "创建目标已存在"));
             continue;
         }
+        if !existing_active_span {
+            let mut shell = current.cloned().unwrap_or(MapEditObject {
+                object_id: id.into(),
+                revision: String::new(),
+                kind: String::new(),
+                lifecycle: "active".into(),
+                payload: Value::Null,
+                endpoints: vec![],
+            });
+            if let Some(result) = crate::semantic_plan::apply(op, &mut shell, actor) {
+                match result {
+                    Ok(()) => {
+                        final_map.insert(id.into(), shell);
+                    }
+                    Err(diagnostic) => diagnostics.push(diagnostic),
+                }
+                continue;
+            }
+        }
         let result = (|| -> Result<MapEditObject, String> {
             if existing_active_span {
                 return Ok(current.cloned().expect("checked above"));
@@ -546,11 +566,13 @@ fn plan(
                     if !matches!(
                         out.kind.as_str(),
                         "SourceSemanticUnit" | "SourceUnitRelation" | "SourceSpan"
-                    ) {
-                        return Err("只允许退役来源单元、关系和原文证据".into());
+                    ) && !crate::semantic_plan::is_semantic_kind(&out.kind)
+                    {
+                        return Err("只允许退役来源单元、关系、原文证据和语义层对象".into());
                     }
                     out.lifecycle = "deprecated".into();
                 }
+                _ => unreachable!("semantic operations are planned by semantic_plan"),
             }
             Ok(out)
         })();
@@ -578,6 +600,9 @@ fn plan(
             o.lifecycle = "deprecated".into();
         }
     }
+    // Debts attached to a retired alignment or shared object become
+    // obsolete (system transition) and retire with it.
+    crate::semantic_plan::obsolete_orphaned_debts(&mut final_map);
     // Check final graph, including dependent objects not explicitly edited.
     diagnostics.extend(final_graph_diagnostics(&final_map, &retired));
     let mut operations = vec![];
@@ -640,7 +665,8 @@ fn plan(
         if !matches!(
             o.kind.as_str(),
             "SourceSemanticUnit" | "SourceUnitRelation" | "SourceSpan"
-        ) {
+        ) && !crate::semantic_plan::is_semantic_kind(&o.kind)
+        {
             continue;
         }
         let make = (|| -> Result<MapOperation<MapEditPayload>, DomainError> {
@@ -650,7 +676,11 @@ fn plan(
                 stable.clone(),
                 RevisionId::parse(&o.revision)?,
                 payload.entity_kind(),
-                SchemaVersion::parse("mathscape-source-1")?,
+                SchemaVersion::parse(if crate::semantic_plan::is_semantic_kind(&o.kind) {
+                    SEMANTIC_SCHEMA_VERSION
+                } else {
+                    "mathscape-source-1"
+                })?,
                 if active(o) {
                     LifecycleStatus::Active
                 } else {
@@ -896,7 +926,13 @@ pub fn get_edit_context(snapshot: &MapEditSnapshot, id: &str) -> Result<EditCont
         can_retire: active(o)
             && matches!(
                 o.kind.as_str(),
-                "SourceSemanticUnit" | "SourceUnitRelation" | "SourceSpan"
+                "SourceSemanticUnit"
+                    | "SourceUnitRelation"
+                    | "SourceSpan"
+                    | "SemanticEntity"
+                    | "Alignment"
+                    | "Debt"
+                    | "DialectScope"
             ),
     })
 }

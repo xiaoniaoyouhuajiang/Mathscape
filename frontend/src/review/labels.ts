@@ -10,6 +10,8 @@ export const workflowStatusLabel: (value: WorkflowStatus | string) => string = l
 export const unitKindLabel = lookup({
   section: "章节", definition: "定义", statement: "命题", proof: "证明", problem: "习题", hint: "提示",
   solution: "解答", example: "例子", remark: "注记", method: "方法", notation: "记号", narrative: "叙述",
+  concept: "共享概念", declaration: "精确说法", theory: "理论", problem_schema: "题型",
+  alignment: "对齐线", debt: "一笔账", dialect_scope: "约定卡",
 });
 
 export const completenessLabel = lookup({
@@ -27,6 +29,10 @@ export const referenceStatusLabel = lookup({
 
 export const relationLabel = lookup({
   proves: "证明", solves: "解答", hints: "提示", explains: "解释", cites: "引用", applies_method: "应用方法",
+  expresses: "说的就是它", specializes: "是特例", generalizes: "是推广", instance_of: "是实例",
+  representation_of: "换一种表示", logically_equivalent: "逻辑等价", definitionally_equivalent: "定义等价",
+  exact_realization: "精确实现", notation_for: "是记号", overlaps_with: "部分重合", incompatible_with: "对不上",
+  in_theory: "属于理论", debt_on: "挂账", scope_of: "约定适用于", uses_entity: "引用对象",
 });
 
 export const issueKindLabel = lookup({
@@ -43,4 +49,5 @@ export const acceptanceLabel = lookup({
 export const anchorPurposeLabel = lookup({
   unit: "单元原文", source_title: "原文标题", source_label: "原文标签", reference: "引用原文",
   relation_evidence: "关系证据", diagnostic_evidence: "诊断证据", selection: "原始选区",
+  semantic_evidence: "语义证据",
 });

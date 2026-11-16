@@ -1,5 +1,4 @@
 import cytoscape, {
-  type CollectionReturnValue,
   type Core,
   type ElementDefinition,
   type StylesheetJson,
@@ -13,7 +12,17 @@ import {
   type IncidenceNode,
 } from "./projection";
 import { FOCUS_CONTRACTION_KIND } from "./focus";
+import { computeLandscapeLayout, type MapPoint } from "./layout";
 import { EDGE_TYPES, NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
+import {
+  bindLabelHover,
+  LABEL_HOVER,
+  LABEL_RECESS,
+  LABEL_HOVER_STYLE,
+  LABEL_RECESS_STYLE,
+  type LabelHoverOptions,
+} from "./label-hover";
+import { graphLabelText, texToPlain } from "./tex-plain";
 
 export type RenderMode = "semantic" | "hyperedge";
 
@@ -87,7 +96,24 @@ export function toCytoscapeElements(
     }));
   }
 
-  return [...nodes, ...edges];
+  return [...nodes, ...edges].map(plainLabels);
+}
+
+/**
+ * 画布只能画纯文字：标签里的 TeX 换成可读的 Unicode（`$k\ge 4$` → `k ≥ 4`），
+ * 在公式中间截断的标签先从摘要找回原文再截断。没有 `$` 的 `f_k = F_k` 也会转成下标。
+ * 节点同时存下全文和短名，悬停时展开全文。
+ */
+function plainLabels(element: ElementDefinition): ElementDefinition {
+  const label = element.data.label;
+  if (typeof label !== "string") return element;
+  const summary = typeof element.data.summary === "string" ? element.data.summary : null;
+  if (element.group === "nodes") {
+    const full = graphLabelText(label, summary, Number.POSITIVE_INFINITY);
+    const compact = graphLabelText(label, summary);
+    return { ...element, data: { ...element.data, label: compact, fullLabel: full, compactLabel: compact } };
+  }
+  return { ...element, data: { ...element.data, label: texToPlain(label) } };
 }
 
 // ---------------------------------------------------------------------------
@@ -165,21 +191,33 @@ function buildSemanticEdges(
 
     if (endpoints.length < 2) continue;
 
-    const sources = endpoints.filter(
+    // Deduplicate identical endpoints (e.g. a folded canonical markdown node
+    // referenced by multiple output spokes of one conversion run).
+    const deduped: typeof endpoints = [];
+    const seenEndpointKeys = new Set<string>();
+    for (const ep of endpoints) {
+      const key = `${ep.entity}:${ep.direction}:${ep.evidence ? "1" : "0"}`;
+      if (seenEndpointKeys.has(key)) continue;
+      seenEndpointKeys.add(key);
+      deduped.push(ep);
+    }
+    if (deduped.length < 2) continue;
+
+    const sources = deduped.filter(
       (e) => e.direction === "into_relation" && !e.evidence,
     );
-    const targets = endpoints.filter(
+    const targets = deduped.filter(
       (e) => e.direction === "out_of_relation" && !e.evidence,
     );
-    const evidenceEndpoints = endpoints.filter((e) => e.evidence);
-    const regularEndpoints = endpoints.filter((e) => !e.evidence);
+    const evidenceEndpoints = deduped.filter((e) => e.evidence);
+    const regularEndpoints = deduped.filter((e) => !e.evidence);
 
     if (sources.length === 1 && targets.length === 1 && regularEndpoints.length === 2) {
       // Keep the mathematical source → target backbone direct even when the
       // relation has one or more evidence spans.
       result.push({
         group: "edges",
-        classes: `${edgeClasses(true, true)}${contractionClass(relationDomainKind)}${retiredClass(relationLifecycle)}`,
+        classes: `${edgeClasses(true, true)}${contractionClass(relationDomainKind)}${semanticLayerClass(relationDomainKind)}${retiredClass(relationLifecycle)}`,
         data: {
           id: `sem~${relationDomainId}`,
           source: sources[0].entity,
@@ -218,11 +256,11 @@ function buildSemanticEdges(
       continue;
     }
 
-    if (endpoints.length === 2) {
+    if (deduped.length === 2) {
       // Binary relation without evidence: keep explicit direction, or fall
       // back to an undirected edge when the endpoint roles are ambiguous.
-      const binarySources = endpoints.filter((e) => e.direction === "into_relation");
-      const binaryTargets = endpoints.filter((e) => e.direction === "out_of_relation");
+      const binarySources = deduped.filter((e) => e.direction === "into_relation");
+      const binaryTargets = deduped.filter((e) => e.direction === "out_of_relation");
 
       let edgeSource: string;
       let edgeTarget: string;
@@ -234,19 +272,19 @@ function buildSemanticEdges(
         directed = true;
       } else if (binarySources.length === 0 && binaryTargets.length === 0) {
         // Both undirected.
-        edgeSource = endpoints[0].entity;
-        edgeTarget = endpoints[1].entity;
+        edgeSource = deduped[0].entity;
+        edgeTarget = deduped[1].entity;
         directed = false;
       } else {
         // Mixed or ambiguous directions: default to undirected to avoid fabricating arrows.
-        edgeSource = endpoints[0].entity;
-        edgeTarget = endpoints[1].entity;
+        edgeSource = deduped[0].entity;
+        edgeTarget = deduped[1].entity;
         directed = false;
       }
 
       result.push({
         group: "edges",
-        classes: `${edgeClasses(directed, true)}${retiredClass(relationLifecycle)}`,
+        classes: `${edgeClasses(directed, true)}${semanticLayerClass(relationDomainKind)}${retiredClass(relationLifecycle)}`,
         data: {
           id: `sem~${relationDomainId}`,
           source: edgeSource,
@@ -274,8 +312,8 @@ function buildSemanticEdges(
         },
       });
 
-      for (let i = 0; i < endpoints.length; i++) {
-        const ep = endpoints[i];
+      for (let i = 0; i < deduped.length; i++) {
+        const ep = deduped[i];
         const isInto = ep.direction === "into_relation";
         result.push({
           group: "edges",
@@ -330,6 +368,21 @@ function addEvidenceEdge(
 
 function contractionClass(domainKind: string | null): string {
   return domainKind === FOCUS_CONTRACTION_KIND ? " contracted-edge" : "";
+}
+
+/** 语义层的连线样式：对齐线、挂账、理论 / 约定卡连接。 */
+export function semanticLayerClass(domainKind: string | null): string {
+  switch (domainKind) {
+    case "Alignment":
+      return " alignment-edge";
+    case "Debt":
+      return " debt-edge";
+    case "SemanticEntity":
+    case "DialectScope":
+      return " semantic-link-edge";
+    default:
+      return "";
+  }
 }
 
 function retiredLifecycle(lifecycle: string | null | undefined): boolean {
@@ -423,7 +476,12 @@ const styles: StylesheetJson = [
       "target-arrow-shape": "triangle",
       "font-size": "9px",
       color: "#9aa9b4",
-      "text-rotation": "autorotate",
+      // 连线上的字水平放、垫深色圆角底：不跟着线转，压在线上和交叉处也读得清。
+      "text-rotation": "none",
+      "text-background-color": "#0c131a",
+      "text-background-opacity": 0.88,
+      "text-background-shape": "roundrectangle",
+      "text-background-padding": "2px",
     },
   },
   {
@@ -461,6 +519,35 @@ const styles: StylesheetJson = [
     style: {
       "target-arrow-shape": "none",
       "line-style": "dashed",
+    },
+  },
+  {
+    selector: "edge.alignment-edge",
+    style: {
+      width: 2.4,
+      "line-color": EDGE_TYPES.alignment.color,
+      "target-arrow-color": EDGE_TYPES.alignment.color,
+      color: "#eadc9a",
+    },
+  },
+  {
+    selector: "edge.debt-edge",
+    style: {
+      width: 1.4,
+      "line-style": "dashed",
+      "line-color": EDGE_TYPES.debt.color,
+      "target-arrow-shape": "none",
+      color: "#e9cc7f",
+      "font-size": "8px",
+    },
+  },
+  {
+    selector: "edge.semantic-link-edge",
+    style: {
+      width: 1.2,
+      "line-style": "dotted",
+      "target-arrow-shape": "none",
+      "font-size": "8px",
     },
   },
   // Declared last so a contracted path keeps its own weight and arrow colour
@@ -599,6 +686,20 @@ const styles: StylesheetJson = [
   },
   { selector: "node.scene-ghost-span", style: { width: "16px", height: "12px", "font-size": "9px" } },
   {
+    selector: "node.scene-ghost-semantic",
+    style: { "background-opacity": 0.7, "border-width": 2.2, "font-size": "10px", opacity: 0.95 },
+  },
+  { selector: "node.scene-ghost-theory", style: { shape: "hexagon", "background-color": "#284765", "border-color": "#8ed8ff", color: "#d9f3ff" } },
+  { selector: "node.scene-ghost-concept", style: { shape: "ellipse", "background-color": "#23554f", "border-color": "#70d9c5", color: "#d8fff7" } },
+  { selector: "node.scene-ghost-declaration", style: { shape: "round-rectangle", "background-color": "#49346b", "border-color": "#c69cff", color: "#f1e4ff" } },
+  { selector: "node.scene-ghost-problem-schema", style: { shape: "diamond", "background-color": "#63421f", "border-color": "#ffc16b", color: "#fff0cf" } },
+  { selector: "node.scene-ghost-debt", style: { shape: "diamond", "background-color": "#554318", "border-color": "#f0ce70", color: "#fff0b0" } },
+  { selector: "node.scene-ghost-dialect-scope", style: { shape: "round-rectangle", "background-color": "#214c49", "border-color": "#77d5b5", color: "#d9fff0" } },
+  { selector: "edge.scene-ghost-alignment-edge", style: { "line-color": "#8fb6ff", "target-arrow-color": "#8fb6ff", color: "#dbe6ff" } },
+  { selector: "edge.scene-ghost-theory-edge, edge.scene-ghost-uses-edge", style: { "line-color": "#8ed8ff", "target-arrow-color": "#8ed8ff", color: "#d9f3ff" } },
+  { selector: "edge.scene-ghost-debt-edge", style: { "line-color": "#f0ce70", "target-arrow-color": "#f0ce70", color: "#fff0b0" } },
+  { selector: "edge.scene-ghost-scope-edge", style: { "line-color": "#77d5b5", "target-arrow-color": "#77d5b5", color: "#d9fff0" } },
+  {
     selector: "edge.scene-ghost-edge",
     style: {
       label: "data(label)",
@@ -621,6 +722,20 @@ const styles: StylesheetJson = [
     style: { "overlay-color": "#ffd84a", "overlay-opacity": 0.3, "overlay-padding": 3 },
   },
   {
+    selector: "node.scene-propose-semantic-hit",
+    style: { "overlay-opacity": 0.34, "overlay-padding": 8 },
+  },
+  { selector: "node.scene-propose-theory-hit", style: { "overlay-color": "#8ed8ff" } },
+  { selector: "node.scene-propose-concept-hit", style: { "overlay-color": "#70d9c5" } },
+  { selector: "node.scene-propose-declaration-hit", style: { "overlay-color": "#c69cff" } },
+  { selector: "node.scene-propose-problem-schema-hit", style: { "overlay-color": "#ffc16b" } },
+  { selector: "node.scene-propose-debt-hit", style: { "overlay-color": "#f0ce70" } },
+  { selector: "node.scene-propose-dialect-scope-hit", style: { "overlay-color": "#77d5b5" } },
+  { selector: "edge.scene-propose-alignment-edge", style: { "overlay-color": "#8fb6ff", "overlay-opacity": 0.38, "overlay-padding": 4 } },
+  { selector: "edge.scene-propose-theory-edge, edge.scene-propose-uses-edge", style: { "overlay-color": "#8ed8ff", "overlay-opacity": 0.32, "overlay-padding": 4 } },
+  { selector: "edge.scene-propose-debt-edge", style: { "overlay-color": "#f0ce70", "overlay-opacity": 0.38, "overlay-padding": 4 } },
+  { selector: "edge.scene-propose-scope-edge", style: { "overlay-color": "#77d5b5", "overlay-opacity": 0.32, "overlay-padding": 4 } },
+  {
     selector: "node.scene-blocked",
     style: { "border-color": "#e0564a", "border-style": "solid", "border-width": 3, color: "#ffb4ab" },
   },
@@ -636,6 +751,31 @@ const styles: StylesheetJson = [
     selector: ".scene-retired",
     style: { opacity: 0.22, "transition-property": "opacity", "transition-duration": 400 },
   },
+
+  {
+    selector: `node.${LABEL_HOVER}`,
+    style: { ...LABEL_HOVER_STYLE },
+  },
+  {
+    selector: `edge.${LABEL_HOVER}`,
+    style: {
+      "text-background-color": "#0c131a",
+      "text-background-opacity": 0.94,
+      "text-background-shape": "roundrectangle",
+      "text-background-padding": "3px",
+      "text-border-color": "#6e5a2a",
+      "text-border-width": 1,
+      "text-border-opacity": 1,
+      "z-index": 1000,
+      "z-index-compare": "manual",
+      "z-compound-depth": "top",
+      opacity: 1,
+    },
+  },
+  {
+    selector: `.${LABEL_RECESS}`,
+    style: { ...LABEL_RECESS_STYLE },
+  },
 ];
 
 export const OUT_OF_FOCUS_CLASS = "is-out-of-focus";
@@ -648,38 +788,57 @@ export function mountCytoscapeGraph(
   container: HTMLElement,
   graph: IncidenceGraph,
   renderMode: RenderMode = "semantic",
+  options?: { labelHover?: LabelHoverOptions; positions?: ReadonlyMap<string, MapPoint> },
 ): Core {
+  const rect = container.getBoundingClientRect();
+  const positions =
+    options?.positions ??
+    computeLandscapeLayout(graph, { width: rect.width, height: rect.height });
+  const elements = toCytoscapeElements(graph, renderMode).map((el) => {
+    if (el.group !== "nodes") return el;
+    const pos = positions.get(String(el.data.id));
+    return pos ? { ...el, position: { x: pos.x, y: pos.y } } : el;
+  });
   const core = cytoscape({
     container,
-    elements: toCytoscapeElements(graph, renderMode),
+    elements,
     style: styles,
+    layout: { name: "preset", fit: false },
     minZoom: 0.08,
     maxZoom: 4,
   });
-  runLayout(core, core.elements(), true);
+  if (core.elements().nonempty() && core.width() > 0 && core.height() > 0) {
+    core.fit(undefined, 28);
+  }
+  bindLabelHover(core, options?.labelHover);
   return core;
 }
 
 /**
  * Brings an already-mounted instance in line with `graph` without tearing it
- * down, so nodes the user has already located on screen keep their position.
- *
- * Only newly added nodes are laid out: everything that survives the diff is
- * locked for the duration of the layout run, and the viewport is left alone
- * unless the element set was replaced wholesale (a render-mode switch, or the
- * first graph after an empty canvas).
+ * down, using deterministic `basePositions` so toggling filter checkboxes in
+ * any order places every node back at its exact settled coordinate.
  */
 export function syncCytoscapeGraph(
   core: Core,
   graph: IncidenceGraph,
   renderMode: RenderMode = "semantic",
+  options?: {
+    positions?: ReadonlyMap<string, MapPoint>;
+    fit?: boolean;
+    updateExistingPositions?: boolean;
+  },
 ): void {
+  const positions =
+    options?.positions ??
+    computeLandscapeLayout(graph, { width: core.width(), height: core.height() });
   const desired = new Map(
     toCytoscapeElements(graph, renderMode).map(
       (element) => [String(element.data.id), element] as const,
     ),
   );
 
+  const wasEmpty = core.nodes().empty();
   const staleIds: string[] = [];
   const additions: ElementDefinition[] = [];
   core.elements().forEach((element) => {
@@ -688,7 +847,8 @@ export function syncCytoscapeGraph(
   for (const [id, element] of desired) {
     const existing = core.getElementById(id);
     if (existing.empty()) {
-      additions.push(element);
+      const pos = element.group === "nodes" ? positions.get(id) : undefined;
+      additions.push(pos ? { ...element, position: { x: pos.x, y: pos.y } } : element);
       continue;
     }
     // Cytoscape cannot repoint an existing edge, so an edge that kept its ID
@@ -704,14 +864,22 @@ export function syncCytoscapeGraph(
     }
     existing.data(element.data);
     existing.classes(element.classes ?? "");
+    if (
+      existing.isNode() &&
+      (options?.updateExistingPositions || existing.data("elementKind") === "junction")
+    ) {
+      const pos = positions.get(id);
+      if (pos) existing.position({ x: pos.x, y: pos.y });
+    }
   }
 
-  const replacedWholesale =
-    core.nodes().empty() ||
+  const allPriorRemoved =
+    !wasEmpty &&
     staleIds.filter((id) => core.getElementById(id).isNode()).length ===
       core.nodes().length;
 
-  let added = core.collection();
+  const addedNodes = additions.filter((el) => el.group === "nodes");
+  const addedEdges = additions.filter((el) => el.group === "edges");
   core.batch(() => {
     core.remove(
       staleIds.reduce(
@@ -719,19 +887,15 @@ export function syncCytoscapeGraph(
         core.collection(),
       ),
     );
-    added = core.add(additions);
+    if (addedNodes.length > 0) core.add(addedNodes);
+    if (addedEdges.length > 0) core.add(addedEdges);
   });
 
-  const addedNodes = added.nodes();
-  if (addedNodes.empty()) return;
-  if (replacedWholesale) {
-    runLayout(core, core.elements(), true);
-    return;
+  const shouldFit =
+    options?.fit ?? ((wasEmpty || allPriorRemoved) && core.nodes().nonempty());
+  if (shouldFit && core.nodes().nonempty() && core.width() > 0 && core.height() > 0) {
+    core.fit(undefined, 28);
   }
-  const settled = core.nodes().difference(addedNodes);
-  settled.lock();
-  runLayout(core, core.elements(), false);
-  settled.unlock();
 }
 
 /**
@@ -768,18 +932,4 @@ export function applyFocusScope(core: Core, inScopeIds: ReadonlySet<string> | nu
       edge.toggleClass(OUT_OF_FOCUS_CLASS, !inScope);
     });
   });
-}
-
-function runLayout(core: Core, elements: CollectionReturnValue, fit: boolean): void {
-  if (elements.empty()) return;
-  elements
-    .layout({
-      name: "cose",
-      animate: false,
-      fit,
-      padding: 24,
-      randomize: false,
-    })
-    .run();
-  if (fit) core.fit(undefined, 24);
 }

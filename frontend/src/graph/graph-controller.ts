@@ -15,8 +15,14 @@ import {
 } from "./cytoscape";
 import { focusSubgraph, type FocusDepth, type FocusResult } from "./focus";
 import { applyInkOverlay, clearInkOverlay, INK_NOTE_NODE_CLASS, type InkOverlayResult } from "./ink-overlay";
+import {
+  collapseRedundantConversions,
+  isAuxiliaryArtifactNode,
+  resolveIncrementalPositions,
+  type MapPoint,
+} from "./layout";
 import type { InkLinkOverlay } from "../ink/links";
-import type { IncidenceGraph, IncidenceNode } from "./projection";
+import type { IncidenceEdge, IncidenceGraph, IncidenceNode } from "./projection";
 import { activityGraph } from "./lifecycle";
 import {
   EDGE_TYPES,
@@ -31,10 +37,30 @@ import {
 export type PresetName = "overview" | "material" | "source";
 
 export const PRESET_NODE_KINDS: Record<PresetName, ReadonlySet<string>> = {
-  overview: new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan"]),
+  overview: new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan", "SemanticEntity"]),
   material: new Set(["SourceArtifact"]),
-  source: new Set(["SourceArtifact", "SourceSemanticUnit"]),
+  source: new Set(["SourceArtifact", "SourceSemanticUnit", "SemanticEntity"]),
 };
+
+/** 「共享对象」开关同时控制语义层的约定卡、一笔账和它们的连线。 */
+export const SEMANTIC_NODE_KINDS: ReadonlySet<string> = new Set(["SemanticEntity", "DialectScope", "Debt"]);
+export const SEMANTIC_RELATION_KINDS: ReadonlySet<string> = new Set([
+  "Alignment",
+  "SemanticEntity",
+  "Debt",
+  "DialectScope",
+]);
+
+/** 语义层上线前保存的过滤设置：没有 SemanticEntity 时补上，保持原预设。 */
+function migrateSavedFilter(saved: Set<string>): Set<string> {
+  const legacy: string[][] = [
+    ["SourceArtifact", "SourceSemanticUnit", "SourceSpan"],
+    ["SourceArtifact", "SourceSemanticUnit"],
+  ];
+  const isLegacy = legacy.some((kinds) => kinds.length === saved.size && kinds.every((kind) => saved.has(kind)));
+  if (isLegacy) saved.add("SemanticEntity");
+  return saved;
+}
 
 export interface GraphControllerElements {
   graphContainer: HTMLElement;
@@ -78,6 +104,11 @@ export class GraphController {
   private showInkNotes = false;
   private inkOverlayResult: InkOverlayResult = { drawn: 0, hidden: 0 };
   private inkToggleLabel: HTMLElement | undefined;
+  /** Order-invariant base positions computed by deterministic `cose` on the full active landscape. */
+  private basePositions = new Map<string, MapPoint>();
+  /** User-dragged node positions preserved across filter toggles until "整理布局". */
+  private userPinnedPositions = new Map<string, MapPoint>();
+  private lastWorkspaceId: string | null = null;
 
   constructor(
     private readonly elements: GraphControllerElements,
@@ -155,7 +186,7 @@ export class GraphController {
       if (savedFilter !== null) {
         const parsed = JSON.parse(savedFilter) as string[];
         if (Array.isArray(parsed) && parsed.every((k: unknown) => typeof k === "string")) {
-          this.visibleNodeKinds = new Set(parsed);
+          this.visibleNodeKinds = migrateSavedFilter(new Set(parsed));
           const matchingPreset = (Object.keys(PRESET_NODE_KINDS) as PresetName[]).find((preset) =>
             this.setsEqual(PRESET_NODE_KINDS[preset], this.visibleNodeKinds),
           );
@@ -197,7 +228,15 @@ export class GraphController {
     this.inkToggleLabel = inkText;
     this.renderInkToggle();
     retiredLabel.after(inkLabel);
-    document.querySelectorAll<HTMLButtonElement>(".preset-button").forEach((button) => {
+
+    const relayoutBtn = document.createElement("button");
+    relayoutBtn.type = "button";
+    relayoutBtn.className = "graph-relayout-button";
+    relayoutBtn.textContent = "整理布局";
+    relayoutBtn.title = "重新计算有机星团布局并适配视野";
+    relayoutBtn.onclick = () => this.relayout();
+    inkLabel.after(relayoutBtn);
+    document.querySelectorAll<HTMLButtonElement>(".preset-button[data-preset]").forEach((button) => {
       button.onclick = () => {
         const preset = button.dataset.preset as PresetName;
         if (preset in PRESET_NODE_KINDS) {
@@ -261,18 +300,21 @@ export class GraphController {
   }
 
   private syncFilterFromCheckboxes(): void {
-    this.activePreset = "custom";
     this.visibleNodeKinds = new Set<string>();
     this.elements.nodeFilterGroup
       .querySelectorAll<HTMLInputElement>("input[data-node-kind]")
       .forEach((cb) => {
         if (cb.checked) this.visibleNodeKinds.add(cb.dataset.nodeKind!);
       });
+    const matchingPreset = (Object.keys(PRESET_NODE_KINDS) as PresetName[]).find((preset) =>
+      this.setsEqual(PRESET_NODE_KINDS[preset], this.visibleNodeKinds),
+    );
+    this.activePreset = matchingPreset ?? "custom";
     this.syncPresetHighlight();
   }
 
   private syncPresetHighlight(): void {
-    document.querySelectorAll<HTMLButtonElement>(".preset-button").forEach((button) => {
+    document.querySelectorAll<HTMLButtonElement>(".preset-button[data-preset]").forEach((button) => {
       const preset = button.dataset.preset as PresetName;
       const presetKinds = PRESET_NODE_KINDS[preset];
       const active = presetKinds !== undefined && this.setsEqual(presetKinds, this.visibleNodeKinds);
@@ -314,11 +356,35 @@ export class GraphController {
     this.inkToggleLabel.textContent = ` 我的手稿${hidden}`;
   }
 
-  renderCurrentGraph(snapshot = this.delegate.getSnapshot()): void {
+  /** Recompute a clean organic `cose` layout on the full map, clearing manual drag offsets. */
+  relayout(): void {
+    this.userPinnedPositions.clear();
+    this.basePositions.clear();
+    this.renderCurrentGraph(this.delegate.getSnapshot(), { forceRelayout: true, fit: true });
+  }
+
+  renderCurrentGraph(
+    snapshot = this.delegate.getSnapshot(),
+    options?: { forceRelayout?: boolean; fit?: boolean },
+  ): void {
     if (snapshot === undefined) return;
     this.delegate.onBeforeRenderGraph?.();
     hideContextMenu();
-    const landscape=activityGraph(snapshot.landscape_graph,this.showRetired);
+    if (this.lastWorkspaceId !== null && this.lastWorkspaceId !== snapshot.workspace_id) {
+      this.basePositions.clear();
+      this.userPinnedPositions.clear();
+    }
+    this.lastWorkspaceId = snapshot.workspace_id;
+
+    const landscape = activityGraph(snapshot.landscape_graph, this.showRetired);
+    const rect = this.elements.graphContainer.getBoundingClientRect();
+    const viewport = { width: rect.width, height: rect.height };
+    this.basePositions = resolveIncrementalPositions(
+      landscape,
+      options?.forceRelayout ? new Map() : this.basePositions,
+      this.userPinnedPositions,
+      viewport,
+    );
 
     if (
       this.focusRootId !== null &&
@@ -337,6 +403,7 @@ export class GraphController {
 
     const filtered = this.filterGraph(landscape);
     this.displayedGraph = focus === null ? filtered : this.mergeGraphs(filtered, focus.graph);
+    const positions = this.positionsWithSynthetics(this.displayedGraph, this.basePositions);
     const focusScope =
       focus === null ? null : new Set(focus.graph.nodes.map((node) => node.id));
 
@@ -367,10 +434,15 @@ export class GraphController {
         this.elements.graphContainer,
         this.displayedGraph,
         this.renderMode,
+        { positions },
       );
       this.bindGraphInteractions(this.graphCore);
     } else {
-      syncCytoscapeGraph(this.graphCore, this.displayedGraph, this.renderMode);
+      syncCytoscapeGraph(this.graphCore, this.displayedGraph, this.renderMode, {
+        positions,
+        fit: options?.fit,
+        updateExistingPositions: options?.forceRelayout,
+      });
     }
 
     this.focusScope = focusScope;
@@ -386,6 +458,33 @@ export class GraphController {
     this.delegate.onGraphRendered?.();
   }
 
+  private positionsWithSynthetics(
+    displayed: IncidenceGraph,
+    base: ReadonlyMap<string, MapPoint>,
+  ): Map<string, MapPoint> {
+    const out = new Map(base);
+    const byRel = new Map<string, IncidenceEdge[]>();
+    for (const edge of displayed.edges) {
+      const list = byRel.get(edge.relation_id) ?? [];
+      list.push(edge);
+      byRel.set(edge.relation_id, list);
+    }
+    for (const node of displayed.nodes) {
+      if (node.element_kind !== "relation" || out.has(node.id)) continue;
+      const relKey = node.domain_id ?? node.id;
+      const relEdges = byRel.get(relKey) ?? [];
+      const pts = relEdges
+        .map((e) => out.get(e.source === node.id ? e.target : e.source))
+        .filter((p): p is MapPoint => !!p);
+      if (pts.length === 0) continue;
+      const cx = Math.round(pts.reduce((a, p) => a + p.x, 0) / pts.length);
+      const cy = Math.round(pts.reduce((a, p) => a + p.y, 0) / pts.length);
+      out.set(node.id, { x: cx, y: cy });
+      out.set(`junc~${relKey}`, { x: cx, y: cy });
+    }
+    return out;
+  }
+
   private mergeGraphs(base: IncidenceGraph, overlay: IncidenceGraph): IncidenceGraph {
     const nodes = new Map(base.nodes.map((node) => [node.id, node]));
     for (const node of overlay.nodes) nodes.set(node.id, node);
@@ -395,14 +494,24 @@ export class GraphController {
   }
 
   private filterGraph(graph: IncidenceGraph): IncidenceGraph {
-    graph=activityGraph(graph,this.showRetired);
-    const knownRelationKinds = new Set(["ConversionRun", "SourceUnitRelation"]);
+    graph = activityGraph(graph, this.showRetired);
+    const knownRelationKinds = new Set([
+      "ConversionRun",
+      "SourceUnitRelation",
+      "Evidence",
+      ...SEMANTIC_RELATION_KINDS,
+    ]);
     const allowUnknownKinds = this.activePreset === "overview";
+    const showSpans = this.visibleNodeKinds.has("SourceSpan");
+    const showArtifacts = this.visibleNodeKinds.has("SourceArtifact");
+    const showUnits = this.visibleNodeKinds.has("SourceSemanticUnit");
     const relationKinds = new Set<string>();
-    if (this.visibleNodeKinds.has("SourceArtifact")) relationKinds.add("ConversionRun");
-    if (this.visibleNodeKinds.has("SourceSemanticUnit")) relationKinds.add("SourceUnitRelation");
+    if (showArtifacts) relationKinds.add("ConversionRun");
+    if (showUnits || showSpans) relationKinds.add("SourceUnitRelation");
+    if (showSpans && showArtifacts) relationKinds.add("Evidence");
+    if (this.visibleNodeKinds.has("SemanticEntity")) SEMANTIC_RELATION_KINDS.forEach((kind) => relationKinds.add(kind));
 
-    const nodes = graph.nodes.filter((node) => {
+    let nodes = graph.nodes.filter((node) => {
       if (node.element_kind === "group") return true;
       if (node.element_kind === "relation") {
         if (node.domain_kind === null) return false;
@@ -415,13 +524,24 @@ export class GraphController {
     });
 
     const nodeIds = new Set(nodes.map((n) => n.id));
-    const edges = graph.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+    let edges = graph.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+
+    if (this.activePreset !== "overview" && showArtifacts) {
+      const collapsed = collapseRedundantConversions(nodes, edges);
+      nodes = collapsed.nodes;
+      edges = collapsed.edges;
+    }
+
     return { ...graph, nodes, edges };
   }
 
   private isEntityVisible(node: IncidenceNode): boolean {
     if (node.domain_kind === null) return false;
-    const knownNodeKinds = new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan"]);
+    if (isAuxiliaryArtifactNode(node) && this.activePreset !== "overview") {
+      return false;
+    }
+    const knownNodeKinds = new Set(["SourceArtifact", "SourceSemanticUnit", "SourceSpan", ...SEMANTIC_NODE_KINDS]);
+    if (SEMANTIC_NODE_KINDS.has(node.domain_kind)) return this.visibleNodeKinds.has("SemanticEntity");
     return (
       (this.activePreset === "overview" && !knownNodeKinds.has(node.domain_kind)) ||
       this.visibleNodeKinds.has(node.domain_kind)
@@ -477,12 +597,24 @@ export class GraphController {
       );
     });
 
+    core.on("dragfreeon", "node", (event) => {
+      const node = event.target as NodeSingular;
+      if (node.hasClass(INK_NOTE_NODE_CLASS) || node.data("elementKind") === "junction") return;
+      const pos = node.position();
+      const point = { x: Math.round(pos.x), y: Math.round(pos.y) };
+      this.userPinnedPositions.set(node.id(), point);
+      this.basePositions.set(node.id(), point);
+    });
+
     core.on("cxttap", (event) => {
       if (event.target !== core) return;
-      if (this.focusRootId === null) return;
-      showContextMenu(event.originalEvent.clientX, event.originalEvent.clientY, [
-        { label: "返回全图", onSelect: () => this.exitFocus() },
-      ]);
+      const items: ContextMenuItem[] = [
+        { label: "整理全图布局", onSelect: () => this.relayout() },
+      ];
+      if (this.focusRootId !== null) {
+        items.push({ label: "返回全图", onSelect: () => this.exitFocus() });
+      }
+      showContextMenu(event.originalEvent.clientX, event.originalEvent.clientY, items);
     });
   }
 
@@ -550,6 +682,8 @@ export class GraphController {
     core.edges().forEach((edge) => {
       if (edge.hasClass("ink-note-edge")) return;
       if (edge.hasClass("contracted-edge")) edgeKeys.add("contracted");
+      else if (edge.hasClass("alignment-edge")) edgeKeys.add("alignment");
+      else if (edge.hasClass("debt-edge")) edgeKeys.add("debt");
       else if (edge.hasClass("evidence-edge")) edgeKeys.add("evidence");
       else if (edge.hasClass("semantic-edge")) edgeKeys.add("relation");
       else edgeKeys.add("incidence");
@@ -561,7 +695,7 @@ export class GraphController {
         items.push(this.legendItem(this.nodeSwatch(NODE_TYPES[key]), NODE_TYPES[key].label));
       }
     }
-    for (const key of ["relation", "evidence", "contracted", "incidence"] as EdgeTypeKey[]) {
+    for (const key of ["relation", "alignment", "debt", "evidence", "contracted", "incidence"] as EdgeTypeKey[]) {
       if (edgeKeys.has(key)) {
         items.push(this.legendItem(this.edgeSwatch(EDGE_TYPES[key]), EDGE_TYPES[key].label));
       }

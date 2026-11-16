@@ -10,6 +10,28 @@ pub fn is_live(o: &MapEditObject) -> bool {
     )
 }
 pub fn object_title(o: &MapEditObject) -> Option<String> {
+    let p = &o.payload["payload"];
+    let semantic = match o.kind.as_str() {
+        "SemanticEntity" => p["plain_label"].as_str().map(str::to_owned).or_else(|| {
+            p["preferred_labels"][0]["label"]
+                .as_str()
+                .map(str::to_owned)
+        }),
+        "Alignment" => Some(
+            p["map_label"]
+                .as_str()
+                .map(|label| format!("对齐线：{label}"))
+                .unwrap_or_else(|| "对齐线".into()),
+        ),
+        "Debt" => p["obligation"]
+            .as_str()
+            .map(|text| format!("一笔账：{text}")),
+        "DialectScope" => p["label"].as_str().map(|label| format!("约定卡：{label}")),
+        _ => None,
+    };
+    if semantic.is_some() {
+        return semantic;
+    }
     o.payload["payload"]["display_title"]
         .as_str()
         .map(str::to_owned)
@@ -85,6 +107,9 @@ pub fn source_references(o: &MapEditObject) -> Result<Vec<(String, String)>, Str
                 ));
             }
         }
+        kind if crate::semantic_plan::is_semantic_kind(kind) => {
+            out.extend(crate::semantic_plan::references(o));
+        }
         _ => return Err(format!("unsupported_reference_kind: {}", o.kind)),
     }
     for v in p["trust"]["evidence"].as_array().into_iter().flatten() {
@@ -131,6 +156,33 @@ pub fn validate_live_references(map: &BTreeMap<String, MapEditObject>) -> Vec<Im
             }),
             Ok(refs) => {
                 for (id, role) in refs {
+                    let semantic = crate::semantic_plan::expected_kinds(&role);
+                    if !semantic.is_empty() || crate::semantic_plan::is_semantic_kind(&o.kind) {
+                        match map.get(&id).filter(|t| is_live(t)) {
+                            None => errors.push(ImpactDiagnostic {
+                                code: "inactive_or_invalid_reference".into(),
+                                object_id: Some(o.object_id.clone()),
+                                message: format!(
+                                    "{role} 指向不存在或已退役的对象 {id}；需先处理依赖者"
+                                ),
+                            }),
+                            Some(t)
+                                if !semantic.is_empty() && !semantic.contains(&t.kind.as_str()) =>
+                            {
+                                errors.push(ImpactDiagnostic {
+                                    code: "invalid_reference_kind".into(),
+                                    object_id: Some(o.object_id.clone()),
+                                    message: format!(
+                                        "{role} 必须指向 {}，实际是 {}",
+                                        semantic.join(" / "),
+                                        t.kind
+                                    ),
+                                })
+                            }
+                            Some(_) => {}
+                        }
+                        continue;
+                    }
                     let expected = match role.as_str() {
                         "parent" | "reference_target" | "endpoint:source" | "endpoint:target" => {
                             Some("SourceSemanticUnit")

@@ -60,6 +60,11 @@ export async function returnToMother(motherRoot: string, toast: Toast, leavingSe
   return true;
 }
 
+/** 顶栏里显示的副本 id：超过 14 个字符时只留开头。 */
+export function shortSandboxId(id: string): string {
+  return id.length > 14 ? `${id.slice(0, 12)}…` : id;
+}
+
 /**
  * Read the binding once at startup and, if the window is in a sandbox, mark
  * the shell and put the banner into the top bar.
@@ -87,8 +92,11 @@ export async function mountSandboxChrome(
   tag.textContent = "沙箱";
   const text = document.createElement("span");
   text.className = "sandbox-banner-text";
-  text.textContent = `${sandbox.sandboxSessionId} · 改动只写入隔离副本，检查点 ${sandbox.checkpointId} 不受影响`;
-  text.title = `当前工作区：${sandbox.workspaceRoot}\n母工作区：${status.motherWorkspaceRoot}`;
+  // 顶栏放不下完整的副本 id：只显示开头，完整说明和路径放在悬停提示里。
+  const full = `${sandbox.sandboxSessionId} · 改动只写入隔离副本，检查点 ${sandbox.checkpointId} 不受影响`;
+  text.textContent = `${shortSandboxId(sandbox.sandboxSessionId)} · 改动只写入隔离副本`;
+  text.title = `${full}\n当前工作区：${sandbox.workspaceRoot}\n母工作区：${status.motherWorkspaceRoot}`;
+  banner.title = text.title;
   const talk = document.createElement("button");
   talk.type = "button";
   talk.className = "sandbox-btn sandbox-btn-secondary";

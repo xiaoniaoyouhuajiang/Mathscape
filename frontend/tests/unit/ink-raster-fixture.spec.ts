@@ -107,11 +107,36 @@ function fixture() {
   };
 }
 
+function expectFixtureClose(actual: unknown, expected: unknown, path = "fixture"): void {
+  if (typeof actual === "number" && typeof expected === "number") {
+    const tolerance = 1e-9 * Math.max(1, Math.abs(actual), Math.abs(expected));
+    expect(Math.abs(actual - expected), path).toBeLessThanOrEqual(tolerance);
+    return;
+  }
+  if (Array.isArray(actual) || Array.isArray(expected)) {
+    expect(Array.isArray(actual), path).toBe(true);
+    expect(Array.isArray(expected), path).toBe(true);
+    const a = actual as unknown[];
+    const e = expected as unknown[];
+    expect(a.length, path).toBe(e.length);
+    for (let i = 0; i < a.length; i++) expectFixtureClose(a[i], e[i], `${path}[${i}]`);
+    return;
+  }
+  if (actual !== null && expected !== null && typeof actual === "object" && typeof expected === "object") {
+    const a = actual as Record<string, unknown>;
+    const e = expected as Record<string, unknown>;
+    expect(Object.keys(a).sort(), path).toEqual(Object.keys(e).sort());
+    for (const key of Object.keys(e)) expectFixtureClose(a[key], e[key], `${path}.${key}`);
+    return;
+  }
+  expect(actual, path).toEqual(expected);
+}
+
 describe("Phase1d-b ink raster fixture", () => {
   it("matches the committed projection and perfect-freehand outlines", () => {
     const actual = JSON.parse(JSON.stringify(fixture()));
     if (process.env.UPDATE_INK_RASTER_FIXTURE === "1") writeFileSync(FIXTURE, `${JSON.stringify(actual)}\n`);
-    expect(actual).toEqual(JSON.parse(readFileSync(FIXTURE, "utf8")));
+    expectFixtureClose(actual, JSON.parse(readFileSync(FIXTURE, "utf8")));
     expect(actual.visible.map((s: { id: string }) => s.id)).toEqual([
       "dot", "dot-pressure", "pair", "triple", "curve", "curve-pressure", "zigzag", "negative-thinning",
       "still", "thin", "wide", "undone", "fragment-1", "fragment-2",

@@ -46,6 +46,10 @@ export interface AppElements {
   sandboxButton: HTMLButtonElement;
   inkButton: HTMLButtonElement;
   searchButton: HTMLButtonElement;
+  learningViewButton: HTMLButtonElement;
+  helpButton: HTMLButtonElement;
+  helpMenu: HTMLElement;
+  tutorialMenuItem: HTMLButtonElement;
   /** Outer overlay that may host the N3c split layout. */
   inkWorkspace: HTMLElement;
   inkSplitReader: HTMLElement;
@@ -68,6 +72,7 @@ export class AppShell {
     this.isParseActive = options.isParseActive ?? (() => false);
     this.elements = this.mount(root);
     this.initSidebarToggle();
+    this.initViewMenu();
     const detailPanel = this.elements.workspaceGrid.querySelector<HTMLElement>(".detail-panel");
     if (detailPanel) mountDetailResizer(this.elements.workspaceGrid, detailPanel);
   }
@@ -83,15 +88,27 @@ export class AppShell {
           <div class="tagline">数学景观 · 来源视图</div>
         </div>
       </div>
+      <nav class="topbar-center" aria-label="视图切换">
+        <button id="view-menu-button" class="view-menu-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="view-switch">视图 <span aria-hidden="true">▾</span></button>
+        <div id="view-switch" class="view-switch" role="group" aria-label="视图">
+          <button id="learning-view-button" class="view-switch-button" type="button" title="学习视图：每份材料里哪些内容是新的、哪些在别的材料里见过">学习视图</button>
+          <button id="ink-button" class="view-switch-button" type="button" title="手写：打开手稿工作区">手写</button>
+          <button id="sandbox-button" class="view-switch-button" type="button" title="沙箱：从检查点复制隔离工作区，可丢弃或导出">沙箱</button>
+        </div>
+      </nav>
       <div class="topbar-actions">
         <span id="service-state" class="service-state">正在连接本地内核</span>
-        <button id="llm-settings-button" class="settings-button" type="button">
+        <button id="workspace-search-button" class="secondary-button workspace-search-button" type="button" title="搜索手稿、材料、来源单元和命名快照（⌘K / Ctrl+K）" aria-keyshortcuts="Meta+K Control+K"><svg class="topbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.4 10.4 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>搜索</span></button>
+        <button id="llm-settings-button" class="icon-button settings-button" type="button" title="设置">
           <span aria-hidden="true">⚙</span>
-          <span id="llm-settings-label">设置</span>
+          <span id="llm-settings-label" class="sr-only">设置</span>
         </button>
-        <button id="workspace-search-button" class="secondary-button workspace-search-button" type="button" title="搜索手稿、材料、来源单元和命名快照（⌘K / Ctrl+K）" aria-keyshortcuts="Meta+K Control+K">搜索</button>
-        <button id="ink-button" class="secondary-button" type="button">手写</button>
-        <button id="sandbox-button" class="secondary-button" type="button" title="沙箱：从检查点复制隔离工作区，可丢弃或导出">沙箱</button>
+        <div class="help-menu">
+          <button id="help-button" class="icon-button" type="button" title="帮助" aria-label="帮助" aria-haspopup="menu" aria-expanded="false" aria-controls="help-menu"><span aria-hidden="true">?</span></button>
+          <div id="help-menu" class="help-menu-list" role="menu" hidden>
+            <button id="tutorial-menu-item" type="button" role="menuitem">教程：两本书讲的是不是同一个东西</button>
+          </div>
+        </div>
         <button id="import-pdf" class="primary-button" type="button">
           <span aria-hidden="true">＋</span> 导入 PDF
         </button>
@@ -179,6 +196,7 @@ export class AppShell {
               <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceArtifact"> 材料文件</label>
               <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceSemanticUnit"> 内容单元</label>
               <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SourceSpan"> 原文证据</label>
+              <label class="graph-evidence-toggle"><input type="checkbox" data-node-kind="SemanticEntity"> 共享对象</label>
             </div>
             <span class="filter-divider">│</span>
             <label class="graph-evidence-toggle"><input id="render-mode-toggle" type="checkbox" checked> 语义边</label>
@@ -274,11 +292,42 @@ export class AppShell {
       sandboxButton: requiredElement<HTMLButtonElement>("#sandbox-button", root),
       inkButton: requiredElement<HTMLButtonElement>("#ink-button", root),
       searchButton: requiredElement<HTMLButtonElement>("#workspace-search-button", root),
+      learningViewButton: requiredElement<HTMLButtonElement>("#learning-view-button", root),
+      helpButton: requiredElement<HTMLButtonElement>("#help-button", root),
+      helpMenu: requiredElement<HTMLElement>("#help-menu", root),
+      tutorialMenuItem: requiredElement<HTMLButtonElement>("#tutorial-menu-item", root),
       inkWorkspace: requiredElement<HTMLElement>("#ink-workspace", root),
       inkSplitReader: requiredElement<HTMLElement>("#ink-split-reader", root),
       inkSplitResizer: requiredElement<HTMLElement>("#ink-split-resizer", root),
       inkHost: requiredElement<HTMLElement>("#ink-desktop-host", root),
     };
+  }
+
+  /**
+   * 顶栏中间的视图切换（学习视图 / 手写 / 沙箱）。窄窗口下收进「视图」下拉：
+   * 还是同一组按钮，只是改成弹出菜单，点一项后收起。
+   */
+  private initViewMenu(): void {
+    const root = this.elements.shell;
+    const button = root.querySelector<HTMLButtonElement>("#view-menu-button");
+    const center = root.querySelector<HTMLElement>(".topbar-center");
+    const group = root.querySelector<HTMLElement>("#view-switch");
+    if (!button || !center || !group) return;
+    const setOpen = (open: boolean) => {
+      center.classList.toggle("is-open", open);
+      button.setAttribute("aria-expanded", String(open));
+    };
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setOpen(!center.classList.contains("is-open"));
+    });
+    group.addEventListener("click", () => setOpen(false));
+    document.addEventListener("click", (event) => {
+      if (!center.contains(event.target as Node)) setOpen(false);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && center.classList.contains("is-open")) setOpen(false);
+    });
   }
 
   private initSidebarToggle(): void {

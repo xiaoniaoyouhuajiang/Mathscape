@@ -336,18 +336,19 @@ impl<'a> AnchorContext<'a> {
             })
     }
 
-    /// Display title of a head object (for diagnostics about head objects).
+    /// Display title of a head object (for diagnostics and semantic/source references).
     pub fn head_title(&self, id: &str) -> Option<String> {
         let object = self
             .head
             .objects
             .iter()
             .find(|object| object.object_id == id)?;
-        let body = object.payload.get("payload").unwrap_or(&object.payload);
-        body.get("display_title")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| Some(object.kind.clone()))
+        let title = mathscape_orchestrator::semantic_view::semantic_object_title(object);
+        Some(if title == object.object_id {
+            object.kind.clone()
+        } else {
+            title
+        })
     }
 
     fn conversion(&mut self, artifact: &str) -> Option<String> {

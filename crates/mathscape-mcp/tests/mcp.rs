@@ -899,10 +899,10 @@ fn phase2_source_proposals_stage_and_read_back_without_changing_the_map() {
         "propose_changes",
         json!({
             "request_id": "proposal-blocked",
-            "rationale": "尝试写入尚未支持的语义节点",
+            "rationale": "尝试写入尚未支持的节点种类",
             "proposed_objects": [{
                 "local_ref": "entity",
-                "kind": "semantic_entity",
+                "kind": "representation_binding",
                 "op": "create",
                 "payload": {}
             }]
@@ -2715,4 +2715,417 @@ fn locate_on_an_unmarked_multi_page_snapshot_reports_page_markers_absent() {
     );
     assert_eq!(plain["status"], "ok", "{plain}");
     assert_eq!(diagnostic_codes(&plain), ["page_unresolved"], "{plain}");
+}
+
+fn semantic_base(span: &str) -> Vec<Value> {
+    vec![
+        json!({
+            "local_ref": "u1",
+            "kind": "source_unit",
+            "op": "create",
+            "payload": {
+                "kind": "statement",
+                "display_title": "有界单调数列收敛",
+                "parent": null,
+                "source_spans": [span],
+                "completeness": "complete"
+            }
+        }),
+        json!({
+            "local_ref": "e.theory",
+            "kind": "semantic_entity",
+            "op": "create",
+            "payload": {
+                "semantic_kind": "theory",
+                "preferred_labels": [{ "lang": "zh", "label": "实数列" }]
+            }
+        }),
+        json!({
+            "local_ref": "e.mct",
+            "kind": "semantic_entity",
+            "op": "create",
+            "payload": {
+                "semantic_kind": "concept",
+                "home_theory": "$new:e.theory",
+                "preferred_labels": [{ "lang": "zh", "label": "单调收敛定理" }],
+                "plain_label": "单调又有界的数列一定收敛",
+                "mathlib_baseline": {
+                    "decl": "tendsto_atTop_ciSup",
+                    "status": "unchecked"
+                }
+            }
+        }),
+        json!({
+            "local_ref": "a1",
+            "kind": "alignment",
+            "op": "create",
+            "payload": {
+                "source": "$new:u1",
+                "target": "$new:e.mct",
+                "relation": "expresses",
+                "source_context": {
+                    "binding": "uncontextualized",
+                    "reason": "测试材料没有约定卡"
+                },
+                "evidence_spans": [span],
+                "status": "retrieved_candidate"
+            }
+        }),
+        json!({
+            "local_ref": "d1",
+            "kind": "debt",
+            "op": "create",
+            "payload": {
+                "debt_kind": "alignment_debt",
+                "attached_to": "$new:a1",
+                "status": "open",
+                "obligation": "核对教材里的“有界”是上有界",
+                "quantifier": "对所有实数列",
+                "failure_mode": "statement"
+            }
+        }),
+    ]
+}
+
+fn propose_semantic(f: &Fixture, request_id: &str, objects: Vec<Value>) -> Value {
+    let (result, is_error) = call(
+        &f.server,
+        "propose_changes",
+        json!({
+            "request_id": request_id,
+            "rationale": "语义层测试",
+            "target_object": "e.mct",
+            "proposed_objects": objects
+        }),
+    );
+    assert!(!is_error, "unexpected tool error: {result}");
+    result
+}
+
+fn codes(result: &Value) -> Vec<String> {
+    result["diagnostics"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|d| d["code"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn semantic_layer_proposals_stage_with_review_items_and_never_touch_the_map() {
+    let f = fixture();
+    let span = seed_source_span(&f.root, &f.markdown);
+    let initial_objects = map_object_count(&f.root);
+    let staged = propose_semantic(&f, "semantic-ok", semantic_base(&span));
+    assert_eq!(staged["status"], "staged", "{staged}");
+    for (local_ref, prefix) in [
+        ("e.theory", "mathscape:semantic-entity/"),
+        ("e.mct", "mathscape:semantic-entity/"),
+        ("a1", "mathscape:alignment/"),
+        ("d1", "mathscape:debt/"),
+    ] {
+        let id = staged["staged_ids"][local_ref].as_str().unwrap_or_default();
+        assert!(id.starts_with(prefix), "{local_ref}: {staged}");
+    }
+    let found = codes(&staged);
+    assert!(
+        found.contains(&"mathlib_baseline_unchecked".to_owned()),
+        "{staged}"
+    );
+    assert!(found.contains(&"uncontextualized".to_owned()), "{staged}");
+    assert!(
+        found.contains(&"theory_aliases_missing".to_owned()),
+        "{staged}"
+    );
+    assert_eq!(map_object_count(&f.root), initial_objects);
+
+    let mut formula_theory = semantic_base(&span);
+    formula_theory[1]["payload"]["preferred_labels"] =
+        json!([{ "lang": "zh", "label": "递推 a_{n+1} = 3n + 1" }]);
+    let formula_res = propose_semantic(&f, "semantic-formula-theory", formula_theory);
+    assert_eq!(formula_res["status"], "staged", "{formula_res}");
+    assert!(
+        codes(&formula_res).contains(&"theory_name_too_specific".to_owned()),
+        "{formula_res}"
+    );
+}
+
+#[test]
+fn semantic_layer_proposals_block_with_contract_codes() {
+    let f = fixture();
+    let span = seed_source_span(&f.root, &f.markdown);
+    type Mutate = fn(&mut Vec<Value>);
+    let cases: Vec<(&str, Mutate, &str)> = vec![
+        (
+            "same-as",
+            |o| o[3]["payload"]["relation"] = json!("same_as"),
+            "same_as_forbidden",
+        ),
+        (
+            "bad-relation",
+            |o| o[3]["payload"]["relation"] = json!("restricts"),
+            "invalid_relation",
+        ),
+        (
+            "accepted-status",
+            |o| o[3]["payload"]["status"] = json!("accepted"),
+            "forbidden_alignment_status",
+        ),
+        (
+            "paid-debt",
+            |o| o[4]["payload"]["status"] = json!("paid"),
+            "forbidden_debt_status",
+        ),
+        (
+            "confirmed-baseline",
+            |o| o[2]["payload"]["mathlib_baseline"]["status"] = json!("confirmed"),
+            "forbidden_baseline_status",
+        ),
+        (
+            "trust-claim",
+            |o| o[2]["payload"]["trust"] = json!({ "alignment": "accepted" }),
+            "forbidden_trust_claim",
+        ),
+        (
+            "bare-ref",
+            |o| o[3]["payload"]["target"] = json!("e.mct"),
+            "dangling_new_ref",
+        ),
+        (
+            "target-is-source",
+            |o| o[3]["payload"]["target"] = json!("$new:u1"),
+            "invalid_reference_kind",
+        ),
+        (
+            "missing-home",
+            |o| {
+                o[2]["payload"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("home_theory");
+            },
+            "missing_required_field",
+        ),
+        (
+            "no-evidence",
+            |o| o[3]["payload"]["evidence_spans"] = json!([]),
+            "missing_required_field",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let mut objects = semantic_base(&span);
+        mutate(&mut objects);
+        let result = propose_semantic(&f, &format!("semantic-{name}"), objects);
+        assert_eq!(result["status"], "blocked", "{name}: {result}");
+        assert!(
+            codes(&result).contains(&expected.to_owned()),
+            "{name}: expected {expected}, got {result}"
+        );
+    }
+}
+
+// ------------------------------------------------ EMIR fixture (S11)
+
+fn emir_fixture_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/emir/fibonacci-two-books")
+}
+
+/// Rewrites every fixture-computed id the earlier change sets staged into
+/// the id this workspace actually staged (the fixture ids are derived from
+/// the fixture's own investigation id).
+fn remap_ids(value: &mut Value, ids: &std::collections::BTreeMap<String, String>) {
+    match value {
+        Value::String(text) => {
+            if let Some(actual) = ids.get(text.as_str()) {
+                *text = actual.clone();
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|item| remap_ids(item, ids)),
+        Value::Object(map) => map.values_mut().for_each(|item| remap_ids(item, ids)),
+        _ => {}
+    }
+}
+
+#[test]
+fn emir_fixture_change_sets_all_stage_in_order() {
+    let dir = emir_fixture_dir();
+    let objects: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("objects.json")).unwrap()).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("ws");
+    let mut pool = ArtifactPool::create(&root).unwrap();
+    for artifact in objects["artifacts"].as_object().unwrap().values() {
+        let file = artifact["file"].as_str().unwrap();
+        let bytes = std::fs::read(dir.join(file)).unwrap();
+        let id = import(
+            &mut pool,
+            bytes,
+            "text/markdown",
+            std::path::Path::new(file)
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            None,
+        );
+        assert_eq!(
+            id, artifact["artifact_id"],
+            "content-addressed artifact id of {file}"
+        );
+    }
+    drop(pool);
+    let workspace = McpWorkspace::open(&root)
+        .unwrap()
+        .with_round(Some("placeholder".into()))
+        .with_capability_runner(Box::new(NothingInstalled));
+    let server = McpServer::new(workspace);
+    let initial_objects = map_object_count(&root);
+
+    let mut ids = std::collections::BTreeMap::new();
+    let mut targets = Vec::new();
+    for change_set in objects["change_sets"].as_array().unwrap() {
+        let mut proposed = change_set["proposed_objects"].clone();
+        remap_ids(&mut proposed, &ids);
+        let mut relations = change_set["proposed_relations"].clone();
+        remap_ids(&mut relations, &ids);
+        let (result, is_error) = call(
+            &server,
+            "propose_changes",
+            json!({
+                "request_id": change_set["request_id"],
+                "rationale": change_set["rationale"],
+                "target_object": change_set["target_object"],
+                "proposed_objects": proposed,
+                "proposed_relations": relations,
+            }),
+        );
+        assert!(!is_error, "{}: {result}", change_set["request_id"]);
+        assert_eq!(
+            result["status"], "staged",
+            "{}: {result}",
+            change_set["request_id"]
+        );
+        assert!(
+            !codes(&result)
+                .iter()
+                .any(|code| code == "same_as_forbidden"),
+            "{result}"
+        );
+        let expected = change_set["staged_ids"].as_object().unwrap();
+        for (local_ref, fixture_id) in expected {
+            let actual = result["staged_ids"][local_ref]
+                .as_str()
+                .unwrap_or_else(|| panic!("{local_ref} not staged: {result}"));
+            let prefix = fixture_id.as_str().unwrap().rsplit_once('/').unwrap().0;
+            assert!(actual.starts_with(prefix), "{local_ref}: {actual}");
+            ids.insert(fixture_id.as_str().unwrap().to_owned(), actual.to_owned());
+        }
+        targets.push(change_set["target_object"].as_str().unwrap().to_owned());
+    }
+    assert_eq!(
+        targets,
+        [
+            "jia.u.sec",
+            "yi.u.sec",
+            "e.fib",
+            "e.qpow",
+            "e.cassini",
+            "e.puzzle"
+        ]
+    );
+    // Staging never touches the accepted map.
+    assert_eq!(map_object_count(&root), initial_objects);
+
+    // Search with scope=accepted sees no semantic objects yet; scope=investigation
+    // finds the staged theory and shared objects by labels, aliases and mathlib name.
+    let (accepted_search, err) = call(
+        &server,
+        "workspace.search",
+        json!({ "query": "Cassini", "scope": "accepted" }),
+    );
+    assert!(!err);
+    assert_eq!(accepted_search["scope"], "accepted");
+    assert_eq!(accepted_search["total"], 0);
+
+    let (theory_search, err) = call(
+        &server,
+        "workspace.search",
+        json!({ "query": "线性递推", "kinds": ["theory"], "scope": "investigation" }),
+    );
+    assert!(!err);
+    assert_eq!(theory_search["scope"], "investigation");
+    let theory_id = ids
+        .iter()
+        .find_map(|(_, actual)| {
+            let (node, _) = call(
+                &server,
+                "graph.get",
+                json!({ "node_id": actual, "scope": "investigation" }),
+            );
+            (node["node"]["semantic_kind"] == "theory").then(|| actual.clone())
+        })
+        .expect("staged theory");
+    assert_eq!(theory_search["groups"][0]["kind"], "theory");
+    assert_eq!(theory_search["groups"][0]["hits"][0]["id"], theory_id);
+
+    let (entity_search, err) = call(
+        &server,
+        "workspace.search",
+        json!({
+            "query": "fib_succ_mul_fib_pred",
+            "kinds": ["semantic_entity"],
+            "scope": "investigation"
+        }),
+    );
+    assert!(!err);
+    assert_eq!(entity_search["groups"][0]["kind"], "semantic_entity");
+    let cassini_id = entity_search["groups"][0]["hits"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // graph.get returns semantic payload details and edge_summary (not unsupported).
+    let (got, err) = call(
+        &server,
+        "graph.get",
+        json!({ "node_id": cassini_id, "scope": "investigation" }),
+    );
+    assert!(!err);
+    assert_eq!(got["node"]["kind"], "semantic_entity");
+    assert_eq!(got["node"]["semantic_kind"], "declaration");
+    assert_eq!(got["node"]["semantic"]["home_theory"], theory_id);
+    assert!(
+        got["node"]["edge_summary"]["aligns"]["in"]
+            .as_u64()
+            .unwrap()
+            >= 2
+    );
+    assert_eq!(got["node"]["edge_summary"]["in_theory"]["out"], 1);
+
+    // graph.neighborhood traverses aligns, in_theory and debt_on when requested.
+    let (hood, err) = call(
+        &server,
+        "graph.neighborhood",
+        json!({
+            "node_id": cassini_id,
+            "depth": 1,
+            "direction": "both",
+            "edge_types": ["aligns", "in_theory", "debt_on"],
+            "scope": "investigation"
+        }),
+    );
+    assert!(!err, "{hood}");
+    assert_eq!(hood["status"], "ok");
+    let kinds: Vec<&str> = hood["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|n| n["kind"].as_str())
+        .collect();
+    assert!(kinds.contains(&"semantic_entity"), "{hood}");
+    assert!(kinds.contains(&"source_unit"), "{hood}");
+    assert!(kinds.contains(&"debt"), "{hood}");
 }

@@ -3,11 +3,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mathscape_store_sqlite::{SearchArtifactRow, SearchCorpus, source_unit_kind_name};
+use mathscape_store_sqlite::{
+    SearchArtifactRow, SearchCorpus, SearchSemanticEntityRow, source_unit_kind_name,
+};
 
 use super::{SearchCandidate, SearchKind, SearchProvider, SearchTarget};
 use crate::artifact_graph::{product_label, readable_filename};
 use crate::canonical_alias::{CANONICAL_MARKDOWN_TITLE, CanonicalAliasTable};
+use crate::semantic_graph::semantic_kind_label;
 
 /// Retired map objects are hidden on the map, so they are not searchable.
 fn retired(lifecycle: &str) -> bool {
@@ -303,6 +306,101 @@ impl SearchProvider for SourceUnitProvider {
                     recency: 0,
                 }
             })
+            .collect()
+    }
+}
+
+fn semantic_entity_title(row: &SearchSemanticEntityRow) -> String {
+    row.plain_label
+        .clone()
+        .or_else(|| row.preferred_labels.first().cloned())
+        .unwrap_or_else(|| {
+            semantic_kind_label(row.semantic_kind.as_deref().unwrap_or("")).to_owned()
+        })
+}
+
+fn semantic_entity_candidate(
+    row: &SearchSemanticEntityRow,
+    theory_titles: &BTreeMap<&str, String>,
+) -> SearchCandidate {
+    let kind_name = semantic_kind_label(row.semantic_kind.as_deref().unwrap_or(""));
+    let title = semantic_entity_title(row);
+    let mut aliases = Vec::new();
+    for value in row
+        .preferred_labels
+        .iter()
+        .chain(row.aliases.iter())
+        .chain(row.mathlib_decl.iter())
+    {
+        push_alias(&mut aliases, &title, value);
+    }
+    let mut subtitle = kind_name.to_owned();
+    if let Some(home) = row
+        .home_theory_id
+        .as_deref()
+        .and_then(|id| theory_titles.get(id))
+    {
+        subtitle.push_str(&format!(" · {home}"));
+    }
+    if let Some(decl) = &row.mathlib_decl {
+        subtitle.push_str(&format!(" · {decl}"));
+    }
+    SearchCandidate {
+        id: row.object_id.clone(),
+        title,
+        aliases,
+        subtitle: Some(subtitle),
+        target: SearchTarget::MapNode {
+            node_id: row.object_id.clone(),
+        },
+        trashed: false,
+        recency: 0,
+    }
+}
+
+/// Theories (`semantic_kind = "theory"`) by plain label, preferred labels and aliases.
+pub struct TheoryProvider;
+
+impl SearchProvider for TheoryProvider {
+    fn kind(&self) -> SearchKind {
+        SearchKind::Theory
+    }
+    fn candidates(&self, corpus: &SearchCorpus) -> Vec<SearchCandidate> {
+        let empty = BTreeMap::new();
+        corpus
+            .semantic_entities
+            .iter()
+            .filter(|row| {
+                !retired(&row.lifecycle) && row.semantic_kind.as_deref() == Some("theory")
+            })
+            .map(|row| semantic_entity_candidate(row, &empty))
+            .collect()
+    }
+}
+
+/// Shared objects other than theories (`concept`, `declaration`, `problem_schema`).
+pub struct SemanticEntityProvider;
+
+impl SearchProvider for SemanticEntityProvider {
+    fn kind(&self) -> SearchKind {
+        SearchKind::SemanticEntity
+    }
+    fn candidates(&self, corpus: &SearchCorpus) -> Vec<SearchCandidate> {
+        let theory_titles: BTreeMap<&str, String> = corpus
+            .semantic_entities
+            .iter()
+            .filter(|row| {
+                !retired(&row.lifecycle) && row.semantic_kind.as_deref() == Some("theory")
+            })
+            .map(|row| (row.object_id.as_str(), semantic_entity_title(row)))
+            .collect();
+        corpus
+            .semantic_entities
+            .iter()
+            .filter(|row| {
+                !retired(&row.lifecycle) && row.semantic_kind.as_deref() != Some("theory")
+            })
+            .map(|row| semantic_entity_candidate(row, &theory_titles))
             .collect()
     }
 }

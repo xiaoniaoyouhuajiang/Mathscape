@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "npm run pad:build && vite --host 127.0.0.1 --port 1420",
+    "dev:test": "npm run pad:build && vite --host 127.0.0.1",
     "build": "tsc --noEmit && npm run pad:build && vite build",
     "typecheck": "tsc --noEmit",
     "test:reader": "playwright test",

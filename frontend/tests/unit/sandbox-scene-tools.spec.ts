@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import fixtures from "../fixtures/scene-tool-events.json";
 import { compileRoundScenes, compileToolScene, resolveScene, sceneToolName, stagedCounts } from "../../src/sandbox/scene/compile";
 import { SCENE_TOOLS, type LeanAct, type LocateAct, type MathlibAct, type ProposeAct, type SceneResolve } from "../../src/sandbox/scene/types";
+import { proposeGhostClass, proposeItemMarkClass, proposeRelationGhostClass, proposeRelationMarkClass } from "../../src/graph/scene-player";
 import type { AgentEventLike } from "../../src/sandbox/format";
 
 type Pair = { call: AgentEventLike; result: AgentEventLike | null };
@@ -14,6 +15,36 @@ const fx = fixtures as unknown as Record<string, Pair>;
 const scene = (name: string, prior: AgentEventLike[] = []) => compileToolScene(fx[name].call, fx[name].result ?? undefined, prior)!;
 const running = (name: string) => compileToolScene(fx[name].call)!;
 const none: SceneResolve = () => null;
+function semanticProposal(): Pair {
+  const sourceUnit = "mathscape:source-unit/existing";
+  const sourceSpan = "mathscape:source-span/existing";
+  const staged = {
+    span: sourceSpan,
+    t: "mathscape:semantic-entity/theory",
+    c: "mathscape:semantic-entity/concept",
+    d: "mathscape:semantic-entity/declaration",
+    a: "mathscape:alignment/alignment",
+    debt: "mathscape:debt/debt",
+    scope: "mathscape:dialect-scope/scope",
+  };
+  const argumentsValue = {
+    request_id: "semantic-scene-test",
+    rationale: "构建语义对象",
+    proposed_objects: [
+      { local_ref: "span", kind: "source_span", op: "create", payload: { artifact_id: "mathscape:artifact/semantic", md_byte_range: { start: 0, end: 8 }, granularity: "inline", quote: "语义证据" } },
+      { local_ref: "t", kind: "semantic_entity", op: "create", payload: { semantic_kind: "theory", home_theory: null, preferred_labels: [{ lang: "zh", label: "生成函数" }] } },
+      { local_ref: "c", kind: "semantic_entity", op: "create", payload: { semantic_kind: "concept", home_theory: "$new:t", preferred_labels: [{ lang: "zh", label: "母函数" }], conventions: [{ evidence_spans: ["$new:span"] }] } },
+      { local_ref: "d", kind: "semantic_entity", op: "create", payload: { semantic_kind: "declaration", home_theory: "$new:t", plain_label: "定理：形式幂级数的相等", declaration: { statement: { text: "A = B", evidence_spans: ["$new:span"] } } } },
+      { local_ref: "a", kind: "alignment", op: "create", payload: { source: sourceUnit, target: "$new:d", relation: "expresses", evidence_spans: ["$new:span"] } },
+      { local_ref: "debt", kind: "debt", op: "create", payload: { attached_to: "$new:a", obligation: "补充证明", evidence_spans: ["$new:span"] } },
+      { local_ref: "scope", kind: "dialect_scope", op: "create", payload: { label: "本节约定", anchor_unit: sourceUnit, conventions: [{ text: "记号约定", evidence_spans: ["$new:span"] }] } },
+    ],
+  };
+  const call = { type: "tool_call", payload: { call_id: "semantic-scene", tool: "propose_changes", raw: { tool: "propose_changes", arguments: argumentsValue } } } as unknown as AgentEventLike;
+  const result = { type: "tool_result", payload: { call_id: "semantic-scene", status: "ok", raw: { tool: "propose_changes", result: { structuredContent: { status: "staged", staged_ids: staged } } } } } as unknown as AgentEventLike;
+  return { call, result };
+}
+
 
 describe("tool names", () => {
   it("covers the six new tools in every spelling", () => {
@@ -34,7 +65,7 @@ describe("propose_changes", () => {
     const act = draft.act as ProposeAct;
     expect(draft.status).toBe("ok");
     expect(act.phase).toBe("staged");
-    expect(act.counts).toEqual({ units: 17, relations: 20, spans: 20 });
+    expect(act.counts).toEqual({ units: 17, relations: 20, spans: 20, semantic: 0 });
     expect(act.stagedIds).toHaveLength(57);
     expect(draft.summary).toBe("已暂存 · 单元 17 · 关系 20 · 片段 20");
     expect(act.items.filter((item) => item.kind === "unit")).toHaveLength(17);
@@ -50,12 +81,58 @@ describe("propose_changes", () => {
     expect([...draft.seeds].sort()).toEqual([...new Set(act.items.flatMap((item) => item.anchors))].sort());
   });
 
+  it("compiles semantic entities and semantic relations for proposal scenes", () => {
+    const pair = semanticProposal();
+    const draft = compileToolScene(pair.call, pair.result!);
+    expect(draft).not.toBeNull();
+    const act = draft!.act as ProposeAct;
+    expect(act.counts).toEqual({ units: 0, relations: 0, spans: 1, semantic: 6 });
+    expect(act.items.map((item) => item.visualKind)).toEqual(expect.arrayContaining(["theory", "concept", "declaration", "debt", "dialect_scope"]));
+    expect(act.relations.map((relation) => relation.relationKind)).toEqual(expect.arrayContaining(["alignment", "in_theory", "debt_on", "scope_of"]));
+
+    const resolve: SceneResolve = (id) => {
+      const nodes: Record<string, { nodeId: string; label: string }> = {
+        "mathscape:source-unit/existing": { nodeId: "node-source", label: "来源单元" },
+        "mathscape:artifact/semantic": { nodeId: "node-artifact", label: "材料" },
+        "mathscape:semantic-entity/theory": { nodeId: "node-theory", label: "生成函数" },
+        "mathscape:semantic-entity/concept": { nodeId: "node-concept", label: "母函数" },
+        "mathscape:semantic-entity/declaration": { nodeId: "node-declaration", label: "形式幂级数的相等" },
+        "mathscape:debt/debt": { nodeId: "node-debt", label: "补充证明" },
+        "mathscape:dialect-scope/scope": { nodeId: "node-scope", label: "本节约定" },
+      };
+      return nodes[id] ?? null;
+    };
+    const resolved = resolveScene(draft!, resolve);
+    const resolvedAct = resolved.act as ProposeAct;
+    expect(resolvedAct.items.find((item) => item.visualKind === "theory")?.node).toBe("node-theory");
+    expect(resolvedAct.relations.find((relation) => relation.relationKind === "alignment")?.source).toMatchObject({ node: "node-source" });
+    expect(resolvedAct.relations.find((relation) => relation.relationKind === "scope_of")?.target).toMatchObject({ node: "node-source" });
+    expect(resolvedAct.relations.find((relation) => relation.relationKind === "debt_on")?.target).toEqual({ local: "d" });
+  });
+
+  it("assigns distinct visual classes to semantic proposal items and edges", () => {
+    const item = (visualKind: string) => ({ kind: "semantic", visualKind }) as Parameters<typeof proposeGhostClass>[0];
+    expect(proposeGhostClass(item("theory"))).toContain("scene-ghost-theory");
+    expect(proposeGhostClass(item("concept"))).toContain("scene-ghost-concept");
+    expect(proposeGhostClass(item("declaration"))).toContain("scene-ghost-declaration");
+    expect(proposeGhostClass(item("problem_schema"))).toContain("scene-ghost-problem-schema");
+    expect(proposeGhostClass(item("debt"))).toContain("scene-ghost-debt");
+    expect(proposeGhostClass(item("dialect_scope"))).toContain("scene-ghost-dialect-scope");
+    expect(proposeItemMarkClass(item("theory"))).toContain("scene-propose-theory-hit");
+    expect(proposeItemMarkClass(item("problem_schema"))).toContain("scene-propose-problem-schema-hit");
+    expect(proposeItemMarkClass(item("dialect_scope"))).toContain("scene-propose-dialect-scope-hit");
+    const relation = (relationKind: string) => ({ relation: relationKind, relationKind, localRef: relationKind, label: relationKind, source: { local: "a" }, target: { local: "b" }, blocked: [] }) as Parameters<typeof proposeRelationGhostClass>[0];
+    expect(proposeRelationMarkClass(relation("alignment"))).toBe("scene-propose-alignment-edge");
+    expect(proposeRelationGhostClass(relation("debt_on"))).toContain("scene-ghost-debt-edge");
+    expect(proposeRelationGhostClass(relation("scope_of"))).toContain("scene-ghost-scope-edge");
+  });
+
   it("matches stagedCounts for every staged fixture", () => {
     for (const name of ["propose_staged_page8_v1", "propose_staged_page8_v2", "propose_staged_57"]) {
       const act = scene(name).act as ProposeAct;
       const payload = (fx[name].result!.payload!.raw as { result: { structuredContent: { staged_ids: Record<string, string> } } }).result.structuredContent;
       expect(act.counts).toEqual(stagedCounts(payload.staged_ids));
-      expect(act.counts.units + act.counts.relations + act.counts.spans).toBe(Object.keys(payload.staged_ids).length);
+      expect(act.counts.units + act.counts.relations + act.counts.spans + act.counts.semantic).toBe(Object.keys(payload.staged_ids).length);
     }
   });
 
@@ -64,7 +141,7 @@ describe("propose_changes", () => {
     const act = draft.act as ProposeAct;
     expect(draft.status).toBe("ok");
     expect(act.phase).toBe("blocked");
-    expect(act.counts).toEqual({ units: 0, relations: 0, spans: 0 });
+    expect(act.counts).toEqual({ units: 0, relations: 0, spans: 0, semantic: 0 });
     expect(act.blocks.length).toBeGreaterThan(0);
     expect(act.blocks[0]).toMatchObject({ code: "quote_mismatch", localRef: "span.ch1" });
     expect(draft.summary).toMatch(/^被阻塞 · \d+ 个问题：quote_mismatch$/);

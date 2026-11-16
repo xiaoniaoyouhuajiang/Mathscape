@@ -30,7 +30,20 @@ fn store(service: &DesktopService) -> Result<SqliteArtifactStore, String> {
         .map_err(|error| error.to_string())
 }
 
+/// UI 不能提交服务端专用操作（mathlib 核对结果只由
+/// `recheck_mathlib_baselines` 写入）。
+fn reject_server_only(request: &UserChangeRequest) -> Result<(), String> {
+    match request.operations.iter().find(|op| op.is_server_only()) {
+        Some(op) => Err(format!(
+            "server_only_operation：{} 的 mathlib 核对结果只能由“重新核对 mathlib 名称”写入",
+            op.object_id()
+        )),
+        None => Ok(()),
+    }
+}
+
 pub fn plan(service: &DesktopService, request: UserChangeRequest) -> Result<ImpactPlan, String> {
+    reject_server_only(&request)?;
     let store = store(service)?;
     let snapshot = store
         .map_edit_snapshot()
@@ -44,6 +57,7 @@ pub fn commit(
     request: UserChangeRequest,
     plan_fingerprint: String,
 ) -> Result<CommitReceipt, String> {
+    reject_server_only(&request)?;
     let mut store = store(service)?;
     let actor = actor()?;
     let planner_actor = actor.clone();
@@ -95,4 +109,16 @@ pub async fn commit_map_change(
     tauri::async_runtime::spawn_blocking(move || commit(&service, request, plan_fingerprint))
         .await
         .map_err(|error| format!("map commit worker failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn recheck_mathlib_baselines(
+    state: State<'_, DesktopState>,
+) -> Result<mathscape_mcp::mathlib_baseline::BaselineRecheckReport, String> {
+    let service = state.service();
+    tauri::async_runtime::spawn_blocking(move || {
+        mathscape_mcp::mathlib_baseline::recheck_mathlib_baselines(service.workspace_root(), now()?)
+    })
+    .await
+    .map_err(|error| format!("mathlib baseline worker failed: {error}"))?
 }

@@ -44,6 +44,10 @@ import { WorkspaceSearchPanel, installWorkspaceSearch, type SearchAction } from 
 import { installInkCloseGuard } from "./ink/close-guard";
 import { reviewBeforeLeaving } from "./review/change-sets";
 import "./styles.css";
+import "./semantic/semantic.css";
+import { LearningViewPanel } from "./semantic/learning-view";
+import { TutorialPlayer } from "./tutorial/player";
+import "./tutorial/tutorial.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (app === null) {
@@ -756,6 +760,42 @@ const workspaceSearch = new WorkspaceSearchPanel({
 });
 installWorkspaceSearch(workspaceSearch);
 el.searchButton.addEventListener("click", () => workspaceSearch.open());
+
+// 语义层学习视图（只读）。
+const learningView = new LearningViewPanel(el.shell, {
+  materialName: (artifactId) => {
+    const nodes = currentSnapshot?.landscape_graph.nodes ?? [];
+    const node = nodes.find(item => item.domain_id === artifactId && item.element_kind === "entity")
+      ?? findSourceArtifactNode(nodes.filter(item => item.element_kind === "entity"), artifactId);
+    return node?.label ?? artifactId.replace(/^mathscape:artifact\/sha256\//, "").slice(0, 12);
+  },
+  showToast: (msg, kind) => shell.showToast(msg, kind),
+  focusObject: (objectId) => {
+    learningView.close();
+    void locateOnMap(objectId, () => true);
+  },
+});
+el.learningViewButton.addEventListener("click", () => void learningView.open());
+eventBus.on("open-learning-view", () => void learningView.open());
+
+// 帮助菜单 → 只读教程「两本书讲的是不是同一个东西」（不写工作区）。
+const tutorial = new TutorialPlayer(document.body);
+const setHelpMenu = (open: boolean) => {
+  el.helpMenu.hidden = !open;
+  el.helpButton.setAttribute("aria-expanded", String(open));
+};
+el.helpButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  setHelpMenu(el.helpMenu.hidden !== false);
+});
+document.addEventListener("click", (event) => {
+  if (!el.helpMenu.hidden && !el.helpMenu.contains(event.target as Node)) setHelpMenu(false);
+});
+el.tutorialMenuItem.addEventListener("click", () => {
+  setHelpMenu(false);
+  void tutorial.open();
+});
+eventBus.on("open-tutorial", () => void tutorial.open());
 
 artifactController.startPolling(1000);
 

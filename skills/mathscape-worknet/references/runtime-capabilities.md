@@ -6,9 +6,9 @@ skill 不能假设文档里写出的工具已经存在。每次启动一个工�
 
 通常包括：
 
-- `workspace.search`
-- `graph.get`
-- `graph.neighborhood`
+- `workspace.search`（支持 `note`、`source_unit`、`theory`、`semantic_entity`、`material`、`snapshot`，以及 `scope: "investigation"` 检索本会话暂存）
+- `graph.get`（支持来源层与语义层节点/关系，语义对象在 `semantic` 字段返回结构化内容）
+- `graph.neighborhood`（`edge_types` 除结构边和书内关系外，支持按需遍历 `aligns`、`in_theory`、`debt_on`、`scope_of`）
 - `material.read`
 - `material.grep`
 - `material.locate`（把一段原文换成快照里的精确 `md_byte_range`，供 `propose_changes` 的 source_span 使用）
@@ -46,9 +46,10 @@ skill 不能假设文档里写出的工具已经存在。每次启动一个工�
 
 ## 语义层假定工具
 
+自 `mathscape-mcp/17` 起，共享对象、对齐线、一笔账和最小约定卡已经由 `propose_changes` 直接支持（`kind`：`semantic_entity`、`alignment`、`debt`、`dialect_scope`，见 SKILL.md §4.2），不需要下面的假定工具。
+
 下面这些名字只是设计接口，不是当前 API：
 
-- `emir.upsert_dialect_scope`
 - `emir.upsert_representation_binding`
 - `emir.upsert_proof_context`
 - `emir.upsert_proof_state`
@@ -82,7 +83,7 @@ artifact.stage          implemented_round_bound
 
 - **挂载的 mathscape 工具**：`workspace.search`、`material.read`、`material.grep`、`pdf.outline`、`graph.get`、`graph.neighborhood`、`ink.page_image`、`pdf.page_image`、`mathlib.search`、`lean.check`、`propose_changes`、`get_change_set`、`material.locate`、`list_change_sets`。提案工具只写当前沙箱副本的 staged/blocked 记录；接受和丢弃仍由 Desktop 审核命令完成。
 - **对话连续性**：同一沙箱会话的各轮延续同一条 Codex 线程，之前轮次的工具调用与结果都保留在上下文中。每个非首轮开头会有一段「自上轮以来工作区变化」摘要（用户可能在两轮之间接受、丢弃提案或改动地图）；与旧结果冲突时以摘要和本轮新调用的工具结果为准。若出现「上下文已降级」，说明线程无法恢复，此前只剩文字转录；出现「工具/skill 已更新」时，按提示重读变化的部分。
-- **汇报提案数量**：以 `propose_changes` / `get_change_set` 返回的 `staged_ids` 为准（按 id 前缀分单元、关系、证据计数），不要凭记忆估算（见 SKILL.md §4.1「汇报数量」）。
+- **汇报提案数量**：以 `propose_changes` / `get_change_set` 返回的 `staged_ids` 为准（按 id 前缀分单元、关系、证据、共享对象、对齐线、账、约定卡计数），不要凭记忆估算（见 SKILL.md §4.1「汇报数量」）。
 - **找回之前的提案**：旧提案的 id 和状态可能已变，修订旧提案前先调用只读的提案列表工具（见 SKILL.md §4.1「修订」），它只列本沙箱会话的提案，并给出可直接用于修订的对象。
 - **未挂载**：`artifact.stage`。文件草稿仍写入 scratch；需要登记来源时使用 `propose_changes`，不能把文件暂存冒充正式地图写入。
 - **harness 自带的文件与 shell 工具**：只能写会话 scratch 目录（路径见本轮 developer instructions）；工作区副本、本 skill 目录和 Lean profile 都是只读；网络关闭。scratch 中的文件是草稿，不是地图变更，也不会提升任何可信状态。

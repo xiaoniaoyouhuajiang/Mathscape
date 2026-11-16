@@ -3,6 +3,7 @@
 mod artifact_graph;
 pub mod canonical_alias;
 pub mod search;
+pub mod semantic_graph;
 mod source_graph;
 
 pub use artifact_graph::{

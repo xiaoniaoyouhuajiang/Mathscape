@@ -225,7 +225,13 @@ pub(crate) fn write_patch(
         let kind = serde_json::to_value(h.kind())?.as_str().unwrap().to_owned();
         if !matches!(
             kind.as_str(),
-            "SourceSemanticUnit" | "SourceUnitRelation" | "SourceSpan"
+            "SourceSemanticUnit"
+                | "SourceUnitRelation"
+                | "SourceSpan"
+                | "SemanticEntity"
+                | "Alignment"
+                | "Debt"
+                | "DialectScope"
         ) {
             return Err(invalid("unsupported edit kind"));
         }

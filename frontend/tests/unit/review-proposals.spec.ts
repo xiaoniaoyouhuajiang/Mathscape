@@ -230,5 +230,58 @@ describe("proposal overview across snapshots", () => {
     proposal.proposal.proposed_relations = proposal.proposal.proposed_relations!.slice(3);
     expect(proposalOverview(proposal).defaultGroup).toBe(2);
   });
+
+  it("projects semantic nodes, alignments, debts and referenced head spans without phantom null snapshots", () => {
+    const proposal = item("S");
+    proposal.proposal.proposed_objects = [
+      { local_ref: "s1", kind: "source_span", op: "create", payload: { artifact_id: "md-1", md_byte_range: { start: 0, end: 5 }, granularity: "page", quote: "节标题" } },
+      { local_ref: "sec2", kind: "source_unit", op: "create", payload: { kind: "section", display_title: "二、形式幂级数", parent: null, source_spans: ["$new:s1"] } },
+      { local_ref: "t1", kind: "semantic_entity", op: "create", payload: { semantic_kind: "theory", plain_label: "理论：组合计数与母函数", preferred_labels: [{ lang: "zh", label: "组合计数与母函数" }] } },
+      { local_ref: "d_thm1", kind: "semantic_entity", op: "create", payload: {
+        semantic_kind: "declaration", home_theory: "$new:t1", plain_label: "精确说法：定理 1",
+        preferred_labels: [{ lang: "zh", label: "定理 1" }],
+        declaration: { declaration_kind: "theorem", statement: { text: "展开式", evidence_spans: ["mathscape:source-span/head3"] } },
+      } },
+      { local_ref: "scope2", kind: "dialect_scope", op: "create", payload: {
+        label: "第二章约定", anchor_unit: "$new:sec2", applies_to: "anchor_subtree",
+        conventions: [{ key: "terminology", subject: "相等", value: "coeff", text: "系数逐项相等", evidence_spans: ["$new:s1"] }],
+      } },
+      { local_ref: "a_thm1", kind: "alignment", op: "create", payload: {
+        source: "mathscape:source-unit/head_thm1", target: "$new:d_thm1", relation: "expresses",
+        source_context: { binding: "uncontextualized", reason: "跨快照" },
+        evidence_spans: ["mathscape:source-span/head3"], status: "partially_aligned",
+      } },
+      { local_ref: "debt_1", kind: "debt", op: "create", payload: {
+        debt_kind: "proof_debt", attached_to: "$new:a_thm1", status: "open",
+        obligation: "核对 n=0", quantifier: "∀ n", failure_mode: "statement",
+        evidence_spans: ["mathscape:source-span/head4"],
+      } },
+    ];
+    proposal.anchors = [
+      anchor("s1", "md-1", 0, 5, { page: { pdf_page_index: 7, page_number: 8 } }),
+      anchor("mathscape:source-span/head3", "md-3", 10, 30, { origin: "head", span_id: "mathscape:source-span/head3", page: { pdf_page_index: 12, page_number: 13 } }),
+      anchor("mathscape:source-span/head4", "md-4", 40, 60, { origin: "head", span_id: "mathscape:source-span/head4", page: { pdf_page_index: 32, page_number: 33 } }),
+    ];
+    proposal.result.diagnostics = [
+      { level: "info", code: "uncontextualized", message: "没有约定卡", local_ref: "a_thm1" },
+    ];
+    proposal.targetTitles = { "mathscape:source-unit/head_thm1": "定理 1（原文单元）" };
+
+    const groups = proposalReviewProjection(proposal);
+    // Only the 3 real Markdown snapshots exist — no phantom `artifact_id: null` 4th group!
+    expect(groups.map(g => g.source.artifact_id)).toEqual(["md-1", "md-3", "md-4"]);
+    // Snapshots md-3 and md-4 (which have 0 new source_units) still populate units & relations from semantic objects!
+    expect(groups[1].units.map(u => u.unit_ref)).toContain("d_thm1");
+    expect(groups[1].units.find(u => u.unit_ref === "d_thm1")!.anchors[0]?.range).toEqual({ start: 10, end: 30 });
+    expect(groups[1].relations.map(r => r.relation_ref)).toContain("a_thm1");
+    expect(groups[2].units.map(u => u.unit_ref)).toContain("debt_1");
+    expect(groups[2].units.find(u => u.unit_ref === "debt_1")!.anchors[0]?.range).toEqual({ start: 40, end: 60 });
+
+    const overview = proposalOverview(proposal, groups);
+    expect(overview.semanticNodes).toBe(4);
+    expect(overview.relations).toBeGreaterThanOrEqual(4); // in_theory, scope_of, a_thm1, debt_on
+    expect(overview.relationList.find(r => r.ref === "a_thm1")?.source.title).toBe("定理 1（原文单元）");
+    expect(overview.groups.map(g => g.pages)).toEqual([{ from: 8, to: 8 }, { from: 13, to: 13 }, { from: 33, to: 33 }]);
+  });
 });
 
