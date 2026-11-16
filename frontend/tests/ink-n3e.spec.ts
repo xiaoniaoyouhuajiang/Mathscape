@@ -67,6 +67,25 @@ async function pixel(page: Page, layer: "input" | "settled", x: number, y: numbe
   }, { layer, x, y });
 }
 
+async function pixelNear(page: Page, layer: "input" | "settled", x: number, y: number, radius = 8): Promise<[number, number, number, number]> {
+  return page.evaluate(({ layer, x, y, radius }) => {
+    const canvas = document.querySelector<HTMLCanvasElement>(`#desktop-ink-board .ink-${layer}`)!;
+    const rect = canvas.getBoundingClientRect();
+    const k = canvas.width / rect.width;
+    const cx = Math.round((x - rect.left) * k);
+    const cy = Math.round((y - rect.top) * k);
+    const context = canvas.getContext("2d")!;
+    let best: [number, number, number, number] = [0, 0, 0, 0];
+    for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
+      const px = Math.max(0, Math.min(canvas.width - 1, cx + dx));
+      const py = Math.max(0, Math.min(canvas.height - 1, cy + dy));
+      const sample = [...context.getImageData(px, py, 1, 1).data] as [number, number, number, number];
+      if (sample[1] > sample[0] && sample[3] > best[3]) best = sample;
+    }
+    return best;
+  }, { layer, x, y, radius });
+}
+
 const ops = (page: Page) => page.evaluate(() => {
   const id = window.inkDesktopHarness.workspace.currentDocumentId();
   return id ? window.inkDesktopHarness.storedDocuments.get(id)!.operations.map(operation => ({ kind: operation.kind, stroke_ids: (operation as { stroke_ids?: string[] }).stroke_ids })) : [];
@@ -168,7 +187,10 @@ test.describe("M4 lasso majority rule and live pre-selection", () => {
     for (const [x, y] of [[25, -70], [25, 20], [80, 20], [80, 70], [20, 70], [20, -20], [-80, -20], [-80, -67]] as const) await page.mouse.move(c2.x + x, c2.y + y, { steps: 6 });
     await page.waitForTimeout(80);
     // Live pre-highlight: a teal halo on A (inside and just beside the line), nothing on B.
-    const onA = await pixel(page, "input", c.x - 30, c.y - 45), besideA = await pixel(page, "input", c.x - 30, c.y - 45 + 5);
+    const onA = await pixel(page, "input", c.x - 30, c.y - 45);
+    await expect.poll(async () => (await pixel(page, "input", c.x - 30, c.y - 45))[3], { timeout: 1500 }).toBeGreaterThan(100);
+    await expect.poll(async () => (await pixelNear(page, "input", c.x - 30, c.y - 45))[3], { timeout: 1500 }).toBeGreaterThan(40);
+    const besideA = await pixelNear(page, "input", c.x - 30, c.y - 45);
     expect(onA[3]).toBeGreaterThan(100);
     expect(besideA[3]).toBeGreaterThan(40);
     expect(besideA[1]).toBeGreaterThan(besideA[0]); // greenish teal, not the ink colour

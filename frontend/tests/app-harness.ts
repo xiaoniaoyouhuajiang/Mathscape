@@ -27,9 +27,33 @@ const citeNode = { id: "r-cite-unit", element_kind: "entity", domain_id: citeUni
 // Composer @ mentions: a second canonical node so the menu has something to filter.
 const citeArtId = "mathscape:artifact/" + "cd34".repeat(16);
 const citeArtNode = { id: "r-cite-art", element_kind: "entity", domain_id: citeArtId, domain_kind: "SourceArtifact", relation_kind: null, layer: "source", label: "紧集讲义.pdf", summary: null, lifecycle: "active", parent: null, boundary: false };
+const richMapNodes = [
+  { id: "r-meta-1", element_kind: "entity", domain_id: "meta-1", domain_kind: "SourceArtifact", relation_kind: null, layer: "source", label: "notes · PDF 1-2 页 · 解析元数据", summary: "application/json · 128 bytes · available", lifecycle: "active", parent: null, boundary: false },
+  { id: "r-span-1", element_kind: "entity", domain_id: "span-1", domain_kind: "SourceSpan", relation_kind: null, layer: "source", label: "来源范围", summary: "Markdown 字节范围", lifecycle: "active", parent: null, boundary: true },
+  { id: "r-sem-t", element_kind: "entity", domain_id: "sem-t", domain_kind: "SemanticEntity", relation_kind: null, layer: "global_semantic", label: "理论：实数与序列", summary: "理论", lifecycle: "active", parent: null, boundary: false },
+  { id: "r-sem-c", element_kind: "entity", domain_id: "sem-c", domain_kind: "SemanticEntity", relation_kind: null, layer: "global_semantic", label: "概念：收敛数列", summary: "概念", lifecycle: "active", parent: null, boundary: false },
+  { id: "rel-loc-1", element_kind: "relation", domain_id: "rel:loc:1", domain_kind: "Evidence", relation_kind: "located_in", layer: "source", label: "来源于 Markdown", summary: null, lifecycle: "active", parent: null, boundary: false },
+  { id: "rel-cs-1", element_kind: "relation", domain_id: "rel:cs:1", domain_kind: "SourceUnitRelation", relation_kind: "contains_span", layer: "source", label: "对应原文", summary: null, lifecycle: "active", parent: null, boundary: false },
+  { id: "rel-it-1", element_kind: "relation", domain_id: "rel:it:1", domain_kind: "SemanticEntity", relation_kind: "in_theory", layer: "global_semantic", label: "属于理论", summary: null, lifecycle: "active", parent: null, boundary: false },
+  { id: "rel-al-1", element_kind: "relation", domain_id: "rel:al:1", domain_kind: "Alignment", relation_kind: "aligns", layer: "alignment", label: "说的就是它", summary: null, lifecycle: "active", parent: null, boundary: false },
+];
+const richMapEdges = [
+  { id: "e-loc-in", source: "r-span-1", target: "rel-loc-1", relation_id: "rel:loc:1", role: "span", ordinal: null, direction: "into_relation", directed: true },
+  { id: "e-loc-out", source: "rel-loc-1", target: "r-md-1", relation_id: "rel:loc:1", role: "artifact", ordinal: null, direction: "out_of_relation", directed: true },
+  { id: "e-cs-in", source: "r-cite-unit", target: "rel-cs-1", relation_id: "rel:cs:1", role: "unit", ordinal: null, direction: "into_relation", directed: true },
+  { id: "e-cs-out", source: "rel-cs-1", target: "r-span-1", relation_id: "rel:cs:1", role: "span", ordinal: null, direction: "out_of_relation", directed: true },
+  { id: "e-it-in", source: "r-sem-c", target: "rel-it-1", relation_id: "rel:it:1", role: "member", ordinal: null, direction: "into_relation", directed: true },
+  { id: "e-it-out", source: "rel-it-1", target: "r-sem-t", relation_id: "rel:it:1", role: "theory", ordinal: null, direction: "out_of_relation", directed: true },
+  { id: "e-al-in", source: "r-cite-unit", target: "rel-al-1", relation_id: "rel:al:1", role: "source", ordinal: null, direction: "into_relation", directed: true },
+  { id: "e-al-out", source: "rel-al-1", target: "r-sem-c", relation_id: "rel:al:1", role: "target", ordinal: null, direction: "out_of_relation", directed: true },
+];
 extraCommands.set("get_desktop_snapshot", () => {
   const value = structuredClone(snapshot);
   if (sessionStorage.getItem("harness.sandbox") === "1") value.landscape_graph.nodes.push(structuredClone(citeNode), structuredClone(citeArtNode));
+  if (sessionStorage.getItem("harness.richMap") === "1") {
+    (value.landscape_graph.nodes as unknown[]).push(structuredClone(citeNode), ...structuredClone(richMapNodes));
+    (value.landscape_graph.edges as unknown[]).push(...structuredClone(richMapEdges));
+  }
   // Sync ensure: while the harness "Marker" runs, the PDF node says 解析中.
   if (sandboxRound.parsingNow) {
     const pdf = value.landscape_graph.nodes.find((node: { id: string }) => node.id === "r-pdf-notes");

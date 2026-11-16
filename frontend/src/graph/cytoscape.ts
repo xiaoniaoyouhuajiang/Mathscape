@@ -1,5 +1,4 @@
 import cytoscape, {
-  type CollectionReturnValue,
   type Core,
   type ElementDefinition,
   type StylesheetJson,
@@ -13,6 +12,7 @@ import {
   type IncidenceNode,
 } from "./projection";
 import { FOCUS_CONTRACTION_KIND } from "./focus";
+import { computeLandscapeLayout, type MapPoint } from "./layout";
 import { EDGE_TYPES, NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
 import {
   bindLabelHover,
@@ -191,14 +191,26 @@ function buildSemanticEdges(
 
     if (endpoints.length < 2) continue;
 
-    const sources = endpoints.filter(
+    // Deduplicate identical endpoints (e.g. a folded canonical markdown node
+    // referenced by multiple output spokes of one conversion run).
+    const deduped: typeof endpoints = [];
+    const seenEndpointKeys = new Set<string>();
+    for (const ep of endpoints) {
+      const key = `${ep.entity}:${ep.direction}:${ep.evidence ? "1" : "0"}`;
+      if (seenEndpointKeys.has(key)) continue;
+      seenEndpointKeys.add(key);
+      deduped.push(ep);
+    }
+    if (deduped.length < 2) continue;
+
+    const sources = deduped.filter(
       (e) => e.direction === "into_relation" && !e.evidence,
     );
-    const targets = endpoints.filter(
+    const targets = deduped.filter(
       (e) => e.direction === "out_of_relation" && !e.evidence,
     );
-    const evidenceEndpoints = endpoints.filter((e) => e.evidence);
-    const regularEndpoints = endpoints.filter((e) => !e.evidence);
+    const evidenceEndpoints = deduped.filter((e) => e.evidence);
+    const regularEndpoints = deduped.filter((e) => !e.evidence);
 
     if (sources.length === 1 && targets.length === 1 && regularEndpoints.length === 2) {
       // Keep the mathematical source → target backbone direct even when the
@@ -244,11 +256,11 @@ function buildSemanticEdges(
       continue;
     }
 
-    if (endpoints.length === 2) {
+    if (deduped.length === 2) {
       // Binary relation without evidence: keep explicit direction, or fall
       // back to an undirected edge when the endpoint roles are ambiguous.
-      const binarySources = endpoints.filter((e) => e.direction === "into_relation");
-      const binaryTargets = endpoints.filter((e) => e.direction === "out_of_relation");
+      const binarySources = deduped.filter((e) => e.direction === "into_relation");
+      const binaryTargets = deduped.filter((e) => e.direction === "out_of_relation");
 
       let edgeSource: string;
       let edgeTarget: string;
@@ -260,13 +272,13 @@ function buildSemanticEdges(
         directed = true;
       } else if (binarySources.length === 0 && binaryTargets.length === 0) {
         // Both undirected.
-        edgeSource = endpoints[0].entity;
-        edgeTarget = endpoints[1].entity;
+        edgeSource = deduped[0].entity;
+        edgeTarget = deduped[1].entity;
         directed = false;
       } else {
         // Mixed or ambiguous directions: default to undirected to avoid fabricating arrows.
-        edgeSource = endpoints[0].entity;
-        edgeTarget = endpoints[1].entity;
+        edgeSource = deduped[0].entity;
+        edgeTarget = deduped[1].entity;
         directed = false;
       }
 
@@ -300,8 +312,8 @@ function buildSemanticEdges(
         },
       });
 
-      for (let i = 0; i < endpoints.length; i++) {
-        const ep = endpoints[i];
+      for (let i = 0; i < deduped.length; i++) {
+        const ep = deduped[i];
         const isInto = ep.direction === "into_relation";
         result.push({
           group: "edges",
@@ -776,40 +788,57 @@ export function mountCytoscapeGraph(
   container: HTMLElement,
   graph: IncidenceGraph,
   renderMode: RenderMode = "semantic",
-  options?: { labelHover?: LabelHoverOptions },
+  options?: { labelHover?: LabelHoverOptions; positions?: ReadonlyMap<string, MapPoint> },
 ): Core {
+  const rect = container.getBoundingClientRect();
+  const positions =
+    options?.positions ??
+    computeLandscapeLayout(graph, { width: rect.width, height: rect.height });
+  const elements = toCytoscapeElements(graph, renderMode).map((el) => {
+    if (el.group !== "nodes") return el;
+    const pos = positions.get(String(el.data.id));
+    return pos ? { ...el, position: { x: pos.x, y: pos.y } } : el;
+  });
   const core = cytoscape({
     container,
-    elements: toCytoscapeElements(graph, renderMode),
+    elements,
     style: styles,
+    layout: { name: "preset", fit: false },
     minZoom: 0.08,
     maxZoom: 4,
   });
-  runLayout(core, core.elements(), true);
+  if (core.elements().nonempty() && core.width() > 0 && core.height() > 0) {
+    core.fit(undefined, 28);
+  }
   bindLabelHover(core, options?.labelHover);
   return core;
 }
 
 /**
  * Brings an already-mounted instance in line with `graph` without tearing it
- * down, so nodes the user has already located on screen keep their position.
- *
- * Only newly added nodes are laid out: everything that survives the diff is
- * locked for the duration of the layout run, and the viewport is left alone
- * unless the element set was replaced wholesale (a render-mode switch, or the
- * first graph after an empty canvas).
+ * down, using deterministic `basePositions` so toggling filter checkboxes in
+ * any order places every node back at its exact settled coordinate.
  */
 export function syncCytoscapeGraph(
   core: Core,
   graph: IncidenceGraph,
   renderMode: RenderMode = "semantic",
+  options?: {
+    positions?: ReadonlyMap<string, MapPoint>;
+    fit?: boolean;
+    updateExistingPositions?: boolean;
+  },
 ): void {
+  const positions =
+    options?.positions ??
+    computeLandscapeLayout(graph, { width: core.width(), height: core.height() });
   const desired = new Map(
     toCytoscapeElements(graph, renderMode).map(
       (element) => [String(element.data.id), element] as const,
     ),
   );
 
+  const wasEmpty = core.nodes().empty();
   const staleIds: string[] = [];
   const additions: ElementDefinition[] = [];
   core.elements().forEach((element) => {
@@ -818,7 +847,8 @@ export function syncCytoscapeGraph(
   for (const [id, element] of desired) {
     const existing = core.getElementById(id);
     if (existing.empty()) {
-      additions.push(element);
+      const pos = element.group === "nodes" ? positions.get(id) : undefined;
+      additions.push(pos ? { ...element, position: { x: pos.x, y: pos.y } } : element);
       continue;
     }
     // Cytoscape cannot repoint an existing edge, so an edge that kept its ID
@@ -834,14 +864,22 @@ export function syncCytoscapeGraph(
     }
     existing.data(element.data);
     existing.classes(element.classes ?? "");
+    if (
+      existing.isNode() &&
+      (options?.updateExistingPositions || existing.data("elementKind") === "junction")
+    ) {
+      const pos = positions.get(id);
+      if (pos) existing.position({ x: pos.x, y: pos.y });
+    }
   }
 
-  const replacedWholesale =
-    core.nodes().empty() ||
+  const allPriorRemoved =
+    !wasEmpty &&
     staleIds.filter((id) => core.getElementById(id).isNode()).length ===
       core.nodes().length;
 
-  let added = core.collection();
+  const addedNodes = additions.filter((el) => el.group === "nodes");
+  const addedEdges = additions.filter((el) => el.group === "edges");
   core.batch(() => {
     core.remove(
       staleIds.reduce(
@@ -849,19 +887,15 @@ export function syncCytoscapeGraph(
         core.collection(),
       ),
     );
-    added = core.add(additions);
+    if (addedNodes.length > 0) core.add(addedNodes);
+    if (addedEdges.length > 0) core.add(addedEdges);
   });
 
-  const addedNodes = added.nodes();
-  if (addedNodes.empty()) return;
-  if (replacedWholesale) {
-    runLayout(core, core.elements(), true);
-    return;
+  const shouldFit =
+    options?.fit ?? ((wasEmpty || allPriorRemoved) && core.nodes().nonempty());
+  if (shouldFit && core.nodes().nonempty() && core.width() > 0 && core.height() > 0) {
+    core.fit(undefined, 28);
   }
-  const settled = core.nodes().difference(addedNodes);
-  settled.lock();
-  runLayout(core, core.elements(), false);
-  settled.unlock();
 }
 
 /**
@@ -898,18 +932,4 @@ export function applyFocusScope(core: Core, inScopeIds: ReadonlySet<string> | nu
       edge.toggleClass(OUT_OF_FOCUS_CLASS, !inScope);
     });
   });
-}
-
-function runLayout(core: Core, elements: CollectionReturnValue, fit: boolean): void {
-  if (elements.empty()) return;
-  elements
-    .layout({
-      name: "cose",
-      animate: false,
-      fit,
-      padding: 24,
-      randomize: false,
-    })
-    .run();
-  if (fit) core.fit(undefined, 24);
 }
