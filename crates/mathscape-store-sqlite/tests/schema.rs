@@ -146,7 +146,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 24);
+    assert_eq!(version, 25);
     assert_eq!(
         connection
             .query_row(
@@ -392,7 +392,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::prepare(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 24
+            supported: 25
         })
     ));
     cleanup(&directory);
@@ -413,7 +413,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 24);
+    assert_eq!(version, 25);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -451,7 +451,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 24);
+    assert_eq!(version, 25);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 3",
@@ -487,7 +487,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        24
+        25
     );
     assert_eq!(
         connection
@@ -540,7 +540,7 @@ fn repairs_a_v5_discovery_schema_missing_result_fingerprint() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        24
+        25
     );
     let has_result_fingerprint = connection
         .prepare("PRAGMA table_info(discovery_runs)")
@@ -1118,7 +1118,7 @@ fn upgrading_to_v10_preserves_discovery_runs_and_their_children() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        24
+        25
     );
     let violations = connection
         .prepare("PRAGMA foreign_key_check")
@@ -1158,4 +1158,54 @@ fn persists_an_immutable_acceptance_decision_and_registration_plan() {
     store.save_registration_plan(&record).unwrap();
     assert_eq!(store.registration_plan(&decision_id).unwrap(), Some(record));
     cleanup(&directory);
+}
+
+#[test]
+fn study_marks_sidecar_upserts_lists_and_clears_unread_without_touching_map() {
+    use mathscape_store_sqlite::{StudyMarkUpdate, StudyStatus};
+
+    let mut store = SqliteArtifactStore::open_in_memory().unwrap();
+    assert!(store.list_study_marks().unwrap().is_empty());
+
+    store
+        .set_study_marks_batch(
+            &[
+                StudyMarkUpdate {
+                    object_id: "mathscape:source-unit/u1".into(),
+                    status: StudyStatus::Mastered,
+                    note: None,
+                },
+                StudyMarkUpdate {
+                    object_id: "mathscape:source-unit/u2".into(),
+                    status: StudyStatus::Studying,
+                    note: Some("证明第三步待补".into()),
+                },
+            ],
+            "unix:1700000000",
+        )
+        .unwrap();
+
+    let marks = store.list_study_marks().unwrap();
+    assert_eq!(marks.len(), 2);
+    assert_eq!(marks["mathscape:source-unit/u1"].status, StudyStatus::Mastered);
+    assert_eq!(
+        marks["mathscape:source-unit/u2"].note.as_deref(),
+        Some("证明第三步待补")
+    );
+
+    // Setting back to unread without note deletes the row cleanly.
+    store
+        .set_study_marks_batch(
+            &[StudyMarkUpdate {
+                object_id: "mathscape:source-unit/u1".into(),
+                status: StudyStatus::Unread,
+                note: None,
+            }],
+            "unix:1700000001",
+        )
+        .unwrap();
+    let marks = store.list_study_marks().unwrap();
+    assert_eq!(marks.len(), 1);
+    assert!(!marks.contains_key("mathscape:source-unit/u1"));
+    assert_eq!(store.map_edit_snapshot().unwrap().base_commit, None);
 }

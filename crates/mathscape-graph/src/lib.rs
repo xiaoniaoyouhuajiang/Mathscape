@@ -12,7 +12,7 @@ pub use incidence::{
     RenderElementId,
 };
 pub use projection::{
-    GRAPH_PROJECTION_SCHEMA_VERSION, GraphProjection, GraphProjectionError, IncidenceDirection,
-    ProjectionEndpoint, ProjectionGroup, ProjectionGroupId, ProjectionLens, ProjectionNode,
-    ProjectionRelation, ProjectionRelationKind, ViewLayer,
+    GRAPH_PROJECTION_SCHEMA_VERSION, GraphProjection, GraphProjectionError, HopClass,
+    IncidenceDirection, ProjectionEndpoint, ProjectionGroup, ProjectionGroupId, ProjectionLens,
+    ProjectionNode, ProjectionRelation, ProjectionRelationKind, ViewLayer,
 };

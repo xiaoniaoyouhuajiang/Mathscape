@@ -380,7 +380,8 @@ code {
   color: #8695a2;
 }
 
-.depth-button {
+.depth-button,
+.lens-button {
   padding: 3px 8px;
   border: 1px solid #45606c;
   border-radius: 5px;
@@ -390,7 +391,8 @@ code {
   cursor: pointer;
 }
 
-.depth-button.is-active {
+.depth-button.is-active,
+.lens-button.is-active {
   border-color: #8fc8b7;
   background: #31534e;
   color: #f3fffb;

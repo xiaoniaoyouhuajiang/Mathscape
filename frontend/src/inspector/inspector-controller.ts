@@ -79,7 +79,11 @@ export class InspectorController {
     }
   }
 
-  selectNodeById(nodeId: string): void {
+  selectNodeById(nodeId: string | null): void {
+    if (nodeId === null) {
+      this.clearSelection();
+      return;
+    }
     const snapshot = this.delegate.getSnapshot();
     if (snapshot === undefined) return;
     const model = snapshot.landscape_graph.nodes.find((node) => node.id === nodeId);
@@ -90,6 +94,12 @@ export class InspectorController {
       (artifact) => artifact.artifact_id === model.domain_id,
     );
     this.renderNodeDetail(model, pdf, snapshot.marker);
+  }
+
+  clearSelection(): void {
+    if (this.inspectorLocked) return;
+    this.selectedNode = undefined;
+    this.restoreNodeDetail();
   }
 
   refreshIfUnlocked(): void {
@@ -132,6 +142,16 @@ export class InspectorController {
         "detail-staged-badge",
         `未审批提案 · ${staged.change_set_id.slice(-12)}@v${staged.change_set_version}${staged.replaces_revision ? "（替换已接受版本）" : ""}。在「审核提案」中接受后才进入正式地图。`,
       ));
+      const openProposal = textElement("button", "parse-button", "在地图联动审核中查看");
+      openProposal.type = "button";
+      openProposal.onclick = () => {
+        eventBus.emit("open-proposal-for-object", {
+          changeSetId: staged.change_set_id,
+          objectId: node.domain_id,
+          mapLinked: true,
+        });
+      };
+      actions.append(openProposal);
       // A staged edit is shown as a replacement; the accepted version is
       // still the head and can be read on demand.
       if (staged.replaces_revision && node.domain_kind === "SourceSemanticUnit") {
@@ -164,7 +184,7 @@ export class InspectorController {
       void this.renderSourceDetail(node, sourceSlot, actions);
     }
 
-    if (!staged && node.domain_id !== null && node.domain_kind !== null && SEMANTIC_DOMAIN_KINDS.has(node.domain_kind)) {
+    if (node.domain_id !== null && node.domain_kind !== null && SEMANTIC_DOMAIN_KINDS.has(node.domain_kind)) {
       void this.renderSemantic(node.domain_id, sourceSlot);
     }
 

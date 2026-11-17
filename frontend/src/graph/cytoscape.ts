@@ -20,7 +20,10 @@ import {
   LABEL_RECESS,
   LABEL_HOVER_STYLE,
   LABEL_RECESS_STYLE,
+  refreshLabels,
+  syncNodeLabel,
   type LabelHoverOptions,
+  type LabelSet,
 } from "./label-hover";
 import { graphLabelText, texToPlain } from "./tex-plain";
 
@@ -594,16 +597,6 @@ const styles: StylesheetJson = [
       "border-color": "#e0913f",
     },
   },
-  // Out-of-focus context: still drawn so the focused region keeps its place in
-  // the whole map, but faint and inert so it cannot be clicked by accident.
-  {
-    selector: ".is-out-of-focus",
-    style: {
-      opacity: 0.12,
-      events: "no",
-      label: "",
-    },
-  },
   // N2 "我的手稿" overlay (ink-overlay.ts): synthesized, never projected.
   {
     selector: "node.has-ink-notes",
@@ -752,6 +745,104 @@ const styles: StylesheetJson = [
     style: { opacity: 0.22, "transition-property": "opacity", "transition-duration": 400 },
   },
 
+  // 单击选中高亮（Selection Spotlight）：凸显当前节点及其直接关联边/邻居，退后其余背景且隐藏无关连线标签。
+  {
+    selector: "node.is-selection-receded",
+    style: {
+      opacity: 0.2,
+    },
+  },
+  {
+    selector: "edge.is-selection-receded",
+    style: {
+      opacity: 0.12,
+      "text-opacity": 0,
+      "text-background-opacity": 0,
+      "text-border-opacity": 0,
+    },
+  },
+  {
+    selector: "node.is-focus-root",
+    style: {
+      "border-width": 4,
+      "border-color": "#ffd89a",
+      "underlay-color": "#ffd89a",
+      "underlay-opacity": 0.25,
+      "underlay-padding": 6,
+      "z-index": 32,
+      opacity: 1,
+    },
+  },
+  {
+    selector: "edge.is-focus-root",
+    style: {
+      width: 3.4,
+      "underlay-color": "#ffd89a",
+      "underlay-opacity": 0.25,
+      "underlay-padding": 4,
+      "z-index": 32,
+      opacity: 1,
+    },
+  },
+  {
+    selector: "node.is-selected-neighbor",
+    style: {
+      "border-width": 2.6,
+      "border-color": "#9eb6ff",
+      "underlay-color": "#9eb6ff",
+      "underlay-opacity": 0.2,
+      "underlay-padding": 5,
+      "z-index": 36,
+      opacity: 1,
+      color: "#eef4ff",
+      "text-background-opacity": 0.92,
+    },
+  },
+  {
+    selector: "node.is-selected-primary, node:selected",
+    style: {
+      "border-width": 3.6,
+      "border-color": "#ffd84a",
+      "underlay-color": "#ffd84a",
+      "underlay-opacity": 0.3,
+      "underlay-padding": 7,
+      "z-index": 50,
+      opacity: 1,
+      color: "#fff6dc",
+      "text-background-color": "#0c131a",
+      "text-background-opacity": 0.95,
+      "text-border-color": "#6e5a2a",
+      "text-border-width": 1,
+      "text-border-opacity": 1,
+    },
+  },
+  {
+    selector: "edge.is-selected-edge, edge:selected",
+    style: {
+      width: 3.2,
+      opacity: 1,
+      "z-index": 45,
+      color: "#ffe6a6",
+      "text-background-color": "#0c131a",
+      "text-background-opacity": 0.95,
+      "text-border-color": "#6e5a2a",
+      "text-border-width": 1,
+      "text-border-opacity": 1,
+    },
+  },
+
+  // Out-of-focus context: placed after staged / ink / selection rules so out-of-focus
+  // elements are always faint, label-free, and non-interactive.
+  {
+    selector: ".is-out-of-focus",
+    style: {
+      opacity: 0.08,
+      events: "no",
+      label: "",
+      "underlay-opacity": 0,
+    },
+  },
+
   {
     selector: `node.${LABEL_HOVER}`,
     style: { ...LABEL_HOVER_STYLE },
@@ -779,6 +870,11 @@ const styles: StylesheetJson = [
 ];
 
 export const OUT_OF_FOCUS_CLASS = "is-out-of-focus";
+export const FOCUS_ROOT_CLASS = "is-focus-root";
+export const SELECTED_PRIMARY_CLASS = "is-selected-primary";
+export const SELECTED_NEIGHBOR_CLASS = "is-selected-neighbor";
+export const SELECTED_EDGE_CLASS = "is-selected-edge";
+export const SELECTION_RECEDED_CLASS = "is-selection-receded";
 
 // ---------------------------------------------------------------------------
 // Graph mounting
@@ -907,29 +1003,134 @@ export function syncCytoscapeGraph(
  * that semantic-edge mode invents have IDs the caller cannot know, so their
  * scope is derived from the endpoints they connect.
  */
-export function applyFocusScope(core: Core, inScopeIds: ReadonlySet<string> | null): void {
+export function applyFocusScope(
+  core: Core,
+  inScopeIds: ReadonlySet<string> | null,
+  inScopeRelationIds?: ReadonlySet<string> | null,
+  focusRootId?: string | null,
+  focusRootDomainId?: string | null,
+): void {
   core.batch(() => {
+    core.elements().removeClass(FOCUS_ROOT_CLASS);
     if (inScopeIds === null) {
       core.elements().removeClass(OUT_OF_FOCUS_CLASS);
       return;
     }
     const junctions = core.nodes('[elementKind = "junction"]');
-    core.nodes().difference(junctions).forEach((node) => {
+    const inkNodes = core.nodes(".ink-note-node");
+    core.nodes().difference(junctions).difference(inkNodes).forEach((node) => {
       node.toggleClass(OUT_OF_FOCUS_CLASS, !inScopeIds.has(node.id()));
+      if (focusRootId && node.id() === focusRootId) {
+        node.addClass(FOCUS_ROOT_CLASS);
+      }
+    });
+    // Synthesized ink-note nodes stay visible iff at least one attached host target is in focus.
+    inkNodes.forEach((inkNode) => {
+      const hosts = inkNode.connectedEdges(".ink-note-edge").connectedNodes().difference(inkNodes);
+      const anyHostInScope = hosts.nonempty() && hosts.not(`.${OUT_OF_FOCUS_CLASS}`).nonempty();
+      inkNode.toggleClass(OUT_OF_FOCUS_CLASS, !anyHostInScope);
     });
     // A junction stands in for one relation, so it belongs to the focused
-    // region only when every endpoint it gathers does.
+    // region only when every endpoint it gathers does (and its relation is in scope).
     junctions.forEach((junction) => {
       const endpoints = junction.neighborhood().nodes();
+      const relId = junction.data("domainId") ?? junction.id();
+      const relAllowed =
+        !inScopeRelationIds || (typeof relId === "string" && inScopeRelationIds.has(relId));
       const inScope =
-        endpoints.nonempty() && endpoints.filter(`.${OUT_OF_FOCUS_CLASS}`).empty();
+        relAllowed &&
+        endpoints.nonempty() &&
+        endpoints.filter(`.${OUT_OF_FOCUS_CLASS}`).empty();
       junction.toggleClass(OUT_OF_FOCUS_CLASS, !inScope);
     });
     core.edges().forEach((edge) => {
+      const relId = edge.data("relationId");
+      const relAllowed =
+        !inScopeRelationIds ||
+        edge.hasClass("ink-note-edge") ||
+        (typeof relId === "string" && inScopeRelationIds.has(relId));
       const inScope =
+        relAllowed &&
         !edge.source().hasClass(OUT_OF_FOCUS_CLASS) &&
         !edge.target().hasClass(OUT_OF_FOCUS_CLASS);
       edge.toggleClass(OUT_OF_FOCUS_CLASS, !inScope);
+      if (inScope && focusRootDomainId && relId === focusRootDomainId) {
+        edge.addClass(FOCUS_ROOT_CLASS);
+      }
     });
   });
+}
+
+/**
+ * Highlights a single-clicked node or relation (`selectedId`) together with its
+ * 1-hop connected edges and neighbor nodes, gently receding all other visible
+ * elements and hiding non-incident edge labels to cut visual clutter.
+ */
+export function applySelectionSpotlight(
+  core: Core,
+  selectedId: string | null,
+  displayedGraph?: IncidenceGraph,
+): void {
+  const SPOTLIGHT_CLASSES = `${SELECTED_PRIMARY_CLASS} ${SELECTED_NEIGHBOR_CLASS} ${SELECTED_EDGE_CLASS} ${SELECTION_RECEDED_CLASS}`;
+  const previouslyHighlighted = core.nodes(`.${SELECTED_PRIMARY_CLASS}`);
+  core.batch(() => {
+    core.elements().removeClass(SPOTLIGHT_CLASSES);
+    previouslyHighlighted.forEach((node) => {
+      syncNodeLabel(node, node.hasClass(LABEL_HOVER) || node.hasClass(FOCUS_ROOT_CLASS));
+    });
+  });
+
+  if (!selectedId) {
+    if (previouslyHighlighted.nonempty()) {
+      refreshLabels(core, previouslyHighlighted as unknown as LabelSet);
+    }
+    return;
+  }
+
+  let primaryNodes = core.collection();
+  let neighborNodes = core.collection();
+  let highlightedEdges = core.collection();
+
+  const directNode = core.getElementById(selectedId);
+  if (directNode.nonempty() && directNode.isNode() && !directNode.hasClass(OUT_OF_FOCUS_CLASS)) {
+    primaryNodes = directNode;
+    let incEdges = directNode.connectedEdges().not(`.${OUT_OF_FOCUS_CLASS}`);
+    const adjJunctions = incEdges.connectedNodes('[elementKind = "junction"]').not(`.${OUT_OF_FOCUS_CLASS}`);
+    if (adjJunctions.nonempty()) {
+      incEdges = incEdges.union(adjJunctions.connectedEdges().not(`.${OUT_OF_FOCUS_CLASS}`));
+    }
+    highlightedEdges = incEdges;
+    neighborNodes = incEdges.connectedNodes().not(`.${OUT_OF_FOCUS_CLASS}`).difference(directNode);
+  } else if (displayedGraph) {
+    const relModel = displayedGraph.nodes.find(
+      (n) => n.id === selectedId && n.element_kind === "relation",
+    );
+    if (relModel) {
+      const relKey = relModel.domain_id ?? relModel.id;
+      const matchingEdges = core.edges().filter(
+        (e) => e.data("relationId") === relKey && !e.hasClass(OUT_OF_FOCUS_CLASS),
+      );
+      if (matchingEdges.nonempty()) {
+        highlightedEdges = matchingEdges;
+        neighborNodes = matchingEdges.connectedNodes().not(`.${OUT_OF_FOCUS_CLASS}`);
+      }
+    }
+  }
+
+  if (primaryNodes.empty() && highlightedEdges.empty()) {
+    if (previouslyHighlighted.nonempty()) {
+      refreshLabels(core, previouslyHighlighted as unknown as LabelSet);
+    }
+    return;
+  }
+
+  const inSpotlight = primaryNodes.union(neighborNodes).union(highlightedEdges);
+  core.batch(() => {
+    primaryNodes.nodes().addClass(SELECTED_PRIMARY_CLASS);
+    neighborNodes.nodes().addClass(SELECTED_NEIGHBOR_CLASS);
+    highlightedEdges.edges().addClass(SELECTED_EDGE_CLASS);
+    core.elements().not(`.${OUT_OF_FOCUS_CLASS}`).difference(inSpotlight).addClass(SELECTION_RECEDED_CLASS);
+    primaryNodes.nodes().forEach((node) => syncNodeLabel(node, true));
+  });
+  refreshLabels(core, primaryNodes.nodes().union(previouslyHighlighted) as unknown as LabelSet);
 }

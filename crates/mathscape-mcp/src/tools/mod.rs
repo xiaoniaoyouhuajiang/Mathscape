@@ -77,7 +77,10 @@ pub const LIST_CHANGE_SETS: &str = "list_change_sets";
 /// `semantic_entity` (incl. `scope="investigation"`), and `graph.get` /
 /// `graph.neighborhood` navigate semantic nodes and relations
 /// (docs/semantic-write-contract.md).
-pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/17";
+/// `/18`: `graph.neighborhood` adds typed-hop `preset` (`heuristic` default
+/// when `edge_types` is omitted, plus `structural`, `semantic_only`, `raw`)
+/// and projects `uses_entity`, `of_concept`, and `paid_by` relations.
+pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/18";
 
 /// sha256 of the serialized [`tool_definitions`] with object keys sorted (so
 /// the value does not depend on serde_json's `preserve_order` feature), for
@@ -295,8 +298,8 @@ mod schema_version_tests {
     /// tool name, description or schema changes the fingerprint: bump
     /// `TOOL_SCHEMA_VERSION` (and the skill frontmatter) and re-pin.
     const PINNED: (&str, &str) = (
-        "mathscape-mcp/17",
-        "cfe83e8ce650a13f8a694f6dcd2116b02a0c3eac668b076efe9229f6f6942589",
+        "mathscape-mcp/18",
+        "d885dcdc7f136206553c446f0b96685caa29bbbabcf3369b054117b10da56f72",
     );
 
     #[test]

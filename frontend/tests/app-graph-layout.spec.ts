@@ -68,5 +68,25 @@ test.describe("Landscape map layout stability & auxiliary noise filtering", () =
     await page.getByRole("button", { name: "整理布局" }).click();
     const resetPos = await page.evaluate(() => window.appHarness.nodePosition("r-sem-c"));
     expect(resetPos).toEqual(orig);
+
+    // Selection Spotlight: tapping a node highlights it + 1-hop neighbors and recedes unrelated nodes
+    await page.evaluate(() => window.appHarness.selectNode("r-cite-unit"));
+    expect(await page.evaluate(() => window.appHarness.withClass("is-selected-primary"))).toEqual(["r-cite-unit"]);
+    const selectedNeighbors = await page.evaluate(() => window.appHarness.withClass("is-selected-neighbor"));
+    expect(selectedNeighbors).toContain("r-sem-c");
+    expect(selectedNeighbors).toContain("r-span-1");
+    expect(await page.evaluate(() => window.appHarness.withClass("is-selection-receded")).then(ids => ids.length)).toBeGreaterThan(0);
+
+    // Focus Mode ("以此为中心聚焦"): dims out-of-focus nodes persistently and marks focus root
+    await page.locator("#node-detail").getByRole("button", { name: "以此为中心聚焦" }).click();
+    await expect(page.locator("#focus-bar")).toBeVisible();
+    expect(await page.evaluate(() => window.appHarness.withClass("is-focus-root"))).toEqual(["r-cite-unit"]);
+    const outOfFocus = await page.evaluate(() => window.appHarness.withClass("is-out-of-focus"));
+    expect(outOfFocus).toContain("r-unit-thm");
+    expect(outOfFocus).not.toContain("r-sem-c");
+
+    await page.locator("#exit-focus").click();
+    await expect(page.locator("#focus-bar")).toBeHidden();
+    expect(await page.evaluate(() => window.appHarness.withClass("is-out-of-focus"))).toEqual([]);
   });
 });

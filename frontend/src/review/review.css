@@ -15,6 +15,21 @@
 }
 
 .review-workspace { position: absolute; inset: 66px 0 0; z-index: 4; display: flex; flex-direction: column; background: var(--review-bg); color: var(--review-text); }
+.review-workspace.is-map-linked {
+  inset: 66px 0 0 auto;
+  width: min(860px, 56vw);
+  border-left: 1px solid var(--review-border-strong);
+  box-shadow: -12px 0 36px rgba(0, 0, 0, 0.55);
+}
+.review-workspace.is-map-linked .review-body {
+  grid-template-columns: minmax(250px, 40%) 1fr;
+}
+.review-map-link-toggle.is-active {
+  border-color: #5fc2ad !important;
+  background: #1f4540 !important;
+  color: #e9fbf6 !important;
+}
+.review-history-diff { margin: 4px 0 6px; padding-left: 16px; color: #b8dad2; font-size: 11px; }
 .review-workspace[hidden] { display: none; }
 
 .review-header { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 6px 12px; padding: 12px 16px 10px; border-bottom: 1px solid #2d3f49; }

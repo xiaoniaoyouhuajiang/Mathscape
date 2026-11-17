@@ -205,6 +205,12 @@ export class AppShell {
         <div id="graph" class="graph-canvas"></div>
         <div id="focus-bar" class="focus-bar" aria-label="聚焦范围" hidden>
           <span class="focus-label">聚焦：<strong id="focus-root">—</strong></span>
+          <span class="focus-depth" aria-label="聚焦视角">
+            视角
+            <button class="lens-button" data-lens="heuristic" type="button" title="跨书启发邻域：穿透共享对象关联其他教材与引理，理论书架止步防爆炸">启发关联</button>
+            <button class="lens-button" data-lens="structural" type="button" title="仅展开单份材料内部的章节与书内证明关系">来源结构</button>
+            <button class="lens-button" data-lens="semantic_only" type="button" title="仅展示共享对象、理论与挂账组成的抽象语义骨架">纯语义网</button>
+          </span>
           <span class="focus-depth">
             深度
             <button class="depth-button" data-depth="1" type="button">1</button>

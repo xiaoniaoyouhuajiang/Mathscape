@@ -42,7 +42,7 @@ import { listInkNoteLinks, type InkNoteLink } from "./ink/links";
 import { searchWorkspace, type SearchHit } from "./search/api";
 import { WorkspaceSearchPanel, installWorkspaceSearch, type SearchAction } from "./search/search-panel";
 import { installInkCloseGuard } from "./ink/close-guard";
-import { reviewBeforeLeaving } from "./review/change-sets";
+import { openProposalReview, reviewBeforeLeaving } from "./review/change-sets";
 import "./styles.css";
 import "./semantic/semantic.css";
 import { LearningViewPanel } from "./semantic/learning-view";
@@ -351,8 +351,13 @@ eventBus.on("ink-split-toggle", (detail) => {
   setInkSplit(next);
 });
 
+let currentSnapshot: DesktopSnapshot | undefined;
+let inspectorController!: InspectorController;
+
 mountDiscoveryTask();
-mountReviewWorkspace(el.reviewWorkspaceHost);
+const reviewWorkspace = mountReviewWorkspace(el.reviewWorkspaceHost, {
+  getGraph: () => currentSnapshot?.landscape_graph,
+});
 const reader = new ArtifactReader(el.readerHost);
 
 const llmSettings = new LlmSettingsController(
@@ -368,9 +373,6 @@ new SandboxPanelController(el.sandboxHost, el.sandboxButton, sandboxToast, sandb
 let sandboxWindowSessionId: string | null = null;
 void mountSandboxChrome(el.shell, { toast: sandboxToast, openDialogue: (id) => void sandboxDock.open(id) })
   .then(status => { sandboxWindowSessionId = status?.sandbox?.sandboxSessionId ?? null; });
-
-let currentSnapshot: DesktopSnapshot | undefined;
-let inspectorController!: InspectorController;
 
 const discoveryLedger = new DiscoveryLedgerController(
   el.discoveryRunsList,
@@ -395,7 +397,13 @@ const graphController = new GraphController(
     emptyStateMessage: el.emptyStateMessage,
   },
   {
-    onSelectNode: (nodeId) => inspectorController.selectNodeById(nodeId),
+    onSelectNode: (nodeId) => {
+      inspectorController.selectNodeById(nodeId);
+      if (nodeId !== null && reviewWorkspace.isMapLinkedOpen()) {
+        const node = currentSnapshot?.landscape_graph.nodes.find((n) => n.id === nodeId);
+        if (node?.domain_id) reviewWorkspace.focusDomainObject(node.domain_id);
+      }
+    },
     onRequestCreateUnit: (parentId) => void inspectorController.enterCreateUnitMode(parentId),
     onRequestCreateRelation: (sourceId, targetId) =>
       void inspectorController.enterCreateRelationMode(sourceId, targetId),
@@ -410,6 +418,7 @@ const graphController = new GraphController(
     onGraphRendered: () => {
       artifactController.refreshParseState();
       scenePlayer?.reapply();
+      reviewWorkspace.reapplyMapScope();
     },
     showToast: (msg, kind) => shell.showToast(msg, kind),
     getSnapshot: () => currentSnapshot,
@@ -421,7 +430,7 @@ inspectorController = new InspectorController(el.nodeDetail, {
   getSnapshot: () => currentSnapshot,
   showToast: (msg, kind) => shell.showToast(msg, kind),
   copyIdentifier: (id) => shell.copyIdentifier(id),
-  onFocusNode: (nodeId) => graphController.setFocus(nodeId, "all"),
+  onFocusNode: (nodeId) => graphController.setFocus(nodeId),
   onOpenReader: (artifactId, label, inkFocus) => {
     if (inkSplit && inkOpen) {
       placeReaderInSplit(true);
@@ -777,6 +786,25 @@ const learningView = new LearningViewPanel(el.shell, {
 });
 el.learningViewButton.addEventListener("click", () => void learningView.open());
 eventBus.on("open-learning-view", () => void learningView.open());
+
+eventBus.on("open-proposal-for-object", (detail) => {
+  void openProposalReview(sandboxWindowSessionId, sandboxToast, {
+    changeSetId: detail.changeSetId,
+    objectId: detail.objectId,
+    mapLinked: detail.mapLinked ?? true,
+  });
+});
+
+eventBus.on("review-map-scope", (detail) => {
+  if (!detail.active) {
+    graphController.setCustomFocusScope(null, null);
+    return;
+  }
+  graphController.setCustomFocusScope(new Set(detail.nodeIds), new Set(detail.relationIds));
+  if (detail.focusDomainId) {
+    graphController.centerDomainObject(detail.focusDomainId);
+  }
+});
 
 // 帮助菜单 → 只读教程「两本书讲的是不是同一个东西」（不写工作区）。
 const tutorial = new TutorialPlayer(document.body);

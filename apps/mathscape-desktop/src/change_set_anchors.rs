@@ -296,6 +296,16 @@ impl<'a> AnchorContext<'a> {
         }
         let mut referenced = Vec::new();
         collect_span_ids(&record.proposal, &mut referenced);
+        for object in &objects {
+            let op = object.get("op").and_then(Value::as_str).unwrap_or("create");
+            if matches!(op, "edit" | "retire")
+                && let Some(target_id) = object.get("target_id").and_then(Value::as_str)
+                && let Some(payload) = self.head_payload(target_id)
+                && let Some(spans) = payload.get("evidence_spans")
+            {
+                collect_span_ids(spans, &mut referenced);
+            }
+        }
         for id in referenced {
             if claimed.contains(&id) {
                 continue;
@@ -343,12 +353,61 @@ impl<'a> AnchorContext<'a> {
             .objects
             .iter()
             .find(|object| object.object_id == id)?;
-        let title = mathscape_orchestrator::semantic_view::semantic_object_title(object);
+        let title =
+            mathscape_orchestrator::semantic_view::semantic_object_title_in(self.head, object);
         Some(if title == object.object_id {
             object.kind.clone()
         } else {
             title
         })
+    }
+
+    pub fn head_payload(&self, id: &str) -> Option<Value> {
+        let object = self
+            .head
+            .objects
+            .iter()
+            .find(|object| object.object_id == id)?;
+        Some(
+            object
+                .payload
+                .get("payload")
+                .unwrap_or(&object.payload)
+                .clone(),
+        )
+    }
+
+    pub fn head_object(&self, id: &str) -> Option<(String, Value)> {
+        let object = self
+            .head
+            .objects
+            .iter()
+            .find(|object| object.object_id == id)?;
+        let kind = match object
+            .payload
+            .get("payload_kind")
+            .and_then(Value::as_str)
+            .unwrap_or(object.kind.as_str())
+        {
+            "source_semantic_unit" | "SourceSemanticUnit" => "source_unit",
+            "semantic_entity" | "SemanticEntity" => "semantic_entity",
+            "alignment" | "Alignment" => "alignment",
+            "debt" | "Debt" => "debt",
+            "dialect_scope" | "DialectScope" => "dialect_scope",
+            "source_span" | "SourceSpan" => "source_span",
+            other => other,
+        }
+        .to_owned();
+        let payload = object
+            .payload
+            .get("payload")
+            .unwrap_or(&object.payload)
+            .clone();
+        Some((kind, payload))
+    }
+
+    pub fn head(&self) -> &MapEditSnapshot {
+        self.head
     }
 
     fn conversion(&mut self, artifact: &str) -> Option<String> {

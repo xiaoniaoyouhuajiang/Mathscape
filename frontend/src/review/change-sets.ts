@@ -26,6 +26,7 @@ import {
   type ProposalDecision, type ProposalWorkspaceController,
 } from "./proposal-model";
 import { renderDiscardConfirm, type DiscardChoice } from "./proposal-discard";
+import { findProposalTargetForDomainObject } from "./map-review-sync";
 import { openEmptyProposalReview, openReviewWorkspace } from "./workspace";
 import "./review.css";
 import "./change-sets.css";
@@ -89,12 +90,22 @@ async function discardSelections(investigationId: string, selections: ChangeSetS
   return `已丢弃 ${outcome.discarded.length} 个提案${outcome.blocked.length ? `，${outcome.blocked.length} 个依赖方转为阻塞` : ""}`;
 }
 
+export interface OpenProposalReviewOptions {
+  changeSetId?: string | null;
+  objectId?: string | null;
+  mapLinked?: boolean;
+}
+
 /** Opens manual review of a session (or this window) in the review workspace. */
-export async function openProposalReview(sandboxSessionId: string | null, toast: Toast): Promise<void> {
+export async function openProposalReview(
+  sandboxSessionId: string | null,
+  toast: Toast,
+  options?: OpenProposalReviewOptions,
+): Promise<void> {
   let investigationId: string | null;
   try { investigationId = await investigationFor(sandboxSessionId); } catch (error) { toast(message(error), "error"); return; }
   if (!investigationId) { toast("当前工作区没有调查（只有沙箱会话会产生提案）", "error"); return; }
-  const session = new ProposalWorkspaceSession(investigationId);
+  const session = new ProposalWorkspaceSession(investigationId, options?.mapLinked);
   try {
     await session.reload();
   } catch (error) {
@@ -105,6 +116,13 @@ export async function openProposalReview(sandboxSessionId: string | null, toast:
   // Open the workspace on an explicit empty state: a toast alone is easy to
   // miss (the dialogue dock can sit on top of it).
   if (!first) { openEmptyProposalReview(investigationId); return; }
+  if (options?.objectId || options?.changeSetId) {
+    const located = findProposalTargetForDomainObject(session.items, options.objectId, options.changeSetId);
+    if (located) {
+      await session.open(located.changeSetKey, undefined, located.focusTarget ?? undefined);
+      return;
+    }
+  }
   await session.open(keyOf(first));
 }
 
@@ -117,7 +135,7 @@ class ProposalWorkspaceSession implements ProposalWorkspaceController {
   items: PendingChangeSet[] = [];
   private docs = new Map<string, Promise<{ document: AnchoredMarkdown; conversionId: string | null }>>();
 
-  constructor(readonly investigationId: string) {}
+  constructor(readonly investigationId: string, private initialMapLinked?: boolean) {}
 
   async reload(): Promise<void> {
     this.items = (await listQueue(this.investigationId)).items;
@@ -154,8 +172,11 @@ class ProposalWorkspaceSession implements ProposalWorkspaceController {
     } else {
       documentError = "该提案没有 Markdown 锚点（只引用了手稿证据或不含证据）。";
     }
+    const initialMapLinked = this.initialMapLinked;
+    this.initialMapLinked = undefined;
     openReviewWorkspace(proposalDiscoveryOutcome(item, group, document?.snapshot.content_hash ?? ""), {
       title: titleOf(item),
+      ...(initialMapLinked !== undefined ? { mapLinked: initialMapLinked } : {}),
       proposal: {
         changeSetId: item.changeSetId, version: item.version, state: item.state, proposedBy: item.proposedBy,
         snapshot: group.source.artifact_id, item, items: this.items, groupIndex: index, groupCount: groups.length, overview,

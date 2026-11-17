@@ -9,11 +9,15 @@ import {
 import { applyStagedOverlay } from "./staged-overlay";
 import {
   applyFocusScope,
+  applySelectionSpotlight,
+  FOCUS_ROOT_CLASS,
   mountCytoscapeGraph,
+  OUT_OF_FOCUS_CLASS,
+  SELECTED_PRIMARY_CLASS,
   syncCytoscapeGraph,
   type RenderMode,
 } from "./cytoscape";
-import { focusSubgraph, type FocusDepth, type FocusResult } from "./focus";
+import { focusSubgraph, type FocusDepth, type FocusLens, type FocusResult } from "./focus";
 import { applyInkOverlay, clearInkOverlay, INK_NOTE_NODE_CLASS, type InkOverlayResult } from "./ink-overlay";
 import {
   collapseRedundantConversions,
@@ -76,7 +80,7 @@ export interface GraphControllerElements {
 }
 
 export interface GraphControllerDelegate {
-  onSelectNode: (nodeId: string) => void;
+  onSelectNode: (nodeId: string | null) => void;
   onRequestCreateUnit: (parentId: string) => void;
   onRequestCreateRelation: (sourceId: string, targetId: string) => void;
   onBeforeRenderGraph?: () => void;
@@ -92,10 +96,19 @@ export class GraphController {
   private displayedGraph?: IncidenceGraph;
   private renderMode: RenderMode = "semantic";
   private focusRootId: string | null = null;
-  private focusDepth: FocusDepth = "all";
+  private focusDepth: FocusDepth = 2;
+  private focusLens: FocusLens = "heuristic";
   private pendingRelationSourceId: string | null = null;
   /** Last applied focus-mode scope, so a map scene can put it back. */
   private focusScope: ReadonlySet<string> | null = null;
+  private focusRelationScope: ReadonlySet<string> | null = null;
+  /** Temporary scope override from Map-Linked Review Drawer, kept separate so closing review restores Focus Mode. */
+  private customFocusScope: {
+    nodeIds: ReadonlySet<string>;
+    relationIds: ReadonlySet<string> | null;
+  } | null = null;
+  /** Currently single-clicked projection element id for 1-hop Selection Spotlight. */
+  private selectedElementId: string | null = null;
 
   private visibleNodeKinds = new Set<string>(PRESET_NODE_KINDS.source);
   private activePreset: PresetName | "custom" = "source";
@@ -134,23 +147,110 @@ export class GraphController {
     this.pendingRelationSourceId = id;
   }
 
-  /** Re-apply the focus-mode dim (after a sandbox map scene used it). */
+  /** Re-apply the focus-mode dim and selection spotlight (after a sandbox map scene or ink refresh). */
   reapplyFocusScope(): void {
-    if (this.graphCore) applyFocusScope(this.graphCore, this.focusScope);
+    this.applyEffectiveFocusAndSelection();
+  }
+
+  private applyEffectiveFocusAndSelection(): void {
+    if (!this.graphCore) return;
+    const snapshot = this.delegate.getSnapshot();
+    const rootModel =
+      this.focusRootId !== null
+        ? snapshot?.landscape_graph.nodes.find((n) => n.id === this.focusRootId)
+        : undefined;
+    const effectiveNodes = this.customFocusScope ? this.customFocusScope.nodeIds : this.focusScope;
+    const effectiveRels = this.customFocusScope ? this.customFocusScope.relationIds : this.focusRelationScope;
+    applyFocusScope(
+      this.graphCore,
+      effectiveNodes,
+      effectiveRels,
+      this.customFocusScope ? null : this.focusRootId,
+      this.customFocusScope ? null : (rootModel?.domain_id ?? null),
+    );
+    applySelectionSpotlight(this.graphCore, this.selectedElementId, this.displayedGraph);
+  }
+
+  private fitInFocusElements(): void {
+    const core = this.graphCore;
+    if (!core || core.width() <= 0 || core.height() <= 0) return;
+    const active = core.elements().not(`.${OUT_OF_FOCUS_CLASS}`);
+    if (active.empty()) return;
+    core.fit(active, 56);
+    if (core.zoom() > 1.35) {
+      core.zoom({ level: 1.35, renderedPosition: { x: core.width() / 2, y: core.height() / 2 } });
+    }
   }
 
   resize(): void {
     this.graphCore?.resize();
   }
 
-  setFocus(id: string, depth: FocusDepth): void {
+  defaultFocusDepthFor(node: IncidenceNode | undefined): FocusDepth {
+    if (node?.domain_kind === "SourceArtifact") return "all";
+    return 2;
+  }
+
+  setFocus(id: string, depth?: FocusDepth, lens?: FocusLens): void {
+    const node = this.delegate.getSnapshot()?.landscape_graph.nodes.find((n) => n.id === id);
     this.focusRootId = id;
-    this.focusDepth = depth;
+    this.selectedElementId = null;
+    this.focusDepth = depth ?? this.defaultFocusDepthFor(node);
+    if (lens !== undefined) {
+      this.focusLens = lens;
+    } else if (
+      node &&
+      (SEMANTIC_NODE_KINDS.has(node.domain_kind ?? "") || node.domain_kind === "Alignment") &&
+      this.focusLens === "structural"
+    ) {
+      // Semantic nodes have no intra-book derivation tree; switch back to heuristic.
+      this.focusLens = "heuristic";
+    }
+    if (
+      node &&
+      (SEMANTIC_NODE_KINDS.has(node.domain_kind ?? "") ||
+        node.domain_kind === "Alignment" ||
+        this.focusLens === "semantic_only") &&
+      !this.visibleNodeKinds.has("SemanticEntity")
+    ) {
+      this.visibleNodeKinds.add("SemanticEntity");
+      this.activePreset = "custom";
+      this.syncCheckboxesToFilter();
+      this.persistFilter();
+    }
     this.renderCurrentGraph();
+    this.fitInFocusElements();
+  }
+
+  /** Apply an arbitrary multi-node focus scope (e.g. from the Map-Linked Review Drawer). */
+  setCustomFocusScope(nodeIds: ReadonlySet<string> | null, relationIds?: ReadonlySet<string> | null): void {
+    this.customFocusScope =
+      nodeIds === null ? null : { nodeIds, relationIds: relationIds ?? null };
+    this.applyEffectiveFocusAndSelection();
+  }
+
+  centerDomainObject(domainId: string): void {
+    const core = this.graphCore;
+    const snapshot = this.delegate.getSnapshot();
+    if (!core || !snapshot) return;
+    const node = snapshot.landscape_graph.nodes.find((n) => n.domain_id === domainId);
+    if (!node) return;
+    this.selectedElementId = node.id;
+    this.applyEffectiveFocusAndSelection();
+    const elem =
+      node.element_kind === "relation"
+        ? core.edges().filter((e) => e.data("relationId") === (node.domain_id ?? node.id))
+        : core.getElementById(node.id);
+    if (!elem || elem.empty()) return;
+    core.elements().unselect();
+    elem.select();
+    core.center(elem);
   }
 
   exitFocus(): void {
     this.focusRootId = null;
+    this.focusScope = null;
+    this.focusRelationScope = null;
     this.renderCurrentGraph();
   }
 
@@ -160,7 +260,7 @@ export class GraphController {
     const snapshot = this.delegate.getSnapshot();
     if (!snapshot?.landscape_graph.nodes.some((node) => node.id === nodeId)) return "missing";
     let element = this.graphCore?.getElementById(nodeId);
-    if ((!element || element.empty()) && this.focusRootId !== null) {
+    if ((!element || element.empty() || element.hasClass(OUT_OF_FOCUS_CLASS)) && this.focusRootId !== null) {
       this.exitFocus();
       element = this.graphCore?.getElementById(nodeId);
     }
@@ -169,14 +269,23 @@ export class GraphController {
     core.resize();
     core.elements().unselect();
     element.select();
+    this.selectedElementId = nodeId;
+    this.applyEffectiveFocusAndSelection();
     core.center(element);
     return "shown";
   }
 
   canFocus(node: IncidenceNode): boolean {
+    if (node.element_kind === "relation") {
+      return node.domain_kind === "Alignment";
+    }
     return (
       node.element_kind === "entity" &&
-      (node.domain_kind === "SourceArtifact" || node.domain_kind === "SourceSemanticUnit")
+      (node.domain_kind === "SourceArtifact" ||
+        node.domain_kind === "SourceSemanticUnit" ||
+        node.domain_kind === "SemanticEntity" ||
+        node.domain_kind === "DialectScope" ||
+        node.domain_kind === "Debt")
     );
   }
 
@@ -273,6 +382,22 @@ export class GraphController {
       };
     });
 
+    document.querySelectorAll<HTMLButtonElement>(".lens-button").forEach((button) => {
+      button.onclick = () => {
+        const lens = button.dataset.lens as FocusLens | undefined;
+        if (lens === "heuristic" || lens === "structural" || lens === "semantic_only") {
+          this.focusLens = lens;
+          if (lens === "semantic_only" && !this.visibleNodeKinds.has("SemanticEntity")) {
+            this.visibleNodeKinds.add("SemanticEntity");
+            this.activePreset = "custom";
+            this.syncCheckboxesToFilter();
+            this.persistFilter();
+          }
+          this.renderCurrentGraph();
+        }
+      };
+    });
+
     const exitFocusBtn = document.querySelector<HTMLButtonElement>("#exit-focus");
     if (exitFocusBtn) {
       exitFocusBtn.onclick = () => this.exitFocus();
@@ -346,6 +471,7 @@ export class GraphController {
   private refreshInkOverlay(): void {
     if (this.graphCore === null) { this.renderInkToggle(); return; }
     this.inkOverlayResult = applyInkOverlay(this.graphCore, this.inkOverlay, this.showInkNotes);
+    this.applyEffectiveFocusAndSelection();
     this.renderInkToggle();
     this.renderLegend(this.graphCore);
   }
@@ -398,6 +524,7 @@ export class GraphController {
         ? null
         : focusSubgraph(landscape, this.focusRootId, {
             depth: this.focusDepth,
+            lens: this.focusLens,
             isEntityVisible: (node) => this.isEntityVisible(node),
           });
 
@@ -406,6 +533,8 @@ export class GraphController {
     const positions = this.positionsWithSynthetics(this.displayedGraph, this.basePositions);
     const focusScope =
       focus === null ? null : new Set(focus.graph.nodes.map((node) => node.id));
+    const focusRelationScope =
+      focus === null ? null : new Set(focus.graph.edges.map((edge) => edge.relation_id));
 
     this.syncPresetHighlight();
     this.renderFocusBar(focus, landscape);
@@ -416,9 +545,9 @@ export class GraphController {
     const hasAnyData = snapshot.landscape_graph.nodes.some((n) => n.element_kind !== "group");
 
     if (focus !== null) {
-      this.elements.emptyStateTitle.textContent = "聚焦范围内没有可显示的节点";
+      this.elements.emptyStateTitle.textContent = "聚焦范围内没有可显示的关联节点";
       this.elements.emptyStateMessage.textContent =
-        "该来源尚未派生出内容，或当前过滤条件隐藏了全部后代。";
+        "可尝试切换聚焦视角（启发关联 / 来源结构 / 纯语义网）、增大深度或开启更多节点类型。";
     } else {
       this.elements.emptyStateTitle.textContent = hasAnyData
         ? "当前过滤条件下无可见节点"
@@ -434,7 +563,13 @@ export class GraphController {
         this.elements.graphContainer,
         this.displayedGraph,
         this.renderMode,
-        { positions },
+        {
+          positions,
+          labelHover: {
+            isFull: (node) =>
+              node.hasClass(SELECTED_PRIMARY_CLASS) || node.hasClass(FOCUS_ROOT_CLASS),
+          },
+        },
       );
       this.bindGraphInteractions(this.graphCore);
     } else {
@@ -445,10 +580,18 @@ export class GraphController {
       });
     }
 
+    if (
+      this.selectedElementId !== null &&
+      !this.displayedGraph.nodes.some((n) => n.id === this.selectedElementId)
+    ) {
+      this.selectedElementId = null;
+    }
+
     this.focusScope = focusScope;
-    applyFocusScope(this.graphCore, focusScope);
+    this.focusRelationScope = focusRelationScope;
     applyStagedOverlay(this.graphCore, this.delegate.getSnapshot()?.investigation);
     this.inkOverlayResult = applyInkOverlay(this.graphCore, this.inkOverlay, this.showInkNotes);
+    this.applyEffectiveFocusAndSelection();
     this.renderInkToggle();
     this.renderLegend(this.graphCore);
     this.elements.emptyState.classList.toggle(
@@ -570,18 +713,54 @@ export class GraphController {
         }
         return;
       }
+      core.elements().unselect();
+      tapped.select();
+      this.selectedElementId = id;
+      this.applyEffectiveFocusAndSelection();
       this.delegate.onSelectNode(id);
     });
 
     core.on("tap", "edge", (event) => {
-      const relationId = (event.target as EdgeSingular).data("relationId");
+      const edge = event.target as EdgeSingular;
+      const relationId = edge.data("relationId");
       if (typeof relationId !== "string") return;
       const relation = this.displayedGraph?.nodes.find(
         (node) => node.element_kind === "relation" && node.domain_id === relationId,
       );
       if (relation !== undefined) {
+        core.elements().unselect();
+        edge.select();
+        this.selectedElementId = relation.id;
+        this.applyEffectiveFocusAndSelection();
         this.delegate.onSelectNode(relation.id);
       }
+    });
+
+    core.on("tap", (event) => {
+      if (event.target !== core) return;
+      if (this.selectedElementId !== null) {
+        core.elements().unselect();
+        this.selectedElementId = null;
+        this.applyEffectiveFocusAndSelection();
+        this.delegate.onSelectNode(null);
+      }
+    });
+
+    core.on("cxttap", "edge", (event) => {
+      const relationId = (event.target as EdgeSingular).data("relationId");
+      if (typeof relationId !== "string") return;
+      const relation = this.displayedGraph?.nodes.find(
+        (node) => node.element_kind === "relation" && node.domain_id === relationId,
+      );
+      if (relation === undefined) return;
+      this.delegate.onSelectNode(relation.id);
+      const position = event.renderedPosition ?? { x: 0, y: 0 };
+      const bounds = this.elements.graphContainer.getBoundingClientRect();
+      showContextMenu(
+        bounds.left + position.x,
+        bounds.top + position.y,
+        this.nodeMenuItems(relation.id),
+      );
     });
 
     core.on("cxttap", "node", (event) => {
@@ -635,11 +814,12 @@ export class GraphController {
       });
     }
     if (node !== undefined && this.canFocus(node)) {
+      const defaultDepth = this.defaultFocusDepthFor(node);
       items.push(
         {
           label: "以此为中心聚焦",
-          disabled: this.focusRootId === id && this.focusDepth === "all",
-          onSelect: () => this.setFocus(id, "all"),
+          disabled: this.focusRootId === id && this.focusDepth === defaultDepth,
+          onSelect: () => this.setFocus(id, defaultDepth),
         },
         {
           label: "仅展开一层",
@@ -647,6 +827,13 @@ export class GraphController {
           onSelect: () => this.setFocus(id, 1),
         },
       );
+      if (defaultDepth !== "all") {
+        items.push({
+          label: "展开全部关联",
+          disabled: this.focusRootId === id && this.focusDepth === "all",
+          onSelect: () => this.setFocus(id, "all"),
+        });
+      }
     }
     items.push({
       label: "返回全图",
@@ -667,6 +854,11 @@ export class GraphController {
     focusSummary.textContent = `展开 ${focus.reachedCount} 个节点${contracted}`;
     document.querySelectorAll<HTMLButtonElement>(".depth-button").forEach((button) => {
       const active = button.dataset.depth === String(this.focusDepth);
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    document.querySelectorAll<HTMLButtonElement>(".lens-button").forEach((button) => {
+      const active = button.dataset.lens === this.focusLens;
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", String(active));
     });

@@ -22,6 +22,7 @@ mod registration;
 mod run_disposition;
 mod search;
 mod source_map;
+mod study_marks;
 
 use std::path::Path;
 
@@ -89,6 +90,7 @@ pub use source_map::{
     MapObjectOutcome, SOURCE_REGISTRATION_RECEIPT_VERSION, SourceMapSnapshot,
     SourceRegistrationReceipt, StoredMapEndpoint, StoredMapObject,
 };
+pub use study_marks::{StudyMark, StudyMarkUpdate, StudyStatus};
 
 const ARTIFACT_POOL_MIGRATION: &str = include_str!("../../../migrations/0001_artifact_pool.sql");
 const LLM_PROFILES_MIGRATION: &str = include_str!("../../../migrations/0002_llm_profiles.sql");
@@ -113,7 +115,8 @@ const CANONICAL_MARKDOWN_ENSURE_MIGRATION: &str =
 const PROPOSED_CHANGE_SETS_MIGRATION: &str =
     include_str!("../../../migrations/0023_proposed_change_sets.sql");
 const PHASE2_PR_B_MIGRATION: &str = include_str!("../../../migrations/0024_phase2_pr_b.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 24;
+const STUDY_MARKS_MIGRATION: &str = include_str!("../../../migrations/0025_study_marks.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 25;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -435,6 +438,7 @@ impl SqliteArtifactStore {
         canonical_ensure::validate_schema(&connection)?;
         validate_registration_schema(&connection)?;
         validate_proposed_change_schema(&connection)?;
+        study_marks::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -446,6 +450,20 @@ impl SqliteArtifactStore {
 
     pub fn open_in_memory() -> Result<Self, SqliteStoreError> {
         Self::initialize(Connection::open_in_memory()?)
+    }
+
+    pub fn list_study_marks(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, StudyMark>, SqliteStoreError> {
+        study_marks::list_study_marks(&self.connection)
+    }
+
+    pub fn set_study_marks_batch(
+        &mut self,
+        updates: &[StudyMarkUpdate],
+        updated_at: &str,
+    ) -> Result<Vec<StudyMark>, SqliteStoreError> {
+        study_marks::set_study_marks_batch(&mut self.connection, updates, updated_at)
     }
 
     pub fn create_ink_document(
@@ -683,7 +701,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=24 => {
+            6..=25 => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -896,6 +914,20 @@ impl SqliteArtifactStore {
                 connection.pragma_update(None, "user_version", 24)?;
             }
         }
+        if version < 25 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 25",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                connection.execute_batch(STUDY_MARKS_MIGRATION)?;
+            } else {
+                connection.pragma_update(None, "user_version", 25)?;
+            }
+        }
         validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -912,6 +944,7 @@ impl SqliteArtifactStore {
         ink_snapshot_label::validate_schema(&connection)?;
         canonical_ensure::validate_schema(&connection)?;
         validate_proposed_change_schema(&connection)?;
+        study_marks::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 

@@ -1121,6 +1121,7 @@ pub fn run() {
             map_edit::recheck_mathlib_baselines,
             semantic::get_semantic_object,
             semantic::semantic_learning_view,
+            semantic::set_study_marks,
             external_link::open_external_link,
             get_desktop_snapshot,
             choose_and_import_pdf,
