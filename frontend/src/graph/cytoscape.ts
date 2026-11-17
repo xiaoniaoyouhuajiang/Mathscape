@@ -745,6 +745,140 @@ const styles: StylesheetJson = [
     style: { opacity: 0.22, "transition-property": "opacity", "transition-duration": 400 },
   },
 
+  // 地图姿态与增量生长动效（GraphChoreographer & StudySpinePosture）
+  {
+    selector: ".is-choreo-entering",
+    style: { opacity: 0.05 },
+  },
+  {
+    selector: ".is-choreo-entered",
+    style: {
+      opacity: 1,
+      "transition-property": "opacity",
+      "transition-duration": 220,
+    },
+  },
+  {
+    selector: "node.spine-header-node",
+    style: {
+      "border-width": 2.5,
+      "border-color": "#7ec6d4",
+      "text-max-width": "260px",
+      "font-size": "12px",
+      color: "#edf7f9",
+    },
+  },
+  {
+    selector: "node.spine-unit-node",
+    style: {
+      "text-valign": "center",
+      "text-halign": "right",
+      "text-margin-x": 10,
+      "text-max-width": "240px",
+    },
+  },
+  {
+    selector: "node.orbit-semantic-node",
+    style: {
+      "text-max-width": "210px",
+      "font-size": "12px",
+    },
+  },
+  {
+    selector: "node.orbit-outer-node",
+    style: {
+      "text-max-width": "210px",
+    },
+  },
+  {
+    selector: "node.study-status-mastered",
+    style: {
+      "border-color": "#52cc96",
+      "border-width": 3.2,
+      "border-style": "solid",
+      "underlay-color": "#52cc96",
+      "underlay-opacity": 0.16,
+      "underlay-padding": 4,
+    },
+  },
+  {
+    selector: "node.study-status-studying",
+    style: {
+      "border-color": "#64c7de",
+      "border-width": 2.8,
+      "border-style": "solid",
+    },
+  },
+  {
+    selector: "node.study-cat-diff",
+    style: {
+      "underlay-color": "#e3aa4b",
+      "underlay-opacity": 0.22,
+      "underlay-padding": 5,
+    },
+  },
+  {
+    selector: "node.study-cat-cross",
+    style: {
+      "underlay-color": "#8ca8ff",
+      "underlay-opacity": 0.22,
+      "underlay-padding": 5,
+    },
+  },
+  {
+    selector: "edge.spine-tree-edge",
+    style: {
+      label: "",
+      width: 1.5,
+      "line-color": "#4b7582",
+      "target-arrow-color": "#4b7582",
+      "arrow-scale": 1.15,
+      opacity: 0.72,
+    },
+  },
+  {
+    selector: "edge.spine-arc-edge",
+    style: {
+      "curve-style": "unbundled-bezier",
+      "control-point-distances": "data(spineArcOffset)",
+      "control-point-weights": 0.5,
+      width: 1.9,
+      opacity: 0.88,
+    },
+  },
+  {
+    selector: "node.is-study-signal-hit",
+    style: {
+      "border-width": 3.2,
+      "border-color": "#ffd875",
+      "z-index": 26,
+      opacity: 1,
+    },
+  },
+  {
+    selector: "edge.is-study-signal-hit",
+    style: {
+      width: 2.8,
+      "z-index": 24,
+      opacity: 1,
+    },
+  },
+  {
+    selector: "node.is-study-signal-muted",
+    style: {
+      opacity: 0.24,
+    },
+  },
+  {
+    selector: "edge.is-study-signal-muted",
+    style: {
+      opacity: 0.14,
+      "text-opacity": 0,
+      "text-background-opacity": 0,
+      "text-border-opacity": 0,
+    },
+  },
+
   // 单击选中高亮（Selection Spotlight）：凸显当前节点及其直接关联边/邻居，退后其余背景且隐藏无关连线标签。
   {
     selector: "node.is-selection-receded",

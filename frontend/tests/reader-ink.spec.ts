@@ -40,7 +40,7 @@ test("N2 right-click menu targets the block under the cursor, or the selection w
   await openMarkdown(page);
   await page.getByLabel("原文块 3", { exact: true }).click({ button: "right" });
   const menu = page.locator(".graph-context-menu");
-  await expect(menu.getByRole("menuitem").or(menu.locator("button"))).toHaveText(["新建关联手稿…", "关联到已有手稿…", "查看相关手稿（0）"]);
+  await expect(menu.getByRole("menuitem").or(menu.locator("button"))).toHaveText(["定位对应 PDF 原页", "新建关联手稿…", "关联到已有手稿…", "查看相关手稿（0）"]);
   await expect(page.getByLabel("原文块 3", { exact: true })).toHaveClass(/is-ink-menu-target/);
   await menu.locator("button", { hasText: "新建关联手稿…" }).click();
   const popover = page.locator(".ink-create-popover");
@@ -115,4 +115,23 @@ test("N2 a patch-derived document shows only the original-version hint", async (
   await openMarkdown(page, ink => { ink.originalNoteCount = 2; });
   await expect(page.locator(".ink-patch-hint")).toHaveText("原版本有 2 份相关手稿");
   await expect(page.locator(".ink-block-marker")).toHaveCount(0);
+});
+
+test("Markdown block PDF backlink jumps to exact PDF page and round-trips back to focused block", async ({ page }) => {
+  await openMarkdown(page);
+  await page.getByLabel("原文块 3", { exact: true }).click({ button: "right" });
+  await page.locator(".graph-context-menu button", { hasText: "定位对应 PDF 原页" }).click();
+
+  const pdfPageInput = page.getByLabel("PDF 页码");
+  await expect(pdfPageInput).toHaveValue("2");
+  const backButton = page.getByRole("button", { name: "← 返回 Markdown 原文" });
+  await expect(backButton).toBeVisible();
+
+  await backButton.click();
+  await expect(page.getByLabel("原文块 3", { exact: true })).toHaveClass(/source-block-focus/);
+
+  // Top-bar "定位 PDF 原页" stays enabled for the focused block and surfaces markdown-only reasons cleanly
+  await page.evaluate(() => { (window as any).harness.behavior.markdownOnlyReason = "旧转换未启用分页输出"; });
+  await page.getByRole("button", { name: "定位 PDF 原页" }).click();
+  await expect(page.locator(".selection-panel [role='status']")).toContainText("旧转换未启用分页输出");
 });

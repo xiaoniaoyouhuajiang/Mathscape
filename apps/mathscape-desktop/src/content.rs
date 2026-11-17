@@ -54,6 +54,8 @@ pub struct SourceNodeDetail {
     pub payload: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ink: Option<InkSourceLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_backlink: Option<crate::SourceBacklink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -228,7 +230,7 @@ impl DesktopService {
             }
             _ => None,
         };
-        let block_ids = locator
+        let block_ids: Vec<String> = locator
             .get("marker_block_ids")
             .and_then(Value::as_array)
             .map(|items| {
@@ -239,6 +241,36 @@ impl DesktopService {
                     .collect()
             })
             .unwrap_or_default();
+        let pdf_backlink = if ink.is_some() {
+            None
+        } else if let (Some(pdf_art), Some(page_idx)) = (
+            locator.pointer("/page/artifact").and_then(Value::as_str),
+            locator
+                .pointer("/page/pdf_page_index")
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok()),
+        ) {
+            Some(crate::SourceBacklink::ExactPdfPages {
+                pdf_artifact_id: pdf_art.to_owned(),
+                pdf_page_indices: vec![page_idx],
+                marker_page_ids: vec![page_idx],
+            })
+        } else if let (Some(artifact), Some(range)) = (artifact_id, &range) {
+            if range.end > range.start {
+                self.get_source_backlink(crate::SourceBacklinkRequest {
+                    artifact_id: artifact.to_owned(),
+                    conversion_id: None,
+                    start: range.start,
+                    end: range.end,
+                    block_ids: block_ids.clone(),
+                })
+                .ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         Ok(SourceNodeDetail {
             node_id: id.to_string(),
             kind: format!("{:?}", object.kind),
@@ -256,6 +288,7 @@ impl DesktopService {
             excerpt,
             markdown_block_ids: block_ids,
             ink,
+            pdf_backlink,
             payload,
         })
     }

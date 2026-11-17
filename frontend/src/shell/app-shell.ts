@@ -13,6 +13,7 @@ export interface AppElements {
   workspaceName: HTMLElement;
   workspaceRoot: HTMLElement;
   copyWorkspaceIdButton: HTMLButtonElement;
+  canvasPanel: HTMLElement;
   graphContainer: HTMLElement;
   graphLegend: HTMLElement;
   focusBar: HTMLElement;
@@ -190,6 +191,7 @@ export class AppShell {
               <button class="preset-button" data-preset="source" type="button">来源内容</button>
               <button class="preset-button" data-preset="material" type="button">材料</button>
               <button class="preset-button" data-preset="overview" type="button">总览</button>
+              <button class="preset-button" data-preset="study" type="button" title="研读透镜：按材料章节顺序动态展开双轨线性书脊与共享语义伴星">研读</button>
             </div>
             <span class="filter-divider">│</span>
             <div class="filter-group" id="node-filter-group">
@@ -265,6 +267,7 @@ export class AppShell {
       workspaceName: requiredElement<HTMLElement>("#workspace-name", root),
       workspaceRoot: requiredElement<HTMLElement>("#workspace-root", root),
       copyWorkspaceIdButton: requiredElement<HTMLButtonElement>("#copy-workspace-id", root),
+      canvasPanel: requiredElement<HTMLElement>(".canvas-panel", root),
       graphContainer: requiredElement<HTMLElement>("#graph", root),
       graphLegend: requiredElement<HTMLElement>("#graph-legend", root),
       focusBar: requiredElement<HTMLElement>("#focus-bar", root),

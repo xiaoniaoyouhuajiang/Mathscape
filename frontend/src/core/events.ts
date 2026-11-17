@@ -1,4 +1,4 @@
-import type { ReaderFocus } from "../reader/reader";
+import type { ReaderFocus, ReaderReturnTarget } from "../reader/reader";
 import type { PatchReviewMode } from "../reader/selection";
 import type { DiscoveryOutcome, ReviewRunMeta } from "../review/types";
 import type { WorkspaceSettings } from "../workspace-settings";
@@ -10,6 +10,9 @@ export interface OpenSourceDetail {
   title: string;
   focus?: ReaderFocus;
   pdfPageIndex?: number;
+  candidatePages?: number[];
+  backlinkNote?: string;
+  returnTo?: ReaderReturnTarget;
   patchRunId?: string;
   patchMode?: PatchReviewMode;
   refreshMap?: boolean;

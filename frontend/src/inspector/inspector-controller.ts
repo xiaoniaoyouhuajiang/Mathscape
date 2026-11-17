@@ -32,7 +32,7 @@ import type { ReaderFocus } from "../reader/reader";
 import type { InkReaderFocus } from "../ink/snapshot-reader";
 import { eventBus } from "../core/events";
 import { listInkLinksToTarget, roleLabel, startInkCreateFromTarget } from "../ink/links";
-import { getSemanticObject, recheckMathlibBaselines, recheckSummary } from "../semantic/api";
+import { getSemanticObject, recheckMathlibBaselines, recheckSummary, type StudyStatus } from "../semantic/api";
 import { renderSemanticDetail } from "../semantic/detail";
 import { SEMANTIC_DOMAIN_KINDS } from "../semantic/labels";
 
@@ -47,6 +47,8 @@ export interface InspectorControllerDelegate {
   refreshSnapshot: () => Promise<void>;
   canFocus: (node: IncidenceNode) => boolean;
   isFocusRoot: (nodeId: string) => boolean;
+  getStudyStatus?: (unitDomainId: string) => StudyStatus | null;
+  onSetStudyStatus?: (unitDomainId: string, status: StudyStatus) => Promise<void> | void;
 }
 
 export class InspectorController {
@@ -181,6 +183,32 @@ export class InspectorController {
       node.domain_id !== null &&
       (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceSpan")
     ) {
+      if (node.domain_kind === "SourceSemanticUnit" && this.delegate.onSetStudyStatus) {
+        const curStatus = this.delegate.getStudyStatus?.(node.domain_id) ?? "unread";
+        const bar = textElement("div", "inspector-study-bar", "");
+        bar.append(textElement("span", "field-label", "个人掌握度"));
+        const group = textElement("div", "study-status-segmented", "");
+        for (const [st, lbl] of [
+          ["unread", "未读"],
+          ["studying", "在读"],
+          ["mastered", "已掌握"],
+        ] as Array<[StudyStatus, string]>) {
+          const btn = textElement(
+            "button",
+            `study-status-chip${curStatus === st ? ` is-active is-${st}` : ""}`,
+            lbl,
+          );
+          btn.type = "button";
+          btn.setAttribute("aria-pressed", String(curStatus === st));
+          btn.onclick = async () => {
+            await this.delegate.onSetStudyStatus!(node.domain_id!, st);
+            this.refreshIfUnlocked();
+          };
+          group.append(btn);
+        }
+        bar.append(group);
+        sourceSlot.append(bar);
+      }
       void this.renderSourceDetail(node, sourceSlot, actions);
     }
 
@@ -352,6 +380,7 @@ export class InspectorController {
         preview.innerHTML = markdownRenderer().render(detail.excerpt);
         host.append(preview);
       }
+      const insertedButtons: HTMLElement[] = [];
       if (detail.artifact_id) {
         const button = textElement("button", "parse-button", detail.ink ? "打开并定位手稿证据" : "打开并定位原文");
         button.type = "button";
@@ -368,7 +397,50 @@ export class InspectorController {
               : undefined!,
           );
         };
-        actions.prepend(button);
+        insertedButtons.push(button);
+      }
+      const backlink = detail.pdf_backlink;
+      if (
+        !detail.ink &&
+        backlink &&
+        backlink.kind !== "markdown_only" &&
+        backlink.pdf_artifact_id &&
+        backlink.pdf_page_indices &&
+        backlink.pdf_page_indices.length > 0
+      ) {
+        const pages = backlink.pdf_page_indices;
+        const firstPage = pages[0];
+        const lastPage = pages[pages.length - 1];
+        const rangeLabel = firstPage === lastPage ? `第 ${firstPage + 1} 页` : `第 ${firstPage + 1}–${lastPage + 1} 页`;
+        const suffix = backlink.kind === "candidate_pdf_pages" ? "（候选）" : "";
+        const pdfBtn = textElement("button", "parse-button", `打开 PDF ${rangeLabel}${suffix}`);
+        pdfBtn.type = "button";
+        if (backlink.reason) pdfBtn.title = backlink.reason;
+        pdfBtn.onclick = () => {
+          const title = detail.display_title ?? node.label;
+          eventBus.emit("open-source", {
+            artifactId: backlink.pdf_artifact_id!,
+            title: `${title} · PDF 原页`,
+            pdfPageIndex: firstPage,
+            candidatePages: pages,
+            backlinkNote: backlink.kind === "candidate_pdf_pages" ? backlink.reason : undefined,
+            returnTo:
+              detail.artifact_id && detail.byte_range
+                ? {
+                    id: detail.artifact_id,
+                    title,
+                    options: {
+                      focus: { ...detail.byte_range, blockIds: detail.markdown_block_ids },
+                    },
+                    label: "切换到 Markdown 原文",
+                  }
+                : undefined,
+          });
+        };
+        insertedButtons.push(pdfBtn);
+      }
+      if (insertedButtons.length > 0) {
+        actions.prepend(...insertedButtons);
       }
     } catch (error) {
       host.append(

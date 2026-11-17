@@ -192,6 +192,7 @@ export class MarkdownSelection {
   private indexes: Map<string, number>;
   private unsubscribeSettings?: () => void;
   private handwriteButton?: HTMLButtonElement;
+  private openPdfButton?: HTMLButtonElement;
 
   constructor(
     private data: AnchoredMarkdown,
@@ -199,6 +200,8 @@ export class MarkdownSelection {
     patch?: { runId: string; mode: PatchReviewMode },
     /** N2 "手写这段": same target rule and request as the right-click menu. */
     private readonly handwrite?: (range: { first: number; last: number }, anchor: HTMLElement) => void,
+    private readonly openPdf?: (range: { first: number; last: number }) => void,
+    private readonly fallbackPdfRange?: { first: number; last: number } | null,
   ) {
     this.indexes = new Map(data.blocks.map((b, i) => [b.id, i]));
     this.panel.className = "selection-panel";
@@ -230,6 +233,13 @@ export class MarkdownSelection {
         if (range) handwrite(range, this.handwriteButton!);
       });
       this.handwriteButton.title = "为所选段落新建关联手稿；没有完整选区时使用当前块";
+    }
+    if (openPdf) {
+      this.openPdfButton = button("定位 PDF 原页", () => {
+        const range = this.targetRange() ?? this.fallbackPdfRange ?? null;
+        if (range) openPdf(range);
+      });
+      this.openPdfButton.title = "打开所选段落（没有选区时使用当前点击块或定位块）对应的原始 PDF 页";
     }
     this.status.setAttribute("role", "status");
     this.discoveryStatus.setAttribute("aria-live", "polite");
@@ -442,9 +452,17 @@ export class MarkdownSelection {
     return blocks.some(block => block.kind !== "page_marker") ? range : null;
   }
 
+  notifyFeedback(message: string): void {
+    this.feedback = message;
+    this.refresh();
+  }
+
   refresh(): void {
     const valid = this.first >= 0 && this.last >= this.first && this.data.blocks.length > 0;
     if (this.handwriteButton) this.handwriteButton.disabled = this.targetRange() === null;
+    if (this.openPdfButton) {
+      this.openPdfButton.disabled = (this.targetRange() ?? this.fallbackPdfRange ?? null) === null;
+    }
     const admissionSelected = this.policy.value === "review_before_publish"
       || this.policy.value === "automatic_candidate";
     this.validate.disabled = !valid || !admissionSelected || this.pending;

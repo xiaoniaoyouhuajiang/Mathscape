@@ -48,6 +48,8 @@ const richMapEdges = [
   { id: "e-al-out", source: "rel-al-1", target: "r-sem-c", relation_id: "rel:al:1", role: "target", ordinal: null, direction: "out_of_relation", directed: true },
 ];
 extraCommands.set("get_desktop_snapshot", () => {
+  const custom = (window as unknown as { __CUSTOM_BUNDLE__?: { snapshot: unknown } }).__CUSTOM_BUNDLE__;
+  if (custom?.snapshot) return structuredClone(custom.snapshot);
   const value = structuredClone(snapshot);
   if (sessionStorage.getItem("harness.sandbox") === "1") value.landscape_graph.nodes.push(structuredClone(citeNode), structuredClone(citeArtNode));
   if (sessionStorage.getItem("harness.richMap") === "1") {
@@ -77,6 +79,82 @@ extraCommands.set("get_source_node_detail", async (args) => {
     node_id: id, kind: "SourceSemanticUnit", display_title: "定理 3.2", unit_kind: "statement", parent: null,
     artifact_id: "md-1", byte_range: { start: 0, end: mdBytes.length }, excerpt: mdSource,
     markdown_block_ids: ["b1"], payload: {},
+    pdf_backlink: { kind: "exact_pdf_pages", pdf_artifact_id: "pdf-notes", pdf_page_indices: [1], marker_page_ids: [1] },
+  };
+});
+extraCommands.set("get_source_backlink", () => ({
+  kind: "exact_pdf_pages", pdf_artifact_id: "pdf-notes", pdf_page_indices: [1], marker_page_ids: [1],
+}));
+const harnessStudyMarks = new Map<string, string>();
+extraCommands.set("set_study_marks", (args) => {
+  const updates = (args.updates as Array<{ object_id: string; status: string }>) ?? [];
+  for (const u of updates) harnessStudyMarks.set(u.object_id, u.status);
+  return updates.map((u) => ({ object_id: u.object_id, status: u.status, updated_at: "unix:1", note: null }));
+});
+extraCommands.set("semantic_learning_view", () => {
+  const custom = (window as unknown as { __CUSTOM_BUNDLE__?: { learningView: unknown } }).__CUSTOM_BUNDLE__;
+  if (custom?.learningView) return structuredClone(custom.learningView);
+  return {
+  materials: [
+    {
+      artifact_id: "md-1",
+      units: [
+        {
+          unit_id: citeUnitId,
+          unit_title: "引理 1.4",
+          alignment_id: "rel:al:1",
+          entity_id: "sem-c",
+          entity_label: "概念：收敛数列",
+          relation: "expresses",
+          label: "新的",
+          seen_in: [],
+          only_differs_by: ["仅在度量空间下给出"],
+        },
+      ],
+      new_conventions: [],
+      conventions_detail: [],
+      open_debts: [],
+      outline_units: [
+        {
+          unit_id: "unit-thm",
+          unit_title: "定理 3.2",
+          unit_kind: "section",
+          parent_unit: null,
+          study_status: harnessStudyMarks.get("unit-thm") ?? "unread",
+          category: "unaligned",
+          targets: [],
+        },
+        {
+          unit_id: citeUnitId,
+          unit_title: "引理 1.4",
+          unit_kind: "statement",
+          parent_unit: "unit-thm",
+          study_status: harnessStudyMarks.get(citeUnitId) ?? "unread",
+          category: "fresh",
+          targets: [
+            {
+              alignment_id: "rel:al:1",
+              entity_id: "sem-c",
+              entity_label: "概念：收敛数列",
+              relation: "expresses",
+              only_differs_by: ["仅在度量空间下给出"],
+              seen_in: [],
+              mastered_in: [],
+            },
+          ],
+        },
+        {
+          unit_id: "unit-ex",
+          unit_title: "例 4",
+          unit_kind: "example",
+          parent_unit: "unit-thm",
+          study_status: harnessStudyMarks.get("unit-ex") ?? "unread",
+          category: "unaligned",
+          targets: [],
+        },
+      ],
+    },
+  ],
   };
 });
 extraCommands.set("get_artifact_content_info", (args) => {

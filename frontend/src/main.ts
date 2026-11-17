@@ -45,7 +45,7 @@ import { installInkCloseGuard } from "./ink/close-guard";
 import { openProposalReview, reviewBeforeLeaving } from "./review/change-sets";
 import "./styles.css";
 import "./semantic/semantic.css";
-import { LearningViewPanel } from "./semantic/learning-view";
+import { StudyHudController } from "./semantic/study-hud";
 import { TutorialPlayer } from "./tutorial/player";
 import "./tutorial/tutorial.css";
 
@@ -353,12 +353,17 @@ eventBus.on("ink-split-toggle", (detail) => {
 
 let currentSnapshot: DesktopSnapshot | undefined;
 let inspectorController!: InspectorController;
+let studyHud: StudyHudController | undefined;
 
 mountDiscoveryTask();
 const reviewWorkspace = mountReviewWorkspace(el.reviewWorkspaceHost, {
   getGraph: () => currentSnapshot?.landscape_graph,
 });
 const reader = new ArtifactReader(el.readerHost);
+reader.setOverlayCloseHandler(() => {
+  reader.close();
+  el.readerHost.hidden = true;
+});
 
 const llmSettings = new LlmSettingsController(
   el.llmSettingsHost,
@@ -419,6 +424,16 @@ const graphController = new GraphController(
       artifactController.refreshParseState();
       scenePlayer?.reapply();
       reviewWorkspace.reapplyMapScope();
+      studyHud?.notifyGraphMounted();
+    },
+    onStudyPostureChanged: (active, initialMaterialId) => {
+      el.learningViewButton.classList.toggle("is-active", active);
+      el.learningViewButton.setAttribute("aria-pressed", String(active));
+      if (active) {
+        void studyHud?.activate(initialMaterialId);
+      } else {
+        studyHud?.deactivate();
+      }
     },
     showToast: (msg, kind) => shell.showToast(msg, kind),
     getSnapshot: () => currentSnapshot,
@@ -455,6 +470,10 @@ inspectorController = new InspectorController(el.nodeDetail, {
   refreshSnapshot: () => loadSnapshot(),
   canFocus: (node) => graphController.canFocus(node),
   isFocusRoot: (nodeId) => graphController.getFocusRootId() === nodeId,
+  getStudyStatus: (unitDomainId) => studyHud?.getUnitStudyStatus(unitDomainId) ?? null,
+  onSetStudyStatus: async (unitDomainId, status) => {
+    await studyHud?.setUnitStudyStatus(unitDomainId, status);
+  },
 });
 
 artifactController = new ArtifactController(
@@ -492,6 +511,7 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
   inspectorController.refreshIfUnlocked();
   loadInkOverlay();
   sandboxDock.refreshCites();
+  void studyHud?.reloadData();
 }
 
 // N2: map count markers and "我的手稿" come from a separate overlay query that
@@ -605,6 +625,9 @@ eventBus.on("open-source", (detail) => {
     await reader.open(detail.artifactId, detail.title, {
       focus: detail.focus,
       pdfPageIndex: detail.pdfPageIndex,
+      candidatePages: detail.candidatePages,
+      backlinkNote: detail.backlinkNote,
+      returnTo: detail.returnTo,
       conversionId: detail.conversionId,
       patch: detail.patchRunId
         ? { runId: detail.patchRunId, mode: detail.patchMode ?? "workflow" }
@@ -770,22 +793,69 @@ const workspaceSearch = new WorkspaceSearchPanel({
 installWorkspaceSearch(workspaceSearch);
 el.searchButton.addEventListener("click", () => workspaceSearch.open());
 
-// 语义层学习视图（只读）。
-const learningView = new LearningViewPanel(el.shell, {
+// 语义层研读透镜（地图内双轨线性书脊 + 右轨共享语义伴星 + 节点悬浮简报卡）。
+studyHud = new StudyHudController(el.canvasPanel, {
   materialName: (artifactId) => {
     const nodes = currentSnapshot?.landscape_graph.nodes ?? [];
-    const node = nodes.find(item => item.domain_id === artifactId && item.element_kind === "entity")
-      ?? findSourceArtifactNode(nodes.filter(item => item.element_kind === "entity"), artifactId);
+    const node =
+      nodes.find((item) => item.domain_id === artifactId && item.element_kind === "entity") ??
+      findSourceArtifactNode(
+        nodes.filter((item) => item.element_kind === "entity"),
+        artifactId,
+      );
     return node?.label ?? artifactId.replace(/^mathscape:artifact\/sha256\//, "").slice(0, 12);
   },
-  showToast: (msg, kind) => shell.showToast(msg, kind),
-  focusObject: (objectId) => {
-    learningView.close();
-    void locateOnMap(objectId, () => true);
+  hasStagedProposals: () =>
+    Boolean(
+      currentSnapshot?.investigation &&
+        (Object.keys(currentSnapshot.investigation.staged).length > 0 ||
+          currentSnapshot.investigation.conflicts.length > 0),
+    ),
+  getDisplayedGraph: () => graphController.getDisplayedGraph(),
+  getGraphCore: () => graphController.getGraphCore(),
+  onSelectMaterial: (materialId) => {
+    graphController.applyStudyData(
+      studyHud!.getLearningViewData(),
+      materialId,
+      studyHud!.getSignalMode(),
+    );
   },
+  onSelectSignal: (signal) => {
+    graphController.applyStudyData(
+      studyHud!.getLearningViewData(),
+      studyHud!.getSelectedMaterialId(),
+      signal,
+    );
+  },
+  onDataUpdated: (view) => {
+    graphController.applyStudyData(
+      view,
+      studyHud!.getSelectedMaterialId(),
+      studyHud!.getSignalMode(),
+    );
+  },
+  onFocusDomainObject: (domainId) => {
+    graphController.centerDomainObject(domainId);
+    const node = currentSnapshot?.landscape_graph.nodes.find((n) => n.domain_id === domainId);
+    if (node) inspectorController.selectNodeById(node.id);
+  },
+  onSelectProjectionNode: (nodeId) => {
+    selectMapNode(nodeId);
+  },
+  onExitStudy: () => graphController.exitStudyPosture(),
+  showToast: (msg, kind) => shell.showToast(msg, kind),
 });
-el.learningViewButton.addEventListener("click", () => void learningView.open());
-eventBus.on("open-learning-view", () => void learningView.open());
+
+const toggleStudyFromTopbar = () => {
+  void (async () => {
+    const wasActive = graphController.isStudyPostureActive();
+    if (!(await showMap(() => true))) return;
+    if (wasActive) graphController.exitStudyPosture();
+    else graphController.enterStudyPosture();
+  })();
+};
+el.learningViewButton.addEventListener("click", toggleStudyFromTopbar);
+eventBus.on("open-learning-view", toggleStudyFromTopbar);
 
 eventBus.on("open-proposal-for-object", (detail) => {
   void openProposalReview(sandboxWindowSessionId, sandboxToast, {

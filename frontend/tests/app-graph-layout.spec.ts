@@ -76,6 +76,8 @@ test.describe("Landscape map layout stability & auxiliary noise filtering", () =
     expect(selectedNeighbors).toContain("r-sem-c");
     expect(selectedNeighbors).toContain("r-span-1");
     expect(await page.evaluate(() => window.appHarness.withClass("is-selection-receded")).then(ids => ids.length)).toBeGreaterThan(0);
+    await expect(page.locator("#node-detail").getByRole("button", { name: "打开并定位原文" })).toBeVisible();
+    await expect(page.locator("#node-detail").getByRole("button", { name: "打开 PDF 第 2 页" })).toBeVisible();
 
     // Focus Mode ("以此为中心聚焦"): dims out-of-focus nodes persistently and marks focus root
     await page.locator("#node-detail").getByRole("button", { name: "以此为中心聚焦" }).click();
@@ -88,5 +90,32 @@ test.describe("Landscape map layout stability & auxiliary noise filtering", () =
     await page.locator("#exit-focus").click();
     await expect(page.locator("#focus-bar")).toBeHidden();
     expect(await page.evaluate(() => window.appHarness.withClass("is-out-of-focus"))).toEqual([]);
+
+    // In-Map Study Posture ("研读" / "学习视图"): morphs selected material into a linear indented spine + right semantic orbit, then restores organic positions on exit
+    await page.locator('.preset-button[data-preset="study"]').click();
+    await expect(page.locator("#study-hud")).toBeVisible();
+    await page.locator(".study-material-select").selectOption("md-1");
+    await expect.poll(async () => {
+      const pThm = await page.evaluate(() => window.appHarness.nodePosition("r-unit-thm"));
+      const pCite = await page.evaluate(() => window.appHarness.nodePosition("r-cite-unit"));
+      const pEx = await page.evaluate(() => window.appHarness.nodePosition("r-unit-ex"));
+      const pSem = await page.evaluate(() => window.appHarness.nodePosition("r-sem-c"));
+      return Boolean(
+        pThm && pCite && pEx && pSem &&
+        pThm.y < pCite.y && pCite.y < pEx.y &&
+        pThm.x < pCite.x &&
+        pSem.x > pCite.x + 200
+      );
+    }).toBe(true);
+
+    // Spotlight signal highlights aligned/diff units without removing unaligned spine context
+    await page.locator('[data-study-signal="novel_and_diff"]').click();
+    expect(await page.evaluate(() => window.appHarness.withClass("is-study-signal-hit"))).toContain("r-cite-unit");
+    expect(await page.evaluate(() => window.appHarness.withClass("is-study-signal-muted"))).toContain("r-unit-thm");
+
+    // Exiting Study Posture unfolds every node cleanly back to its deterministic organic coordinates
+    await page.getByRole("button", { name: "退出研读" }).click();
+    await expect(page.locator("#study-hud")).toBeHidden();
+    await expect.poll(() => page.evaluate(() => window.appHarness.nodePosition("r-sem-c"))).toEqual(orig);
   });
 });

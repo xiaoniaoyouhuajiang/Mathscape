@@ -30,6 +30,7 @@ export class ReaderInkLinks {
     private readonly article: HTMLElement,
     private readonly selection: () => MarkdownSelection,
     private readonly isRaw: () => boolean,
+    private readonly onOpenPdf?: (range: { first: number; last: number }) => void,
   ) {
     this.hint.className = "ink-patch-hint";
     this.hint.hidden = true;
@@ -160,6 +161,9 @@ export class ReaderInkLinks {
     this.highlight(range);
     const label = markdownPreviewLabel(this.rangeText(range));
     showContextMenu(x, y, [
+      ...(this.onOpenPdf
+        ? [{ label: "定位对应 PDF 原页", onSelect: () => { this.highlight(null); this.onOpenPdf!(range); } }]
+        : []),
       { label: "新建关联手稿…", onSelect: () => this.create(range, x, y) },
       {
         label: "关联到已有手稿…",

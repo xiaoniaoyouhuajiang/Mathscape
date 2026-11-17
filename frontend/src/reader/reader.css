@@ -1,6 +1,13 @@
 .reader-panel { position: absolute; inset: 66px 0 0; overflow: auto; background: #131c24; padding: 18px; z-index: 3; }
 .reader-panel[hidden] { display: none; }
 .reader-panel h2 { font-size: 17px; overflow-wrap: anywhere; margin: 0 0 14px; }
+.reader-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; }
+.reader-heading-row h2 { margin: 0; }
+.reader-close-overlay-btn {
+  flex-shrink: 0; background: #1c3d3b; color: #dff5ef; border: 1px solid #5fa89a; border-radius: 6px;
+  padding: 5px 11px; font-size: 12px; cursor: pointer;
+}
+.reader-close-overlay-btn:hover { background: #24504d; }
 .reader-panel img { max-width: 100%; }
 .reader-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
 .reader-controls button, .reader-controls select, .reader-controls input, .reader-tab {
@@ -79,8 +86,22 @@
 .source-block.is-discovery-anchor-block { background: #fff2bd; border-left-color: #d69b23; box-shadow: inset 0 0 0 1px #e4bf61; }
 .source-block.is-current-block, .source-block:focus-visible { outline: 2px solid #567ebb; outline-offset: -2px; }
 .source-block-focus { outline: 2px solid #d7aa58; outline-offset: 4px; background: rgba(215, 170, 88, 0.12); }
-.source-page-marker { cursor: default; margin: 12px 0; padding: 4px 10px; border-left-color: #82939b; color: #687983; background: #e9edef; font-size: 11px; text-align: center; }
+.source-page-marker { cursor: default; margin: 12px 0; padding: 4px 10px; border-left-color: #82939b; color: #687983; background: #e9edef; font-size: 11px; text-align: center; display: flex; align-items: center; justify-content: center; gap: 10px; }
 .source-page-marker:hover { background: #e9edef; }
+.page-marker-jump {
+  background: #dce5ea; color: #2d4c5b; border: 1px solid #a9bdc7; border-radius: 4px;
+  padding: 1px 7px; font-size: 11px; cursor: pointer;
+}
+.page-marker-jump:hover { background: #cde0e8; }
+.reader-return-button { border-color: #5fa89a !important; color: #dff5ef !important; background: #1c3d3b !important; }
+.reader-candidate-pages { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #b8d8d2; }
+.reader-page-chip { padding: 3px 8px !important; font-size: 11px; }
+.reader-backlink-note { margin: 0 0 10px; padding: 6px 10px; border-left: 3px solid #d69b23; background: #22261f; color: #ead8a6; font-size: 12px; }
+.canonical-segment-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.canonical-segment-actions button {
+  background: #dde9ee; color: #24404d; border: 1px solid #a7bfca; border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer;
+}
+.canonical-segment-actions button:hover { background: #cfe1e9; }
 
 /* N2 note markers (§6.4). */
 .source-block { position: relative; }

@@ -3,11 +3,13 @@ import { PDF_ZOOM_DEFAULT, PDF_ZOOM_MAX, PDF_ZOOM_MIN, PDF_ZOOM_STEPS, anchoredS
 import { ArtifactPdfTransport } from "./pdf-transport";
 import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import { contentInfo, readRange, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
+import { getSourceBacklink } from "./backlink";
 import { markdownRenderer } from "./markdown";
-import { canonicalReaderProjection, gapLabel, projectionSummary, segmentLabel, splitByPageMarkers, type CanonicalReaderSegment } from "./canonical";
+import { canonicalReaderProjection, gapLabel, pagesLabel, projectionSummary, segmentLabel, splitByPageMarkers, type CanonicalReaderSegment } from "./canonical";
 import { isCanonicalMarkdownId } from "./openable";
-import { markdownDocument, MarkdownSelection, type PatchReviewMode } from "./selection";
+import { markdownDocument, MarkdownSelection, type AnchoredMarkdown, type PatchReviewMode } from "./selection";
 import { ReaderInkLinks } from "./ink-links";
+import { showContextMenu } from "../graph/context-menu";
 import { eventBus } from "../core/events";
 import { openInkSnapshot } from "../ink/persistence";
 import { mountInkSnapshotReader, type InkReaderFocus } from "../ink/snapshot-reader";
@@ -23,10 +25,23 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, text = ""): HTML
 
 export interface ReaderFocus { start: number; end: number; blockIds?: string[] }
 
+export interface ReaderReturnTarget {
+  id: string;
+  title: string;
+  options?: ReaderOpenOptions;
+  label?: string;
+}
+
 export interface ReaderOpenOptions {
   focus?: ReaderFocus;
   /** Zero-based PDF page index used by provenance back-links. */
   pdfPageIndex?: number;
+  /** Zero-based PDF page indices when an anchor spans or matches multiple pages. */
+  candidatePages?: number[];
+  /** Reason note shown when a PDF jump comes from a candidate multi-page mapping. */
+  backlinkNote?: string;
+  /** Optional round-trip target to jump right back to the Markdown block/view. */
+  returnTo?: ReaderReturnTarget;
   /** Opens the Markdown patch review of a run instead of the latest pending one. */
   patch?: { runId: string; mode: PatchReviewMode };
   conversionId?: string | null;
@@ -42,7 +57,12 @@ export class ArtifactReader {
   private error: string | undefined;
   /** Last successfully opened artifact — kept across close() for 并排阅读 restore. */
   private lastOpen: { id: string; title: string; options: ReaderOpenOptions } | undefined;
+  private overlayCloseHandler: (() => void) | undefined;
   constructor(private host: HTMLElement) {}
+
+  setOverlayCloseHandler(handler: (() => void) | undefined): void {
+    this.overlayCloseHandler = handler;
+  }
 
   private revokeImages(): void {
     this.urls.forEach(url => URL.revokeObjectURL(url));
@@ -76,11 +96,22 @@ export class ArtifactReader {
     this.close();
     this.state = "loading";
     eventBus.emit("reader-opened");
-    const { focus, patch, conversionId, pdfPageIndex } = options;
+    const { focus, patch, conversionId } = options;
     const generation = this.generation;
     const heading = element("h2", title);
     const status = element("p", "正在读取…");
-    this.host.append(heading, status);
+    if (this.overlayCloseHandler && this.host.parentElement?.id !== "ink-split-reader") {
+      const headerRow = element("div");
+      headerRow.className = "reader-heading-row";
+      const closeBtn = element("button", "← 返回当前地图");
+      closeBtn.type = "button";
+      closeBtn.className = "reader-close-overlay-btn";
+      closeBtn.onclick = () => this.overlayCloseHandler?.();
+      headerRow.append(heading, closeBtn);
+      this.host.append(headerRow, status);
+    } else {
+      this.host.append(heading, status);
+    }
     try {
       if (isCanonicalMarkdownId(id)) {
         // Logical canonical id: a stitched read-only view, never content_info.
@@ -100,9 +131,9 @@ export class ArtifactReader {
         this.disposeDocument = mountInkSnapshotReader(this.host,snapshot,options.inkFocus);
         this.inkOpen = true;
       } else if (info.media_type === "application/pdf") {
-        await this.pdf(info, generation, pdfPageIndex);
+        await this.pdf(info, generation, options);
       } else if (info.media_type === "text/markdown") {
-        await this.markdown(info, generation, focus, patch, conversionId);
+        await this.markdown(info, title, generation, focus, patch, conversionId);
       } else if (info.media_type === "application/json" || info.media_type.startsWith("text/")) {
         const bytes = await readSmallFile(info);
         if (generation !== this.generation) return false;
@@ -142,7 +173,8 @@ export class ArtifactReader {
     return url;
   }
 
-  private async pdf(info: ContentInfo, generation: number, requestedPageIndex?: number): Promise<void> {
+  private async pdf(info: ContentInfo, generation: number, pdfOptions: ReaderOpenOptions = {}): Promise<void> {
+    const requestedPageIndex = pdfOptions.pdfPageIndex;
     const initial = await readRange(info.artifact_id, 0, Math.min(65536, info.byte_size));
     if (generation !== this.generation) return;
     const failure = element("p");
@@ -203,11 +235,42 @@ export class ArtifactReader {
     zoom.setAttribute("aria-label", "缩放");
     zoom.title = "Ctrl/⌘ 0 恢复适合宽度；按住 Ctrl/⌘ 滚动或双指捏合可缩放";
     controls.append(previous, pageInput, element("span", "/ " + pdf.numPages + " 页"), next, outlineToggle, zoomOut, zoom, zoomIn);
+    if (pdfOptions.returnTo) {
+      const target = pdfOptions.returnTo;
+      const back = element("button", `← ${target.label ?? "返回 Markdown 原文"}`);
+      back.type = "button";
+      back.className = "reader-return-button";
+      back.onclick = () => void this.open(target.id, target.title, target.options);
+      controls.prepend(back);
+    }
+    const candidateChipButtons: Array<{ pageNumber: number; button: HTMLButtonElement }> = [];
+    if (pdfOptions.candidatePages && pdfOptions.candidatePages.length > 1) {
+      const group = element("span");
+      group.className = "reader-candidate-pages";
+      group.append(element("span", "关联页："));
+      for (const idx of pdfOptions.candidatePages) {
+        const targetNum = idx + 1;
+        if (targetNum < 1 || targetNum > pdf.numPages) continue;
+        const chip = element("button", `第 ${targetNum} 页`);
+        chip.type = "button";
+        chip.className = "reader-page-chip";
+        chip.onclick = () => void show(targetNum);
+        candidateChipButtons.push({ pageNumber: targetNum, button: chip });
+        group.append(chip);
+      }
+      if (candidateChipButtons.length > 1) controls.append(group);
+    }
     const layout = element("div"); layout.className = "pdf-layout";
     const outline = element("nav"); outline.className = "pdf-outline"; outline.setAttribute("aria-label", "PDF 目录");
     const viewport = element("div"); viewport.className = "pdf-viewport";
     layout.append(outline, viewport);
-    this.host.append(controls, layout);
+    if (pdfOptions.backlinkNote) {
+      const note = element("p", pdfOptions.backlinkNote);
+      note.className = "reader-backlink-note";
+      this.host.append(controls, note, layout);
+    } else {
+      this.host.append(controls, layout);
+    }
     const outlineKey = "mathscape:pdf-outline";
     const setOutline = (visible: boolean): void => {
       outline.hidden = !visible;
@@ -310,6 +373,9 @@ export class ArtifactReader {
       if (!Number.isInteger(number) || number < 1 || number > pdf.numPages) { pageInput.value = String(pageNumber); return; }
       pageNumber = number; pageInput.value = String(number);
       previous.disabled = number === 1; next.disabled = number === pdf.numPages;
+      for (const item of candidateChipButtons) {
+        item.button.setAttribute("aria-pressed", String(item.pageNumber === number));
+      }
       const navigation = ++navigationVersion;
       navigating = true;
       renderVersion++;
@@ -420,9 +486,22 @@ export class ArtifactReader {
     if (generation !== this.generation) return;
     const controls = element("div"); controls.className = "reader-controls";
     controls.append(element("span", projectionSummary(projection)));
+    const openRootPdf = element("button", "打开原始 PDF");
+    openRootPdf.type = "button";
+    openRootPdf.onclick = () => void this.open(projection.source_pdf_artifact_id, `${title} · 原始 PDF`, {
+      returnTo: { id, title, label: "返回规范解析正文" },
+    });
+    controls.append(openRootPdf);
     const article = element("article"); article.className = "markdown-body canonical-reader";
     article.dataset.canonicalId = projection.canonical_id;
     this.host.append(controls, article);
+    const openCanonicalPdfPage = (pageIndex: number, candidatePages?: number[]) => {
+      void this.open(projection.source_pdf_artifact_id, `${title} · PDF 原页`, {
+        pdfPageIndex: pageIndex,
+        candidatePages,
+        returnTo: { id, title, label: "返回规范解析正文" },
+      });
+    };
     const md = markdownRenderer();
     const segments: Array<{ segment: CanonicalReaderSegment; body: HTMLElement }> = [];
     for (const piece of projection.pieces) {
@@ -437,19 +516,43 @@ export class ArtifactReader {
       const section = element("section"); section.className = "canonical-segment";
       section.dataset.artifactId = piece.artifact_id;
       const header = element("div"); header.className = "canonical-segment-header";
+      const headerActions = element("div"); headerActions.className = "canonical-segment-actions";
+      if (piece.pages) {
+        const jumpPdf = element("button", `查看 PDF ${pagesLabel(piece.pages)}`);
+        jumpPdf.type = "button";
+        jumpPdf.title = "打开此分段对应的原始 PDF 页面";
+        const spanPages = piece.pages.to - piece.pages.from <= 7
+          ? Array.from({ length: piece.pages.to - piece.pages.from + 1 }, (_, k) => piece.pages!.from - 1 + k)
+          : undefined;
+        jumpPdf.onclick = () => openCanonicalPdfPage(piece.pages!.from - 1, spanPages);
+        headerActions.append(jumpPdf);
+      }
       const open = element("button", "打开此快照");
+      open.type = "button";
       open.title = "以物理快照打开，可选择原文块、记录发现或手写批注";
       open.onclick = () => void this.open(piece.artifact_id, title + " · " + segmentLabel(piece));
-      header.append(element("span", segmentLabel(piece)), open);
+      headerActions.append(open);
+      header.append(element("span", segmentLabel(piece)), headerActions);
       const body = element("div");
+      let activePageIndex: number | null = piece.pages ? piece.pages.from - 1 : null;
       for (const chunk of splitByPageMarkers(piece.markdown)) {
         if (chunk.kind === "page") {
+          activePageIndex = chunk.pageId;
           const marker = element("div"); marker.className = "source-block source-page-marker";
           marker.append(element("span", `PDF 第 ${chunk.pageId + 1} 页`));
+          const jump = element("button", "查看原页 ↗");
+          jump.type = "button";
+          jump.className = "page-marker-jump";
+          const targetIdx = chunk.pageId;
+          jump.onclick = (event) => { event.stopPropagation(); openCanonicalPdfPage(targetIdx); };
+          marker.append(jump);
           body.append(marker);
           continue;
         }
         const block = element("div"); block.className = "source-block";
+        if (activePageIndex !== null) block.dataset.pdfPageIndex = String(activePageIndex);
+        block.dataset.segmentArtifactId = piece.artifact_id;
+        block.dataset.segmentLabel = segmentLabel(piece);
         block.innerHTML = md.render(chunk.text, {});
         if (!block.innerHTML.trim()) block.append(element("pre", chunk.text));
         body.append(block);
@@ -458,6 +561,34 @@ export class ArtifactReader {
       article.append(section);
       segments.push({ segment: piece, body });
     }
+    const onCanonicalContextMenu = (event: MouseEvent): void => {
+      const block = (event.target as Element).closest<HTMLElement>(".source-block:not(.source-page-marker)");
+      if (!block || !article.contains(block)) return;
+      const pageAttr = block.dataset.pdfPageIndex;
+      const segArt = block.dataset.segmentArtifactId;
+      const segLbl = block.dataset.segmentLabel ?? "";
+      if (pageAttr === undefined && !segArt) return;
+      event.preventDefault();
+      block.classList.add("is-ink-menu-target");
+      const clearHighlight = () => block.classList.remove("is-ink-menu-target");
+      const items: Array<{ label: string; onSelect: () => void }> = [];
+      if (pageAttr !== undefined) {
+        const idx = Number(pageAttr);
+        items.push({
+          label: `定位对应 PDF 原页（第 ${idx + 1} 页）`,
+          onSelect: () => { clearHighlight(); openCanonicalPdfPage(idx); },
+        });
+      }
+      if (segArt) {
+        items.push({
+          label: "打开所属物理快照",
+          onSelect: () => { clearHighlight(); void this.open(segArt, `${title} · ${segLbl}`); },
+        });
+      }
+      showContextMenu(event.clientX, event.clientY, items, clearHighlight);
+    };
+    article.addEventListener("contextmenu", onCanonicalContextMenu);
+    this.disposeDocument = () => article.removeEventListener("contextmenu", onCanonicalContextMenu);
     if (!projection.pieces.length) article.append(element("p", "规范解析正文暂无可读快照。"));
     article.querySelectorAll("a").forEach(link => { link.removeAttribute("href"); link.title = "链接导航尚未启用"; });
     for (const { segment, body } of segments) {
@@ -490,7 +621,7 @@ export class ArtifactReader {
     }
   }
 
-  private async markdown(info: ContentInfo, generation: number, focus?: ReaderFocus, patch?: ReaderOpenOptions["patch"], conversionId?: string | null): Promise<void> {
+  private async markdown(info: ContentInfo, title: string, generation: number, focus?: ReaderFocus, patch?: ReaderOpenOptions["patch"], conversionId?: string | null): Promise<void> {
     let document = await markdownDocument(info.artifact_id, conversionId ?? info.contexts[0]?.conversion_id ?? null);
     if (generation !== this.generation) return;
     const controls = element("div"); controls.className = "reader-controls";
@@ -498,19 +629,96 @@ export class ArtifactReader {
     const contextSelect = element("select");
     contextSelect.setAttribute("aria-label", "转换来源");
     info.contexts.forEach((context, i) => contextSelect.add(new Option("转换来源 " + (i + 1), String(i))));
+    if (conversionId) {
+      const idx = info.contexts.findIndex(c => c.conversion_id === conversionId);
+      if (idx >= 0) contextSelect.value = String(idx);
+    }
     controls.append(raw);
     if (info.contexts.length > 1) controls.append(contextSelect);
     const article = element("article"); article.className = "markdown-body";
     this.host.append(controls, article);
     let rawMode = false, version = 0;
     let inkLinks: ReaderInkLinks | undefined;
+    const currentConversionId = (): string | null =>
+      info.contexts[Number(contextSelect.value) || 0]?.conversion_id ?? conversionId ?? null;
+    const resolveFocusedBlockRange = (doc: AnchoredMarkdown): { first: number; last: number } | null => {
+      if (!focus) return null;
+      const matched: number[] = [];
+      doc.blocks.forEach((block, index) => {
+        if (block.kind === "page_marker") return;
+        const byId = Boolean(focus.blockIds?.length && focus.blockIds.includes(block.id));
+        const byBytes = !focus.blockIds?.length && focus.end > focus.start && block.range.start < focus.end && block.range.end > focus.start;
+        if (byId || byBytes) matched.push(index);
+      });
+      return matched.length ? { first: matched[0], last: matched[matched.length - 1] } : null;
+    };
     const handwrite = (range: { first: number; last: number }, anchor: HTMLElement) => {
       const bounds = anchor.getBoundingClientRect();
       inkLinks?.create(range, bounds.left, bounds.bottom + 4);
     };
-    let selection = new MarkdownSelection(document, article, patch, handwrite);
+    let selection!: MarkdownSelection;
+    const openPdfForRange = async (range: { first: number; last: number }, preferredPageIndex?: number): Promise<void> => {
+      const contentBlocks = document.blocks.slice(range.first, range.last + 1).filter(b => b.kind !== "page_marker");
+      if (!contentBlocks.length) {
+        selection.notifyFeedback("所选范围仅包含分页标记，请选择具体正文块。");
+        return;
+      }
+      const start = contentBlocks[0].range.start;
+      const end = contentBlocks[contentBlocks.length - 1].range.end;
+      const blockIds = contentBlocks.map(b => b.id);
+      try {
+        const backlink = await getSourceBacklink({
+          artifact_id: info.artifact_id,
+          conversion_id: currentConversionId(),
+          start,
+          end,
+          block_ids: blockIds,
+        });
+        if (generation !== this.generation) return;
+        if (backlink.kind === "markdown_only" || !backlink.pdf_artifact_id || !backlink.pdf_page_indices?.length) {
+          selection.notifyFeedback(backlink.reason ?? "当前段落没有对应的 PDF 页映射。");
+          return;
+        }
+        const pages = backlink.pdf_page_indices;
+        const targetPage = preferredPageIndex !== undefined && pages.includes(preferredPageIndex)
+          ? preferredPageIndex
+          : pages[0];
+        await this.open(backlink.pdf_artifact_id, `${title} · PDF 原页`, {
+          pdfPageIndex: targetPage,
+          candidatePages: pages,
+          backlinkNote: backlink.kind === "candidate_pdf_pages" ? backlink.reason : undefined,
+          returnTo: {
+            id: info.artifact_id,
+            title,
+            options: {
+              conversionId: currentConversionId(),
+              focus: { start, end, blockIds },
+            },
+            label: "返回 Markdown 原文",
+          },
+        });
+      } catch (error) {
+        if (generation === this.generation) {
+          selection.notifyFeedback("PDF 回链查询失败：" + (error instanceof Error ? error.message : String(error)));
+        }
+      }
+    };
+    selection = new MarkdownSelection(
+      document,
+      article,
+      patch,
+      handwrite,
+      (range) => void openPdfForRange(range),
+      resolveFocusedBlockRange(document),
+    );
     controls.after(selection.panel);
-    inkLinks = new ReaderInkLinks(document, article, () => selection, () => rawMode);
+    inkLinks = new ReaderInkLinks(
+      document,
+      article,
+      () => selection,
+      () => rawMode,
+      (range) => void openPdfForRange(range),
+    );
     controls.after(inkLinks.hint);
     this.disposeDocument = () => { selection.dispose(); inkLinks?.dispose(); };
     const render = async (): Promise<void> => {
@@ -528,7 +736,14 @@ export class ArtifactReader {
         const wrapper = element("div");
         wrapper.className = "source-block";
         wrapper.dataset.sourceBlock = block.id;
-        if (focus?.blockIds?.includes(block.id)) wrapper.classList.add("source-block-focus");
+        const isFocused = Boolean(
+          focus && (
+            focus.blockIds?.length
+              ? focus.blockIds.includes(block.id)
+              : focus.end > focus.start && block.kind !== "page_marker" && block.range.start < focus.end && block.range.end > focus.start
+          ),
+        );
+        if (isFocused) wrapper.classList.add("source-block-focus");
         wrapper.tabIndex = 0;
         wrapper.setAttribute("aria-label", `原文块 ${i + 1}`);
         wrapper.title = `第 ${i + 1} 块 · ${block.kind} · UTF-8 [${block.range.start}, ${block.range.end})`;
@@ -539,6 +754,26 @@ export class ArtifactReader {
           wrapper.setAttribute("aria-label", page ? `PDF 第 ${Number(page) + 1} 页` : "PDF 页边界");
           wrapper.title = page ? `PDF 第 ${Number(page) + 1} 页（Marker page_id=${page}）` : "PDF 页边界";
           wrapper.append(element("span", page ? `PDF 第 ${Number(page) + 1} 页` : "PDF 页边界"));
+          if (page !== undefined && info.contexts.length > 0) {
+            const jump = element("button", "查看原页 ↗");
+            jump.type = "button";
+            jump.className = "page-marker-jump";
+            jump.onclick = (event) => {
+              event.stopPropagation();
+              let adj = -1;
+              for (let j = i + 1; j < document.blocks.length; j++) {
+                if (document.blocks[j].kind !== "page_marker") { adj = j; break; }
+              }
+              if (adj < 0) {
+                for (let j = i - 1; j >= 0; j--) {
+                  if (document.blocks[j].kind !== "page_marker") { adj = j; break; }
+                }
+              }
+              if (adj >= 0) void openPdfForRange({ first: adj, last: adj }, Number(page));
+              else selection.notifyFeedback("当前文档没有可用于验证页映射的正文块。");
+            };
+            wrapper.append(jump);
+          }
           article.append(wrapper);
           return;
         }
@@ -587,7 +822,14 @@ export class ArtifactReader {
       void markdownDocument(info.artifact_id, info.contexts[Number(contextSelect.value)]?.conversion_id ?? null).then(data => {
         if (generation !== this.generation || current !== version) return;
         document = data;
-        selection = new MarkdownSelection(document, article, patch, handwrite);
+        selection = new MarkdownSelection(
+          document,
+          article,
+          patch,
+          handwrite,
+          (range) => void openPdfForRange(range),
+          resolveFocusedBlockRange(document),
+        );
         controls.after(selection.panel);
         inkLinks?.setDocument(document);
         raw.disabled = false;

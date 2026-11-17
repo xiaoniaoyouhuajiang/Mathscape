@@ -78,7 +78,8 @@ const resumeRequests: unknown[] = [];
 const ink = { links: [] as InkLinkedNote[], originalNoteCount: 0, pageMarkerBlock: -1, creates: [] as unknown[], linkRequests: [] as unknown[], opened: [] as string[] };
 setInkContextCreator(async (target, choice, draft) => { ink.creates.push({ target, choice, requestId: draft.requestId }); });
 eventBus.on("open-ink-document", ({ documentId }) => { ink.opened.push(documentId); });
-const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash" };
+const backlinkRequests: unknown[] = [];
+const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash", markdownOnlyReason: null as string | null };
 const byteOffset = (text: string): number => new TextEncoder().encode(markdown.slice(0, markdown.indexOf(text))).length;
 function patchReview(status: string): unknown {
   const start = byteOffset("x^2");
@@ -277,6 +278,13 @@ function handle(command: string, payload: any): any {
     doc.snapshot.content_hash = behavior.documentHash;
     return doc;
   }
+  if (command === "get_source_backlink") {
+    backlinkRequests.push((payload as { request: unknown }).request);
+    if (behavior.markdownOnlyReason) {
+      return { kind: "markdown_only", reason: behavior.markdownOnlyReason };
+    }
+    return { kind: "exact_pdf_pages", pdf_artifact_id: "pdf", pdf_page_indices: [1], marker_page_ids: [1] };
+  }
   const args = payload as { artifactId: string; offset: number; length: number };
   const file = files[args.artifactId];
   if (!file) throw new Error("Artifact 不存在");
@@ -332,5 +340,5 @@ window.addEventListener("mathscape:open-source", event => {
   });
 });
 Object.assign(window, {
-  harness: { ink, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ink, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
 });

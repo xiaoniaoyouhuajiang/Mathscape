@@ -17,6 +17,7 @@ import {
   syncCytoscapeGraph,
   type RenderMode,
 } from "./cytoscape";
+import { LABEL_HOVER, refreshLabels, syncNodeLabel, type LabelSet } from "./label-hover";
 import { focusSubgraph, type FocusDepth, type FocusLens, type FocusResult } from "./focus";
 import { applyInkOverlay, clearInkOverlay, INK_NOTE_NODE_CLASS, type InkOverlayResult } from "./ink-overlay";
 import {
@@ -25,8 +26,17 @@ import {
   resolveIncrementalPositions,
   type MapPoint,
 } from "./layout";
+import { GraphChoreographer } from "./choreographer";
+import {
+  buildOrganicPosture,
+  buildStudyOverviewPosture,
+  buildStudySpinePosture,
+  type MapPostureSpec,
+  type StudySignalMode,
+} from "./study-posture";
+import type { LearningView } from "../semantic/api";
 import type { InkLinkOverlay } from "../ink/links";
-import type { IncidenceEdge, IncidenceGraph, IncidenceNode } from "./projection";
+import type { IncidenceGraph, IncidenceNode } from "./projection";
 import { activityGraph } from "./lifecycle";
 import {
   EDGE_TYPES,
@@ -85,6 +95,7 @@ export interface GraphControllerDelegate {
   onRequestCreateRelation: (sourceId: string, targetId: string) => void;
   onBeforeRenderGraph?: () => void;
   onGraphRendered?: () => void;
+  onStudyPostureChanged?: (active: boolean, initialMaterialId?: string | null) => void;
   showToast: (message: string, kind: "success" | "error") => void;
   getSnapshot: () => DesktopSnapshot | undefined;
   /** N2: a synthesized "我的手稿" node was clicked. */
@@ -122,6 +133,13 @@ export class GraphController {
   /** User-dragged node positions preserved across filter toggles until "整理布局". */
   private userPinnedPositions = new Map<string, MapPoint>();
   private lastWorkspaceId: string | null = null;
+
+  private readonly choreographer = new GraphChoreographer();
+  private studyActive = false;
+  private studyLearningView: LearningView | null = null;
+  private studyMaterialId: string | null = null;
+  private studySignal: StudySignalMode = "all";
+  private preStudyState: { kinds: Set<string>; preset: PresetName | "custom" } | null = null;
 
   constructor(
     private readonly elements: GraphControllerElements,
@@ -191,7 +209,79 @@ export class GraphController {
     return 2;
   }
 
+  isStudyPostureActive(): boolean {
+    return this.studyActive;
+  }
+
+  finishTransitions(): void {
+    this.choreographer.finishNow();
+  }
+
+  toggleStudyPosture(materialId?: string | null): void {
+    if (this.studyActive && materialId === undefined) {
+      this.exitStudyPosture();
+    } else {
+      this.enterStudyPosture(materialId);
+    }
+  }
+
+  enterStudyPosture(materialId?: string | null): void {
+    if (!this.studyActive) {
+      this.preStudyState = {
+        kinds: new Set(this.visibleNodeKinds),
+        preset: this.activePreset,
+      };
+      this.focusRootId = null;
+      this.focusScope = null;
+      this.focusRelationScope = null;
+      this.visibleNodeKinds = new Set(["SourceArtifact", "SourceSemanticUnit", "SemanticEntity"]);
+    }
+    this.studyActive = true;
+    if (materialId !== undefined) {
+      this.studyMaterialId = materialId;
+      this.studySignal = "all";
+    }
+    this.syncCheckboxesToFilter();
+    this.delegate.onStudyPostureChanged?.(true, this.studyMaterialId);
+    this.renderCurrentGraph();
+  }
+
+  exitStudyPosture(): void {
+    if (!this.studyActive) return;
+    this.studyActive = false;
+    this.studyMaterialId = null;
+    this.studySignal = "all";
+    if (this.preStudyState) {
+      this.visibleNodeKinds = new Set(this.preStudyState.kinds);
+      this.activePreset = this.preStudyState.preset;
+      this.preStudyState = null;
+    }
+    this.syncCheckboxesToFilter();
+    this.delegate.onStudyPostureChanged?.(false, null);
+    this.renderCurrentGraph();
+  }
+
+  applyStudyData(
+    view: LearningView,
+    materialId: string | null,
+    signal: StudySignalMode,
+  ): void {
+    this.studyLearningView = view;
+    this.studyMaterialId = materialId;
+    this.studySignal = signal;
+    if (this.studyActive) {
+      this.renderCurrentGraph(this.delegate.getSnapshot(), { preserveReader: true });
+    }
+  }
+
   setFocus(id: string, depth?: FocusDepth, lens?: FocusLens): void {
+    if (this.studyActive) {
+      this.studyActive = false;
+      this.studyMaterialId = null;
+      this.studySignal = "all";
+      this.preStudyState = null;
+      this.delegate.onStudyPostureChanged?.(false, null);
+    }
     const node = this.delegate.getSnapshot()?.landscape_graph.nodes.find((n) => n.id === id);
     this.focusRootId = id;
     this.selectedElementId = null;
@@ -347,8 +437,20 @@ export class GraphController {
     inkLabel.after(relayoutBtn);
     document.querySelectorAll<HTMLButtonElement>(".preset-button[data-preset]").forEach((button) => {
       button.onclick = () => {
-        const preset = button.dataset.preset as PresetName;
+        const rawPreset = button.dataset.preset;
+        if (rawPreset === "study") {
+          this.toggleStudyPosture();
+          return;
+        }
+        const preset = rawPreset as PresetName;
         if (preset in PRESET_NODE_KINDS) {
+          if (this.studyActive) {
+            this.studyActive = false;
+            this.studyMaterialId = null;
+            this.studySignal = "all";
+            this.preStudyState = null;
+            this.delegate.onStudyPostureChanged?.(false, null);
+          }
           this.activePreset = preset;
           this.visibleNodeKinds = new Set(PRESET_NODE_KINDS[preset]);
           this.syncCheckboxesToFilter();
@@ -359,6 +461,13 @@ export class GraphController {
     });
 
     this.elements.nodeFilterGroup.addEventListener("change", () => {
+      if (this.studyActive) {
+        this.studyActive = false;
+        this.studyMaterialId = null;
+        this.studySignal = "all";
+        this.preStudyState = null;
+        this.delegate.onStudyPostureChanged?.(false, null);
+      }
       this.syncFilterFromCheckboxes();
       this.persistFilter();
       this.renderCurrentGraph();
@@ -409,6 +518,8 @@ export class GraphController {
         hideContextMenu();
       } else if (this.focusRootId !== null) {
         this.exitFocus();
+      } else if (this.studyActive) {
+        this.exitStudyPosture();
       }
     });
 
@@ -440,9 +551,18 @@ export class GraphController {
 
   private syncPresetHighlight(): void {
     document.querySelectorAll<HTMLButtonElement>(".preset-button[data-preset]").forEach((button) => {
-      const preset = button.dataset.preset as PresetName;
-      const presetKinds = PRESET_NODE_KINDS[preset];
-      const active = presetKinds !== undefined && this.setsEqual(presetKinds, this.visibleNodeKinds);
+      const raw = button.dataset.preset;
+      let active: boolean;
+      if (raw === "study") {
+        active = this.studyActive;
+      } else {
+        const preset = raw as PresetName;
+        const presetKinds = PRESET_NODE_KINDS[preset];
+        active =
+          !this.studyActive &&
+          presetKinds !== undefined &&
+          this.setsEqual(presetKinds, this.visibleNodeKinds);
+      }
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", String(active));
     });
@@ -491,11 +611,19 @@ export class GraphController {
 
   renderCurrentGraph(
     snapshot = this.delegate.getSnapshot(),
-    options?: { forceRelayout?: boolean; fit?: boolean },
+    options?: { forceRelayout?: boolean; fit?: boolean; preserveReader?: boolean },
   ): void {
     if (snapshot === undefined) return;
-    this.delegate.onBeforeRenderGraph?.();
+    if (!options?.preserveReader) {
+      this.delegate.onBeforeRenderGraph?.();
+    }
     hideContextMenu();
+    this.choreographer.finishNow();
+    const priorPositions = this.choreographer.snapshotPositions(this.graphCore);
+    const priorElementIds = this.graphCore
+      ? new Set(this.graphCore.elements().map((e) => e.id()))
+      : new Set<string>();
+
     if (this.lastWorkspaceId !== null && this.lastWorkspaceId !== snapshot.workspace_id) {
       this.basePositions.clear();
       this.userPinnedPositions.clear();
@@ -520,7 +648,7 @@ export class GraphController {
     }
 
     const focus =
-      this.focusRootId === null
+      this.studyActive || this.focusRootId === null
         ? null
         : focusSubgraph(landscape, this.focusRootId, {
             depth: this.focusDepth,
@@ -530,11 +658,38 @@ export class GraphController {
 
     const filtered = this.filterGraph(landscape);
     this.displayedGraph = focus === null ? filtered : this.mergeGraphs(filtered, focus.graph);
-    const positions = this.positionsWithSynthetics(this.displayedGraph, this.basePositions);
-    const focusScope =
-      focus === null ? null : new Set(focus.graph.nodes.map((node) => node.id));
-    const focusRelationScope =
-      focus === null ? null : new Set(focus.graph.edges.map((edge) => edge.relation_id));
+
+    let posture: MapPostureSpec;
+    if (this.studyActive) {
+      const selectedMaterial =
+        this.studyMaterialId && this.studyLearningView
+          ? this.studyLearningView.materials.find((m) => m.artifact_id === this.studyMaterialId) ??
+            null
+          : null;
+      posture = selectedMaterial
+        ? buildStudySpinePosture(
+            this.displayedGraph,
+            this.basePositions,
+            selectedMaterial,
+            this.studySignal,
+          )
+        : buildStudyOverviewPosture(
+            this.displayedGraph,
+            this.basePositions,
+            this.studyLearningView,
+          );
+    } else {
+      const focusScope =
+        focus === null ? null : new Set(focus.graph.nodes.map((node) => node.id));
+      const focusRelationScope =
+        focus === null ? null : new Set(focus.graph.edges.map((edge) => edge.relation_id));
+      posture = buildOrganicPosture(
+        this.displayedGraph,
+        this.basePositions,
+        focusScope,
+        focusRelationScope,
+      );
+    }
 
     this.syncPresetHighlight();
     this.renderFocusBar(focus, landscape);
@@ -557,6 +712,13 @@ export class GraphController {
         : "导入第一份 PDF 后，节点会出现在这里。";
     }
 
+    const isFullLabelNode = (node: NodeSingular) =>
+      node.hasClass(SELECTED_PRIMARY_CLASS) ||
+      node.hasClass(FOCUS_ROOT_CLASS) ||
+      node.hasClass("spine-unit-node") ||
+      node.hasClass("orbit-semantic-node") ||
+      node.hasClass("spine-header-node");
+
     if (this.graphCore !== null) clearInkOverlay(this.graphCore);
     if (this.graphCore === null) {
       this.graphCore = mountCytoscapeGraph(
@@ -564,17 +726,16 @@ export class GraphController {
         this.displayedGraph,
         this.renderMode,
         {
-          positions,
+          positions: posture.positions,
           labelHover: {
-            isFull: (node) =>
-              node.hasClass(SELECTED_PRIMARY_CLASS) || node.hasClass(FOCUS_ROOT_CLASS),
+            isFull: isFullLabelNode,
           },
         },
       );
       this.bindGraphInteractions(this.graphCore);
     } else {
       syncCytoscapeGraph(this.graphCore, this.displayedGraph, this.renderMode, {
-        positions,
+        positions: posture.positions,
         fit: options?.fit,
         updateExistingPositions: options?.forceRelayout,
       });
@@ -587,11 +748,31 @@ export class GraphController {
       this.selectedElementId = null;
     }
 
-    this.focusScope = focusScope;
-    this.focusRelationScope = focusRelationScope;
+    this.focusScope = posture.inScopeNodeIds;
+    this.focusRelationScope = posture.inScopeRelationIds;
     applyStagedOverlay(this.graphCore, this.delegate.getSnapshot()?.investigation);
     this.inkOverlayResult = applyInkOverlay(this.graphCore, this.inkOverlay, this.showInkNotes);
     this.applyEffectiveFocusAndSelection();
+    this.choreographer.applyPosture(
+      this.graphCore,
+      posture,
+      priorPositions,
+      priorElementIds,
+      { forceSnap: options?.forceRelayout },
+    );
+
+    // Sync full/compact labels across posture transitions (Study Spine shows full chapter/theorem titles)
+    let changedLabels = this.graphCore.collection();
+    this.graphCore.nodes().forEach((node) => {
+      if (node.data("elementKind") === "junction" || node.hasClass(INK_NOTE_NODE_CLASS)) return;
+      if (syncNodeLabel(node, node.hasClass(LABEL_HOVER) || isFullLabelNode(node))) {
+        changedLabels = changedLabels.union(node);
+      }
+    });
+    if (changedLabels.nonempty()) {
+      refreshLabels(this.graphCore, changedLabels as unknown as LabelSet);
+    }
+
     this.renderInkToggle();
     this.renderLegend(this.graphCore);
     this.elements.emptyState.classList.toggle(
@@ -599,33 +780,6 @@ export class GraphController {
       entityCount > (focus === null ? 0 : 1),
     );
     this.delegate.onGraphRendered?.();
-  }
-
-  private positionsWithSynthetics(
-    displayed: IncidenceGraph,
-    base: ReadonlyMap<string, MapPoint>,
-  ): Map<string, MapPoint> {
-    const out = new Map(base);
-    const byRel = new Map<string, IncidenceEdge[]>();
-    for (const edge of displayed.edges) {
-      const list = byRel.get(edge.relation_id) ?? [];
-      list.push(edge);
-      byRel.set(edge.relation_id, list);
-    }
-    for (const node of displayed.nodes) {
-      if (node.element_kind !== "relation" || out.has(node.id)) continue;
-      const relKey = node.domain_id ?? node.id;
-      const relEdges = byRel.get(relKey) ?? [];
-      const pts = relEdges
-        .map((e) => out.get(e.source === node.id ? e.target : e.source))
-        .filter((p): p is MapPoint => !!p);
-      if (pts.length === 0) continue;
-      const cx = Math.round(pts.reduce((a, p) => a + p.x, 0) / pts.length);
-      const cy = Math.round(pts.reduce((a, p) => a + p.y, 0) / pts.length);
-      out.set(node.id, { x: cx, y: cy });
-      out.set(`junc~${relKey}`, { x: cx, y: cy });
-    }
-    return out;
   }
 
   private mergeGraphs(base: IncidenceGraph, overlay: IncidenceGraph): IncidenceGraph {
@@ -777,6 +931,7 @@ export class GraphController {
     });
 
     core.on("dragfreeon", "node", (event) => {
+      if (this.studyActive) return;
       const node = event.target as NodeSingular;
       if (node.hasClass(INK_NOTE_NODE_CLASS) || node.data("elementKind") === "junction") return;
       const pos = node.position();
@@ -800,6 +955,16 @@ export class GraphController {
   private nodeMenuItems(id: string): ContextMenuItem[] {
     const node = this.displayedGraph?.nodes.find((candidate) => candidate.id === id);
     const items: ContextMenuItem[] = [];
+    if (node?.domain_kind === "SourceArtifact" && node.domain_id !== null) {
+      const targetMatId = node.domain_id;
+      const matMatch = this.studyLearningView?.materials.find(
+        (m) => m.artifact_id === targetMatId || (m.aliased_artifact_ids ?? []).includes(targetMatId),
+      );
+      items.push({
+        label: "在研读透镜中展开此材料",
+        onSelect: () => this.enterStudyPosture(matMatch?.artifact_id ?? targetMatId),
+      });
+    }
     if (node?.domain_kind === "SourceSemanticUnit" && node.domain_id !== null) {
       items.push({
         label: "以此为父节点新建内容单元",
