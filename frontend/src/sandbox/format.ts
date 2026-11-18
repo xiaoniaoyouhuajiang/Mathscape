@@ -216,7 +216,7 @@ export function modelOptionLabel(model: AgentModelLike): string {
  */
 export function modelCatalogHint(models: AgentModelLike[], current: string): string | null {
   if (models.length >= 2) return null;
-  const where = "~/.codex/models_cache.json 与 codex app-server model/list";
+  const where = "config.toml 的 model_catalog_json、~/.codex/models_cache.json 与 codex app-server model/list";
   if (models.length === 0) return `未读到 Codex 模型目录（${where}），也未设置默认模型。`;
   const only = current || models[0].id;
   return `未读到 Codex 的其他可选模型（${where}），仅显示当前模型 ${only}。在终端运行一次 codex 刷新目录后重开对话。`;
