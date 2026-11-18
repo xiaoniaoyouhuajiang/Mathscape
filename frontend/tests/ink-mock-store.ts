@@ -90,15 +90,61 @@ mockIPC(async (command, payload) => {
     });
     return { source: file.format ? "unsaved_operations" : "document", original_document_id: file.document_id, sessions: created };
   }
+  if (command === "get_ink_markdown_links") {
+    const artifactId = String(args.artifactId ?? "");
+    const matched = links
+      .filter(link => link.state === "active" && link.target.kind === "markdown" && link.target.artifact_id === artifactId)
+      .map(link => ({ note: noteState(link.document_id), link: structuredClone(link) }));
+    return { artifact_id: artifactId, links: matched, original_note_count: 0 };
+  }
   if (command === "create_ink_note_from_context") {
     // §6.5: one transaction creates an auto-titled note and its primary link.
-    const request = args.request as { request_id: string; document: InkDocument; session_id: string; target: { kind: "source_object"; object_id: string }; role: InkNoteLink["role"]; title: string | null };
+    const request = args.request as {
+      request_id: string;
+      document: InkDocument;
+      session_id: string;
+      target:
+        | { kind: "source_object"; object_id: string }
+        | { kind: "markdown"; artifact_id: string; content_hash: string; first_block: string; last_block: string };
+      role: InkNoteLink["role"];
+      title: string | null;
+    };
     const document = structuredClone(request.document);
     documents.set(document.document_id, document); sessions.set(document.document_id, request.session_id); snapshots.set(document.document_id, []);
     notes.set(document.document_id, { title_mode: request.title ? "manual" : "auto", title_revision: 0, lifecycle: "active", lifecycle_revision: 0, trashed_at: null, last_used_at: Date.now() });
     if (request.title) document.title = request.title;
-    const id = request.target.object_id;
-    const link: InkNoteLink = { link_id: "link-" + request.request_id, document_id: document.document_id, target_kind: "source_object", target_key: `src:${id}`, target_id: id, target: structuredClone(request.target) as InkNoteLink["target"], target_revision: null, target_label: sourceLabels.get(id) ?? id, role: request.role, is_primary: true, state: "active", created_at: Date.now(), removed_at: null, target_status: "active" };
+    let link: InkNoteLink;
+    if (request.target.kind === "markdown") {
+      const t = request.target;
+      const blockIds = t.first_block === t.last_block ? [t.first_block] : [t.first_block, t.last_block];
+      link = {
+        link_id: "link-" + request.request_id,
+        document_id: document.document_id,
+        target_kind: "markdown",
+        target_key: `md:${t.artifact_id}:${t.first_block}:${t.last_block}`,
+        target_id: t.artifact_id,
+        target: {
+          ...structuredClone(t),
+          block_ids: blockIds,
+          start: 0,
+          end: 10,
+          block_hash: "bh",
+          excerpt: "正确表述",
+          label: "正确表述",
+        },
+        target_revision: t.content_hash,
+        target_label: "正确表述",
+        role: request.role,
+        is_primary: true,
+        state: "active",
+        created_at: Date.now(),
+        removed_at: null,
+        target_status: "active",
+      };
+    } else {
+      const id = request.target.object_id;
+      link = { link_id: "link-" + request.request_id, document_id: document.document_id, target_kind: "source_object", target_key: `src:${id}`, target_id: id, target: structuredClone(request.target) as InkNoteLink["target"], target_revision: null, target_label: sourceLabels.get(id) ?? id, role: request.role, is_primary: true, state: "active", created_at: Date.now(), removed_at: null, target_status: "active" };
+    }
     links.push(link);
     retitle(document.document_id);
     return { document_id: document.document_id, session_id: request.session_id, writer_id: "desktop-local", writer_epoch: 1, status: "active", device: {}, started_at: document.created_at, last_seen_at: document.created_at, note: noteState(document.document_id), link: structuredClone(link), request_id: request.request_id, replayed: false };

@@ -178,7 +178,7 @@ extraCommands.set("get_markdown_document", () => ({
   conversion_id: "c1",
   source: mdSource,
   blocks: [{ id: "b1", kind: "heading", range: { start: 0, end: mdBytes.length } }],
-  snapshot: { content_hash: "sha256:test", byte_size: mdBytes.length },
+  snapshot: { artifact_id: "md-1", conversion_id: "c1", content_hash: "sha256:test", anchor_scheme: "mathscape-markdown-blocks-1", fingerprint: "fp-md-1", byte_size: mdBytes.length },
 }));
 
 // N3d: a stand-in for search_workspace. Ranking is covered by the Rust

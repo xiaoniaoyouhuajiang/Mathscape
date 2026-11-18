@@ -18,6 +18,7 @@ import { SandboxPanelController } from "./sandbox/panel";
 import { DesktopInkWorkspace } from "./ink/desktop";
 import { connectInkViews, type InkViewSync } from "./ink/views";
 import {
+  closeInkPopover,
   createInkNoteFromContext,
   setInkContextCreator,
   setInkSourceCandidateProvider,
@@ -74,16 +75,56 @@ let splitGeneration = 0;
 let splitReaderRequest = 0;
 let splitReaderError: string | undefined;
 
+type ReaderScrollAnchor =
+  | { kind: "block"; block: HTMLElement }
+  | { kind: "ratio"; ratio: number };
+
+function captureReaderScrollAnchor(): ReaderScrollAnchor | null {
+  if (!reader.hasContent() || el.readerHost.hidden) return null;
+  const preferred = el.readerHost.querySelector<HTMLElement>(
+    ".source-block.is-selected-block, .source-block.is-current-block, .source-block.is-ink-menu-target, .source-block.source-block-focus",
+  );
+  if (preferred) return { kind: "block", block: preferred };
+  const hostRect = el.readerHost.getBoundingClientRect();
+  for (const block of el.readerHost.querySelectorAll<HTMLElement>(".source-block")) {
+    const rect = block.getBoundingClientRect();
+    if (rect.bottom > hostRect.top + 64) {
+      return { kind: "block", block };
+    }
+  }
+  const maxScroll = el.readerHost.scrollHeight - el.readerHost.clientHeight;
+  if (maxScroll > 1) {
+    return { kind: "ratio", ratio: el.readerHost.scrollTop / maxScroll };
+  }
+  return null;
+}
+
+function restoreReaderScrollAnchor(anchor: ReaderScrollAnchor | null): void {
+  if (!anchor) return;
+  requestAnimationFrame(() => {
+    if (!inkSplit || !inkOpen || el.readerHost.hidden) return;
+    if (anchor.kind === "block" && anchor.block.isConnected) {
+      anchor.block.scrollIntoView({ block: "center", behavior: "instant" });
+    } else if (anchor.kind === "ratio") {
+      const maxScroll = el.readerHost.scrollHeight - el.readerHost.clientHeight;
+      if (maxScroll > 0) el.readerHost.scrollTop = anchor.ratio * maxScroll;
+    }
+  });
+}
+
 function placeReaderInSplit(inSplit: boolean): void {
   if (inSplit) {
     // Never move #reader into the overlay after an exit (in-flight ensure/open).
     if (!inkSplit || !inkOpen) return;
-    if (el.readerHost.parentElement !== el.inkSplitReader) {
+    const movingIntoSplit = el.readerHost.parentElement !== el.inkSplitReader;
+    const anchor = movingIntoSplit ? captureReaderScrollAnchor() : null;
+    if (movingIntoSplit) {
       el.inkSplitReader.append(el.readerHost);
     }
     el.readerHost.classList.add("reader-panel");
     // Keep host visible only when it has a document; empty state covers the blank case.
     el.readerHost.hidden = !reader.hasContent() && !reader.isLoading();
+    if (movingIntoSplit) restoreReaderScrollAnchor(anchor);
   } else {
     restoreReaderHome({ hide: false });
   }
@@ -539,11 +580,18 @@ async function loadSnapshot(): Promise<void> {
 el.importButton.addEventListener("click", () => void artifactController.importPdf());
 
 eventBus.on("source-map-changed", () => void loadSnapshot());
-function showInkWorkspace(): void {
-  // Keep the last reader document for a later 并排阅读; only hide the host.
-  if (!inkSplit) el.readerHost.hidden = true;
-  inkOpen = true; el.workspaceGrid.hidden = true; el.inkWorkspace.hidden = false;
+function showInkWorkspace(opts: { enterSplitWithReader?: boolean; anchor?: ReaderScrollAnchor | null } = {}): void {
+  const autoSplit = Boolean(opts.enterSplitWithReader && window.innerWidth >= INK_SPLIT_WINDOW_MIN);
+  // Keep the last reader document for 并排阅读; only hide the host when staying full-screen.
+  if (!inkSplit && !autoSplit) el.readerHost.hidden = true;
+  inkOpen = true;
+  el.workspaceGrid.hidden = true;
+  el.inkWorkspace.hidden = false;
   el.inkButton.textContent = "返回地图";
+  if (autoSplit) {
+    setInkSplit(true);
+    restoreReaderScrollAnchor(opts.anchor ?? null);
+  }
 }
 eventBus.on("open-ink-document", ({ documentId }) => {
   if (inkSplit && inkOpen) {
@@ -554,16 +602,25 @@ eventBus.on("open-ink-document", ({ documentId }) => {
     });
     return;
   }
-  showInkWorkspace();
+  const readerWasOpen = !inkOpen && !el.readerHost.hidden && reader.hasContent();
+  const anchor = readerWasOpen ? captureReaderScrollAnchor() : null;
+  closeInkPopover();
+  showInkWorkspace({ enterSplitWithReader: readerWasOpen, anchor });
+  inkPaneFocused = true;
   void inkWorkspace.openDocumentId(documentId);
 });
 
 // N2 context creation (§6.5): one transaction creates the note and its first
-// link; then the note opens on the desktop or with the tablet pairing panel.
+// link; when initiated from an open reader, enter left-source + right-ink split
+// automatically (for both desktop and tablet writing modes).
 setInkContextCreator(async (target, choice, draft) => {
+  const readerWasOpen = !inkOpen && !el.readerHost.hidden && reader.hasContent();
+  const anchor = readerWasOpen ? captureReaderScrollAnchor() : null;
   const receipt = await createInkNoteFromContext(draft, target, choice.role, choice.title);
+  closeInkPopover();
   eventBus.emit("ink-links-changed");
-  showInkWorkspace();
+  showInkWorkspace({ enterSplitWithReader: readerWasOpen, anchor });
+  inkPaneFocused = true;
   await inkWorkspace.openDocumentId(receipt.document_id);
   if (choice.mode === "tablet") await inkWorkspace.pairTablet(receipt.document_id);
 });

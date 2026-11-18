@@ -135,3 +135,41 @@ test("Markdown block PDF backlink jumps to exact PDF page and round-trips back t
   await page.getByRole("button", { name: "定位 PDF 原页" }).click();
   await expect(page.locator(".selection-panel [role='status']")).toContainText("旧转换未启用分页输出");
 });
+
+test("Shift+click block range, floating block action pill, Escape clear, and discovery drawer toggle", async ({ page }) => {
+  await openMarkdown(page);
+  await expect(page.locator(".block-action-pill")).toHaveCount(0);
+
+  // Plain click selects single block and shows floating pill
+  await page.getByLabel("原文块 2", { exact: true }).click();
+  const pill = page.locator(".block-action-pill");
+  await expect(pill).toBeVisible();
+  await expect(pill.getByRole("button", { name: "✎ 手写此块" })).toBeVisible();
+  await expect(pill.getByRole("button", { name: "＋ 关联已有" })).toBeVisible();
+  await expect(pill.getByRole("button", { name: "↗ PDF 原页" })).toBeVisible();
+
+  // Shift+click extends continuous block range without clicking top-bar endpoints
+  await page.getByLabel("原文块 4", { exact: true }).click({ modifiers: ["Shift"] });
+  await expect(page.locator(".is-selected-block")).toHaveCount(3);
+  await expect(pill.getByRole("button", { name: "✎ 手写这 3 块" })).toBeVisible();
+
+  await pill.getByRole("button", { name: "✎ 手写这 3 块" }).click();
+  await page.locator(".ink-create-popover").getByRole("button", { name: "在电脑上书写" }).click();
+  const creates = await page.evaluate(() => (window as any).harness.ink.creates);
+  expect(creates[0].target).toMatchObject({ first_block: "test-block-1", last_block: "test-block-3" });
+
+  // Plain click outside resets Shift range back to single block
+  await page.getByLabel("原文块 6", { exact: true }).click();
+  await expect(page.locator(".is-selected-block")).toHaveCount(0);
+  await expect(pill.getByRole("button", { name: "✎ 手写此块" })).toBeVisible();
+
+  // Escape clears block selection and dismisses the floating pill
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".block-action-pill")).toHaveCount(0);
+
+  // Discovery drawer toggle collapses/expands the secondary toolbar
+  await page.getByRole("button", { name: "收起工具 ▴" }).click();
+  await expect(page.locator(".selection-discovery-drawer")).toBeHidden();
+  await page.getByRole("button", { name: "选区与发现 ▾" }).click();
+  await expect(page.locator(".selection-discovery-drawer")).toBeVisible();
+});

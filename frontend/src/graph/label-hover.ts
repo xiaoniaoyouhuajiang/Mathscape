@@ -75,7 +75,10 @@ export function boxesOverlap(a: LabelBox, b: LabelBox): boolean {
 
 /** 焦点或悬停用全文，其余用短名。直接改 `label`，让 Cytoscape 重算标签尺寸。 */
 export function syncNodeLabel(node: NodeSingular, full: boolean): boolean {
-  const next = String(node.data(full ? "fullLabel" : "compactLabel") ?? node.data("label") ?? "");
+  const rawBase = String(node.data(full ? "fullLabel" : "compactLabel") ?? node.data("inkBaseLabel") ?? node.data("label") ?? "");
+  const inkCount = Number(node.data("inkCount") ?? 0);
+  const suffix = inkCount > 0 ? ` · ✎${inkCount}` : "";
+  const next = suffix && !rawBase.endsWith(suffix) ? `${rawBase}${suffix}` : rawBase;
   if (node.data("label") === next) return false;
   node.data("label", next);
   return true;

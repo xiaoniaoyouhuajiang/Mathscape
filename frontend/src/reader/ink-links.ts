@@ -71,10 +71,14 @@ export class ReaderInkLinks {
   /** Re-applies markers after every render. */
   decorate(): void {
     this.article.querySelectorAll(".ink-block-marker").forEach(marker => marker.remove());
+    this.article.querySelectorAll<HTMLElement>("[data-source-block].has-ink-marker").forEach(el => el.classList.remove("has-ink-marker"));
     const original = this.links?.original_note_count ?? 0;
     this.hint.hidden = original === 0;
     this.hint.textContent = original ? `原版本有 ${original} 份相关手稿` : "";
-    if (!this.links || this.isRaw()) return;
+    if (!this.links || this.isRaw()) {
+      this.syncActionPill();
+      return;
+    }
     const notesByBlock = new Map<string, Set<string>>();
     for (const { link } of this.links.links) {
       if (link.target.kind !== "markdown" || link.target.content_hash !== this.data.snapshot.content_hash) continue;
@@ -100,8 +104,85 @@ export class ReaderInkLinks {
         openRelatedNotesPopover({ x: bounds.left, y: bounds.bottom + 4, title: "相关手稿", notes: overlappingNotes(this.links?.links ?? [], [blockId]) });
       });
       marker.addEventListener("keydown", event => event.stopPropagation());
+      wrapper.classList.add("has-ink-marker");
       wrapper.append(marker);
     }
+    this.syncActionPill();
+  }
+
+  /** Renders or updates the floating quick-action pill on the active block/range. */
+  syncActionPill(): void {
+    this.article.querySelectorAll(".block-action-pill").forEach(pill => pill.remove());
+    this.article.querySelectorAll<HTMLElement>("[data-source-block].has-action-pill").forEach(el => el.classList.remove("has-action-pill"));
+    if (this.disposed || this.isRaw()) return;
+    const sel = this.selection();
+    if (sel.isWholeSelection()) return;
+    const range = sel.targetRange();
+    if (!range) return;
+    const contentBlocks = this.data.blocks.slice(range.first, range.last + 1).filter(b => b.kind !== "page_marker");
+    if (!contentBlocks.length) return;
+    const anchorBlock = contentBlocks[0];
+    const wrapper = this.article.querySelector<HTMLElement>(`[data-source-block="${anchorBlock.id}"]`);
+    if (!wrapper) return;
+
+    const pill = document.createElement("div");
+    pill.className = "block-action-pill";
+    pill.setAttribute("role", "toolbar");
+    pill.setAttribute("aria-label", "所选段落快捷操作");
+    const stop = (event: Event) => event.stopPropagation();
+    pill.addEventListener("click", stop);
+    pill.addEventListener("pointerdown", stop);
+    pill.addEventListener("contextmenu", stop);
+    pill.addEventListener("keydown", stop);
+
+    const count = contentBlocks.length;
+    const writeBtn = document.createElement("button");
+    writeBtn.type = "button";
+    writeBtn.className = "block-pill-btn block-pill-primary";
+    writeBtn.textContent = count === 1 ? "✎ 手写此块" : `✎ 手写这 ${count} 块`;
+    writeBtn.title = "新建关联手稿并打开左右并排书写视图";
+    writeBtn.onclick = (event) => {
+      event.stopPropagation();
+      const bounds = writeBtn.getBoundingClientRect();
+      this.create(range, bounds.left, bounds.bottom + 6);
+    };
+    pill.append(writeBtn);
+
+    const linkBtn = document.createElement("button");
+    linkBtn.type = "button";
+    linkBtn.className = "block-pill-btn";
+    linkBtn.textContent = "＋ 关联已有";
+    linkBtn.title = "将所选段落关联到一份已有手稿";
+    linkBtn.onclick = (event) => {
+      event.stopPropagation();
+      const bounds = linkBtn.getBoundingClientRect();
+      const label = markdownPreviewLabel(this.rangeText(range));
+      this.highlight(range);
+      openLinkExistingPopover({
+        x: bounds.left,
+        y: bounds.bottom + 6,
+        target: this.target(range),
+        targetLabel: label,
+        onClose: () => this.highlight(null),
+      });
+    };
+    pill.append(linkBtn);
+
+    if (this.onOpenPdf) {
+      const pdfBtn = document.createElement("button");
+      pdfBtn.type = "button";
+      pdfBtn.className = "block-pill-btn";
+      pdfBtn.textContent = "↗ PDF 原页";
+      pdfBtn.title = "跳转查看所选段落对应的原始 PDF 页";
+      pdfBtn.onclick = (event) => {
+        event.stopPropagation();
+        this.onOpenPdf!(range);
+      };
+      pill.append(pdfBtn);
+    }
+
+    wrapper.classList.add("has-action-pill");
+    wrapper.append(pill);
   }
 
   private blockIds(range: { first: number; last: number }): string[] {
@@ -148,7 +229,7 @@ export class ReaderInkLinks {
 
   private onContextMenu = (event: MouseEvent): void => {
     if (this.isRaw()) return;
-    if ((event.target as Element).closest(".ink-block-marker")) return;
+    if ((event.target as Element).closest(".ink-block-marker, .block-action-pill")) return;
     const wrapper = (event.target as Element).closest<HTMLElement>("[data-source-block]");
     if (!wrapper || !this.article.contains(wrapper)) return;
     const index = this.data.blocks.findIndex(block => block.id === wrapper.dataset.sourceBlock);

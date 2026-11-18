@@ -259,4 +259,32 @@ test.describe("N3c side-by-side reading", () => {
     expect(box!.height).toBeGreaterThan(100);
   });
 
+  test("creating a note from an open Markdown reader (desktop or tablet) auto-enters split with compact left toolbar", async ({ page }) => {
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("mathscape:open-source", { detail: { artifactId: "md-1", title: "正确表述.md" } }));
+    });
+    await expect(page.locator("#reader .markdown-body")).toContainText("正确表述");
+    // In full-screen reader, discovery drawer starts expanded
+    await expect(page.locator("#reader .selection-discovery-drawer")).toBeVisible();
+
+    await page.locator("#reader [data-source-block='b1']").click();
+    const pill = page.locator("#reader .block-action-pill");
+    await expect(pill.getByRole("button", { name: "✎ 手写此块" })).toBeVisible();
+    await pill.getByRole("button", { name: "✎ 手写此块" }).click();
+    await page.locator(".ink-create-popover").getByRole("button", { name: "用平板书写" }).click();
+
+    // Automatically transitions into left-source + right-ink split workspace + tablet pairing panel
+    await expect(page.locator("#ink-workspace")).toBeVisible();
+    await expect(page.locator("#ink-workspace")).toHaveClass(/is-split/);
+    await expect(page.locator("#ink-split-toggle")).toHaveText("退出并排");
+    await expect(page.locator("#ink-split-reader #reader")).toBeVisible();
+    await expect(page.locator("#ink-split-reader .markdown-body")).toContainText("正确表述");
+    // Discovery drawer auto-collapses inside split left pane to maximize reading space
+    await expect(page.locator("#ink-split-reader .selection-discovery-drawer")).toBeHidden();
+    // Block marker updates live on the left pane and tablet pairing opens on the right pane
+    await expect(page.locator("#ink-split-reader .ink-block-marker")).toHaveText("✎ 1");
+    await expect(page.locator("#ink-document-heading")).toContainText("尝试 · 正确表述");
+    await expect(page.locator("#ink-lan-panel")).toBeVisible();
+  });
+
 });

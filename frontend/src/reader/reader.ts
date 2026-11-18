@@ -719,6 +719,7 @@ export class ArtifactReader {
       () => rawMode,
       (range) => void openPdfForRange(range),
     );
+    selection.setOnSelectionChange(() => inkLinks?.syncActionPill());
     controls.after(inkLinks.hint);
     this.disposeDocument = () => { selection.dispose(); inkLinks?.dispose(); };
     const render = async (): Promise<void> => {
@@ -746,7 +747,7 @@ export class ArtifactReader {
         if (isFocused) wrapper.classList.add("source-block-focus");
         wrapper.tabIndex = 0;
         wrapper.setAttribute("aria-label", `原文块 ${i + 1}`);
-        wrapper.title = `第 ${i + 1} 块 · ${block.kind} · UTF-8 [${block.range.start}, ${block.range.end})`;
+        wrapper.title = `第 ${i + 1} 块 · 单击选择，按住 Shift 单击可连选多块，右键手写或反查 PDF`;
         const text = decoder.decode(sourceBytes.subarray(block.range.start, block.range.end));
         if (block.kind === "page_marker") {
           const page = /^\s*\{(\d+)\}-{16,}\s*$/.exec(text)?.[1];
@@ -831,6 +832,7 @@ export class ArtifactReader {
           resolveFocusedBlockRange(document),
         );
         controls.after(selection.panel);
+        selection.setOnSelectionChange(() => inkLinks?.syncActionPill());
         inkLinks?.setDocument(document);
         raw.disabled = false;
         return render();
