@@ -26,6 +26,25 @@ export interface SourceNodeDetail {
 }
 export function sourceNodeDetail(nodeId: string): Promise<SourceNodeDetail> { return invoke("get_source_node_detail", { nodeId }); }
 
+export interface MarkdownUnitMarker {
+  unit_id: string;
+  title: string;
+  unit_kind: string;
+  artifact_id: string;
+  byte_range: { start: number; end: number };
+  block_ids: string[];
+}
+
+export async function getMarkdownUnitMarkers(artifactIds: string[]): Promise<MarkdownUnitMarker[]> {
+  if (!artifactIds.length) return [];
+  try {
+    const markers = await invoke<MarkdownUnitMarker[] | undefined>("get_markdown_unit_markers", { artifactIds });
+    return Array.isArray(markers) ? markers : [];
+  } catch {
+    return [];
+  }
+}
+
 export function contentInfo(id: string): Promise<ContentInfo> {
   return invoke("get_artifact_content_info", { artifactId: id });
 }

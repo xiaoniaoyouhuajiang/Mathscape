@@ -53,6 +53,8 @@ export interface MathscapeEventMap {
   "open-tutorial": void;
   /** 从地图 / Inspector 跳转到指定提案审核（默认打开地图联动分屏模式）。 */
   "open-proposal-for-object": { changeSetId?: string | null; objectId?: string | null; mapLinked?: boolean };
+  /** 从阅读器内已入图单元徽章跳转到主地图对应领域节点。 */
+  "locate-domain-object": { objectId: string; title?: string };
   /** 审核工作区处于地图联动分屏模式时，驱动主地图高亮提案涉及的子图与 1 跳上下文。 */
   "review-map-scope": {
     active: boolean;
@@ -103,6 +105,7 @@ export class MathscapeEventBus {
       "reader-opened",
       "open-settings",
       "workspace-settings-changed",
+      "locate-domain-object",
     ];
 
     for (const name of eventNames) {

@@ -2,13 +2,15 @@ import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy, type PDFPagePr
 import { PDF_ZOOM_DEFAULT, PDF_ZOOM_MAX, PDF_ZOOM_MIN, PDF_ZOOM_STEPS, anchoredScroll, canvasRatio, clampZoom, loadZoom, resolveZoom, saveZoom, stepZoom, zoomLabel, type PdfZoomMode } from "./pdf-zoom";
 import { ArtifactPdfTransport } from "./pdf-transport";
 import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
-import { contentInfo, readRange, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
+import { contentInfo, getMarkdownUnitMarkers, readRange, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
 import { getSourceBacklink } from "./backlink";
 import { markdownRenderer } from "./markdown";
 import { canonicalReaderProjection, gapLabel, pagesLabel, projectionSummary, segmentLabel, splitByPageMarkers, type CanonicalReaderSegment } from "./canonical";
 import { isCanonicalMarkdownId } from "./openable";
 import { markdownDocument, MarkdownSelection, type AnchoredMarkdown, type PatchReviewMode } from "./selection";
 import { ReaderInkLinks } from "./ink-links";
+import { CanonicalInkController, type CanonicalBlockItem } from "./canonical-ink";
+import { mountMarkdownOutline, type OutlineBlockDescriptor } from "./markdown-outline";
 import { showContextMenu } from "../graph/context-menu";
 import { eventBus } from "../core/events";
 import { openInkSnapshot } from "../ink/persistence";
@@ -115,7 +117,7 @@ export class ArtifactReader {
     try {
       if (isCanonicalMarkdownId(id)) {
         // Logical canonical id: a stitched read-only view, never content_info.
-        await this.canonical(id, title, generation);
+        await this.canonical(id, title, generation, focus);
         if (generation !== this.generation) return false;
         status.remove();
         this.state = "ready";
@@ -478,10 +480,11 @@ export class ArtifactReader {
 
   /**
    * 「规范解析正文」 unified view: every coverage segment in page order with
-   * gaps marked. Read-only — block selection, discoveries and ink stay on the
-   * physical snapshot, reachable through each segment's 「打开此快照」.
+   * gaps marked. Each segment's blocks retain their immutable physical snapshot
+   * coordinates so `✎ N` markers, `Shift+单击` selection, and direct ink-note
+   * creation work seamlessly without writing a synthetic stitched Artifact.
    */
-  private async canonical(id: string, title: string, generation: number): Promise<void> {
+  private async canonical(id: string, title: string, generation: number, focus?: ReaderFocus): Promise<void> {
     const projection = await canonicalReaderProjection(id);
     if (generation !== this.generation) return;
     const controls = element("div"); controls.className = "reader-controls";
@@ -491,19 +494,50 @@ export class ArtifactReader {
     openRootPdf.onclick = () => void this.open(projection.source_pdf_artifact_id, `${title} · 原始 PDF`, {
       returnTo: { id, title, label: "返回规范解析正文" },
     });
-    controls.append(openRootPdf);
     const article = element("article"); article.className = "markdown-body canonical-reader";
     article.dataset.canonicalId = projection.canonical_id;
-    this.host.append(controls, article);
-    const openCanonicalPdfPage = (pageIndex: number, candidatePages?: number[]) => {
+    const outlineHandle = mountMarkdownOutline(article, (domKey) =>
+      article.querySelector<HTMLElement>(`[data-canonical-key="${CSS.escape(domKey)}"]`),
+    );
+    controls.append(outlineHandle.toggleButton, openRootPdf);
+
+    const statusHint = element("p");
+    statusHint.className = "canonical-status-hint";
+    statusHint.setAttribute("role", "status");
+    statusHint.hidden = true;
+    const setStatusHint = (msg: string | null) => {
+      statusHint.textContent = msg ?? "";
+      statusHint.hidden = !msg;
+    };
+
+    const layout = element("div");
+    layout.className = "md-reader-layout";
+    const paperStage = element("div");
+    paperStage.className = "md-paper-stage";
+    paperStage.append(article);
+    layout.append(outlineHandle.nav, paperStage);
+    this.host.append(controls, statusHint, layout);
+
+    const openCanonicalPdfPage = (pageIndex: number, candidatePages?: number[], returnFocus?: ReaderFocus) => {
       void this.open(projection.source_pdf_artifact_id, `${title} · PDF 原页`, {
         pdfPageIndex: pageIndex,
         candidatePages,
-        returnTo: { id, title, label: "返回规范解析正文" },
+        returnTo: {
+          id,
+          title,
+          options: returnFocus ? { focus: returnFocus } : undefined,
+          label: "返回规范解析正文",
+        },
       });
     };
+
     const md = markdownRenderer();
+    const decoder = new TextDecoder("utf-8", { fatal: true });
     const segments: Array<{ segment: CanonicalReaderSegment; body: HTMLElement }> = [];
+    const canonicalItems: CanonicalBlockItem[] = [];
+    const outlineBlocks: OutlineBlockDescriptor[] = [];
+    let segIdx = 0;
+
     for (const piece of projection.pieces) {
       if (piece.kind === "gap") {
         const gap = element("div", gapLabel(piece));
@@ -513,6 +547,8 @@ export class ArtifactReader {
         article.append(gap);
         continue;
       }
+      const currentSegIdx = segIdx++;
+      const segLbl = segmentLabel(piece);
       const section = element("section"); section.className = "canonical-segment";
       section.dataset.artifactId = piece.artifact_id;
       const header = element("div"); header.className = "canonical-segment-header";
@@ -529,68 +565,224 @@ export class ArtifactReader {
       }
       const open = element("button", "打开此快照");
       open.type = "button";
-      open.title = "以物理快照打开，可选择原文块、记录发现或手写批注";
-      open.onclick = () => void this.open(piece.artifact_id, title + " · " + segmentLabel(piece));
+      open.title = "单独打开此物理快照，可用于发起 LLM 内容发现";
+      open.onclick = () => void this.open(piece.artifact_id, title + " · " + segLbl);
       headerActions.append(open);
-      header.append(element("span", segmentLabel(piece)), headerActions);
+      header.append(element("span", segLbl), headerActions);
       const body = element("div");
       let activePageIndex: number | null = piece.pages ? piece.pages.from - 1 : null;
-      for (const chunk of splitByPageMarkers(piece.markdown)) {
-        if (chunk.kind === "page") {
-          activePageIndex = chunk.pageId;
-          const marker = element("div"); marker.className = "source-block source-page-marker";
-          marker.append(element("span", `PDF 第 ${chunk.pageId + 1} 页`));
-          const jump = element("button", "查看原页 ↗");
-          jump.type = "button";
-          jump.className = "page-marker-jump";
-          const targetIdx = chunk.pageId;
-          jump.onclick = (event) => { event.stopPropagation(); openCanonicalPdfPage(targetIdx); };
-          marker.append(jump);
-          body.append(marker);
-          continue;
+
+      if (piece.blocks && piece.blocks.length > 0 && piece.content_hash) {
+        const env = {};
+        md.parse(piece.markdown, env);
+        const segBytes = new TextEncoder().encode(piece.markdown);
+        piece.blocks.forEach((b, blockOrdinal) => {
+          const relStart = Math.max(0, b.range.start - piece.byte_start);
+          const relEnd = Math.min(segBytes.length, Math.max(relStart, b.range.end - piece.byte_start));
+          const text = decoder.decode(segBytes.subarray(relStart, relEnd));
+          const domKey = `${currentSegIdx}:${b.id}`;
+          if (b.kind === "page_marker") {
+            const pageMatch = /^\s*\{(\d+)\}-{16,}\s*$/.exec(text)?.[1];
+            if (pageMatch !== undefined) activePageIndex = Number(pageMatch);
+            const marker = element("div");
+            marker.className = "source-block source-page-marker";
+            marker.dataset.canonicalKey = domKey;
+            marker.dataset.sourceBlock = b.id;
+            const pageNum = pageMatch !== undefined ? Number(pageMatch) : activePageIndex;
+            marker.append(element("span", pageNum !== null ? `PDF 第 ${pageNum + 1} 页` : "PDF 页边界"));
+            if (pageNum !== null) {
+              const jump = element("button", "查看原页 ↗");
+              jump.type = "button";
+              jump.className = "page-marker-jump";
+              const targetIdx = pageNum;
+              jump.onclick = (event) => { event.stopPropagation(); openCanonicalPdfPage(targetIdx); };
+              marker.append(jump);
+            }
+            body.append(marker);
+            return;
+          }
+
+          const wrapper = element("div");
+          wrapper.className = "source-block";
+          wrapper.dataset.canonicalKey = domKey;
+          wrapper.dataset.sourceBlock = b.id;
+          wrapper.dataset.segmentArtifactId = piece.artifact_id;
+          wrapper.dataset.segmentLabel = segLbl;
+          if (activePageIndex !== null) wrapper.dataset.pdfPageIndex = String(activePageIndex);
+          const isFocused = Boolean(
+            focus && (
+              focus.blockIds?.length
+                ? focus.blockIds.includes(b.id)
+                : focus.end > focus.start && b.range.start < focus.end && b.range.end > focus.start
+            ),
+          );
+          if (isFocused) wrapper.classList.add("source-block-focus");
+          wrapper.tabIndex = 0;
+          wrapper.setAttribute("aria-label", `分段 ${currentSegIdx + 1} 原文块 ${blockOrdinal + 1}`);
+          wrapper.title = `分段 ${currentSegIdx + 1} · 第 ${blockOrdinal + 1} 块 · 单击选择，Shift+单击连选多块，右键手写或反查 PDF`;
+          wrapper.innerHTML = md.render(text, env);
+          if (!wrapper.innerHTML.trim()) wrapper.append(element("pre", text));
+          body.append(wrapper);
+
+          canonicalItems.push({
+            domKey,
+            segmentIndex: currentSegIdx,
+            segmentLabel: segLbl,
+            artifactId: piece.artifact_id,
+            conversionId: piece.conversion_id,
+            contentHash: piece.content_hash!,
+            block: b,
+            text,
+            fallbackPdfPageIndex: activePageIndex,
+          });
+          outlineBlocks.push({
+            id: b.id,
+            domKey,
+            artifactId: piece.artifact_id,
+            range: b.range,
+            text,
+            kind: b.kind,
+          });
+        });
+      } else {
+        let fallbackOrdinal = 0;
+        for (const chunk of splitByPageMarkers(piece.markdown)) {
+          if (chunk.kind === "page") {
+            activePageIndex = chunk.pageId;
+            const marker = element("div"); marker.className = "source-block source-page-marker";
+            marker.append(element("span", `PDF 第 ${chunk.pageId + 1} 页`));
+            const jump = element("button", "查看原页 ↗");
+            jump.type = "button";
+            jump.className = "page-marker-jump";
+            const targetIdx = chunk.pageId;
+            jump.onclick = (event) => { event.stopPropagation(); openCanonicalPdfPage(targetIdx); };
+            marker.append(jump);
+            body.append(marker);
+            continue;
+          }
+          const domKey = `${currentSegIdx}:chunk-${fallbackOrdinal++}`;
+          const block = element("div"); block.className = "source-block";
+          block.dataset.canonicalKey = domKey;
+          if (activePageIndex !== null) block.dataset.pdfPageIndex = String(activePageIndex);
+          block.dataset.segmentArtifactId = piece.artifact_id;
+          block.dataset.segmentLabel = segLbl;
+          block.innerHTML = md.render(chunk.text, {});
+          if (!block.innerHTML.trim()) block.append(element("pre", chunk.text));
+          body.append(block);
+          outlineBlocks.push({
+            id: domKey,
+            domKey,
+            artifactId: piece.artifact_id,
+            range: { start: 0, end: 0 },
+            text: chunk.text,
+          });
         }
-        const block = element("div"); block.className = "source-block";
-        if (activePageIndex !== null) block.dataset.pdfPageIndex = String(activePageIndex);
-        block.dataset.segmentArtifactId = piece.artifact_id;
-        block.dataset.segmentLabel = segmentLabel(piece);
-        block.innerHTML = md.render(chunk.text, {});
-        if (!block.innerHTML.trim()) block.append(element("pre", chunk.text));
-        body.append(block);
       }
       section.append(header, body);
       article.append(section);
       segments.push({ segment: piece, body });
     }
-    const onCanonicalContextMenu = (event: MouseEvent): void => {
-      const block = (event.target as Element).closest<HTMLElement>(".source-block:not(.source-page-marker)");
-      if (!block || !article.contains(block)) return;
-      const pageAttr = block.dataset.pdfPageIndex;
-      const segArt = block.dataset.segmentArtifactId;
-      const segLbl = block.dataset.segmentLabel ?? "";
-      if (pageAttr === undefined && !segArt) return;
-      event.preventDefault();
-      block.classList.add("is-ink-menu-target");
-      const clearHighlight = () => block.classList.remove("is-ink-menu-target");
-      const items: Array<{ label: string; onSelect: () => void }> = [];
-      if (pageAttr !== undefined) {
-        const idx = Number(pageAttr);
-        items.push({
-          label: `定位对应 PDF 原页（第 ${idx + 1} 页）`,
-          onSelect: () => { clearHighlight(); openCanonicalPdfPage(idx); },
-        });
-      }
-      if (segArt) {
-        items.push({
-          label: "打开所属物理快照",
-          onSelect: () => { clearHighlight(); void this.open(segArt, `${title} · ${segLbl}`); },
-        });
-      }
-      showContextMenu(event.clientX, event.clientY, items, clearHighlight);
+
+    let canonicalInk: CanonicalInkController | undefined;
+    let fallbackMenuListener: ((event: MouseEvent) => void) | undefined;
+    if (canonicalItems.length > 0) {
+      canonicalInk = new CanonicalInkController(canonicalItems, article, {
+        onStatusHint: setStatusHint,
+        onOpenSnapshot: (artifactId, segLbl, rangeItems) => {
+          const start = rangeItems[0].block.range.start;
+          const end = rangeItems[rangeItems.length - 1].block.range.end;
+          const blockIds = rangeItems.map((i) => i.block.id);
+          void this.open(artifactId, `${title} · ${segLbl}`, {
+            focus: { start, end, blockIds },
+          });
+        },
+        onOpenPdfRange: (firstItem, rangeItems) => {
+          void (async () => {
+            const start = rangeItems[0].block.range.start;
+            const end = rangeItems[rangeItems.length - 1].block.range.end;
+            const blockIds = rangeItems.map((i) => i.block.id);
+            const returnFocus: ReaderFocus = { start, end, blockIds };
+            try {
+              const backlink = await getSourceBacklink({
+                artifact_id: firstItem.artifactId,
+                conversion_id: firstItem.conversionId,
+                start,
+                end,
+                block_ids: blockIds,
+              });
+              if (generation !== this.generation) return;
+              if (backlink.pdf_artifact_id && backlink.pdf_page_indices?.length) {
+                await this.open(backlink.pdf_artifact_id, `${title} · PDF 原页`, {
+                  pdfPageIndex: backlink.pdf_page_indices[0],
+                  candidatePages: backlink.pdf_page_indices,
+                  backlinkNote: backlink.kind === "candidate_pdf_pages" ? backlink.reason : undefined,
+                  returnTo: {
+                    id,
+                    title,
+                    options: { focus: returnFocus },
+                    label: "返回规范解析正文",
+                  },
+                });
+                return;
+              }
+            } catch {
+              /* Fall back to page marker index if available. */
+            }
+            if (firstItem.fallbackPdfPageIndex !== null) {
+              openCanonicalPdfPage(firstItem.fallbackPdfPageIndex, undefined, returnFocus);
+            } else {
+              setStatusHint("当前段落没有对应的 PDF 页映射。");
+            }
+          })();
+        },
+      });
+    } else {
+      fallbackMenuListener = (event: MouseEvent): void => {
+        const block = (event.target as Element).closest<HTMLElement>(".source-block:not(.source-page-marker)");
+        if (!block || !article.contains(block)) return;
+        const pageAttr = block.dataset.pdfPageIndex;
+        const segArt = block.dataset.segmentArtifactId;
+        const segLbl = block.dataset.segmentLabel ?? "";
+        if (pageAttr === undefined && !segArt) return;
+        event.preventDefault();
+        block.classList.add("is-ink-menu-target");
+        const clearHighlight = () => block.classList.remove("is-ink-menu-target");
+        const items: Array<{ label: string; onSelect: () => void }> = [];
+        if (pageAttr !== undefined) {
+          const idx = Number(pageAttr);
+          items.push({
+            label: `定位对应 PDF 原页（第 ${idx + 1} 页）`,
+            onSelect: () => { clearHighlight(); openCanonicalPdfPage(idx); },
+          });
+        }
+        if (segArt) {
+          items.push({
+            label: "打开所属物理快照",
+            onSelect: () => { clearHighlight(); void this.open(segArt, `${title} · ${segLbl}`); },
+          });
+        }
+        showContextMenu(event.clientX, event.clientY, items, clearHighlight);
+      };
+      article.addEventListener("contextmenu", fallbackMenuListener);
+    }
+
+    this.disposeDocument = () => {
+      canonicalInk?.dispose();
+      outlineHandle.dispose();
+      if (fallbackMenuListener) article.removeEventListener("contextmenu", fallbackMenuListener);
     };
-    article.addEventListener("contextmenu", onCanonicalContextMenu);
-    this.disposeDocument = () => article.removeEventListener("contextmenu", onCanonicalContextMenu);
+
     if (!projection.pieces.length) article.append(element("p", "规范解析正文暂无可读快照。"));
+    if (focus) {
+      article.querySelector<HTMLElement>(".source-block-focus")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
     article.querySelectorAll("a").forEach(link => { link.removeAttribute("href"); link.title = "链接导航尚未启用"; });
+
+    const uniqueSegArtifacts = [...new Set(segments.map((s) => s.segment.artifact_id))];
+    const unitMarkers = await getMarkdownUnitMarkers(uniqueSegArtifacts);
+    if (generation !== this.generation) return;
+    outlineHandle.update(outlineBlocks, unitMarkers);
+    canonicalInk?.setUnitMarkers(unitMarkers);
     for (const { segment, body } of segments) {
       const placeholders = body.querySelectorAll<HTMLElement>("[data-image-ref]");
       if (!placeholders.length) continue;
@@ -622,7 +814,11 @@ export class ArtifactReader {
   }
 
   private async markdown(info: ContentInfo, title: string, generation: number, focus?: ReaderFocus, patch?: ReaderOpenOptions["patch"], conversionId?: string | null): Promise<void> {
-    let document = await markdownDocument(info.artifact_id, conversionId ?? info.contexts[0]?.conversion_id ?? null);
+    const [initialDoc, unitMarkers] = await Promise.all([
+      markdownDocument(info.artifact_id, conversionId ?? info.contexts[0]?.conversion_id ?? null),
+      getMarkdownUnitMarkers([info.artifact_id]),
+    ]);
+    let document = initialDoc;
     if (generation !== this.generation) return;
     const controls = element("div"); controls.className = "reader-controls";
     const raw = element("button", "查看原文");
@@ -633,10 +829,19 @@ export class ArtifactReader {
       const idx = info.contexts.findIndex(c => c.conversion_id === conversionId);
       if (idx >= 0) contextSelect.value = String(idx);
     }
-    controls.append(raw);
-    if (info.contexts.length > 1) controls.append(contextSelect);
     const article = element("article"); article.className = "markdown-body";
-    this.host.append(controls, article);
+    const outlineHandle = mountMarkdownOutline(article, (domKey) =>
+      article.querySelector<HTMLElement>(`[data-source-block="${CSS.escape(domKey)}"]`),
+    );
+    controls.append(outlineHandle.toggleButton, raw);
+    if (info.contexts.length > 1) controls.append(contextSelect);
+    const layout = element("div");
+    layout.className = "md-reader-layout";
+    const paperStage = element("div");
+    paperStage.className = "md-paper-stage";
+    paperStage.append(article);
+    layout.append(outlineHandle.nav, paperStage);
+    this.host.append(controls, layout);
     let rawMode = false, version = 0;
     let inkLinks: ReaderInkLinks | undefined;
     const currentConversionId = (): string | null =>
@@ -718,20 +923,28 @@ export class ArtifactReader {
       () => selection,
       () => rawMode,
       (range) => void openPdfForRange(range),
+      unitMarkers,
     );
     selection.setOnSelectionChange(() => inkLinks?.syncActionPill());
     controls.after(inkLinks.hint);
-    this.disposeDocument = () => { selection.dispose(); inkLinks?.dispose(); };
+    this.disposeDocument = () => { selection.dispose(); inkLinks?.dispose(); outlineHandle.dispose(); };
     const render = async (): Promise<void> => {
       const current = ++version;
       this.revokeImages();
-      if (rawMode) { article.replaceChildren(element("pre", document.source)); inkLinks?.decorate(); return; }
+      if (rawMode) {
+        outlineHandle.setHiddenForRaw(true);
+        article.replaceChildren(element("pre", document.source));
+        inkLinks?.decorate();
+        return;
+      }
+      outlineHandle.setHiddenForRaw(false);
       const md = markdownRenderer();
       const environment = {};
       // Parse the full source once to retain reference-style link/image definitions.
       md.parse(document.source, environment);
       const sourceBytes = new TextEncoder().encode(document.source);
       const decoder = new TextDecoder("utf-8", { fatal: true });
+      const outlineBlocks: OutlineBlockDescriptor[] = [];
       article.replaceChildren();
       document.blocks.forEach((block, i) => {
         const wrapper = element("div");
@@ -781,7 +994,16 @@ export class ArtifactReader {
         wrapper.innerHTML = md.render(text, environment);
         if (!wrapper.innerHTML.trim()) wrapper.append(element("pre", text));
         article.append(wrapper);
+        outlineBlocks.push({
+          id: block.id,
+          domKey: block.id,
+          artifactId: info.artifact_id,
+          range: block.range,
+          text,
+          kind: block.kind,
+        });
       });
+      outlineHandle.update(outlineBlocks, unitMarkers);
       if (focus) (article.querySelector<HTMLElement>(".source-block-focus") as HTMLElement | null)?.scrollIntoView({ behavior: "smooth", block: "center" });
       selection.refresh();
       inkLinks?.decorate();

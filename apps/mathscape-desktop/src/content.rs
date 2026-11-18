@@ -58,10 +58,20 @@ pub struct SourceNodeDetail {
     pub pdf_backlink: Option<crate::SourceBacklink>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ByteRangeView {
     pub start: u64,
     pub end: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MarkdownUnitMarker {
+    pub unit_id: String,
+    pub title: String,
+    pub unit_kind: String,
+    pub artifact_id: String,
+    pub byte_range: ByteRangeView,
+    pub block_ids: Vec<String>,
 }
 
 impl DesktopService {
@@ -432,6 +442,132 @@ pub async fn get_source_node_detail(
 ) -> Result<SourceNodeDetail, String> {
     let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.source_node_detail(&node_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+impl DesktopService {
+    /// Lists active registered `SourceSemanticUnit`s anchored inside any of `artifact_ids`.
+    pub fn markdown_unit_markers(
+        &self,
+        artifact_ids: &[String],
+    ) -> Result<Vec<MarkdownUnitMarker>, String> {
+        if artifact_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let wanted: std::collections::HashSet<&str> =
+            artifact_ids.iter().map(String::as_str).collect();
+        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
+            .map_err(|e| e.to_string())?;
+        let snapshot = store.source_map_snapshot().map_err(|e| e.to_string())?;
+        let spans_by_id: std::collections::HashMap<&StableId, &Value> = snapshot
+            .objects
+            .iter()
+            .filter(|obj| {
+                obj.kind == mathscape_domain::EntityKind::SourceSpan
+                    && !matches!(
+                        obj.lifecycle,
+                        mathscape_domain::LifecycleStatus::Superseded
+                            | mathscape_domain::LifecycleStatus::Rejected
+                            | mathscape_domain::LifecycleStatus::Deprecated
+                    )
+            })
+            .map(|obj| (&obj.stable_id, obj.payload.get("payload").unwrap_or(&obj.payload)))
+            .collect();
+
+        let mut out = Vec::new();
+        for obj in &snapshot.objects {
+            if obj.kind != mathscape_domain::EntityKind::SourceSemanticUnit {
+                continue;
+            }
+            if matches!(
+                obj.lifecycle,
+                mathscape_domain::LifecycleStatus::Superseded
+                    | mathscape_domain::LifecycleStatus::Rejected
+                    | mathscape_domain::LifecycleStatus::Deprecated
+            ) {
+                continue;
+            }
+            let body = obj.payload.get("payload").unwrap_or(&obj.payload);
+            let Some(span_ids) = body.get("source_spans").and_then(Value::as_array) else {
+                continue;
+            };
+            let title = body
+                .get("display_title")
+                .or_else(|| body.get("title"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| obj.stable_id.as_str())
+                .to_owned();
+            let unit_kind = body
+                .get("kind")
+                .or_else(|| body.get("unit_kind"))
+                .and_then(Value::as_str)
+                .unwrap_or("statement")
+                .to_owned();
+
+            for raw_span_id in span_ids.iter().filter_map(Value::as_str) {
+                let Ok(parsed_span) = StableId::parse(raw_span_id) else {
+                    continue;
+                };
+                let Some(span_body) = spans_by_id.get(&parsed_span) else {
+                    continue;
+                };
+                let Some(art) = span_body.pointer("/markdown/artifact").and_then(Value::as_str)
+                else {
+                    continue;
+                };
+                if !wanted.contains(art) {
+                    continue;
+                }
+                let Some(range_val) = span_body.pointer("/markdown/byte_range") else {
+                    continue;
+                };
+                let (Some(start), Some(end)) = (
+                    range_val.get("start").and_then(Value::as_u64),
+                    range_val.get("end").and_then(Value::as_u64),
+                ) else {
+                    continue;
+                };
+                let block_ids: Vec<String> = span_body
+                    .get("marker_block_ids")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                out.push(MarkdownUnitMarker {
+                    unit_id: obj.stable_id.to_string(),
+                    title,
+                    unit_kind,
+                    artifact_id: art.to_owned(),
+                    byte_range: ByteRangeView { start, end },
+                    block_ids,
+                });
+                break;
+            }
+        }
+        out.sort_by(|a, b| {
+            a.artifact_id
+                .cmp(&b.artifact_id)
+                .then(a.byte_range.start.cmp(&b.byte_range.start))
+                .then(a.byte_range.end.cmp(&b.byte_range.end))
+        });
+        Ok(out)
+    }
+}
+
+#[tauri::command]
+pub async fn get_markdown_unit_markers(
+    state: State<'_, DesktopState>,
+    artifact_ids: Vec<String>,
+) -> Result<Vec<MarkdownUnitMarker>, String> {
+    let service = state.service();
+    tauri::async_runtime::spawn_blocking(move || service.markdown_unit_markers(&artifact_ids))
         .await
         .map_err(|e| e.to_string())?
 }

@@ -725,6 +725,11 @@ async function locateOnMap(domainId: string, current: () => boolean): Promise<bo
   return true;
 }
 
+eventBus.on("locate-domain-object", ({ objectId }) => {
+  const token = ++searchNavigation;
+  void locateOnMap(objectId, () => token === searchNavigation);
+});
+
 // A-PR3: sandbox dialogue cite chips jump to the map. Map Scene Player:
 // live tool events (and replays from process cards) play as map scenes.
 // The dock stays open (sidebar beside the map).

@@ -1,4 +1,4 @@
-.reader-panel { position: absolute; inset: 66px 0 0; overflow: auto; background: #131c24; padding: 18px; z-index: 3; }
+.reader-panel { position: absolute; inset: 66px 0 0; overflow: auto; background: #131c24; color: #e6eef3; padding: 18px; z-index: 3; }
 .reader-panel[hidden] { display: none; }
 .reader-panel h2 { font-size: 17px; overflow-wrap: anywhere; margin: 0 0 14px; }
 .reader-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; }
@@ -27,7 +27,37 @@
 .pdf-outline[hidden] { display: none; }
 .reader-controls button[aria-pressed="true"] { outline: 1px solid #5fa89a; }
 .pdf-viewport canvas { display: block; background: white; margin: 0 auto; }
-.markdown-body { background: #f7f8fa; color: #25303c; padding: 28px; line-height: 1.8; overflow-wrap: anywhere; }
+.markdown-body { background: #f4f5f0; color: #222d38; padding: 28px 34px; line-height: 1.82; overflow-wrap: anywhere; border-radius: 8px; box-shadow: 0 2px 14px rgba(0, 0, 0, .18); }
+.md-paper-stage > .markdown-body { max-width: 78ch; margin: 0 auto; }
+#ink-split-reader .md-paper-stage > .markdown-body { padding: 20px 22px; }
+.markdown-patch-pane .markdown-body { background: #f4f5f0; padding: 14px 16px; border-radius: 4px; box-shadow: none; max-width: none; }
+.md-reader-layout { display: flex; align-items: flex-start; gap: 16px; width: 100%; }
+.md-paper-stage { flex: 1 1 0; min-width: 0; }
+.md-outline {
+  width: 215px; flex-shrink: 0; position: sticky; top: 56px;
+  max-height: calc(100vh - 150px); overflow-y: auto;
+  background: #16222b; border: 1px solid #354e59; border-radius: 8px; padding: 10px 8px;
+  font-size: 12px; color: #c7d9de; box-shadow: 0 4px 12px rgba(0, 0, 0, .2);
+}
+.md-outline[hidden] { display: none !important; }
+.md-outline-header { font-size: 11px; font-weight: 600; color: #8fb1bc; padding: 0 6px 7px; border-bottom: 1px solid #283c45; margin-bottom: 6px; }
+.md-outline-empty { color: #869ea7; font-size: 11px; margin: 6px; line-height: 1.5; }
+.md-outline-list { display: flex; flex-direction: column; gap: 2px; }
+.md-outline-item { display: flex; align-items: center; justify-content: space-between; gap: 4px; border-radius: 5px; }
+.md-outline-item:hover { background: #20333e; }
+.md-outline-jump {
+  flex: 1 1 auto; min-width: 0; background: transparent; border: none; color: #d5e5ea;
+  text-align: left; padding: 5px 6px; font-size: 12px; line-height: 1.35; cursor: pointer; overflow-wrap: anywhere;
+}
+.md-outline-item.is-registered-unit .md-outline-jump { color: #a8e3d2; font-weight: 500; }
+.md-outline-level-2 .md-outline-jump { padding-left: 14px; }
+.md-outline-level-3 .md-outline-jump { padding-left: 22px; font-size: 11.5px; color: #b9ced5; }
+.md-outline-level-4 .md-outline-jump { padding-left: 30px; font-size: 11px; color: #a5bdc5; }
+.md-outline-map-link {
+  flex-shrink: 0; background: #1d3938; color: #bfece0; border: 1px solid #417771; border-radius: 4px;
+  padding: 1px 5px; margin-right: 4px; font-size: 10px; cursor: pointer; opacity: .82;
+}
+.md-outline-map-link:hover { opacity: 1; background: #264c4a; }
 .markdown-body pre, .reader-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; user-select: text; }
 .markdown-body .katex-display { overflow-x: auto; overflow-y: hidden; }
 .markdown-body table { border-collapse: collapse; }
@@ -162,4 +192,22 @@
 .canonical-gap {
   margin: 16px 0; padding: 14px 12px; border: 1px dashed #c08a3e; border-radius: 4px;
   color: #7a5420; background: #fbf4e8; font-size: 13px; text-align: center;
+}
+.canonical-status-hint {
+  margin: 0 0 10px; padding: 6px 10px; border-left: 3px solid #5fa89a; border-radius: 4px;
+  background: #172830; color: #cfe8e2; font-size: 12px;
+}
+.canonical-status-hint[hidden] { display: none !important; }
+.unit-map-badge-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 4px;
+}
+.unit-map-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: #e3f2ee; color: #1b5c50; border: 1px solid #91c6ba; border-radius: 999px;
+  padding: 1px 8px; font-size: 11px; font-weight: 500; line-height: 1.4; cursor: pointer;
+}
+.unit-map-badge:hover { background: #d2ebe4; border-color: #6dae9f; }
+.source-block.is-outline-pulse {
+  outline: 2px solid #3f9c88; outline-offset: 3px; background: rgba(63, 156, 136, 0.12);
+  transition: background 0.3s ease;
 }

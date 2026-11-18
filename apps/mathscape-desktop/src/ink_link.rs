@@ -67,6 +67,8 @@ pub struct LinkInkNoteRequest {
 pub struct InkMarkdownLinks {
     pub artifact_id: String,
     pub links: Vec<InkLinkedNote>,
+    /// Active notes linked to `SourceSemanticUnit`s (`source_object`) anchored inside this Markdown snapshot.
+    pub unit_links: Vec<InkLinkedNote>,
     /// Active notes linked to the original this file was patched from.
     pub original_note_count: u64,
 }
@@ -486,11 +488,22 @@ impl DesktopService {
         artifact_id: String,
     ) -> Result<InkMarkdownLinks, InkCommandError> {
         let store = self.link_store()?;
+        let links = store
+            .ink_links_to_target("markdown", &artifact_id)
+            .map_err(fail)?;
+        let original_note_count = store.ink_markdown_patch_hint(&artifact_id).map_err(fail)?;
+        let mut unit_links = Vec::new();
+        if let Ok(markers) = self.markdown_unit_markers(std::slice::from_ref(&artifact_id)) {
+            for marker in markers {
+                if let Ok(found) = store.ink_links_to_target("source_object", &marker.unit_id) {
+                    unit_links.extend(found);
+                }
+            }
+        }
         Ok(InkMarkdownLinks {
-            links: store
-                .ink_links_to_target("markdown", &artifact_id)
-                .map_err(fail)?,
-            original_note_count: store.ink_markdown_patch_hint(&artifact_id).map_err(fail)?,
+            links,
+            unit_links,
+            original_note_count,
             artifact_id,
         })
     }

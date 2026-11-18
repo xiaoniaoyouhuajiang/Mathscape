@@ -75,9 +75,13 @@ let restoreFailure=false, restoreLostResponse=false, restoredRequest:string|null
 const patchDecisions: any[] = [];
 const resumeRequests: unknown[] = [];
 // N2: Markdown note links shown by the reader (markers, menu, patch hint).
-const ink = { links: [] as InkLinkedNote[], originalNoteCount: 0, pageMarkerBlock: -1, creates: [] as unknown[], linkRequests: [] as unknown[], opened: [] as string[] };
+const ink = { links: [] as InkLinkedNote[], unitLinks: [] as InkLinkedNote[], linksByArtifact: {} as Record<string, InkLinkedNote[]>, unitLinksByArtifact: {} as Record<string, InkLinkedNote[]>, originalNoteCount: 0, pageMarkerBlock: -1, creates: [] as unknown[], linkRequests: [] as unknown[], opened: [] as string[] };
 setInkContextCreator(async (target, choice, draft) => { ink.creates.push({ target, choice, requestId: draft.requestId }); });
 eventBus.on("open-ink-document", ({ documentId }) => { ink.opened.push(documentId); });
+const locatedObjects: string[] = [];
+eventBus.on("locate-domain-object", ({ objectId }) => { locatedObjects.push(objectId); });
+const unitMarkers: any[] = [];
+let canonicalProjection: any = null;
 const backlinkRequests: unknown[] = [];
 const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash", markdownOnlyReason: null as string | null };
 const byteOffset = (text: string): number => new TextEncoder().encode(markdown.slice(0, markdown.indexOf(text))).length;
@@ -111,7 +115,20 @@ function anchored(conversion: string): AnchoredMarkdown {
   };
 }
 function handle(command: string, payload: any): any {
-  if (command === "get_ink_markdown_links") return { artifact_id: payload.artifactId, links: structuredClone(ink.links), original_note_count: ink.originalNoteCount };
+  if (command === "get_ink_markdown_links") {
+    const aid = String(payload.artifactId);
+    const list = ink.linksByArtifact[aid] ?? ink.links;
+    const uList = ink.unitLinksByArtifact[aid] ?? ink.unitLinks;
+    return { artifact_id: aid, links: structuredClone(list), unit_links: structuredClone(uList), original_note_count: ink.originalNoteCount };
+  }
+  if (command === "get_markdown_unit_markers") {
+    const wanted = new Set<string>(payload.artifactIds ?? []);
+    return structuredClone(unitMarkers.filter(m => wanted.has(m.artifact_id)));
+  }
+  if (command === "get_canonical_reader_projection") {
+    if (!canonicalProjection) throw new Error("规范解析正文未登记");
+    return structuredClone(canonicalProjection);
+  }
   if (command === "list_ink_documents") return [{ document_id: "note-old", title: "旧手稿", created_at: "unix:1", head_seq: 0, active_session_id: null, updated_at: "unix:1", lifecycle: "active", last_used_at: 5 }, { document_id: "note-gone", title: "已删手稿", created_at: "unix:1", head_seq: 0, active_session_id: null, updated_at: "unix:1", lifecycle: "trashed", last_used_at: 9 }];
   if (command === "list_ink_note_links") return [];
   if (command === "link_ink_note") {
@@ -340,5 +357,5 @@ window.addEventListener("mathscape:open-source", event => {
   });
 });
 Object.assign(window, {
-  harness: { ink, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ink, locatedObjects, unitMarkers, setCanonicalProjection: (p: any) => { canonicalProjection = p; }, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
 });

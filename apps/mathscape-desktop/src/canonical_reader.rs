@@ -10,10 +10,10 @@
 
 use mathscape_artifact::ArtifactPool;
 use mathscape_domain::{
-    InclusivePageRange, MarkdownCoverage, ReaderPiece, SkippedReaderSegment, StableId,
-    markdown_offset_of_page, plan_canonical_reader,
+    InclusivePageRange, MarkdownBlock, MarkdownCoverage, ReaderPiece, SkippedReaderSegment,
+    StableId, markdown_offset_of_page, plan_canonical_reader,
 };
-use mathscape_orchestrator::MAX_MARKDOWN_BYTES;
+use mathscape_orchestrator::{MAX_MARKDOWN_BYTES, anchor_markdown};
 use mathscape_store_sqlite::SqliteArtifactStore;
 use serde::Serialize;
 use tauri::State;
@@ -50,6 +50,10 @@ pub enum CanonicalReaderPiece {
         is_head: bool,
         /// Byte offset in the snapshot where `markdown` starts.
         byte_start: u64,
+        /// Immutable content hash of the underlying physical snapshot.
+        content_hash: String,
+        /// Physical snapshot blocks starting at or after `byte_start` (ranges remain physical snapshot byte offsets).
+        blocks: Vec<MarkdownBlock>,
         markdown: String,
     },
     Gap {
@@ -92,6 +96,18 @@ impl DesktopService {
                     budget = budget
                         .checked_sub(markdown.len())
                         .ok_or("规范解析正文拼接后超过 16 MiB，当前阅读视图暂不加载")?;
+                    let anchored = anchor_markdown(
+                        segment.markdown_artifact_id.clone(),
+                        Some(segment.conversion_id.clone()),
+                        source,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    let content_hash = anchored.snapshot.content_hash.to_string();
+                    let blocks: Vec<MarkdownBlock> = anchored
+                        .blocks
+                        .into_iter()
+                        .filter(|b| b.range.end > byte_start as u64)
+                        .collect();
                     pieces.push(CanonicalReaderPiece::Segment {
                         conversion_id: segment.conversion_id.to_string(),
                         artifact_id: segment.markdown_artifact_id.to_string(),
@@ -101,6 +117,8 @@ impl DesktopService {
                         overlap_trimmed: start.is_some(),
                         is_head: segment.is_head,
                         byte_start: byte_start as u64,
+                        content_hash,
+                        blocks,
                         markdown,
                     });
                 }

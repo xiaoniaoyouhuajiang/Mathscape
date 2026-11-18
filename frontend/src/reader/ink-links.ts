@@ -9,11 +9,13 @@ import {
   markdownPreviewLabel,
   openLinkExistingPopover,
   openRelatedNotesPopover,
-  overlappingNotes,
+  overlappingNotesForBlocks,
   startInkCreateFromTarget,
   type InkLinkTargetRef,
   type InkMarkdownLinks,
 } from "../ink/links";
+import type { MarkdownUnitMarker } from "./content";
+import { matchUnitsToBlocks } from "./markdown-outline";
 import type { AnchoredMarkdown, MarkdownSelection } from "./selection";
 
 const MENU_TARGET_CLASS = "is-ink-menu-target";
@@ -21,6 +23,7 @@ const MENU_TARGET_CLASS = "is-ink-menu-target";
 export class ReaderInkLinks {
   readonly hint = document.createElement("p");
   private links: InkMarkdownLinks | undefined;
+  private unitMarkers: readonly MarkdownUnitMarker[] = [];
   private disposed = false;
   private version = 0;
   private readonly unsubscribe: () => void;
@@ -31,7 +34,9 @@ export class ReaderInkLinks {
     private readonly selection: () => MarkdownSelection,
     private readonly isRaw: () => boolean,
     private readonly onOpenPdf?: (range: { first: number; last: number }) => void,
+    initialUnitMarkers: readonly MarkdownUnitMarker[] = [],
   ) {
+    this.unitMarkers = initialUnitMarkers;
     this.hint.className = "ink-patch-hint";
     this.hint.hidden = true;
     this.article.addEventListener("contextmenu", this.onContextMenu);
@@ -44,6 +49,32 @@ export class ReaderInkLinks {
   setDocument(data: AnchoredMarkdown): void {
     this.data = data;
     this.decorate();
+  }
+
+  setUnitMarkers(markers: readonly MarkdownUnitMarker[]): void {
+    this.unitMarkers = markers;
+    this.decorate();
+  }
+
+  private unitIdsByBlock(): Map<string, string[]> {
+    const out = new Map<string, string[]>();
+    if (!this.unitMarkers.length) return out;
+    const matched = matchUnitsToBlocks(
+      this.unitMarkers,
+      this.data.blocks.map((b) => ({
+        id: b.id,
+        domKey: b.id,
+        artifactId: this.data.snapshot.artifact_id,
+        range: b.range,
+        kind: b.kind,
+      })),
+    );
+    for (const item of matched) {
+      const list = out.get(item.blockId) ?? [];
+      list.push(item.unit.unit_id);
+      out.set(item.blockId, list);
+    }
+    return out;
   }
 
   dispose(): void {
@@ -79,29 +110,35 @@ export class ReaderInkLinks {
       this.syncActionPill();
       return;
     }
-    const notesByBlock = new Map<string, Set<string>>();
-    for (const { link } of this.links.links) {
-      if (link.target.kind !== "markdown" || link.target.content_hash !== this.data.snapshot.content_hash) continue;
-      for (const block of link.target.block_ids) {
-        const notes = notesByBlock.get(block) ?? new Set<string>();
-        notes.add(link.document_id);
-        notesByBlock.set(block, notes);
-      }
-    }
+    const unitMap = this.unitIdsByBlock();
     for (const wrapper of this.article.querySelectorAll<HTMLElement>("[data-source-block]")) {
       const blockId = wrapper.dataset.sourceBlock ?? "";
-      const notes = notesByBlock.get(blockId);
-      if (!notes?.size || wrapper.classList.contains("source-page-marker")) continue;
+      if (!blockId || wrapper.classList.contains("source-page-marker")) continue;
+      const related = overlappingNotesForBlocks(
+        this.links.links,
+        this.links.unit_links ?? [],
+        [blockId],
+        unitMap,
+        this.data.snapshot.content_hash,
+      );
+      if (!related.length) continue;
       const marker = document.createElement("button");
       marker.type = "button";
       marker.className = "ink-block-marker";
-      marker.textContent = `✎ ${notes.size}`;
-      marker.setAttribute("aria-label", `${notes.size} 份相关手稿`);
+      marker.textContent = `✎ ${related.length}`;
+      marker.setAttribute("aria-label", `${related.length} 份相关手稿`);
       marker.title = "查看相关手稿";
       marker.addEventListener("click", event => {
         event.stopPropagation();
         const bounds = marker.getBoundingClientRect();
-        openRelatedNotesPopover({ x: bounds.left, y: bounds.bottom + 4, title: "相关手稿", notes: overlappingNotes(this.links?.links ?? [], [blockId]) });
+        const latestNotes = overlappingNotesForBlocks(
+          this.links?.links ?? [],
+          this.links?.unit_links ?? [],
+          [blockId],
+          this.unitIdsByBlock(),
+          this.data.snapshot.content_hash,
+        );
+        openRelatedNotesPopover({ x: bounds.left, y: bounds.bottom + 4, title: "相关手稿", notes: latestNotes });
       });
       marker.addEventListener("keydown", event => event.stopPropagation());
       wrapper.classList.add("has-ink-marker");
@@ -237,7 +274,13 @@ export class ReaderInkLinks {
     const range = this.selection().targetRange(index);
     if (!range) return;
     event.preventDefault();
-    const related = overlappingNotes(this.links?.links ?? [], this.blockIds(range));
+    const related = overlappingNotesForBlocks(
+      this.links?.links ?? [],
+      this.links?.unit_links ?? [],
+      this.blockIds(range),
+      this.unitIdsByBlock(),
+      this.data.snapshot.content_hash,
+    );
     const { clientX: x, clientY: y } = event;
     this.highlight(range);
     const label = markdownPreviewLabel(this.rangeText(range));

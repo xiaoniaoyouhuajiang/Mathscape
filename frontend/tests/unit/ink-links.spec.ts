@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import cytoscape from "cytoscape";
-import { markdownPreviewLabel, overlappingNotes, type InkLinkedNote, type InkLinkOverlay } from "../../src/ink/links";
+import { markdownPreviewLabel, overlappingNotes, overlappingNotesForBlocks, type InkLinkedNote, type InkLinkOverlay } from "../../src/ink/links";
 import { applyInkOverlay, clearInkOverlay, INK_NOTE_NODE_CAP } from "../../src/graph/ink-overlay";
 
 const linked = (documentId: string, blocks: string[], primary = false, linkId = `${documentId}:${blocks.join(",")}`): InkLinkedNote => ({
@@ -20,6 +20,32 @@ describe("N2 Markdown block links", () => {
     expect(hit[0].link.is_primary).toBe(true);
     expect(overlappingNotes(links, ["b1"]).map(entry => entry.note.document_id)).toEqual(["n1", "n3"]);
     expect(overlappingNotes(links, ["b9"])).toEqual([]);
+  });
+
+  it("merges source_object unit notes onto anchored blocks and deduplicates by document_id", () => {
+    const mdLinks = [linked("n-both", ["b2"], false), linked("n-md", ["b2"], true)];
+    const unitLinks: InkLinkedNote[] = [
+      {
+        note: { document_id: "n-unit", title: "无基础尝试" } as InkLinkedNote["note"],
+        link: {
+          link_id: "l-unit", document_id: "n-unit", target_kind: "source_object", target_key: "src:u8", target_id: "u8",
+          target: { kind: "source_object", object_id: "u8" },
+          target_revision: null, target_label: "习题 8", role: "attempt", is_primary: true, state: "active", created_at: 0, removed_at: null, target_status: "active",
+        },
+      },
+      {
+        note: { document_id: "n-both", title: "双挂接手稿" } as InkLinkedNote["note"],
+        link: {
+          link_id: "l-both-unit", document_id: "n-both", target_kind: "source_object", target_key: "src:u8", target_id: "u8",
+          target: { kind: "source_object", object_id: "u8" },
+          target_revision: null, target_label: "习题 8", role: "study", is_primary: true, state: "active", created_at: 0, removed_at: null, target_status: "active",
+        },
+      },
+    ];
+    const unitMap = new Map<string, string[]>([["b2", ["u8"]]]);
+    const merged = overlappingNotesForBlocks(mdLinks, unitLinks, ["b2"], unitMap, "h");
+    expect(merged.map((e) => e.note.document_id)).toEqual(["n-both", "n-md", "n-unit"]);
+    expect(merged[0].link.is_primary).toBe(true);
   });
 
   it("derives short names like the desktop: heading, numbered statement, else 24 characters", () => {

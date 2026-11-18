@@ -1072,6 +1072,7 @@ pub fn run() {
             content::prepare_discovery_input,
             content::get_artifact_content_info,
             content::get_source_node_detail,
+            content::get_markdown_unit_markers,
             content::read_artifact_bytes,
             canonical_reader::get_canonical_reader_projection,
             change_sets::get_change_set_investigation,
