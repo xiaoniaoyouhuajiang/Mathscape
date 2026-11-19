@@ -53,6 +53,7 @@
 }
 
 .settings-dialog {
+  color-scheme: dark;
   width: min(620px, 100%);
   max-height: min(760px, calc(100vh - 48px));
   overflow: auto;
@@ -105,17 +106,17 @@
   background: #1b2730;
 }
 
+.motion-settings,
+.workspace-settings-form,
 .llm-settings-form {
   display: grid;
   gap: 17px;
   padding: 24px 26px 26px;
-  border-top: 1px solid #293640;
 }
 
-.workspace-settings-form {
-  display: grid;
-  gap: 17px;
-  padding: 24px 26px 26px;
+.workspace-settings-form,
+.llm-settings-form {
+  border-top: 1px solid #293640;
 }
 
 .settings-section-heading {
@@ -170,7 +171,7 @@
   font-size: 11px;
 }
 
-.settings-field input,
+.settings-field input:not([type="checkbox"]),
 .settings-field select {
   width: 100%;
   min-height: 40px;
