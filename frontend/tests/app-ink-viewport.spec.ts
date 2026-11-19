@@ -32,6 +32,52 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator("#ink-button")).toBeVisible();
 });
 
+for (const width of [1600, 1280, 720]) {
+  test(`discovery tasks clear the ink export toolbar at ${width}px`, async ({ page }) => {
+    const launcher = page.locator(".task-launcher");
+    const taskPanel = page.locator(".discovery-task-window");
+    const footer = page.locator(".ink-desktop-footer");
+    await openNoteA(page);
+    await page.setViewportSize({ width, height: 860 });
+
+    const expectToolbarClear = async () => {
+      await expect.poll(async () => {
+        const button = (await launcher.boundingBox())!;
+        const toolbar = (await footer.boundingBox())!;
+        return toolbar.y - (button.y + button.height);
+      }).toBeGreaterThanOrEqual(18);
+      for (const button of await page.locator(".ink-export-actions button").all()) {
+        await expect(button).toBeVisible();
+        expect(await button.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+        })).toBe(true);
+      }
+    };
+
+    await expectToolbarClear();
+    await launcher.click();
+    await expect(taskPanel).toBeVisible();
+    expect((await taskPanel.boundingBox())!.y + (await taskPanel.boundingBox())!.height)
+      .toBeLessThan((await launcher.boundingBox())!.y);
+    await taskPanel.locator(".task-minimize").click();
+
+    if (width >= 1280) {
+      await enterSplit(page);
+      await expectToolbarClear();
+    }
+    await page.setViewportSize({ width: 720, height: 860 });
+    await expectToolbarClear();
+    await page.setViewportSize({ width: 1400, height: 860 });
+    await page.locator("#ink-button").click();
+    await expect(footer).toBeHidden();
+    await expect.poll(async () => {
+      const button = (await launcher.boundingBox())!;
+      return 860 - (button.y + button.height);
+    }).toBe(18);
+  });
+}
+
 test("notes list: expanded in normal, collapsed in split, remembered per mode; 新建 works collapsed", async ({ page }) => {
   await openNoteA(page);
   await expect(panel(page)).toBeVisible();

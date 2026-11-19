@@ -40,6 +40,17 @@ export function mountDiscoveryTask(): void {
   document.body.append(launcher, panel);
 }
 
+export function reserveDiscoveryTaskSpace(bottomToolbar: HTMLElement): void {
+  mountDiscoveryTask();
+  const updateInset = () => {
+    const inset = `${bottomToolbar.getBoundingClientRect().height}px`;
+    launcher.style.setProperty("--task-bottom-inset", inset);
+    panel!.style.setProperty("--task-bottom-inset", inset);
+  };
+  new ResizeObserver(updateInset).observe(bottomToolbar);
+  updateInset();
+}
+
 /** Application lifetime owns the promise and output, independent of readers. */
 export function runDiscoveryTask<T>(request: unknown): Promise<T> {
   return executeDiscoveryTask<T>("run_discovery", { request }, false);
