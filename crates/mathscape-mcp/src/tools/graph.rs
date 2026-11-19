@@ -20,11 +20,11 @@
 //! hyperedge that does not consume depth but counts toward `max_edges`.
 //! `unknown` relations are never traversed or returned (fail-closed).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use mathscape_agent::{Scope, ToolError, ToolErrorCode, ToolStatus};
 use mathscape_domain::{CanonicalMarkdownView, EntityKind, LifecycleStatus};
-use mathscape_graph::{GraphProjection, IncidenceDirection};
+use mathscape_graph::{GraphProjection, HopClass, IncidenceDirection};
 use mathscape_query::{LandscapeProjectionInput, SourceGraphProjectionError, project_landscape};
 use mathscape_store_sqlite::{
     InkLinkTarget, SourceMapSnapshot, SqliteArtifactStore, StoredMapObject,
@@ -39,7 +39,7 @@ use crate::investigation::{InvestigationMarks, investigation_landscape};
 
 const GET_DESCRIPTION: &str = "Resolve one id from the material & semantic landscape graph (artifacts, source units, source spans, ink snapshots, notes, plus semantic_entity, alignment, debt and dialect_scope) without expanding neighbors. Accepts any workspace.search hit id as-is (a snapshot_id is canonicalized to its snapshot artifact id; use canonical_id afterwards) and any graph id (source-span, source-relation, semantic-entity, alignment, debt, dialect-scope, projection-relation, conversion run). Returns kind (artifact|source_span|source_unit|semantic_entity|debt|dialect_scope|snapshot|note|relation|unsupported), entity_kind, label, lifecycle, parent_artifact_id, content_ref, semantic payload details (`semantic` for semantic_entity/debt/dialect_scope/alignment), plus edge_summary counts per relation and direction. No source body text: when content_ref is not null, call material.read with content_ref.artifact_id and content_ref.locator unchanged (md_byte_range, or pdf_pages 1-based). Notes, snapshots and ink spans get content_ref.type=ink_page (tool ink.page_image, node_id, page_id, stroke_ids for spans): pass content_ref.node_id and page_id to ink.page_image. content_ref is null with a content_unavailable diagnostic for units without located spans (no_span_locator; do not guess byte ranges), semantic objects (semantic_node), unsupported media, and relations. A missing id is status not_found with node null; an existing id of an unsupported kind is status ok with kind unsupported. Read-only.";
 
-const NEIGHBORHOOD_DESCRIPTION: &str = "Bounded BFS from one node_id or 1-8 seed_ids over the material & semantic landscape graph (a read-time projection with synthetic bridges: contains_span unit->span, has_part parent->child, located_in span->artifact, conversion pdf->markdown, has_snapshot note->ink snapshot, in_theory entity->theory, debt_on debt->holder, scope_of dialect_scope->anchor_unit; note_link note->linked source unit/span/artifact, Markdown range or note; aligns unit->semantic_entity). Relations are returned in edges[] (each counts toward max_edges, keeps every endpoint with role and side; from/to are null for multi-endpoint relations, so read endpoints) and do not consume depth: unit->span->artifact is 2 hops. depth defaults to 1 (max 3; 0 = seeds only). direction defaults to both; out follows from-side to to-side (unit out -> spans -> artifact), in goes the other way (markdown artifact in -> spans -> units); undirected roles such as evidence are only reached with both. edge_types defaults to the structural five [conversion, located_in, contains_span, has_part, has_snapshot]; note_link, source relations (states, proves, poses, hints, solves, explains, applies_method, cites) and semantic relations (aligns, in_theory, debt_on, scope_of) are opt-in and must be listed together with any structural ones you still want; [] walks no edges. Prefer depth <= 2 and an explicit max_nodes when adding cites. node_kinds (artifact|source_span|source_unit|semantic_entity|debt|dialect_scope|snapshot|note) filters the output only; traversal still passes through filtered nodes. max_nodes defaults to 40 (max 100), max_edges to 80 (max 200); values over the hard cap are invalid_arg. Over a cap the result is status truncated with truncated true, shallower layers first, and never a dangling edge. Retired (superseded|rejected|deprecated) and trashed ink nodes are hidden unless include_trashed; include_virtual must be false. Nodes carry depth, via_edge, parent_artifact_id and content_ref for material.read, never body text. Any missing seed makes the whole result not_found. Read-only.";
+const NEIGHBORHOOD_DESCRIPTION: &str = "Bounded typed-hop exploration from one node_id or 1-8 seed_ids over the material & semantic landscape graph (synthetic bridges: contains_span unit->span, has_part parent->child, located_in span->artifact, conversion pdf->markdown, has_snapshot note->ink snapshot, in_theory entity->theory, debt_on debt->holder, scope_of dialect_scope->anchor_unit, uses_entity entity->used, of_concept declaration->concept, paid_by debt->payer, note_link note->linked target; plus aligns unit->semantic_entity and source relations). `preset` selects the typed-hop lens when `edge_types` is omitted: `heuristic` (default: 0-cost provenance & context attachment for conventions/debts, 1-cost intra-source reasoning and cross-book semantic bridges, and hub-sink boundary on non-seed Theory shelves and foreign Artifacts so depth=2 crosses shared objects to other books/lemmas without hub explosion), `structural` (single-source hierarchy & reasoning only), `semantic_only` (shared semantic web only), or `raw` (legacy 1-relation-1-hop structural five [conversion, located_in, contains_span, has_part, has_snapshot]). Passing explicit `edge_types` without `preset` runs `raw` over those exact relation types; [] walks no edges. `depth` defaults to 1 (max 3; 0 = seeds only). `direction` defaults to both (out: from->to; in: to->from). `node_kinds` filters returned nodes only; traversal is not cut. `max_nodes` defaults to 40 (max 100), `max_edges` to 80 (max 200); over a cap returns status truncated, shallower layers first, never a dangling edge. Retired and trashed objects are hidden unless include_trashed; include_virtual must be false. Nodes carry depth, via_edge, parent_artifact_id and content_ref for material.read, never body text. Any missing seed makes the whole result not_found. Read-only.";
 
 const SNAPSHOT_MEDIA_TYPE: &str = "application/vnd.mathscape.ink-snapshot+json";
 const SYNTHETIC_PREFIX: &str = "mathscape:projection-relation/";
@@ -59,8 +59,8 @@ const ARTIFACT_HEAD_BYTES: u64 = 32 * 1024;
 /// Most dangling-endpoint items listed in one diagnostic.
 const MAX_DANGLING_LISTED: usize = 20;
 
-/// Closed relation enum (contract §7), in contract order.
-pub const RELATION_TYPES: [&str; 18] = [
+/// Closed relation enum (contract §7 + semantic extensions), in contract order.
+pub const RELATION_TYPES: [&str; 21] = [
     "conversion",
     "located_in",
     "contains_span",
@@ -79,6 +79,9 @@ pub const RELATION_TYPES: [&str; 18] = [
     "in_theory",
     "debt_on",
     "scope_of",
+    "uses_entity",
+    "of_concept",
+    "paid_by",
 ];
 pub const DEFAULT_EDGE_TYPES: [&str; 5] = [
     "conversion",
@@ -87,6 +90,33 @@ pub const DEFAULT_EDGE_TYPES: [&str; 5] = [
     "has_part",
     "has_snapshot",
 ];
+const STRUCTURAL_EDGE_TYPES: [&str; 15] = [
+    "conversion",
+    "located_in",
+    "contains_span",
+    "has_part",
+    "has_snapshot",
+    "note_link",
+    "states",
+    "proves",
+    "poses",
+    "hints",
+    "solves",
+    "explains",
+    "applies_method",
+    "cites",
+    "scope_of",
+];
+const SEMANTIC_ONLY_EDGE_TYPES: [&str; 7] = [
+    "aligns",
+    "in_theory",
+    "debt_on",
+    "uses_entity",
+    "of_concept",
+    "paid_by",
+    "scope_of",
+];
+const PRESETS: [&str; 4] = ["heuristic", "structural", "semantic_only", "raw"];
 /// Tool that renders `ink_page` content refs (Phase1d-b).
 const INK_PAGE_TOOL: &str = "ink.page_image";
 /// Most stroke ids carried by one `ink_page` content ref.
@@ -154,12 +184,18 @@ pub(super) fn neighborhood_definition() -> Value {
                     "uniqueItems": true,
                     "description": "1-8 distinct seeds. Give exactly one of node_id or seed_ids.",
                 },
+                "preset": {
+                    "type": "string",
+                    "enum": PRESETS,
+                    "default": "heuristic",
+                    "description": "Typed-hop lens: heuristic (default when edge_types omitted; cross-book semantic bridge + 0-cost provenance + hub-sink guard), structural (intra-source only), semantic_only (shared semantic web), or raw (legacy 1-relation-1-hop).",
+                },
                 "depth": {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": MAX_DEPTH,
                     "default": DEFAULT_DEPTH,
-                    "description": "Entity hops; relations do not consume depth. 0 returns the seeds only.",
+                    "description": "Semantic hop budget (0 returns seeds only). In heuristic/structural presets, file provenance and local convention/debt attachments cost 0 hops.",
                 },
                 "direction": {
                     "type": "string",
@@ -170,8 +206,7 @@ pub(super) fn neighborhood_definition() -> Value {
                 "edge_types": {
                     "type": "array",
                     "items": { "type": "string", "enum": RELATION_TYPES },
-                    "default": DEFAULT_EDGE_TYPES,
-                    "description": "Relations to traverse and return. Omitted = the structural five (incl. has_snapshot); note_link and semantic relations are opt-in; [] = no edges.",
+                    "description": "Optional explicit relation filter. When passed without preset, runs raw 1-hop-per-relation over these types; [] = no edges.",
                 },
                 "node_kinds": {
                     "type": "array",
@@ -773,6 +808,33 @@ impl Graph {
         }
         to_string_value(self.projection.relations()[index].relation_kind_value())
             .unwrap_or_else(|| "unknown".to_owned())
+    }
+
+    fn hop_class(&self, index: usize) -> HopClass {
+        if let Some(edge) = self.ink_edge(index) {
+            return match edge.kind {
+                "has_snapshot" => HopClass::Plumbing,
+                "note_link" => HopClass::Hierarchy,
+                _ => HopClass::Forbidden,
+            };
+        }
+        self.projection.relations()[index]
+            .relation_kind_value()
+            .hop_class()
+    }
+
+    fn is_theory_node(&self, index: usize) -> bool {
+        if self.note_at(index).is_some() {
+            return false;
+        }
+        let node = &self.projection.nodes()[index];
+        if node.kind() != EntityKind::SemanticEntity {
+            return false;
+        }
+        self.objects
+            .get(node.entity_id().as_str())
+            .is_some_and(|obj| str_at(inner_payload(&obj.payload), "/semantic_kind") == Some("theory"))
+            || node.summary_ref().is_some_and(|s| s.starts_with("理论"))
     }
 
     fn relation_retired(&self, index: usize) -> bool {
@@ -1518,6 +1580,8 @@ struct NeighborhoodArgs {
     #[serde(default)]
     seed_ids: Option<Vec<String>>,
     #[serde(default)]
+    preset: Option<String>,
+    #[serde(default)]
     depth: Option<u64>,
     #[serde(default)]
     direction: Option<String>,
@@ -1544,8 +1608,52 @@ enum Direction {
     Out,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Preset {
+    Heuristic,
+    Structural,
+    SemanticOnly,
+    Raw,
+}
+
+impl Preset {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Heuristic => "heuristic",
+            Self::Structural => "structural",
+            Self::SemanticOnly => "semantic_only",
+            Self::Raw => "raw",
+        }
+    }
+
+    fn default_edge_types(self) -> &'static [&'static str] {
+        match self {
+            Self::Heuristic => &RELATION_TYPES,
+            Self::Structural => &STRUCTURAL_EDGE_TYPES,
+            Self::SemanticOnly => &SEMANTIC_ONLY_EDGE_TYPES,
+            Self::Raw => &DEFAULT_EDGE_TYPES,
+        }
+    }
+}
+
+/// Traversal capability state attached to a reached node in typed-hop presets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum NodeMode {
+    /// Absorbed container/context endpoint (non-seed Theory, terminal Artifact, DialectScope): never expands further.
+    Sink = 0,
+    /// Upward provenance chain (`unit -> span -> markdown -> pdf`): only walks upward to parent artifact/PDF.
+    ProvenanceUp = 1,
+    /// Parent section reached upward (`child <-has_part- section`): only attaches `scope_of` conventions and upward provenance, never fans out to sibling children.
+    SectionContext = 2,
+    /// Downward plumbing from an Artifact seed (`pdf -> markdown <- span`): reaches its units at cost 1 without bouncing sideways.
+    PlumbingDown = 3,
+    /// Active node eligible for all hops permitted by the active preset.
+    Full = 4,
+}
+
 struct Applied {
     seeds: Vec<String>,
+    preset: Preset,
     depth: u32,
     direction: Direction,
     direction_name: String,
@@ -1637,6 +1745,20 @@ fn validate(args: NeighborhoodArgs) -> Result<Applied, ToolError> {
             json!({ "field": "include_virtual" }),
         ));
     }
+    let preset = match args.preset.as_deref() {
+        Some("heuristic") => Preset::Heuristic,
+        Some("structural") => Preset::Structural,
+        Some("semantic_only") => Preset::SemanticOnly,
+        Some("raw") => Preset::Raw,
+        Some(other) => {
+            return Err(invalid(
+                format!("preset must be one of heuristic, structural, semantic_only, raw; got `{other}`"),
+                json!({ "field": "preset", "value": other, "allowed": PRESETS }),
+            ));
+        }
+        None if args.edge_types.is_some() => Preset::Raw,
+        None => Preset::Heuristic,
+    };
     let depth = bounded(
         "depth",
         args.depth,
@@ -1657,7 +1779,7 @@ fn validate(args: NeighborhoodArgs) -> Result<Applied, ToolError> {
         }
     };
     let edge_types = match args.edge_types {
-        None => DEFAULT_EDGE_TYPES.iter().map(|s| (*s).to_owned()).collect(),
+        None => preset.default_edge_types().iter().map(|s| (*s).to_owned()).collect(),
         Some(values) => validate_enum("edge_types", &values, &RELATION_TYPES)?,
     };
     let node_kinds = match args.node_kinds {
@@ -1668,6 +1790,7 @@ fn validate(args: NeighborhoodArgs) -> Result<Applied, ToolError> {
     let max_edges = bounded("max_edges", args.max_edges, DEFAULT_MAX_EDGES, 1, MAX_EDGES)?;
     Ok(Applied {
         seeds,
+        preset,
         depth,
         direction,
         direction_name,
@@ -1684,6 +1807,7 @@ struct Visit {
     depth: u32,
     via: Option<usize>,
     seed: usize,
+    mode: NodeMode,
 }
 
 /// Whether `other` is reachable from `own` (two endpoints of one relation)
@@ -1700,6 +1824,160 @@ fn reachable(direction: Direction, own: IncidenceDirection, other: IncidenceDire
     }
 }
 
+/// Evaluates one typed hop `(cost, next_mode)` under a non-`Raw` preset.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_typed_hop(
+    preset: Preset,
+    mode: NodeMode,
+    current_kind: &str,
+    current_is_seed: bool,
+    hop_class: HopClass,
+    rel_kind: &str,
+    own_dir: IncidenceDirection,
+    other_dir: IncidenceDirection,
+    target_kind: &str,
+    target_is_theory: bool,
+) -> Option<(u32, NodeMode)> {
+    let forward = own_dir == IncidenceDirection::IntoRelation
+        && other_dir == IncidenceDirection::OutOfRelation;
+    let backward = own_dir == IncidenceDirection::OutOfRelation
+        && other_dir == IncidenceDirection::IntoRelation;
+
+    match mode {
+        NodeMode::Sink => None,
+        NodeMode::ProvenanceUp => match rel_kind {
+            // span --located_in(out)--> markdown/artifact
+            "located_in" if forward => Some((0, NodeMode::ProvenanceUp)),
+            // markdown <--conversion(in)-- pdf
+            "conversion" if backward => Some((0, NodeMode::Sink)),
+            // snapshot <--has_snapshot(in)-- note
+            "has_snapshot" if backward => Some((0, NodeMode::Sink)),
+            _ => None,
+        },
+        NodeMode::SectionContext => match rel_kind {
+            // Attach conventions anchored to this parent section (`scope --scope_of--> section`)
+            "scope_of" if backward => Some((0, NodeMode::Sink)),
+            // Walk further up parent sections (`grandparent --has_part--> section`) to inherit conventions
+            "has_part" if backward => Some((0, NodeMode::SectionContext)),
+            // Attach provenance of the section
+            "contains_span" if forward => Some((0, NodeMode::ProvenanceUp)),
+            _ => None,
+        },
+        NodeMode::PlumbingDown => match rel_kind {
+            "conversion" if forward => Some((0, NodeMode::PlumbingDown)),
+            "located_in" if backward => Some((0, NodeMode::PlumbingDown)),
+            // span <--contains_span(in)-- unit: entering actual mathematical content costs 1 hop
+            "contains_span" if backward => Some((1, NodeMode::Full)),
+            _ => None,
+        },
+        NodeMode::Full => match preset {
+            Preset::Raw => Some((1, NodeMode::Full)),
+            Preset::SemanticOnly => match hop_class {
+                HopClass::SemanticBridge => {
+                    // Only allow entering semantic web from a seed source_unit; never drop back out to textbooks.
+                    if rel_kind == "aligns" && target_kind == "source_unit" {
+                        None
+                    } else if current_kind == "source_unit" && !current_is_seed {
+                        None
+                    } else {
+                        Some((1, NodeMode::Full))
+                    }
+                }
+                HopClass::ContextAttach if rel_kind == "debt_on" => {
+                    let next = if target_is_theory { NodeMode::Sink } else { NodeMode::Full };
+                    Some((0, next))
+                }
+                HopClass::ContainerHub => {
+                    if forward && target_is_theory {
+                        Some((0, NodeMode::Sink))
+                    } else if backward && current_is_seed {
+                        Some((1, NodeMode::Full))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+            Preset::Heuristic | Preset::Structural => match hop_class {
+                HopClass::Plumbing => match rel_kind {
+                    // Downward from an artifact/snapshot/note seed into content
+                    "conversion" if forward && matches!(current_kind, "artifact" | "snapshot") => {
+                        Some((0, NodeMode::PlumbingDown))
+                    }
+                    "located_in" if backward && matches!(current_kind, "artifact" | "snapshot") => {
+                        Some((0, NodeMode::PlumbingDown))
+                    }
+                    "contains_span" if backward && current_kind == "source_span" => {
+                        Some((1, NodeMode::Full))
+                    }
+                    "has_snapshot" => {
+                        if current_is_seed {
+                            Some((0, NodeMode::PlumbingDown))
+                        } else {
+                            Some((0, NodeMode::Sink))
+                        }
+                    }
+                    // Upward provenance from a content unit or span
+                    "contains_span" if forward => Some((0, NodeMode::ProvenanceUp)),
+                    "located_in" if forward => Some((0, NodeMode::ProvenanceUp)),
+                    "conversion" if backward => Some((0, NodeMode::Sink)),
+                    _ => None,
+                },
+                HopClass::ContextAttach => match rel_kind {
+                    // scope --scope_of--> anchor_unit
+                    "scope_of" => {
+                        if backward {
+                            Some((0, NodeMode::Sink))
+                        } else if current_is_seed {
+                            Some((1, NodeMode::Full))
+                        } else {
+                            None
+                        }
+                    }
+                    // debt --debt_on--> holder
+                    "debt_on" if preset == Preset::Heuristic => {
+                        let cost = if backward { 0 } else { 1 };
+                        let next = if target_is_theory { NodeMode::Sink } else { NodeMode::Full };
+                        Some((cost, next))
+                    }
+                    _ => None,
+                },
+                HopClass::Hierarchy => match rel_kind {
+                    "has_part" => {
+                        if forward {
+                            Some((1, NodeMode::Full))
+                        } else if backward {
+                            // Ascending into parent section: attach section & its conventions without sibling explosion
+                            Some((0, NodeMode::SectionContext))
+                        } else {
+                            None
+                        }
+                    }
+                    "note_link" => Some((1, NodeMode::Full)),
+                    _ => None,
+                },
+                HopClass::SourceReasoning => Some((1, NodeMode::Full)),
+                HopClass::SemanticBridge if preset == Preset::Heuristic => {
+                    let next = if target_is_theory { NodeMode::Sink } else { NodeMode::Full };
+                    Some((1, next))
+                }
+                HopClass::ContainerHub if preset == Preset::Heuristic => {
+                    if forward && target_is_theory {
+                        // Entering a Theory shelf: 0-cost context sink, never bounces out to unrelated shelf-mates
+                        Some((0, NodeMode::Sink))
+                    } else if backward && current_is_seed {
+                        // Starting directly on a Theory shelf: list its members at cost 1
+                        Some((1, NodeMode::Full))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+        },
+    }
+}
+
 pub(super) fn call_neighborhood(
     workspace: &McpWorkspace,
     arguments: Value,
@@ -1710,6 +1988,7 @@ pub(super) fn call_neighborhood(
     let graph = load(workspace, investigation.as_deref())?;
     let as_of = as_of();
     let applied_json = json!({
+        "preset": applied.preset.as_str(),
         "depth": applied.depth,
         "direction": applied.direction_name,
         "edge_types": applied.edge_types,
@@ -1755,10 +2034,11 @@ pub(super) fn call_neighborhood(
     diagnostics.extend(graph.load_diagnostics.iter().cloned());
 
     let mut seed_ids: Vec<String> = Vec::new();
+    let mut seed_indices: HashSet<usize> = HashSet::new();
     // Seeds returned as-is without expansion (unsupported objects).
     let mut static_seeds: Vec<(String, Target)> = Vec::new();
     let mut visits: BTreeMap<usize, Visit> = BTreeMap::new();
-    let mut frontier: Vec<usize> = Vec::new();
+    let mut queue: VecDeque<(usize, u32, NodeMode)> = VecDeque::new();
     let mut retired_seeds = Vec::new();
     for found in &resolved {
         if seed_ids.contains(&found.canonical) {
@@ -1774,15 +2054,17 @@ pub(super) fn call_neighborhood(
         match found.target {
             Target::Node(index) if graph.node_kind(index) != "unsupported" => {
                 let seed = seed_ids.len() - 1;
+                seed_indices.insert(index);
                 visits.insert(
                     index,
                     Visit {
                         depth: 0,
                         via: None,
                         seed,
+                        mode: NodeMode::Full,
                     },
                 );
-                frontier.push(index);
+                queue.push_back((index, 0, NodeMode::Full));
             }
             Target::Relation(_) => {
                 diagnostics.push(json!({
@@ -1812,7 +2094,7 @@ pub(super) fn call_neighborhood(
     let mut visited_count = visits.len();
 
     // Relations around the seeds that edge_types excludes (one hop).
-    for &seed in &frontier {
+    for &seed in &seed_indices {
         for &relation in &graph.incident[seed] {
             let kind = graph.relation_kind(relation);
             if kind != "unknown" && !allowed.contains(kind.as_str()) {
@@ -1821,17 +2103,26 @@ pub(super) fn call_neighborhood(
         }
     }
 
-    let mut depth = 0;
-    'bfs: while !frontier.is_empty() {
-        let expanding = depth < applied.depth;
-        let mut next = Vec::new();
-        for &current in &frontier {
-            let current_id = graph.node_id(current);
-            let seed = visits[&current].seed;
+    if applied.depth > 0 {
+        'bfs: while let Some((current, popped_depth, popped_mode)) = queue.pop_front() {
+            let current_visit = &visits[&current];
+            if popped_depth > current_visit.depth || popped_mode < current_visit.mode {
+                continue;
+            }
+            if current_visit.mode == NodeMode::Sink {
+                continue;
+            }
+            let current_depth = current_visit.depth;
+            let current_mode = current_visit.mode;
+            let current_seed = current_visit.seed;
+            let current_id = graph.node_id(current).to_owned();
+            let current_kind = graph.node_kind(current);
+            let current_is_seed = seed_indices.contains(&current);
+
             for &relation_index in &graph.incident[current] {
                 let kind = graph.relation_kind(relation_index);
                 if kind == "unknown" {
-                    if expanding {
+                    if current_depth < applied.depth {
                         unknown_relations.insert(relation_index);
                     }
                     continue;
@@ -1840,28 +2131,80 @@ pub(super) fn call_neighborhood(
                     continue;
                 }
                 if !applied.include_trashed && graph.relation_retired(relation_index) {
-                    if expanding {
+                    if current_depth < applied.depth {
                         hidden_relations.insert(relation_index);
                     }
                     continue;
                 }
+                let hop_class = graph.hop_class(relation_index);
                 let endpoints = graph.endpoints(relation_index);
-                let mut targets = BTreeSet::new();
+                let mut transitions: BTreeMap<usize, (u32, NodeMode)> = BTreeMap::new();
                 for own in endpoints.iter().filter(|e| e.node == current_id) {
                     for other in endpoints.iter().filter(|e| e.node != current_id) {
-                        if reachable(applied.direction, own.direction, other.direction)
-                            && let Some(&index) = graph.node_index.get(other.node)
-                        {
-                            targets.insert(index);
+                        if !reachable(applied.direction, own.direction, other.direction) {
+                            continue;
+                        }
+                        let Some(&target) = graph.node_index.get(other.node) else {
+                            continue;
+                        };
+                        let step = if applied.preset == Preset::Raw {
+                            Some((1, NodeMode::Full))
+                        } else {
+                            evaluate_typed_hop(
+                                applied.preset,
+                                current_mode,
+                                current_kind,
+                                current_is_seed,
+                                hop_class,
+                                kind.as_str(),
+                                own.direction,
+                                other.direction,
+                                graph.node_kind(target),
+                                graph.is_theory_node(target),
+                            )
+                        };
+                        if let Some((cost, next_mode)) = step {
+                            transitions
+                                .entry(target)
+                                .and_modify(|existing| {
+                                    if cost < existing.0 || (cost == existing.0 && next_mode > existing.1) {
+                                        *existing = (cost, next_mode);
+                                    }
+                                })
+                                .or_insert((cost, next_mode));
                         }
                     }
                 }
-                for target in targets {
-                    if visits.contains_key(&target) || hidden_nodes.contains(&target) {
+                for (target, (cost, next_mode)) in transitions {
+                    if hidden_nodes.contains(&target) {
                         continue;
                     }
-                    if !expanding {
+                    let next_depth = current_depth.saturating_add(cost);
+                    if next_depth > applied.depth {
                         unexpanded.insert(relation_index);
+                        continue;
+                    }
+                    if let Some(existing) = visits.get_mut(&target) {
+                        let improved_depth = next_depth < existing.depth;
+                        let improved_mode = next_mode > existing.mode;
+                        if !improved_depth && !improved_mode {
+                            continue;
+                        }
+                        if improved_depth {
+                            existing.depth = next_depth;
+                            existing.via = Some(relation_index);
+                            existing.seed = current_seed;
+                        }
+                        if improved_mode {
+                            existing.mode = next_mode;
+                        }
+                        let push_depth = existing.depth;
+                        let push_mode = existing.mode;
+                        if cost == 0 {
+                            queue.push_front((target, push_depth, push_mode));
+                        } else {
+                            queue.push_back((target, push_depth, push_mode));
+                        }
                         continue;
                     }
                     if visited_count >= MAX_VISITED {
@@ -1876,20 +2219,20 @@ pub(super) fn call_neighborhood(
                     visits.insert(
                         target,
                         Visit {
-                            depth: depth + 1,
+                            depth: next_depth,
                             via: Some(relation_index),
-                            seed,
+                            seed: current_seed,
+                            mode: next_mode,
                         },
                     );
-                    next.push(target);
+                    if cost == 0 {
+                        queue.push_front((target, next_depth, next_mode));
+                    } else {
+                        queue.push_back((target, next_depth, next_mode));
+                    }
                 }
             }
         }
-        if !expanding {
-            break;
-        }
-        frontier = next;
-        depth += 1;
     }
 
     // Output nodes: node_kinds filter (seeds exempt), sort, layer-wise cap.

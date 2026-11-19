@@ -14,10 +14,14 @@ import { InspectorController } from "./inspector/inspector-controller";
 import { LlmSettingsController } from "./llm/settings";
 import { mountSandboxChrome } from "./sandbox/chrome";
 import { SandboxDialogueDock } from "./sandbox/dialogue";
+import { INK_NOTE_CITE_PREFIX, type CiteTarget } from "./sandbox/cite";
 import { SandboxPanelController } from "./sandbox/panel";
 import { DesktopInkWorkspace } from "./ink/desktop";
+import { listInkDocuments } from "./ink/persistence";
 import { connectInkViews, type InkViewSync } from "./ink/views";
+import { listUnreviewedErrataUnits } from "./reader/markdown-errata";
 import {
+  closeInkPopover,
   createInkNoteFromContext,
   setInkContextCreator,
   setInkSourceCandidateProvider,
@@ -42,10 +46,10 @@ import { listInkNoteLinks, type InkNoteLink } from "./ink/links";
 import { searchWorkspace, type SearchHit } from "./search/api";
 import { WorkspaceSearchPanel, installWorkspaceSearch, type SearchAction } from "./search/search-panel";
 import { installInkCloseGuard } from "./ink/close-guard";
-import { reviewBeforeLeaving } from "./review/change-sets";
+import { openProposalReview, reviewBeforeLeaving } from "./review/change-sets";
 import "./styles.css";
 import "./semantic/semantic.css";
-import { LearningViewPanel } from "./semantic/learning-view";
+import { StudyHudController } from "./semantic/study-hud";
 import { TutorialPlayer } from "./tutorial/player";
 import "./tutorial/tutorial.css";
 
@@ -74,16 +78,102 @@ let splitGeneration = 0;
 let splitReaderRequest = 0;
 let splitReaderError: string | undefined;
 
-function placeReaderInSplit(inSplit: boolean): void {
+type ReaderScrollAnchor =
+  | { kind: "block"; block: HTMLElement; offsetFromTop: number }
+  | { kind: "ratio"; ratio: number };
+
+let pendingReaderAnchor: ReaderScrollAnchor | null = null;
+let readerAnchorToken = 0;
+
+function readerScrollContainer(): HTMLElement {
+  return el.readerHost.classList.contains("has-errata-pdf-pane")
+    ? (el.readerHost.querySelector<HTMLElement>(".reader-main-pane") ?? el.readerHost)
+    : el.readerHost;
+}
+
+function captureReaderScrollAnchor(): ReaderScrollAnchor | null {
+  if (!reader.hasContent() || el.readerHost.hidden || el.readerHost.getClientRects().length === 0) {
+    return null;
+  }
+  const scroller = readerScrollContainer();
+  const hostRect = scroller.getBoundingClientRect();
+  if (hostRect.height <= 0) return null;
+
+  const isVisible = (block: HTMLElement): DOMRect | null => {
+    if (block.classList.contains("is-errata-merged-hidden")) return null;
+    const rect = block.getBoundingClientRect();
+    if (rect.height <= 0) return null;
+    if (rect.bottom <= hostRect.top + 8 || rect.top >= hostRect.bottom - 8) return null;
+    return rect;
+  };
+
+  // Prefer the active/triggered block ONLY when it is actually inside the current viewport.
+  // Stale off-screen selections or initial `.source-block-focus` anchors must never yank the reader away.
+  const prioritySelectors = [
+    ".source-block.is-ink-menu-target",
+    ".source-block.is-selected-block",
+    ".source-block.is-current-block",
+    ".source-block.source-block-focus",
+  ];
+  for (const selector of prioritySelectors) {
+    for (const candidate of el.readerHost.querySelectorAll<HTMLElement>(selector)) {
+      const rect = isVisible(candidate);
+      if (rect) {
+        const offsetFromTop = Math.max(16, Math.min(hostRect.height - 64, rect.top - hostRect.top));
+        return { kind: "block", block: candidate, offsetFromTop };
+      }
+    }
+  }
+
+  for (const block of el.readerHost.querySelectorAll<HTMLElement>(".source-block:not(.is-errata-merged-hidden)")) {
+    const rect = block.getBoundingClientRect();
+    if (rect.height > 0 && rect.bottom > hostRect.top + 32) {
+      const offsetFromTop = Math.max(12, Math.min(hostRect.height - 64, rect.top - hostRect.top));
+      return { kind: "block", block, offsetFromTop };
+    }
+  }
+  const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+  if (maxScroll > 1) {
+    return { kind: "ratio", ratio: scroller.scrollTop / maxScroll };
+  }
+  return null;
+}
+
+function restoreReaderScrollAnchor(anchor: ReaderScrollAnchor | null): void {
+  if (!anchor) return;
+  const token = ++readerAnchorToken;
+  requestAnimationFrame(() => {
+    if (token !== readerAnchorToken || !inkSplit || !inkOpen || el.readerHost.hidden) return;
+    const scroller = readerScrollContainer();
+    const hostRect = scroller.getBoundingClientRect();
+    if (hostRect.height <= 0) return;
+    if (anchor.kind === "block" && anchor.block.isConnected) {
+      const blockRect = anchor.block.getBoundingClientRect();
+      if (blockRect.height <= 0) return;
+      const desiredOffset = Math.max(12, Math.min(hostRect.height - 64, anchor.offsetFromTop));
+      const delta = (blockRect.top - hostRect.top) - desiredOffset;
+      scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
+    } else if (anchor.kind === "ratio") {
+      const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+      if (maxScroll > 0) scroller.scrollTop = anchor.ratio * maxScroll;
+    }
+  });
+}
+
+function placeReaderInSplit(inSplit: boolean, preCapturedAnchor?: ReaderScrollAnchor | null): void {
   if (inSplit) {
     // Never move #reader into the overlay after an exit (in-flight ensure/open).
     if (!inkSplit || !inkOpen) return;
-    if (el.readerHost.parentElement !== el.inkSplitReader) {
+    const movingIntoSplit = el.readerHost.parentElement !== el.inkSplitReader;
+    const anchor = preCapturedAnchor ?? pendingReaderAnchor ?? (movingIntoSplit ? captureReaderScrollAnchor() : null);
+    pendingReaderAnchor = null;
+    if (movingIntoSplit) {
       el.inkSplitReader.append(el.readerHost);
     }
     el.readerHost.classList.add("reader-panel");
     // Keep host visible only when it has a document; empty state covers the blank case.
     el.readerHost.hidden = !reader.hasContent() && !reader.isLoading();
+    if (movingIntoSplit && anchor) restoreReaderScrollAnchor(anchor);
   } else {
     restoreReaderHome({ hide: false });
   }
@@ -243,7 +333,7 @@ async function ensureSplitLeftPane(): Promise<void> {
   renderSplitEmpty(primary);
 }
 
-function setInkSplit(enabled: boolean, opts: { hint?: boolean } = {}): void {
+function setInkSplit(enabled: boolean, opts: { hint?: boolean; anchor?: ReaderScrollAnchor | null } = {}): void {
   if (enabled && window.innerWidth < INK_SPLIT_WINDOW_MIN) {
     shell.showToast(`窗口窄于 ${INK_SPLIT_WINDOW_MIN}px，暂无法并排阅读。`, "error");
     enabled = false;
@@ -260,7 +350,7 @@ function setInkSplit(enabled: boolean, opts: { hint?: boolean } = {}): void {
   el.inkWorkspace.classList.toggle("is-split", enabled);
   el.inkSplitReader.hidden = !enabled;
   el.inkSplitResizer.hidden = !enabled;
-  placeReaderInSplit(enabled);
+  placeReaderInSplit(enabled, opts.anchor);
   inkSplitHandle?.setEnabled(enabled);
   // Per-layout notes-list preference, and fit the page once on entering 并排.
   inkWorkspace.setSplitMode(enabled);
@@ -305,6 +395,9 @@ el.inkSplitReader.addEventListener("pointerdown", () => { inkPaneFocused = false
 
 function openInkWorkspaceFromButton(): Promise<void> {
   scenePlayer?.cancel();
+  // Preserve reader scroll position before hiding workspaceGrid, so clicking
+  // 「并排阅读」 afterwards restores the exact block the user was reading.
+  pendingReaderAnchor = captureReaderScrollAnchor();
   inkOpen = true;
   el.workspaceGrid.hidden = true;
   el.inkWorkspace.hidden = false;
@@ -351,9 +444,19 @@ eventBus.on("ink-split-toggle", (detail) => {
   setInkSplit(next);
 });
 
+let currentSnapshot: DesktopSnapshot | undefined;
+let inspectorController!: InspectorController;
+let studyHud: StudyHudController | undefined;
+
 mountDiscoveryTask();
-mountReviewWorkspace(el.reviewWorkspaceHost);
+const reviewWorkspace = mountReviewWorkspace(el.reviewWorkspaceHost, {
+  getGraph: () => currentSnapshot?.landscape_graph,
+});
 const reader = new ArtifactReader(el.readerHost);
+reader.setOverlayCloseHandler(() => {
+  reader.close();
+  el.readerHost.hidden = true;
+});
 
 const llmSettings = new LlmSettingsController(
   el.llmSettingsHost,
@@ -368,9 +471,6 @@ new SandboxPanelController(el.sandboxHost, el.sandboxButton, sandboxToast, sandb
 let sandboxWindowSessionId: string | null = null;
 void mountSandboxChrome(el.shell, { toast: sandboxToast, openDialogue: (id) => void sandboxDock.open(id) })
   .then(status => { sandboxWindowSessionId = status?.sandbox?.sandboxSessionId ?? null; });
-
-let currentSnapshot: DesktopSnapshot | undefined;
-let inspectorController!: InspectorController;
 
 const discoveryLedger = new DiscoveryLedgerController(
   el.discoveryRunsList,
@@ -395,7 +495,13 @@ const graphController = new GraphController(
     emptyStateMessage: el.emptyStateMessage,
   },
   {
-    onSelectNode: (nodeId) => inspectorController.selectNodeById(nodeId),
+    onSelectNode: (nodeId) => {
+      inspectorController.selectNodeById(nodeId);
+      if (nodeId !== null && reviewWorkspace.isMapLinkedOpen()) {
+        const node = currentSnapshot?.landscape_graph.nodes.find((n) => n.id === nodeId);
+        if (node?.domain_id) reviewWorkspace.focusDomainObject(node.domain_id);
+      }
+    },
     onRequestCreateUnit: (parentId) => void inspectorController.enterCreateUnitMode(parentId),
     onRequestCreateRelation: (sourceId, targetId) =>
       void inspectorController.enterCreateRelationMode(sourceId, targetId),
@@ -410,6 +516,17 @@ const graphController = new GraphController(
     onGraphRendered: () => {
       artifactController.refreshParseState();
       scenePlayer?.reapply();
+      reviewWorkspace.reapplyMapScope();
+      studyHud?.notifyGraphMounted();
+    },
+    onStudyPostureChanged: (active, initialMaterialId) => {
+      el.learningViewButton.classList.toggle("is-active", active);
+      el.learningViewButton.setAttribute("aria-pressed", String(active));
+      if (active) {
+        void studyHud?.activate(initialMaterialId);
+      } else {
+        studyHud?.deactivate();
+      }
     },
     showToast: (msg, kind) => shell.showToast(msg, kind),
     getSnapshot: () => currentSnapshot,
@@ -421,7 +538,7 @@ inspectorController = new InspectorController(el.nodeDetail, {
   getSnapshot: () => currentSnapshot,
   showToast: (msg, kind) => shell.showToast(msg, kind),
   copyIdentifier: (id) => shell.copyIdentifier(id),
-  onFocusNode: (nodeId) => graphController.setFocus(nodeId, "all"),
+  onFocusNode: (nodeId) => graphController.setFocus(nodeId),
   onOpenReader: (artifactId, label, inkFocus) => {
     if (inkSplit && inkOpen) {
       placeReaderInSplit(true);
@@ -446,6 +563,10 @@ inspectorController = new InspectorController(el.nodeDetail, {
   refreshSnapshot: () => loadSnapshot(),
   canFocus: (node) => graphController.canFocus(node),
   isFocusRoot: (nodeId) => graphController.getFocusRootId() === nodeId,
+  getStudyStatus: (unitDomainId) => studyHud?.getUnitStudyStatus(unitDomainId) ?? null,
+  onSetStudyStatus: async (unitDomainId, status) => {
+    await studyHud?.setUnitStudyStatus(unitDomainId, status);
+  },
 });
 
 artifactController = new ArtifactController(
@@ -482,7 +603,10 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
   graphController.renderCurrentGraph(snapshot);
   inspectorController.refreshIfUnlocked();
   loadInkOverlay();
+  void refreshErrataReviewOverlay();
+  void refreshInkCiteTargets();
   sandboxDock.refreshCites();
+  void studyHud?.reloadData();
 }
 
 // N2: map count markers and "我的手稿" come from a separate overlay query that
@@ -490,6 +614,35 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
 let inkViews: InkViewSync | undefined;
 function loadInkOverlay(): void {
   void inkViews?.reloadOverlay();
+}
+
+let errataOverlayRevision = 0;
+async function refreshErrataReviewOverlay(): Promise<void> {
+  const rev = ++errataOverlayRevision;
+  const units = await listUnreviewedErrataUnits();
+  if (rev !== errataOverlayRevision) return;
+  graphController.setErrataReviewOverlay(units);
+}
+
+let activeInkCiteTargets: CiteTarget[] = [];
+let inkCiteRevision = 0;
+async function refreshInkCiteTargets(): Promise<void> {
+  const rev = ++inkCiteRevision;
+  try {
+    const docs = await listInkDocuments();
+    if (rev !== inkCiteRevision) return;
+    activeInkCiteTargets = docs
+      .filter((doc) => doc.lifecycle !== "trashed")
+      .map((doc) => ({
+        nodeId: `${INK_NOTE_CITE_PREFIX}${doc.document_id}`,
+        domainId: doc.document_id,
+        domainKind: "InkNote",
+        label: doc.title,
+      }));
+    sandboxDock.refreshCites();
+  } catch {
+    /* Non-fatal in minimal test environments without ink IPC. */
+  }
 }
 
 async function loadSnapshot(): Promise<void> {
@@ -509,12 +662,21 @@ async function loadSnapshot(): Promise<void> {
 
 el.importButton.addEventListener("click", () => void artifactController.importPdf());
 
+eventBus.on("reader-opened", () => { pendingReaderAnchor = null; });
 eventBus.on("source-map-changed", () => void loadSnapshot());
-function showInkWorkspace(): void {
-  // Keep the last reader document for a later 并排阅读; only hide the host.
-  if (!inkSplit) el.readerHost.hidden = true;
-  inkOpen = true; el.workspaceGrid.hidden = true; el.inkWorkspace.hidden = false;
+function showInkWorkspace(opts: { enterSplitWithReader?: boolean; anchor?: ReaderScrollAnchor | null } = {}): void {
+  const autoSplit = Boolean(opts.enterSplitWithReader && window.innerWidth >= INK_SPLIT_WINDOW_MIN);
+  const anchor = opts.anchor ?? captureReaderScrollAnchor();
+  if (!autoSplit && anchor) pendingReaderAnchor = anchor;
+  // Keep the last reader document for 并排阅读; only hide the host when staying full-screen.
+  if (!inkSplit && !autoSplit) el.readerHost.hidden = true;
+  inkOpen = true;
+  el.workspaceGrid.hidden = true;
+  el.inkWorkspace.hidden = false;
   el.inkButton.textContent = "返回地图";
+  if (autoSplit) {
+    setInkSplit(true, { anchor });
+  }
 }
 eventBus.on("open-ink-document", ({ documentId }) => {
   if (inkSplit && inkOpen) {
@@ -525,16 +687,26 @@ eventBus.on("open-ink-document", ({ documentId }) => {
     });
     return;
   }
-  showInkWorkspace();
+  const readerWasOpen = !inkOpen && !el.readerHost.hidden && reader.hasContent();
+  const anchor = readerWasOpen ? captureReaderScrollAnchor() : null;
+  closeInkPopover();
+  showInkWorkspace({ enterSplitWithReader: readerWasOpen, anchor });
+  inkPaneFocused = true;
   void inkWorkspace.openDocumentId(documentId);
 });
 
 // N2 context creation (§6.5): one transaction creates the note and its first
-// link; then the note opens on the desktop or with the tablet pairing panel.
+// link; when initiated from an open reader, enter left-source + right-ink split
+// automatically (for both desktop and tablet writing modes).
 setInkContextCreator(async (target, choice, draft) => {
+  const readerWasOpen = !inkOpen && !el.readerHost.hidden && reader.hasContent();
+  const anchor = readerWasOpen ? captureReaderScrollAnchor() : null;
   const receipt = await createInkNoteFromContext(draft, target, choice.role, choice.title);
+  closeInkPopover();
   eventBus.emit("ink-links-changed");
-  showInkWorkspace();
+  eventBus.emit("ink-notes-changed");
+  showInkWorkspace({ enterSplitWithReader: readerWasOpen, anchor });
+  inkPaneFocused = true;
   await inkWorkspace.openDocumentId(receipt.document_id);
   if (choice.mode === "tablet") await inkWorkspace.pairTablet(receipt.document_id);
 });
@@ -548,6 +720,16 @@ setInkSourceCandidateProvider(() => {
 inkViews = connectInkViews({
   applyOverlay: (overlay) => graphController.setInkOverlay(overlay),
   refreshInspector: () => inspectorController.refreshIfUnlocked(),
+});
+eventBus.on("ink-notes-changed", () => void refreshInkCiteTargets());
+eventBus.on("ink-links-changed", () => void refreshInkCiteTargets());
+eventBus.on("markdown-errata-changed", () => {
+  void refreshErrataReviewOverlay();
+  inspectorController.refreshIfUnlocked();
+});
+eventBus.on("errata-reviews-changed", () => {
+  void refreshErrataReviewOverlay();
+  inspectorController.refreshIfUnlocked();
 });
 eventBus.on("open-ink-link-target", ({ link }) => {
   const target = link.target;
@@ -596,6 +778,10 @@ eventBus.on("open-source", (detail) => {
     await reader.open(detail.artifactId, detail.title, {
       focus: detail.focus,
       pdfPageIndex: detail.pdfPageIndex,
+      candidatePages: detail.candidatePages,
+      backlinkNote: detail.backlinkNote,
+      focusExcerpt: detail.focusExcerpt,
+      returnTo: detail.returnTo,
       conversionId: detail.conversionId,
       patch: detail.patchRunId
         ? { runId: detail.patchRunId, mode: detail.patchMode ?? "workflow" }
@@ -636,6 +822,11 @@ async function locateOnMap(domainId: string, current: () => boolean): Promise<bo
   return true;
 }
 
+eventBus.on("locate-domain-object", ({ objectId }) => {
+  const token = ++searchNavigation;
+  void locateOnMap(objectId, () => token === searchNavigation);
+});
+
 // A-PR3: sandbox dialogue cite chips jump to the map. Map Scene Player:
 // live tool events (and replays from process cards) play as map scenes.
 // The dock stays open (sidebar beside the map).
@@ -654,7 +845,14 @@ watchMotion();
 const noNodes: never[] = [];
 sandboxDock.setCiteContext({
   nodes: () => currentSnapshot?.landscape_graph.nodes ?? noNodes,
+  extraTargets: () => activeInkCiteTargets,
   jump: (nodeId) => {
+    if (nodeId.startsWith(INK_NOTE_CITE_PREFIX)) {
+      const documentId = nodeId.slice(INK_NOTE_CITE_PREFIX.length);
+      player.cancel(false);
+      eventBus.emit("open-ink-document", { documentId });
+      return;
+    }
     const token = ++searchNavigation;
     player.cancel(false);
     void (async () => {
@@ -761,22 +959,88 @@ const workspaceSearch = new WorkspaceSearchPanel({
 installWorkspaceSearch(workspaceSearch);
 el.searchButton.addEventListener("click", () => workspaceSearch.open());
 
-// 语义层学习视图（只读）。
-const learningView = new LearningViewPanel(el.shell, {
+// 语义层研读透镜（地图内双轨线性书脊 + 右轨共享语义伴星 + 节点悬浮简报卡）。
+studyHud = new StudyHudController(el.canvasPanel, {
   materialName: (artifactId) => {
     const nodes = currentSnapshot?.landscape_graph.nodes ?? [];
-    const node = nodes.find(item => item.domain_id === artifactId && item.element_kind === "entity")
-      ?? findSourceArtifactNode(nodes.filter(item => item.element_kind === "entity"), artifactId);
+    const node =
+      nodes.find((item) => item.domain_id === artifactId && item.element_kind === "entity") ??
+      findSourceArtifactNode(
+        nodes.filter((item) => item.element_kind === "entity"),
+        artifactId,
+      );
     return node?.label ?? artifactId.replace(/^mathscape:artifact\/sha256\//, "").slice(0, 12);
   },
-  showToast: (msg, kind) => shell.showToast(msg, kind),
-  focusObject: (objectId) => {
-    learningView.close();
-    void locateOnMap(objectId, () => true);
+  hasStagedProposals: () =>
+    Boolean(
+      currentSnapshot?.investigation &&
+        (Object.keys(currentSnapshot.investigation.staged).length > 0 ||
+          currentSnapshot.investigation.conflicts.length > 0),
+    ),
+  getDisplayedGraph: () => graphController.getDisplayedGraph(),
+  getGraphCore: () => graphController.getGraphCore(),
+  onSelectMaterial: (materialId) => {
+    graphController.applyStudyData(
+      studyHud!.getLearningViewData(),
+      materialId,
+      studyHud!.getSignalMode(),
+    );
   },
+  onSelectSignal: (signal) => {
+    graphController.applyStudyData(
+      studyHud!.getLearningViewData(),
+      studyHud!.getSelectedMaterialId(),
+      signal,
+    );
+  },
+  onDataUpdated: (view) => {
+    graphController.applyStudyData(
+      view,
+      studyHud!.getSelectedMaterialId(),
+      studyHud!.getSignalMode(),
+    );
+  },
+  onFocusDomainObject: (domainId) => {
+    graphController.centerDomainObject(domainId);
+    const node = currentSnapshot?.landscape_graph.nodes.find((n) => n.domain_id === domainId);
+    if (node) inspectorController.selectNodeById(node.id);
+  },
+  onSelectProjectionNode: (nodeId) => {
+    selectMapNode(nodeId);
+  },
+  onExitStudy: () => graphController.exitStudyPosture(),
+  showToast: (msg, kind) => shell.showToast(msg, kind),
 });
-el.learningViewButton.addEventListener("click", () => void learningView.open());
-eventBus.on("open-learning-view", () => void learningView.open());
+
+const toggleStudyFromTopbar = () => {
+  void (async () => {
+    const wasActive = graphController.isStudyPostureActive();
+    if (!(await showMap(() => true))) return;
+    if (wasActive) graphController.exitStudyPosture();
+    else graphController.enterStudyPosture();
+  })();
+};
+el.learningViewButton.addEventListener("click", toggleStudyFromTopbar);
+eventBus.on("open-learning-view", toggleStudyFromTopbar);
+
+eventBus.on("open-proposal-for-object", (detail) => {
+  void openProposalReview(sandboxWindowSessionId, sandboxToast, {
+    changeSetId: detail.changeSetId,
+    objectId: detail.objectId,
+    mapLinked: detail.mapLinked ?? true,
+  });
+});
+
+eventBus.on("review-map-scope", (detail) => {
+  if (!detail.active) {
+    graphController.setCustomFocusScope(null, null);
+    return;
+  }
+  graphController.setCustomFocusScope(new Set(detail.nodeIds), new Set(detail.relationIds));
+  if (detail.focusDomainId) {
+    graphController.centerDomainObject(detail.focusDomainId);
+  }
+});
 
 // 帮助菜单 → 只读教程「两本书讲的是不是同一个东西」（不写工作区）。
 const tutorial = new TutorialPlayer(document.body);

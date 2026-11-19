@@ -1,14 +1,17 @@
 //! N2 desktop commands for NoteLinks (proposal §6, §14): Markdown block-range
 //! resolution, context creation, link management and read-only overlays.
 
+use std::collections::HashMap;
+
 use crate::ink_problem_card::{self, InkProblemCard, ProblemCardStatus};
-use mathscape_domain::InkLabDocument;
-use mathscape_orchestrator::PAGE_MARKER_STRUCTURAL_KIND;
+use crate::markdown_errata::to_overlay_entries;
+use mathscape_domain::{AnchoredMarkdown, InkLabDocument};
+use mathscape_orchestrator::{PAGE_MARKER_STRUCTURAL_KIND, render_effective_slice};
 use mathscape_store_sqlite::{
     InkContextCreateReceipt, InkContextCreateRequest, InkLifecycle, InkLinkOverlay, InkLinkReceipt,
     InkLinkRequest, InkLinkRole, InkLinkTarget, InkLinkTargetStatus, InkLinkedNote,
-    InkMarkdownTarget, InkNoteLink, InkSetPrimaryRequest, InkUnlinkRequest, markdown_excerpt,
-    markdown_short_label,
+    InkMarkdownTarget, InkNoteLink, InkSetPrimaryRequest, InkUnlinkRequest, MarkdownBlockErrata,
+    markdown_excerpt, markdown_short_label,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -67,12 +70,96 @@ pub struct LinkInkNoteRequest {
 pub struct InkMarkdownLinks {
     pub artifact_id: String,
     pub links: Vec<InkLinkedNote>,
+    /// Active notes linked to `SourceSemanticUnit`s (`source_object`) anchored inside this Markdown snapshot.
+    pub unit_links: Vec<InkLinkedNote>,
     /// Active notes linked to the original this file was patched from.
     pub original_note_count: u64,
 }
 
 fn invalid(message: impl Into<String>) -> InkCommandError {
     InkCommandError::new("link_target_invalid", message)
+}
+
+struct ProjectedMarkdownLink {
+    start: u64,
+    end: u64,
+    block_ids: Vec<String>,
+    raw_slice: String,
+    effective_source: String,
+    excerpt: String,
+    label: String,
+}
+
+fn project_markdown_link(
+    document: &AnchoredMarkdown,
+    first_block: &str,
+    last_block: &str,
+    active_errata: &[MarkdownBlockErrata],
+) -> Result<ProjectedMarkdownLink, InkCommandError> {
+    let find = |id: &str| document.blocks.iter().position(|block| block.id == id);
+    let (Some(first), Some(last)) = (find(first_block), find(last_block)) else {
+        return Err(invalid("所选段落已不存在，请重新选择。"));
+    };
+    if first > last {
+        return Err(invalid("所选段落顺序无效，请重新选择。"));
+    }
+    let blocks = &document.blocks[first..=last];
+    let Some(lead) = blocks
+        .iter()
+        .find(|block| block.kind != PAGE_MARKER_STRUCTURAL_KIND)
+    else {
+        return Err(invalid("分页提示不能关联手稿。"));
+    };
+    let start = blocks[0].range.start;
+    let end = blocks[blocks.len() - 1].range.end;
+    let raw_slice = document
+        .source
+        .get(start as usize..end as usize)
+        .ok_or_else(|| invalid("所选段落范围无效。"))?;
+    let overlay = to_overlay_entries(active_errata);
+    let effective_source = if overlay.is_empty() {
+        raw_slice.to_owned()
+    } else {
+        render_effective_slice(&document.source, start as usize..end as usize, &overlay)
+            .effective_source
+    };
+    let lead_effective = if lead.kind == "heading" {
+        let lead_start = lead.range.start as usize;
+        let lead_end = lead.range.end as usize;
+        if overlay.is_empty() {
+            document
+                .source
+                .get(lead_start..lead_end)
+                .unwrap_or(raw_slice)
+                .to_owned()
+        } else {
+            render_effective_slice(&document.source, lead_start..lead_end, &overlay)
+                .effective_source
+        }
+    } else {
+        let lead_start = lead.range.start as usize;
+        if overlay.is_empty() {
+            document
+                .source
+                .get(lead_start..end as usize)
+                .unwrap_or(raw_slice)
+                .to_owned()
+        } else {
+            render_effective_slice(&document.source, lead_start..end as usize, &overlay)
+                .effective_source
+        }
+    };
+    let label = markdown_short_label(&lead.kind, &lead_effective);
+    let excerpt = markdown_excerpt(&effective_source);
+    Ok(ProjectedMarkdownLink {
+        start,
+        end,
+        block_ids: blocks.iter().map(|block| block.id.clone()).collect(),
+        raw_slice: raw_slice.to_owned(),
+        effective_source,
+        excerpt,
+        label,
+    })
 }
 
 impl DesktopService {
@@ -89,48 +176,26 @@ impl DesktopService {
         if document.snapshot.content_hash.to_string() != request.content_hash {
             return Err(invalid("Markdown 内容已变化，请重新选择。"));
         }
-        let find = |id: &str| document.blocks.iter().position(|block| block.id == id);
-        let (Some(first), Some(last)) = (find(&request.first_block), find(&request.last_block))
-        else {
-            return Err(invalid("所选段落已不存在，请重新选择。"));
-        };
-        if first > last {
-            return Err(invalid("所选段落顺序无效，请重新选择。"));
-        }
-        let blocks = &document.blocks[first..=last];
-        let Some(lead) = blocks
-            .iter()
-            .find(|block| block.kind != PAGE_MARKER_STRUCTURAL_KIND)
-        else {
-            return Err(invalid("分页提示不能关联手稿。"));
-        };
-        let start = blocks[0].range.start;
-        let end = blocks[blocks.len() - 1].range.end;
-        let text = document
-            .source
-            .get(start as usize..end as usize)
-            .ok_or_else(|| invalid("所选段落范围无效。"))?;
-        let lead_text = document
-            .source
-            .get(lead.range.start as usize..lead.range.end as usize)
-            .unwrap_or(text);
-        let label = if lead.kind == "heading" {
-            markdown_short_label("heading", lead_text)
-        } else {
-            let from_lead = &document.source[lead.range.start as usize..end as usize];
-            markdown_short_label(&lead.kind, from_lead)
-        };
+        let active_errata = self
+            .list_markdown_errata(&request.artifact_id)
+            .unwrap_or_default();
+        let projected = project_markdown_link(
+            &document,
+            &request.first_block,
+            &request.last_block,
+            &active_errata,
+        )?;
         Ok(InkMarkdownTarget {
             artifact_id: request.artifact_id.clone(),
             content_hash: request.content_hash.clone(),
             first_block: request.first_block.clone(),
             last_block: request.last_block.clone(),
-            block_ids: blocks.iter().map(|block| block.id.clone()).collect(),
-            start,
-            end,
-            block_hash: format!("{:x}", Sha256::digest(text.as_bytes())),
-            excerpt: markdown_excerpt(text),
-            label,
+            block_ids: projected.block_ids,
+            start: projected.start,
+            end: projected.end,
+            block_hash: format!("{:x}", Sha256::digest(projected.raw_slice.as_bytes())),
+            excerpt: projected.excerpt,
+            label: projected.label,
         })
     }
 
@@ -263,11 +328,15 @@ impl DesktopService {
                                 Some(live_hash),
                             ));
                         }
-                        let find =
-                            |id: &str| document.blocks.iter().position(|block| block.id == id);
-                        let (Some(first), Some(last)) =
-                            (find(&markdown.first_block), find(&markdown.last_block))
-                        else {
+                        let active_errata = self
+                            .list_markdown_errata(&markdown.artifact_id)
+                            .unwrap_or_default();
+                        let Ok(projected) = project_markdown_link(
+                            &document,
+                            &markdown.first_block,
+                            &markdown.last_block,
+                            &active_errata,
+                        ) else {
                             return Ok(ink_problem_card::finalize_card(
                                 link,
                                 markdown.excerpt.clone(),
@@ -275,24 +344,15 @@ impl DesktopService {
                                 Some(live_hash),
                             ));
                         };
-                        if first > last {
-                            return Ok(ink_problem_card::finalize_card(
-                                link,
-                                markdown.excerpt.clone(),
-                                ProblemCardStatus::Missing,
-                                Some(live_hash),
-                            ));
-                        }
-                        let start = document.blocks[first].range.start as usize;
-                        let end = document.blocks[last].range.end as usize;
-                        let text = document.source.get(start..end).unwrap_or("");
-                        let body = if text.is_empty() {
+                        let body = if projected.effective_source.is_empty() {
                             markdown.excerpt.clone()
                         } else {
-                            ink_problem_card::markdown_body_from_source(text)
+                            ink_problem_card::markdown_body_from_source(&projected.effective_source)
                         };
+                        let mut projected_link = link.clone();
+                        projected_link.target_label = projected.label;
                         Ok(ink_problem_card::finalize_card(
-                            link,
+                            &projected_link,
                             body,
                             ProblemCardStatus::Ok,
                             Some(live_hash),
@@ -399,45 +459,74 @@ impl DesktopService {
             if !seen.insert((artifact.to_owned(), start, end)) {
                 continue;
             }
-            let Ok(id) = StableId::parse(artifact) else {
+            let artifact_str = artifact;
+            let Ok(id) = StableId::parse(artifact_str) else {
                 return unavailable(ProblemCardStatus::Missing);
             };
-            let Some(artifact) = catalog
+            let Some(artifact_record) = catalog
                 .artifacts()
                 .iter()
                 .find(|a| a.entity().header().stable_id() == &id)
             else {
                 return unavailable(ProblemCardStatus::Missing);
             };
-            let artifact = artifact.entity().payload();
-            if artifact.media_type().as_str() != "text/markdown" {
+            let artifact_meta = artifact_record.entity().payload();
+            if artifact_meta.media_type().as_str() != "text/markdown" {
                 return unavailable(ProblemCardStatus::Unsupported);
             }
-            if start >= end || end > artifact.byte_size() {
+            if start >= end || end > artifact_meta.byte_size() {
                 return unavailable(ProblemCardStatus::Missing);
             }
-            // At most 4001 Unicode characters are needed to establish truncation.
-            let length = (end - start)
-                .min(((ink_problem_card::PROBLEM_CARD_BODY_MAX + 1) * 4) as u64)
-                as u32;
-            let Ok(bytes) = pool.read_bytes(&id, start, length) else {
-                return unavailable(ProblemCardStatus::Missing);
-            };
-            if bytes.len() != length as usize {
-                return unavailable(ProblemCardStatus::Missing);
-            }
-            let source = match std::str::from_utf8(&bytes) {
-                Ok(source) => source,
-                Err(error) if error.error_len().is_none() && u64::from(length) < end - start => {
-                    std::str::from_utf8(&bytes[..error.valid_up_to()]).map_err(fail)?
+            let active_errata = store
+                .list_active_markdown_errata(artifact_str)
+                .unwrap_or_default();
+            let has_overlapping_errata = active_errata
+                .iter()
+                .any(|entry| entry.base_byte_start < end && entry.base_byte_end > start);
+            let effective_owned: String;
+            let source: &str = if has_overlapping_errata
+                && artifact_meta.byte_size() <= mathscape_orchestrator::MAX_MARKDOWN_BYTES as u64
+            {
+                let Ok(full_bytes) = pool.read_bytes(&id, 0, artifact_meta.byte_size() as u32)
+                else {
+                    return unavailable(ProblemCardStatus::Missing);
+                };
+                let Ok(full_source) = std::str::from_utf8(&full_bytes) else {
+                    return unavailable(ProblemCardStatus::Missing);
+                };
+                let overlay = to_overlay_entries(&active_errata);
+                effective_owned =
+                    render_effective_slice(full_source, start as usize..end as usize, &overlay)
+                        .effective_source;
+                effective_owned.as_str()
+            } else {
+                // At most 4001 Unicode characters are needed to establish truncation.
+                let length = (end - start)
+                    .min(((ink_problem_card::PROBLEM_CARD_BODY_MAX + 1) * 4) as u64)
+                    as u32;
+                let Ok(bytes) = pool.read_bytes(&id, start, length) else {
+                    return unavailable(ProblemCardStatus::Missing);
+                };
+                if bytes.len() != length as usize {
+                    return unavailable(ProblemCardStatus::Missing);
                 }
-                Err(_) => return unavailable(ProblemCardStatus::Missing),
+                let raw = match std::str::from_utf8(&bytes) {
+                    Ok(source) => source,
+                    Err(error)
+                        if error.error_len().is_none() && u64::from(length) < end - start =>
+                    {
+                        std::str::from_utf8(&bytes[..error.valid_up_to()]).map_err(fail)?
+                    }
+                    Err(_) => return unavailable(ProblemCardStatus::Missing),
+                };
+                effective_owned = raw.to_owned();
+                effective_owned.as_str()
             };
             let text = ink_problem_card::markdown_body_from_source(source);
             if !text.is_empty() {
                 chars += text.chars().count() + if parts.is_empty() { 0 } else { 2 };
                 parts.push(text);
-                hashes.insert(artifact.content_hash().to_string());
+                hashes.insert(artifact_meta.content_hash().to_string());
             }
         }
         if parts.is_empty() {
@@ -460,9 +549,45 @@ impl DesktopService {
         &self,
         document_id: String,
     ) -> Result<Vec<InkNoteLink>, InkCommandError> {
-        self.link_store()?
-            .ink_note_links(&document_id)
-            .map_err(fail)
+        let store = self.link_store()?;
+        let mut links = store.ink_note_links(&document_id).map_err(fail)?;
+        let mut errata_cache: HashMap<String, Vec<MarkdownBlockErrata>> = HashMap::new();
+        let mut doc_cache: HashMap<String, Option<AnchoredMarkdown>> = HashMap::new();
+        for link in &mut links {
+            if link.target_status != InkLinkTargetStatus::Active {
+                continue;
+            }
+            let InkLinkTarget::Markdown(ref mut md) = link.target else {
+                continue;
+            };
+            let active_errata = errata_cache
+                .entry(md.artifact_id.clone())
+                .or_insert_with(|| {
+                    store
+                        .list_active_markdown_errata(&md.artifact_id)
+                        .unwrap_or_default()
+                });
+            if active_errata.is_empty() {
+                continue;
+            }
+            let doc_opt = doc_cache
+                .entry(md.artifact_id.clone())
+                .or_insert_with(|| self.markdown_for_link(&md.artifact_id).ok());
+            let Some(document) = doc_opt.as_ref() else {
+                continue;
+            };
+            if document.snapshot.content_hash.to_string() != md.content_hash {
+                continue;
+            }
+            if let Ok(projected) =
+                project_markdown_link(document, &md.first_block, &md.last_block, active_errata)
+            {
+                md.excerpt = projected.excerpt;
+                md.label = projected.label.clone();
+                link.target_label = projected.label;
+            }
+        }
+        Ok(links)
     }
 
     pub fn list_ink_links_to_target(
@@ -486,11 +611,22 @@ impl DesktopService {
         artifact_id: String,
     ) -> Result<InkMarkdownLinks, InkCommandError> {
         let store = self.link_store()?;
+        let links = store
+            .ink_links_to_target("markdown", &artifact_id)
+            .map_err(fail)?;
+        let original_note_count = store.ink_markdown_patch_hint(&artifact_id).map_err(fail)?;
+        let mut unit_links = Vec::new();
+        if let Ok(markers) = self.markdown_unit_markers(std::slice::from_ref(&artifact_id)) {
+            for marker in markers {
+                if let Ok(found) = store.ink_links_to_target("source_object", &marker.unit_id) {
+                    unit_links.extend(found);
+                }
+            }
+        }
         Ok(InkMarkdownLinks {
-            links: store
-                .ink_links_to_target("markdown", &artifact_id)
-                .map_err(fail)?,
-            original_note_count: store.ink_markdown_patch_hint(&artifact_id).map_err(fail)?,
+            links,
+            unit_links,
+            original_note_count,
             artifact_id,
         })
     }

@@ -105,9 +105,12 @@ interface MarkdownPatchPreviewView {
 
 interface MarkdownPatchReceiptView {
   status: string;
+  base_artifact_id?: string;
   patched_artifact_id: string | null;
   conversion_id: string | null;
   safety: MarkdownPatchSafetyView;
+  /** Present when the approval was persisted as Markdown errata (no new artifact). */
+  applied_errata_ids?: string[];
 }
 
 function textElement<K extends keyof HTMLElementTagNameMap>(
@@ -164,7 +167,11 @@ export class MarkdownSelection {
   private current = -1;
   private first = -1;
   private last = -1;
+  private shiftAnchor = -1;
+  private selectedViaShift = false;
   private whole = false;
+  private drawerOpen = true;
+  private userToggledDrawer = false;
   private version = 0;
   private disposed = false;
   private pending = false;
@@ -180,6 +187,8 @@ export class MarkdownSelection {
   private discoveryResult = document.createElement("section");
   // Survives selection changes: a paused run is not tied to the current range.
   private patchReviewHost = document.createElement("section");
+  private discoveryDrawer = document.createElement("div");
+  private drawerToggle!: HTMLButtonElement;
   private policy = document.createElement("select");
   private policyTouched = false;
   private askEachRun = false;
@@ -192,6 +201,9 @@ export class MarkdownSelection {
   private indexes: Map<string, number>;
   private unsubscribeSettings?: () => void;
   private handwriteButton?: HTMLButtonElement;
+  private openPdfButton?: HTMLButtonElement;
+  private onSelectionChange?: () => void;
+  private onEditErrata?: (range: { first: number; last: number }) => void;
 
   constructor(
     private data: AnchoredMarkdown,
@@ -199,39 +211,93 @@ export class MarkdownSelection {
     patch?: { runId: string; mode: PatchReviewMode },
     /** N2 "手写这段": same target rule and request as the right-click menu. */
     private readonly handwrite?: (range: { first: number; last: number }, anchor: HTMLElement) => void,
+    private readonly openPdf?: (range: { first: number; last: number }) => void,
+    private readonly fallbackPdfRange?: { first: number; last: number } | null,
   ) {
     this.indexes = new Map(data.blocks.map((b, i) => [b.id, i]));
     this.panel.className = "selection-panel";
     this.panel.setAttribute("aria-label", "来源发现选区");
-    const instructions = document.createElement("p");
-    instructions.textContent = "点击正文块，再设置起点和终点；列表、表格和公式按整块选择。可先检查发现输入，再调用 LLM；有效提案也不会在此处直接入图。";
-    const controls = document.createElement("div"); controls.className = "reader-controls";
-    const button = (text: string, run: () => void): HTMLButtonElement => {
-      const b = document.createElement("button"); b.type = "button"; b.textContent = text;
-      b.onclick = run; controls.append(b); return b;
+
+    const primaryBar = document.createElement("div");
+    primaryBar.className = "selection-primary-bar";
+    const primaryActions = document.createElement("div");
+    primaryActions.className = "selection-primary-actions";
+
+    this.discoveryDrawer.className = "selection-discovery-drawer reader-controls";
+    const addButton = (host: HTMLElement, text: string, run: () => void, className = ""): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = text;
+      if (className) b.className = className;
+      b.onclick = run;
+      host.append(b);
+      return b;
     };
-    this.startButton = button("设置起点", () => { this.first = this.current; this.whole = false; this.changed(); });
-    this.endButton = button("设置终点", () => { this.last = this.current; this.whole = false; this.changed(); });
-    button("选择全文", () => { this.whole = true; this.first = 0; this.last = data.blocks.length - 1; this.changed(); });
-    button("清除选择", () => { this.current = this.first = this.last = -1; this.whole = false; this.changed(); });
+
+    this.startButton = addButton(this.discoveryDrawer, "设置起点", () => {
+      this.first = this.current;
+      this.shiftAnchor = this.current;
+      this.selectedViaShift = false;
+      this.whole = false;
+      this.changed();
+    });
+    this.endButton = addButton(this.discoveryDrawer, "设置终点", () => {
+      this.last = this.current;
+      this.selectedViaShift = false;
+      this.whole = false;
+      this.changed();
+    });
+    addButton(this.discoveryDrawer, "选择全文", () => {
+      this.whole = true;
+      this.selectedViaShift = false;
+      this.first = 0;
+      this.last = data.blocks.length - 1;
+      this.changed();
+    });
+    addButton(this.discoveryDrawer, "清除选择", () => this.clearSelection());
     this.policy.setAttribute("aria-label", "后续入图方式");
     this.policy.add(new Option("本次运行：请选择审核方式", ""));
     this.policy.add(new Option("后续：审核后入图", "review_before_publish"));
     this.policy.add(new Option("后续：自动加入候选图（未人工审核）", "automatic_candidate"));
     this.policy.value = "review_before_publish";
     this.policy.onchange = () => { this.policyTouched = true; this.changed(); };
-    controls.append(this.policyLabel);
-    button("修改设置", () => eventBus.emit("open-settings"));
-    this.validate = button("构建发现输入", () => void this.resolve());
-    this.discover = button("使用 LLM 发现内容", () => void this.runDiscovery());
+    this.policyLabel.className = "selection-policy-label";
+    this.discoveryDrawer.append(this.policyLabel);
+    addButton(this.discoveryDrawer, "修改设置", () => eventBus.emit("open-settings"));
+    this.validate = addButton(this.discoveryDrawer, "构建发现输入", () => void this.resolve());
+    this.discover = addButton(this.discoveryDrawer, "使用 LLM 发现内容", () => void this.runDiscovery());
+
     if (handwrite) {
-      this.handwriteButton = button("手写这段", () => {
+      this.handwriteButton = addButton(primaryActions, "手写这段", () => {
         const range = this.targetRange();
         if (range) handwrite(range, this.handwriteButton!);
-      });
+      }, "selection-handwrite-btn");
       this.handwriteButton.title = "为所选段落新建关联手稿；没有完整选区时使用当前块";
     }
+    if (openPdf) {
+      this.openPdfButton = addButton(primaryActions, "定位 PDF 原页", () => {
+        const range = this.targetRange() ?? this.fallbackPdfRange ?? null;
+        if (range) openPdf(range);
+      });
+      this.openPdfButton.title = "打开所选段落（没有选区时使用当前点击块或定位块）对应的原始 PDF 页";
+    }
+    this.drawerToggle = addButton(primaryActions, "收起工具 ▴", () => {
+      this.userToggledDrawer = true;
+      this.drawerOpen = !this.drawerOpen;
+      this.applyDrawerState();
+    }, "selection-drawer-toggle");
+    this.drawerToggle.title = "展开或收起选区端点与 LLM 内容发现工具";
+
+    const helpBadge = textElement("span", "selection-help-badge", "?");
+    helpBadge.tabIndex = 0;
+    helpBadge.setAttribute("aria-label", "选块与发现操作说明");
+    helpBadge.title = "单击正文块选中单块，按住 Shift 单击另一块可快速连选区间；列表、表格和公式按整块选择。也可展开工具栏手动设置起点/终点或调用 LLM 发现内容（提案经审核后才会入图）。";
+    primaryActions.append(helpBadge);
+
+    this.status.className = "selection-status-text";
     this.status.setAttribute("role", "status");
+    primaryBar.append(this.status, primaryActions);
+
     this.discoveryStatus.setAttribute("aria-live", "polite");
     this.discoveryStatus.className = "discovery-status";
     this.result.className = "selection-source";
@@ -241,9 +307,8 @@ export class MarkdownSelection {
     this.patchReviewHost.className = "markdown-patch-host";
     this.patchReviewHost.hidden = true;
     this.panel.append(
-      instructions,
-      controls,
-      this.status,
+      primaryBar,
+      this.discoveryDrawer,
       this.discoveryStatus,
       this.result,
       this.patchReviewHost,
@@ -251,12 +316,14 @@ export class MarkdownSelection {
     );
     article.addEventListener("click", this.onClick);
     article.addEventListener("keydown", this.onKey);
+    window.addEventListener("resize", this.onWindowResize);
     this.unsubscribeSettings = eventBus.on("workspace-settings-changed", (settings) => {
       this.onWorkspaceSettings(new CustomEvent(WORKSPACE_SETTINGS_CHANGED, { detail: settings }));
     });
     this.discoveryTimer = window.setInterval(() => void this.syncActiveDiscovery(), 1200);
     void this.syncActiveDiscovery();
     void this.loadWorkspacePolicy();
+    this.syncDrawerForEnvironment();
     this.refresh();
     if (patch?.mode === "manual") void this.openSidecarPatchReview(patch.runId);
     else if (patch) void this.openWorkflowPatchReview(patch.runId);
@@ -366,23 +433,120 @@ export class MarkdownSelection {
     }
   }
 
+  setOnSelectionChange(listener: (() => void) | undefined): void {
+    this.onSelectionChange = listener;
+  }
+
+  setOnEditErrata(listener: ((range: { first: number; last: number }) => void) | undefined): void {
+    this.onEditErrata = listener;
+  }
+
+  isWholeSelection(): boolean {
+    return this.whole;
+  }
+
+  clearSelection(): void {
+    this.current = this.first = this.last = this.shiftAnchor = -1;
+    this.selectedViaShift = false;
+    this.whole = false;
+    this.changed();
+  }
+
+  private inSplitReader(): boolean {
+    return Boolean(this.panel.closest("#ink-split-reader"));
+  }
+
+  private syncDrawerForEnvironment(): void {
+    if (this.activeDiscovery !== null || !this.result.hidden) {
+      this.drawerOpen = true;
+    } else if (!this.userToggledDrawer) {
+      this.drawerOpen = !this.inSplitReader();
+    }
+    this.applyDrawerState();
+  }
+
+  private applyDrawerState(): void {
+    this.discoveryDrawer.hidden = !this.drawerOpen;
+    this.drawerToggle.setAttribute("aria-expanded", String(this.drawerOpen));
+    this.drawerToggle.textContent = this.drawerOpen ? "收起工具 ▴" : "选区与发现 ▾";
+  }
+
+  private onWindowResize = (): void => {
+    if (!this.disposed) this.syncDrawerForEnvironment();
+  };
+
   dispose(): void {
     this.disposed = true; this.version++;
     this.article.removeEventListener("click", this.onClick);
     this.article.removeEventListener("keydown", this.onKey);
+    window.removeEventListener("resize", this.onWindowResize);
     this.unsubscribeSettings?.();
     window.clearInterval(this.discoveryTimer);
     this.panel.remove();
   }
 
   private onClick = (event: Event): void => {
-    const block = (event.target as Element).closest<HTMLElement>("[data-source-block]");
+    const target = event.target as Element | null;
+    if (!target || target.closest(".block-action-pill, .ink-block-marker, .page-marker-jump, .unit-map-badge-row, .errata-block-badge, .errata-inline-editor, .errata-diff-popover")) return;
+    const block = target.closest<HTMLElement>("[data-source-block]");
     if (!block || !this.article.contains(block)) return;
-    this.current = this.indexes.get(block.dataset.sourceBlock ?? "") ?? -1;
+    const index = this.indexes.get(block.dataset.sourceBlock ?? "") ?? -1;
+    if (index < 0) return;
+
+    const isShift = event instanceof MouseEvent && event.shiftKey;
+    if (isShift && this.data.blocks[index]?.kind !== "page_marker") {
+      window.getSelection()?.removeAllRanges();
+      const rawAnchor = this.shiftAnchor >= 0
+        ? this.shiftAnchor
+        : this.first >= 0
+          ? this.first
+          : this.current >= 0
+            ? this.current
+            : index;
+      const anchor = this.data.blocks[rawAnchor]?.kind === "page_marker" ? index : rawAnchor;
+      this.shiftAnchor = anchor;
+      this.current = index;
+      this.first = Math.min(anchor, index);
+      this.last = Math.max(anchor, index);
+      this.whole = false;
+      this.selectedViaShift = true;
+      this.changed();
+      return;
+    }
+
+    this.current = index;
+    if (this.data.blocks[index]?.kind !== "page_marker") {
+      this.shiftAnchor = index;
+    }
+    if (this.selectedViaShift) {
+      this.first = -1;
+      this.last = -1;
+      this.whole = false;
+      this.selectedViaShift = false;
+      this.changed();
+      return;
+    }
     this.refresh();
   };
   private onKey = (event: KeyboardEvent): void => {
-    if ((event.key === "Enter" || event.key === " ") && (event.target as HTMLElement).hasAttribute("data-source-block")) {
+    const target = event.target as HTMLElement | null;
+    if (target && (target.closest(".errata-inline-editor, .errata-diff-popover") || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable)) {
+      return;
+    }
+    if (event.key === "Escape" && !event.defaultPrevented && (this.current >= 0 || this.first >= 0 || this.last >= 0)) {
+      event.preventDefault();
+      this.clearSelection();
+      return;
+    }
+    if ((event.key === "e" || event.key === "E") && !event.ctrlKey && !event.metaKey && !event.altKey && this.onEditErrata) {
+      const range = this.targetRange();
+      if (range && !this.whole) {
+        event.preventDefault();
+        this.onEditErrata(range);
+        return;
+      }
+    }
+    if ((event.key === "Enter" || event.key === " ") && target?.hasAttribute("data-source-block")) {
       event.preventDefault(); this.onClick(event);
     }
   };
@@ -442,9 +606,17 @@ export class MarkdownSelection {
     return blocks.some(block => block.kind !== "page_marker") ? range : null;
   }
 
+  notifyFeedback(message: string): void {
+    this.feedback = message;
+    this.refresh();
+  }
+
   refresh(): void {
     const valid = this.first >= 0 && this.last >= this.first && this.data.blocks.length > 0;
     if (this.handwriteButton) this.handwriteButton.disabled = this.targetRange() === null;
+    if (this.openPdfButton) {
+      this.openPdfButton.disabled = (this.targetRange() ?? this.fallbackPdfRange ?? null) === null;
+    }
     const admissionSelected = this.policy.value === "review_before_publish"
       || this.policy.value === "automatic_candidate";
     this.validate.disabled = !valid || !admissionSelected || this.pending;
@@ -460,10 +632,16 @@ export class MarkdownSelection {
       ? admissionSelected
         ? `已选择${this.whole ? "全文" : `第 ${this.first + 1}～${this.last + 1} 块`}，尚未构建发现输入。`
         : "已选择原文范围；请为本次运行选择审核方式。"
-      : this.first >= 0 && this.last >= 0 ? "终点必须位于起点之后，请重新设置。" : "尚未选择完整范围。");
+      : this.first >= 0 && this.last >= 0
+        ? "终点必须位于起点之后，请重新设置。"
+        : this.current >= 0
+          ? `当前定位第 ${this.current + 1} 块（按住 Shift 点击另一块可连选区间，尚未选择完整发现范围）。`
+          : "尚未选择完整范围（单击选块，Shift+单击可快速连选多块）。");
     this.discoveryStatus.textContent = this.activeDiscovery !== null
       ? this.activeDiscoveryText(this.activeDiscovery)
       : this.discoveryFeedback ?? "";
+    this.syncDrawerForEnvironment();
+    this.onSelectionChange?.();
   }
 
   private activeDiscoveryText(task: ActiveDiscoveryTask): string {
@@ -765,18 +943,33 @@ export class MarkdownSelection {
         });
         section.classList.add("is-finished");
         acceptButton.disabled = rejectButton.disabled = true;
-        // A map refresh closes this reader; the workflow path refreshes the
-        // map when it reopens the reader on the patched artifact.
-        if (receipt.status === "applied" && !workflow) eventBus.emit("source-map-changed");
+        const errataIds = receipt.applied_errata_ids ?? [];
+        const asErrata = receipt.status === "applied"
+          && (errataIds.length > 0 || receipt.patched_artifact_id === receipt.base_artifact_id);
+        if (asErrata && errataIds.length > 0) {
+          // The canonical reader, ink cards and map review badges reload the
+          // effective text; the physical snapshot itself is unchanged.
+          eventBus.emit("markdown-errata-changed", {
+            artifactId: receipt.base_artifact_id ?? this.data.snapshot.artifact_id,
+            errataId: errataIds[0],
+            action: "discovery_patch",
+            affectedUnitIds: [],
+          });
+        }
+        // Legacy promotion only: a map refresh closes this reader.
+        if (receipt.status === "applied" && !asErrata && !workflow) eventBus.emit("source-map-changed");
+        const appliedText = asErrata
+          ? `修订已作为 ${errataIds.length} 条勘误写入规范解析正文（原文快照不变）`
+          : `修订已写入新 Markdown：${receipt.patched_artifact_id ?? ""}`;
         if (workflow) {
           status.textContent = receipt.status === "applied"
-            ? `修订已写入新 Markdown：${receipt.patched_artifact_id ?? ""}；正在继续内容发现…`
+            ? `${appliedText}；正在继续内容发现…`
             : "修订已拒绝，原 Markdown 保持不变；正在继续内容发现…";
           void this.resumeAfterPatch(review.run_id, status);
           return;
         }
         status.textContent = receipt.status === "applied"
-          ? `修订已应用：${receipt.patched_artifact_id ?? "新 Markdown"}；请基于新材料重新运行来源发现。`
+          ? (asErrata ? `${appliedText}。` : `修订已应用：${receipt.patched_artifact_id ?? "新 Markdown"}；请基于新材料重新运行来源发现。`)
           : "修订已拒绝，原 Markdown 保持不变。";
       } catch (error) {
         status.textContent = `提交失败：${String(error)}`;

@@ -149,14 +149,15 @@ fn seed_object(
     kind: &str,
     payload: serde_json::Value,
 ) {
+    let rev = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
     connection.execute(
-        "INSERT INTO map_objects(object_id,object_shape,entity_kind,current_revision) VALUES(?1,'entity',?2,'card-rev')",
-        rusqlite::params![id, kind],
+        "INSERT INTO map_objects(object_id,object_shape,entity_kind,current_revision) VALUES(?1,'entity',?2,?3)",
+        rusqlite::params![id, kind, rev],
     ).unwrap();
     connection.execute(
         "INSERT INTO map_object_revisions(object_id,revision_id,schema_version,lifecycle,created_at,created_by,generation_run,payload_json)
-         VALUES(?1,'card-rev','1','active','2026-10-20T00:00:00Z','test',NULL,?2)",
-        rusqlite::params![id, payload.to_string()],
+         VALUES(?1,?2,'1','active','2026-10-20T00:00:00Z','test',NULL,?3)",
+        rusqlite::params![id, rev, payload.to_string()],
     ).unwrap();
 }
 
@@ -516,4 +517,181 @@ fn problem_card_bounds_long_utf8_source_without_losing_its_body() {
     assert!(card.body.chars().count() <= 4000);
     assert!(card.body.starts_with("# 长题目"));
     assert!(!card.body.contains('\u{fffd}'));
+}
+
+#[test]
+fn markdown_errata_updates_ink_links_problem_cards_and_source_detail_reviews() {
+    let fixture = Fixture::new("errata-mod2-sync");
+    let (_, blocks) = fixture.blocks();
+    let theorem_idx = blocks
+        .iter()
+        .position(|(_, kind)| kind != "page_marker" && kind != "heading")
+        .unwrap();
+    let theorem_block_id = blocks[theorem_idx].0.clone();
+
+    // 1. Create a Markdown-linked note on the theorem block.
+    let md_req = fixture.context(
+        "errata-md-note",
+        "errata-md-doc",
+        fixture.target(theorem_idx, theorem_idx),
+    );
+    fixture
+        .service
+        .create_ink_note_from_context(md_req)
+        .unwrap();
+
+    // 2. Create a SourceSemanticUnit covering the theorem block and link a second note to it.
+    let first = SOURCE.find("**定理").unwrap();
+    let first_end = SOURCE[first..].find("\n\n").unwrap() + first;
+    let unit_id = fixture.source_unit("errata-unit", &[(first, first_end)]);
+    let mut unit_req = fixture.context(
+        "errata-unit-note",
+        "errata-unit-doc",
+        fixture.target(theorem_idx, theorem_idx),
+    );
+    unit_req.target = InkLinkTargetRequest::SourceObject {
+        object_id: unit_id.clone(),
+    };
+    fixture
+        .service
+        .create_ink_note_from_context(unit_req)
+        .unwrap();
+
+    // Baseline: no unreviewed errata units yet.
+    assert!(
+        fixture
+            .service
+            .list_unreviewed_errata_units()
+            .unwrap()
+            .is_empty()
+    );
+
+    // 3. Apply a manual errata correcting the theorem statement.
+    let saved = fixture
+        .service
+        .save_markdown_errata(mathscape_desktop::SaveMarkdownErrataRequest {
+            artifact_id: fixture.artifact.clone(),
+            base_content_hash: None,
+            first_block_id: theorem_block_id.clone(),
+            last_block_id: theorem_block_id,
+            corrected_text: "**定理 3.2（已人工校对）** 设 $f$ 一致连续且满足 $C_n^r + C_n^{r+1} = C_{n+1}^{r+1}$。".into(),
+            note: Some("核对原书修正".into()),
+            verified_pdf_page: Some(1),
+        })
+        .unwrap();
+    assert!(saved.affected_unit_ids.contains(&unit_id));
+
+    // 4. Markdown-linked note: both list_ink_note_links chip label/excerpt and ProblemCard sync!
+    let links = fixture
+        .service
+        .list_ink_note_links("errata-md-doc".into())
+        .unwrap();
+    assert_eq!(links.len(), 1);
+    assert!(
+        links[0].target_label.contains("已人工校对")
+            || matches!(
+                &links[0].target,
+                mathscape_store_sqlite::InkLinkTarget::Markdown(m) if m.excerpt.contains("一致连续")
+            ),
+        "expected projected link label/excerpt, got {:?}",
+        links[0]
+    );
+    let md_card = fixture
+        .service
+        .ink_problem_card("errata-md-doc")
+        .unwrap()
+        .unwrap();
+    assert!(md_card.body.contains("一致连续"), "body={}", md_card.body);
+    assert!(
+        md_card.body.contains("C_{n+1}^{r+1}"),
+        "body={}",
+        md_card.body
+    );
+
+    // 5. SourceSemanticUnit-linked note: ProblemCard also reflects the errata!
+    let unit_card = fixture
+        .service
+        .ink_problem_card("errata-unit-doc")
+        .unwrap()
+        .unwrap();
+    assert!(
+        unit_card.body.contains("一致连续"),
+        "unit_card={}",
+        unit_card.body
+    );
+
+    // 6. Inspector SourceNodeDetail returns effective excerpt + unreviewed errata review.
+    let detail = fixture.service.source_node_detail(&unit_id).unwrap();
+    assert!(
+        detail.excerpt.as_deref().unwrap_or("").contains("一致连续"),
+        "excerpt={:?}",
+        detail.excerpt
+    );
+    let review = detail.errata_review.expect("expected errata_review");
+    assert_eq!(review.items.len(), 1);
+    assert_eq!(review.items[0].errata_id, saved.errata.errata_id);
+    assert!(!review.items[0].sent_to_sandbox);
+
+    // Unreviewed map badge index includes this unit.
+    let unreviewed = fixture.service.list_unreviewed_errata_units().unwrap();
+    assert_eq!(unreviewed.get(&unit_id), Some(&1));
+
+    // 7. Marking `sent_to_sandbox` preserves badge but sets `sent_to_sandbox = true`.
+    fixture
+        .service
+        .mark_errata_unit_reviewed(
+            &unit_id,
+            std::slice::from_ref(&saved.errata.errata_id),
+            "sent_to_sandbox",
+        )
+        .unwrap();
+    let after_send = fixture.service.source_node_detail(&unit_id).unwrap();
+    assert!(after_send.errata_review.unwrap().items[0].sent_to_sandbox);
+    assert_eq!(
+        fixture
+            .service
+            .list_unreviewed_errata_units()
+            .unwrap()
+            .get(&unit_id),
+        Some(&1)
+    );
+
+    // 8. Marking `acknowledged` clears both Inspector review card and map badge.
+    fixture
+        .service
+        .mark_errata_unit_reviewed(
+            &unit_id,
+            std::slice::from_ref(&saved.errata.errata_id),
+            "acknowledged",
+        )
+        .unwrap();
+    let after_ack = fixture.service.source_node_detail(&unit_id).unwrap();
+    assert!(after_ack.errata_review.is_none());
+    assert!(
+        fixture
+            .service
+            .list_unreviewed_errata_units()
+            .unwrap()
+            .is_empty()
+    );
+
+    // 9. Reverting errata restores original ProblemCard and Inspector excerpt.
+    fixture
+        .service
+        .revert_markdown_errata(&saved.errata.errata_id)
+        .unwrap();
+    let reverted_card = fixture
+        .service
+        .ink_problem_card("errata-md-doc")
+        .unwrap()
+        .unwrap();
+    assert!(!reverted_card.body.contains("一致连续"));
+    let reverted_detail = fixture.service.source_node_detail(&unit_id).unwrap();
+    assert!(
+        !reverted_detail
+            .excerpt
+            .as_deref()
+            .unwrap_or("")
+            .contains("一致连续")
+    );
 }

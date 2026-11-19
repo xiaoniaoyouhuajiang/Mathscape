@@ -7,7 +7,7 @@ export class PadTransportError extends Error { constructor(readonly code:string,
 /** N1 note metadata; older desktops omit it and the document title is used. */
 export interface PadNote { document_id:string;title:string;title_mode:"auto"|"manual";title_revision:number;lifecycle:"active"|"trashed";lifecycle_revision:number }
 export const TRASHED_REASON="document_trashed";
-export interface PadContext { type:"session_context";protocol_version:string;lease:PadLease;note?:PadNote;document:InkDocument;head_seq:number;limits:{operation_bytes:number;document_bytes:number;queue_bytes:number};problem_card?:PadProblemCard|null }
+export interface PadContext { type:"session_context";protocol_version:string;lease:PadLease;note?:PadNote;document:InkDocument;head_seq:number;limits:{operation_bytes:number;document_bytes:number;queue_bytes:number};problem_card?:PadProblemCard|null;standby_token?:string }
 /** N3a: desktop push-switch offer. */
 export interface PadSwitchOffer { type:"switch_offer";offer_id:string;document_id:string;title:string;pairing_token:string;expires_at:number;requires_takeover:boolean;message:string }
 /** N3b: primary-link excerpt. Markdown is rendered locally with the shared math renderer. */
@@ -145,4 +145,97 @@ export class InkPadTransport {
   }
   async snapshot(id:string,head:number):Promise<Record<string,unknown>> {return this.request(id,{type:"snapshot_request",request_id:id,expected_head:head});}
   close():void {this.closed=true;this.ready=false;if(this.retry)clearTimeout(this.retry);if(this.heartbeat)clearInterval(this.heartbeat);for(const task of this.pending.values()){clearTimeout(task.timer);task.reject(new PadTransportError("offline","连接已关闭，原操作保留在本机。"));}this.pending.clear();this.socket?.close();}
+}
+
+export interface StandbyCredentials { standby_token?:string; credential?:string }
+
+/** Read-only push-ready standby WebSocket for paired tablets without an active note lease. */
+export class InkPadStandbyTransport {
+  private socket:WebSocket|undefined;
+  private ready=false;
+  private closed=false;
+  private connecting=false;
+  private retry:ReturnType<typeof setTimeout>|undefined;
+  private heartbeat:ReturnType<typeof setInterval>|undefined;
+  private attempts=0;
+  private readonly clientId=tabClientId();
+  constructor(
+    private readonly auth:()=>Promise<StandbyCredentials|undefined>,
+    private readonly onState:(state:"connecting"|"ready"|"offline"|"revoked",standbyToken?:string)=>void,
+    private readonly onSwitchOffer:(offer:PadSwitchOffer)=>void,
+  ) {}
+  isReady():boolean{return this.ready;}
+  connect():void {
+    if(this.closed||this.connecting||this.socket?.readyState===WebSocket.OPEN||this.socket?.readyState===WebSocket.CONNECTING)return;
+    if(this.retry){clearTimeout(this.retry);this.retry=undefined;}
+    this.connecting=true;
+    void this.openSocket();
+  }
+  private async openSocket():Promise<void> {
+    try{
+      const creds=await this.auth();
+      if(this.closed||(!creds?.standby_token&&!creds?.credential)){this.connecting=false;return;}
+      const url=new URL("/api/ws",location.href);url.protocol="wss:";
+      this.onState("connecting");
+      const socket=new WebSocket(url);this.socket=socket;this.connecting=false;
+      socket.onopen=()=>socket.send(JSON.stringify({
+        type:"hello_standby",
+        protocol_version:INK_LAN_PROTOCOL,
+        client_id:this.clientId,
+        standby_token:creds.standby_token??null,
+        credential:creds.credential??null,
+      }));
+      socket.onmessage=event=>this.receive(socket,event.data);
+      socket.onerror=()=>{ /* close reports offline and schedules reconnect. */ };
+      socket.onclose=()=>{
+        if(this.socket!==socket)return;
+        this.socket=undefined;this.ready=false;if(this.heartbeat){clearInterval(this.heartbeat);this.heartbeat=undefined;}
+        if(!this.closed){
+          this.onState("offline");
+          this.retry=setTimeout(()=>this.connect(),Math.min(15000,1000*2**Math.min(this.attempts++,4)));
+        }
+      };
+    }catch{
+      this.connecting=false;
+    }
+  }
+  private receive(socket:WebSocket,input:unknown):void {
+    if(this.socket!==socket||typeof input!=="string")return;
+    let message:Record<string,unknown>;
+    try{message=JSON.parse(input);}catch{return;}
+    if(message.type==="standby_ready"){
+      if(message.protocol_version!==INK_LAN_PROTOCOL){this.stopRevoked();return;}
+      this.ready=true;this.attempts=0;
+      const token=typeof message.standby_token==="string"?message.standby_token:undefined;
+      this.onState("ready",token);
+      if(this.heartbeat)clearInterval(this.heartbeat);
+      this.heartbeat=setInterval(()=>{if(this.ready&&this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify({type:"ping"}));},20000);
+      return;
+    }
+    if(message.type==="switch_offer"){this.onSwitchOffer(message as unknown as PadSwitchOffer);return;}
+    if(message.type==="operation_conflict"){
+      const code=String(message.code??"");
+      if(["writer_revoked","authentication_failed","protocol_mismatch"].includes(code))this.stopRevoked();
+      return;
+    }
+    if(message.type==="session_closed"){
+      const code=String(message.code??"");
+      if(code==="writer_revoked")this.stopRevoked();
+      else if(code==="connection_replaced")this.close();
+      else socket.close();
+    }
+  }
+  private stopRevoked():void {
+    this.closed=true;this.ready=false;
+    if(this.retry){clearTimeout(this.retry);this.retry=undefined;}
+    if(this.heartbeat){clearInterval(this.heartbeat);this.heartbeat=undefined;}
+    this.onState("revoked");
+    this.socket?.close();
+  }
+  close():void {
+    this.closed=true;this.ready=false;this.connecting=false;
+    if(this.retry){clearTimeout(this.retry);this.retry=undefined;}
+    if(this.heartbeat){clearInterval(this.heartbeat);this.heartbeat=undefined;}
+    this.socket?.close();this.socket=undefined;
+  }
 }

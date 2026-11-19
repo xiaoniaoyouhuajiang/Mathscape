@@ -12,7 +12,7 @@
 
 use mathscape_agent::{ToolError, ToolErrorCode, ToolStatus};
 use mathscape_domain::StableId;
-use mathscape_orchestrator::locate_quote;
+use mathscape_orchestrator::{locate_quote, render_effective_slice};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -107,8 +107,8 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
         }
     };
     let source = context.source.as_str();
-    let (offset, haystack) = match &args.within {
-        None => (0, source),
+    let (phys_start, phys_end) = match &args.within {
+        None => (0, source.len()),
         Some(within) => {
             let (start, end) = (within.start as usize, within.end as usize);
             if start > end
@@ -124,17 +124,55 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
                     ),
                 ));
             }
-            (start, &source[start..end])
+            (start, end)
         }
     };
-    let (ranges, normalized) = locate_quote(haystack, &args.quote);
+    let mut matched_raw_fallback = false;
+    let (ranges, normalized) = if context.active_errata.is_empty() {
+        let (local, normalized) = locate_quote(&source[phys_start..phys_end], &args.quote);
+        let mapped = local
+            .into_iter()
+            .map(|(s, e)| ((s + phys_start) as u64, (e + phys_start) as u64))
+            .collect::<Vec<_>>();
+        (mapped, normalized)
+    } else {
+        let view = render_effective_slice(
+            source,
+            phys_start..phys_end,
+            &context.active_errata.entries,
+        );
+        let (eff_ranges, eff_normalized) = locate_quote(&view.effective_source, &args.quote);
+        let mut mapped = eff_ranges
+            .into_iter()
+            .filter_map(|(s, e)| {
+                let phys = view.byte_map.effective_range_to_physical(s, e)?;
+                Some((phys.start, phys.end))
+            })
+            .collect::<Vec<_>>();
+        mapped.sort_unstable();
+        mapped.dedup();
+        if !mapped.is_empty() || view.applied_errata_ids.is_empty() {
+            (mapped, eff_normalized)
+        } else {
+            // Fall back to raw OCR text inside the same physical window so legacy citations keep resolving.
+            let (raw_ranges, raw_normalized) =
+                locate_quote(&source[phys_start..phys_end], &args.quote);
+            let fallback = raw_ranges
+                .into_iter()
+                .map(|(s, e)| ((s + phys_start) as u64, (e + phys_start) as u64))
+                .collect::<Vec<_>>();
+            if !fallback.is_empty() {
+                matched_raw_fallback = true;
+            }
+            (fallback, raw_normalized)
+        }
+    };
     let total = ranges.len();
     let mut unresolved_page: Option<String> = None;
     let candidates = ranges
         .into_iter()
         .take(MAX_LOCATE_CANDIDATES)
         .map(|(start, end)| {
-            let (start, end) = ((start + offset) as u64, (end + offset) as u64);
             let page = match map_page(&context, &ByteRangeInput { start, end }) {
                 Ok(page) => Some(json!({
                     "pdf_page_index": page.pdf_page_index(),
@@ -154,6 +192,12 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
         })
         .collect::<Vec<_>>();
     let mut diagnostics = Vec::new();
+    if matched_raw_fallback {
+        diagnostics.push(json!({
+            "code": "matched_raw_ocr_fallback",
+            "message": "quote matched raw OCR bytes that have active markdown errata; consider quoting the corrected effective text from material.read"
+        }));
+    }
     if normalized && total > 0 {
         diagnostics.push(json!({
             "code": "matched_normalized",

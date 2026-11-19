@@ -328,6 +328,12 @@ struct PatchResumePlan {
 
 enum PatchResumeDecision {
     RejectAll,
+    /// Accepted patches were written as Markdown errata on the unchanged
+    /// physical snapshot; B continues on the original input.
+    AppliedAsErrata {
+        accepted_patch_refs: Vec<String>,
+    },
+    /// Legacy replay: an approval that promoted a separate patched artifact.
     Apply {
         base_document: AnchoredMarkdown,
         selected: MarkdownPatchSet,
@@ -1065,9 +1071,18 @@ impl DesktopService {
             timeout: policy.request_timeout,
             ..Default::default()
         };
+        let excluded = {
+            let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+            let artifact_id = match &start {
+                DiscoveryStart::Fresh(prepared) => prepared.input().snapshot.artifact_id.clone(),
+                DiscoveryStart::Resume(plan) => plan.prepared.input().snapshot.artifact_id.clone(),
+            };
+            crate::markdown_patch::errata_excluded_ranges(&store, &artifact_id)?
+        };
         let mut workflow = DiscoveryWorkflow::new(&backend, limits)
             .with_observer(workflow_observer)
             .with_patch_gate(MarkdownPatchGate::ReviewBeforeApply)
+            .with_patch_excluded_ranges(excluded)
             .with_run_id(run_id.clone());
         let prepared = match start {
             DiscoveryStart::Fresh(prepared) => prepared,
@@ -1087,6 +1102,16 @@ impl DesktopService {
                     PatchResumeDecision::RejectAll => {
                         workflow
                             .resolve_patch_review(PatchReviewDecision::RejectAll)
+                            .map_err(resume)?;
+                        prepared
+                    }
+                    PatchResumeDecision::AppliedAsErrata {
+                        accepted_patch_refs,
+                    } => {
+                        workflow
+                            .resolve_patch_review(PatchReviewDecision::AppliedAsErrata {
+                                accepted_patch_refs,
+                            })
                             .map_err(resume)?;
                         prepared
                     }
@@ -1244,18 +1269,32 @@ impl DesktopService {
                     .latest_markdown_patch_application(&patch_set_id)?
                     .filter(|application| application.status == "applied")
                     .ok_or_else(|| resume("修订决定缺少应用回执".into()))?;
-                let (Some(patched_artifact_id), Some(conversion_id)) =
-                    (application.patched_artifact_id, application.conversion_id)
-                else {
-                    return Err(resume("修订应用回执缺少修订后的 Markdown".into()));
-                };
-                let patched_document = self
-                    .markdown_document(&patched_artifact_id, Some(&conversion_id))
-                    .map_err(resume)?;
-                PatchResumeDecision::Apply {
-                    base_document,
-                    selected,
-                    patched_document,
+                if application.patched_artifact_id.as_deref()
+                    == Some(source.snapshot.artifact_id.as_str())
+                {
+                    // Errata mode: the base snapshot is unchanged, the
+                    // accepted operations now live in markdown_block_errata.
+                    PatchResumeDecision::AppliedAsErrata {
+                        accepted_patch_refs: selected
+                            .patches
+                            .iter()
+                            .map(|patch| patch.patch_ref.clone())
+                            .collect(),
+                    }
+                } else {
+                    let (Some(patched_artifact_id), Some(conversion_id)) =
+                        (application.patched_artifact_id, application.conversion_id)
+                    else {
+                        return Err(resume("修订应用回执缺少修订后的 Markdown".into()));
+                    };
+                    let patched_document = self
+                        .markdown_document(&patched_artifact_id, Some(&conversion_id))
+                        .map_err(resume)?;
+                    PatchResumeDecision::Apply {
+                        base_document,
+                        selected,
+                        patched_document,
+                    }
                 }
             }
             _ => return Err(resume("请先接受或拒绝 Markdown 修订建议".into())),

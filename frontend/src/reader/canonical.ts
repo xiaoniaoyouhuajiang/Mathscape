@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { MarkdownBlockErrata } from "./markdown-errata";
+import type { MarkdownBlock } from "./selection";
 
 /**
  * Unified read-only view of a canonical markdown node (「… · 规范解析正文」).
@@ -20,6 +22,9 @@ export interface CanonicalReaderSegment {
   overlap_trimmed: boolean;
   is_head: boolean;
   byte_start: number;
+  content_hash?: string;
+  blocks?: MarkdownBlock[];
+  errata?: MarkdownBlockErrata[];
   markdown: string;
 }
 export interface CanonicalReaderGap { kind: "gap"; pages: PageRange }

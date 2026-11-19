@@ -652,12 +652,35 @@ fn dangling_span_is_skipped_with_a_diagnostic() {
 }
 
 #[test]
-fn default_edge_types_exclude_semantic_relations() {
+fn heuristic_is_default_and_raw_preset_keeps_legacy_structural_five() {
     let f = fixture(0);
-    let default = hood(&f, json!({ "node_id": unit("lemma") }));
-    assert_eq!(default["status"], "ok", "{default}");
+    // Default call uses `heuristic`: 0-cost provenance reaches markdown & PDF,
+    // and intra-source reasoning (`proves`, `cites`) is traversed at depth 1.
+    let heuristic = hood(&f, json!({ "node_id": unit("lemma") }));
+    assert_eq!(heuristic["status"], "ok", "{heuristic}");
+    assert_eq!(heuristic["applied"]["preset"], "heuristic");
+    assert_eq!(heuristic["applied"]["depth"], 1);
+    assert_no_dangling_edges(&heuristic);
+    let h_ids = node_ids(&heuristic);
+    assert!(
+        h_ids.contains(&unit("proof"))
+            && h_ids.contains(&unit("sec"))
+            && h_ids.contains(&f.markdown)
+            && h_ids.contains(&f.pdf),
+        "{h_ids:?}"
+    );
+    let h_rels = edge_relations(&heuristic);
+    assert!(
+        h_rels.iter().any(|r| r == "proves") && h_rels.iter().any(|r| r == "cites"),
+        "{h_rels:?}"
+    );
+
+    // Explicit `preset: "raw"` preserves the legacy 1-relation-1-hop structural five.
+    let raw = hood(&f, json!({ "node_id": unit("lemma"), "preset": "raw" }));
+    assert_eq!(raw["status"], "ok", "{raw}");
+    assert_eq!(raw["applied"]["preset"], "raw");
     assert_eq!(
-        default["applied"]["edge_types"],
+        raw["applied"]["edge_types"],
         json!([
             "conversion",
             "located_in",
@@ -666,16 +689,16 @@ fn default_edge_types_exclude_semantic_relations() {
             "has_snapshot"
         ])
     );
-    assert_eq!(default["applied"]["direction"], "both");
-    assert_eq!(default["applied"]["depth"], 1);
-    let relations = edge_relations(&default);
+    assert_eq!(raw["applied"]["direction"], "both");
+    assert_eq!(raw["applied"]["depth"], 1);
+    let relations = edge_relations(&raw);
     assert!(
         !relations.iter().any(|r| r == "proves" || r == "cites"),
         "{relations:?}"
     );
-    assert!(codes(&default).contains(&"edge_types_filtered".to_owned()));
-    assert_no_dangling_edges(&default);
-    let ids = node_ids(&default);
+    assert!(codes(&raw).contains(&"edge_types_filtered".to_owned()));
+    assert_no_dangling_edges(&raw);
+    let ids = node_ids(&raw);
     assert_eq!(ids[0], unit("lemma"));
     assert!(
         ids.contains(&unit("sec")) && ids.contains(&span("s_body")),
@@ -683,13 +706,14 @@ fn default_edge_types_exclude_semantic_relations() {
     );
     assert!(
         !ids.contains(&unit("proof")),
-        "proof only reached via has_part at depth 2"
+        "proof only reached via has_part at depth 2 in raw preset"
     );
 
     let semantic = hood(
         &f,
         json!({ "node_id": unit("lemma"), "edge_types": ["proves", "cites"] }),
     );
+    assert_eq!(semantic["applied"]["preset"], "raw");
     let mut relations = edge_relations(&semantic);
     relations.sort();
     assert_eq!(relations, ["cites", "proves"], "{semantic}");
@@ -712,11 +736,120 @@ fn default_edge_types_exclude_semantic_relations() {
 }
 
 #[test]
+fn heuristic_hub_sink_stops_theory_and_foreign_book_explosion() {
+    let f = fixture(0);
+    let mut writer = MapWriter {
+        connection: Connection::open(f.root.join("mathscape.sqlite3")).unwrap(),
+        revision: 3000,
+    };
+    let theory = "mathscape:semantic-entity/th_seq";
+    let cassini = "mathscape:semantic-entity/e_cassini";
+    let qpow = "mathscape:semantic-entity/e_qpow";
+    let unrelated = "mathscape:semantic-entity/e_unrelated";
+    let debt = "mathscape:debt/d_forward";
+    let book_b_sec = unit("book_b_sec");
+    let book_b_thm = unit("book_b_thm");
+    let book_b_other = unit("book_b_other");
+
+    writer.unit(&book_b_sec, "section", "B书 §2", None, &[]);
+    writer.unit(&book_b_thm, "statement", "B书 定理 2.1", Some(&book_b_sec), &[]);
+    writer.unit(&book_b_other, "problem", "B书 无关习题 2.9", Some(&book_b_sec), &[]);
+    writer.insert(
+        theory,
+        "entity",
+        "SemanticEntity",
+        json!({ "payload_kind": "semantic_entity", "payload": {
+            "semantic_kind": "theory",
+            "preferred_labels": [{ "lang": "zh", "label": "数列与递推" }]
+        }}),
+    );
+    writer.insert(
+        qpow,
+        "entity",
+        "SemanticEntity",
+        json!({ "payload_kind": "semantic_entity", "payload": {
+            "semantic_kind": "declaration",
+            "home_theory": theory,
+            "plain_label": "矩阵幂引理"
+        }}),
+    );
+    writer.insert(
+        cassini,
+        "entity",
+        "SemanticEntity",
+        json!({ "payload_kind": "semantic_entity", "payload": {
+            "semantic_kind": "declaration",
+            "home_theory": theory,
+            "plain_label": "Cassini 恒等式",
+            "declaration": { "uses_entities": [qpow] }
+        }}),
+    );
+    writer.insert(
+        unrelated,
+        "entity",
+        "SemanticEntity",
+        json!({ "payload_kind": "semantic_entity", "payload": {
+            "semantic_kind": "declaration",
+            "home_theory": theory,
+            "plain_label": "同书架无关定理"
+        }}),
+    );
+    writer.insert(
+        "mathscape:alignment/a_lemma",
+        "entity",
+        "Alignment",
+        json!({ "payload_kind": "alignment", "payload": {
+            "source": unit("lemma"), "target": cassini, "relation": "specializes", "status": "retrieved_candidate"
+        }}),
+    );
+    writer.insert(
+        "mathscape:alignment/a_book_b",
+        "entity",
+        "Alignment",
+        json!({ "payload_kind": "alignment", "payload": {
+            "source": book_b_thm, "target": cassini, "relation": "expresses", "status": "retrieved_candidate"
+        }}),
+    );
+    writer.insert(
+        debt,
+        "entity",
+        "Debt",
+        json!({ "payload_kind": "debt", "payload": {
+            "attached_to": "mathscape:alignment/a_lemma",
+            "status": "claimed_paid",
+            "obligation": "代入验证",
+            "paid_by": [{ "ref": qpow, "note": "取行列式" }]
+        }}),
+    );
+    drop(writer);
+
+    // Golden 2-hop from `lemma`: crosses `cassini` to `book_b_thm` and `qpow`,
+    // attaches `theory`, `debt` and `book_b_sec`, but NEVER bounces into
+    // `unrelated` on the same theory shelf or `book_b_other` in Book B!
+    let res = hood(&f, json!({ "node_id": unit("lemma"), "depth": 2 }));
+    assert_eq!(res["status"], "ok", "{res}");
+    assert_no_dangling_edges(&res);
+    let ids = node_ids(&res);
+    for expected in [cassini, qpow, theory, debt, book_b_thm.as_str(), book_b_sec.as_str()] {
+        assert!(ids.contains(&expected.to_owned()), "missing {expected} in {ids:?}");
+    }
+    assert!(!ids.contains(&unrelated.to_owned()), "theory hub leaked {unrelated}: {ids:?}");
+    assert!(!ids.contains(&book_b_other), "foreign section leaked {book_b_other}: {ids:?}");
+
+    // Seeding directly on `theory` DOES list all shelf members at depth 1.
+    let shelf = hood(&f, json!({ "node_id": theory, "depth": 1 }));
+    let shelf_ids = node_ids(&shelf);
+    for member in [cassini, qpow, unrelated] {
+        assert!(shelf_ids.contains(&member.to_owned()), "missing shelf member {member}: {shelf_ids:?}");
+    }
+}
+
+#[test]
 fn direction_follows_from_and_to_sides() {
     let f = fixture(0);
     let out = hood(
         &f,
-        json!({ "node_id": unit("lemma"), "direction": "out", "depth": 2 }),
+        json!({ "node_id": unit("lemma"), "preset": "raw", "direction": "out", "depth": 2 }),
     );
     let ids = node_ids(&out);
     assert!(
@@ -730,7 +863,7 @@ fn direction_follows_from_and_to_sides() {
 
     let into = hood(
         &f,
-        json!({ "node_id": f.markdown, "direction": "in", "depth": 2, "node_kinds": ["source_unit"] }),
+        json!({ "node_id": f.markdown, "preset": "raw", "direction": "in", "depth": 2, "node_kinds": ["source_unit"] }),
     );
     let ids = node_ids(&into);
     assert_eq!(ids[0], f.markdown, "seed is kept despite node_kinds");
@@ -743,7 +876,7 @@ fn direction_follows_from_and_to_sides() {
 
     let parent = hood(
         &f,
-        json!({ "node_id": unit("sec"), "direction": "out", "depth": 1 }),
+        json!({ "node_id": unit("sec"), "preset": "raw", "direction": "out", "depth": 1 }),
     );
     let ids = node_ids(&parent);
     assert!(
@@ -751,7 +884,7 @@ fn direction_follows_from_and_to_sides() {
         "{ids:?}"
     );
 
-    let conversion = hood(&f, json!({ "node_id": f.pdf, "direction": "out" }));
+    let conversion = hood(&f, json!({ "node_id": f.pdf, "preset": "raw", "direction": "out" }));
     assert!(node_ids(&conversion).contains(&f.markdown), "{conversion}");
     assert!(edge_relations(&conversion).contains(&"conversion".to_owned()));
 }
@@ -990,10 +1123,19 @@ fn unnamed_snapshot_is_a_snapshot_with_ink_page() {
 }
 
 #[test]
-fn has_snapshot_is_a_default_edge() {
+fn has_snapshot_and_note_link_behave_under_heuristic_and_raw() {
     let f = fixture(0);
     add_ink(&f);
-    let result = hood(&f, json!({ "node_id": NOTE_ID }));
+    // Default (`heuristic`) surfaces both the snapshot and linked note targets.
+    let heuristic = hood(&f, json!({ "node_id": NOTE_ID }));
+    assert_eq!(heuristic["status"], "ok", "{heuristic}");
+    assert_no_dangling_edges(&heuristic);
+    assert_eq!(edges_of(&heuristic, "has_snapshot").len(), 1);
+    assert_eq!(edges_of(&heuristic, "note_link").len(), 3);
+    assert!(node_ids(&heuristic).contains(&unit("lemma")));
+
+    // `raw` keeps `note_link` opt-in while including `has_snapshot`.
+    let result = hood(&f, json!({ "node_id": NOTE_ID, "preset": "raw" }));
     assert_eq!(result["status"], "ok", "{result}");
     assert_no_dangling_edges(&result);
     let snapshots = edges_of(&result, "has_snapshot");
@@ -1013,7 +1155,7 @@ fn has_snapshot_is_a_default_edge() {
     );
     assert!(
         edges_of(&result, "note_link").is_empty(),
-        "note_link is opt-in"
+        "note_link is opt-in in raw preset"
     );
     assert!(!node_ids(&result).contains(&unit("lemma")));
     // The edge is navigable from the snapshot side as well, and get resolves it.

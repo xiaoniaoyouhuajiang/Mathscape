@@ -43,7 +43,51 @@ export type RelationKind =
   | "in_theory"
   | "debt_on"
   | "scope_of"
+  | "uses_entity"
+  | "of_concept"
+  | "paid_by"
   | "unknown";
+
+export type HopClass =
+  | "plumbing"
+  | "context_attach"
+  | "hierarchy"
+  | "source_reasoning"
+  | "semantic_bridge"
+  | "container_hub"
+  | "forbidden";
+
+export function relationHopClass(kind: RelationKind | null): HopClass {
+  switch (kind) {
+    case "conversion":
+    case "located_in":
+    case "contains_span":
+      return "plumbing";
+    case "debt_on":
+    case "scope_of":
+      return "context_attach";
+    case "has_part":
+      return "hierarchy";
+    case "states":
+    case "proves":
+    case "poses":
+    case "hints":
+    case "solves":
+    case "explains":
+    case "applies_method":
+    case "cites":
+      return "source_reasoning";
+    case "aligns":
+    case "uses_entity":
+    case "of_concept":
+    case "paid_by":
+      return "semantic_bridge";
+    case "in_theory":
+      return "container_hub";
+    default:
+      return "forbidden";
+  }
+}
 
 export type IncidenceDirection =
   | "into_relation"

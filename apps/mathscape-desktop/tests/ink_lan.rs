@@ -122,6 +122,44 @@ impl Fixture {
         socket.send(Message::Text(json!({"type":"hello","protocol_version":INK_LAN_PROTOCOL_VERSION,"credential":credential,"client_id":client}).to_string().into())).await.unwrap();
         socket
     }
+    async fn standby_socket_on(
+        &self,
+        port: u16,
+        client: &str,
+        standby_token: Option<&str>,
+        credential: Option<&str>,
+    ) -> Socket {
+        let base = format!("https://127.0.0.1:{port}");
+        let mut request = format!("wss://127.0.0.1:{port}/api/ws")
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert("origin", base.parse().unwrap());
+        let (mut socket, _) = connect_async_tls_with_config(
+            request,
+            None,
+            false,
+            Some(Connector::Rustls(self.tls.clone())),
+        )
+        .await
+        .unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "hello_standby",
+                    "protocol_version": INK_LAN_PROTOCOL_VERSION,
+                    "client_id": client,
+                    "standby_token": standby_token,
+                    "credential": credential,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        socket
+    }
     async fn claim(&self, url: &str, credential: &str) -> reqwest::Response {
         let token = url.split("#pair=").nth(1).unwrap_or(url);
         self.client
@@ -1357,5 +1395,209 @@ async fn n3a_preferred_host_persists_and_reorders_pairing_urls() {
     f.service.set_ink_lan_preferred_host(None).unwrap();
     let status = f.service.ink_lan_status().await.unwrap();
     assert!(status.preferred_host.is_none());
+    f.cleanup().await;
+}
+
+#[tokio::test]
+async fn standby_channel_keeps_reclaimed_tablet_push_ready_and_read_only() {
+    let f = Fixture::new("standby-push").await;
+    let credential = "a".repeat(64);
+    let pairing = f
+        .service
+        .create_ink_pairing(f.document.document_id.clone(), 0)
+        .await
+        .unwrap();
+    let pair_resp = f.claim(&pairing.urls[0], &credential).await;
+    assert_eq!(pair_resp.status(), 200);
+    let pair_body = pair_resp.json::<Value>().await.unwrap();
+    let pair_standby = pair_body["standby_token"].as_str().unwrap().to_owned();
+    assert_eq!(pair_standby.len(), 64);
+
+    let mut active_socket = f.socket_as("tablet-standby", &credential).await;
+    let ctx = next(&mut active_socket).await;
+    assert_eq!(ctx["type"], "session_context");
+    assert_eq!(ctx["standby_token"].as_str(), Some(pair_standby.as_str()));
+    let epoch = ctx["lease"]["writer_epoch"].as_u64().unwrap();
+
+    // Desktop reclaims doc A; active socket is revoked and normal hello fails.
+    f.service
+        .reclaim_ink_writer(&f.document.document_id, epoch, 0, "reclaim-standby-1")
+        .unwrap();
+    let closed = next(&mut active_socket).await;
+    assert_eq!(closed["type"], "session_closed");
+    assert_eq!(closed["code"], "writer_revoked");
+    let _ = active_socket.close(None).await;
+
+    let mut rejected_hello = f.socket_as("tablet-standby", &credential).await;
+    let err = next(&mut rejected_hello).await;
+    assert_eq!(err["type"], "operation_conflict");
+    assert_eq!(err["code"], "writer_revoked");
+    let _ = rejected_hello.close(None).await;
+
+    // Tablet enters read-only standby using ONLY the legacy revoked credential (zero-rescan upgrade).
+    let mut standby = f
+        .standby_socket_on(f.port, "tablet-standby", None, Some(&credential))
+        .await;
+    let ready = next(&mut standby).await;
+    assert_eq!(ready["type"], "standby_ready");
+    assert_eq!(ready["standby_token"].as_str(), Some(pair_standby.as_str()));
+
+    // Desktop sees 1 online tablet globally, while doc A's active-writer mirror stays disconnected.
+    let status = f.service.ink_lan_status().await.unwrap();
+    assert_eq!(status.online_tablets, 1);
+    let mirror = f
+        .service
+        .ink_lan_mirror(&f.document.document_id, 0)
+        .unwrap();
+    assert!(!mirror.connected);
+
+    // Standby channel strictly rejects write operations.
+    send_json(
+        &mut standby,
+        json!({
+            "type": "rename_request",
+            "request_id": "standby-bad-rename",
+            "title": "不应写入",
+            "expected_title_revision": 0,
+        }),
+    )
+    .await;
+    let denied = next(&mut standby).await;
+    assert_eq!(denied["type"], "operation_conflict");
+    assert_eq!(denied["code"], "standby_read_only");
+
+    // Create doc B and push it to the standby tablet without rescanning QR.
+    let mut doc_b = f.document.clone();
+    doc_b.document_id = "doc-standby-target".into();
+    doc_b.title = "待命推送目标".into();
+    f.service
+        .create_ink_document(CreateInkDocumentRequest {
+            document: doc_b.clone(),
+            session_id: "standby-native-b".into(),
+            writer_id: "desktop-local".into(),
+            device: json!({"source": "desktop"}),
+            request_id: Some("standby-target-b".into()),
+            title_mode: None,
+        })
+        .unwrap();
+
+    let push_b = f
+        .service
+        .push_ink_to_tablet(&doc_b.document_id, false)
+        .await
+        .unwrap();
+    assert!(push_b.pushed, "{push_b:?}");
+    assert_eq!(push_b.online, 1);
+    let offer_b = next(&mut standby).await;
+    assert_eq!(offer_b["type"], "switch_offer");
+    assert_eq!(offer_b["document_id"], doc_b.document_id);
+    assert_eq!(offer_b["pairing_token"].as_str().unwrap().len(), 64);
+
+    // Desktop can also push doc A back to re-authorize the tablet on the same note.
+    let push_a = f
+        .service
+        .push_ink_to_tablet(&f.document.document_id, false)
+        .await
+        .unwrap();
+    assert!(push_a.pushed, "{push_a:?}");
+    let offer_a = next(&mut standby).await;
+    assert_eq!(offer_a["type"], "switch_offer");
+    assert_eq!(offer_a["document_id"], f.document.document_id);
+
+    let _ = standby.close(None).await;
+    f.cleanup().await;
+}
+
+#[tokio::test]
+async fn explicit_stop_revokes_standby_token_and_legacy_fallback_but_restart_preserves_them() {
+    let f = Fixture::new("standby-stop").await;
+    let credential = "b".repeat(64);
+    let pairing = f
+        .service
+        .create_ink_pairing(f.document.document_id.clone(), 0)
+        .await
+        .unwrap();
+    let pair_body = f
+        .claim(&pairing.urls[0], &credential)
+        .await
+        .error_for_status()
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let token_1 = pair_body["standby_token"].as_str().unwrap().to_owned();
+
+    // Non-revoking restart preserves standby_token.
+    f.service.shutdown_ink_lan(false).await.unwrap();
+    let restarted = f.service.start_ink_lan(Some(0)).await.unwrap();
+    let mut after_restart = f
+        .standby_socket_on(restarted.port, "tablet-restart", Some(&token_1), None)
+        .await;
+    assert_eq!(next(&mut after_restart).await["type"], "standby_ready");
+
+    // Explicit Stop revokes both active standby socket and future standby logins.
+    f.service.shutdown_ink_lan(true).await.unwrap();
+    let closed = next(&mut after_restart).await;
+    assert_eq!(closed["type"], "session_closed");
+    assert_eq!(closed["code"], "writer_revoked");
+    let _ = after_restart.close(None).await;
+
+    let resumed = f.service.start_ink_lan(Some(0)).await.unwrap();
+
+    // Old standby_token is rejected.
+    let mut old_token_sock = f
+        .standby_socket_on(resumed.port, "tablet-old-tok", Some(&token_1), None)
+        .await;
+    let old_tok_err = next(&mut old_token_sock).await;
+    assert_eq!(old_tok_err["type"], "operation_conflict");
+    assert_eq!(old_tok_err["code"], "writer_revoked");
+    let _ = old_token_sock.close(None).await;
+
+    // Legacy credential fallback is ALSO rejected after explicit Stop.
+    let mut legacy_sock = f
+        .standby_socket_on(resumed.port, "tablet-legacy", None, Some(&credential))
+        .await;
+    let legacy_err = next(&mut legacy_sock).await;
+    assert_eq!(legacy_err["type"], "operation_conflict");
+    assert_eq!(legacy_err["code"], "writer_revoked");
+    let _ = legacy_sock.close(None).await;
+
+    assert_eq!(f.service.ink_lan_status().await.unwrap().online_tablets, 0);
+
+    // Fresh QR pairing issues a rotated standby_token that works.
+    let new_pair = f
+        .service
+        .create_ink_pairing(f.document.document_id.clone(), 0)
+        .await
+        .unwrap();
+    let new_token = new_pair.urls[0].split("#pair=").nth(1).unwrap();
+    let new_base = format!("https://127.0.0.1:{}", resumed.port);
+    let new_body = f
+        .client
+        .post(format!("{new_base}/api/pair"))
+        .header("Origin", &new_base)
+        .json(&json!({
+            "pairing_token": new_token,
+            "resume_secret": "f".repeat(64),
+            "device": {"model": "repaired"}
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let token_2 = new_body["standby_token"].as_str().unwrap().to_owned();
+    assert_ne!(token_2, token_1);
+
+    let mut fresh_standby = f
+        .standby_socket_on(resumed.port, "tablet-fresh", Some(&token_2), None)
+        .await;
+    assert_eq!(next(&mut fresh_standby).await["type"], "standby_ready");
+    assert_eq!(f.service.ink_lan_status().await.unwrap().online_tablets, 1);
+
+    let _ = fresh_standby.close(None).await;
     f.cleanup().await;
 }

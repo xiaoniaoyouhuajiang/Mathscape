@@ -8,6 +8,7 @@
 import type { AnchoredMarkdown } from "../reader/selection";
 import { alignmentPlainLabel, entityPlainLabel } from "../semantic/labels";
 import { collectSemanticSpanRefs } from "../semantic/review-model";
+import { effectiveProposalPayload, unwrapFieldChange } from "../semantic/semantic-diff";
 import type { DiscoveryOutcome, SourceReviewAnchor, SourceReviewProjection, SourceReviewUnit } from "./types";
 
 export interface ChangeSetSelection {
@@ -64,6 +65,12 @@ export interface HistoryVersion {
   state: string;
   createdAt: string;
   diagnostics: ProposalDiagnostic[];
+  proposal?: PendingChangeSet["proposal"];
+}
+
+export interface BaseObjectView {
+  kind: string;
+  payload: Record<string, unknown>;
 }
 
 export interface ProposedObject {
@@ -98,6 +105,7 @@ export interface PendingChangeSet {
   baseCommit: string | null;
   proposal: {
     rationale?: string;
+    target_object?: string | null;
     proposed_objects?: ProposedObject[];
     proposed_relations?: ProposedRelation[];
   };
@@ -113,6 +121,12 @@ export interface PendingChangeSet {
   history?: HistoryVersion[];
   /** Titles of existing (head or staged) objects the proposal names: diagnostic targets, relation endpoints, parents, edit targets. */
   targetTitles?: Record<string, string>;
+  /** Short human-readable title of `proposal.target_object` (resolved on the backend). */
+  targetObjectTitle?: string | null;
+  /** Payloads of existing / cross-proposal objects referenced by this version. */
+  baseObjects?: Record<string, BaseObjectView>;
+  /** Outstanding debts attached to `retire` targets that will become `obsolete`. */
+  retireCascades?: Record<string, string[]>;
 }
 
 export interface ChangeSetQueue {
@@ -167,6 +181,8 @@ export function selectionOf(item: PendingChangeSet): ChangeSetSelection {
 }
 
 export function titleOf(item: PendingChangeSet): string {
+  const target = item.targetObjectTitle?.trim();
+  if (target) return target;
   return item.proposal.rationale?.trim() || item.changeSetId.replace(/^mathscape:change-set\//, "").slice(0, 12);
 }
 
@@ -458,11 +474,12 @@ interface SemanticEdgeSpec {
   evidenceRefs: string[];
 }
 
-function extractSemanticEdges(objects: ProposedObject[]): SemanticEdgeSpec[] {
+function extractSemanticEdges(objects: ProposedObject[], baseObjects?: Record<string, BaseObjectView>): SemanticEdgeSpec[] {
   const alignmentTargets = new Map<string, string>();
   for (const object of objects) {
     if (object.kind === "alignment" && object.op !== "retire") {
-      const fields = (object.op === "edit" ? object.changes : object.payload) ?? {};
+      const base = object.target_id ? baseObjects?.[object.target_id]?.payload : null;
+      const fields = effectiveProposalPayload(object, base);
       const target = newRef(fields.target);
       if (target) alignmentTargets.set(object.local_ref, target);
     }
@@ -470,7 +487,8 @@ function extractSemanticEdges(objects: ProposedObject[]): SemanticEdgeSpec[] {
   const out: SemanticEdgeSpec[] = [];
   for (const object of objects) {
     if (object.op === "retire") continue;
-    const fields = (object.op === "edit" ? object.changes : object.payload) ?? {};
+    const base = object.target_id ? baseObjects?.[object.target_id]?.payload : null;
+    const fields = effectiveProposalPayload(object, base);
     if (object.kind === "alignment") {
       const source = newRef(fields.source) ?? object.target_id ?? "";
       const target = newRef(fields.target) ?? "";
@@ -490,6 +508,30 @@ function extractSemanticEdges(objects: ProposedObject[]): SemanticEdgeSpec[] {
       const selfRef = object.op === "create" ? object.local_ref : (object.target_id ?? object.local_ref);
       if (home && selfRef) {
         out.push({ ref: `${object.local_ref}:in_theory`, source: selfRef, target: home, relation: "in_theory", op: object.op, evidenceRefs: [] });
+      }
+      const decl = fields.declaration && typeof fields.declaration === "object" ? (fields.declaration as Record<string, unknown>) : null;
+      if (decl && selfRef) {
+        const concept = newRef(decl.concept);
+        if (concept) {
+          out.push({ ref: `${object.local_ref}:of_concept`, source: selfRef, target: concept, relation: "of_concept", op: object.op, evidenceRefs: [] });
+        }
+        if (Array.isArray(decl.uses_entities)) {
+          decl.uses_entities.forEach((raw, idx) => {
+            const dep = newRef(raw);
+            if (dep && dep !== selfRef) {
+              out.push({ ref: `${object.local_ref}:uses:${idx}`, source: selfRef, target: dep, relation: "uses_entity", op: object.op, evidenceRefs: [] });
+            }
+          });
+        }
+      }
+      const schema = fields.problem_schema && typeof fields.problem_schema === "object" ? (fields.problem_schema as Record<string, unknown>) : null;
+      if (schema && selfRef && Array.isArray(schema.uses_entities)) {
+        schema.uses_entities.forEach((raw, idx) => {
+          const dep = newRef(raw);
+          if (dep && dep !== selfRef) {
+            out.push({ ref: `${object.local_ref}:schema_uses:${idx}`, source: selfRef, target: dep, relation: "uses_entity", op: object.op, evidenceRefs: [] });
+          }
+        });
       }
     } else if (object.kind === "dialect_scope") {
       const anchor = newRef(fields.anchor_unit);
@@ -516,6 +558,16 @@ function extractSemanticEdges(objects: ProposedObject[]): SemanticEdgeSpec[] {
           relation: "debt_on",
           op: object.op,
           evidenceRefs: collectSemanticSpanRefs(fields),
+        });
+      }
+      if (selfRef && Array.isArray(fields.paid_by)) {
+        fields.paid_by.forEach((entry, idx) => {
+          if (entry && typeof entry === "object") {
+            const payer = newRef((entry as Record<string, unknown>).ref);
+            if (payer) {
+              out.push({ ref: `${object.local_ref}:paid_by:${idx}`, source: selfRef, target: payer, relation: "paid_by", op: object.op, evidenceRefs: [] });
+            }
+          }
         });
       }
     }
@@ -562,9 +614,9 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
     const unitAnchors = spanRefs(fields).flatMap(ref => anchors.get(ref) ?? []);
     const first = unitAnchors[0] ?? null;
     const title = object.op === "edit"
-      ? ((fields.display_title as { value?: string } | undefined)?.value ?? object.target_id ?? object.local_ref)
+      ? ((unwrapFieldChange<string>(fields.display_title).value) ?? item.targetTitles?.[object.target_id ?? ""] ?? object.target_id ?? object.local_ref)
       : (typeof fields.display_title === "string" ? fields.display_title : object.local_ref);
-    const parentField = object.op === "edit" ? (fields.parent as { value?: string } | undefined)?.value : fields.parent;
+    const parentField = object.op === "edit" ? unwrapFieldChange<string>(fields.parent).value : fields.parent;
     // Anchors in other snapshots cannot be shown against this group's document.
     const local = unitAnchors.filter(anchor => anchor.artifact === first?.artifact);
     const unit: SourceReviewUnit = {
@@ -687,7 +739,7 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
       source_excerpt: typeof fields.description === "string" ? fields.description : "",
     });
   };
-  for (const edge of extractSemanticEdges(objects)) {
+  for (const edge of extractSemanticEdges(objects, item.baseObjects)) {
     const evidence = edge.evidenceRefs.flatMap(ref => anchors.get(ref) ?? []);
     const homeArtifacts = new Set<string | null>();
     for (const anchor of evidence) homeArtifacts.add(anchor.artifact);
@@ -822,7 +874,7 @@ export function proposalOverview(item: PendingChangeSet, groups: ProposalReviewP
         crossSnapshot: source.group !== null && target.group !== null && source.group !== target.group,
       };
     }),
-    ...extractSemanticEdges(objects).map(edge => {
+    ...extractSemanticEdges(objects, item.baseObjects).map(edge => {
       const source = endpoint(edge.source), target = endpoint(edge.target);
       return {
         ref: edge.ref, relation: edge.relation, op: edge.op, ...(edge.label ? { label: edge.label } : {}), source, target,

@@ -54,8 +54,36 @@ pub(crate) fn configured_effort(home: Option<&Path>) -> Option<String> {
 /// round hot path where spawning a second Codex just to read a list is wasteful.
 pub(crate) fn cached_catalog(home: Option<&Path>) -> Vec<AgentModel> {
     codex_home(home)
-        .map(|root| read_models_cache(&root.join("models_cache.json")))
+        .map(|root| read_on_disk_catalog(&root))
         .unwrap_or_default()
+}
+
+const CATALOG_OVERRIDE_KEY: &str = "model_catalog_json";
+
+/// On-disk catalog in the order Codex itself resolves it: a top-level
+/// `model_catalog_json = "…"` in `config.toml` (a user/gateway supplied list
+/// that replaces the fetched one) wins over the CLI's `models_cache.json`.
+fn read_on_disk_catalog(root: &Path) -> Vec<AgentModel> {
+    if let Some(path) = catalog_override_path(root) {
+        let models = read_models_cache(&path);
+        if !models.is_empty() {
+            return models;
+        }
+    }
+    read_models_cache(&root.join("models_cache.json"))
+}
+
+/// `model_catalog_json` resolved to an absolute path (`~/` expanded, relative
+/// paths taken from the Codex home).
+fn catalog_override_path(root: &Path) -> Option<PathBuf> {
+    let raw = read_top_level_string(&root.join("config.toml"), CATALOG_OVERRIDE_KEY)?;
+    let path = if let Some(rest) = raw.strip_prefix("~/") {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+        PathBuf::from(home).join(rest)
+    } else {
+        PathBuf::from(&raw)
+    };
+    Some(if path.is_absolute() { path } else { root.join(path) })
 }
 
 /// Effort the next round will use for `model`, given the configured value and
@@ -166,7 +194,7 @@ pub(crate) fn list_models(
         .and_then(|root| read_default_model_from(&root.join("config.toml")));
     let mut models = root
         .as_ref()
-        .map(|root| read_models_cache(&root.join("models_cache.json")))
+        .map(|root| read_on_disk_catalog(root))
         .unwrap_or_default();
     if models.is_empty() {
         // Second discovery path: the same `model/list` the Codex TUI picker uses.
@@ -621,6 +649,51 @@ mod tests {
         assert_eq!(
             models[2].display_name.as_deref(),
             Some("M Three · routing group")
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn model_catalog_json_override_wins_over_models_cache() {
+        let home = temp_home("override");
+        std::fs::write(home.join("models_cache.json"), REAL_SHAPE_CACHE).unwrap();
+        std::fs::write(
+            home.join("gateway-models.json"),
+            r#"{"models":[
+              {"slug":"m-one","display_name":"M-One","visibility":"list"},
+              {"slug":"google/g-four","display_name":"G Four · Google","visibility":"list",
+               "supported_reasoning_levels":[{"effort":"low"},{"effort":"ultra"}]},
+              {"slug":"cursor/c-five","display_name":"C Five · Cursor","visibility":"list"},
+              {"slug":"m-reserve","visibility":"hide"}
+            ]}"#,
+        )
+        .unwrap();
+        // Relative path → resolved against the Codex home.
+        std::fs::write(
+            home.join("config.toml"),
+            "model = \"m-one\"\nmodel_catalog_json = \"gateway-models.json\"\n\n[x]\nmodel_catalog_json = \"ignored.json\"\n",
+        )
+        .unwrap();
+        let models = list_models(Some(&home), None).unwrap();
+        assert_eq!(ids(&models), ["m-one", "google/g-four", "cursor/c-five"]);
+        assert_eq!(
+            ids(&cached_catalog(Some(&home))),
+            ["m-one", "google/g-four", "cursor/c-five"]
+        );
+        assert_eq!(efforts_for("google/g-four", &models).len(), 2);
+
+        // Absolute path works too; a missing/broken override falls back to the cache.
+        let abs = home.join("gateway-models.json");
+        std::fs::write(
+            home.join("config.toml"),
+            format!("model_catalog_json = \"{}\"\n", abs.display()),
+        )
+        .unwrap();
+        assert_eq!(list_models(Some(&home), None).unwrap().len(), 3);
+        std::fs::write(home.join("config.toml"), "model_catalog_json = \"nope.json\"\n").unwrap();
+        assert_eq!(
+            ids(&list_models(Some(&home), None).unwrap()),
+            ["m-one", "m-two", "group/m-three"]
         );
         let _ = std::fs::remove_dir_all(&home);
     }

@@ -10,17 +10,20 @@ import { DiscoveryLedgerController } from "../src/discovery/discovery-ledger";
 import { setInkContextCreator, overlappingNotes, markdownPreviewLabel, type InkLinkedNote } from "../src/ink/links";
 import { eventBus } from "../src/core/events";
 
-// Tiny reproducible PDF: two pages and one outline entry, no copyrighted assets.
+// Tiny reproducible PDF: two pages with selectable text streams and one outline entry, no copyrighted assets.
 function samplePdf(): Uint8Array {
+  const s1 = "1 0 0 rg 0 0 100 100 re f\n0 0 0 rg BT /F1 14 Tf 24 340 Td (Theorem 1 Generating Function) Tj ET\n";
+  const s2 = "0 0 1 rg 0 0 200 200 re f\n0 0 0 rg BT /F1 14 Tf 24 340 Td (Proof by Induction Step) Tj ET\n";
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R /Outlines 7 0 R >>",
     "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Contents 5 0 R >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Contents 6 0 R >>",
-    "<< /Length 25 >>\nstream\n1 0 0 rg 0 0 100 100 re f\n\nendstream",
-    "<< /Length 25 >>\nstream\n0 0 1 rg 0 0 200 200 re f\n\nendstream",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources << /Font << /F1 9 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources << /Font << /F1 9 0 R >> >> /Contents 6 0 R >>",
+    `<< /Length ${s1.length} >>\nstream\n${s1}\nendstream`,
+    `<< /Length ${s2.length} >>\nstream\n${s2}\nendstream`,
     "<< /Type /Outlines /First 8 0 R /Last 8 0 R /Count 1 >>",
     "<< /Title (Second page) /Parent 7 0 R /Dest [4 0 R /Fit] >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
   ];
   // Padding ensures PDF.js must request ranges rather than receive the whole file initially.
   let data = "%PDF-1.4\n%" + "padding".repeat(40000) + "\n";
@@ -75,10 +78,21 @@ let restoreFailure=false, restoreLostResponse=false, restoredRequest:string|null
 const patchDecisions: any[] = [];
 const resumeRequests: unknown[] = [];
 // N2: Markdown note links shown by the reader (markers, menu, patch hint).
-const ink = { links: [] as InkLinkedNote[], originalNoteCount: 0, pageMarkerBlock: -1, creates: [] as unknown[], linkRequests: [] as unknown[], opened: [] as string[] };
+const ink = { links: [] as InkLinkedNote[], unitLinks: [] as InkLinkedNote[], linksByArtifact: {} as Record<string, InkLinkedNote[]>, unitLinksByArtifact: {} as Record<string, InkLinkedNote[]>, originalNoteCount: 0, pageMarkerBlock: -1, creates: [] as unknown[], linkRequests: [] as unknown[], opened: [] as string[] };
 setInkContextCreator(async (target, choice, draft) => { ink.creates.push({ target, choice, requestId: draft.requestId }); });
 eventBus.on("open-ink-document", ({ documentId }) => { ink.opened.push(documentId); });
-const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash" };
+const locatedObjects: string[] = [];
+eventBus.on("locate-domain-object", ({ objectId }) => { locatedObjects.push(objectId); });
+const errataEvents: unknown[] = [];
+eventBus.on("markdown-errata-changed", (detail) => { errataEvents.push(detail); });
+const errataStore = {
+  items: [] as any[],
+  seq: 1,
+};
+const unitMarkers: any[] = [];
+let canonicalProjection: any = null;
+const backlinkRequests: unknown[] = [];
+const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash", markdownOnlyReason: null as string | null };
 const byteOffset = (text: string): number => new TextEncoder().encode(markdown.slice(0, markdown.indexOf(text))).length;
 function patchReview(status: string): unknown {
   const start = byteOffset("x^2");
@@ -110,7 +124,20 @@ function anchored(conversion: string): AnchoredMarkdown {
   };
 }
 function handle(command: string, payload: any): any {
-  if (command === "get_ink_markdown_links") return { artifact_id: payload.artifactId, links: structuredClone(ink.links), original_note_count: ink.originalNoteCount };
+  if (command === "get_ink_markdown_links") {
+    const aid = String(payload.artifactId);
+    const list = ink.linksByArtifact[aid] ?? ink.links;
+    const uList = ink.unitLinksByArtifact[aid] ?? ink.unitLinks;
+    return { artifact_id: aid, links: structuredClone(list), unit_links: structuredClone(uList), original_note_count: ink.originalNoteCount };
+  }
+  if (command === "get_markdown_unit_markers") {
+    const wanted = new Set<string>(payload.artifactIds ?? []);
+    return structuredClone(unitMarkers.filter(m => wanted.has(m.artifact_id)));
+  }
+  if (command === "get_canonical_reader_projection") {
+    if (!canonicalProjection) throw new Error("规范解析正文未登记");
+    return structuredClone(canonicalProjection);
+  }
   if (command === "list_ink_documents") return [{ document_id: "note-old", title: "旧手稿", created_at: "unix:1", head_seq: 0, active_session_id: null, updated_at: "unix:1", lifecycle: "active", last_used_at: 5 }, { document_id: "note-gone", title: "已删手稿", created_at: "unix:1", head_seq: 0, active_session_id: null, updated_at: "unix:1", lifecycle: "trashed", last_used_at: 9 }];
   if (command === "list_ink_note_links") return [];
   if (command === "link_ink_note") {
@@ -272,10 +299,84 @@ function handle(command: string, payload: any): any {
       });
     }, behavior.selectionDelay));
   }
+  if (command === "list_markdown_errata") {
+    const aid = (payload as { artifactId: string }).artifactId;
+    return errataStore.items.filter((e) => e.artifact_id === aid && e.status === "active");
+  }
+  if (command === "save_markdown_errata") {
+    const req = (payload as { request: any }).request;
+    const blocks = req.artifact_id === "md"
+      ? anchored("conversion").blocks
+      : canonicalProjection?.pieces?.find((p: any) => p.kind === "segment" && p.artifact_id === req.artifact_id)?.blocks ?? [];
+    const sourceText = req.artifact_id === "md"
+      ? markdown
+      : canonicalProjection?.pieces?.find((p: any) => p.kind === "segment" && p.artifact_id === req.artifact_id)?.markdown ?? "";
+    const byteStartOffset = req.artifact_id === "md"
+      ? 0
+      : canonicalProjection?.pieces?.find((p: any) => p.kind === "segment" && p.artifact_id === req.artifact_id)?.byte_start ?? 0;
+    const firstIdx = blocks.findIndex((b: any) => b.id === req.first_block_id);
+    const lastIdx = blocks.findIndex((b: any) => b.id === req.last_block_id);
+    if (firstIdx < 0 || lastIdx < firstIdx) throw new Error("所选块不存在");
+    const slice = blocks.slice(firstIdx, lastIdx + 1);
+    if (slice.some((b: any) => b.kind === "page_marker")) throw new Error("所选区间包含 PDF 分页标记");
+    const baseStart = slice[0].range.start;
+    const baseEnd = slice[slice.length - 1].range.end;
+    const srcBytes = new TextEncoder().encode(sourceText);
+    const originalText = new TextDecoder().decode(srcBytes.subarray(Math.max(0, baseStart - byteStartOffset), Math.max(0, baseEnd - byteStartOffset)));
+    const newId = `mathscape:markdown-errata/test-${errataStore.seq++}`;
+    const superseded_ids: string[] = [];
+    for (const prev of errataStore.items) {
+      if (prev.artifact_id === req.artifact_id && prev.status === "active" && prev.base_byte_start < baseEnd && prev.base_byte_end > baseStart) {
+        prev.status = "superseded";
+        prev.superseded_by = newId;
+        superseded_ids.push(prev.errata_id);
+      }
+    }
+    const created = {
+      errata_id: newId,
+      artifact_id: req.artifact_id,
+      base_content_hash: req.base_content_hash ?? behavior.documentHash,
+      first_block_id: req.first_block_id,
+      last_block_id: req.last_block_id,
+      covered_block_ids: slice.map((b: any) => b.id),
+      base_byte_start: baseStart,
+      base_byte_end: baseEnd,
+      base_text_hash: "sha256:fixture",
+      original_text: originalText,
+      corrected_text: req.corrected_text,
+      status: "active",
+      source_kind: "manual",
+      actor: "mathscape:actor/desktop-user",
+      note: req.note ?? null,
+      verified_pdf_page: req.verified_pdf_page ?? null,
+      created_at: "2026-11-19T11:00:00+08:00",
+      updated_at: "2026-11-19T11:00:00+08:00",
+    };
+    errataStore.items.push(created);
+    const affected_unit_ids = unitMarkers
+      .filter((u: any) => u.artifact_id === req.artifact_id && u.byte_range.start < baseEnd && u.byte_range.end > baseStart)
+      .map((u: any) => u.unit_id);
+    return { errata: created, superseded_ids, affected_unit_ids };
+  }
+  if (command === "revert_markdown_errata") {
+    const eid = (payload as { errataId: string }).errataId;
+    const item = errataStore.items.find((e) => e.errata_id === eid);
+    if (!item) throw new Error("未找到勘误记录");
+    item.status = "reverted";
+    item.updated_at = "2026-11-19T11:01:00+08:00";
+    return { errata: item, affected_unit_ids: [] };
+  }
   if (command === "get_markdown_document") {
     const doc = anchored((payload as { conversionId: string }).conversionId);
     doc.snapshot.content_hash = behavior.documentHash;
     return doc;
+  }
+  if (command === "get_source_backlink") {
+    backlinkRequests.push((payload as { request: unknown }).request);
+    if (behavior.markdownOnlyReason) {
+      return { kind: "markdown_only", reason: behavior.markdownOnlyReason };
+    }
+    return { kind: "exact_pdf_pages", pdf_artifact_id: "pdf", pdf_page_indices: [1], marker_page_ids: [1] };
   }
   const args = payload as { artifactId: string; offset: number; length: number };
   const file = files[args.artifactId];
@@ -332,5 +433,5 @@ window.addEventListener("mathscape:open-source", event => {
   });
 });
 Object.assign(window, {
-  harness: { ink, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ink, locatedObjects, errataStore, errataEvents, unitMarkers, setCanonicalProjection: (p: any) => { canonicalProjection = p; }, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
 });

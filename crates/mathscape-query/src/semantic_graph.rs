@@ -350,7 +350,8 @@ pub(crate) fn project_semantic_layer(
     };
 
     for object in of_kind(EntityKind::SemanticEntity) {
-        if let Some(theory) = id_at(object_payload(object), "home_theory") {
+        let payload = object_payload(object);
+        if let Some(theory) = id_at(payload, "home_theory") {
             synthetic(
                 "in-theory",
                 EntityKind::SemanticEntity,
@@ -361,6 +362,48 @@ pub(crate) fn project_semantic_layer(
                 (&theory, "theory"),
                 object.lifecycle,
             )?;
+        }
+        if let Some(concept) = payload
+            .pointer("/declaration/concept")
+            .and_then(Value::as_str)
+            .and_then(|value| StableId::parse(value).ok())
+            && concept != object.stable_id
+        {
+            synthetic(
+                "of-concept",
+                EntityKind::SemanticEntity,
+                ProjectionRelationKind::OfConcept,
+                "归属概念",
+                "精确说法所属的概念".to_owned(),
+                (&object.stable_id, "declaration"),
+                (&concept, "concept"),
+                object.lifecycle,
+            )?;
+        }
+        let mut seen_used = BTreeSet::new();
+        for ptr in ["/declaration/uses_entities", "/problem_schema/uses_entities"] {
+            for used in payload
+                .pointer(ptr)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .filter_map(|value| StableId::parse(value).ok())
+            {
+                if used == object.stable_id || !seen_used.insert(used.clone()) {
+                    continue;
+                }
+                synthetic(
+                    "uses-entity",
+                    EntityKind::SemanticEntity,
+                    ProjectionRelationKind::UsesEntity,
+                    "引用对象",
+                    "该共享对象引用的其他共享对象".to_owned(),
+                    (&object.stable_id, "user"),
+                    (&used, "used"),
+                    object.lifecycle,
+                )?;
+            }
         }
     }
     for object in of_kind(EntityKind::DialectScope) {
@@ -378,24 +421,52 @@ pub(crate) fn project_semantic_layer(
         }
     }
     for object in of_kind(EntityKind::Debt) {
-        let Some(attached) = id_at(object_payload(object), "attached_to") else {
-            continue;
-        };
-        // 挂在对齐线上的账，画到对齐线指向的共享对象旁边。
-        let (holder, summary) = match alignment_target.get(&attached) {
-            Some((target, label)) => (target.clone(), format!("挂在对齐线「{label}」上")),
-            None => (attached, "挂在这个对象上".to_owned()),
-        };
-        synthetic(
-            "debt-on",
-            EntityKind::Debt,
-            ProjectionRelationKind::DebtOn,
-            "挂账",
-            summary,
-            (&object.stable_id, "debt"),
-            (&holder, "holder"),
-            object.lifecycle,
-        )?;
+        let payload = object_payload(object);
+        if let Some(attached) = id_at(payload, "attached_to") {
+            // 挂在对齐线上的账，画到对齐线指向的共享对象旁边。
+            let (holder, summary) = match alignment_target.get(&attached) {
+                Some((target, label)) => (target.clone(), format!("挂在对齐线「{label}」上")),
+                None => (attached, "挂在这个对象上".to_owned()),
+            };
+            synthetic(
+                "debt-on",
+                EntityKind::Debt,
+                ProjectionRelationKind::DebtOn,
+                "挂账",
+                summary,
+                (&object.stable_id, "debt"),
+                (&holder, "holder"),
+                object.lifecycle,
+            )?;
+        }
+        let mut seen_payers = BTreeSet::new();
+        for entry in payload
+            .get("paid_by")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(payer) = id_at(entry, "ref") else {
+                continue;
+            };
+            if payer == object.stable_id || !seen_payers.insert(payer.clone()) {
+                continue;
+            };
+            let summary = match text(entry, "note").filter(|s| !s.trim().is_empty()) {
+                Some(note) => format!("由该对象偿还：{note}"),
+                None => "偿还这笔账的对象".to_owned(),
+            };
+            synthetic(
+                "paid-by",
+                EntityKind::Debt,
+                ProjectionRelationKind::PaidBy,
+                "由…偿还",
+                summary,
+                (&object.stable_id, "debt"),
+                (&payer, "payer"),
+                object.lifecycle,
+            )?;
+        }
     }
     Ok(())
 }
@@ -454,6 +525,18 @@ mod tests {
                             "mathlib_baseline": { "decl": "Nat.fib", "status": "confirmed" } }),
                 ),
                 object(
+                    "mathscape:semantic-entity/cassini",
+                    8,
+                    EntityKind::SemanticEntity,
+                    json!({ "semantic_kind": "declaration",
+                            "home_theory": "mathscape:semantic-entity/theory",
+                            "plain_label": "Cassini 恒等式",
+                            "declaration": {
+                                "concept": "mathscape:semantic-entity/fib",
+                                "uses_entities": ["mathscape:semantic-entity/fib"]
+                            } }),
+                ),
+                object(
                     "mathscape:alignment/a",
                     5,
                     EntityKind::Alignment,
@@ -468,8 +551,9 @@ mod tests {
                     "mathscape:debt/d",
                     6,
                     EntityKind::Debt,
-                    json!({ "attached_to": "mathscape:alignment/a", "status": "open",
-                            "obligation": "核对首项" }),
+                    json!({ "attached_to": "mathscape:alignment/a", "status": "claimed_paid",
+                            "obligation": "核对首项",
+                            "paid_by": [{ "ref": "mathscape:semantic-entity/cassini", "note": "归纳可证" }] }),
                 ),
                 object(
                     "mathscape:dialect-scope/s",
@@ -482,7 +566,7 @@ mod tests {
             relation_endpoints: Default::default(),
         };
         let projection = project_source_map(&snapshot, ProjectionLens::Source).unwrap();
-        assert_eq!(projection.nodes().len(), 6);
+        assert_eq!(projection.nodes().len(), 7);
         let fib = projection
             .nodes()
             .iter()
@@ -503,6 +587,9 @@ mod tests {
             ProjectionRelationKind::InTheory,
             ProjectionRelationKind::DebtOn,
             ProjectionRelationKind::ScopeOf,
+            ProjectionRelationKind::UsesEntity,
+            ProjectionRelationKind::OfConcept,
+            ProjectionRelationKind::PaidBy,
         ] {
             assert!(kinds.contains(&expected), "{expected:?} missing: {kinds:?}");
         }

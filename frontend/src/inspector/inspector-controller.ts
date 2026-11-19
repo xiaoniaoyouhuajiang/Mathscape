@@ -25,14 +25,15 @@ import {
   type EditContext,
   type UserChangeRequest,
 } from "../map-edit";
-import { sourceNodeDetail } from "../reader/content";
+import { sourceNodeDetail, type SourceUnitErrataReview } from "../reader/content";
+import { computeLineDiff, markErrataUnitReviewed } from "../reader/markdown-errata";
 import { readerTargetId, tryOpenableArtifactId } from "../reader/openable";
 import { markdownRenderer } from "../reader/markdown";
 import type { ReaderFocus } from "../reader/reader";
 import type { InkReaderFocus } from "../ink/snapshot-reader";
 import { eventBus } from "../core/events";
 import { listInkLinksToTarget, roleLabel, startInkCreateFromTarget } from "../ink/links";
-import { getSemanticObject, recheckMathlibBaselines, recheckSummary } from "../semantic/api";
+import { getSemanticObject, recheckMathlibBaselines, recheckSummary, type StudyStatus } from "../semantic/api";
 import { renderSemanticDetail } from "../semantic/detail";
 import { SEMANTIC_DOMAIN_KINDS } from "../semantic/labels";
 
@@ -47,6 +48,8 @@ export interface InspectorControllerDelegate {
   refreshSnapshot: () => Promise<void>;
   canFocus: (node: IncidenceNode) => boolean;
   isFocusRoot: (nodeId: string) => boolean;
+  getStudyStatus?: (unitDomainId: string) => StudyStatus | null;
+  onSetStudyStatus?: (unitDomainId: string, status: StudyStatus) => Promise<void> | void;
 }
 
 export class InspectorController {
@@ -79,7 +82,11 @@ export class InspectorController {
     }
   }
 
-  selectNodeById(nodeId: string): void {
+  selectNodeById(nodeId: string | null): void {
+    if (nodeId === null) {
+      this.clearSelection();
+      return;
+    }
     const snapshot = this.delegate.getSnapshot();
     if (snapshot === undefined) return;
     const model = snapshot.landscape_graph.nodes.find((node) => node.id === nodeId);
@@ -90,6 +97,12 @@ export class InspectorController {
       (artifact) => artifact.artifact_id === model.domain_id,
     );
     this.renderNodeDetail(model, pdf, snapshot.marker);
+  }
+
+  clearSelection(): void {
+    if (this.inspectorLocked) return;
+    this.selectedNode = undefined;
+    this.restoreNodeDetail();
   }
 
   refreshIfUnlocked(): void {
@@ -132,6 +145,16 @@ export class InspectorController {
         "detail-staged-badge",
         `未审批提案 · ${staged.change_set_id.slice(-12)}@v${staged.change_set_version}${staged.replaces_revision ? "（替换已接受版本）" : ""}。在「审核提案」中接受后才进入正式地图。`,
       ));
+      const openProposal = textElement("button", "parse-button", "在地图联动审核中查看");
+      openProposal.type = "button";
+      openProposal.onclick = () => {
+        eventBus.emit("open-proposal-for-object", {
+          changeSetId: staged.change_set_id,
+          objectId: node.domain_id,
+          mapLinked: true,
+        });
+      };
+      actions.append(openProposal);
       // A staged edit is shown as a replacement; the accepted version is
       // still the head and can be read on demand.
       if (staged.replaces_revision && node.domain_kind === "SourceSemanticUnit") {
@@ -161,10 +184,36 @@ export class InspectorController {
       node.domain_id !== null &&
       (node.domain_kind === "SourceSemanticUnit" || node.domain_kind === "SourceSpan")
     ) {
+      if (node.domain_kind === "SourceSemanticUnit" && this.delegate.onSetStudyStatus) {
+        const curStatus = this.delegate.getStudyStatus?.(node.domain_id) ?? "unread";
+        const bar = textElement("div", "inspector-study-bar", "");
+        bar.append(textElement("span", "field-label", "个人掌握度"));
+        const group = textElement("div", "study-status-segmented", "");
+        for (const [st, lbl] of [
+          ["unread", "未读"],
+          ["studying", "在读"],
+          ["mastered", "已掌握"],
+        ] as Array<[StudyStatus, string]>) {
+          const btn = textElement(
+            "button",
+            `study-status-chip${curStatus === st ? ` is-active is-${st}` : ""}`,
+            lbl,
+          );
+          btn.type = "button";
+          btn.setAttribute("aria-pressed", String(curStatus === st));
+          btn.onclick = async () => {
+            await this.delegate.onSetStudyStatus!(node.domain_id!, st);
+            this.refreshIfUnlocked();
+          };
+          group.append(btn);
+        }
+        bar.append(group);
+        sourceSlot.append(bar);
+      }
       void this.renderSourceDetail(node, sourceSlot, actions);
     }
 
-    if (!staged && node.domain_id !== null && node.domain_kind !== null && SEMANTIC_DOMAIN_KINDS.has(node.domain_kind)) {
+    if (node.domain_id !== null && node.domain_kind !== null && SEMANTIC_DOMAIN_KINDS.has(node.domain_kind)) {
       void this.renderSemantic(node.domain_id, sourceSlot);
     }
 
@@ -326,12 +375,16 @@ export class InspectorController {
     try {
       const detail = await sourceNodeDetail(node.domain_id!);
       if (this.selectedNode?.domain_id !== node.domain_id) return;
+      if (detail.errata_review && detail.errata_review.items.length > 0) {
+        host.append(this.buildErrataReviewCard(node, detail.errata_review));
+      }
       if (detail.excerpt) {
         const preview = document.createElement("div");
         preview.className = "source-preview markdown-body";
         preview.innerHTML = markdownRenderer().render(detail.excerpt);
         host.append(preview);
       }
+      const insertedButtons: HTMLElement[] = [];
       if (detail.artifact_id) {
         const button = textElement("button", "parse-button", detail.ink ? "打开并定位手稿证据" : "打开并定位原文");
         button.type = "button";
@@ -348,7 +401,51 @@ export class InspectorController {
               : undefined!,
           );
         };
-        actions.prepend(button);
+        insertedButtons.push(button);
+      }
+      const backlink = detail.pdf_backlink;
+      if (
+        !detail.ink &&
+        backlink &&
+        backlink.kind !== "markdown_only" &&
+        backlink.pdf_artifact_id &&
+        backlink.pdf_page_indices &&
+        backlink.pdf_page_indices.length > 0
+      ) {
+        const pages = backlink.pdf_page_indices;
+        const firstPage = pages[0];
+        const lastPage = pages[pages.length - 1];
+        const rangeLabel = firstPage === lastPage ? `第 ${firstPage + 1} 页` : `第 ${firstPage + 1}–${lastPage + 1} 页`;
+        const suffix = backlink.kind === "candidate_pdf_pages" ? "（候选）" : "";
+        const pdfBtn = textElement("button", "parse-button", `打开 PDF ${rangeLabel}${suffix}`);
+        pdfBtn.type = "button";
+        if (backlink.reason) pdfBtn.title = backlink.reason;
+        pdfBtn.onclick = () => {
+          const title = detail.display_title ?? node.label;
+          eventBus.emit("open-source", {
+            artifactId: backlink.pdf_artifact_id!,
+            title: `${title} · PDF 原页`,
+            pdfPageIndex: firstPage,
+            candidatePages: pages,
+            backlinkNote: backlink.kind === "candidate_pdf_pages" ? backlink.reason : undefined,
+            focusExcerpt: detail.excerpt ?? detail.display_title ?? undefined,
+            returnTo:
+              detail.artifact_id && detail.byte_range
+                ? {
+                    id: detail.artifact_id,
+                    title,
+                    options: {
+                      focus: { ...detail.byte_range, blockIds: detail.markdown_block_ids },
+                    },
+                    label: "切换到 Markdown 原文",
+                  }
+                : undefined,
+          });
+        };
+        insertedButtons.push(pdfBtn);
+      }
+      if (insertedButtons.length > 0) {
+        actions.prepend(...insertedButtons);
       }
     } catch (error) {
       host.append(
@@ -359,6 +456,109 @@ export class InspectorController {
         ),
       );
     }
+  }
+
+  private buildErrataReviewCard(
+    node: IncidenceNode,
+    review: SourceUnitErrataReview,
+  ): HTMLElement {
+    const card = document.createElement("section");
+    card.className = "detail-errata-review";
+    card.setAttribute("aria-label", "原文已校对复核提示");
+
+    const head = document.createElement("div");
+    head.className = "detail-errata-head";
+    const badge = textElement("span", "detail-errata-badge", "原文已校对");
+    const countText = textElement(
+      "span",
+      "detail-errata-summary",
+      `关联原文有 ${review.items.length} 处人工校对待复核`,
+    );
+    head.append(badge, countText);
+    const allSent = review.items.every((item) => item.sent_to_sandbox);
+    const sentPill = textElement("span", "detail-errata-sent-pill", "已发往沙盒");
+    sentPill.hidden = !allSent;
+    head.append(sentPill);
+    card.append(head);
+
+    const details = document.createElement("details");
+    details.className = "detail-errata-diff";
+    details.append(textElement("summary", "", "查看原 OCR vs 校对版 Diff"));
+    for (const item of review.items) {
+      const diffView = document.createElement("div");
+      diffView.className = "errata-diff-view detail-errata-diff-view";
+      const diff = computeLineDiff(item.original_text, item.corrected_text);
+      for (const line of diff.lines) {
+        const row = document.createElement("div");
+        row.className = `errata-diff-line is-${line.kind}`;
+        const prefix = line.kind === "add" ? "+ " : line.kind === "del" ? "− " : "  ";
+        row.textContent = prefix + line.text;
+        diffView.append(row);
+      }
+      details.append(diffView);
+    }
+    card.append(details);
+
+    const actionsRow = document.createElement("div");
+    actionsRow.className = "detail-errata-actions";
+    const errataIds = review.items.map((item) => item.errata_id);
+
+    const sendBtn = textElement("button", "detail-errata-send-btn", "交给沙盒复核陈述");
+    sendBtn.type = "button";
+    sendBtn.title = "把此节点及原 OCR / 校对版差异填入沙盒对话框（不自动发送）";
+    sendBtn.onclick = async () => {
+      const blocks = review.items
+        .map((item, idx) => {
+          const tag = review.items.length > 1 ? `（第 ${idx + 1} 处）` : "";
+          return [
+            `原 OCR${tag}：`,
+            item.original_text.trim(),
+            `校对后${tag}：`,
+            item.corrected_text.trim(),
+          ].join("\n");
+        })
+        .join("\n\n");
+      const prompt = [
+        `请复核已入图节点 ${review.unit_id}（${node.label}）的陈述、摘要与来源关系：其关联原文已对照原书完成人工校对，请检查当前图谱陈述是否需要同步修订并给出提案。`,
+        "",
+        blocks,
+      ].join("\n");
+      let accepted = false;
+      eventBus.emit("insert-agent-feedback", {
+        text: prompt,
+        accept: () => { accepted = true; },
+      });
+      if (!accepted) {
+        this.delegate.showToast("请先进入沙箱并打开沙箱对话，再将复核请求填入对话框。", "error");
+        return;
+      }
+      try {
+        await markErrataUnitReviewed(review.unit_id, errataIds, "sent_to_sandbox");
+        sentPill.hidden = false;
+        this.delegate.showToast("已将原文校对差异填入沙盒对话框，确认后即可发送。", "success");
+      } catch (error) {
+        this.delegate.showToast(`记录复核状态失败：${errorMessage(error)}`, "error");
+      }
+    };
+
+    const ackBtn = textElement("button", "detail-errata-ack-btn", "标记已复核");
+    ackBtn.type = "button";
+    ackBtn.title = "确认当前节点陈述不受影响或已处理，消除此提醒";
+    ackBtn.onclick = async () => {
+      ackBtn.disabled = sendBtn.disabled = true;
+      try {
+        await markErrataUnitReviewed(review.unit_id, errataIds, "acknowledged");
+        card.remove();
+        this.delegate.showToast("已标记该节点的原文校对为已复核。", "success");
+      } catch (error) {
+        ackBtn.disabled = sendBtn.disabled = false;
+        this.delegate.showToast(`标记失败：${errorMessage(error)}`, "error");
+      }
+    };
+
+    actionsRow.append(sendBtn, ackBtn);
+    card.append(actionsRow);
+    return card;
   }
 
   private async mountEditActions(objectId: string, host: HTMLElement): Promise<void> {

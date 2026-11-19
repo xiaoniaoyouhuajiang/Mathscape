@@ -800,6 +800,7 @@ pub fn promote_applied_patch(
         new_input_fingerprint,
         safety,
         status: MarkdownPatchStatus::Applied,
+        applied_errata_ids: Vec::new(),
     };
     Ok(MarkdownPatchPromotion {
         artifact,

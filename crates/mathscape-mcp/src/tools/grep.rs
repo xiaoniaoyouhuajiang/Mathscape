@@ -51,11 +51,13 @@ use mathscape_domain::{
     CanonicalMarkdownView, InclusivePageRange, MarkdownCoverage, StableId, covers_range,
     merge_page_ranges, missing_pages,
 };
+use mathscape_orchestrator::build_effective_markdown;
 use mathscape_pdf::{PdfEngine, PdfOpenOptions, PdfPageIndex, PdfSelection};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::canonical::CanonicalIndex;
+use super::errata::load_active_errata;
 use super::material::{
     self, MARKDOWN_MEDIA_TYPE, ManagedPathFailure, Material, PDF_MEDIA_TYPE, find_material,
     find_materials, managed_path_failure,
@@ -200,7 +202,7 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
                 let coverage = view.coverage(None);
                 (view.canonical_id.to_string(), coverage.partial, coverage)
             });
-            scan_markdown(&pool, material, attachment, room, &mut out)?
+            scan_markdown(workspace, &pool, material, attachment, room, &mut out)?
         };
         match scan {
             Scan::Scanned { limited, capped } => {
@@ -256,6 +258,7 @@ enum Scan {
 /// Scans one markdown material (a markdown id, or a snapshot of a PDF's
 /// canonical lineage) and appends `md_byte_range` hits on that material.
 fn scan_markdown(
+    workspace: &McpWorkspace,
     pool: &ArtifactPool,
     material: &Material,
     attachment: Option<Attachment>,
@@ -278,14 +281,29 @@ fn scan_markdown(
             "total_bytes": material.byte_size,
         }));
     }
-    let (found, limited) = scan_text(&text, out.pattern, room);
+    let errata = load_active_errata(workspace, material.id.as_str())?;
+    let (found, limited, byte_map) = if errata.is_empty() {
+        let (found, limited) = scan_text(&text, out.pattern, room);
+        (found, limited, None)
+    } else {
+        let view = build_effective_markdown(&text, &errata.entries);
+        let (found, limited) = scan_text(&view.effective_source, out.pattern, room);
+        (found, limited, Some(view.byte_map))
+    };
     for found in found {
+        let (start, end) = if let Some(map) = &byte_map {
+            let Some(physical) =
+                map.effective_range_to_physical(found.start as usize, found.end as usize)
+            else {
+                continue;
+            };
+            (physical.start, physical.end)
+        } else {
+            (found.start, found.end)
+        };
         out.hits.push(GrepHit {
             artifact_id: material.id.to_string(),
-            locator: Locator::MdByteRange {
-                start: found.start,
-                end: found.end,
-            },
+            locator: Locator::MdByteRange { start, end },
             snippet: found.snippet,
             score: LITERAL_SCORE,
             revision: material.revision.clone(),
@@ -310,7 +328,9 @@ fn grep_pdf(
     out: &mut HitSink<'_>,
 ) -> Result<Scan, ToolError> {
     match canonical_plan(workspace, pool, index, material)? {
-        CanonicalPlan::Usable(plan) => grep_canonical_pdf(pool, &plan, material, room, out),
+        CanonicalPlan::Usable(plan) => {
+            grep_canonical_pdf(workspace, pool, &plan, material, room, out)
+        }
         CanonicalPlan::Unusable {
             canonical_id,
             reason,
@@ -367,6 +387,7 @@ fn grep_whole_text_layer(
 }
 
 fn grep_canonical_pdf(
+    workspace: &McpWorkspace,
     pool: &ArtifactPool,
     plan: &LineagePlan<'_>,
     material: &Material,
@@ -389,6 +410,7 @@ fn grep_canonical_pdf(
     let mut limited = false;
     for snapshot in &plan.snapshots {
         match scan_markdown(
+            workspace,
             pool,
             &snapshot.material,
             Some(attachment.clone()),

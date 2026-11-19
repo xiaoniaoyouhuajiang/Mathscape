@@ -279,7 +279,7 @@ export class ChipComposer {
     menu.id = `sandbox-composer-menu-${menuSeq}`;
     menu.className = "sandbox-composer-menu";
     menu.setAttribute("role", "listbox");
-    menu.setAttribute("aria-label", "引用地图节点");
+    menu.setAttribute("aria-label", "引用地图节点或手稿");
     menu.hidden = true;
     // Keep focus (and the caret) in the composer while picking with the mouse.
     menu.addEventListener("mousedown", (event) => {

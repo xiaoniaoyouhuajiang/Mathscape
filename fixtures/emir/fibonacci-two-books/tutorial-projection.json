@@ -1109,6 +1109,26 @@
       {
         "directed": true,
         "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/of-concept/559a662597cef607f615a16fdcedb179253c3d75d06d4f34110dcf6d408befb6:concept:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/of-concept/559a662597cef607f615a16fdcedb179253c3d75d06d4f34110dcf6d408befb6",
+        "role": "concept",
+        "source": "relation:mathscape:projection-relation/of-concept/559a662597cef607f615a16fdcedb179253c3d75d06d4f34110dcf6d408befb6",
+        "target": "entity:mathscape:semantic-entity/f1584df51252afaffcd44712ed566662a2fb6664faba1659842d9ee12e4b1a21"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/of-concept/559a662597cef607f615a16fdcedb179253c3d75d06d4f34110dcf6d408befb6:declaration:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/of-concept/559a662597cef607f615a16fdcedb179253c3d75d06d4f34110dcf6d408befb6",
+        "role": "declaration",
+        "source": "entity:mathscape:semantic-entity/7fce50167ce41f124c55a2ee12e2ae34295bf682f04b6edaf15bafa2c649cc0a",
+        "target": "relation:mathscape:projection-relation/of-concept/559a662597cef607f615a16fdcedb179253c3d75d06d4f34110dcf6d408befb6"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
         "id": "incidence:mathscape:projection-relation/scope-of/bbf81d3c62bd10d1715fe3e723b8f6ce1eb3e5ab1b9970bdf74c6e870e9864ee:anchor:single",
         "ordinal": null,
         "relation_id": "mathscape:projection-relation/scope-of/bbf81d3c62bd10d1715fe3e723b8f6ce1eb3e5ab1b9970bdf74c6e870e9864ee",
@@ -1145,6 +1165,86 @@
         "role": "scope",
         "source": "entity:mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
         "target": "relation:mathscape:projection-relation/scope-of/d44ea37feea3621385311ba5d84a31ab8b687979038acef6c5a47c8708f7b71a"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/uses-entity/42de2520a8c98433ae780fd1cea7789e6cfbd75ecd7d75a8065e61da2ae2103f:used:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/uses-entity/42de2520a8c98433ae780fd1cea7789e6cfbd75ecd7d75a8065e61da2ae2103f",
+        "role": "used",
+        "source": "relation:mathscape:projection-relation/uses-entity/42de2520a8c98433ae780fd1cea7789e6cfbd75ecd7d75a8065e61da2ae2103f",
+        "target": "entity:mathscape:semantic-entity/7fce50167ce41f124c55a2ee12e2ae34295bf682f04b6edaf15bafa2c649cc0a"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/uses-entity/42de2520a8c98433ae780fd1cea7789e6cfbd75ecd7d75a8065e61da2ae2103f:user:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/uses-entity/42de2520a8c98433ae780fd1cea7789e6cfbd75ecd7d75a8065e61da2ae2103f",
+        "role": "user",
+        "source": "entity:mathscape:semantic-entity/b17d6e25bfbdd0c67fdf8482033969d81c3ae761b05f2cca3aa285ea583ef0f8",
+        "target": "relation:mathscape:projection-relation/uses-entity/42de2520a8c98433ae780fd1cea7789e6cfbd75ecd7d75a8065e61da2ae2103f"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/uses-entity/7609aa6f6be5bd17bf7a3d60204c0c7222c52b54745d0f1077ebaa5c88add915:used:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/uses-entity/7609aa6f6be5bd17bf7a3d60204c0c7222c52b54745d0f1077ebaa5c88add915",
+        "role": "used",
+        "source": "relation:mathscape:projection-relation/uses-entity/7609aa6f6be5bd17bf7a3d60204c0c7222c52b54745d0f1077ebaa5c88add915",
+        "target": "entity:mathscape:semantic-entity/7fce50167ce41f124c55a2ee12e2ae34295bf682f04b6edaf15bafa2c649cc0a"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/uses-entity/7609aa6f6be5bd17bf7a3d60204c0c7222c52b54745d0f1077ebaa5c88add915:user:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/uses-entity/7609aa6f6be5bd17bf7a3d60204c0c7222c52b54745d0f1077ebaa5c88add915",
+        "role": "user",
+        "source": "entity:mathscape:semantic-entity/17c977e20576a97d3a2d629c993534b3820d19e95b18e81dd043894c7162ef2e",
+        "target": "relation:mathscape:projection-relation/uses-entity/7609aa6f6be5bd17bf7a3d60204c0c7222c52b54745d0f1077ebaa5c88add915"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/uses-entity/a30af35bf53ced3cc96abf4aaa80df67e25354d64cc43f0d5535e381fa13309b:used:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/uses-entity/a30af35bf53ced3cc96abf4aaa80df67e25354d64cc43f0d5535e381fa13309b",
+        "role": "used",
+        "source": "relation:mathscape:projection-relation/uses-entity/a30af35bf53ced3cc96abf4aaa80df67e25354d64cc43f0d5535e381fa13309b",
+        "target": "entity:mathscape:semantic-entity/7fce50167ce41f124c55a2ee12e2ae34295bf682f04b6edaf15bafa2c649cc0a"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/uses-entity/a30af35bf53ced3cc96abf4aaa80df67e25354d64cc43f0d5535e381fa13309b:user:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/uses-entity/a30af35bf53ced3cc96abf4aaa80df67e25354d64cc43f0d5535e381fa13309b",
+        "role": "user",
+        "source": "entity:mathscape:semantic-entity/2cbea77f0c7d234f4ecbeec75b59b61669d1a72bf4a0594fd8c279bc37a86fbf",
+        "target": "relation:mathscape:projection-relation/uses-entity/a30af35bf53ced3cc96abf4aaa80df67e25354d64cc43f0d5535e381fa13309b"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/uses-entity/a9fa9c37f9f31ef7f127e381375639796ffb859e5b7106d2c4e5dd684b71f149:used:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/uses-entity/a9fa9c37f9f31ef7f127e381375639796ffb859e5b7106d2c4e5dd684b71f149",
+        "role": "used",
+        "source": "relation:mathscape:projection-relation/uses-entity/a9fa9c37f9f31ef7f127e381375639796ffb859e5b7106d2c4e5dd684b71f149",
+        "target": "entity:mathscape:semantic-entity/b17d6e25bfbdd0c67fdf8482033969d81c3ae761b05f2cca3aa285ea583ef0f8"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/uses-entity/a9fa9c37f9f31ef7f127e381375639796ffb859e5b7106d2c4e5dd684b71f149:user:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/uses-entity/a9fa9c37f9f31ef7f127e381375639796ffb859e5b7106d2c4e5dd684b71f149",
+        "role": "user",
+        "source": "entity:mathscape:semantic-entity/2cbea77f0c7d234f4ecbeec75b59b61669d1a72bf4a0594fd8c279bc37a86fbf",
+        "target": "relation:mathscape:projection-relation/uses-entity/a9fa9c37f9f31ef7f127e381375639796ffb859e5b7106d2c4e5dd684b71f149"
       },
       {
         "directed": false,
@@ -2579,6 +2679,19 @@
       },
       {
         "boundary": false,
+        "domain_id": "mathscape:projection-relation/of-concept/559a662597cef607f615a16fdcedb179253c3d75d06d4f34110dcf6d408befb6",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/of-concept/559a662597cef607f615a16fdcedb179253c3d75d06d4f34110dcf6d408befb6",
+        "label": "归属概念",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "of_concept",
+        "summary": "精确说法所属的概念"
+      },
+      {
+        "boundary": false,
         "domain_id": "mathscape:projection-relation/scope-of/bbf81d3c62bd10d1715fe3e723b8f6ce1eb3e5ab1b9970bdf74c6e870e9864ee",
         "domain_kind": "DialectScope",
         "element_kind": "relation",
@@ -2602,6 +2715,58 @@
         "parent": "group:source-map-landscape",
         "relation_kind": "scope_of",
         "summary": "约定卡适用于这一节及其下的内容"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/uses-entity/42de2520a8c98433ae780fd1cea7789e6cfbd75ecd7d75a8065e61da2ae2103f",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/uses-entity/42de2520a8c98433ae780fd1cea7789e6cfbd75ecd7d75a8065e61da2ae2103f",
+        "label": "引用对象",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "uses_entity",
+        "summary": "该共享对象引用的其他共享对象"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/uses-entity/7609aa6f6be5bd17bf7a3d60204c0c7222c52b54745d0f1077ebaa5c88add915",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/uses-entity/7609aa6f6be5bd17bf7a3d60204c0c7222c52b54745d0f1077ebaa5c88add915",
+        "label": "引用对象",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "uses_entity",
+        "summary": "该共享对象引用的其他共享对象"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/uses-entity/a30af35bf53ced3cc96abf4aaa80df67e25354d64cc43f0d5535e381fa13309b",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/uses-entity/a30af35bf53ced3cc96abf4aaa80df67e25354d64cc43f0d5535e381fa13309b",
+        "label": "引用对象",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "uses_entity",
+        "summary": "该共享对象引用的其他共享对象"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/uses-entity/a9fa9c37f9f31ef7f127e381375639796ffb859e5b7106d2c4e5dd684b71f149",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/uses-entity/a9fa9c37f9f31ef7f127e381375639796ffb859e5b7106d2c4e5dd684b71f149",
+        "label": "引用对象",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "uses_entity",
+        "summary": "该共享对象引用的其他共享对象"
       },
       {
         "boundary": false,
@@ -2689,6 +2854,15 @@
     "materials": [
       {
         "artifact_id": "mathscape:artifact/sha256/5e53af1c625f8b63ceaf8429389bdff2b0b89177ab108e3ccbf86551e9467107",
+        "conventions_detail": [
+          {
+            "is_baseline_match": true,
+            "key": "sequence_index_origin",
+            "scope_id": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+            "scope_label": "《星港》§3.2 的约定",
+            "text": "数列 $(F_n)_{n\\ge 0}$，从第 0 项 $F_0=0$ 起编"
+          }
+        ],
         "new_conventions": [
           {
             "scope_id": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
@@ -2697,6 +2871,113 @@
           }
         ],
         "open_debts": [],
+        "outline_units": [
+          {
+            "category": "unaligned",
+            "study_status": "unread",
+            "targets": [],
+            "unit_id": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+            "unit_kind": "section",
+            "unit_title": "§3.2 Fibonacci 数列"
+          },
+          {
+            "category": "seen_elsewhere",
+            "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+            "study_status": "unread",
+            "targets": [
+              {
+                "alignment_id": "mathscape:alignment/aaf11d561ef8d7e07cfa041a237aa5b62f097da5de55d883959d32d4d3fb1962",
+                "entity_id": "mathscape:semantic-entity/7fce50167ce41f124c55a2ee12e2ae34295bf682f04b6edaf15bafa2c649cc0a",
+                "entity_label": "精确说法：Fibonacci 数列（F₀ = 0 起编，同 mathlib）",
+                "only_differs_by": [],
+                "relation": "expresses",
+                "seen_in": [
+                  "mathscape:artifact/sha256/e78e0229a40ec9f8c7d14d64aa4fc611ec8c88de3a998acfdfc5b3b390ed24a2"
+                ]
+              },
+              {
+                "alignment_id": "mathscape:alignment/ffe7f34c0c09014ee013fbced60586841db88de3b66168890616af62b01b13b0",
+                "entity_id": "mathscape:semantic-entity/f1584df51252afaffcd44712ed566662a2fb6664faba1659842d9ee12e4b1a21",
+                "entity_label": "概念：Fibonacci 数列",
+                "only_differs_by": [],
+                "relation": "expresses",
+                "seen_in": [
+                  "mathscape:artifact/sha256/e78e0229a40ec9f8c7d14d64aa4fc611ec8c88de3a998acfdfc5b3b390ed24a2"
+                ]
+              }
+            ],
+            "unit_id": "mathscape:source-unit/528e8bcbd11e97f6f9158baf0fb228a4b6c3a5ccf79a08e311ad76bd1799b5cd",
+            "unit_kind": "definition",
+            "unit_title": "定义 3.2.1 Fibonacci 数列（F₀=0, F₁=1）"
+          },
+          {
+            "category": "seen_elsewhere",
+            "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+            "study_status": "unread",
+            "targets": [
+              {
+                "alignment_id": "mathscape:alignment/3f5f5ef3182483015d718721d55e0c5f820fe6ea41f2316994164ba2d249478f",
+                "entity_id": "mathscape:semantic-entity/17c977e20576a97d3a2d629c993534b3820d19e95b18e81dd043894c7162ef2e",
+                "entity_label": "精确说法：Q 的 n 次方里是三个相邻的 Fibonacci 数（n ≥ 1）",
+                "only_differs_by": [],
+                "relation": "expresses",
+                "seen_in": [
+                  "mathscape:artifact/sha256/e78e0229a40ec9f8c7d14d64aa4fc611ec8c88de3a998acfdfc5b3b390ed24a2"
+                ]
+              }
+            ],
+            "unit_id": "mathscape:source-unit/0ff4f383b7311c61b0b338ead233031650931b34a0556e3d55e396a859341ebc",
+            "unit_kind": "statement",
+            "unit_title": "引理 3.2.2 Qⁿ 的矩阵形式"
+          },
+          {
+            "category": "unaligned",
+            "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+            "study_status": "unread",
+            "targets": [],
+            "unit_id": "mathscape:source-unit/7d9a343517af706dae697dce96cef3ae6a77baca12d72b1d4eaba72bcc4ac142",
+            "unit_kind": "proof",
+            "unit_title": "引理 3.2.2 的证明（归纳）"
+          },
+          {
+            "category": "seen_elsewhere",
+            "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+            "study_status": "unread",
+            "targets": [
+              {
+                "alignment_id": "mathscape:alignment/b2a60780d49d5e155e0dc5655588071cfc62bc9bc41d76afe34251c15f04d835",
+                "entity_id": "mathscape:semantic-entity/b17d6e25bfbdd0c67fdf8482033969d81c3ae761b05f2cca3aa285ea583ef0f8",
+                "entity_label": "精确说法：Cassini 恒等式（对一切 n ≥ 1）",
+                "only_differs_by": [],
+                "relation": "expresses",
+                "seen_in": [
+                  "mathscape:artifact/sha256/e78e0229a40ec9f8c7d14d64aa4fc611ec8c88de3a998acfdfc5b3b390ed24a2"
+                ]
+              }
+            ],
+            "unit_id": "mathscape:source-unit/6656c9b7a63b44e04ce329318c7106d481a478eae5aa73c047ecf4a995da5623",
+            "unit_kind": "statement",
+            "unit_title": "定理 3.2.3 Cassini 恒等式"
+          },
+          {
+            "category": "unaligned",
+            "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+            "study_status": "unread",
+            "targets": [],
+            "unit_id": "mathscape:source-unit/ef2a81538022363b3ce9f903f394a3b3e4677cc2848516deab38bbf6f60e042c",
+            "unit_kind": "proof",
+            "unit_title": "定理 3.2.3 的证明（取行列式）"
+          },
+          {
+            "category": "unaligned",
+            "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+            "study_status": "unread",
+            "targets": [],
+            "unit_id": "mathscape:source-unit/4abc1c94cf359cabf348ad0f2d2201e6e5d582594a425cd4b5ded9f12dc2f9af",
+            "unit_kind": "remark",
+            "unit_title": "注 3.2.4 n=1 的情形用到 F₀"
+          }
+        ],
         "units": [
           {
             "alignment_id": "mathscape:alignment/ffe7f34c0c09014ee013fbced60586841db88de3b66168890616af62b01b13b0",
@@ -2754,6 +3035,23 @@
       },
       {
         "artifact_id": "mathscape:artifact/sha256/e78e0229a40ec9f8c7d14d64aa4fc611ec8c88de3a998acfdfc5b3b390ed24a2",
+        "conventions_detail": [
+          {
+            "diff_note": "与共享基线取值（0）不同",
+            "is_baseline_match": false,
+            "key": "sequence_index_origin",
+            "scope_id": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+            "scope_label": "《灯塔》§2.4 的约定",
+            "text": "本书的下标一律从 1 开始，不使用第 0 项"
+          },
+          {
+            "is_baseline_match": false,
+            "key": "terminology",
+            "scope_id": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+            "scope_label": "《灯塔》§2.4 的约定",
+            "text": "本节把 Fibonacci 数列叫作“兔子数列”"
+          }
+        ],
         "new_conventions": [
           {
             "scope_id": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
@@ -2786,6 +3084,119 @@
             "debt_id": "mathscape:debt/f190f4d833a23798878607f7aecfbf8936b19f4adad18aaa634deb285aebd317",
             "obligation": "证明 $f_k = F_k$ 对一切 $k\\ge 1$ 成立（两者 k = 1, 2 取值相同、递推相同，对 k 归纳）",
             "status": "open"
+          }
+        ],
+        "outline_units": [
+          {
+            "category": "unaligned",
+            "study_status": "unread",
+            "targets": [],
+            "unit_id": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+            "unit_kind": "section",
+            "unit_title": "§2.4 兔子数列"
+          },
+          {
+            "category": "seen_elsewhere",
+            "parent_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+            "study_status": "unread",
+            "targets": [
+              {
+                "alignment_id": "mathscape:alignment/c48ab92ec8e2458f0c7d97ef2c25e0d705bc2b3f0b13ca03399852616583c6ee",
+                "entity_id": "mathscape:semantic-entity/f1584df51252afaffcd44712ed566662a2fb6664faba1659842d9ee12e4b1a21",
+                "entity_label": "概念：Fibonacci 数列",
+                "only_differs_by": [],
+                "relation": "expresses",
+                "seen_in": [
+                  "mathscape:artifact/sha256/5e53af1c625f8b63ceaf8429389bdff2b0b89177ab108e3ccbf86551e9467107"
+                ]
+              },
+              {
+                "alignment_id": "mathscape:alignment/ccd2ad035c7b0a0d3ac984086203856d4426a7947dd2ab524964ddde2fc4bf72",
+                "entity_id": "mathscape:semantic-entity/7fce50167ce41f124c55a2ee12e2ae34295bf682f04b6edaf15bafa2c649cc0a",
+                "entity_label": "精确说法：Fibonacci 数列（F₀ = 0 起编，同 mathlib）",
+                "only_differs_by": [
+                  "灯塔没有第 0 项"
+                ],
+                "relation": "overlaps_with",
+                "seen_in": [
+                  "mathscape:artifact/sha256/5e53af1c625f8b63ceaf8429389bdff2b0b89177ab108e3ccbf86551e9467107"
+                ]
+              }
+            ],
+            "unit_id": "mathscape:source-unit/ea4353677ffeb25d60ccbc96b37526cb6c114cd3c4e646aa7b5ac13e9de63b66",
+            "unit_kind": "definition",
+            "unit_title": "定义 2.4.1 兔子数列（f₁=f₂=1，无第 0 项）"
+          },
+          {
+            "category": "seen_elsewhere",
+            "parent_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+            "study_status": "unread",
+            "targets": [
+              {
+                "alignment_id": "mathscape:alignment/37fc1e0788f9b708d8e81f28b0426958a1af1aeeb5f3429b9474a32cd4b8b2fc",
+                "entity_id": "mathscape:semantic-entity/17c977e20576a97d3a2d629c993534b3820d19e95b18e81dd043894c7162ef2e",
+                "entity_label": "精确说法：Q 的 n 次方里是三个相邻的 Fibonacci 数（n ≥ 1）",
+                "only_differs_by": [
+                  "缺共享的 n = 1"
+                ],
+                "relation": "specializes",
+                "seen_in": [
+                  "mathscape:artifact/sha256/5e53af1c625f8b63ceaf8429389bdff2b0b89177ab108e3ccbf86551e9467107"
+                ]
+              }
+            ],
+            "unit_id": "mathscape:source-unit/1c3aeaafc612899ef1857e0c890a363949584a000a8f88241286e5fc0b057e04",
+            "unit_kind": "statement",
+            "unit_title": "命题 2.4.2 Mⁿ⁺¹ 的矩阵形式"
+          },
+          {
+            "category": "seen_elsewhere",
+            "parent_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+            "study_status": "unread",
+            "targets": [
+              {
+                "alignment_id": "mathscape:alignment/78630adadd1dfcf59396cfaae97d806c97240439e27bf16c52bad0a52111cd81",
+                "entity_id": "mathscape:semantic-entity/b17d6e25bfbdd0c67fdf8482033969d81c3ae761b05f2cca3aa285ea583ef0f8",
+                "entity_label": "精确说法：Cassini 恒等式（对一切 n ≥ 1）",
+                "only_differs_by": [
+                  "缺共享的 n = 1"
+                ],
+                "relation": "specializes",
+                "seen_in": [
+                  "mathscape:artifact/sha256/5e53af1c625f8b63ceaf8429389bdff2b0b89177ab108e3ccbf86551e9467107"
+                ]
+              }
+            ],
+            "unit_id": "mathscape:source-unit/e00b973e2088ba7b45fbdcc6660249700452a4944d7152aadda3b161554f9272",
+            "unit_kind": "statement",
+            "unit_title": "命题 2.4.3 Cassini（灯塔的写法）"
+          },
+          {
+            "category": "fresh",
+            "parent_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+            "study_status": "unread",
+            "targets": [
+              {
+                "alignment_id": "mathscape:alignment/d031bda6fbb3e5d916b54f725ea67afe66a8a2f26ecf067600b0a53d1d2f3371",
+                "entity_id": "mathscape:semantic-entity/2cbea77f0c7d234f4ecbeec75b59b61669d1a72bf4a0594fd8c279bc37a86fbf",
+                "entity_label": "题型：64 = 65 这一族剪拼题",
+                "only_differs_by": [],
+                "relation": "expresses",
+                "seen_in": []
+              }
+            ],
+            "unit_id": "mathscape:source-unit/907071a544888ecb578e121f816a9d15c1ec344fea800b9206bb62161705b1e6",
+            "unit_kind": "problem",
+            "unit_title": "习题 2.4.7 剪拼悖论"
+          },
+          {
+            "category": "unaligned",
+            "parent_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+            "study_status": "unread",
+            "targets": [],
+            "unit_id": "mathscape:source-unit/23a3696983ba615de0fd7838f92c64df58c2a9068a247c0dc34ea7eff536ae11",
+            "unit_kind": "hint",
+            "unit_title": "习题 2.4.7 的提示"
           }
         ],
         "units": [

@@ -15,6 +15,7 @@ mod ink_note;
 mod ink_recovery;
 mod ink_snapshot_label;
 mod map_edit;
+mod markdown_errata;
 mod markdown_patch;
 mod proposals;
 mod read;
@@ -22,6 +23,7 @@ mod registration;
 mod run_disposition;
 mod search;
 mod source_map;
+mod study_marks;
 
 use std::path::Path;
 
@@ -74,6 +76,11 @@ pub use ink_snapshot_label::{
     INK_SNAPSHOT_LABEL_MAX_CHARS, InkSnapshotLabelReceipt, InkSnapshotLabelRequest,
     normalize_snapshot_label,
 };
+pub use markdown_errata::{
+    ErrataUnitReviewDecision, ErrataUnitReviewRecord, MarkdownBlockErrata,
+    MarkdownErrataSourceKind, MarkdownErrataStatus, UpsertMarkdownErrata,
+    UpsertMarkdownErrataOutcome,
+};
 pub use markdown_patch::{StoredMarkdownPatchSet, StoredPatchApplication};
 pub use proposals::ProposedChangeRecord;
 pub use proposals::{
@@ -89,6 +96,7 @@ pub use source_map::{
     MapObjectOutcome, SOURCE_REGISTRATION_RECEIPT_VERSION, SourceMapSnapshot,
     SourceRegistrationReceipt, StoredMapEndpoint, StoredMapObject,
 };
+pub use study_marks::{StudyMark, StudyMarkUpdate, StudyStatus};
 
 const ARTIFACT_POOL_MIGRATION: &str = include_str!("../../../migrations/0001_artifact_pool.sql");
 const LLM_PROFILES_MIGRATION: &str = include_str!("../../../migrations/0002_llm_profiles.sql");
@@ -113,7 +121,9 @@ const CANONICAL_MARKDOWN_ENSURE_MIGRATION: &str =
 const PROPOSED_CHANGE_SETS_MIGRATION: &str =
     include_str!("../../../migrations/0023_proposed_change_sets.sql");
 const PHASE2_PR_B_MIGRATION: &str = include_str!("../../../migrations/0024_phase2_pr_b.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 24;
+const STUDY_MARKS_MIGRATION: &str = include_str!("../../../migrations/0025_study_marks.sql");
+const MARKDOWN_ERRATA_MIGRATION: &str = include_str!("../../../migrations/0026_markdown_errata.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 26;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -435,6 +445,8 @@ impl SqliteArtifactStore {
         canonical_ensure::validate_schema(&connection)?;
         validate_registration_schema(&connection)?;
         validate_proposed_change_schema(&connection)?;
+        study_marks::validate_schema(&connection)?;
+        markdown_errata::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -446,6 +458,94 @@ impl SqliteArtifactStore {
 
     pub fn open_in_memory() -> Result<Self, SqliteStoreError> {
         Self::initialize(Connection::open_in_memory()?)
+    }
+
+    pub fn list_study_marks(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, StudyMark>, SqliteStoreError> {
+        study_marks::list_study_marks(&self.connection)
+    }
+
+    pub fn set_study_marks_batch(
+        &mut self,
+        updates: &[StudyMarkUpdate],
+        updated_at: &str,
+    ) -> Result<Vec<StudyMark>, SqliteStoreError> {
+        study_marks::set_study_marks_batch(&mut self.connection, updates, updated_at)
+    }
+
+    pub fn list_active_markdown_errata(
+        &self,
+        artifact_id: &str,
+    ) -> Result<Vec<MarkdownBlockErrata>, SqliteStoreError> {
+        markdown_errata::list_active_markdown_errata(&self.connection, artifact_id)
+    }
+
+    /// Every errata row (any status) written for one approved discovery patch set.
+    pub fn list_markdown_errata_for_patch_set(
+        &self,
+        patch_set_id: &str,
+    ) -> Result<Vec<MarkdownBlockErrata>, SqliteStoreError> {
+        markdown_errata::list_markdown_errata_for_patch_set(&self.connection, patch_set_id)
+    }
+
+    pub fn list_all_active_markdown_errata(
+        &self,
+    ) -> Result<Vec<MarkdownBlockErrata>, SqliteStoreError> {
+        markdown_errata::list_all_active_markdown_errata(&self.connection)
+    }
+
+    pub fn list_markdown_errata_history(
+        &self,
+        artifact_id: &str,
+        block_id: Option<&str>,
+    ) -> Result<Vec<MarkdownBlockErrata>, SqliteStoreError> {
+        markdown_errata::list_markdown_errata_history(&self.connection, artifact_id, block_id)
+    }
+
+    pub fn get_markdown_errata(
+        &self,
+        errata_id: &str,
+    ) -> Result<Option<MarkdownBlockErrata>, SqliteStoreError> {
+        markdown_errata::get_markdown_errata(&self.connection, errata_id)
+    }
+
+    pub fn upsert_markdown_errata(
+        &mut self,
+        input: UpsertMarkdownErrata,
+    ) -> Result<UpsertMarkdownErrataOutcome, SqliteStoreError> {
+        markdown_errata::upsert_markdown_errata(&mut self.connection, input)
+    }
+
+    pub fn revert_markdown_errata(
+        &mut self,
+        errata_id: &str,
+        now: &str,
+    ) -> Result<Option<MarkdownBlockErrata>, SqliteStoreError> {
+        markdown_errata::revert_markdown_errata(&mut self.connection, errata_id, now)
+    }
+
+    pub fn mark_errata_unit_reviewed(
+        &mut self,
+        unit_id: &str,
+        errata_id: &str,
+        decision: ErrataUnitReviewDecision,
+        reviewed_at: &str,
+    ) -> Result<ErrataUnitReviewRecord, SqliteStoreError> {
+        markdown_errata::mark_errata_unit_reviewed(
+            &mut self.connection,
+            unit_id,
+            errata_id,
+            decision,
+            reviewed_at,
+        )
+    }
+
+    pub fn list_errata_unit_reviews(
+        &self,
+        unit_id: Option<&str>,
+    ) -> Result<Vec<ErrataUnitReviewRecord>, SqliteStoreError> {
+        markdown_errata::list_errata_unit_reviews(&self.connection, unit_id)
     }
 
     pub fn create_ink_document(
@@ -683,7 +783,7 @@ impl SqliteArtifactStore {
             5 => {
                 validate_schema(&connection)?;
             }
-            6..=24 => {
+            6..=SUPPORTED_SCHEMA_VERSION => {
                 validate_schema(&connection)?;
             }
             actual => {
@@ -896,6 +996,34 @@ impl SqliteArtifactStore {
                 connection.pragma_update(None, "user_version", 24)?;
             }
         }
+        if version < 25 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 25",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                connection.execute_batch(STUDY_MARKS_MIGRATION)?;
+            } else {
+                connection.pragma_update(None, "user_version", 25)?;
+            }
+        }
+        if version < 26 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 26",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                connection.execute_batch(MARKDOWN_ERRATA_MIGRATION)?;
+            } else {
+                connection.pragma_update(None, "user_version", 26)?;
+            }
+        }
         validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -912,6 +1040,8 @@ impl SqliteArtifactStore {
         ink_snapshot_label::validate_schema(&connection)?;
         canonical_ensure::validate_schema(&connection)?;
         validate_proposed_change_schema(&connection)?;
+        study_marks::validate_schema(&connection)?;
+        markdown_errata::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 

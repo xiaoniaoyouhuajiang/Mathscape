@@ -27,9 +27,12 @@ import { parseMathscapeId, shortStableId } from "../core/stable-id";
 import { aliasIdsOf } from "../reader/openable";
 import type { AgentEventLike } from "./format";
 
-/** One map node a cite can jump to. */
+/** Prefix for synthetic cite targets that open a live handwrite note (`ink_documents`). */
+export const INK_NOTE_CITE_PREFIX = "ink-note:";
+
+/** One map node (or live ink note) a cite can jump to. */
 export interface CiteTarget {
-  /** Projection (render) node id, what `selectNodeById` takes. */
+  /** Projection (render) node id, or `ink-note:<document_id>` for live ink notes. */
   nodeId: string;
   domainId: string;
   domainKind: string | null;
@@ -111,9 +114,13 @@ function push<T>(index: Map<string, T[]>, key: string, value: T, same: (a: T, b:
 
 const sameTarget = (a: CiteTarget, b: CiteTarget) => a.domainId === b.domainId;
 
-/** domain_id / bare hash → map node. One target per domain id: the entity
- * (non-boundary) node wins over relation or boundary copies. */
-export function buildCiteIndex(nodes: readonly IncidenceNode[]): CiteIndex {
+/** domain_id / bare hash → map node (plus optional extra targets such as active
+ * live ink notes). One target per domain id: the entity (non-boundary) node
+ * wins over relation or boundary copies. */
+export function buildCiteIndex(
+  nodes: readonly IncidenceNode[],
+  extraTargets: readonly CiteTarget[] = [],
+): CiteIndex {
   const best = new Map<string, IncidenceNode>();
   const rank = (node: IncidenceNode) => (node.element_kind === "entity" ? 0 : 2) + (node.boundary ? 1 : 0);
   for (const node of nodes) {
@@ -131,6 +138,10 @@ export function buildCiteIndex(nodes: readonly IncidenceNode[]): CiteIndex {
     for (const alias of aliasIdsOf(node)) {
       if (!best.has(alias)) for (const key of citeKeys(alias)) push(index, key, target, sameTarget);
     }
+  }
+  for (const extra of extraTargets) {
+    if (!extra.domainId || best.has(extra.domainId)) continue;
+    for (const key of citeKeys(extra.domainId)) push(index, key, extra, sameTarget);
   }
   return index;
 }
@@ -320,7 +331,14 @@ export function mapNodeIds(ids: readonly string[], map: CiteIndex, round?: Round
   const out: string[] = [];
   for (const id of ids) {
     const hit = resolveCite(id, round, map);
-    if (hit.status === "map" && hit.target && !out.includes(hit.target.nodeId)) out.push(hit.target.nodeId);
+    if (
+      hit.status === "map" &&
+      hit.target &&
+      !hit.target.nodeId.startsWith(INK_NOTE_CITE_PREFIX) &&
+      !out.includes(hit.target.nodeId)
+    ) {
+      out.push(hit.target.nodeId);
+    }
     if (out.length >= cap) break;
   }
   return out;
@@ -364,9 +382,10 @@ export function citeChipParts(cite: CiteResolution): CiteChipParts {
   const idText = shortCite(cite.target?.domainId ?? cite.raw);
   if ((cite.status === "map" || cite.status === "ambiguous") && cite.target) {
     const head = [kind, idText].filter(Boolean).join(" · ");
+    const jumpLabel = cite.target.nodeId.startsWith(INK_NOTE_CITE_PREFIX) ? "\n点击打开手稿" : "\n点击在地图上定位";
     const more = cite.status === "ambiguous"
       ? `\n歧义：${cite.candidates.length} 个候选，点击定位第一个\n${cite.candidates.map((item) => `· ${item.label || shortCite(item.domainId)}`).join("\n")}`
-      : "\n点击在地图上定位";
+      : jumpLabel;
     return {
       statusClass: `is-${cite.status}`, text: chipLabel(cite.label || idText), title: head + more,
       jumpNode: cite.target.nodeId, ambiguous: cite.status === "ambiguous",

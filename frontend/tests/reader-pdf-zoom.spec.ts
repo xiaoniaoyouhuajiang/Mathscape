@@ -6,13 +6,14 @@ import { expect, test, type Page } from "@playwright/test";
 test.use({ deviceScaleFactor: 2, viewport: { width: 1100, height: 760 } });
 
 const viewport = (page: Page) => page.locator(".pdf-viewport");
+const activeCanvas = (page: Page) => page.locator(".pdf-viewport .pdf-page-slot.is-active-page canvas");
 const scale = async (page: Page) => Number(await viewport(page).getAttribute("data-scale"));
-const canvasState = (page: Page) => page.locator(".pdf-viewport canvas").evaluate((canvas: HTMLCanvasElement) => ({
+const canvasState = (page: Page) => activeCanvas(page).evaluate((canvas: HTMLCanvasElement) => ({
   cssWidth: parseFloat(canvas.style.width), width: canvas.width, ratio: Number(canvas.dataset.ratio),
 }));
 const open = async (page: Page) => {
   await page.evaluate(async () => (window as any).harness.reader.open("pdf", "Zoom"));
-  await expect(page.locator(".pdf-viewport canvas")).toBeVisible();
+  await expect(activeCanvas(page)).toBeVisible();
 };
 /**
  * A bitmap is crisp when it has one device pixel per CSS pixel at `ratio`.
@@ -119,7 +120,7 @@ test("the zoom is remembered per document and the outline can be hidden", async 
 });
 
 /** Colour at the bottom-left of the rendered bitmap: page 1 is red, page 2 blue. */
-const renderedPage = (page: Page) => page.locator(".pdf-viewport canvas").evaluate((canvas: HTMLCanvasElement) => {
+const renderedPage = (page: Page) => activeCanvas(page).evaluate((canvas: HTMLCanvasElement) => {
   const [r, , b, a] = canvas.getContext("2d")!.getImageData(4, canvas.height - 4, 1, 1).data;
   return a === 0 ? "blank" : r > 200 && b < 80 ? "page-1" : b > 200 && r < 80 ? "page-2" : `rgb(${r},${b})`;
 });
@@ -150,4 +151,43 @@ test("zooming while the next page is still loading renders that page at the new 
   await expect.poll(() => scale(page)).toBe(0.9);
   await crisp(page);
   await expect.poll(() => renderedPage(page)).toBe("page-1");
+});
+
+test("continuous scroll default, single-page toggle, keyboard PageDown/PageUp, TextLayer selection, search, and backlink landing highlight", async ({ page }) => {
+  await page.evaluate(async () => {
+    await (window as any).harness.reader.open("pdf", "Continuous & TextLayer", {
+      pdfPageIndex: 1,
+      focusExcerpt: "Proof by Induction Step",
+    });
+  });
+
+  // 1. Opens in continuous scroll mode at target page 2 with golden backlink pulse + TextLayer phrase highlight
+  await expect(page.getByRole("button", { name: "连续滚动" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("PDF 页码")).toHaveValue("2");
+  const slot2Shell = page.locator(".pdf-page-slot[data-page-number='2'] .pdf-page-shell");
+  await expect(slot2Shell).toHaveClass(/is-backlink-target/);
+  await expect(slot2Shell.locator(".textLayer")).toContainText("Proof by Induction Step");
+  await expect(slot2Shell.locator(".textLayer .pdf-backlink-text-hit").first()).toBeVisible();
+
+  // 2. Keyboard PageUp / PageDown navigates cleanly
+  await page.keyboard.press("PageUp");
+  await expect(page.getByLabel("PDF 页码")).toHaveValue("1");
+  await page.keyboard.press("PageDown");
+  await expect(page.getByLabel("PDF 页码")).toHaveValue("2");
+
+  // 3. Cross-page PDF find bar (`查找`) jumps to Page 1 match and highlights TextLayer span
+  await page.getByRole("button", { name: "查找" }).click();
+  await expect(page.locator(".pdf-find-bar")).toBeVisible();
+  await page.getByLabel("查找 PDF 文字").fill("Generating Function");
+  await expect(page.locator(".pdf-find-count")).toHaveText("1 / 1");
+  await expect(page.getByLabel("PDF 页码")).toHaveValue("1");
+  await expect(page.locator(".pdf-page-slot[data-page-number='1'] .textLayer .pdf-find-hit-active").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".pdf-find-bar")).toBeHidden();
+
+  // 4. Toggling to single-page mode hides inactive page slots and persists preference
+  await page.getByRole("button", { name: "连续滚动" }).click();
+  await expect(page.getByRole("button", { name: "单页视图" })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator(".pdf-page-slot[data-page-number='1']")).toBeVisible();
+  await expect(page.locator(".pdf-page-slot[data-page-number='2']")).toBeHidden();
 });

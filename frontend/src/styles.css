@@ -380,7 +380,8 @@ code {
   color: #8695a2;
 }
 
-.depth-button {
+.depth-button,
+.lens-button {
   padding: 3px 8px;
   border: 1px solid #45606c;
   border-radius: 5px;
@@ -390,7 +391,8 @@ code {
   cursor: pointer;
 }
 
-.depth-button.is-active {
+.depth-button.is-active,
+.lens-button.is-active {
   border-color: #8fc8b7;
   background: #31534e;
   color: #f3fffb;
@@ -1233,6 +1235,15 @@ code {
 .ink-link-fields { display: grid; gap: 8px; }
 .ink-link-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .ink-link-message, .ink-link-hint { min-height: 1em; margin: 0; color: #e6c98a; }
+.ink-tablet-hint { margin: 2px 0 0; font-size: 11.5px; line-height: 1.45; color: #9ec5be; }
+.ink-tablet-hint[hidden] { display: none !important; }
+button.is-tablet-online { border-color: #49b698; color: #d6faf0; background: #153934; }
+button.is-tablet-online:hover:not(:disabled) { background: #1c4c45; }
+button.is-tablet-online::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-right: 6px; vertical-align: 1px; background: #4fe3b5;
+  box-shadow: 0 0 6px rgba(79, 227, 181, .75);
+}
 .ink-link-candidates { display: grid; gap: 2px; max-height: 190px; overflow: auto; }
 .ink-link-candidate { padding: 6px 8px; border: 1px solid transparent; border-radius: 5px; color: inherit; background: #13212a; text-align: left; cursor: pointer; }
 .ink-link-candidate[aria-selected="true"] { border-color: #5fb3a3; background: #1d3a40; }
@@ -1245,6 +1256,38 @@ code {
 .detail-ink-notes h4 { margin: 0; font-size: 13px; }
 .detail-ink-notes ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .detail-ink-notes .ink-related-meta { margin-left: 6px; }
+
+/* Inspector non-blocking `原文已校对` review card (Errata Module 2). */
+.detail-errata-review {
+  display: grid; gap: 8px; margin: 10px 0; padding: 10px 11px;
+  border-radius: 7px; border: 1px solid #3c7b6e; background: #102428; color: #dff2ee;
+  font-size: 12px;
+}
+.detail-errata-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.detail-errata-badge {
+  display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px;
+  background: #1d574b; border: 1px solid #4ca694; color: #e2faf3; font-size: 11px; font-weight: 600;
+}
+.detail-errata-summary { color: #c7e3de; font-size: 12px; }
+.detail-errata-sent-pill {
+  padding: 1px 6px; border-radius: 999px; font-size: 10.5px;
+  background: #23384a; border: 1px solid #5985a8; color: #cde6fa;
+}
+.detail-errata-sent-pill[hidden] { display: none !important; }
+.detail-errata-diff summary { cursor: pointer; color: #9ad2c6; font-size: 11.5px; }
+.detail-errata-diff-view { margin-top: 6px; max-height: 170px; }
+.detail-errata-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.detail-errata-send-btn {
+  padding: 5px 10px; border-radius: 5px; font-size: 11.5px; cursor: pointer;
+  background: #216e5f; color: #effbf8; border: 1px solid #4ca694; font-weight: 500;
+}
+.detail-errata-send-btn:hover:not(:disabled) { background: #298472; }
+.detail-errata-ack-btn {
+  padding: 5px 10px; border-radius: 5px; font-size: 11.5px; cursor: pointer;
+  background: #182b33; color: #cbe0e6; border: 1px solid #3f5d6b;
+}
+.detail-errata-ack-btn:hover:not(:disabled) { background: #223b46; }
+.detail-errata-send-btn:disabled, .detail-errata-ack-btn:disabled { opacity: .5; cursor: default; }
 
 /* Note-page links (§6.2). */
 .ink-link-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #263b44; font-size: 12px; }

@@ -64,8 +64,35 @@ pub enum ProjectionRelationKind {
     DebtOn,
     /// Semantic layer: a dialect scope (约定卡) anchored at a section unit.
     ScopeOf,
+    /// Semantic layer: a declaration or problem schema referencing another shared object.
+    UsesEntity,
+    /// Semantic layer: an exact declaration belonging to a shared concept.
+    OfConcept,
+    /// Semantic layer: a debt discharged (or claimed paid) by an object.
+    PaidBy,
     #[default]
     Unknown,
+}
+
+/// Epistemological hop classification shared by Desktop focus and MCP
+/// `graph.neighborhood` presets.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HopClass {
+    /// Physical/file provenance indirection (`conversion`, `located_in`, `contains_span`).
+    Plumbing,
+    /// Local contextual annotations (`debt_on`, `scope_of`).
+    ContextAttach,
+    /// Intra-material containment (`has_part`).
+    Hierarchy,
+    /// Intra-source mathematical reasoning (`states`, `proves`, `poses`, `hints`, `solves`, `explains`, `applies_method`, `cites`).
+    SourceReasoning,
+    /// Cross-book alignment & formal semantic dependency (`aligns`, `uses_entity`, `of_concept`, `paid_by`).
+    SemanticBridge,
+    /// High-fanout categorical topic shelf (`in_theory`).
+    ContainerHub,
+    /// Untraversable (`unknown` or future unrecognized kinds).
+    Forbidden,
 }
 
 impl ProjectionRelationKind {
@@ -83,6 +110,28 @@ impl ProjectionRelationKind {
             "applies_method" => Self::AppliesMethod,
             "cites" => Self::Cites,
             _ => Self::Unknown,
+        }
+    }
+
+    /// Classifies the epistemological hop type of this relation kind.
+    pub const fn hop_class(self) -> HopClass {
+        match self {
+            Self::Conversion | Self::LocatedIn | Self::ContainsSpan => HopClass::Plumbing,
+            Self::DebtOn | Self::ScopeOf => HopClass::ContextAttach,
+            Self::HasPart => HopClass::Hierarchy,
+            Self::States
+            | Self::Proves
+            | Self::Poses
+            | Self::Hints
+            | Self::Solves
+            | Self::Explains
+            | Self::AppliesMethod
+            | Self::Cites => HopClass::SourceReasoning,
+            Self::Aligns | Self::UsesEntity | Self::OfConcept | Self::PaidBy => {
+                HopClass::SemanticBridge
+            }
+            Self::InTheory => HopClass::ContainerHub,
+            Self::Unknown => HopClass::Forbidden,
         }
     }
 }

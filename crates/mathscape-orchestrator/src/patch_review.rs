@@ -88,6 +88,24 @@ pub enum PatchReviewDecision {
     /// conversion issue becomes a read-only warning.
     RejectAll,
     Apply(Box<PatchContinuation>),
+    /// The accepted patches were persisted by the application shell as
+    /// block-level errata over the unchanged physical snapshot. B continues
+    /// on the original input; every conversion issue stays a B warning so
+    /// fact extraction knows these spans carry OCR damage in the raw bytes.
+    AppliedAsErrata {
+        accepted_patch_refs: Vec<String>,
+    },
+}
+
+/// True when any evidence range of `issue` overlaps one of `ranges`.
+/// Used to keep blocks that already carry human errata out of the P round,
+/// so a model patch over raw OCR can never supersede a manual correction.
+pub fn issue_touches_ranges(issue: &CanonicalDiscoveryIssue, ranges: &[TextByteRange]) -> bool {
+    issue.evidence.iter().any(|evidence| {
+        ranges
+            .iter()
+            .any(|range| range.start < evidence.end && evidence.start < range.end)
+    })
 }
 
 /// Result of applying an accepted patch subset. `rebound` is present only

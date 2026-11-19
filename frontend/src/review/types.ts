@@ -196,4 +196,6 @@ export interface ReviewRunMeta {
    * change set is accepted or discarded whole through `controller`.
    */
   proposal?: import("./proposal-model").ProposalWorkspaceMeta;
+  /** Opens or keeps the workspace in Map-Linked split-drawer mode alongside the main Cytoscape map. */
+  mapLinked?: boolean;
 }

@@ -146,7 +146,7 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 24);
+    assert_eq!(version, 26);
     assert_eq!(
         connection
             .query_row(
@@ -392,7 +392,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::prepare(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 24
+            supported: 26
         })
     ));
     cleanup(&directory);
@@ -413,7 +413,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 24);
+    assert_eq!(version, 26);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -451,7 +451,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 24);
+    assert_eq!(version, 26);
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 3",
@@ -487,7 +487,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        24
+        26
     );
     assert_eq!(
         connection
@@ -540,7 +540,7 @@ fn repairs_a_v5_discovery_schema_missing_result_fingerprint() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        24
+        26
     );
     let has_result_fingerprint = connection
         .prepare("PRAGMA table_info(discovery_runs)")
@@ -1118,7 +1118,7 @@ fn upgrading_to_v10_preserves_discovery_runs_and_their_children() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        24
+        26
     );
     let violations = connection
         .prepare("PRAGMA foreign_key_check")
@@ -1158,4 +1158,183 @@ fn persists_an_immutable_acceptance_decision_and_registration_plan() {
     store.save_registration_plan(&record).unwrap();
     assert_eq!(store.registration_plan(&decision_id).unwrap(), Some(record));
     cleanup(&directory);
+}
+
+#[test]
+fn study_marks_sidecar_upserts_lists_and_clears_unread_without_touching_map() {
+    use mathscape_store_sqlite::{StudyMarkUpdate, StudyStatus};
+
+    let mut store = SqliteArtifactStore::open_in_memory().unwrap();
+    assert!(store.list_study_marks().unwrap().is_empty());
+
+    store
+        .set_study_marks_batch(
+            &[
+                StudyMarkUpdate {
+                    object_id: "mathscape:source-unit/u1".into(),
+                    status: StudyStatus::Mastered,
+                    note: None,
+                },
+                StudyMarkUpdate {
+                    object_id: "mathscape:source-unit/u2".into(),
+                    status: StudyStatus::Studying,
+                    note: Some("证明第三步待补".into()),
+                },
+            ],
+            "unix:1700000000",
+        )
+        .unwrap();
+
+    let marks = store.list_study_marks().unwrap();
+    assert_eq!(marks.len(), 2);
+    assert_eq!(marks["mathscape:source-unit/u1"].status, StudyStatus::Mastered);
+    assert_eq!(
+        marks["mathscape:source-unit/u2"].note.as_deref(),
+        Some("证明第三步待补")
+    );
+
+    // Setting back to unread without note deletes the row cleanly.
+    store
+        .set_study_marks_batch(
+            &[StudyMarkUpdate {
+                object_id: "mathscape:source-unit/u1".into(),
+                status: StudyStatus::Unread,
+                note: None,
+            }],
+            "unix:1700000001",
+        )
+        .unwrap();
+    let marks = store.list_study_marks().unwrap();
+    assert_eq!(marks.len(), 1);
+    assert!(!marks.contains_key("mathscape:source-unit/u1"));
+    assert_eq!(store.map_edit_snapshot().unwrap().base_commit, None);
+}
+
+#[test]
+fn markdown_errata_sidecar_upserts_supersedes_reverts_and_tracks_unit_reviews() {
+    use mathscape_store_sqlite::{
+        ErrataUnitReviewDecision, MarkdownErrataSourceKind, MarkdownErrataStatus,
+        UpsertMarkdownErrata,
+    };
+
+    let mut store = SqliteArtifactStore::open_in_memory().unwrap();
+    let artifact = "mathscape:artifact/md-demo";
+    assert!(store.list_active_markdown_errata(artifact).unwrap().is_empty());
+
+    // 1. Insert single-block errata E1 on bytes [10, 40)
+    let out1 = store
+        .upsert_markdown_errata(UpsertMarkdownErrata {
+            errata_id: "mathscape:markdown-errata/e1".into(),
+            artifact_id: artifact.into(),
+            base_content_hash: "sha256:aaa".into(),
+            first_block_id: "block:b1".into(),
+            last_block_id: "block:b1".into(),
+            covered_block_ids: vec!["block:b1".into()],
+            base_byte_start: 10,
+            base_byte_end: 40,
+            base_text_hash: "sha256:t1".into(),
+            original_text: "$x^a$".into(),
+            corrected_text: "$x^n$".into(),
+            source_kind: MarkdownErrataSourceKind::Manual,
+            actor: "mathscape:actor/desktop-user".into(),
+            note: Some("核对 PDF 第 3 页".into()),
+            verified_pdf_page: Some(2),
+            discovery_run_id: None,
+            patch_set_id: None,
+            now: "unix:1700000010".into(),
+        })
+        .unwrap();
+    assert!(out1.superseded_ids.is_empty());
+    assert_eq!(out1.errata.status, MarkdownErrataStatus::Active);
+
+    // 2. Partial overlap [20, 60) that fails to cover [10, 40) must be rejected
+    let partial_err = store.upsert_markdown_errata(UpsertMarkdownErrata {
+        errata_id: "mathscape:markdown-errata/bad".into(),
+        artifact_id: artifact.into(),
+        base_content_hash: "sha256:aaa".into(),
+        first_block_id: "block:b1".into(),
+        last_block_id: "block:b2".into(),
+        covered_block_ids: vec!["block:b1".into(), "block:b2".into()],
+        base_byte_start: 20,
+        base_byte_end: 60,
+        base_text_hash: "sha256:t12".into(),
+        original_text: "old".into(),
+        corrected_text: "new".into(),
+        source_kind: MarkdownErrataSourceKind::Manual,
+        actor: "mathscape:actor/desktop-user".into(),
+        note: None,
+        verified_pdf_page: None,
+        discovery_run_id: None,
+        patch_set_id: None,
+        now: "unix:1700000011".into(),
+    });
+    assert!(partial_err.is_err());
+
+    // 3. Full covering union [10, 80) supersedes E1 atomically
+    let out2 = store
+        .upsert_markdown_errata(UpsertMarkdownErrata {
+            errata_id: "mathscape:markdown-errata/e2".into(),
+            artifact_id: artifact.into(),
+            base_content_hash: "sha256:aaa".into(),
+            first_block_id: "block:b1".into(),
+            last_block_id: "block:b2".into(),
+            covered_block_ids: vec!["block:b1".into(), "block:b2".into()],
+            base_byte_start: 10,
+            base_byte_end: 80,
+            base_text_hash: "sha256:t12".into(),
+            original_text: "$x^a$\n\ncontinuation".into(),
+            corrected_text: "$x^n + y^n$".into(),
+            source_kind: MarkdownErrataSourceKind::Manual,
+            actor: "mathscape:actor/desktop-user".into(),
+            note: None,
+            verified_pdf_page: Some(2),
+            discovery_run_id: None,
+            patch_set_id: None,
+            now: "unix:1700000012".into(),
+        })
+        .unwrap();
+    assert_eq!(out2.superseded_ids, vec!["mathscape:markdown-errata/e1"]);
+    let active = store.list_active_markdown_errata(artifact).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].errata_id, "mathscape:markdown-errata/e2");
+    let e1 = store
+        .get_markdown_errata("mathscape:markdown-errata/e1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(e1.status, MarkdownErrataStatus::Superseded);
+    assert_eq!(
+        e1.superseded_by.as_deref(),
+        Some("mathscape:markdown-errata/e2")
+    );
+
+    // 4. Unit review acknowledgment records without map commit
+    let review = store
+        .mark_errata_unit_reviewed(
+            "mathscape:source-unit/u1",
+            "mathscape:markdown-errata/e2",
+            ErrataUnitReviewDecision::Acknowledged,
+            "unix:1700000013",
+        )
+        .unwrap();
+    assert_eq!(review.decision, ErrataUnitReviewDecision::Acknowledged);
+    assert_eq!(
+        store
+            .list_errata_unit_reviews(Some("mathscape:source-unit/u1"))
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // 5. Revert E2 cleanly without deleting history
+    let reverted = store
+        .revert_markdown_errata("mathscape:markdown-errata/e2", "unix:1700000014")
+        .unwrap()
+        .unwrap();
+    assert_eq!(reverted.status, MarkdownErrataStatus::Reverted);
+    assert!(store.list_active_markdown_errata(artifact).unwrap().is_empty());
+    assert_eq!(
+        store.list_markdown_errata_history(artifact, None).unwrap().len(),
+        2
+    );
+    assert_eq!(store.map_edit_snapshot().unwrap().base_commit, None);
 }

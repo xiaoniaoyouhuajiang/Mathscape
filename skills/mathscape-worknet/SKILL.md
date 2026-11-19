@@ -2,8 +2,8 @@
 name: mathscape-worknet
 description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、对象卡、表示、证明上下文、失败见证）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
 metadata:
-  version: "0.7.1"
-  tool_schema_version: "mathscape-mcp/17"
+  version: "0.7.2"
+  tool_schema_version: "mathscape-mcp/18"
 ---
 
 # Mathscape 数学地图构建 skill v0.7.1
@@ -50,14 +50,14 @@ D 不是跨表示的万能边，T 不是改名，X 不能隐藏需要证明的�
 ```text
 workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 scope: "investigation" 查本会话暂存）
   → graph.get（支持来源节点、共享对象、对齐线、一笔账、约定卡）
-  → graph.neighborhood（需要看语义关联时在 edge_types 里显式加入 aligns / in_theory / debt_on / scope_of）
+  → graph.neighborhood（默认即启用 preset: "heuristic" 跨书启发邻域：0 步长附着文件溯源/约定卡/挂账，1 步长走书内证明与跨书语义桥 aligns/uses_entity/of_concept/paid_by，并在非种子 Theory 书架与外部材料封面上自动止步防爆炸；推荐 depth: 2 触发跨书联想；若仅看单书结构可传 preset: "structural"，仅看抽象语义网可传 preset: "semantic_only"）
   → material.read / material.grep
   → ink.page_image 或 pdf.page_image（需要看版式或手稿时）
 ```
 
 命中只告诉你“有这个对象”，原文正文必须通过 `content_ref` 回链读取；共享对象、对齐线、账和约定卡的结构化内容直接由 `graph.get` 的 `semantic` 字段给出。没有可靠 locator 时不能猜字节范围，也不能把模型摘要写进图节点来代替正文。
 
-先读窄的结构邻域；需要书内证明链时显式加入 `proves`、`states` 等关系，需要看跨书对齐或所属理论时显式加入 `aligns`、`in_theory`、`debt_on`、`scope_of`。不要一开始就打开所有边和最大深度。
+探索某条定理或共享对象的跨教材对应与引理依赖时，直接使用默认 `preset: "heuristic"`（`depth: 1` 或 `depth: 2`）；需要精确指定底层关系时才显式传 `edge_types`。
 
 ## 3. 五个阶段：每一步都用白话说清楚
 

@@ -23,6 +23,7 @@ pub use ink_lan::{
 mod llm_settings;
 mod loogle_host;
 mod map_edit;
+mod markdown_errata;
 mod markdown_patch;
 mod registration;
 mod resident_log;
@@ -54,6 +55,9 @@ pub use llm_settings::{
     LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,
 };
 pub use map_edit::{commit_map_change, get_map_object_edit_context, plan_map_change};
+pub use markdown_errata::{
+    RevertMarkdownErrataResponse, SaveMarkdownErrataRequest, SaveMarkdownErrataResponse,
+};
 pub use markdown_patch::{
     DesktopMarkdownPatchPreview, DesktopMarkdownPatchReview, PreviewMarkdownPatchRequest,
     RunMarkdownPatchRequest, SubmitMarkdownPatchDecisionRequest,
@@ -1072,6 +1076,7 @@ pub fn run() {
             content::prepare_discovery_input,
             content::get_artifact_content_info,
             content::get_source_node_detail,
+            content::get_markdown_unit_markers,
             content::read_artifact_bytes,
             canonical_reader::get_canonical_reader_projection,
             change_sets::get_change_set_investigation,
@@ -1110,6 +1115,12 @@ pub fn run() {
             discovery::accept_discovery_result,
             discovery::run_discovery,
             discovery::resume_discovery_after_patch,
+            markdown_errata::list_markdown_errata,
+            markdown_errata::list_markdown_errata_history,
+            markdown_errata::save_markdown_errata,
+            markdown_errata::revert_markdown_errata,
+            markdown_errata::mark_errata_unit_reviewed,
+            markdown_errata::list_unreviewed_errata_units,
             markdown_patch::run_markdown_patch,
             markdown_patch::get_markdown_patch_review,
             markdown_patch::get_pending_markdown_patch_review,
@@ -1121,6 +1132,7 @@ pub fn run() {
             map_edit::recheck_mathlib_baselines,
             semantic::get_semantic_object,
             semantic::semantic_learning_view,
+            semantic::set_study_marks,
             external_link::open_external_link,
             get_desktop_snapshot,
             choose_and_import_pdf,

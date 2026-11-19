@@ -109,6 +109,7 @@ export interface InkLinkOverlay {
 export interface InkMarkdownLinks {
   artifact_id: string;
   links: InkLinkedNote[];
+  unit_links?: InkLinkedNote[];
   original_note_count: number;
 }
 
@@ -181,6 +182,50 @@ export function overlappingNotes(links: InkLinkedNote[], blockIds: readonly stri
     if (link.target.kind !== "markdown" || !link.target.block_ids.some(id => wanted.has(id))) continue;
     const previous = byNote.get(link.document_id);
     if (!previous || (link.is_primary && !previous.link.is_primary)) byNote.set(link.document_id, entry);
+  }
+  return [...byNote.values()];
+}
+
+/**
+ * Combines block-level Markdown links (`target.kind === "markdown"`) and
+ * `SourceSemanticUnit` links (`target.kind === "source_object"`) anchored on
+ * `blockIds`, deduplicated per `document_id` (preferring primary links).
+ */
+export function overlappingNotesForBlocks(
+  links: readonly InkLinkedNote[],
+  unitLinks: readonly InkLinkedNote[],
+  blockIds: readonly string[],
+  unitIdsByBlock?: ReadonlyMap<string, readonly string[]>,
+  expectedContentHash?: string,
+): InkLinkedNote[] {
+  const wantedBlocks = new Set(blockIds);
+  const wantedUnits = new Set<string>();
+  if (unitIdsByBlock) {
+    for (const bid of blockIds) {
+      for (const uid of unitIdsByBlock.get(bid) ?? []) wantedUnits.add(uid);
+    }
+  }
+  const byNote = new Map<string, InkLinkedNote>();
+  const record = (entry: InkLinkedNote) => {
+    const previous = byNote.get(entry.link.document_id);
+    if (!previous || (entry.link.is_primary && !previous.link.is_primary)) {
+      byNote.set(entry.link.document_id, entry);
+    }
+  };
+  for (const entry of links) {
+    const { link } = entry;
+    if (link.target.kind !== "markdown") continue;
+    if (expectedContentHash && link.target.content_hash !== expectedContentHash) continue;
+    if (!link.target.block_ids.some((id) => wantedBlocks.has(id))) continue;
+    record(entry);
+  }
+  if (wantedUnits.size > 0) {
+    for (const entry of unitLinks) {
+      const { link } = entry;
+      if (link.target.kind !== "source_object") continue;
+      if (!wantedUnits.has(link.target.object_id)) continue;
+      record(entry);
+    }
   }
   return [...byNote.values()];
 }
@@ -286,6 +331,22 @@ export function openCreateInkPopover(options: {
   const tablet = node("button", "用平板书写", "secondary-button");
   const cancel = node("button", "取消", "secondary-button");
   for (const button of [desktop, tablet, cancel]) button.type = "button";
+  const tabletHint = node("p", "", "ink-tablet-hint");
+  tabletHint.hidden = true;
+  void safeInvoke<{ running?: boolean; online_tablets?: number }>("get_ink_lan_status")
+    .then((status) => {
+      if (!root.isConnected) return;
+      if (status?.running && (status.online_tablets ?? 0) > 0) {
+        tablet.textContent = "推送到平板（已在线）";
+        tablet.classList.add("is-tablet-online");
+        tabletHint.textContent = "检测到平板已连接，创建后将直接推送切换，无需重新扫码。";
+        tabletHint.hidden = false;
+      } else {
+        tabletHint.textContent = "当前未连接平板，点击「用平板书写」后将打开配对二维码。";
+        tabletHint.hidden = false;
+      }
+    })
+    .catch(() => { /* Optional hint when LAN IPC is unavailable. */ });
   const go = async (mode: InkCreateChoice["mode"]) => {
     desktop.disabled = tablet.disabled = true;
     message.textContent = "正在创建手稿…";
@@ -310,7 +371,7 @@ export function openCreateInkPopover(options: {
   fields.append(roleLabelEl, titleLabelEl);
   root.append(node("h3", "新建关联手稿"), target);
   if (options.excerpt) root.append(node("blockquote", options.excerpt, "ink-link-excerpt"));
-  root.append(fields, message, actions);
+  root.append(fields, message, actions, tabletHint);
   desktop.focus();
 }
 

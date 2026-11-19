@@ -13,14 +13,18 @@ import { eventBus } from "../core/events";
 import { shortStableId } from "../core/stable-id";
 import "./review.css";
 import { openSourceRegistrationReview } from "../discovery/registration-workspace";
+import type { IncidenceGraph } from "../graph/projection";
+import { texToPlain, truncatePlain } from "../graph/tex-plain";
 import {
-  debtView, dependentsIndex, diagnosticLabel, discardPreview, impactSummary, keyOf, proposalDebts, stateLabel,
+  debtView, dependencyGroups, dependentsIndex, diagnosticLabel, discardPreview, impactSummary, keyOf, proposalDebts, stateLabel,
   targetDiagnosticGroups, titleOf, type ImpactPreview, type OverviewRelation, type PendingChangeSet, type ProposalWorkspaceMeta,
 } from "./proposal-model";
+import { computeProposalMapScope, findProposalTargetForDomainObject } from "./map-review-sync";
 import { renderDiscardConfirm } from "./proposal-discard";
 import { feedbackButton, type FeedbackTarget } from "../semantic/feedback";
-import { proposalLevelReviewItems, reviewItemCode, reviewItemText, semanticReviewCards, type SemanticReviewCard } from "../semantic/review-model";
+import { proposalLevelReviewItems, refTitle, reviewItemCode, reviewItemText, semanticReviewCards, type SemanticReviewCard } from "../semantic/review-model";
 import { SEMANTIC_REVIEW_CODES } from "../semantic/labels";
+import { computeSupersedesDiff, renderSemanticComparisonPanel } from "../semantic/semantic-diff";
 
 export const OPEN_REVIEW_EVENT = "mathscape:open-review";
 export type { OpenReviewDetail } from "../core/events";
@@ -174,6 +178,9 @@ export class DiscoveryReviewWorkspace {
   private readonly md = markdownRenderer();
   private proposalPreview: ImpactPreview | string | null = null;
   private proposalBusy = false;
+  private mapLinked = false;
+  private mapScopeIncludeChain = true;
+  private mapScopeApplied = false;
 
   private header = el("header", "review-header");
   private tabs = el("nav", "review-tabs");
@@ -182,7 +189,10 @@ export class DiscoveryReviewWorkspace {
   private preview = el("section", "review-preview");
   private returnChip = el("div", "review-return-chip");
 
-  constructor(private host: HTMLElement) {
+  constructor(
+    private host: HTMLElement,
+    private readonly deps?: { getGraph?: () => IncidenceGraph | undefined },
+  ) {
     host.classList.add("review-workspace");
     host.setAttribute("aria-label", "内容发现审核工作区");
     host.hidden = true;
@@ -235,11 +245,80 @@ export class DiscoveryReviewWorkspace {
 
   isOpen(): boolean { return !this.host.hidden; }
 
+  isMapLinkedOpen(): boolean {
+    return this.isOpen() && this.mapLinked && Boolean(this.meta.proposal);
+  }
+
+  reapplyMapScope(): void {
+    if (!this.isMapLinkedOpen()) return;
+    this.syncMapScope();
+  }
+
+  focusDomainObject(domainId: string): boolean {
+    const proposal = this.meta.proposal;
+    if (!proposal || !this.isOpen()) return false;
+    const found = findProposalTargetForDomainObject(proposal.items, domainId, proposal.changeSetId);
+    if (!found) return false;
+    if (found.changeSetKey !== keyOf(proposal.item)) {
+      void proposal.controller.open(found.changeSetKey, undefined, found.focusTarget ?? undefined);
+      return true;
+    }
+    if (found.focusTarget) {
+      const target = this.findTarget(found.focusTarget);
+      if (target) {
+        this.lock(target);
+        const cardEl = this.list.querySelector<HTMLElement>(`[data-target="${found.focusTarget}"]`);
+        cardEl?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private toggleMapLinked(force?: boolean): void {
+    this.mapLinked = force !== undefined ? force : !this.mapLinked;
+    this.host.classList.toggle("is-map-linked", this.mapLinked);
+    this.renderHeader();
+    this.graph?.resize();
+    this.syncMapScope();
+  }
+
+  private syncMapScope(focusDomainId?: string | null): void {
+    const proposal = this.meta.proposal;
+    if (!this.isOpen() || !this.mapLinked || !proposal) {
+      if (this.mapScopeApplied) {
+        this.mapScopeApplied = false;
+        eventBus.emit("review-map-scope", { active: false, nodeIds: [], relationIds: [] });
+      }
+      return;
+    }
+    const graph = this.deps?.getGraph?.();
+    if (!graph) return;
+    const scope = computeProposalMapScope(graph, proposal.items, proposal.item, this.mapScopeIncludeChain);
+    this.mapScopeApplied = true;
+    eventBus.emit("review-map-scope", {
+      active: true,
+      nodeIds: scope.nodeIds,
+      relationIds: scope.relationIds,
+      focusDomainId: focusDomainId ?? null,
+      description: scope.description,
+    });
+  }
+
   async open(outcome: DiscoveryOutcome, meta: ReviewRunMeta = {}): Promise<void> {
+    const wasOpen = this.isOpen();
     const generation = ++this.generation;
     this.graph?.destroy(); this.graph = null;
     this.outcome = outcome;
     this.meta = meta;
+    if (!meta.proposal) {
+      this.mapLinked = false;
+    } else if (meta.mapLinked !== undefined) {
+      this.mapLinked = meta.mapLinked;
+    } else if (!wasOpen) {
+      this.mapLinked = false;
+    }
+    this.host.classList.toggle("is-map-linked", this.mapLinked);
     this.model = buildModel(outcome);
     this.doc = null; this.bytes = new Uint8Array(); this.stale = null;
     this.locked = null; this.lockedAnchor = 0; this.rawMode = false;
@@ -300,7 +379,20 @@ export class DiscoveryReviewWorkspace {
       ?? (draft?.target ? this.findTarget(draft.target) : null);
     const first = this.model.units.find(unit => unit.anchors.length > 0);
     const firstRel = !first ? this.model.relations.find(rel => rel.evidence.length > 0) : undefined;
-    this.lock(restored ?? (first ? this.unitTarget(first) : firstRel ? this.relationTarget(firstRel) : null), false);
+    const firstSemantic = (!first && !firstRel && proposal)
+      ? semanticReviewCards(proposal.item)[0]
+      : undefined;
+    this.lock(
+      restored ?? (first
+        ? this.unitTarget(first)
+        : firstRel
+          ? this.relationTarget(firstRel)
+          : firstSemantic && proposal
+            ? this.semanticCardTarget(proposal, firstSemantic).target
+            : null),
+      false,
+    );
+    this.syncMapScope();
   }
 
   /**
@@ -328,6 +420,10 @@ export class DiscoveryReviewWorkspace {
     this.returnChip.hidden = false;
     const label = this.returnChip.querySelector<HTMLElement>(".review-return-open");
     if (label) label.textContent = `返回审核工作区 · ${this.meta.title ?? "内容发现"}`;
+    if (this.mapScopeApplied) {
+      this.mapScopeApplied = false;
+      eventBus.emit("review-map-scope", { active: false, nodeIds: [], relationIds: [] });
+    }
   }
 
   resume(): void {
@@ -335,14 +431,21 @@ export class DiscoveryReviewWorkspace {
     this.host.hidden = false;
     this.returnChip.hidden = true;
     this.graph?.resize();
+    this.syncMapScope();
   }
 
   close(): void {
     this.generation++;
     this.graph?.destroy(); this.graph = null;
     this.outcome = null; this.model = null; this.doc = null;
+    this.mapLinked = false;
+    this.host.classList.remove("is-map-linked");
     this.host.hidden = true;
     this.returnChip.hidden = true;
+    if (this.mapScopeApplied) {
+      this.mapScopeApplied = false;
+      eventBus.emit("review-map-scope", { active: false, nodeIds: [], relationIds: [] });
+    }
   }
 
   // ---------------------------------------------------------------- state
@@ -514,6 +617,12 @@ export class DiscoveryReviewWorkspace {
     this.syncCurrent();
     this.renderPreview(target, 0);
     if (save) this.saveDraft();
+    if (this.mapLinked && this.meta.proposal && target) {
+      const stagedIds = this.meta.proposal.item.result.staged_ids ?? {};
+      const proposed = (this.meta.proposal.item.proposal.proposed_objects ?? []).find((o) => o.local_ref === target.id);
+      const focusDomainId = stagedIds[target.id] ?? proposed?.target_id ?? null;
+      this.syncMapScope(focusDomainId);
+    }
   }
 
   private hover(target: Target): void {
@@ -576,6 +685,32 @@ export class DiscoveryReviewWorkspace {
     const state = el("span", `review-state ${this.stale ? "is-stale" : "is-live"}`, this.stale ? "锚点失效" : "锚点有效");
     if (this.stale) state.title = this.stale;
     const actions = el("div", "review-header-actions");
+    if (proposal) {
+      const mapBtn = button(
+        this.mapLinked ? "全屏精读模式" : "地图联动分屏",
+        () => this.toggleMapLinked(),
+        `review-map-link-toggle${this.mapLinked ? " is-active" : ""}`,
+      );
+      mapBtn.title = this.mapLinked
+        ? "切换回全屏双栏精读审核"
+        : "缩小为右侧抽屉，在左侧主地图上同步高亮提案涉及的节点、连线与 1 跳上下文";
+      actions.append(mapBtn);
+      if (this.mapLinked) {
+        const group = dependencyGroups(proposal.items).find((g) => g.some((c) => keyOf(c) === keyOf(proposal.item)));
+        if (group && group.length > 1) {
+          actions.append(
+            button(
+              this.mapScopeIncludeChain ? `高亮：依赖组 (${group.length})` : "高亮：仅本提案",
+              () => {
+                this.mapScopeIncludeChain = !this.mapScopeIncludeChain;
+                this.syncMapScope();
+                this.renderHeader();
+              },
+            ),
+          );
+        }
+      }
+    }
     const back = button("返回选区", () => this.openSelection());
     back.disabled = this.stale !== null || !source?.requested_range || this.doc === null;
     const open = button("打开原文", () => this.openSource(this.currentAnchor()));
@@ -971,7 +1106,11 @@ export class DiscoveryReviewWorkspace {
     pdf.disabled = anchor === undefined || this.doc === null || this.stale !== null;
     controls.append(pdf);
     const children: HTMLElement[] = [heading, controls];
-    if (target.note) children.push(el("p", "review-fallback-note", target.note));
+    const semanticPanel = (target.kind === "semantic" && this.meta.proposal)
+      ? renderSemanticComparisonPanel(this.md, this.meta.proposal.item, target.id)
+      : null;
+    if (semanticPanel) children.push(semanticPanel);
+    if (target.note && !semanticPanel) children.push(el("p", "review-fallback-note", target.note));
     const server = anchor && this.meta.proposal?.anchors.find(entry => entry.range.start === anchor.start && entry.range.end === anchor.end);
     if (server) {
       const origin = server.origin === "head" ? "已有证据" : server.origin === "staged" ? "其他提案中的证据" : "本提案新建证据";
@@ -980,12 +1119,14 @@ export class DiscoveryReviewWorkspace {
       children.push(el("p", "review-item-meta", `${origin} · ${page} · ${blocks}${server.granularity ? ` · ${server.granularity}` : ""}`));
     }
     if (this.stale) {
-      children.push(el("p", "review-stale", this.stale));
+      if (!semanticPanel || anchor !== undefined) {
+        children.push(el("p", "review-stale", this.stale));
+      }
       // A proposal anchor still shows the backend's excerpt, rendered with
       // KaTeX, clearly marked as not checked against the snapshot.
       if (this.meta.proposal && anchor?.excerpt) children.push(this.unverifiedQuote(anchor.excerpt));
     } else if (anchor === undefined) {
-      children.push(el("p", "review-preview-empty", "该条目没有可定位的原文范围。"));
+      if (!semanticPanel) children.push(el("p", "review-preview-empty", "该条目没有可定位的原文范围。"));
     } else if (this.doc === null) {
       children.push(el("p", "review-preview-empty", "正在读取来源 Markdown…"));
     } else {
@@ -1228,7 +1369,9 @@ export class DiscoveryReviewWorkspace {
     }
     this.list.append(el("p", "review-note",
       "提案按整个 change set 接受或丢弃。接受只表示写入当前工作区地图，不提升 Trust，也不代表数学上已验证。"));
-    if (item.proposal.rationale) this.list.append(el("p", "review-proposal-rationale", item.proposal.rationale));
+    if (item.proposal.rationale) {
+      this.list.append(el("p", "review-proposal-rationale", texToPlain(item.proposal.rationale).replace(/[{}]/g, "")));
+    }
     if (this.stale) this.list.append(el("p", "review-warning", this.stale));
     const unverified = proposal.anchors.filter(anchor => !anchor.verified).length;
     if (unverified) this.list.append(el("p", "review-warning", `${unverified} 处锚点的引文未能在后端与快照核对，按 Agent 引文显示。`));
@@ -1240,8 +1383,14 @@ export class DiscoveryReviewWorkspace {
       const row = el("article", `review-item review-proposal state-${candidate.state}`);
       row.classList.toggle("is-current", key === keyOf(item));
       row.tabIndex = 0;
-      row.append(el("strong", "", `${titleOf(candidate)} v${candidate.version}`),
-        el("span", "review-item-meta", `${stateLabel(candidate.state)} · ${candidate.proposedBy} · round ${candidate.roundId}`));
+      const cleanCandidateTitle = texToPlain(titleOf(candidate)).replace(/[{}]/g, "");
+      row.append(
+        el("strong", "", `${cleanCandidateTitle} v${candidate.version}`),
+        el("span", "review-item-meta", `${stateLabel(candidate.state)} · ${candidate.proposedBy} · round ${candidate.roundId}`),
+      );
+      if (candidate.targetObjectTitle && candidate.proposal.rationale && candidate.proposal.rationale.trim() !== candidate.targetObjectTitle.trim()) {
+        row.append(el("span", "review-item-meta", truncatePlain(texToPlain(candidate.proposal.rationale).replace(/[{}]/g, ""), 76)));
+      }
       row.onclick = () => { if (key !== keyOf(item)) void proposal.controller.open(key); };
       this.list.append(row);
       // Older versions of the same change set stay folded.
@@ -1251,7 +1400,18 @@ export class DiscoveryReviewWorkspace {
         const list = el("ul", "review-structure");
         for (const old of candidate.history) {
           const codes = old.diagnostics.map(diagnostic => diagnosticLabel(diagnostic.code)).filter(Boolean);
-          list.append(el("li", "", `v${old.version} · ${stateLabel(old.state)} · ${old.createdAt}${codes.length ? ` · ${[...new Set(codes)].join("、")}` : ""}`));
+          const li = el("li", "", `v${old.version} · ${stateLabel(old.state)} · ${old.createdAt}${codes.length ? ` · ${[...new Set(codes)].join("、")}` : ""}`);
+          const revDiff = computeSupersedesDiff(old.version, old.proposal, candidate, (r) => refTitle(candidate, r));
+          if (revDiff && (revDiff.added.length || revDiff.removed.length || revDiff.modified.length)) {
+            const sub = el("ul", "review-history-diff");
+            if (revDiff.added.length) sub.append(el("li", "", `相对 v${old.version} 新增：${revDiff.added.join("、")}`));
+            if (revDiff.removed.length) sub.append(el("li", "", `相对 v${old.version} 移除：${revDiff.removed.join("、")}`));
+            for (const mod of revDiff.modified) {
+              sub.append(el("li", "", `修订「${mod.title}」：${mod.summaries.join("；")}`));
+            }
+            li.append(sub);
+          }
+          list.append(li);
         }
         history.append(list);
         this.list.append(history);
@@ -1557,8 +1717,11 @@ function removeDependents(selected: Set<string>, review: SourceReviewProjection,
 }
 
 /** Mounts the single workspace instance and routes open requests to it. */
-export function mountReviewWorkspace(host: HTMLElement): DiscoveryReviewWorkspace {
-  const workspace = new DiscoveryReviewWorkspace(host);
+export function mountReviewWorkspace(
+  host: HTMLElement,
+  deps?: { getGraph?: () => IncidenceGraph | undefined },
+): DiscoveryReviewWorkspace {
+  const workspace = new DiscoveryReviewWorkspace(host, deps);
   eventBus.on("open-review", (detail) => {
     void workspace.open(detail.outcome, detail.meta);
   });

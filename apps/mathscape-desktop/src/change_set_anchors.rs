@@ -296,6 +296,16 @@ impl<'a> AnchorContext<'a> {
         }
         let mut referenced = Vec::new();
         collect_span_ids(&record.proposal, &mut referenced);
+        for object in &objects {
+            let op = object.get("op").and_then(Value::as_str).unwrap_or("create");
+            if matches!(op, "edit" | "retire")
+                && let Some(target_id) = object.get("target_id").and_then(Value::as_str)
+                && let Some(payload) = self.head_payload(target_id)
+                && let Some(spans) = payload.get("evidence_spans")
+            {
+                collect_span_ids(spans, &mut referenced);
+            }
+        }
         for id in referenced {
             if claimed.contains(&id) {
                 continue;
@@ -343,12 +353,61 @@ impl<'a> AnchorContext<'a> {
             .objects
             .iter()
             .find(|object| object.object_id == id)?;
-        let title = mathscape_orchestrator::semantic_view::semantic_object_title(object);
+        let title =
+            mathscape_orchestrator::semantic_view::semantic_object_title_in(self.head, object);
         Some(if title == object.object_id {
             object.kind.clone()
         } else {
             title
         })
+    }
+
+    pub fn head_payload(&self, id: &str) -> Option<Value> {
+        let object = self
+            .head
+            .objects
+            .iter()
+            .find(|object| object.object_id == id)?;
+        Some(
+            object
+                .payload
+                .get("payload")
+                .unwrap_or(&object.payload)
+                .clone(),
+        )
+    }
+
+    pub fn head_object(&self, id: &str) -> Option<(String, Value)> {
+        let object = self
+            .head
+            .objects
+            .iter()
+            .find(|object| object.object_id == id)?;
+        let kind = match object
+            .payload
+            .get("payload_kind")
+            .and_then(Value::as_str)
+            .unwrap_or(object.kind.as_str())
+        {
+            "source_semantic_unit" | "SourceSemanticUnit" => "source_unit",
+            "semantic_entity" | "SemanticEntity" => "semantic_entity",
+            "alignment" | "Alignment" => "alignment",
+            "debt" | "Debt" => "debt",
+            "dialect_scope" | "DialectScope" => "dialect_scope",
+            "source_span" | "SourceSpan" => "source_span",
+            other => other,
+        }
+        .to_owned();
+        let payload = object
+            .payload
+            .get("payload")
+            .unwrap_or(&object.payload)
+            .clone();
+        Some((kind, payload))
+    }
+
+    pub fn head(&self) -> &MapEditSnapshot {
+        self.head
     }
 
     fn conversion(&mut self, artifact: &str) -> Option<String> {
@@ -368,12 +427,35 @@ impl<'a> AnchorContext<'a> {
             return None;
         }
         let id = StableId::parse(artifact).ok()?;
+        let pool = self.pool.as_ref()?;
+        let active_errata = self
+            .store
+            .list_active_markdown_errata(artifact)
+            .ok()
+            .unwrap_or_default();
+        let has_overlap = active_errata
+            .iter()
+            .any(|row| row.base_byte_end > range.start && row.base_byte_start < range.end);
+        if has_overlap
+            && let Ok(info) = content_info_at(self.root, artifact)
+            && info.byte_size <= 16 * 1024 * 1024
+            && let Ok(full_len) = u32::try_from(info.byte_size)
+            && let Ok(full_bytes) = pool.read_bytes(&id, 0, full_len)
+            && let Ok(full_source) = String::from_utf8(full_bytes)
+            && (range.end as usize) <= full_source.len()
+            && full_source.is_char_boundary(range.start as usize)
+            && full_source.is_char_boundary(range.end as usize)
+        {
+            let entries = crate::markdown_errata::to_overlay_entries(&active_errata);
+            let view = mathscape_orchestrator::render_effective_slice(
+                &full_source,
+                range.start as usize..range.end as usize,
+                &entries,
+            );
+            return Some(view.effective_source);
+        }
         let length = u32::try_from(range.end - range.start).ok()?;
-        let bytes = self
-            .pool
-            .as_ref()?
-            .read_bytes(&id, range.start, length)
-            .ok()?;
+        let bytes = pool.read_bytes(&id, range.start, length).ok()?;
         (bytes.len() == length as usize)
             .then(|| String::from_utf8(bytes).ok())
             .flatten()

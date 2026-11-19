@@ -31,3 +31,7 @@
   .pad-problem-card-summary{font-size:13px;min-height:48px}
   .pad-problem-card-body{font-size:14px;max-height:24vh}
 }
+#pad-connection.is-standby{color:#1b6a56;font-weight:500}
+#pad-connection.is-standby::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:#1fa876;margin-right:6px;vertical-align:middle}
+.pad-clean-stale{font-size:12px;padding:6px 10px;border:1px solid #d5c5a8;border-radius:8px;background:#fffaf0;color:#7a5314;cursor:pointer}
+.pad-clean-stale[hidden]{display:none}

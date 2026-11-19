@@ -209,6 +209,8 @@ export class DesktopInkWorkspace {
   private dialogResolve: ((value: string | null) => void) | undefined;
   private noteLinks: InkNoteLink[] = [];
   private linksRevision = 0;
+  private tabletOnlineCount = 0;
+  private lanPresenceTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     private readonly host: HTMLElement,
@@ -224,11 +226,15 @@ export class DesktopInkWorkspace {
       eventBus.on("ink-links-changed", () => void this.refreshLinks());
       // Links to a note that was trashed or renamed change their status/label.
       eventBus.on("ink-notes-changed", () => void this.refreshLinks());
+      // Block-level Markdown errata updates projected link labels & excerpts live.
+      eventBus.on("markdown-errata-changed", () => void this.refreshLinks());
       this.outbox = await InkOutbox.openDefault();
       if (!this.outbox.persistent) this.status("本地恢复队列不可用；当前窗口关闭前请保持应用运行。", true);
     }
     await this.refreshDocuments(true);
+    void this.refreshTabletPresence();
     if(!this.mirrorTimer)this.mirrorTimer=setInterval(()=>void this.refreshMirror(),300);
+    if(!this.lanPresenceTimer)this.lanPresenceTimer=setInterval(()=>void this.refreshTabletPresence(),4000);
   }
 
   /**
@@ -240,6 +246,7 @@ export class DesktopInkWorkspace {
     if (!await this.confirmLeave("close")) return false;
     this.navigationRevision++;
     if(this.mirrorTimer){clearInterval(this.mirrorTimer);this.mirrorTimer=undefined;}
+    if(this.lanPresenceTimer){clearInterval(this.lanPresenceTimer);this.lanPresenceTimer=undefined;}
     this.onClose();
     return true;
   }
@@ -323,9 +330,36 @@ export class DesktopInkWorkspace {
     this.status("手稿不存在或已被移除。", true);
   }
 
-  /** N2 "用平板书写" from a context menu: the pairing panel for this note. */
+  /**
+   * N2 "用平板书写" from a context menu: when a tablet is already connected,
+   * push a `switch_offer` directly so the user keeps writing continuously
+   * without rescanning a QR code; fall back to the pairing panel when offline.
+   */
   async pairTablet(documentId: string): Promise<void> {
     if (this.documentState?.document_id !== documentId || !this.lanPanel) return;
+    try {
+      this.board?.finish();
+      if (await this.flush()) {
+        const result = await safeInvoke<{
+          pushed: boolean; online: number; requires_takeover: boolean; message: string;
+        }>("push_ink_to_tablet", { documentId, allowTransfer: false });
+        if (result.pushed) {
+          this.tabletOnlineCount = Math.max(1, result.online);
+          this.renderPushButtonState();
+          this.status(result.message, false);
+          this.showToast("已推送至在线平板，请在平板上确认切换（无需重新扫码）。", "success");
+          return;
+        }
+        if (result.requires_takeover) {
+          await this.pushToTablet(documentId, false);
+          return;
+        }
+        this.tabletOnlineCount = 0;
+        this.renderPushButtonState();
+      }
+    } catch {
+      /* Offline or LAN unavailable: fall back to the pairing panel below. */
+    }
     await this.lanPanel.open(documentId).catch(error => this.status(errorText(error), true));
   }
 
@@ -341,7 +375,12 @@ export class DesktopInkWorkspace {
       '<div id="ink-trash-banner" class="ink-trash-banner" role="status" hidden><span>这份手稿在回收站中，只能查看和导出。</span><button id="ink-trash-restore" class="secondary-button" type="button">恢复手稿</button></div><div id="ink-link-bar" class="ink-link-bar" aria-label="手稿关联" hidden></div><div id="desktop-ink-evidence" hidden></div><div id="ink-empty-state" class="ink-empty-state" hidden><p>还没有打开的手稿。</p><button id="ink-empty-create" class="secondary-button" type="button">新建手稿</button></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="'+INK_TITLE_MAX+'" value="" placeholder="留空恢复自动标题" aria-label="手稿标题" title="点击改名；回车保存，Esc 取消" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div><section id="ink-lan-panel" hidden></section><div id="ink-dialog" class="ink-dialog" role="dialog" aria-modal="true" aria-labelledby="ink-dialog-text" hidden><div class="ink-dialog-box"><p id="ink-dialog-text"></p><div id="ink-dialog-extra" class="ink-dialog-extra"></div><div id="ink-dialog-actions" class="ink-dialog-actions"></div></div></div></div>',
     ].join("");
     element<HTMLButtonElement>(this.host, "#ink-close").addEventListener("click", () => void this.close());
-    element<HTMLButtonElement>(this.host, "#ink-split-toggle").addEventListener("click", () => eventBus.emit("ink-split-toggle"));
+    const splitBtn = element<HTMLButtonElement>(this.host, "#ink-split-toggle");
+    if (this.listMode === "split") {
+      splitBtn.setAttribute("aria-pressed", "true");
+      splitBtn.textContent = "退出并排";
+    }
+    splitBtn.addEventListener("click", () => eventBus.emit("ink-split-toggle"));
     element<HTMLButtonElement>(this.host, "#ink-save-now").addEventListener("click", () => void this.flush("手动保存完成。"));
     element<HTMLButtonElement>(this.host, "#ink-snapshot").addEventListener("click", () => void this.createSnapshot());
     this.lanPanel=new InkLanPanel(element(this.host,"#ink-lan-panel"),documentId=>this.preparePad(documentId),()=>this.writerView,()=>this.refreshMirror(true),()=>this.writerView?.remote?this.writerPresence:undefined);
@@ -1163,6 +1202,7 @@ export class DesktopInkWorkspace {
       await this.mountDocument(documentState, receipt, 0, false, undefined, revision);
       this.status("手稿已创建，书写后会自动保存。", false);
       await this.refreshDocuments();
+      this.notesChanged();
     } catch (error) {
       // The same request id is reused on the next attempt.
       this.status("创建手稿失败，可重试：" + errorText(error), true);
@@ -1610,11 +1650,16 @@ export class DesktopInkWorkspace {
       return this.pushToTablet(documentId, true);
     }
     if (!result.pushed) {
+      this.tabletOnlineCount = 0;
+      this.renderPushButtonState();
       this.status(result.message + " 正在打开配对二维码。", false);
       await this.lanPanel?.openWithPairing(documentId, this.documentState?.operations.length ?? 0);
       return;
     }
+    this.tabletOnlineCount = Math.max(1, result.online);
+    this.renderPushButtonState();
     this.status(result.message, false);
+    this.showToast("已推送至在线平板，请在平板上确认切换（无需重新扫码）。", "success");
   }
 
   private setTool(tool: InkTool): void {
@@ -1762,6 +1807,36 @@ export class DesktopInkWorkspace {
     select.value = this.currentPage;
   }
 
+  private async refreshTabletPresence(): Promise<void> {
+    if (!this.rendered || this.host.hidden) return;
+    try {
+      const status = await safeInvoke<{ running?: boolean; online_tablets?: number }>("get_ink_lan_status");
+      const next = status?.running ? Math.max(0, Number(status.online_tablets ?? 0)) : 0;
+      if (next !== this.tabletOnlineCount) {
+        this.tabletOnlineCount = next;
+        this.renderPushButtonState();
+      }
+    } catch { /* Optional presence indicator. */ }
+  }
+
+  private renderPushButtonState(): void {
+    const push = this.host.querySelector<HTMLButtonElement>("#ink-push-tablet");
+    if (!push) return;
+    const online = this.tabletOnlineCount > 0 || Boolean(this.writerPresence?.connected);
+    push.classList.toggle("is-tablet-online", online);
+    push.dataset.tabletOnline = online ? "true" : "false";
+    push.disabled = this.trashedView || !!this.currentSnapshot || !this.documentState;
+    push.title = this.trashedView
+      ? "回收站中的手稿不能推送到平板"
+      : this.currentSnapshot
+        ? "历史快照不能推送到平板"
+        : online
+          ? (this.mirrorMode
+            ? "平板已在线：把这份手稿推送到已连接的平板（若平板正在书写，需确认转交）"
+            : "平板已在线：点击把当前手稿直接推送到平板切换，无需重新扫码")
+          : "当前无在线平板：点击后将打开配对二维码";
+  }
+
   private renderSummary(): void {
     if (!this.documentState) return;
     const projection = projectInk(this.documentState);
@@ -1769,17 +1844,7 @@ export class DesktopInkWorkspace {
     element<HTMLButtonElement>(this.host, "#desktop-ink-redo").disabled = this.readOnly || !projection.redo.length;
     element<HTMLButtonElement>(this.host, "#desktop-ink-delete-selection").disabled = !this.canDeleteSelection();
     element<HTMLButtonElement>(this.host, "#desktop-ink-restyle").disabled = !this.canDeleteSelection();
-    const push = element<HTMLButtonElement>(this.host, "#ink-push-tablet");
-    // Mirror/read-only still allows push (may need takeover confirm). Trashed and
-    // historical snapshots stay blocked.
-    push.disabled = this.trashedView || !!this.currentSnapshot || !this.documentState;
-    push.title = this.trashedView
-      ? "回收站中的手稿不能推送到平板"
-      : this.currentSnapshot
-        ? "历史快照不能推送到平板"
-        : this.mirrorMode
-          ? "把这份手稿推送到已连接的平板（若平板正在书写，需确认转交）"
-          : "把这份手稿推送到已连接的平板";
+    this.renderPushButtonState();
     element(this.host, "#desktop-ink-summary").textContent = projection.visible.length + " 笔 · " + (projection.pointCount + this.metrics.activePoints) + " 点 · head " + this.logicalHead;
     this.renderViewState();
   }

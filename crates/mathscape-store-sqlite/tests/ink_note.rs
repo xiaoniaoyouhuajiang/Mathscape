@@ -622,7 +622,7 @@ fn upgrading_v16_backfills_titles_and_keeps_old_requests_replayable() {
         .unwrap()
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 24);
+    assert_eq!(version, 26);
     fs::remove_dir_all(directory).ok();
 }
 

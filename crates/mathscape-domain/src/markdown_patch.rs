@@ -195,4 +195,10 @@ pub struct MarkdownPatchApplyReceipt {
     pub new_input_fingerprint: Option<ContentHash>,
     pub safety: PatchSafetyReport,
     pub status: MarkdownPatchStatus,
+    /// Errata rows written for an approval that was persisted as block-level
+    /// Markdown errata over the unchanged base snapshot (then
+    /// `patched_artifact_id == Some(base_artifact_id)`). Empty for legacy
+    /// receipts that promoted a separate patched artifact.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_errata_ids: Vec<String>,
 }

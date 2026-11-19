@@ -90,15 +90,61 @@ mockIPC(async (command, payload) => {
     });
     return { source: file.format ? "unsaved_operations" : "document", original_document_id: file.document_id, sessions: created };
   }
+  if (command === "get_ink_markdown_links") {
+    const artifactId = String(args.artifactId ?? "");
+    const matched = links
+      .filter(link => link.state === "active" && link.target.kind === "markdown" && link.target.artifact_id === artifactId)
+      .map(link => ({ note: noteState(link.document_id), link: structuredClone(link) }));
+    return { artifact_id: artifactId, links: matched, original_note_count: 0 };
+  }
   if (command === "create_ink_note_from_context") {
     // §6.5: one transaction creates an auto-titled note and its primary link.
-    const request = args.request as { request_id: string; document: InkDocument; session_id: string; target: { kind: "source_object"; object_id: string }; role: InkNoteLink["role"]; title: string | null };
+    const request = args.request as {
+      request_id: string;
+      document: InkDocument;
+      session_id: string;
+      target:
+        | { kind: "source_object"; object_id: string }
+        | { kind: "markdown"; artifact_id: string; content_hash: string; first_block: string; last_block: string };
+      role: InkNoteLink["role"];
+      title: string | null;
+    };
     const document = structuredClone(request.document);
     documents.set(document.document_id, document); sessions.set(document.document_id, request.session_id); snapshots.set(document.document_id, []);
     notes.set(document.document_id, { title_mode: request.title ? "manual" : "auto", title_revision: 0, lifecycle: "active", lifecycle_revision: 0, trashed_at: null, last_used_at: Date.now() });
     if (request.title) document.title = request.title;
-    const id = request.target.object_id;
-    const link: InkNoteLink = { link_id: "link-" + request.request_id, document_id: document.document_id, target_kind: "source_object", target_key: `src:${id}`, target_id: id, target: structuredClone(request.target) as InkNoteLink["target"], target_revision: null, target_label: sourceLabels.get(id) ?? id, role: request.role, is_primary: true, state: "active", created_at: Date.now(), removed_at: null, target_status: "active" };
+    let link: InkNoteLink;
+    if (request.target.kind === "markdown") {
+      const t = request.target;
+      const blockIds = t.first_block === t.last_block ? [t.first_block] : [t.first_block, t.last_block];
+      link = {
+        link_id: "link-" + request.request_id,
+        document_id: document.document_id,
+        target_kind: "markdown",
+        target_key: `md:${t.artifact_id}:${t.first_block}:${t.last_block}`,
+        target_id: t.artifact_id,
+        target: {
+          ...structuredClone(t),
+          block_ids: blockIds,
+          start: 0,
+          end: 10,
+          block_hash: "bh",
+          excerpt: "正确表述",
+          label: "正确表述",
+        },
+        target_revision: t.content_hash,
+        target_label: "正确表述",
+        role: request.role,
+        is_primary: true,
+        state: "active",
+        created_at: Date.now(),
+        removed_at: null,
+        target_status: "active",
+      };
+    } else {
+      const id = request.target.object_id;
+      link = { link_id: "link-" + request.request_id, document_id: document.document_id, target_kind: "source_object", target_key: `src:${id}`, target_id: id, target: structuredClone(request.target) as InkNoteLink["target"], target_revision: null, target_label: sourceLabels.get(id) ?? id, role: request.role, is_primary: true, state: "active", created_at: Date.now(), removed_at: null, target_status: "active" };
+    }
     links.push(link);
     retitle(document.document_id);
     return { document_id: document.document_id, session_id: request.session_id, writer_id: "desktop-local", writer_epoch: 1, status: "active", device: {}, started_at: document.created_at, last_seen_at: document.created_at, note: noteState(document.document_id), link: structuredClone(link), request_id: request.request_id, replayed: false };
@@ -154,7 +200,7 @@ mockIPC(async (command, payload) => {
     const session={document_id:document.document_id,session_id:sessions.get(document.document_id)!,writer_id:remote?"inkpad-test":"desktop-local",writer_epoch:behavior.epoch,status:"active",device:{},started_at:document.created_at,last_seen_at:document.created_at};
     return {delta:{metadata:inkMetadata(document),operations:document.operations.filter(operation=>operation.seq>Number(args.afterSeq)),head_seq:document.operations.length,server_head:document.operations.length,writer:{document_id:document.document_id,head_seq:document.operations.length,writer_epoch:behavior.epoch,session,remote,pairing_pending:behavior.pairingPending},snapshot_count:snapshots.get(document.document_id)!.length},connected:remote&&behavior.remoteConnected,preview:null,client:remote&&behavior.remoteConnected?{pending_count:behavior.remotePending,locally_durable:true,secure_context:true,page_id:document.pages[0].id}:null};
   }
-  if(command==="get_ink_lan_status"||command==="start_ink_lan")return {enabled:true,running:true,port:1443,urls:["https://192.168.31.20:1443/pad/","https://100.90.0.2:1443/pad/","https://127.0.0.1:1443/pad/","https://localhost:1443/pad/"],url_kinds:["lan","vpn","loopback","loopback"],preferred_host:behavior.preferredHost||null,certificate_file_sha256:"fixture",assets_ready:true,error:null};
+  if(command==="get_ink_lan_status"||command==="start_ink_lan")return {enabled:true,running:true,port:1443,urls:["https://192.168.31.20:1443/pad/","https://100.90.0.2:1443/pad/","https://127.0.0.1:1443/pad/","https://localhost:1443/pad/"],url_kinds:["lan","vpn","loopback","loopback"],preferred_host:behavior.preferredHost||null,certificate_file_sha256:"fixture",assets_ready:true,online_tablets:behavior.pushOffline?0:1,error:null};
   if(command==="set_ink_lan_preferred_host"){behavior.preferredHost=(args.host as string|null|undefined)||null;return{enabled:true,port:1443,preferred_host:behavior.preferredHost};}
   if(command==="push_ink_to_tablet"){behavior.pushArgs.push(structuredClone(args));if(behavior.pushOffline)return{pushed:false,online:0,requires_takeover:false,expires_at:null,document_id:args.documentId,title:null,message:"平板未连接。请用二维码配对，或确认平板已打开这份电脑上的手稿。"};if(behavior.pushNeedsTakeover&&!args.allowTransfer)return{pushed:false,online:1,requires_takeover:true,expires_at:null,document_id:args.documentId,title:"手稿",message:"这份手稿正在由平板书写。推送会转交写入权，对方未同步的内容会被隔离，可以导出恢复草稿。"};return{pushed:true,online:1,requires_takeover:false,expires_at:Math.floor(Date.now()/1000)+120,document_id:args.documentId,title:"手稿",message:"已向 1 台在线平板发送切换请求。"};}
   if(command==="create_ink_pairing"){behavior.pairingArgs.push(structuredClone(args));if(behavior.strictPairing&&behavior.remoteDocumentId===args.documentId&&!args.allowTransfer)throw new Error("ink invariant failed: takeover_required");behavior.pairingPending=true;return{document_id:args.documentId,expires_at:Date.now()/1000+120,urls:["https://192.168.31.20:1443/pad/#pair="+"a".repeat(64),"https://100.90.0.2:1443/pad/#pair="+"a".repeat(64),"https://127.0.0.1:1443/pad/#pair="+"a".repeat(64)],url_kinds:behavior.noLanAddress?["vpn","vpn","loopback"]:["lan","vpn","loopback"]};}

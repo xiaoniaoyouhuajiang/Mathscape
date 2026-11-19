@@ -597,10 +597,10 @@ test.describe("S1 sandbox shell", () => {
 
     await input.click();
     await expect(menu).toHaveCount(0);
-    // Only canonical-id nodes are offered (the harness's plain ids would not chip).
+    // Canonical-id map nodes (2) + active 32-hex live ink notes (2) are offered.
     await page.keyboard.type("看看 @");
     await expect(menu).toBeVisible();
-    await expect(options).toHaveCount(2);
+    await expect(options).toHaveCount(4);
     await expect(input).toHaveAttribute("aria-expanded", "true");
     // Filter by label, by type (中文 kind label) and by short id.
     await page.keyboard.type("紧集");
@@ -608,7 +608,7 @@ test.describe("S1 sandbox shell", () => {
     await expect(options.first().locator(".sandbox-composer-menu-label")).toHaveText("紧集讲义.pdf");
     await expect(options.first().locator(".sandbox-composer-menu-meta")).toHaveText(/材料文件 · artifact\/cd34cd34…/);
     for (let i = 0; i < 2; i += 1) await page.keyboard.press("Backspace");
-    await expect(options).toHaveCount(2);
+    await expect(options).toHaveCount(4);
     await page.keyboard.type("内容单元");
     await expect(options).toHaveCount(1);
     await expect(options.first()).toHaveAttribute("data-domain-id", unitId);
@@ -619,16 +619,21 @@ test.describe("S1 sandbox shell", () => {
     await page.keyboard.type("zz");
     await expect(menu).toHaveCount(0);
     for (let i = 0; i < 8; i += 1) await page.keyboard.press("Backspace");
-    await expect(options).toHaveCount(2);
+    await expect(options).toHaveCount(4);
 
     // ↑/↓ move the active option (wrapping); Enter picks it and does not send.
     await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("ArrowDown");
     await expect(options.nth(1)).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("ArrowDown");
+    await expect(options.nth(2)).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ArrowDown");
+    await expect(options.nth(3)).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ArrowDown");
     await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("ArrowUp");
-    await page.keyboard.press("ArrowUp");
+    await expect(options.nth(3)).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ArrowDown");
     await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
     await page.keyboard.type("引理");
     await expect(options).toHaveCount(1);

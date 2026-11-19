@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { SourceBacklinkView } from "./backlink";
 
 export interface ProductPath { path: string; artifact_id: string }
 export interface ContentInfo {
@@ -9,8 +10,58 @@ export interface ContentInfo {
   contexts: { conversion_id: string; paths: ProductPath[] }[];
 }
 
-export interface SourceNodeDetail { node_id: string; kind: string; display_title: string | null; unit_kind: string | null; parent: string | null; artifact_id: string | null; byte_range: { start: number; end: number } | null; excerpt: string | null; markdown_block_ids: string[]; payload: unknown; ink?: { snapshot_id: string; document_id: string; page_id: string; stroke_ids: string[] }; }
+export interface SourceErrataReviewItem {
+  errata_id: string;
+  artifact_id: string;
+  first_block_id: string;
+  last_block_id: string;
+  original_text: string;
+  corrected_text: string;
+  source_kind: string;
+  updated_at: string;
+  sent_to_sandbox: boolean;
+}
+
+export interface SourceUnitErrataReview {
+  unit_id: string;
+  items: SourceErrataReviewItem[];
+}
+
+export interface SourceNodeDetail {
+  node_id: string;
+  kind: string;
+  display_title: string | null;
+  unit_kind: string | null;
+  parent: string | null;
+  artifact_id: string | null;
+  byte_range: { start: number; end: number } | null;
+  excerpt: string | null;
+  markdown_block_ids: string[];
+  payload: unknown;
+  ink?: { snapshot_id: string; document_id: string; page_id: string; stroke_ids: string[] };
+  pdf_backlink?: SourceBacklinkView;
+  errata_review?: SourceUnitErrataReview;
+}
 export function sourceNodeDetail(nodeId: string): Promise<SourceNodeDetail> { return invoke("get_source_node_detail", { nodeId }); }
+
+export interface MarkdownUnitMarker {
+  unit_id: string;
+  title: string;
+  unit_kind: string;
+  artifact_id: string;
+  byte_range: { start: number; end: number };
+  block_ids: string[];
+}
+
+export async function getMarkdownUnitMarkers(artifactIds: string[]): Promise<MarkdownUnitMarker[]> {
+  if (!artifactIds.length) return [];
+  try {
+    const markers = await invoke<MarkdownUnitMarker[] | undefined>("get_markdown_unit_markers", { artifactIds });
+    return Array.isArray(markers) ? markers : [];
+  } catch {
+    return [];
+  }
+}
 
 export function contentInfo(id: string): Promise<ContentInfo> {
   return invoke("get_artifact_content_info", { artifactId: id });

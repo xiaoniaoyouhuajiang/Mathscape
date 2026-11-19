@@ -70,6 +70,13 @@ impl ChangeSetSelection {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BaseObjectView {
+    pub kind: String,
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PendingChangeSetView {
     pub change_set_id: String,
     pub version: i64,
@@ -90,6 +97,14 @@ pub struct PendingChangeSetView {
     /// Titles of existing objects the version names (head first, else another
     /// staged version): diagnostic targets, relation ends, parents, edit targets.
     pub target_titles: BTreeMap<String, String>,
+    /// Resolved short human title of `proposal.target_object` (or primary object).
+    pub target_object_title: Option<String>,
+    /// Payloads of existing / cross-proposal objects referenced by this version,
+    /// enabling before/after diffs (`edit`/`retire`) and side-by-side alignment cards.
+    pub base_objects: BTreeMap<String, BaseObjectView>,
+    /// Outstanding (`open` / `claimed_paid`) debts attached to `retire` targets
+    /// that will automatically become `obsolete` upon acceptance.
+    pub retire_cascades: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -99,6 +114,7 @@ pub struct HistoryVersionView {
     pub state: String,
     pub created_at: String,
     pub diagnostics: Value,
+    pub proposal: Value,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -314,22 +330,60 @@ fn view(
                 .get("diagnostics")
                 .cloned()
                 .unwrap_or_else(|| Value::Array(vec![])),
+            proposal: other.record.proposal.clone(),
         })
         .collect();
     history.sort_by_key(|item| std::cmp::Reverse(item.version));
-    let target_titles = named_ids(item)
+    let mut ids = named_ids(item);
+    let retire_cascades = collect_retire_cascades(item, anchors.head(), versions);
+    for debt_ids in retire_cascades.values() {
+        for debt_id in debt_ids {
+            if !ids.iter().any(|existing| existing == debt_id) {
+                ids.push(debt_id.clone());
+            }
+        }
+    }
+    let mut base_objects: BTreeMap<String, BaseObjectView> = BTreeMap::new();
+    for id in &ids {
+        if let Some((kind, payload)) = anchors.head_object(id) {
+            base_objects.insert(id.clone(), BaseObjectView { kind, payload });
+        } else if let Some(staged) = staged_object(versions, id) {
+            base_objects.insert(id.clone(), staged);
+        }
+    }
+    // Ensure endpoints of any referenced Alignment (e.g. when retiring/editing an alignment)
+    // also have their titles resolved.
+    let mut extra_ids = Vec::new();
+    for base in base_objects.values() {
+        if base.kind == "alignment" {
+            for end in ["source", "target"] {
+                if let Some(end_id) = base.payload.get(end).and_then(Value::as_str)
+                    && !ids.iter().any(|existing| existing == end_id)
+                    && !extra_ids.iter().any(|existing| existing == end_id)
+                {
+                    extra_ids.push(end_id.to_owned());
+                }
+            }
+        }
+    }
+    ids.extend(extra_ids);
+    let target_titles: BTreeMap<String, String> = ids
         .into_iter()
         .filter_map(|id| {
             let title = anchors
                 .head_title(&id)
-                .or_else(|| staged_title(versions, &id))?;
+                .or_else(|| staged_title(versions, anchors, &id))?;
             Some((id, title))
         })
         .collect();
+    let target_object_title = resolve_target_object_title(item, &target_titles);
     PendingChangeSetView {
         anchors: anchors.anchors(item),
         history,
         target_titles,
+        target_object_title,
+        base_objects,
+        retire_cascades,
         change_set_id: item.record.change_set_id.clone(),
         version: item.record.version,
         state: item.record.state.clone(),
@@ -382,14 +436,70 @@ fn named_ids(item: &PendingChangeSet) -> Vec<String> {
     ids
 }
 
-/// Title of an object another version of this investigation stages.
-fn staged_title(versions: &[PendingChangeSet], id: &str) -> Option<String> {
-    versions.iter().find_map(|version| {
+fn resolve_local_refs(value: &Value, staged_ids: &serde_json::Map<String, Value>) -> Value {
+    match value {
+        Value::String(text) => {
+            if let Some(local) = text.strip_prefix("$new:")
+                && let Some(actual) = staged_ids.get(local).and_then(Value::as_str)
+            {
+                Value::String(actual.to_owned())
+            } else {
+                Value::String(text.clone())
+            }
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| resolve_local_refs(item, staged_ids))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), resolve_local_refs(v, staged_ids)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn payload_short_title(payload: &Value) -> Option<String> {
+    let str_at = |key: &str| {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned)
+    };
+    str_at("display_title")
+        .or_else(|| str_at("plain_label"))
+        .or_else(|| {
+            let labels = payload.get("preferred_labels")?.as_array()?;
+            labels
+                .iter()
+                .find(|l| l.get("lang").and_then(Value::as_str) == Some("zh"))
+                .or_else(|| labels.first())?
+                .get("label")?
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_owned)
+        })
+        .or_else(|| str_at("label"))
+        .or_else(|| str_at("map_label"))
+        .or_else(|| str_at("obligation"))
+}
+
+fn staged_object(versions: &[PendingChangeSet], id: &str) -> Option<BaseObjectView> {
+    let mut ordered: Vec<&PendingChangeSet> = versions.iter().collect();
+    ordered.sort_by_key(|v| {
+        (
+            v.record.state != "staged",
+            std::cmp::Reverse(v.record.version),
+        )
+    });
+    ordered.into_iter().find_map(|version| {
         let record = &version.record;
-        let (local_ref, _) = record
-            .result
-            .get("staged_ids")?
-            .as_object()?
+        let staged_ids = record.result.get("staged_ids")?.as_object()?;
+        let (local_ref, _) = staged_ids
             .iter()
             .find(|(_, staged)| staged.as_str() == Some(id))?;
         let object = record
@@ -398,24 +508,212 @@ fn staged_title(versions: &[PendingChangeSet], id: &str) -> Option<String> {
             .as_array()?
             .iter()
             .find(|object| object.get("local_ref").and_then(Value::as_str) == Some(local_ref))?;
-        let payload = object.get("payload")?;
-        let str_at = |key: &str| payload.get(key).and_then(Value::as_str).map(str::to_owned);
-        str_at("display_title")
-            .or_else(|| str_at("plain_label"))
-            .or_else(|| {
-                let labels = payload.get("preferred_labels")?.as_array()?;
-                labels
-                    .iter()
-                    .find(|l| l.get("lang").and_then(Value::as_str) == Some("zh"))
-                    .or_else(|| labels.first())?
-                    .get("label")?
-                    .as_str()
-                    .map(str::to_owned)
-            })
-            .or_else(|| str_at("label"))
-            .or_else(|| str_at("map_label"))
-            .or_else(|| str_at("obligation"))
+        let op = object.get("op").and_then(Value::as_str).unwrap_or("create");
+        if op != "create" {
+            return None;
+        }
+        let kind = object.get("kind")?.as_str()?.to_owned();
+        let payload = resolve_local_refs(object.get("payload")?, staged_ids);
+        Some(BaseObjectView { kind, payload })
     })
+}
+
+/// Title of an object another version of this investigation stages.
+fn staged_title(
+    versions: &[PendingChangeSet],
+    anchors: &AnchorContext<'_>,
+    id: &str,
+) -> Option<String> {
+    let base = staged_object(versions, id)?;
+    if base.kind == "alignment" {
+        let end_title = |key: &str| -> String {
+            let Some(end_id) = base.payload.get(key).and_then(Value::as_str) else {
+                return "?".into();
+            };
+            anchors
+                .head_title(end_id)
+                .or_else(|| staged_object(versions, end_id).and_then(|o| payload_short_title(&o.payload)))
+                .unwrap_or_else(|| end_id.to_owned())
+        };
+        let label = base
+            .payload
+            .get("map_label")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| base.payload.get("relation").and_then(Value::as_str))
+            .unwrap_or("对齐");
+        return Some(format!("{} —{}→ {}", end_title("source"), label, end_title("target")));
+    }
+    payload_short_title(&base.payload)
+}
+
+fn collect_retire_cascades(
+    item: &PendingChangeSet,
+    head: &mathscape_domain::MapEditSnapshot,
+    versions: &[PendingChangeSet],
+) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let Some(objects) = item
+        .record
+        .proposal
+        .get("proposed_objects")
+        .and_then(Value::as_array)
+    else {
+        return out;
+    };
+    let retire_targets: BTreeSet<String> = objects
+        .iter()
+        .filter(|obj| obj.get("op").and_then(Value::as_str) == Some("retire"))
+        .filter_map(|obj| obj.get("target_id").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+    if retire_targets.is_empty() {
+        return out;
+    }
+    for obj in &head.objects {
+        if obj.lifecycle != "active" || !matches!(obj.kind.as_str(), "Debt" | "debt") {
+            continue;
+        }
+        let inner = obj.payload.get("payload").unwrap_or(&obj.payload);
+        let status = inner.get("status").and_then(Value::as_str).unwrap_or("");
+        if !matches!(status, "open" | "claimed_paid") {
+            continue;
+        }
+        if let Some(attached) = inner.get("attached_to").and_then(Value::as_str)
+            && retire_targets.contains(attached)
+        {
+            out.entry(attached.to_owned())
+                .or_default()
+                .push(obj.object_id.clone());
+        }
+    }
+    for version in versions {
+        if version.record.state != "staged" {
+            continue;
+        }
+        let Some(staged_ids) = version.record.result.get("staged_ids").and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(proposed) = version
+            .record
+            .proposal
+            .get("proposed_objects")
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for obj in proposed {
+            if obj.get("kind").and_then(Value::as_str) != Some("debt")
+                || obj.get("op").and_then(Value::as_str).unwrap_or("create") != "create"
+            {
+                continue;
+            }
+            let Some(local_ref) = obj.get("local_ref").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(debt_id) = staged_ids.get(local_ref).and_then(Value::as_str) else {
+                continue;
+            };
+            let payload = resolve_local_refs(
+                obj.get("payload").unwrap_or(&Value::Null),
+                staged_ids,
+            );
+            let status = payload.get("status").and_then(Value::as_str).unwrap_or("");
+            if !matches!(status, "open" | "claimed_paid") {
+                continue;
+            }
+            if let Some(attached) = payload.get("attached_to").and_then(Value::as_str)
+                && retire_targets.contains(attached)
+            {
+                let list = out.entry(attached.to_owned()).or_default();
+                if !list.iter().any(|existing| existing == debt_id) {
+                    list.push(debt_id.to_owned());
+                }
+            }
+        }
+    }
+    out
+}
+
+fn resolve_target_object_title(
+    item: &PendingChangeSet,
+    target_titles: &BTreeMap<String, String>,
+) -> Option<String> {
+    let proposal = &item.record.proposal;
+    let objects = proposal
+        .get("proposed_objects")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let local_titles: BTreeMap<String, String> = objects
+        .iter()
+        .filter_map(|obj| {
+            let local_ref = obj.get("local_ref")?.as_str()?;
+            let op = obj.get("op").and_then(Value::as_str).unwrap_or("create");
+            let title = if op == "create" {
+                payload_short_title(obj.get("payload")?)?
+            } else {
+                let target_id = obj.get("target_id")?.as_str()?;
+                target_titles.get(target_id)?.clone()
+            };
+            Some((local_ref.to_owned(), title))
+        })
+        .collect();
+    let resolve_ref = |raw: &str| -> Option<String> {
+        let stripped = raw.strip_prefix("$new:").unwrap_or(raw);
+        local_titles
+            .get(stripped)
+            .cloned()
+            .or_else(|| target_titles.get(stripped).cloned())
+            .or_else(|| {
+                let obj = objects
+                    .iter()
+                    .find(|o| o.get("local_ref").and_then(Value::as_str) == Some(stripped))?;
+                if obj.get("kind").and_then(Value::as_str) == Some("alignment")
+                    && obj.get("op").and_then(Value::as_str).unwrap_or("create") == "create"
+                {
+                    let payload = obj.get("payload")?;
+                    let src = payload
+                        .get("source")
+                        .and_then(Value::as_str)
+                        .map(|s| s.strip_prefix("$new:").unwrap_or(s))
+                        .and_then(|s| local_titles.get(s).or_else(|| target_titles.get(s)))?;
+                    let dst = payload
+                        .get("target")
+                        .and_then(Value::as_str)
+                        .map(|s| s.strip_prefix("$new:").unwrap_or(s))
+                        .and_then(|s| local_titles.get(s).or_else(|| target_titles.get(s)))?;
+                    let label = payload
+                        .get("map_label")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.trim().is_empty())
+                        .or_else(|| payload.get("relation").and_then(Value::as_str))
+                        .unwrap_or("对齐");
+                    return Some(format!("{src} —{label}→ {dst}"));
+                }
+                None
+            })
+    };
+    if let Some(target) = proposal.get("target_object").and_then(Value::as_str)
+        && !target.trim().is_empty()
+        && let Some(title) = resolve_ref(target)
+    {
+        return Some(title);
+    }
+    // Fallback when `target_object` is omitted: pick the primary non-span proposed object.
+    let priority = |kind: &str| match kind {
+        "semantic_entity" => 0,
+        "alignment" => 1,
+        "dialect_scope" => 2,
+        "debt" => 3,
+        "source_unit" => 4,
+        _ => 9,
+    };
+    objects
+        .iter()
+        .filter(|o| o.get("kind").and_then(Value::as_str) != Some("source_span"))
+        .min_by_key(|o| priority(o.get("kind").and_then(Value::as_str).unwrap_or("")))
+        .and_then(|o| o.get("local_ref").and_then(Value::as_str))
+        .and_then(resolve_ref)
 }
 
 pub fn list_queue(root: &Path, investigation_id: &str) -> Result<ChangeSetQueue, String> {
@@ -2344,13 +2642,28 @@ mod tests {
         );
         assert_eq!(move_shelf["status"], "staged", "{move_shelf}");
         let new_theory_id = staged_id(&move_shelf, "t.new");
+        // 未审批阶段即可读取暂存语义对象详情，且 edit 对象附带已接受旧版本 payload 以便对比。
+        let service = crate::DesktopService::open(&fx.root)
+            .unwrap()
+            .with_investigation(Some(INV.into()));
+        let staged_new =
+            crate::semantic::object_detail_with_scope(&service, &new_theory_id, true).unwrap();
+        assert!(staged_new.staged.is_some());
+        assert!(staged_new.staged.as_ref().unwrap().accepted_payload.is_none());
+        let staged_edited =
+            crate::semantic::object_detail_with_scope(&service, &entity_id, true).unwrap();
+        assert!(staged_edited.staged.as_ref().unwrap().accepted_payload.is_some());
+        assert_eq!(
+            staged_edited.payload["home_theory"],
+            json!(new_theory_id)
+        );
         accept(&fx, vec![sel(&move_shelf)]).unwrap();
         assert_eq!(
             semantic_payload(&fx, &entity_id)["payload"]["home_theory"],
             new_theory_id
         );
 
-        // Agent 提议退役对齐线；用户接受后挂在上面的账自动失效。
+        // Agent 提议退役对齐线；队列视图能直接预告级联失效的账；接受后挂在上面的账自动失效。
         let revision = open_store(&fx.root)
             .unwrap()
             .map_edit_snapshot()
@@ -2370,6 +2683,13 @@ mod tests {
             }),
         );
         assert_eq!(retire["status"], "staged", "{retire}");
+        let retire_queue = list_queue(&fx.root, INV).unwrap();
+        let retire_view = &retire_queue.items[0];
+        assert_eq!(
+            retire_view.retire_cascades.get(&alignment_id),
+            Some(&vec![debt_id.clone()])
+        );
+        assert!(retire_view.target_object_title.as_deref().unwrap_or("").contains("单调收敛定理"));
         accept(&fx, vec![sel(&retire)]).unwrap();
         assert_ne!(semantic_payload(&fx, &alignment_id)["lifecycle"], "active");
         assert_eq!(
@@ -2481,6 +2801,12 @@ mod tests {
                 .map(String::as_str),
             Some("理论：线性递推数列")
         );
+        assert_eq!(
+            cassini_view.target_object_title.as_deref(),
+            Some("精确说法：Cassini 恒等式（对一切 n ≥ 1）")
+        );
+        assert!(cassini_view.base_objects.contains_key(jia_thm_id));
+        assert!(cassini_view.base_objects.contains_key(theory_id));
         accept(&fx, selections).unwrap();
         assert_eq!(commit_count(&fx), 1);
 

@@ -9,11 +9,13 @@ import {
   markdownPreviewLabel,
   openLinkExistingPopover,
   openRelatedNotesPopover,
-  overlappingNotes,
+  overlappingNotesForBlocks,
   startInkCreateFromTarget,
   type InkLinkTargetRef,
   type InkMarkdownLinks,
 } from "../ink/links";
+import type { MarkdownUnitMarker } from "./content";
+import { matchUnitsToBlocks } from "./markdown-outline";
 import type { AnchoredMarkdown, MarkdownSelection } from "./selection";
 
 const MENU_TARGET_CLASS = "is-ink-menu-target";
@@ -21,6 +23,7 @@ const MENU_TARGET_CLASS = "is-ink-menu-target";
 export class ReaderInkLinks {
   readonly hint = document.createElement("p");
   private links: InkMarkdownLinks | undefined;
+  private unitMarkers: readonly MarkdownUnitMarker[] = [];
   private disposed = false;
   private version = 0;
   private readonly unsubscribe: () => void;
@@ -30,7 +33,12 @@ export class ReaderInkLinks {
     private readonly article: HTMLElement,
     private readonly selection: () => MarkdownSelection,
     private readonly isRaw: () => boolean,
+    private readonly onOpenPdf?: (range: { first: number; last: number }) => void,
+    initialUnitMarkers: readonly MarkdownUnitMarker[] = [],
+    private readonly onEditErrata?: (range: { first: number; last: number }) => void,
+    private readonly coveredBlockIdsFor?: (blockId: string) => string[],
   ) {
+    this.unitMarkers = initialUnitMarkers;
     this.hint.className = "ink-patch-hint";
     this.hint.hidden = true;
     this.article.addEventListener("contextmenu", this.onContextMenu);
@@ -43,6 +51,32 @@ export class ReaderInkLinks {
   setDocument(data: AnchoredMarkdown): void {
     this.data = data;
     this.decorate();
+  }
+
+  setUnitMarkers(markers: readonly MarkdownUnitMarker[]): void {
+    this.unitMarkers = markers;
+    this.decorate();
+  }
+
+  private unitIdsByBlock(): Map<string, string[]> {
+    const out = new Map<string, string[]>();
+    if (!this.unitMarkers.length) return out;
+    const matched = matchUnitsToBlocks(
+      this.unitMarkers,
+      this.data.blocks.map((b) => ({
+        id: b.id,
+        domKey: b.id,
+        artifactId: this.data.snapshot.artifact_id,
+        range: b.range,
+        kind: b.kind,
+      })),
+    );
+    for (const item of matched) {
+      const list = out.get(item.blockId) ?? [];
+      list.push(item.unit.unit_id);
+      out.set(item.blockId, list);
+    }
+    return out;
   }
 
   dispose(): void {
@@ -70,37 +104,143 @@ export class ReaderInkLinks {
   /** Re-applies markers after every render. */
   decorate(): void {
     this.article.querySelectorAll(".ink-block-marker").forEach(marker => marker.remove());
+    this.article.querySelectorAll<HTMLElement>("[data-source-block].has-ink-marker").forEach(el => el.classList.remove("has-ink-marker"));
     const original = this.links?.original_note_count ?? 0;
     this.hint.hidden = original === 0;
     this.hint.textContent = original ? `原版本有 ${original} 份相关手稿` : "";
-    if (!this.links || this.isRaw()) return;
-    const notesByBlock = new Map<string, Set<string>>();
-    for (const { link } of this.links.links) {
-      if (link.target.kind !== "markdown" || link.target.content_hash !== this.data.snapshot.content_hash) continue;
-      for (const block of link.target.block_ids) {
-        const notes = notesByBlock.get(block) ?? new Set<string>();
-        notes.add(link.document_id);
-        notesByBlock.set(block, notes);
-      }
+    if (!this.links || this.isRaw()) {
+      this.syncActionPill();
+      return;
     }
+    const unitMap = this.unitIdsByBlock();
     for (const wrapper of this.article.querySelectorAll<HTMLElement>("[data-source-block]")) {
       const blockId = wrapper.dataset.sourceBlock ?? "";
-      const notes = notesByBlock.get(blockId);
-      if (!notes?.size || wrapper.classList.contains("source-page-marker")) continue;
+      if (!blockId || wrapper.classList.contains("source-page-marker") || wrapper.classList.contains("is-errata-merged-hidden")) continue;
+      const targetBlockIds = this.coveredBlockIdsFor?.(blockId) ?? [blockId];
+      const related = overlappingNotesForBlocks(
+        this.links.links,
+        this.links.unit_links ?? [],
+        targetBlockIds,
+        unitMap,
+        this.data.snapshot.content_hash,
+      );
+      if (!related.length) continue;
       const marker = document.createElement("button");
       marker.type = "button";
       marker.className = "ink-block-marker";
-      marker.textContent = `✎ ${notes.size}`;
-      marker.setAttribute("aria-label", `${notes.size} 份相关手稿`);
+      marker.textContent = `✎ ${related.length}`;
+      marker.setAttribute("aria-label", `${related.length} 份相关手稿`);
       marker.title = "查看相关手稿";
       marker.addEventListener("click", event => {
         event.stopPropagation();
         const bounds = marker.getBoundingClientRect();
-        openRelatedNotesPopover({ x: bounds.left, y: bounds.bottom + 4, title: "相关手稿", notes: overlappingNotes(this.links?.links ?? [], [blockId]) });
+        const latestNotes = overlappingNotesForBlocks(
+          this.links?.links ?? [],
+          this.links?.unit_links ?? [],
+          this.coveredBlockIdsFor?.(blockId) ?? [blockId],
+          this.unitIdsByBlock(),
+          this.data.snapshot.content_hash,
+        );
+        openRelatedNotesPopover({ x: bounds.left, y: bounds.bottom + 4, title: "相关手稿", notes: latestNotes });
       });
       marker.addEventListener("keydown", event => event.stopPropagation());
+      wrapper.classList.add("has-ink-marker");
       wrapper.append(marker);
     }
+    this.syncActionPill();
+  }
+
+  /** Renders or updates the floating quick-action pill on the active block/range. */
+  syncActionPill(): void {
+    this.article.querySelectorAll(".block-action-pill").forEach(pill => pill.remove());
+    this.article.querySelectorAll<HTMLElement>("[data-source-block].has-action-pill").forEach(el => el.classList.remove("has-action-pill"));
+    if (this.disposed || this.isRaw()) return;
+    const sel = this.selection();
+    if (sel.isWholeSelection()) return;
+    const range = sel.targetRange();
+    if (!range) return;
+    const contentBlocks = this.data.blocks.slice(range.first, range.last + 1).filter(b => b.kind !== "page_marker");
+    if (!contentBlocks.length) return;
+    const anchorBlock = contentBlocks[0];
+    const wrapper = this.article.querySelector<HTMLElement>(`[data-source-block="${anchorBlock.id}"]`);
+    if (!wrapper) return;
+
+    const pill = document.createElement("div");
+    pill.className = "block-action-pill";
+    pill.setAttribute("role", "toolbar");
+    pill.setAttribute("aria-label", "所选段落快捷操作");
+    const stop = (event: Event) => event.stopPropagation();
+    pill.addEventListener("click", stop);
+    pill.addEventListener("pointerdown", stop);
+    pill.addEventListener("contextmenu", stop);
+    pill.addEventListener("keydown", stop);
+
+    const count = contentBlocks.length;
+    const writeBtn = document.createElement("button");
+    writeBtn.type = "button";
+    writeBtn.className = "block-pill-btn block-pill-primary";
+    writeBtn.textContent = count === 1 ? "✎ 手写此块" : `✎ 手写这 ${count} 块`;
+    writeBtn.title = "新建关联手稿并打开左右并排书写视图";
+    writeBtn.onclick = (event) => {
+      event.stopPropagation();
+      const bounds = writeBtn.getBoundingClientRect();
+      this.create(range, bounds.left, bounds.bottom + 6);
+    };
+    pill.append(writeBtn);
+
+    const linkBtn = document.createElement("button");
+    linkBtn.type = "button";
+    linkBtn.className = "block-pill-btn";
+    linkBtn.textContent = "＋ 关联已有";
+    linkBtn.title = "将所选段落关联到一份已有手稿";
+    linkBtn.onclick = (event) => {
+      event.stopPropagation();
+      const bounds = linkBtn.getBoundingClientRect();
+      const label = markdownPreviewLabel(this.rangeText(range));
+      this.highlight(range);
+      openLinkExistingPopover({
+        x: bounds.left,
+        y: bounds.bottom + 6,
+        target: this.target(range),
+        targetLabel: label,
+        onClose: () => this.highlight(null),
+      });
+    };
+    pill.append(linkBtn);
+
+    if (this.onEditErrata) {
+      const rangeBlocks = this.data.blocks.slice(range.first, range.last + 1);
+      const crossesMarker = rangeBlocks.some(b => b.kind === "page_marker");
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "block-pill-btn block-pill-errata";
+      editBtn.textContent = count === 1 ? "✎ 校对" : `✎ 合并校对 ${count} 块`;
+      editBtn.disabled = crossesMarker;
+      editBtn.title = crossesMarker
+        ? "所选区间跨越了 PDF 分页标记，请分段校对"
+        : "就地修正 OCR 错字或公式（快捷键 E），保留全部手稿与地图锚点";
+      editBtn.onclick = (event) => {
+        event.stopPropagation();
+        this.onEditErrata!(range);
+      };
+      pill.append(editBtn);
+    }
+
+    if (this.onOpenPdf) {
+      const pdfBtn = document.createElement("button");
+      pdfBtn.type = "button";
+      pdfBtn.className = "block-pill-btn";
+      pdfBtn.textContent = "↗ PDF 原页";
+      pdfBtn.title = "跳转查看所选段落对应的原始 PDF 页";
+      pdfBtn.onclick = (event) => {
+        event.stopPropagation();
+        this.onOpenPdf!(range);
+      };
+      pill.append(pdfBtn);
+    }
+
+    wrapper.classList.add("has-action-pill");
+    wrapper.append(pill);
   }
 
   private blockIds(range: { first: number; last: number }): string[] {
@@ -147,7 +287,7 @@ export class ReaderInkLinks {
 
   private onContextMenu = (event: MouseEvent): void => {
     if (this.isRaw()) return;
-    if ((event.target as Element).closest(".ink-block-marker")) return;
+    if ((event.target as Element).closest(".ink-block-marker, .block-action-pill, .errata-block-badge, .errata-inline-editor, .errata-diff-popover")) return;
     const wrapper = (event.target as Element).closest<HTMLElement>("[data-source-block]");
     if (!wrapper || !this.article.contains(wrapper)) return;
     const index = this.data.blocks.findIndex(block => block.id === wrapper.dataset.sourceBlock);
@@ -155,11 +295,28 @@ export class ReaderInkLinks {
     const range = this.selection().targetRange(index);
     if (!range) return;
     event.preventDefault();
-    const related = overlappingNotes(this.links?.links ?? [], this.blockIds(range));
+    const related = overlappingNotesForBlocks(
+      this.links?.links ?? [],
+      this.links?.unit_links ?? [],
+      this.blockIds(range),
+      this.unitIdsByBlock(),
+      this.data.snapshot.content_hash,
+    );
     const { clientX: x, clientY: y } = event;
     this.highlight(range);
     const label = markdownPreviewLabel(this.rangeText(range));
+    const rangeCrossesMarker = this.data.blocks.slice(range.first, range.last + 1).some(b => b.kind === "page_marker");
     showContextMenu(x, y, [
+      ...(this.onEditErrata
+        ? [{
+            label: range.first === range.last ? "校对此块 OCR 正文…" : "合并校对所选正文块…",
+            disabled: rangeCrossesMarker,
+            onSelect: () => { this.highlight(null); this.onEditErrata!(range); },
+          }]
+        : []),
+      ...(this.onOpenPdf
+        ? [{ label: "定位对应 PDF 原页", onSelect: () => { this.highlight(null); this.onOpenPdf!(range); } }]
+        : []),
       { label: "新建关联手稿…", onSelect: () => this.create(range, x, y) },
       {
         label: "关联到已有手稿…",
