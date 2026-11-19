@@ -43,6 +43,23 @@ export function extractAnchorPhrase(markdownExcerpt: string | undefined | null):
   return normalizeSearchText(compact).length >= 3 ? compact : null;
 }
 
+/**
+ * Reads a page's text-run strings with a stream reader. `PDFPageProxy.getTextContent`
+ * iterates a `ReadableStream` with `for await`, which WebKitGTK (the Linux Tauri
+ * WebView) does not support.
+ */
+export async function readPageTextStrings(page: Pick<PDFPageProxy, "streamTextContent">): Promise<string[]> {
+  const reader = page.streamTextContent().getReader();
+  const strs: string[] = [];
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return strs;
+    for (const item of value.items) {
+      strs.push("str" in item && typeof item.str === "string" ? item.str : "");
+    }
+  }
+}
+
 export interface PageSpanMatch {
   spanIndices: number[];
 }
@@ -318,9 +335,7 @@ export class PdfFindController {
         try {
           const page = await this.pdf.getPage(p);
           if (this.disposed) return;
-          const content = await page.getTextContent();
-          const strs = content.items.map((item) => ("str" in item && typeof item.str === "string" ? item.str : ""));
-          this.pageTextCache.set(p, strs);
+          this.pageTextCache.set(p, await readPageTextStrings(page));
         } catch {
           this.pageTextCache.set(p, []);
         }
