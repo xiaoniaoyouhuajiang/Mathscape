@@ -421,28 +421,36 @@ impl CodexEventMapper {
     }
 
     fn on_usage(&mut self, params: &Value) -> Vec<AgentEvent> {
-        let mut events = Vec::new();
+        if !self.turn_open || self.turn_closed {
+            // On a resumed thread, Codex replays the previous turn's trailing
+            // `thread/tokenUsage/updated` before `turn/start` returns. Never
+            // let a usage notification open the turn or hijack `self.turn_id`.
+            return Vec::new();
+        }
         if let Some(id) = params.get("turnId").and_then(Value::as_str) {
-            events.extend(self.ensure_turn(id, Value::Null));
+            let parsed = TurnId::parse(sanitize_id(id, "turn-1"))
+                .unwrap_or_else(|_| TurnId::parse("turn-1").expect("fallback turn id"));
+            if self.turn_id.as_ref() != Some(&parsed) {
+                return Vec::new();
+            }
         }
         let Some(usage) = params
             .get("tokenUsage")
             .or_else(|| params.get("token_usage"))
         else {
-            return events;
+            return Vec::new();
         };
         let Some(breakdown) = usage.get("last").or_else(|| usage.get("total")) else {
-            return events;
+            return Vec::new();
         };
         let cached = json_u64(breakdown.get("cachedInputTokens"));
-        events.push(self.emit(EventPayload::Usage(Usage {
+        vec![self.emit(EventPayload::Usage(Usage {
             input_tokens: json_u64(breakdown.get("inputTokens")).unwrap_or(0),
             output_tokens: json_u64(breakdown.get("outputTokens")).unwrap_or(0),
             cached_input_tokens: cached,
             cost_usd: None,
             raw: Some(usage.clone()),
-        })));
-        events
+        }))]
     }
 
     fn on_item(&mut self, phase: ItemPhase, params: &Value) -> Vec<AgentEvent> {
@@ -1350,5 +1358,59 @@ mod tests {
         };
         assert_eq!(result.status, ToolResultStatus::Ok);
         assert!(result.raw.as_ref().unwrap()["mcp"]["tools"].is_null());
+    }
+
+    #[test]
+    fn replayed_previous_turn_usage_before_turn_start_does_not_hijack_turn_id() {
+        let mut m = mapper();
+        let stale_usage = serde_json::json!({
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": "thr_resumed",
+                "turnId": "01a1f2fc-e4d3-7713-88a2-941d6b5ea4b9",
+                "tokenUsage": {
+                    "last": { "inputTokens": 74282, "outputTokens": 612, "cachedInputTokens": 72064 }
+                }
+            }
+        });
+        let current_usage = serde_json::json!({
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": "thr_resumed",
+                "turnId": "01a1f477-4dc9-7da0-b311-8b65d42f3877",
+                "tokenUsage": {
+                    "last": { "inputTokens": 1200, "outputTokens": 300, "cachedInputTokens": 800 }
+                }
+            }
+        });
+
+        // Stale usage replayed right after thread/resume (before turn/start response) is ignored.
+        assert!(m.on_notification(&stale_usage).is_empty());
+
+        let mut events = m.accept_turn("01a1f477-4dc9-7da0-b311-8b65d42f3877", &Value::Null);
+        events.extend(m.on_notification(&serde_json::json!({
+            "method": "turn/started",
+            "params": { "turn": { "id": "01a1f477-4dc9-7da0-b311-8b65d42f3877", "status": "inProgress" } }
+        })));
+        // Late stale usage after turn open is also ignored without emitting a protocol error.
+        events.extend(m.on_notification(&stale_usage));
+        // Real usage for the active turn is recorded cleanly.
+        events.extend(m.on_notification(&current_usage));
+        events.extend(m.on_notification(&serde_json::json!({
+            "method": "turn/completed",
+            "params": { "turn": { "id": "01a1f477-4dc9-7da0-b311-8b65d42f3877", "status": "completed" } }
+        })));
+
+        assert_eq!(validate_round(&events), vec![]);
+        let types: Vec<_> = events.iter().map(AgentEvent::type_name).collect();
+        assert_eq!(types, ["turn_start", "usage", "turn_end"]);
+        assert!(events.iter().all(|event| {
+            event.turn_id.as_ref().map(|id| id.as_str())
+                == Some("01a1f477-4dc9-7da0-b311-8b65d42f3877")
+        }));
+        let EventPayload::Usage(usage) = &events[1].payload else {
+            panic!("expected usage");
+        };
+        assert_eq!(usage.input_tokens, 1200);
     }
 }
