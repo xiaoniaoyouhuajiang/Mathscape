@@ -45,8 +45,8 @@ export function extractAnchorPhrase(markdownExcerpt: string | undefined | null):
 
 /**
  * Reads a page's text-run strings with a stream reader. `PDFPageProxy.getTextContent`
- * iterates a `ReadableStream` with `for await`, which WebKitGTK (the Linux Tauri
- * WebView) does not support.
+ * iterates a `ReadableStream` with `for await`, which WebKit (WKWebView on macOS,
+ * WebKitGTK on Linux) does not support.
  */
 export async function readPageTextStrings(page: Pick<PDFPageProxy, "streamTextContent">): Promise<string[]> {
   const reader = page.streamTextContent().getReader();

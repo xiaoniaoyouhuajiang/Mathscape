@@ -30,7 +30,7 @@ describe("pdf-text-find pure helpers", () => {
 });
 
 describe("readPageTextStrings", () => {
-  it("reads every chunk without ReadableStream async iteration (WebKitGTK)", async () => {
+  it("reads every chunk without ReadableStream async iteration (WebKit)", async () => {
     const stream = new ReadableStream({
       start(controller) {
         controller.enqueue({ items: [{ str: "Trace-based" }, { type: "beginMarkedContent" }] });
