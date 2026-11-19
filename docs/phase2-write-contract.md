@@ -275,7 +275,7 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 
 #### 4.2.3 Phase2-0 可编译范围 [本文提议]
 
-现有正式写管线只有：`UserChangeOperation` 的 `CreateSourceUnit` / `CreateSourceRelation` / `EditSourceUnit` / `EditSourceRelation` / `RetireObject`（`crates/mathscape-domain/src/map_edit.rs`），来源登记（`plan_registration_commit` / `commit_bound_source_registration`），手稿证据登记（`register_ink_evidence`）。为「复用、不另造写引擎」（REV §1；FX §4.4「服务端编制补丁，不能直接执行 Agent 给的 MapPatch」）：
+来源层正式写管线包括：`UserChangeOperation` 的 `CreateSourceUnit` / `CreateSourceRelation` / `EditSourceUnit` / `EditSourceRelation` / `RetireObject`（`crates/mathscape-domain/src/map_edit.rs`），来源登记（`plan_registration_commit` / `commit_bound_source_registration`），手稿证据登记（`register_ink_evidence`）。为「复用、不另造写引擎」（REV §1；FX §4.4「服务端编制补丁，不能直接执行 Agent 给的 MapPatch」）：
 
 | `kind` / `op` | Phase2-0 | 编译目标 |
 | --- | --- | --- |
@@ -284,7 +284,8 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 | `source_relation` / `create` | ✅ | `CreateSourceRelation` |
 | `source_relation` / `edit` | ✅ | `EditSourceRelation` |
 | 来源层 `retire` | ❌ Agent 不可提议退役 | 退役只走 Desktop 手工编辑或 §6.2；语义层对象的 retire 见 `docs/semantic-write-contract.md` §S4.4（2026-11-13 用户改定） |
-| `SemanticEntity` / `FormalArtifact` / `Alignment` / 解释 / 证明对象 | ❌ | 后续契约（语义层） |
+| `semantic_entity` / `alignment` / `debt` / `dialect_scope` 的 create/edit/retire | ✅ 语义层扩展 | 对应语义 `UserChangeOperation`；用户审核 / 结账与服务端基线核对另有专用操作，见 [语义写契约](semantic-write-contract.md) §S4 |
+| `FormalArtifact` / 解释 / 证明对象 | ❌ | 尚未接通完整证明 / Lean 编排 |
 | `source_span` / `create` | ✅ [锁定·2026-11-09 用户改定；原口径 ❌，见 §10 待核 1] | 新增 `UserChangeOperation::CreateSourceSpan`（§4.2.5） |
 | `source_span` / `edit` | ❌ | span 是不可变定位；改定位 = 新建 span + 改引用 |
 
@@ -331,7 +332,7 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 | 范围在快照字节长度内、`start < end` | `range_out_of_bounds` |
 | 范围不超过 4096 字节 [2026-11-10 V3]（一章按题或按段拆成多个 span） | `span_too_long` |
 | `start`、`end` 落在 UTF-8 字符边界 | `invalid_utf8_boundary` |
-| `quote` 与范围原文一致 [2026-11-10 定稿 R2]：**先按 `[start,end)` 截出范围原文**，再比较——先精确相等；否则两侧都去掉外层数学定界符并做 TeX 感知的空白归一化（`source_locator::quote_matches_range`，归一化与内容发现共用 `normalize_locator_text`）后相等。不在快照全文里搜索 quote（原口径的 `locator_matches` 是全文搜索，只留给内容发现） | `quote_mismatch` |
+| `quote` 与范围正文一致（R2 + errata）：**先按物理 `[start,end)` 截取**，再比较——先精确，否则做相同的外层数学定界符 / TeX 空白归一化。有活动 errata 时可匹配有效校对正文，也兼容原始 OCR；有效正文子段仅在映射恰好等于该物理范围时通过。不搜索范围外正文；见 `crates/mathscape-mcp/src/tools/propose.rs` 的 `materialize_span_drafts` | `quote_mismatch` |
 | `granularity = block` 但范围内没有 canonical `block:*`（页标记不算） [R3] | `block_locator_unavailable` |
 | `granularity = page` 但范围不能唯一映射到一个 PDF 页（跨分页标记、多页快照无分页标记、快照无页信息等） [R3] | `page_mapping_unavailable` |
 | 同 id span 在正式图上已退役 [U1] | `span_inactive` |
@@ -339,13 +340,13 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 
 服务端补全：
 - `markdown = MarkdownLocator(artifact_id, ByteRange(start, end))`，`displayed_lines` 不填。
-- `normalized_text_hash` [2026-11-10 定稿 R4] = `source_text_hash(范围原文)` = `fingerprint(&text)`，即对原文字符串做 JSON 序列化后取 sha256，与内容发现登记写 span 文本 hash 的函数相同（`crates/mathscape-orchestrator/src/source_locator.rs`，两条路径都调用它）。字段名里的 `normalized` 是历史命名：hash 前**不做**归一化。PR-B 合并前提案路径曾用原文字节 sha256，但该版本从未进入 main，不存在需要迁移的已有数据。
+- `normalized_text_hash` [2026-11-10 定稿 R4] = `source_text_hash(匹配采用的有效正文或原始 OCR)` = `fingerprint(&text)`，即对所采用的文本字符串做 JSON 序列化后取 sha256，与内容发现登记写 span 文本 hash 的函数相同（`crates/mathscape-orchestrator/src/source_locator.rs`，两条路径都调用它）。字段名里的 `normalized` 是历史命名：hash 前**不做**归一化。PR-B 合并前提案路径曾用原文字节 sha256，但该版本从未进入 main，不存在需要迁移的已有数据。
 - `marker_block_ids` = 与范围相交的 canonical `block:*` id（同 `ResolvedDiscoverySelector::canonical_block_ids` 的相交规则，块取自快照的 `AnchoredMarkdown.blocks`）。
 - `page`：仅 `granularity = page` 时填 `PageCoordinate`，由快照的分页标记（或单页快照的页范围）确定唯一页；不能唯一确定 ⇒ `page_mapping_unavailable`（R3），不留空降级。`inline` / `block` 粒度不填 `page`（来源登记同样留空；`markdown` 已满足 `invalid_locator` 校验）。
 - `layout = Other`、`bounding_boxes = []`、`exact_text_artifact = None`；**`ink` 永不填**——手稿证据只走 `register_ink_evidence`（Desktop 用户写入）。
 - lifecycle / trust 同 §3.3：接受者写入，不自设可信终态。
 
-**先定位再提案** [2026-11-10 V2/V3]：Agent 用 `material.read` 读页，取 `served_segments[].artifact_id / md_byte_range`；从正文原样复制一段，调用 `material.locate`（可用 `within` 限定在所读页的字节段），把返回的 `md_byte_range` 与**同一** `quote` 放进 `source_span`。`material.locate` 只是 R2 的搜索形式：它返回的范围都满足 `quote_matches_range(范围原文, quote)`，因此一定通过 R2；R2 本身仍是截取后比较，不在全文里搜。快照没有分页标记时（`page_markers_absent`）只能用 `inline` 粒度。
+**先定位再提案** [2026-11-10 V2/V3]：Agent 用 `material.read` 读页，取 `served_segments[].artifact_id / md_byte_range`；从正文原样复制一段，调用 `material.locate`（可用 `within` 限定在所读页的字节段），把返回的 `md_byte_range` 与**同一** `quote` 放进 `source_span`。`material.locate` 使用同一匹配规则：有 errata 时优先搜索有效正文并映射回物理区间，保留原始 OCR 回退；返回的范围与同一 `quote` 通过 R2 + errata 校验。不要按有效正文的字符串偏移自行构造物理范围。快照没有分页标记时（`page_markers_absent`）只能用 `inline` 粒度。
 
 **身份与去重** [锁定·2026-11-09 用户改定]：span id **复用内容发现的确定性规则**——`markdown_span_id(artifact_id, range) = stable_hash_id("source-span", fingerprint(("markdown-source-span-1", artifact_id, range)))`，定义在共享模块 `crates/mathscape-orchestrator/src/source_locator.rs`，来源登记的 `intern_span` 与 propose 都调用它（有跨路径同 id、同 hash 的测试）。因此：
 - 同一快照同一范围得到同一 id，无论来自内容发现登记、哪个 change_set、哪个 version。

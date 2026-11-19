@@ -92,6 +92,8 @@ Head 选择：在该 lineage 的成功 / `partial`、输出为 `text/markdown` �
 
 PDF 的 `pdf_pages` 精读（无论请求页有没有原生文本层，正文都只来自 canonical Marker Markdown）：
 
+下述覆盖与裁切按物理快照计算；有活动 errata 时，返回正文应用校对叠加层，物理定位规则不变（见「校对叠加层与物理定位」）。
+
 - 已有一份快照的页区间 **完全包含** 请求：返回该快照的 Markdown 字节（包含请求的 head 优先，否则取最新的包含快照；会在该 PDF 的所有 lineage 中找），`content_type` 为 `markdown`，`served_artifact_id` 指向物理快照。不按页切开字节；区间以 `coverage` 为准。超出 32KiB 仍是 `truncated`。只与请求相交的单份快照不会冒充整段请求返回，而是走下一条按页拼接。
 - 没有单份快照完全包含请求，但该 PDF 全部 lineage 的快照**按页合起来**盖住请求：不跑 Marker，按页拼接返回（`mathscape_domain::plan_page_cover`）。贪心选段：从请求起页开始，在包含当前页的快照里选伸进请求最远的一份；同样远时依次取排名更前的 lineage（与 `all_for_pdf` 同序）、head、`finished_at` 更新者、id。每段在 Marker 页标记 `{N}----------------`（N 为 0 基绝对 PDF 页号）处切到它负责的页；段边界与快照边界重合时不需要标记；需要切却找不到标记时整段保留，`trimmed_to_pages: false` 并给诊断 `stitched_snapshot_untrimmed`（宁可重复，不丢文字）。段间以空行相接，整体仍受 32KiB 上限（`truncated`）。结果没有 `served_artifact_id`，改为 `details.served_segments`：每段 `artifact_id`（物理快照）、`canonical_id`、`pages`（本段负责的请求页）、`snapshot_pages`、`md_byte_range`（该快照内被选中的字节，可原样交给 `material.read` / cite）、`trimmed_to_pages`、`is_head`；诊断 `served_stitched_canonical_markdown`。顶层 `canonical_id`/`coverage`/`partial` 取第一段所在 lineage。
 - 有请求页没有任何快照覆盖：进入下面的内部 ensure，**在同一次调用里同步等待** Marker 完成，Marker **只解析缺口页**（见「范围」）。ensure 成功后重新加载视图，按上面两条（单份包含 → 按页拼接）返回（`status: ok`）；否则返回 `capability_unavailable`，`details` 里带 Marker 的 CapabilityProbe 与 `ensure` 结果（`failed` 带明确原因）。没有「已启动，稍后再读」的中间态，Agent 不需要也不应轮询。
@@ -107,6 +109,16 @@ PDF 的 `pdf_pages` 精读（无论请求页有没有原生文本层，正文都
 - 没有可用 head：逐页扫描整份原生文本层，命中形状同上；若该页已有 canonical 视图则附带 `canonical_id`/`coverage`/`partial`。head 存在但不可读（`head_not_in_catalog`/`head_not_markdown`/`content_unavailable`）时另给诊断 `canonical_head_unavailable`。
 - grep 命中只是定位，不是可引用正文：snippet（尤其文本层的）只用于定位；引用或建节点一律用命中的 `artifact_id` + locator 调 `material.read`（`pdf_pages` 精读会按需先解析）。
 - 以上路径都不运行 Marker。
+
+## 校对叠加层与物理定位
+
+物理 Markdown 保持不可变；人工校对与已接受的发现校对作为 errata 叠加层保存（migration 26），可查看 Diff、历史并撤销，不改旧 SourceSpan 或手稿链接的字节锚点。
+
+- `material.read` 返回应用活动 errata 的有效正文；校对改变长度后，返回文本偏移不能直接当物理字节偏移。结果以 `details.applied_errata` 和 `markdown_errata_applied` 诊断说明校对来源，locator 仍指物理区间。
+- `material.grep` 搜索有效正文并把命中映射回物理 `md_byte_range`；`material.locate` 优先匹配有效正文，必要时兼容原始 OCR（`matched_raw_ocr_fallback`）。引用校对文时应把同一 quote 交给 locate，不自行计算物理范围。
+- `propose_changes` 在给定物理区间内校验有效校对文或兼容的原始 OCR；有效子段必须映射到同一物理范围。它不把校对文的偏移当作新快照坐标，接受提案也不代表校对具有数学证明效力。
+
+代码：[叠加与映射](../crates/mathscape-orchestrator/src/markdown_errata.rs)、[MCP 校对来源](../crates/mathscape-mcp/src/tools/errata.rs)、[读取](../crates/mathscape-mcp/src/tools/read.rs)、[定位](../crates/mathscape-mcp/src/tools/locate.rs)。
 
 ## Ensure（`material.read` 内部路径）
 
@@ -196,7 +208,7 @@ Map Scene：前端把进行中的 `material.read`（带 `pdf_pages`）视为可�
 
 - 后端：Tauri 命令 `get_canonical_reader_projection(canonical_id)`（`apps/mathscape-desktop/src/canonical_reader.rs`）。只读已登记的注册表（`list_canonical_markdown`），未 sync 的 canonical 返回「规范解析正文未登记」。`get_artifact_content_info` / `read_artifact_bytes` 仍只接受物理 id；MCP 契约不变。
 - 规划：`mathscape_domain::plan_canonical_reader`（纯函数，有单测）。
-- 前端：`readerTargetId(node)` 对折叠节点返回 canonical id，`ArtifactReader` 识别该前缀后走统一视图。手写批注、cite chip、发现记录仍用物理 head（`openableArtifactId`）。
+- 前端：`readerTargetId(node)` 对折叠节点返回 canonical id，`ArtifactReader` 识别该前缀后走统一视图。cite chip 的物理打开入口仍使用 `openableArtifactId`；统一视图的块选择与手稿关联按各分段映射回物理快照坐标，不把整个视图当作新 Artifact。
 
 **拼接 / 重叠策略**（确定性）：
 
@@ -208,7 +220,7 @@ Map Scene：前端把进行中的 `material.read`（带 `pdf_pages`）视为可�
 
 即「先到先得」：已显示的页不会因为后来补解析的段而改变，新段只追加它带来的新页。缺口显示为明显的占位框「第 x–y 页尚未解析」，不补写任何内容。拼接后正文上限 16 MiB（与单个 Markdown 阅读上限相同）。
 
-统一视图不提供原文块选择、发现记录和手写批注（这些需要物理字节坐标）；每段标题旁的「打开此快照」以物理快照打开，功能照旧。
+统一视图通过 `CanonicalInkController`（`frontend/src/reader/canonical-ink.ts`）支持同分段内单击 / Shift 连选块、手稿徽章、直建手稿与关联已有手稿，也可对块 / 连续块校对。操作使用该分段的物理 Artifact、内容 hash 与块坐标，跨分段选择会截断到当前分段边界；需要物理快照入口的发现操作仍可从每段「打开此快照」进入。
 
 ## 搜索（Desktop / MCP）
 

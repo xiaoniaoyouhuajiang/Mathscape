@@ -21,7 +21,7 @@
 6. [锁定·S13-1] **语义层对象允许 Agent 提议 retire**（选项 B），仍只是提案，须用户接受；来源层 retire 仍禁止 Agent 提议。Debt 的 `paid` / `waived` 只能由用户设置，Agent 最多写 `claimed_paid`。
 7. [锁定·S13-3] `TrustRecord.alignment` 只由对齐状态按固定映射派生，任何写入口都不能直接写它。
 8. [锁定·S13-8] mathlib 参照基线三态：`unchecked`（Agent 可写）/ `confirmed`（只由服务端在本机 Lean profile 的 mathlib 源码或 Loogle 中查到该名字后写入，并记录 mathlib 版本）/ `not_found`（服务端查过、没有）。没有 profile 时保持 `unchecked`。提供重新核对入口（后端函数 + Desktop 按钮 + CLI 命令）。
-9. [锁定·S13-7] 学习视图标签「别的材料里见过」由对齐线自动计算；另有「新的」「新约定」和未还清账目汇总。「读过」标记不在本期，作为以后的扩展（S9.1）。
+9. [锁定·S13-7] 学习视图标签「别的材料里见过」由对齐线自动计算；另有「新的」「新约定」和未还清账目汇总。另已接入用户本地研读进度，独立于地图与对齐推导标签（S9.1）。
 
 **不做**：proof / method_pattern / mathematical_object 三种实体；FormalArtifact；TheoryAdapter；RepresentationBinding、ProofContext；R/D/T/X 对象；Expression AST；跨项目命名空间；自动对齐；自动还清 Debt。
 
@@ -114,7 +114,7 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
   - `confirmed`：只能由服务端写入（`record_mathlib_baseline` 操作，Agent 无法编译出它）。服务端在本机 Lean profile 的 mathlib 源码里按“命名空间 + 声明名”确定性查找（或 Loogle），查到后写 `confirmed`，并在 `checked` 里记录 mathlib 版本、profile、模块和文件行号。
   - `not_found`：服务端查过这个 profile，没有该名字。
   - 本机没有 Lean profile，或 profile 未就绪时：**不改状态**，保持 `unchecked`，核对入口返回“不可用”的原因。
-  - **重新核对入口**：后端函数 `mathlib_baseline::recheck`（编排层纯函数 + Desktop 命令 `recheck_mathlib_baselines`）、审核页 / 学习视图上的「重新核对 mathlib 名称」按钮、CLI `mathscape mathlib-baseline recheck --workspace <path>`。核对结果以普通地图提交写入（新 revision、可回溯），作者是 `system:mathlib-baseline`。
+  - **重新核对入口**：后端函数 `mathscape_mcp::mathlib_baseline::recheck_mathlib_baselines`（`crates/mathscape-mcp/src/mathlib_baseline.rs`；Desktop 命令 `recheck_mathlib_baselines` 调用同一入口）、审核页 / 学习视图上的「重新核对 mathlib 名称」按钮、CLI `mathscape mathlib-baseline recheck --workspace <path>`。核对结果以普通地图提交写入（新 revision、可回溯），作者是 `system:mathlib-baseline`。
   - **基线引用不是证明，也不提升 proof 或 alignment 可信度。**`confirmed` 只说明“这个名字在你这份 mathlib 里存在”。
 - 共享对象不占有页码，也不带 `source_spans`（EMIR 不变量 9）。它和来源的连接**只走对齐线**（不变量 11）。
 
@@ -199,7 +199,7 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
   | open → claimed_paid | Agent（edit） | 必须带 `paid_by`，引用活动对象 |
   | claimed_paid → paid | **只能用户**（审核页“确认已还清”） | — |
   | open / claimed_paid → waived | **只能用户** | 填理由 |
-  | 任意 → obsolete | 系统 | `attached_to` 被退役或被新修订取代时自动标记，并在预览中列出 |
+  | 任意 → obsolete | 系统 | `attached_to` 不再活动时自动标记并退役该 Debt，在预览中列出；普通 edit 产生新 revision 不触发此迁移 |
   | claimed_paid → open | Agent / 用户 | 撤回声明 |
 
 - **与 P2 §3.3 提案 Debt 的关系**：P2 §3.3 的 `validation / unresolved / agent_declared` 改称**提案诊断**，仍挂在 change set version 上、不进地图。地图 Debt 是本节的新对象。审核页把两者分开显示：前者叫“审核项”，后者叫“一笔账” [实现]。
@@ -402,7 +402,7 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
   - 没有其他材料对齐到同一共享对象的，标「新的」；
   - 本材料的约定卡标「新约定」（例如“下标从 1 开始”）；
   - 底部汇总挂在本材料相关对齐线 / 共享对象上的未还清账目数（open + claimed_paid）。
-  - 只计算、不写入任何对象。**「读过」标记不在本期**：以后可以加一个用户自己的“读过”记号，与「别的材料里见过」并列显示，但不会替代它 [以后]。
+  - 上述标签只计算、不写入地图对象。用户另可设置 `unread` / `studying` / `mastered`（未读 / 在读 / 已掌握），经 Desktop `set_study_marks` 存入 `study_marks`（migration 25）。这是用户本地进度，不产生地图 revision，不替代「别的材料里见过」。
 
 ### S9.2 审核页
 
@@ -479,7 +479,7 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 | 3 | 两套对齐状态 | 采纳固定映射；`TrustRecord.alignment` 不可直接写 |
 | 4 | statement 回链 span | 是措辞来源证据，不是归属 |
 | 5 | lost_information | 内嵌在对齐线里 |
-| 7 | 学习视图 | 「别的材料里见过」自动计算；「新的」「新约定」+ 未还清账目汇总；「读过」以后再做 |
+| 7 | 学习视图 | 「别的材料里见过」自动计算；「新的」「新约定」+ 未还清账目汇总；用户研读进度另存本地 sidecar，不替代对齐推导标签 |
 | 8 | mathlib 基线 | unchecked / confirmed / not_found 三态，confirmed 只由服务端查到后写入并记 mathlib 版本；无 profile 保持 unchecked；提供重新核对入口 |
 | 9 | 一个目标的粒度 | 每个 change set 一个 `target_object`；`cs.fib` 带 theory + concept + definition 可以接受 |
 | 10 | “限制”关系 | 不新增，继续用 `overlaps_with` |
@@ -499,6 +499,7 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 
 ### S13.3 仍待决
 
+用户研读进度的归属已落实为独立 `study_marks` sidecar，不属于地图对象（S9.1）。
+
 1. **约定卡与来源单元的绑定**：第一期用 `anchor_subtree` 派生，不写 `SourceSemanticUnit.dialect_binding`；什么时候回写？
-2. **「读过」标记**的数据归属（用户私有笔记，还是地图对象）。
-3. **`formally_related` 开放的时间**（与 Lean 工具契约联动）。
+2. **`formally_related` 开放的时间**（与 Lean 工具契约联动）。
