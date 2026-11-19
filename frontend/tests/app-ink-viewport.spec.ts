@@ -32,6 +32,27 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator("#ink-button")).toBeVisible();
 });
 
+test("discovery tasks stop observing a replaced bottom toolbar", async ({ page }) => {
+  await page.evaluate(async () => {
+    const modulePath = "/src/discovery-task.ts";
+    const { reserveDiscoveryTaskSpace } = await import(modulePath);
+    for (const [id, height] of [["previous-toolbar", 80], ["replacement-toolbar", 120]] as const) {
+      const toolbar = document.createElement("div");
+      toolbar.id = id;
+      toolbar.style.cssText = `position: fixed; left: -1000px; width: 100px; height: ${height}px`;
+      document.body.append(toolbar);
+      reserveDiscoveryTaskSpace(toolbar);
+    }
+  });
+  const launcher = page.locator(".task-launcher");
+  await expect(launcher).toHaveCSS("bottom", "138px");
+  await page.locator("#previous-toolbar").evaluate(element => { element.style.height = "200px"; });
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(launcher).toHaveCSS("bottom", "138px");
+  await page.locator("#replacement-toolbar").evaluate(element => { element.style.height = "160px"; });
+  await expect(launcher).toHaveCSS("bottom", "178px");
+});
+
 for (const width of [1600, 1280, 720]) {
   test(`discovery tasks clear the ink export toolbar at ${width}px`, async ({ page }) => {
     const launcher = page.locator(".task-launcher");
