@@ -14,27 +14,7 @@ use mathscape_agent::{
 };
 
 fn fixture_program() -> PathBuf {
-    // Cargo documents `CARGO_BIN_EXE_<name>` for integration tests. This
-    // workspace's Cargo 1.88 does not export it, so fall back to the bin that
-    // sits beside the test harness (`target/<profile>/mathscape-codex-fixture`).
-    if let Some(path) = std::env::var_os("CARGO_BIN_EXE_mathscape_codex_fixture") {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return path;
-        }
-    }
-    let exe = std::env::current_exe().expect("integration test current_exe");
-    let profile_dir = exe
-        .parent()
-        .and_then(|deps| deps.parent())
-        .expect("test binary lives in target/<profile>/deps");
-    let candidate = profile_dir.join("mathscape-codex-fixture");
-    assert!(
-        candidate.is_file(),
-        "fixture binary missing at {} (build mathscape-agent's bin target first)",
-        candidate.display()
-    );
-    candidate
+    PathBuf::from(env!("CARGO_BIN_EXE_mathscape-codex-fixture"))
 }
 
 fn fixture_executor(args: Vec<String>) -> CodexExecutor {
