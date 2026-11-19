@@ -8,6 +8,7 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use lopdf::{Document, Object, Stream, content::Content, dictionary};
@@ -711,6 +712,41 @@ fn a_read_queues_behind_a_live_lease_on_the_same_pdf_then_parses_in_the_same_cal
     assert!(ensure["waited_ms"].as_u64().unwrap() >= 600);
     assert_eq!(h.marker_calls(), ["0"]);
     assert!(h.no_live_lease());
+}
+
+#[test]
+fn artifact_promotion_waits_for_another_catalog_writer() {
+    let h = harness();
+    let mut pool = ArtifactPool::open(&h.root).unwrap();
+    let writer = rusqlite::Connection::open(pool.workspace().database_path()).unwrap();
+    // Another catalog writer, such as the lease heartbeat, owns the WAL writer slot.
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    std::thread::scope(|scope| {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        scope.spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = pool.import_bytes(
+                b"# promoted by Marker\n",
+                ArtifactMetadata::derived(MediaType::parse("text/markdown").unwrap(), None)
+                    .unwrap(),
+                ActorRef::parse("test").unwrap(),
+            );
+            result_tx.send(result).unwrap();
+        });
+        started_rx.recv().unwrap();
+        let before_commit = result_rx.recv_timeout(Duration::from_millis(250));
+        writer.execute_batch("COMMIT").unwrap();
+        let promoted = match before_commit {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => result_rx.recv().unwrap(),
+            Err(error) => panic!("promotion worker stopped: {error}"),
+        };
+        promoted
+            .expect("artifact registration should wait for the writer, not fail with SQLITE_BUSY");
+    });
+    assert_eq!(h.store().artifact_count().unwrap(), 3);
 }
 
 #[test]

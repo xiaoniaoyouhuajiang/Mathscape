@@ -1080,7 +1080,10 @@ impl SqliteArtifactStore {
             .transpose()?;
         let permitted_uses = serde_json::to_string(artifact.rights().permitted_uses())?;
         let lifecycle = lifecycle(header.lifecycle())?;
-        let transaction = self.connection.transaction()?;
+        // Reserve the writer slot before reading: SQLite will not wait when upgrading a read snapshot.
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
         let existing = find_artifact_by_hash_in(&transaction, artifact.content_hash())?;
         let outcome = if let Some(existing) = existing {
