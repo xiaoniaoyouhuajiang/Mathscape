@@ -10,17 +10,20 @@ import { DiscoveryLedgerController } from "../src/discovery/discovery-ledger";
 import { setInkContextCreator, overlappingNotes, markdownPreviewLabel, type InkLinkedNote } from "../src/ink/links";
 import { eventBus } from "../src/core/events";
 
-// Tiny reproducible PDF: two pages and one outline entry, no copyrighted assets.
+// Tiny reproducible PDF: two pages with selectable text streams and one outline entry, no copyrighted assets.
 function samplePdf(): Uint8Array {
+  const s1 = "1 0 0 rg 0 0 100 100 re f\n0 0 0 rg BT /F1 14 Tf 24 340 Td (Theorem 1 Generating Function) Tj ET\n";
+  const s2 = "0 0 1 rg 0 0 200 200 re f\n0 0 0 rg BT /F1 14 Tf 24 340 Td (Proof by Induction Step) Tj ET\n";
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R /Outlines 7 0 R >>",
     "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Contents 5 0 R >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Contents 6 0 R >>",
-    "<< /Length 25 >>\nstream\n1 0 0 rg 0 0 100 100 re f\n\nendstream",
-    "<< /Length 25 >>\nstream\n0 0 1 rg 0 0 200 200 re f\n\nendstream",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources << /Font << /F1 9 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources << /Font << /F1 9 0 R >> >> /Contents 6 0 R >>",
+    `<< /Length ${s1.length} >>\nstream\n${s1}\nendstream`,
+    `<< /Length ${s2.length} >>\nstream\n${s2}\nendstream`,
     "<< /Type /Outlines /First 8 0 R /Last 8 0 R /Count 1 >>",
     "<< /Title (Second page) /Parent 7 0 R /Dest [4 0 R /Fit] >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
   ];
   // Padding ensures PDF.js must request ranges rather than receive the whole file initially.
   let data = "%PDF-1.4\n%" + "padding".repeat(40000) + "\n";

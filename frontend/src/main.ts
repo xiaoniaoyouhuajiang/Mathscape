@@ -684,6 +684,7 @@ eventBus.on("open-source", (detail) => {
       pdfPageIndex: detail.pdfPageIndex,
       candidatePages: detail.candidatePages,
       backlinkNote: detail.backlinkNote,
+      focusExcerpt: detail.focusExcerpt,
       returnTo: detail.returnTo,
       conversionId: detail.conversionId,
       patch: detail.patchRunId

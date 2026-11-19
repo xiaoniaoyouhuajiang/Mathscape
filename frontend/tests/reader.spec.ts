@@ -58,17 +58,17 @@ test("PDF IPC failure settles opening, preserves first error, and allows reopeni
     h.behavior.pdfRangeFailure = false;
     await h.reader.open("pdf", "Retry");
   });
-  await expect(page.locator("canvas")).toBeVisible();
+  await expect(page.locator(".pdf-page-slot.is-active-page canvas")).toBeVisible();
   expect(errors).toEqual([]);
 });
 
 test("PDF range transport, outline destination, page input and cleanup", async ({ page }) => {
   await page.evaluate(async () => (window as any).harness.reader.open("pdf", "Two pages"));
-  await expect(page.locator("canvas")).toBeVisible();
+  await expect(page.locator(".pdf-page-slot.is-active-page canvas")).toBeVisible();
   await expect(page.getByLabel("PDF 页码")).toHaveValue("1");
   await page.getByRole("button", { name: "Second page" }).click();
   await expect(page.getByLabel("PDF 页码")).toHaveValue("2");
-  await expect.poll(() => page.locator("canvas").evaluate((canvas: HTMLCanvasElement) => {
+  await expect.poll(() => page.locator(".pdf-page-slot.is-active-page canvas").evaluate((canvas: HTMLCanvasElement) => {
     return canvas.getContext("2d")!.getImageData(50, 350, 1, 1).data[2];
   })).toBe(255);
   await page.getByLabel("PDF 页码").fill("1");

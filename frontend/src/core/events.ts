@@ -12,6 +12,7 @@ export interface OpenSourceDetail {
   pdfPageIndex?: number;
   candidatePages?: number[];
   backlinkNote?: string;
+  focusExcerpt?: string;
   returnTo?: ReaderReturnTarget;
   patchRunId?: string;
   patchMode?: PatchReviewMode;

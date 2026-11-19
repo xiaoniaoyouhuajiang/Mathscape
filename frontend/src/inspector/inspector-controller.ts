@@ -424,6 +424,7 @@ export class InspectorController {
             pdfPageIndex: firstPage,
             candidatePages: pages,
             backlinkNote: backlink.kind === "candidate_pdf_pages" ? backlink.reason : undefined,
+            focusExcerpt: detail.excerpt ?? detail.display_title ?? undefined,
             returnTo:
               detail.artifact_id && detail.byte_range
                 ? {
