@@ -1122,7 +1122,7 @@ mod tests {
     use std::{
         path::Path,
         process::Command,
-        sync::mpsc,
+        sync::{OnceLock, mpsc},
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
@@ -1134,32 +1134,42 @@ mod tests {
     /// `mathscape-codex-fixture` (dry-run Codex app-server: no login, no
     /// model; echoes the user text as the agent message).
     fn fixture_program() -> PathBuf {
-        let exe = env::current_exe().unwrap();
-        let profile_dir = exe.parent().and_then(Path::parent).unwrap().to_path_buf();
-        let candidate = profile_dir.join(format!(
-            "mathscape-codex-fixture{}",
-            env::consts::EXE_SUFFIX
-        ));
-        if !candidate.is_file() {
-            let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-            let status = Command::new(cargo)
-                .args([
-                    "build",
-                    "-p",
-                    "mathscape-agent",
-                    "--bin",
-                    "mathscape-codex-fixture",
-                ])
-                .status()
-                .expect("build codex fixture");
-            assert!(status.success(), "building mathscape-codex-fixture failed");
-        }
-        assert!(
-            candidate.is_file(),
-            "fixture missing at {}",
-            candidate.display()
-        );
-        candidate
+        static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+        FIXTURE
+            .get_or_init(|| {
+                // CARGO_BIN_EXE is only available to integration tests in the binary's package.
+                let output = Command::new(env!("CARGO"))
+                    .current_dir(env!("CARGO_MANIFEST_DIR"))
+                    .args([
+                        "build",
+                        "-p",
+                        "mathscape-agent",
+                        "--bin",
+                        "mathscape-codex-fixture",
+                        "--message-format=json-render-diagnostics",
+                    ])
+                    .output()
+                    .expect("build codex fixture");
+                assert!(
+                    output.status.success(),
+                    "building mathscape-codex-fixture failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                    .find_map(|message| {
+                        if message["reason"] == "compiler-artifact"
+                            && message["target"]["name"] == "mathscape-codex-fixture"
+                        {
+                            message["executable"].as_str().map(PathBuf::from)
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("Cargo must report the codex fixture executable")
+            })
+            .clone()
     }
 
     struct Fixture {
