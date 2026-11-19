@@ -63,6 +63,39 @@ export class InkPadStore {
   async markNeedsReauth(key:string):Promise<void> {await this.metaPut(this.authStatusKey(key),"needs_reauth");}
   async clearNeedsReauth(key:string):Promise<void> {await this.metaDelete(this.authStatusKey(key));}
   async needsReauth(key:string):Promise<boolean> {return (await this.metaGet<string>(this.authStatusKey(key)))==="needs_reauth";}
+  /** Workspace-scoped standby push token (stored in existing meta store; zero schema bump). */
+  async getStandbyToken():Promise<string|undefined> {return this.metaGet<string>("standby-token");}
+  async setStandbyToken(token:string):Promise<void> {if(/^[0-9a-f]{64}$/.test(token))await this.metaPut("standby-token",token);}
+  async clearStandbyToken():Promise<void> {await this.metaDelete("standby-token");}
+  /** Atomically removes a cached draft and its history ONLY when it is not active and has zero pending ops. */
+  async deleteDraftIfSynced(key:string):Promise<boolean> {
+    return new Promise((resolve,reject)=>{
+      const tx=this.database.transaction(["drafts","operations","history","meta"],"readwrite");
+      let deleted=false;
+      const activeReq=tx.objectStore("meta").get("active");
+      activeReq.onsuccess=()=>{
+        const active=activeReq.result as PadBinding|undefined;
+        if(active?.key===key)return;
+        const draftReq=tx.objectStore("drafts").get(key);
+        draftReq.onsuccess=()=>{
+          const draft=draftReq.result as PadDraft|undefined;
+          if(!draft)return;
+          const opsReq=tx.objectStore("operations").getAll();
+          opsReq.onsuccess=()=>{
+            const ops=opsReq.result as InkOutboxItem[];
+            const hasPending=ops.some(item=>item.session_id===draft.binding.lease.session_id && item.writer_epoch===draft.binding.lease.writer_epoch && item.document_id===draft.binding.lease.document_id);
+            if(hasPending)return;
+            tx.objectStore("drafts").delete(key);
+            tx.objectStore("history").delete(IDBKeyRange.bound([key,0],[key,Number.MAX_SAFE_INTEGER]));
+            tx.objectStore("meta").delete(this.authStatusKey(key));
+            tx.objectStore("meta").delete("rename:"+key);
+            deleted=true;
+          };
+        };
+      };
+      tx.oncomplete=()=>resolve(deleted);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+    });
+  }
   async pending(binding:PadBinding):Promise<InkOutboxItem[]> {
     return (await this.all<InkOutboxItem>("operations")).filter(item=>item.session_id===binding.lease.session_id && item.writer_epoch===binding.lease.writer_epoch && item.document_id===binding.lease.document_id).sort((a,b)=>a.operation.seq-b.operation.seq);
   }

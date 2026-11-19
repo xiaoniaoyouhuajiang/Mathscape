@@ -1,7 +1,8 @@
 import { InkCanvas,type CanvasMetrics,type InkTool } from "./canvas";
 import { appendInk,encodeInk,inkId,inkMetadata,normalizeInkTitle,INK_TITLE_MAX,parseInkDocument,projectInk,type InkDocument,type InkStroke,type InkBrush,type CaptureSegment,type InkPage,type InkProjection } from "./model";
+import { formatPadDraftLabel,reconcilePadDrafts,type PadDraftSummary } from "./pad-drafts";
 import { InkPadStore,type PadBinding,type PadDraft } from "./pad-store";
-import { InkPadTransport,PadTransportError,type PadContext,type PadNote,type PadProblemCard,type PadSwitchOffer } from "./pad-transport";
+import { InkPadStandbyTransport,InkPadTransport,PadTransportError,TRASHED_REASON,type PadContext,type PadNote,type PadProblemCard,type PadSwitchOffer,type StandbyCredentials } from "./pad-transport";
 /** Keep role labels here so the pad bundle does not pull Tauri IPC via links.ts. */
 const PAD_ROLE_LABELS:Record<string,string>={attempt:"尝试",alt_proof:"另证",check:"验算",study:"学习笔记",question:"疑问",reference:"参考"};
 function padRoleLabel(role:string):string{return PAD_ROLE_LABELS[role]??role;}
@@ -30,11 +31,16 @@ class InkPad {
   private board:InkCanvas|undefined;
   private palette:InkPalette|undefined;
   private transport:InkPadTransport|undefined;
+  private standby:InkPadStandbyTransport|undefined;
+  private standbyReady=false;
+  private cleanableStaleKeys:string[]=[];
+  private draftsRevision=0;
   private confirmed=0;
   private pending=0;
   private persisted=true;
   private fenced=false;
   private fenceCode:string|undefined;
+  private static readonly STANDBY_FENCE_CODES=new Set(["writer_revoked","credential_expired","authentication_failed",TRASHED_REASON]);
   private enqueueTail:Promise<void>=Promise.resolve();
   private buffered=new Map<string,{draft:PadDraft;item:InkOutboxItem}>();
   private flushing:Promise<boolean>|undefined;
@@ -63,7 +69,7 @@ class InkPad {
         <button id="pad-problem-card-retry" class="pad-problem-card-retry" type="button" hidden>重新读取原文</button>
       </details>
       <section id="pad-board" class="ink-board" aria-label="平板画板"></section>
-      <footer class="pad-footer"><div class="pad-save-state"><span id="pad-local-status">尚未打开手稿</span><span id="pad-desktop-status">尚未连接电脑</span></div><div class="ink-file-actions"><button id="pad-sync">立即同步</button><button id="pad-snapshot">保存快照</button><button id="pad-export">导出恢复草稿</button><button id="pad-png">导出 PNG</button><button id="pad-retry">重试连接</button><select id="pad-drafts" aria-label="最近手稿"></select></div><p id="pad-status" class="lab-status" role="status">请使用 Mathscape 中展示的二维码配对。</p><details class="ink-diagnostics"><summary>输入与恢复诊断</summary><div id="pad-diagnostics"></div></details></footer></main>`;
+      <footer class="pad-footer"><div class="pad-save-state"><span id="pad-local-status">尚未打开手稿</span><span id="pad-desktop-status">尚未连接电脑</span></div><div class="ink-file-actions"><button id="pad-sync">立即同步</button><button id="pad-snapshot">保存快照</button><button id="pad-export">导出恢复草稿</button><button id="pad-png">导出 PNG</button><button id="pad-retry">重试连接</button><select id="pad-drafts" aria-label="最近手稿"></select><button id="pad-clean-stale" type="button" class="pad-clean-stale" hidden title="仅清理已完全同步且失去写入权的旧缓存，绝不删除任何未同步笔迹">清理旧缓存</button></div><p id="pad-status" class="lab-status" role="status">请使用 Mathscape 中展示的二维码配对。</p><details class="ink-diagnostics"><summary>输入与恢复诊断</summary><div id="pad-diagnostics"></div></details></footer></main>`;
     // N3.0: shared presets + custom colour; the tablet remembers its own choice.
     this.palette=createInkPalette({storageKey:PAD_COLOR_KEY,idPrefix:"pad"});element("#pad-palette-host").replaceWith(this.palette.element);
     this.events();this.controls();this.initProblemCard();
@@ -88,7 +94,7 @@ class InkPad {
         await this.acceptPairing(token,"qr");
         history.replaceState(null,"",location.pathname);
       }
-      if(this.binding)this.connect();else element("#pad-connection").textContent="尚未配对";
+      if(this.binding)this.connect();else{element("#pad-connection").textContent="尚未配对";this.connectStandby();}
       const quiet=this.fenced||missingDocument;
       if("serviceWorker" in navigator){try{if(!navigator.serviceWorker.controller)await navigator.serviceWorker.register("/pad/sw.js",{scope:"/pad/"});await navigator.serviceWorker.ready;if(!quiet&&!this.fenced)this.message("画板已准备离线恢复；书写会自动同步到电脑。");}catch{if(!quiet&&!this.fenced)this.message("操作队列可恢复，离线页面缓存未完成；保持本页打开或先导出恢复草稿。");}}
       if(missingDocument)this.message("这台设备没有这份手稿的书写授权。请在电脑的“平板书写”中选择“换一台设备书写”，再扫码。");
@@ -112,14 +118,15 @@ class InkPad {
     element<HTMLSelectElement>("#pad-page").onchange=()=>{this.board?.resetTransientInteraction();this.page=element<HTMLSelectElement>("#pad-page").value;this.board?.setSelection([]);this.board?.fit();this.summary();};
     element<HTMLButtonElement>("#pad-fit").onclick=()=>this.board?.fit();element<HTMLButtonElement>("#pad-zoom-in").onclick=()=>this.board?.zoom(1.3);element<HTMLButtonElement>("#pad-zoom-out").onclick=()=>this.board?.zoom(1/1.3);
     element<HTMLButtonElement>("#pad-sync").onclick=()=>{this.board?.finish();void this.retryBuffered().then(()=>{if(this.fenceCode==="local_storage_failed"&&!this.buffered.size)this.connect();else void this.flush();});};
-    element<HTMLButtonElement>("#pad-retry").onclick=()=>{void this.retryBuffered().then(()=>{if(this.fenced&&!["device_busy","local_storage_failed"].includes(this.fenceCode??""))this.message("会话已经失效，原队列不会写入新会话。请先导出恢复草稿，再在电脑创建恢复手稿。");else{this.transport?.close();this.connect();}});};
+    element<HTMLButtonElement>("#pad-retry").onclick=()=>{void this.retryBuffered().then(()=>{if(this.fenced&&!["device_busy","local_storage_failed"].includes(this.fenceCode??"")){if(InkPad.STANDBY_FENCE_CODES.has(this.fenceCode??""))this.connectStandby();this.message(this.pending>0?"会话已经失效，原队列不会写入新会话。请先导出恢复草稿，再在电脑创建恢复手稿。":"当前手稿已失去写入权；正在保持待命连接，可直接在电脑点击“推送到平板”。");}else{this.transport?.close();this.connect();}});};
     element<HTMLButtonElement>("#pad-snapshot").onclick=()=>void this.snapshot();
     element<HTMLButtonElement>("#pad-export").onclick=()=>{if(!this.document)return;try{this.board?.finish();let json:string;try{json=encodeInk(this.document);}catch{json=JSON.stringify(this.document);}download(new Blob([json],{type:"application/json"}),`mathscape-ink-recovery-${this.document.document_id}.json`);this.message("完整笔迹及编辑历史已生成恢复文件，请确认设备保存成功。");}catch(error){this.message(String(error));}};
     element<HTMLButtonElement>("#pad-png").onclick=()=>{try{this.board?.png().toBlob(blob=>{if(blob)download(blob,"mathscape-ink-page.png");});}catch(error){this.message(String(error));}};
     element<HTMLSelectElement>("#pad-drafts").onchange=()=>void this.openDraft(element<HTMLSelectElement>("#pad-drafts").value);
-    window.addEventListener("online",()=>this.transport?.connect());
-    window.addEventListener("pagehide",()=>{this.board?.finish();this.transport?.close();});
-    window.addEventListener("pageshow",event=>{if(event.persisted&&this.binding)this.connect();});
+    element<HTMLButtonElement>("#pad-clean-stale").onclick=()=>void this.cleanStaleDrafts();
+    window.addEventListener("online",()=>{if(this.standby)this.standby.connect();else this.transport?.connect();});
+    window.addEventListener("pagehide",()=>{this.board?.finish();this.transport?.close();this.closeStandby();});
+    window.addEventListener("pageshow",event=>{if(event.persisted){if(this.binding&&!this.fenced)this.connect();else if(!this.binding||InkPad.STANDBY_FENCE_CODES.has(this.fenceCode??""))this.connectStandby();}});
     window.addEventListener("hashchange",()=>{
       const next=new URLSearchParams(location.hash.slice(1));
       if(!next.has("pair")&&!next.has("doc"))return;
@@ -167,6 +174,7 @@ class InkPad {
     if(!response.ok)throw new Error(result.message??(via==="desktop_push"?"切换失败，请在电脑重新推送或扫码。":"配对失败，请在电脑重新生成二维码。"));
     const binding:PadBinding={key:`${result.lease.session_id}:${result.lease.writer_epoch}`,credential:pair.credential,lease:result.lease};
     await this.database.activate(binding);
+    if(typeof result.standby_token==="string")await this.database.setStandbyToken(result.standby_token);
     this.binding=binding;
     this.buffered.clear();
     this.persisted=true;
@@ -187,8 +195,66 @@ class InkPad {
     }catch(error){this.message(String(error));}
   }
   private async retryBuffered():Promise<void> {await this.enqueueTail;for(const [id,value] of this.buffered){try{await this.database!.enqueue(value.draft,value.item);this.buffered.delete(id);}catch(error){this.message(String(error));break;}}this.persisted=!this.buffered.size;this.summary();}
+  private closeStandby():void {
+    this.standby?.close();
+    this.standby=undefined;
+    this.standbyReady=false;
+    element("#pad-connection").classList.remove("is-standby");
+  }
+  private async standbyCredentials():Promise<StandbyCredentials|undefined> {
+    if(!this.database)return undefined;
+    const standby_token=await this.database.getStandbyToken();
+    let credential=this.binding?.credential;
+    if(!credential){
+      const drafts=await this.database.drafts();
+      credential=drafts[0]?.binding.credential;
+    }
+    if(!standby_token&&!credential)return undefined;
+    return {standby_token,credential};
+  }
+  private connectStandby():void {
+    if(!this.database)return;
+    if(this.transport?.isReady()&&!this.fenced)return;
+    this.closeStandby();
+    const standby=new InkPadStandbyTransport(
+      ()=>this.standbyCredentials(),
+      (state,token)=>{
+        if(this.standby!==standby)return;
+        if(token)void this.database?.setStandbyToken(token);
+        this.standbyReady=state==="ready";
+        const conn=element("#pad-connection");
+        conn.classList.toggle("is-standby",this.standbyReady);
+        if(state==="ready"){
+          if(this.fenced){
+            conn.textContent=this.fenceCode===TRASHED_REASON
+              ?"手稿已进回收站（只读）· 已在线待命，等待电脑推送"
+              :"会话已失效/写入权已转移（只读）· 已在线待命，等待电脑推送";
+          }else if(!this.binding){
+            conn.textContent="平板已在线待命 · 等待电脑推送手稿";
+          }
+        }else if(state==="offline"){
+          if(this.fenced){
+            conn.textContent=this.fenceCode===TRASHED_REASON
+              ?"手稿已进回收站（只读）· 待命连接中断，正在重连…"
+              :"会话已失效/写入权已转移（只读）· 待命连接中断，正在重连…";
+          }else if(!this.binding){
+            conn.textContent="待命连接中断 · 正在重连电脑…";
+          }
+        }else if(state==="revoked"){
+          void this.database?.clearStandbyToken();
+          if(this.fenced)conn.textContent="会话已失效/写入权已转移 · 请重新扫码配对";
+          else if(!this.binding)conn.textContent="电脑已停止配对服务 · 请重新扫码配对";
+        }
+        this.summary();
+      },
+      offer=>{if(this.standby===standby)void this.handleSwitchOffer(offer);},
+    );
+    this.standby=standby;
+    standby.connect();
+  }
   private connect():void {
     if(!this.binding||!this.database)return;
+    this.closeStandby();
     this.transport?.close();
     const binding=this.binding;
     const current=()=>this.transport===transport&&this.binding?.key===binding.key;
@@ -198,7 +264,8 @@ class InkPad {
       if(state==="conflict"){
         this.board?.finish();this.fenced=true;this.fenceCode=code;if(this.document)this.mount(this.document,this.page);this.message(message);
         if(code==="protocol_mismatch"){const status=element("#pad-status");if(!status.querySelector("[data-reload]")){const button=document.createElement("button");button.type="button";button.dataset.reload="";button.textContent="刷新页面";button.onclick=()=>location.reload();status.append(" ",button);}}
-        if(["writer_revoked","credential_expired","authentication_failed"].includes(code??""))void this.database?.markNeedsReauth(binding.key).then(()=>this.refreshDrafts());
+        if(["writer_revoked","credential_expired","authentication_failed",TRASHED_REASON].includes(code??""))void this.database?.markNeedsReauth(binding.key).then(()=>this.refreshDrafts());
+        if(InkPad.STANDBY_FENCE_CODES.has(code??""))this.connectStandby();
       }
       if(state==="ready")void this.database?.clearNeedsReauth(binding.key).then(()=>this.refreshDrafts());
       this.controls();this.summary();
@@ -222,6 +289,8 @@ class InkPad {
     if(!current())return;
     this.confirmed=context.head_seq;this.pending=pending.length;this.fenced=false;this.fenceCode=undefined;
     this.mount(document,this.page);await this.refreshDrafts();
+    if(!current())return;
+    if(typeof context.standby_token==="string")await this.database!.setStandbyToken(context.standby_token);
     if(!current())return;
     // N3b: session_context may carry the primary-link card (or null / omitted).
     if("problem_card" in context)this.applyProblemCard(context.problem_card??null,binding.lease.document_id);
@@ -348,7 +417,7 @@ class InkPad {
   }
   private async handleSwitchOffer(offer:PadSwitchOffer):Promise<void> {
     if(!this.database)return;
-    if(offer.document_id===this.binding?.lease.document_id){this.message(`电脑推送的是当前手稿「${offer.title}」，无需切换。`);return;}
+    if(!this.fenced&&this.transport?.isReady()&&offer.document_id===this.binding?.lease.document_id){this.message(`电脑推送的是当前手稿「${offer.title}」，无需切换。`);return;}
     const takeover=offer.requires_takeover
       ? "\n\n注意：目标手稿正被其他设备书写。接手后对方未同步的内容会被隔离，对方可以导出恢复草稿。"
       : "";
@@ -360,6 +429,7 @@ class InkPad {
       if(this.transport?.isReady())await this.flush();
     }catch{/* Keep going; local draft is durable. */}
     this.transport?.close();
+    this.closeStandby();
     // Same teardown as the #pair= bootstrap: dispose the old canvas before clearing the document.
     this.clearSurface();
     try{
@@ -370,7 +440,13 @@ class InkPad {
       // Title/canvas come from session_context → restore → mount; wait until then before claiming success.
     }catch(error){
       this.message("切换未完成："+(error instanceof Error?error.message:String(error)));
-      if(this.binding)this.connect();
+      if(this.binding){
+        const cached=await this.database.draft(this.binding.key);
+        if(cached){this.confirmed=cached.confirmed_head;this.pending=(await this.database.pending(this.binding)).length;this.mount(parseInkDocument(cached.document),cached.page_id);}
+        this.connect();
+      }else{
+        this.connectStandby();
+      }
       return;
     }
     // restore() mounts asynchronously via the transport; surface the intent immediately,
@@ -379,10 +455,10 @@ class InkPad {
     const title=offer.title;
     const waitReady=async()=>{
       for(let i=0;i<50;i++){
-        if(this.document&&this.document.title===title&&this.state==="ready")return true;
+        if(this.document&&this.state==="ready"&&(this.document.title===title||this.binding?.lease.document_id===offer.document_id))return true;
         await new Promise(resolve=>setTimeout(resolve,100));
       }
-      return !!(this.document&&this.document.title===title);
+      return !!(this.document&&(this.document.title===title||this.binding?.lease.document_id===offer.document_id));
     };
     if(await waitReady())this.message(`已切换到「${title}」。`);
     else this.message(`已配对「${title}」，正在等待电脑会话…`);
@@ -390,15 +466,57 @@ class InkPad {
   }
 
   private async refreshDrafts():Promise<void> {
-    const select=element<HTMLSelectElement>("#pad-drafts");select.replaceChildren();
-    for(const draft of await this.database!.drafts()){
-      const needs=await this.database!.needsReauth(draft.key);
-      select.add(new Option(needs?`${draft.document.title} · 需要电脑重新授权`:`${draft.document.title} · 最近手稿`,draft.key));
+    if(!this.database)return;
+    const rev=++this.draftsRevision;
+    const drafts=await this.database.drafts();
+    const summaries:PadDraftSummary[]=await Promise.all(drafts.map(async draft=>({
+      key:draft.key,
+      documentId:draft.binding.lease.document_id,
+      title:draft.document.title,
+      writerEpoch:draft.binding.lease.writer_epoch,
+      updatedAt:draft.updated_at,
+      pendingCount:(await this.database!.pending(draft.binding)).length,
+      needsReauth:await this.database!.needsReauth(draft.key),
+    })));
+    const plan=reconcilePadDrafts(summaries,this.binding?.key);
+    for(const key of plan.pruneKeys){
+      await this.database.deleteDraftIfSynced(key);
     }
+    if(rev!==this.draftsRevision)return;
+    this.cleanableStaleKeys=plan.cleanableStaleKeys;
+    const select=element<HTMLSelectElement>("#pad-drafts");select.replaceChildren();
+    const grouped=plan.pendingOffline.length>0||plan.readonlyHistory.length>0;
+    const appendGroup=(label:string,items:PadDraftSummary[])=>{
+      if(!items.length)return;
+      if(!grouped){
+        for(const item of items)select.add(new Option(formatPadDraftLabel(item),item.key));
+        return;
+      }
+      const group=document.createElement("optgroup");
+      group.label=label;
+      for(const item of items)group.append(new Option(formatPadDraftLabel(item),item.key));
+      select.append(group);
+    };
+    appendGroup("可续写手稿",plan.active);
+    appendGroup("有未同步笔迹（请导出恢复）",plan.pendingOffline);
+    appendGroup("仅本机历史（需电脑重新推送）",plan.readonlyHistory);
     if(this.binding)select.value=this.binding.key;
+    const cleanBtn=element<HTMLButtonElement>("#pad-clean-stale");
+    cleanBtn.hidden=this.cleanableStaleKeys.length===0;
+    cleanBtn.textContent=`清理旧缓存 (${this.cleanableStaleKeys.length})`;
+  }
+  private async cleanStaleDrafts():Promise<void> {
+    if(!this.database||!this.cleanableStaleKeys.length)return;
+    const keys=[...this.cleanableStaleKeys];
+    let removed=0;
+    for(const key of keys){
+      if(await this.database.deleteDraftIfSynced(key))removed++;
+    }
+    await this.refreshDrafts();
+    this.message(removed>0?`已清理 ${removed} 份已同步的旧缓存；所有未同步笔迹均完整保留。`:"没有可安全清理的旧缓存。");
   }
   private async openDraft(key:string):Promise<void> {
-    if(!this.database||(key===this.binding?.key&&this.document))return;const revision=++this.navigationRevision;this.board?.finish();await this.enqueueTail;if(revision!==this.navigationRevision)return;this.transport?.close();
+    if(!this.database||(key===this.binding?.key&&this.document))return;const revision=++this.navigationRevision;this.board?.finish();await this.enqueueTail;if(revision!==this.navigationRevision)return;this.transport?.close();this.closeStandby();
     if(this.buffered.size){element<HTMLSelectElement>("#pad-drafts").value=this.binding?.key??"";this.message("当前笔迹尚未保存到本机，请先导出恢复草稿或重试保存，再切换记录。");return;}
     const draft=await this.database.draft(key);if(!draft||revision!==this.navigationRevision)return;await this.database.activate(draft.binding);const pending=await this.database.pending(draft.binding);if(revision!==this.navigationRevision)return;this.binding=draft.binding;this.snapshotRequest=undefined;this.confirmed=draft.confirmed_head;this.pending=pending.length;this.fenced=false;this.fenceCode=undefined;this.persisted=true;this.mount(parseInkDocument(draft.document),draft.page_id);this.connect();
   }
@@ -410,7 +528,7 @@ class InkPad {
     const projection=this.projection.value;element<HTMLButtonElement>("#pad-undo").disabled=this.fenced||!projection.undo.length;element<HTMLButtonElement>("#pad-delete-selection").disabled=this.fenced||this.tool!=="select"||!this.board?.selectionCount();element<HTMLButtonElement>("#pad-restyle").disabled=this.fenced||this.tool!=="select"||!this.board?.selectionCount();element<HTMLButtonElement>("#pad-redo").disabled=this.fenced||!projection.redo.length;
     element("#pad-local-status").textContent=this.persisted?`本机已保存 · 待同步 ${this.pending} 个操作`:`本机尚有 ${this.buffered.size} 个操作未保存`;
     element("#pad-desktop-status").textContent=`电脑已保存至 head ${this.confirmed}`;
-    element("#pad-diagnostics").textContent=`安全上下文：${window.isSecureContext} · IndexedDB 恢复队列：${!!this.database}\n${projection.visible.length} 笔 · ${projection.pointCount+this.metrics.activePoints} 点 · 本机 head ${this.document.operations.length}\n输入：${this.metrics.lastPointer} · 合并采样 ${this.metrics.coalescedSamples} · 前景绘制 ${this.metrics.frameMs.toFixed(2)} ms\n连接：${this.state} · 写入 epoch ${this.binding?.lease.writer_epoch??"—"}`;
+    element("#pad-diagnostics").textContent=`安全上下文：${window.isSecureContext} · IndexedDB 恢复队列：${!!this.database}\n${projection.visible.length} 笔 · ${projection.pointCount+this.metrics.activePoints} 点 · 本机 head ${this.document.operations.length}\n输入：${this.metrics.lastPointer} · 合并采样 ${this.metrics.coalescedSamples} · 前景绘制 ${this.metrics.frameMs.toFixed(2)} ms\n连接：${this.state} · 待命推送：${this.standbyReady?"已在线":"未连接"} · 写入 epoch ${this.binding?.lease.writer_epoch??"—"}`;
   }
   private message(text:string):void {element("#pad-status").textContent=text;}
 }

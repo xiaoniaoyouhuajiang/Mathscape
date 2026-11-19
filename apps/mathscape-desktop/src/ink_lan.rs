@@ -57,6 +57,52 @@ fn hash(value: &str) -> Result<String, String> {
     }
     Ok(format!("{:x}", Sha256::digest(value.as_bytes())))
 }
+fn ct_eq(left: &str, right: &str) -> bool {
+    let (a, b) = (left.as_bytes(), right.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct StandbyKeyFile {
+    token: String,
+    #[serde(default)]
+    revoked_after_stop: bool,
+}
+fn standby_key_path(workspace_root: &std::path::Path) -> std::path::PathBuf {
+    workspace_root.join("ink-lan/standby.key")
+}
+fn write_standby_key(
+    workspace_root: &std::path::Path,
+    key: &StandbyKeyFile,
+) -> Result<(), String> {
+    use std::io::Write;
+    let dir = workspace_root.join("ink-lan");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = standby_key_path(workspace_root);
+    let tmp = dir.join(format!("standby.key.tmp.{}", secret()?));
+    let payload = serde_json::to_vec(key).map_err(|e| e.to_string())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
+    file.write_all(&payload)
+        .and_then(|_| file.sync_all())
+        .map_err(|e| e.to_string())?;
+    drop(file);
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })
+}
+fn valid_standby_token(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
 fn store(service: &DesktopService) -> Result<SqliteArtifactStore, String> {
     SqliteArtifactStore::open(&service.workspace_root().join("mathscape.sqlite3"))
         .map_err(|e| e.to_string())
@@ -263,6 +309,9 @@ fn trashed_closed() -> Value {
 }
 struct Live {
     slots: Mutex<HashMap<String, Slot>>,
+    /// Read-only push-ready standby sockets keyed by `client_id -> instance`.
+    standby_slots: Mutex<HashMap<String, String>>,
+    standby_key_lock: Mutex<()>,
     previews: Mutex<HashMap<String, Preview>>,
     reports: Mutex<HashMap<String, Report>>,
     setup: Mutex<Option<SetupState>>,
@@ -274,12 +323,48 @@ impl Live {
         let (control, _) = broadcast::channel(32);
         Self {
             slots: Mutex::new(HashMap::new()),
+            standby_slots: Mutex::new(HashMap::new()),
+            standby_key_lock: Mutex::new(()),
             previews: Mutex::new(HashMap::new()),
             reports: Mutex::new(HashMap::new()),
             setup: Mutex::new(None),
             control,
-            connections: Arc::new(Semaphore::new(8)),
+            connections: Arc::new(Semaphore::new(16)),
         }
+    }
+    fn online_tablet_count(&self) -> usize {
+        let slots = self.slots.lock().unwrap();
+        let standby = self.standby_slots.lock().unwrap();
+        let mut ids: HashSet<&str> = slots.values().map(|slot| slot.client_id.as_str()).collect();
+        ids.extend(standby.keys().map(String::as_str));
+        ids.len()
+    }
+    fn load_or_create_standby_key(
+        &self,
+        workspace_root: &std::path::Path,
+    ) -> Result<StandbyKeyFile, String> {
+        let _guard = self.standby_key_lock.lock().unwrap();
+        let path = standby_key_path(workspace_root);
+        if let Ok(bytes) = std::fs::read(&path)
+            && let Ok(parsed) = serde_json::from_slice::<StandbyKeyFile>(&bytes)
+            && valid_standby_token(&parsed.token)
+        {
+            return Ok(parsed);
+        }
+        let created = StandbyKeyFile {
+            token: secret()?,
+            revoked_after_stop: false,
+        };
+        write_standby_key(workspace_root, &created)?;
+        Ok(created)
+    }
+    fn rotate_standby_key_on_stop(&self, workspace_root: &std::path::Path) -> Result<(), String> {
+        let _guard = self.standby_key_lock.lock().unwrap();
+        let rotated = StandbyKeyFile {
+            token: secret()?,
+            revoked_after_stop: true,
+        };
+        write_standby_key(workspace_root, &rotated)
     }
 }
 struct Running {
@@ -499,7 +584,14 @@ async fn pair(
                     }
                 }
             }
-            secure_response(Json(json!({"protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease})).into_response())
+            let mut body = json!({"protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease});
+            if let Ok(key) = state
+                .live
+                .load_or_create_standby_key(state.service.workspace_root())
+            {
+                body["standby_token"] = key.token.into();
+            }
+            secure_response(Json(body).into_response())
         }
         Ok(Err(message)) if message.contains(TRASHED_REASON)=>secure_response((StatusCode::CONFLICT,Json(json!({"code":"writer_revoked","reason":TRASHED_REASON,"message":"这份手稿已在电脑上移到回收站，无法配对。"}))).into_response()),
         Ok(Err(message))=>secure_response((StatusCode::CONFLICT,Json(json!({"code":error_code(&message),"message":"配对无效、已使用或书写状态已变化，请在电脑重新配对。"}))).into_response()),
@@ -534,6 +626,15 @@ enum ClientMessage {
         protocol_version: String,
         credential: String,
         client_id: String,
+    },
+    /// Read-only push-ready standby channel for paired tablets without an active note lease.
+    HelloStandby {
+        protocol_version: String,
+        client_id: String,
+        #[serde(default)]
+        standby_token: Option<String>,
+        #[serde(default)]
+        credential: Option<String>,
     },
     OperationSubmit {
         request: InkLanOperation,
@@ -604,18 +705,38 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
     let Ok(Some(Ok(Message::Text(text)))) = first else {
         return;
     };
-    let Ok(ClientMessage::Hello {
-        protocol_version,
-        credential,
-        client_id,
-    }) = serde_json::from_str::<ClientMessage>(&text)
-    else {
-        send(
-            &mut socket,
-            error("authentication_failed", "连接认证失败。"),
-        )
-        .await;
-        return;
+    let (protocol_version, credential, client_id) = match serde_json::from_str::<ClientMessage>(&text)
+    {
+        Ok(ClientMessage::Hello {
+            protocol_version,
+            credential,
+            client_id,
+        }) => (protocol_version, credential, client_id),
+        Ok(ClientMessage::HelloStandby {
+            protocol_version,
+            client_id,
+            standby_token,
+            credential,
+        }) => {
+            standby_loop(
+                socket,
+                state,
+                protocol_version,
+                client_id,
+                standby_token,
+                credential,
+            )
+            .await;
+            return;
+        }
+        _ => {
+            send(
+                &mut socket,
+                error("authentication_failed", "连接认证失败。"),
+            )
+            .await;
+            return;
+        }
     };
     if protocol_version != INK_LAN_PROTOCOL_VERSION || client_id.is_empty() || client_id.len() > 200
     {
@@ -709,6 +830,14 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
         return;
     }
     let mut full = json!({"type":"session_context","protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease,"note":document.note,"document":document.document,"head_seq":document.head_seq,"limits":{"operation_bytes":INK_LAN_OPERATION_BYTES,"document_bytes":INK_LAN_DOCUMENT_BYTES,"queue_bytes":INK_LAN_DOCUMENT_BYTES}});
+    if let Ok(key) = state
+        .live
+        .load_or_create_standby_key(state.service.workspace_root())
+    {
+        full.as_object_mut()
+            .unwrap()
+            .insert("standby_token".into(), key.token.into());
+    }
     // N3b: primary-link card for this authorized note only (§10).
     match state.service.ink_problem_card(&lease.document_id) {
         Ok(card) => {
@@ -810,7 +939,7 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
                             }
                         }
                         ClientMessage::Ping=>Some(json!({"type":"pong"})),
-                        ClientMessage::Hello{..}=>Some(error("invalid_message","连接已经认证。")),
+                        ClientMessage::Hello{..}|ClientMessage::HelloStandby{..}=>Some(error("invalid_message","连接已经认证。")),
                     };
                     if let Some(reply)=reply {if !send(&mut socket,reply).await{break;}}
                 },_=>{send(&mut socket,error("invalid_message","只接受版本化 JSON 消息。")).await;}}
@@ -819,6 +948,181 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
     }
     release(&state, &credential_hash, &instance);
     let _ = socket.send(Message::Close(None)).await;
+}
+async fn standby_loop(
+    mut socket: WebSocket,
+    state: HttpState,
+    protocol_version: String,
+    client_id: String,
+    standby_token: Option<String>,
+    credential: Option<String>,
+) {
+    if protocol_version != INK_LAN_PROTOCOL_VERSION || client_id.is_empty() || client_id.len() > 200
+    {
+        send(
+            &mut socket,
+            error("protocol_mismatch", "InkPad 版本不兼容，请重新加载页面。"),
+        )
+        .await;
+        return;
+    }
+    let Ok(key) = state
+        .live
+        .load_or_create_standby_key(state.service.workspace_root())
+    else {
+        send(
+            &mut socket,
+            error("service_unavailable", "待命服务暂时不可用。"),
+        )
+        .await;
+        return;
+    };
+    let token_valid = standby_token
+        .as_deref()
+        .is_some_and(|candidate| valid_standby_token(candidate) && ct_eq(candidate, &key.token));
+    let authenticated = if token_valid {
+        true
+    } else if !key.revoked_after_stop {
+        if let Some(raw_credential) = credential.as_deref()
+            && let Ok(cred_hash) = hash(raw_credential)
+        {
+            let service = state.service.clone();
+            matches!(
+                tokio::task::spawn_blocking(move || {
+                    store(&service)?
+                        .can_ink_standby(&cred_hash, now())
+                        .map_err(|e| e.to_string())
+                })
+                .await,
+                Ok(Ok(true))
+            )
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if !authenticated {
+        let code = if standby_token.is_some() || credential.is_some() {
+            "writer_revoked"
+        } else {
+            "authentication_failed"
+        };
+        send(
+            &mut socket,
+            error(code, "待命认证已失效，请重新扫码配对。"),
+        )
+        .await;
+        return;
+    }
+    let Ok(instance) = secret() else {
+        return;
+    };
+    let mut control = state.live.control.subscribe();
+    {
+        let mut standby = state.live.standby_slots.lock().unwrap();
+        if let Some(old_instance) = standby.insert(client_id.clone(), instance.clone()) {
+            let _ = state.live.control.send(Control::Replace(old_instance));
+        }
+    }
+    if !send(
+        &mut socket,
+        json!({
+            "type": "standby_ready",
+            "protocol_version": INK_LAN_PROTOCOL_VERSION,
+            "standby_token": key.token,
+        }),
+    )
+    .await
+    {
+        release_standby(&state, &client_id, &instance);
+        return;
+    }
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+    let mut last_seen = Instant::now();
+    loop {
+        tokio::select! {
+            event = control.recv() => {
+                if let Ok(Control::SwitchOffer(payload)) = &event {
+                    if !send(&mut socket, payload.clone()).await {
+                        break;
+                    }
+                    continue;
+                }
+                let code = match event {
+                    Ok(Control::Stop(revoke)) => Some(if revoke { "writer_revoked" } else { "server_restart" }),
+                    Ok(Control::Replace(old)) if old == instance => Some("connection_replaced"),
+                    Err(broadcast::error::RecvError::Lagged(_)) => Some("reconnect_required"),
+                    _ => None,
+                };
+                if let Some(code) = code {
+                    send(&mut socket, json!({"type": "session_closed", "code": code})).await;
+                    break;
+                }
+            }
+            _ = heartbeat.tick() => {
+                if last_seen.elapsed() > Duration::from_secs(50) {
+                    break;
+                }
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break;
+                }
+            }
+            incoming = socket.recv() => {
+                let Some(Ok(message)) = incoming else { break; };
+                last_seen = Instant::now();
+                match message {
+                    Message::Pong(_) => continue,
+                    Message::Ping(data) => {
+                        if socket.send(Message::Pong(data)).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                    Message::Close(_) => break,
+                    Message::Text(text) => {
+                        if state
+                            .live
+                            .standby_slots
+                            .lock()
+                            .unwrap()
+                            .get(&client_id)
+                            .is_none_or(|current| current != &instance)
+                        {
+                            break;
+                        }
+                        let reply = match serde_json::from_str::<ClientMessage>(&text) {
+                            Ok(ClientMessage::Ping) => Some(json!({"type": "pong"})),
+                            Ok(_) => Some(error(
+                                "standby_read_only",
+                                "当前处于只读待命状态，不能写入手稿。",
+                            )),
+                            Err(_) => Some(error("invalid_message", "消息格式无效，内容未写入。")),
+                        };
+                        if let Some(reply) = reply
+                            && !send(&mut socket, reply).await
+                        {
+                            break;
+                        }
+                    }
+                    _ => {
+                        send(&mut socket, error("invalid_message", "只接受版本化 JSON 消息。")).await;
+                    }
+                }
+            }
+        }
+    }
+    release_standby(&state, &client_id, &instance);
+    let _ = socket.send(Message::Close(None)).await;
+}
+fn release_standby(state: &HttpState, client_id: &str, instance: &str) {
+    let mut standby = state.live.standby_slots.lock().unwrap();
+    if standby
+        .get(client_id)
+        .is_some_and(|current| current == instance)
+    {
+        standby.remove(client_id);
+    }
 }
 /// Keeps the setup hand-off title current and pushes the note to tablets.
 fn note_changed(live: &Live, note: &InkNoteState) {
@@ -1480,7 +1784,7 @@ impl DesktopService {
             preferred_host: settings_now.preferred_host.clone(),
             certificate_file_sha256: Some(fingerprint),
             assets_ready: !INKPAD_ASSETS.is_empty(),
-            online_tablets: self.ink_lan.live.slots.lock().unwrap().len(),
+            online_tablets: self.ink_lan.live.online_tablet_count(),
             error: None,
         };
         let state = HttpState {
@@ -1552,7 +1856,7 @@ impl DesktopService {
                 status.online_tablets = 0;
                 status.error = Some("InkPad 服务已停止，请重新开启服务。".into());
             } else {
-                status.online_tablets = self.ink_lan.live.slots.lock().unwrap().len();
+                status.online_tablets = self.ink_lan.live.online_tablet_count();
             }
             return Ok(status);
         }
@@ -1575,6 +1879,9 @@ impl DesktopService {
             store(self)?
                 .revoke_ink_lan(now())
                 .map_err(|e| e.to_string())?;
+            self.ink_lan
+                .live
+                .rotate_standby_key_on_stop(self.workspace_root())?;
         }
         self.cancel_ink_setup().await;
         let _ = self.ink_lan.live.control.send(Control::Stop(revoke));
@@ -1584,6 +1891,7 @@ impl DesktopService {
             let _ = tokio::time::timeout(Duration::from_secs(2), active.task).await;
         }
         self.ink_lan.live.slots.lock().unwrap().clear();
+        self.ink_lan.live.standby_slots.lock().unwrap().clear();
         self.ink_lan.live.previews.lock().unwrap().clear();
         self.ink_lan.live.reports.lock().unwrap().clear();
         Ok(())
@@ -1718,10 +2026,7 @@ impl DesktopService {
         document: &str,
         allow_transfer: bool,
     ) -> Result<InkPushResult, String> {
-        let online = {
-            let slots = self.ink_lan.live.slots.lock().unwrap();
-            slots.len()
-        };
+        let online = self.ink_lan.live.online_tablet_count();
         if online == 0 {
             return Ok(InkPushResult {
                 pushed: false,

@@ -484,6 +484,39 @@ impl SqliteArtifactStore {
     ) -> Result<InkRemoteLease, SqliteStoreError> {
         authenticate(&self.connection, credential, now)
     }
+    /// Checks whether a previously paired device credential may join the
+    /// read-only standby push channel during zero-rescan upgrade (before the
+    /// tablet caches a workspace standby token). Rejects unknown, expired, and
+    /// globally-revoked (`revoke_ink_lan`) credentials.
+    pub fn can_ink_standby(
+        &self,
+        credential: &str,
+        now: i64,
+    ) -> Result<bool, SqliteStoreError> {
+        digest(credential)?;
+        let row: Option<(i64, Option<i64>, String, bool)> = self
+            .connection
+            .query_row(
+                "SELECT d.expires_at, d.revoked_at, doc.lifecycle,
+                        EXISTS(
+                            SELECT 1 FROM ink_writer_transfers t
+                            WHERE t.document_id = d.document_id AND t.from_epoch = d.writer_epoch
+                        )
+                 FROM ink_lan_devices d
+                 JOIN ink_documents doc ON doc.document_id = d.document_id
+                 WHERE d.credential_hash = ?1",
+                [credential],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        let Some((expires_at, revoked_at, lifecycle, transferred)) = row else {
+            return Ok(false);
+        };
+        if expires_at <= now {
+            return Ok(false);
+        }
+        Ok(revoked_at.is_none() || transferred || lifecycle == "trashed")
+    }
     pub fn ink_remote_context(
         &self,
         credential: &str,

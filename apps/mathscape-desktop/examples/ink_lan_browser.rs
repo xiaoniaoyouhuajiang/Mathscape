@@ -374,6 +374,8 @@ async fn main() {
                     last = id;
                     ready["action_id"] = id.into();
                     ready["setup"] = serde_json::to_value(service.ink_setup_status()).unwrap();
+                    ready["lan_status"] =
+                        serde_json::to_value(service.ink_lan_status().await.unwrap()).unwrap();
                     if !document_id.is_empty() {
                         ready["document"] = serde_json::to_value(
                             service

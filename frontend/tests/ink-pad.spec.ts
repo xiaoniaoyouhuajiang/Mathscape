@@ -363,3 +363,65 @@ test("problem card missing text can be retried without losing writing",async({pa
   await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
   await expect(page.locator("#pad-local-status")).toContainText("待同步 0");
 });
+
+test("reclaimed tablet stays online in standby, accepts re-auth push, and deduplicates old epochs",async({page})=>{
+  await writeLine(page,-25);
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  await expect(page.locator("#pad-local-status")).toContainText("待同步 0");
+  const titleA=(await page.locator("#pad-title").textContent())!;
+  const oldKey=await page.locator("#pad-drafts").inputValue();
+
+  await control("reclaim");
+  await expect(page.locator("#pad-connection")).toContainText("已在线待命",{timeout:10000});
+  await expect(page.locator("#pad-connection")).toContainText("会话");
+  await expect(page.locator("#pad-connection")).toContainText("写入权已转移");
+  await expect(page.getByRole("button",{name:"笔",exact:true})).toBeDisabled();
+  await expect.poll(async()=>(await control("status")).lan_status.online_tablets).toBe(1);
+
+  // Desktop pushes Note A itself back to the standby tablet without rescanning a QR code.
+  page.once("dialog",dialog=>dialog.accept());
+  const pushed=await control("push_current");
+  expect(pushed.push.pushed).toBe(true);
+  expect(pushed.push.online).toBe(1);
+
+  await expect(page.locator("#pad-connection")).toContainText("电脑已连接",{timeout:15000});
+  await expect(page.getByRole("button",{name:"笔",exact:true})).toBeEnabled();
+  await expect(page.locator("#pad-title")).toHaveText(titleA);
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+
+  // Superseded zero-pending old epoch of Note A was automatically pruned.
+  const newKey=await page.locator("#pad-drafts").inputValue();
+  expect(newKey).not.toBe(oldKey);
+  const matchingLabels=await page.locator("#pad-drafts option").allTextContents();
+  expect(matchingLabels.filter(text=>text.startsWith(titleA))).toHaveLength(1);
+});
+
+test("one-tap stale cache cleanup removes zero-pending revoked shells while keeping active note",async({page})=>{
+  await writeLine(page,-25);
+  await expect(page.locator("#pad-desktop-status")).toContainText("head 1");
+  await expect(page.locator("#pad-local-status")).toContainText("待同步 0");
+  const titleA=(await page.locator("#pad-title").textContent())!;
+
+  await control("reclaim");
+  await expect(page.locator("#pad-connection")).toContainText("已在线待命",{timeout:10000});
+
+  // Push a fresh Note B from desktop while tablet is in standby.
+  page.once("dialog",dialog=>dialog.accept());
+  const pushed=await control("push");
+  expect(pushed.push.pushed).toBe(true);
+  const titleB=pushed.push_title as string;
+  await expect(page.locator("#pad-title")).toHaveText(titleB,{timeout:15000});
+  await expect(page.locator("#pad-connection")).toContainText("电脑已连接");
+
+  // Revoked zero-pending Note A is now a cleanable stale shell; active Note B stays usable.
+  const cleanBtn=page.locator("#pad-clean-stale");
+  await expect(cleanBtn).toBeVisible({timeout:10000});
+  await expect(cleanBtn).toContainText("清理旧缓存");
+  await cleanBtn.click();
+
+  await expect(cleanBtn).toBeHidden();
+  await expect(page.locator("#pad-status")).toContainText("已清理");
+  const remaining=await page.locator("#pad-drafts option").allTextContents();
+  expect(remaining.some(text=>text.startsWith(titleA))).toBe(false);
+  expect(remaining.some(text=>text.startsWith(titleB))).toBe(true);
+});
