@@ -1064,10 +1064,11 @@ mod tests {
         assert_eq!(read_jsonl(buffer.as_slice()).unwrap(), events);
         let line = crate::to_jsonl_line(&events[0]).unwrap();
         assert!(line.contains("\"backend\":\"codex\""), "{line}");
-        assert!(
-            line.contains("+") || line.contains('Z'),
-            "timestamp needs an offset: {line}"
-        );
+        let json: Value = serde_json::from_str(&line).unwrap();
+        let timestamp = DateTime::parse_from_rfc3339(json["ts"].as_str().unwrap())
+            .expect("event timestamp must be RFC 3339 with a UTC offset");
+        assert_eq!(timestamp, events[0].ts);
+        assert_eq!(timestamp.offset(), events[0].ts.offset());
     }
 
     #[test]
