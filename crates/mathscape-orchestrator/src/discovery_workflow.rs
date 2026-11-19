@@ -1,7 +1,8 @@
 //! Bounded, in-memory orchestration. Each provider request is independent.
 use crate::markdown_patch::resolve_patch_proposals;
 use crate::patch_review::{
-    conversion_warnings, is_patchable_issue, prepare_continuation, ranges_covered,
+    conversion_warnings, is_patchable_issue, issue_touches_ranges, prepare_continuation,
+    ranges_covered,
 };
 use crate::source_facts::{decode_response, pending_run};
 use crate::unit_discovery::{fingerprint, new_request_ref};
@@ -157,6 +158,8 @@ pub struct DiscoveryWorkflow<'a> {
     observer: Option<DiscoveryWorkflowObserver>,
     run_id: Option<StableId>,
     patch: MarkdownPatchWorkflowState,
+    /// Source ranges already carrying human errata; never offered to P.
+    patch_excluded_ranges: Vec<TextByteRange>,
 }
 impl<'a> DiscoveryWorkflow<'a> {
     pub fn new(backend: &'a dyn LlmBackend, limits: DiscoveryWorkflowLimits) -> Self {
@@ -175,6 +178,7 @@ impl<'a> DiscoveryWorkflow<'a> {
             observer: None,
             run_id: None,
             patch: MarkdownPatchWorkflowState::default(),
+            patch_excluded_ranges: Vec::new(),
         }
     }
     pub fn with_observer(mut self, observer: DiscoveryWorkflowObserver) -> Self {
@@ -183,6 +187,13 @@ impl<'a> DiscoveryWorkflow<'a> {
     }
     pub fn with_patch_gate(mut self, gate: MarkdownPatchGate) -> Self {
         self.patch.gate = gate;
+        self
+    }
+    /// Conversion issues whose evidence overlaps these source ranges (blocks
+    /// already corrected through Markdown errata) are kept out of the P round
+    /// and remain plain B warnings.
+    pub fn with_patch_excluded_ranges(mut self, ranges: Vec<TextByteRange>) -> Self {
+        self.patch_excluded_ranges = ranges;
         self
     }
     /// Patch sets are bound to the persisted run identity.
@@ -336,6 +347,17 @@ impl<'a> DiscoveryWorkflow<'a> {
                 self.patch.source_warnings = conversion_warnings(units, &[]);
                 self.events.push("markdown patch rejected".into());
                 (false, false)
+            }
+            PatchReviewDecision::AppliedAsErrata {
+                accepted_patch_refs,
+            } => {
+                let units = self.units.as_ref().expect("paused run keeps its UnitSet");
+                self.patch.source_warnings = conversion_warnings(units, &[]);
+                self.events.push(format!(
+                    "markdown patch applied as errata ({}); B continues on the original snapshot",
+                    accepted_patch_refs.join(",")
+                ));
+                (true, false)
             }
             PatchReviewDecision::Apply(continuation) => {
                 let (patch_set, applied, input, safety, rebound) = continuation.into_parts();
@@ -622,6 +644,7 @@ impl<'a> DiscoveryWorkflow<'a> {
         let patchable: Vec<_> = issues
             .iter()
             .filter(|issue| is_patchable_issue(prepared.input(), issue))
+            .filter(|issue| !issue_touches_ranges(issue, &self.patch_excluded_ranges))
             .cloned()
             .collect();
         if patchable.is_empty() {

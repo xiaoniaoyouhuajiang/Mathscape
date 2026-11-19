@@ -105,9 +105,12 @@ interface MarkdownPatchPreviewView {
 
 interface MarkdownPatchReceiptView {
   status: string;
+  base_artifact_id?: string;
   patched_artifact_id: string | null;
   conversion_id: string | null;
   safety: MarkdownPatchSafetyView;
+  /** Present when the approval was persisted as Markdown errata (no new artifact). */
+  applied_errata_ids?: string[];
 }
 
 function textElement<K extends keyof HTMLElementTagNameMap>(
@@ -940,18 +943,33 @@ export class MarkdownSelection {
         });
         section.classList.add("is-finished");
         acceptButton.disabled = rejectButton.disabled = true;
-        // A map refresh closes this reader; the workflow path refreshes the
-        // map when it reopens the reader on the patched artifact.
-        if (receipt.status === "applied" && !workflow) eventBus.emit("source-map-changed");
+        const errataIds = receipt.applied_errata_ids ?? [];
+        const asErrata = receipt.status === "applied"
+          && (errataIds.length > 0 || receipt.patched_artifact_id === receipt.base_artifact_id);
+        if (asErrata && errataIds.length > 0) {
+          // The canonical reader, ink cards and map review badges reload the
+          // effective text; the physical snapshot itself is unchanged.
+          eventBus.emit("markdown-errata-changed", {
+            artifactId: receipt.base_artifact_id ?? this.data.snapshot.artifact_id,
+            errataId: errataIds[0],
+            action: "discovery_patch",
+            affectedUnitIds: [],
+          });
+        }
+        // Legacy promotion only: a map refresh closes this reader.
+        if (receipt.status === "applied" && !asErrata && !workflow) eventBus.emit("source-map-changed");
+        const appliedText = asErrata
+          ? `修订已作为 ${errataIds.length} 条勘误写入规范解析正文（原文快照不变）`
+          : `修订已写入新 Markdown：${receipt.patched_artifact_id ?? ""}`;
         if (workflow) {
           status.textContent = receipt.status === "applied"
-            ? `修订已写入新 Markdown：${receipt.patched_artifact_id ?? ""}；正在继续内容发现…`
+            ? `${appliedText}；正在继续内容发现…`
             : "修订已拒绝，原 Markdown 保持不变；正在继续内容发现…";
           void this.resumeAfterPatch(review.run_id, status);
           return;
         }
         status.textContent = receipt.status === "applied"
-          ? `修订已应用：${receipt.patched_artifact_id ?? "新 Markdown"}；请基于新材料重新运行来源发现。`
+          ? (asErrata ? `${appliedText}。` : `修订已应用：${receipt.patched_artifact_id ?? "新 Markdown"}；请基于新材料重新运行来源发现。`)
           : "修订已拒绝，原 Markdown 保持不变。";
       } catch (error) {
         status.textContent = `提交失败：${String(error)}`;

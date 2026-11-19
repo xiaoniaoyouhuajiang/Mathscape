@@ -481,6 +481,14 @@ impl SqliteArtifactStore {
         markdown_errata::list_active_markdown_errata(&self.connection, artifact_id)
     }
 
+    /// Every errata row (any status) written for one approved discovery patch set.
+    pub fn list_markdown_errata_for_patch_set(
+        &self,
+        patch_set_id: &str,
+    ) -> Result<Vec<MarkdownBlockErrata>, SqliteStoreError> {
+        markdown_errata::list_markdown_errata_for_patch_set(&self.connection, patch_set_id)
+    }
+
     pub fn list_all_active_markdown_errata(
         &self,
     ) -> Result<Vec<MarkdownBlockErrata>, SqliteStoreError> {

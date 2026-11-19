@@ -1,31 +1,31 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
-use mathscape_artifact::ArtifactPool;
 use mathscape_domain::{
-    ActorRef, AnchoredMarkdown, ContentHash, DiscoveryInput, EntityKind, LifecycleStatus,
-    MarkdownPatchApplyReceipt, MarkdownPatchDecision, MarkdownPatchDecisionKind, MarkdownPatchSet,
-    MarkdownPatchStatus, MarkdownPdfBlockMap, SourcePayload, StableId, UnitDiscoveryCheckpoint,
+    AnchoredMarkdown, ContentHash, DiscoveryInput, MarkdownPatchApplyReceipt,
+    MarkdownPatchDecision, MarkdownPatchDecisionKind, MarkdownPatchSet, MarkdownPatchStatus,
+    ResolvedMarkdownPatch, StableId, UnitDiscoveryCheckpoint,
 };
 use mathscape_llm::{GenaiBackend, GenaiBackendOptions};
 use mathscape_orchestrator::markdown_patch::resolve_patch_proposals;
 use mathscape_orchestrator::markdown_patch::{
-    anchor_patched_markdown, apply_patch_set, evaluate_patch_safety, markdown_patch_artifact_id,
-    markdown_patch_content_hash, markdown_patch_conversion_id, promote_applied_patch,
+    anchor_patched_markdown, apply_patch_set, evaluate_patch_safety,
     rewrite_patch_set_replacements, select_patch_set,
 };
 use mathscape_orchestrator::{
-    MarkdownPatchProducer, MarkdownPatchProductionOutcome, MarkdownPdfMapInheritance,
-    PreparedUnitDiscoveryRequest, ValidatedUnitSet, build_markdown_patch_request_with_issues,
-    canonical_discovery_issues, canonical_discovery_issues_for_checkpoint,
-    prepare_unit_discovery_request_from_input, rebind_discovery_input,
-    rebind_discovery_input_after_patch,
+    MarkdownPatchProducer, MarkdownPatchProductionOutcome, ValidatedUnitSet,
+    build_markdown_patch_request_with_issues, canonical_discovery_issues,
+    canonical_discovery_issues_for_checkpoint, issue_touches_ranges,
+    normalize_errata_corrected_text, prepare_unit_discovery_request_from_input,
+    rebind_discovery_input, resolve_errata_target_range, validate_errata_corrected_text,
 };
-use mathscape_store_sqlite::{ArtifactCatalogSnapshot, SqliteArtifactStore};
+use mathscape_store_sqlite::{
+    MarkdownBlockErrata, MarkdownErrataSourceKind, SqliteArtifactStore, UpsertMarkdownErrata,
+};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use thiserror::Error;
 
-use crate::backlink::conversion_has_pdf_lineage;
+use crate::markdown_errata::{generate_errata_id, to_overlay_entries};
 use crate::{DesktopService, DesktopState};
 
 /// Patch decisions and drafts record their actor as a `StableId`, which needs
@@ -154,97 +154,17 @@ fn patch_set_from_store(
         .map_err(DesktopMarkdownPatchError::Validation)
 }
 
-fn read_json_artifact(
-    pool: &ArtifactPool,
-    catalog: &ArtifactCatalogSnapshot,
-    artifact_id: &StableId,
-) -> Result<serde_json::Value, DesktopMarkdownPatchError> {
-    let record = catalog
-        .artifacts()
-        .iter()
-        .find(|record| record.entity().header().stable_id() == artifact_id)
-        .ok_or_else(|| {
-            DesktopMarkdownPatchError::Checkpoint(format!("页映射 Artifact {} 不存在", artifact_id))
-        })?;
-    let byte_size = record.entity().payload().byte_size();
-    let mut bytes = Vec::with_capacity(
-        usize::try_from(byte_size)
-            .map_err(|_| DesktopMarkdownPatchError::Checkpoint("页映射过大".into()))?,
-    );
-    let mut offset = 0_u64;
-    while offset < byte_size {
-        let length = (byte_size - offset).min(4 * 1024 * 1024) as u32;
-        let chunk = pool.read_bytes(artifact_id, offset, length)?;
-        if chunk.len() != length as usize {
-            return Err(DesktopMarkdownPatchError::Checkpoint(
-                "页映射 Artifact 长度已改变".into(),
-            ));
-        }
-        bytes.extend(chunk);
-        offset += u64::from(length);
-    }
-    serde_json::from_slice(&bytes)
-        .map_err(|error| DesktopMarkdownPatchError::Checkpoint(format!("页映射损坏：{error}")))
-}
-
-fn markdown_pdf_map_inheritance(
-    catalog: &ArtifactCatalogSnapshot,
-    pool: &ArtifactPool,
-    markdown_artifact_id: &StableId,
-    requested_conversion_id: Option<&StableId>,
-) -> Result<Option<MarkdownPdfMapInheritance>, DesktopMarkdownPatchError> {
-    let conversion = catalog
-        .conversions()
-        .iter()
-        .filter(|conversion| {
-            requested_conversion_id.is_none_or(|id| conversion.header().stable_id() == id)
-        })
-        .find(|conversion| {
-            conversion.endpoints().iter().any(|endpoint| {
-                endpoint.role().as_str() == "output" && endpoint.entity() == markdown_artifact_id
-            })
-        });
-    let Some(conversion) = conversion else {
-        return Ok(None);
-    };
-    let SourcePayload::ConversionRun(run) = conversion.payload() else {
-        return Ok(None);
-    };
-    let Some(map_id) = run
-        .parameters()
-        .additional_options()
-        .get(mathscape_orchestrator::MARKDOWN_PDF_MAP_ARTIFACT_KEY)
-        .and_then(|value| StableId::parse(value).ok())
-    else {
-        return Ok(None);
-    };
-    let value = read_json_artifact(pool, catalog, &map_id)?;
-    let map: MarkdownPdfBlockMap = serde_json::from_value(value)?;
-    if map.conversion_id != *conversion.header().stable_id()
-        || map.markdown_artifact_id != *markdown_artifact_id
-        || !conversion_has_pdf_lineage(
-            catalog,
-            conversion.header().stable_id(),
-            markdown_artifact_id,
-            &map.pdf_artifact_id,
-            &mut BTreeSet::new(),
-        )
-    {
-        return Err(DesktopMarkdownPatchError::Checkpoint(
-            "基础 Markdown 的 PDF 页映射与转换身份不一致".into(),
-        ));
-    }
-    Ok(Some(MarkdownPdfMapInheritance {
-        base_conversion_id: conversion.header().stable_id().clone(),
-        pdf_artifact_id: map.pdf_artifact_id,
-        marker_page_ids: map.marker_page_ids,
-    }))
-}
-
 fn replay_patch_receipt(
+    store: &SqliteArtifactStore,
     patch_set: &MarkdownPatchSet,
+    patch_set_id: &StableId,
     application: mathscape_store_sqlite::StoredPatchApplication,
 ) -> Result<MarkdownPatchApplyReceipt, DesktopMarkdownPatchError> {
+    let applied_errata_ids = store
+        .list_markdown_errata_for_patch_set(patch_set_id.as_str())?
+        .into_iter()
+        .map(|item| item.errata_id)
+        .collect();
     let status = match application.status.as_str() {
         "applied" => MarkdownPatchStatus::Applied,
         "rejected" => MarkdownPatchStatus::Rejected,
@@ -273,43 +193,155 @@ fn replay_patch_receipt(
             .transpose()?,
         safety: serde_json::from_str(&application.safety_json)?,
         status,
+        applied_errata_ids,
     })
 }
 
 struct PatchContext {
     source: DiscoveryInput,
     document: AnchoredMarkdown,
-    prepared: PreparedUnitDiscoveryRequest,
     units: ValidatedUnitSet,
 }
 
-fn payload_mentions_artifact(value: &serde_json::Value, artifact_id: &StableId) -> bool {
-    match value {
-        serde_json::Value::String(value) => value == artifact_id.as_str(),
-        serde_json::Value::Array(values) => values
-            .iter()
-            .any(|value| payload_mentions_artifact(value, artifact_id)),
-        serde_json::Value::Object(values) => values
-            .values()
-            .any(|value| payload_mentions_artifact(value, artifact_id)),
-        _ => false,
+/// Persists an accepted patch subset as block-level Markdown errata
+/// (`source_kind = discovery_patch`). Every operation must sit inside one
+/// physical block; operations on the same block are merged into one row.
+/// Blocks that already carry active errata are refused, because the patch
+/// was computed against raw OCR and would silently supersede a human fix.
+/// Re-submitting after a partially persisted attempt reuses the rows that
+/// were already written for this patch set.
+fn write_patch_errata(
+    store: &mut SqliteArtifactStore,
+    document: &AnchoredMarkdown,
+    selected: &MarkdownPatchSet,
+    patch_set_id: &StableId,
+    run_id: &StableId,
+) -> Result<Vec<MarkdownBlockErrata>, DesktopMarkdownPatchError> {
+    let existing = store.list_markdown_errata_for_patch_set(patch_set_id.as_str())?;
+    if !existing.is_empty() {
+        return Ok(existing);
     }
+    let artifact_id = selected.base_snapshot.artifact_id.as_str();
+    let active = store.list_active_markdown_errata(artifact_id)?;
+    let overlay = to_overlay_entries(&active);
+    let mut groups: BTreeMap<usize, Vec<&ResolvedMarkdownPatch>> = BTreeMap::new();
+    for patch in &selected.patches {
+        let index = document
+            .blocks
+            .iter()
+            .position(|block| {
+                block.range.start <= patch.range.start && patch.range.end <= block.range.end
+            })
+            .ok_or_else(|| {
+                DesktopMarkdownPatchError::Validation(format!(
+                    "修订 {} 不在单个 Markdown 块内，无法写入勘误",
+                    patch.patch_ref
+                ))
+            })?;
+        groups.entry(index).or_default().push(patch);
+    }
+    let now = crate::discovery::timestamp_now()?.as_str().to_owned();
+    let mut inputs = Vec::new();
+    for (index, patches) in &groups {
+        let block = &document.blocks[*index];
+        let refs = patches
+            .iter()
+            .map(|patch| patch.patch_ref.as_str())
+            .collect::<Vec<_>>()
+            .join("、");
+        if active.iter().any(|item| {
+            item.base_byte_start < block.range.end && item.base_byte_end > block.range.start
+        }) {
+            return Err(DesktopMarkdownPatchError::Validation(format!(
+                "修订 {refs} 所在的块已有人工勘误（阅读器中已是修正后的文本），请取消勾选后再提交"
+            )));
+        }
+        let resolved = resolve_errata_target_range(
+            document,
+            Some(document.snapshot.content_hash.as_str()),
+            &block.id,
+            &block.id,
+            &overlay,
+        )
+        .map_err(|error| DesktopMarkdownPatchError::Validation(format!("修订 {refs}：{error}")))?;
+        let mut text = resolved.original_text.clone();
+        let mut ordered = patches.clone();
+        ordered.sort_by_key(|patch| std::cmp::Reverse(patch.range.start));
+        for patch in ordered {
+            let start = usize::try_from(patch.range.start - resolved.base_byte_start)
+                .map_err(|_| DesktopMarkdownPatchError::Validation("修订区间过大".into()))?;
+            let end = usize::try_from(patch.range.end - resolved.base_byte_start)
+                .map_err(|_| DesktopMarkdownPatchError::Validation("修订区间过大".into()))?;
+            if text.get(start..end) != Some(patch.old_text.as_str()) {
+                return Err(DesktopMarkdownPatchError::Validation(format!(
+                    "修订 {} 的原文已漂移，请重新运行内容发现",
+                    patch.patch_ref
+                )));
+            }
+            text.replace_range(start..end, &patch.replacement);
+        }
+        let corrected = normalize_errata_corrected_text(&resolved.original_text, &text);
+        validate_errata_corrected_text(&corrected).map_err(|error| {
+            DesktopMarkdownPatchError::Validation(format!("修订 {refs}：{error}"))
+        })?;
+        if corrected == resolved.original_text {
+            continue;
+        }
+        let note = format!(
+            "内容发现修订 · {}",
+            patches
+                .iter()
+                .map(|patch| format!("{}：{}", patch.patch_ref, patch.rationale))
+                .collect::<Vec<_>>()
+                .join("；")
+        );
+        inputs.push(UpsertMarkdownErrata {
+            errata_id: generate_errata_id(
+                artifact_id,
+                &resolved.first_block_id,
+                &resolved.last_block_id,
+                &corrected,
+            ),
+            artifact_id: artifact_id.to_owned(),
+            base_content_hash: document.snapshot.content_hash.to_string(),
+            first_block_id: resolved.first_block_id,
+            last_block_id: resolved.last_block_id,
+            covered_block_ids: resolved.covered_block_ids,
+            base_byte_start: resolved.base_byte_start,
+            base_byte_end: resolved.base_byte_end,
+            base_text_hash: resolved.base_text_hash.to_string(),
+            original_text: resolved.original_text,
+            corrected_text: corrected,
+            source_kind: MarkdownErrataSourceKind::DiscoveryPatch,
+            actor: DESKTOP_PATCH_ACTOR.to_owned(),
+            note: Some(note),
+            verified_pdf_page: None,
+            discovery_run_id: Some(run_id.to_string()),
+            patch_set_id: Some(patch_set_id.to_string()),
+            now: now.clone(),
+        });
+    }
+    let mut written = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        written.push(store.upsert_markdown_errata(input)?.errata);
+    }
+    Ok(written)
 }
 
-fn registered_source_artifact(
+/// Active errata byte ranges of one physical snapshot; issues touching them
+/// are kept out of the P round.
+pub(crate) fn errata_excluded_ranges(
     store: &SqliteArtifactStore,
     artifact_id: &StableId,
-) -> Result<bool, DesktopMarkdownPatchError> {
-    let snapshot = store.source_map_snapshot()?;
-    Ok(snapshot.objects.iter().any(|object| {
-        matches!(
-            object.kind,
-            EntityKind::SourceSpan
-                | EntityKind::SourceSemanticUnit
-                | EntityKind::SourceUnitRelation
-        ) && object.lifecycle == LifecycleStatus::Active
-            && payload_mentions_artifact(&object.payload, artifact_id)
-    }))
+) -> Result<Vec<mathscape_domain::TextByteRange>, mathscape_store_sqlite::SqliteStoreError> {
+    Ok(store
+        .list_active_markdown_errata(artifact_id.as_str())?
+        .into_iter()
+        .map(|item| mathscape_domain::TextByteRange {
+            start: item.base_byte_start,
+            end: item.base_byte_end,
+        })
+        .collect())
 }
 
 impl DesktopService {
@@ -390,7 +422,6 @@ impl DesktopService {
         Ok(PatchContext {
             source,
             document,
-            prepared,
             units,
         })
     }
@@ -518,7 +549,12 @@ impl DesktopService {
                 if let Some(application) =
                     store.latest_markdown_patch_application(&original_patch_set_id)?
                 {
-                    return replay_patch_receipt(&original, application);
+                    return replay_patch_receipt(
+                        &store,
+                        &original,
+                        &original_patch_set_id,
+                        application,
+                    );
                 }
                 return Err(DesktopMarkdownPatchError::Validation(
                     "该 Markdown patch set 已经完成审核决定，不能在同一次 run 中再次提交".into(),
@@ -547,7 +583,12 @@ impl DesktopService {
             if let Some(application) =
                 store.latest_markdown_patch_application(&original_patch_set_id)?
             {
-                return replay_patch_receipt(&original, application);
+                return replay_patch_receipt(
+                    &store,
+                    &original,
+                    &original_patch_set_id,
+                    application,
+                );
             }
             let mut no_patch = rewritten.clone();
             no_patch.patches.clear();
@@ -581,6 +622,7 @@ impl DesktopService {
                 new_input_fingerprint: None,
                 safety,
                 status: MarkdownPatchStatus::Rejected,
+                applied_errata_ids: Vec::new(),
             };
             let application_id =
                 fingerprint_id("markdown-patch-application", &rewritten.fingerprint)?;
@@ -599,21 +641,17 @@ impl DesktopService {
         if let Some(application) =
             store.latest_markdown_patch_application(&selected_patch_set_id)?
         {
-            return replay_patch_receipt(&selected, application);
+            return replay_patch_receipt(&store, &selected, &selected_patch_set_id, application);
         }
-        if registered_source_artifact(&store, &selected.base_snapshot.artifact_id)? {
-            return Err(DesktopMarkdownPatchError::Validation(
-                "该 Markdown 已经有活动来源对象，v1 不允许在原来源登记上直接修订；请从该材料重新发起新的发现运行".into(),
-            ));
-        }
+        // Deterministic gate only: the patched text is anchored in memory to
+        // prove that block structure and PDF page markers survive. Nothing is
+        // promoted into the Artifact Pool any more; accepted operations land
+        // as block-level errata over the unchanged physical snapshot.
         let applied = apply_patch_set(&context.document.source, &selected)
             .map_err(|error| DesktopMarkdownPatchError::Validation(error.to_string()))?;
-        let content_hash = markdown_patch_content_hash(applied.source.as_bytes());
-        let patched_artifact_id = markdown_patch_artifact_id(&content_hash)?;
-        let conversion_id = markdown_patch_conversion_id(&selected)?;
         let patched_document = anchor_patched_markdown(
-            patched_artifact_id.clone(),
-            Some(conversion_id.clone()),
+            selected.base_snapshot.artifact_id.clone(),
+            selected.base_snapshot.conversion_id.clone(),
             &applied,
         )
         .map_err(|error| DesktopMarkdownPatchError::Input(error.to_string()))?;
@@ -631,7 +669,7 @@ impl DesktopService {
                 )
             })
             .collect::<Vec<_>>();
-        let mut safety = evaluate_patch_safety(
+        let safety = evaluate_patch_safety(
             &context.document,
             &patched_document,
             &selected,
@@ -644,81 +682,36 @@ impl DesktopService {
             )
         }) {
             return Err(DesktopMarkdownPatchError::Validation(
-                "所选修订会改变 Markdown 块结构或 PDF 分页标记，v1 不接受此类修订".into(),
+                "所选修订会改变 Markdown 块结构或 PDF 分页标记，不接受此类修订".into(),
             ));
         }
-        let new_input = rebind_discovery_input_after_patch(
-            &patched_document,
-            &context.source,
-            &applied.offset_map,
-            Default::default(),
-        )
-        .ok();
-        if matches!(safety.status, mathscape_domain::PatchSafetyStatus::SafeForB) {
-            if let Some(input) = &new_input {
-                if let Err(report) = mathscape_orchestrator::rebind_unit_set_after_patch(
-                    &context.prepared,
-                    &context.units,
-                    input.clone(),
-                    &applied.offset_map,
-                ) {
-                    safety.status = mathscape_domain::PatchSafetyStatus::RequiresARebuild;
-                    safety
-                        .diagnostics
-                        .push(mathscape_domain::PatchSafetyDiagnostic {
-                            code: "unit_set_rebind_failed".into(),
-                            path: "unit_set".into(),
-                            message: format!("{report:?}"),
-                        });
-                }
-            } else {
-                safety.status = mathscape_domain::PatchSafetyStatus::RequiresARebuild;
-                safety
-                    .diagnostics
-                    .push(mathscape_domain::PatchSafetyDiagnostic {
-                        code: "input_rebind_failed".into(),
-                        path: "input".into(),
-                        message: "patched selection could not be rebound".into(),
-                    });
-            }
-        }
-        let new_input_fingerprint = new_input.as_ref().map(|input| input.fingerprint.clone());
-        let landscape = store.landscape_snapshot()?;
-        let base = landscape
-            .artifacts()
-            .artifacts()
-            .iter()
-            .find(|record| {
-                record.entity().header().stable_id() == &selected.base_snapshot.artifact_id
-            })
-            .ok_or_else(|| {
-                DesktopMarkdownPatchError::Checkpoint("base artifact not found".into())
-            })?;
-        let mut pool = ArtifactPool::open(&self.workspace_root)?;
-        let pdf_inheritance = markdown_pdf_map_inheritance(
-            landscape.artifacts(),
-            &pool,
-            &selected.base_snapshot.artifact_id,
-            selected.base_snapshot.conversion_id.as_ref(),
-        )?;
-        let promotion = promote_applied_patch(
-            &mut pool,
-            &selected.base_snapshot.artifact_id,
-            base.entity().payload(),
+        let errata = write_patch_errata(
+            &mut store,
+            &context.document,
             &selected,
-            &applied,
-            pdf_inheritance.as_ref(),
-            safety,
-            new_input_fingerprint,
-            ActorRef::parse("mathscape-desktop-user")?,
-            now.clone(),
+            &selected_patch_set_id,
+            &run_id,
         )?;
+        let receipt = MarkdownPatchApplyReceipt {
+            version: mathscape_domain::MARKDOWN_PATCH_RECEIPT_VERSION.into(),
+            run_id: run_id.clone(),
+            patch_set_fingerprint: selected.fingerprint.clone(),
+            base_artifact_id: selected.base_snapshot.artifact_id.clone(),
+            // Errata mode: the canonical physical snapshot stays the source.
+            patched_artifact_id: Some(selected.base_snapshot.artifact_id.clone()),
+            conversion_id: selected.base_snapshot.conversion_id.clone(),
+            old_input_fingerprint: selected.base_input_fingerprint.clone(),
+            new_input_fingerprint: None,
+            safety,
+            status: MarkdownPatchStatus::Applied,
+            applied_errata_ids: errata.iter().map(|item| item.errata_id.clone()).collect(),
+        };
         store.save_markdown_patch_set(
             &selected_patch_set_id,
             &selected,
             MarkdownPatchStatus::Applied,
-            promotion.receipt.patched_artifact_id.as_ref(),
-            promotion.receipt.conversion_id.as_ref(),
+            receipt.patched_artifact_id.as_ref(),
+            receipt.conversion_id.as_ref(),
             &now,
         )?;
         if selected_patch_set_id != original_patch_set_id {
@@ -751,11 +744,30 @@ impl DesktopService {
         store.record_markdown_patch_application(
             &application_id,
             &selected_patch_set_id,
-            &promotion.receipt,
+            &receipt,
             None,
             &now,
         )?;
-        Ok(promotion.receipt)
+        drop(store);
+        let mut affected = Vec::new();
+        for item in &errata {
+            if let Ok(units) = self.affected_unit_ids_for_errata(
+                &item.artifact_id,
+                item.base_byte_start,
+                item.base_byte_end,
+                &item.covered_block_ids,
+            ) {
+                for unit in units {
+                    if !affected.contains(&unit) {
+                        affected.push(unit);
+                    }
+                }
+            }
+        }
+        if !errata.is_empty() {
+            self.notify_errata_changed_ink_cards(receipt.base_artifact_id.as_str(), &affected);
+        }
+        Ok(receipt)
     }
 
     pub async fn run_markdown_patch(
@@ -820,8 +832,15 @@ impl DesktopService {
                 "持久化的 A 阶段 issue registry 与当前 UnitSet 不一致".into(),
             ));
         };
+        // Blocks already corrected through errata are never re-patched from raw OCR.
+        let excluded = errata_excluded_ranges(&store, &source.snapshot.artifact_id)?;
+        let patchable_issues = issues
+            .iter()
+            .filter(|issue| !issue_touches_ranges(issue, &excluded))
+            .cloned()
+            .collect::<Vec<_>>();
         let patch_request =
-            build_markdown_patch_request_with_issues(&prepared, &units, issues.clone());
+            build_markdown_patch_request_with_issues(&prepared, &units, patchable_issues);
         if patch_request.input().issues.is_empty() {
             return Ok(DesktopMarkdownPatchReview {
                 run_id: request.run_id,

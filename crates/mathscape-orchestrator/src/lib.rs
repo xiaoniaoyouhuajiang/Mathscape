@@ -96,7 +96,7 @@ pub use marker_promotion::{
 };
 pub use patch_review::{
     AppliedPatchRecord, MarkdownPatchGate, MarkdownPatchWorkflowState, PatchContinuation,
-    PatchReviewDecision, PatchReviewError, ranges_covered,
+    PatchReviewDecision, PatchReviewError, issue_touches_ranges, ranges_covered,
 };
 pub use selection_plan::{ConversionSelectionPlan, ConversionSlice};
 pub use selector_resolver::{

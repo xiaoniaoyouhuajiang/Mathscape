@@ -1401,6 +1401,17 @@ export class ArtifactReader {
         if (generation === this.generation && current === version) article.textContent = String(error);
       });
     };
+    // Discovery patch approvals land as errata on this snapshot; reload the
+    // effective text in place (manual saves already update local state).
+    const stopErrataSync = eventBus.on("markdown-errata-changed", (detail) => {
+      if (generation !== this.generation) { stopErrataSync(); return; }
+      if (detail.action !== "discovery_patch" || detail.artifactId !== info.artifact_id) return;
+      void listMarkdownErrata(info.artifact_id).then((items) => {
+        if (generation !== this.generation) return;
+        activeErrata = items.filter((item) => item.status === "active");
+        return render();
+      });
+    });
     await render();
   }
 }

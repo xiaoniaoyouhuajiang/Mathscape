@@ -66,7 +66,7 @@ pub(crate) fn to_overlay_entries(items: &[MarkdownBlockErrata]) -> Vec<ErrataOve
         .collect()
 }
 
-fn generate_errata_id(
+pub(crate) fn generate_errata_id(
     artifact_id: &str,
     first_block_id: &str,
     last_block_id: &str,
@@ -247,7 +247,7 @@ impl DesktopService {
 
     /// Broadcasts updated ProblemCards to any connected tablet whose active note
     /// links directly to `artifact_id` or to one of `affected_unit_ids`.
-    fn notify_errata_changed_ink_cards(&self, artifact_id: &str, affected_unit_ids: &[String]) {
+    pub(crate) fn notify_errata_changed_ink_cards(&self, artifact_id: &str, affected_unit_ids: &[String]) {
         let Ok(store) = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
         else {
             return;

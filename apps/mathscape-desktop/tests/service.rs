@@ -1287,8 +1287,11 @@ async fn discovery_pauses_for_markdown_patch_review_and_resumes_from_sqlite() {
         "a finished run cannot be resumed twice"
     );
 
-    // Accepting promotes the patched Markdown and B runs on it.
-    let second = serde_json::to_value(service.run_discovery(request).await.unwrap()).unwrap();
+    // Accepting writes block-level errata on the unchanged canonical
+    // Markdown. No patched artifact is promoted and B continues on the
+    // original physical snapshot.
+    let artifact_count_before = service.snapshot().unwrap().artifact_count();
+    let second = serde_json::to_value(service.run_discovery(request.clone()).await.unwrap()).unwrap();
     let (applied_run, review) = pause(second);
     let receipt = serde_json::to_value(
         service
@@ -1305,7 +1308,44 @@ async fn discovery_pauses_for_markdown_patch_review_and_resumes_from_sqlite() {
     )
     .unwrap();
     assert_eq!(receipt["status"], "applied");
-    let patched_artifact = receipt["patched_artifact_id"].as_str().unwrap().to_owned();
+    assert_eq!(receipt["patched_artifact_id"], markdown_id.as_str());
+    assert_eq!(receipt["base_artifact_id"], markdown_id.as_str());
+    assert!(receipt["new_input_fingerprint"].is_null());
+    let errata_ids = receipt["applied_errata_ids"].as_array().unwrap().clone();
+    assert_eq!(errata_ids.len(), 1);
+    assert_eq!(
+        service.snapshot().unwrap().artifact_count(),
+        artifact_count_before,
+        "errata mode must not promote an orphan patched artifact"
+    );
+    let active = service.list_markdown_errata(&markdown_id).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].errata_id, errata_ids[0].as_str().unwrap());
+    assert_eq!(
+        active[0].source_kind,
+        mathscape_store_sqlite::MarkdownErrataSourceKind::DiscoveryPatch
+    );
+    assert_eq!(active[0].discovery_run_id.as_deref(), Some(applied_run.as_str()));
+    assert!(active[0].corrected_text.contains("N=2"));
+    assert!(active[0].original_text.contains("N=1"));
+    // A replayed submit returns the same receipt instead of writing twice.
+    let replayed = serde_json::to_value(
+        service
+            .submit_markdown_patch_decision(
+                serde_json::from_value(serde_json::json!({
+                    "run_id": applied_run.as_str(),
+                    "patch_set_id": review["patch_set_id"],
+                    "expected_patch_fingerprint": review["patch_set"]["fingerprint"],
+                    "accepted_patch_refs": ["p1"]
+                }))
+                .unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(replayed["applied_errata_ids"], receipt["applied_errata_ids"]);
+    assert_eq!(service.list_markdown_errata(&markdown_id).unwrap().len(), 1);
+
     let resumed = serde_json::to_value(
         service
             .resume_discovery_after_patch(ResumeDiscoveryRequest::new(applied_run.as_str()))
@@ -1314,32 +1354,11 @@ async fn discovery_pauses_for_markdown_patch_review_and_resumes_from_sqlite() {
     )
     .unwrap();
     assert_eq!(resumed["outcome"], "completed");
-    // The reader switches to this snapshot to locate the resumed result.
-    assert_eq!(
-        resumed["view"]["source"]["artifact_id"],
-        patched_artifact.as_str()
-    );
-    assert_eq!(
-        resumed["view"]["source"]["conversion_id"],
-        receipt["conversion_id"]
-    );
+    assert_eq!(resumed["view"]["source"]["artifact_id"], markdown_id.as_str());
     let checkpoint = status_of(&applied_run);
     assert_eq!(checkpoint.status, DiscoveryCheckpointStatus::Completed);
-    assert_eq!(checkpoint.artifact_id.as_str(), patched_artifact);
-    assert_eq!(
-        checkpoint.conversion_id.as_ref().map(StableId::as_str),
-        receipt["conversion_id"].as_str()
-    );
-    assert_eq!(
-        checkpoint.snapshot["patch"]["applied"]["patched_artifact_id"],
-        patched_artifact.as_str()
-    );
-    let recovered_applied =
-        serde_json::to_value(service.get_discovery_review(applied_run.as_str()).unwrap()).unwrap();
-    assert_eq!(
-        recovered_applied["outcome"]["view"]["source"]["artifact_id"],
-        patched_artifact
-    );
+    assert_eq!(checkpoint.artifact_id.as_str(), markdown_id);
+    assert!(checkpoint.snapshot["patch"]["applied"].is_null());
     let acceptance: AcceptDiscoveryRequest = serde_json::from_value(serde_json::json!({
         "run_id":applied_run.as_str(),
         "expected_result_fingerprint":resumed["review"]["result_fingerprint"],
@@ -1351,37 +1370,7 @@ async fn discovery_pauses_for_markdown_patch_review_and_resumes_from_sqlite() {
     assert_eq!(accepted["state"], "registered");
     let decision = accepted["decision_id"].as_str().unwrap();
     let context = service.registration_source_context(decision).unwrap();
-    assert_eq!(context.artifact_id.as_str(), patched_artifact);
-    assert_eq!(
-        context.conversion_id.as_ref().map(StableId::as_str),
-        receipt["conversion_id"].as_str()
-    );
-    assert!(
-        service
-            .markdown_document(context.artifact_id.as_str(), None)
-            .is_err()
-    );
-    let doc = service
-        .markdown_document(
-            context.artifact_id.as_str(),
-            context.conversion_id.as_ref().map(StableId::as_str),
-        )
-        .unwrap();
-    assert!(doc.source.contains("N=2"));
-    let plan = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3"))
-        .unwrap()
-        .registration_plan(&StableId::parse(decision).unwrap())
-        .unwrap()
-        .unwrap();
-    let unit_id = plan.plan["units"][0]["stable_id"].as_str().unwrap();
-    let detail = service
-        .registration_object_detail(decision, unit_id)
-        .unwrap();
-    assert_eq!(
-        detail.artifact_id.as_deref(),
-        Some(patched_artifact.as_str())
-    );
-    assert!(detail.excerpt.is_some());
+    assert_eq!(context.artifact_id.as_str(), markdown_id);
     assert_eq!(
         schemas(3).await,
         [
@@ -1393,17 +1382,28 @@ async fn discovery_pauses_for_markdown_patch_review_and_resumes_from_sqlite() {
     let facts_request: serde_json::Value = server.received_requests().await.unwrap()[5]
         .body_json()
         .unwrap();
+    let facts_content = facts_request["messages"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(
-        facts_request["messages"]
-            .as_array()
-            .unwrap()
-            .last()
-            .unwrap()["content"]
-            .as_str()
-            .unwrap()
-            .contains("N=2"),
-        "B reads the patched Markdown"
+        facts_content.contains("N=1"),
+        "plan B: stage B still reads the physical snapshot"
     );
+
+    // A later run over the corrected block never re-patches it from raw OCR:
+    // the conversion issue stays a B warning and no P round is spent.
+    let third = serde_json::to_value(service.run_discovery(request).await.unwrap()).unwrap();
+    assert_eq!(third["outcome"], "completed");
+    assert_eq!(
+        schemas(6).await,
+        ["unit_discovery_v1", "source_facts_v1"]
+    );
+    assert_eq!(service.list_markdown_errata(&markdown_id).unwrap().len(), 1);
     directory.cleanup();
 }
 

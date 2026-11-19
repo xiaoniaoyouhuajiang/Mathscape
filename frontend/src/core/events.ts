@@ -60,7 +60,7 @@ export interface MathscapeEventMap {
   "markdown-errata-changed": {
     artifactId: string;
     errataId: string;
-    action: "saved" | "reverted";
+    action: "saved" | "reverted" | "discovery_patch";
     affectedUnitIds: string[];
   };
   /** 已入图单元的勘误复核状态更新（标记已复核 / 交沙盒复核）；刷新地图微标与详情卡。 */

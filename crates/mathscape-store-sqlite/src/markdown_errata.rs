@@ -290,6 +290,25 @@ pub(crate) fn list_all_active_markdown_errata(
     Ok(out)
 }
 
+pub(crate) fn list_markdown_errata_for_patch_set(
+    connection: &Connection,
+    patch_set_id: &str,
+) -> Result<Vec<MarkdownBlockErrata>, SqliteStoreError> {
+    let sql = format!(
+        "SELECT {SELECT_COLUMNS}
+         FROM markdown_block_errata
+         WHERE patch_set_id = ?1
+         ORDER BY base_byte_start ASC, created_at ASC, errata_id ASC"
+    );
+    let mut stmt = connection.prepare(&sql)?;
+    let mut rows = stmt.query(params![patch_set_id])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(map_errata_row(row)?);
+    }
+    Ok(out)
+}
+
 pub(crate) fn list_markdown_errata_history(
     connection: &Connection,
     artifact_id: &str,
