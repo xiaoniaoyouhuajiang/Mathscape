@@ -427,12 +427,35 @@ impl<'a> AnchorContext<'a> {
             return None;
         }
         let id = StableId::parse(artifact).ok()?;
+        let pool = self.pool.as_ref()?;
+        let active_errata = self
+            .store
+            .list_active_markdown_errata(artifact)
+            .ok()
+            .unwrap_or_default();
+        let has_overlap = active_errata
+            .iter()
+            .any(|row| row.base_byte_end > range.start && row.base_byte_start < range.end);
+        if has_overlap
+            && let Ok(info) = content_info_at(self.root, artifact)
+            && info.byte_size <= 16 * 1024 * 1024
+            && let Ok(full_len) = u32::try_from(info.byte_size)
+            && let Ok(full_bytes) = pool.read_bytes(&id, 0, full_len)
+            && let Ok(full_source) = String::from_utf8(full_bytes)
+            && (range.end as usize) <= full_source.len()
+            && full_source.is_char_boundary(range.start as usize)
+            && full_source.is_char_boundary(range.end as usize)
+        {
+            let entries = crate::markdown_errata::to_overlay_entries(&active_errata);
+            let view = mathscape_orchestrator::render_effective_slice(
+                &full_source,
+                range.start as usize..range.end as usize,
+                &entries,
+            );
+            return Some(view.effective_source);
+        }
         let length = u32::try_from(range.end - range.start).ok()?;
-        let bytes = self
-            .pool
-            .as_ref()?
-            .read_bytes(&id, range.start, length)
-            .ok()?;
+        let bytes = pool.read_bytes(&id, range.start, length).ok()?;
         (bytes.len() == length as usize)
             .then(|| String::from_utf8(bytes).ok())
             .flatten()

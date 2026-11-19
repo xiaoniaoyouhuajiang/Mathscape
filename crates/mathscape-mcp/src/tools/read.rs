@@ -34,12 +34,16 @@ use mathscape_domain::{
     CanonicalMarkdownView, InclusivePageRange, PageCoverPiece, StableId, markdown_offset_of_page,
     marker_page_id, plan_page_cover,
 };
+use mathscape_orchestrator::{
+    EffectiveByteSegmentKind, build_effective_markdown, render_effective_slice,
+};
 use mathscape_pdf::{PdfEngine, PdfOpenOptions, PdfPageIndex, PdfSelection};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::canonical::CanonicalIndex;
 use super::ensure::{self, EnsureReport, EnsureStatus};
+use super::errata::{self, load_active_errata};
 use super::material::{
     self, MARKDOWN_MEDIA_TYPE, Material, PDF_MEDIA_TYPE, find_material, managed_path_failure,
 };
@@ -189,7 +193,7 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
 
     match (material.media_type.as_str(), args.locator) {
         (MARKDOWN_MEDIA_TYPE, Locator::MdByteRange { start, end }) => {
-            read_markdown(&pool, &material, &args, start, end).and_then(|value| {
+            read_markdown(workspace, &pool, &material, &args, start, end).and_then(|value| {
                 annotate_view(value, index.for_markdown(material.id.as_str()), None, None)
             })
         }
@@ -299,6 +303,7 @@ fn map_managed_path_error(args: &ReadArgs, error: ArtifactPoolError) -> ToolRepl
 }
 
 fn read_markdown(
+    workspace: &McpWorkspace,
     pool: &ArtifactPool,
     material: &Material,
     args: &ReadArgs,
@@ -327,6 +332,63 @@ fn read_markdown(
     }
     let start = start.saturating_sub(expand.before);
     let end = requested_end.saturating_add(expand.after).min(size);
+
+    let errata = load_active_errata(workspace, material.id.as_str())?;
+    if !errata.is_empty()
+        && let Some(raw_source) = read_markdown_whole(pool, material)?
+    {
+        let mut snapped_start = (start as usize).min(raw_source.len());
+        while snapped_start > 0 && !raw_source.is_char_boundary(snapped_start) {
+            snapped_start -= 1;
+        }
+        let mut snapped_end = (end as usize).min(raw_source.len()).max(snapped_start);
+        while snapped_end < raw_source.len() && !raw_source.is_char_boundary(snapped_end) {
+            snapped_end += 1;
+        }
+        let view = render_effective_slice(&raw_source, snapped_start..snapped_end, &errata.entries);
+        let capped = cap_at_char_boundary(&view.effective_source, MAX_READ_BYTES).to_owned();
+        let truncated = capped.len() < view.effective_source.len();
+        let locator = if capped.is_empty() {
+            Locator::MdByteRange {
+                start: snapped_start as u64,
+                end: snapped_end as u64,
+            }
+        } else if let Some(physical) = view.byte_map.effective_range_to_physical(0, capped.len()) {
+            Locator::MdByteRange {
+                start: physical.start,
+                end: physical.end,
+            }
+        } else {
+            Locator::MdByteRange {
+                start: snapped_start as u64,
+                end: snapped_end as u64,
+            }
+        };
+        let applied = errata.applied_within_prefix(&view.byte_map, capped.len());
+        let details = if applied.is_empty() {
+            None
+        } else {
+            diagnostics.push(errata::applied_errata_diagnostic(applied.len()));
+            Some(json!({ "applied_errata": applied }))
+        };
+        return result(ReadResult {
+            status: if truncated {
+                ToolStatus::Truncated
+            } else {
+                ToolStatus::Ok
+            },
+            artifact_id: material.id.to_string(),
+            content_type: "markdown",
+            text: Some(capped),
+            locator,
+            truncated: Some(truncated),
+            total_bytes: Some(size),
+            total_pages: None,
+            revision: Some(material.revision.clone()),
+            details,
+            diagnostics,
+        });
+    }
 
     // Read a window wide enough to snap both ends to UTF-8 boundaries.
     let cap = MAX_READ_BYTES as u64;
@@ -598,7 +660,7 @@ fn read_canonical_view(
             ),
         ));
     }
-    let mut value = read_markdown(pool, &head, args, start, end)?;
+    let mut value = read_markdown(workspace, pool, &head, args, start, end)?;
     if let Some(object) = value.as_object_mut() {
         let diagnostics = object
             .entry("diagnostics")
@@ -658,16 +720,32 @@ fn serve_canonical_snapshot(
             ensured,
         );
     };
-    let (text, truncated) = read_markdown_prefix(pool, &served)?;
+    let errata = load_active_errata(workspace, served.id.as_str())?;
+    let segment_pages = segment.pages;
+    let whole_source = if segment_pages.is_some() || !errata.is_empty() {
+        read_markdown_whole(pool, &served)?
+    } else {
+        None
+    };
+    let (text, truncated, applied_errata) =
+        if !errata.is_empty() && let Some(source) = whole_source.as_deref() {
+            let view = build_effective_markdown(source, &errata.entries);
+            let capped = cap_at_char_boundary(&view.effective_source, MAX_READ_BYTES).to_owned();
+            let truncated = capped.len() < view.effective_source.len();
+            let applied = errata.applied_within_prefix(&view.byte_map, capped.len());
+            (capped, truncated, applied)
+        } else {
+            let (text, truncated) = read_markdown_prefix(pool, &served)?;
+            (text, truncated, Vec::new())
+        };
     // The body is the snapshot from byte 0 (text offsets are snapshot
     // offsets); served_segments says where the requested pages are inside it.
-    let segment_pages = segment.pages;
     let mut segments = Vec::new();
     if let Some(snapshot_pages) = segment_pages
-        && let Some(source) = read_markdown_whole(pool, &served)?
+        && let Some(source) = whole_source.as_deref()
     {
-        let (range, exact) = page_byte_range(&source, snapshot_pages, request);
-        if let Some(diagnostic) = page_markers_absent(&source, &served.id, snapshot_pages) {
+        let (range, exact) = page_byte_range(source, snapshot_pages, request);
+        if let Some(diagnostic) = page_markers_absent(source, &served.id, snapshot_pages) {
             diagnostics.push(diagnostic);
         }
         segments.push(ServedSegment {
@@ -679,6 +757,9 @@ fn serve_canonical_snapshot(
             trimmed_to_pages: exact,
             is_head: view.head_artifact_id.as_ref() == Some(&served.id),
         });
+    }
+    if !applied_errata.is_empty() {
+        diagnostics.push(errata::applied_errata_diagnostic(applied_errata.len()));
     }
     diagnostics.push(match ensured {
         None => diagnostic(
@@ -707,7 +788,7 @@ fn serve_canonical_snapshot(
         total_bytes: None,
         total_pages: Some(page_count),
         revision: Some(material.revision.clone()),
-        details: single_details(ensured, &material.id, &segments)?,
+        details: single_details(ensured, &material.id, &segments, &applied_errata)?,
         diagnostics,
     })?;
     annotate_view(value, Some(view), Some(request), Some(served.id.as_str())).map(Some)
@@ -839,6 +920,7 @@ fn serve_stitched(
     let mut text = String::new();
     let mut segments = Vec::with_capacity(cover.pieces.len());
     let mut untrimmed = false;
+    let mut stitched_errata: Vec<(usize, String, Value)> = Vec::new();
     for piece in &cover.pieces {
         let Some(snapshot) = find_material(workspace, &piece.markdown_artifact_id)? else {
             return Ok(None);
@@ -862,7 +944,25 @@ fn serve_stitched(
         if !text.is_empty() {
             text.push_str(STITCH_SEPARATOR);
         }
-        text.push_str(&source[range.start..range.end]);
+        let errata = load_active_errata(workspace, snapshot.id.as_str())?;
+        if errata.is_empty() {
+            text.push_str(&source[range.start..range.end]);
+        } else {
+            let piece_offset = text.len();
+            let view = render_effective_slice(&source, range.start..range.end, &errata.entries);
+            text.push_str(&view.effective_source);
+            for seg in view.byte_map.segments() {
+                if let EffectiveByteSegmentKind::Errata { errata_id } = &seg.kind
+                    && let Some(row) = errata.rows.iter().find(|r| r.errata_id == *errata_id)
+                {
+                    stitched_errata.push((
+                        piece_offset + seg.eff_start,
+                        row.errata_id.clone(),
+                        errata::errata_provenance_json(row),
+                    ));
+                }
+            }
+        }
         segments.push(ServedSegment {
             artifact_id: snapshot.id.to_string(),
             canonical_id: views[piece.view_index].canonical_id.to_string(),
@@ -876,6 +976,15 @@ fn serve_stitched(
     let total = text.len();
     let capped = cap_at_char_boundary(&text, MAX_READ_BYTES).to_owned();
     let truncated = capped.len() < total;
+    let mut seen_errata = std::collections::HashSet::new();
+    let applied_errata: Vec<Value> = stitched_errata
+        .into_iter()
+        .filter(|(offset, id, _)| *offset < capped.len() && seen_errata.insert(id.clone()))
+        .map(|(_, _, entry)| entry)
+        .collect();
+    if !applied_errata.is_empty() {
+        diagnostics.push(errata::applied_errata_diagnostic(applied_errata.len()));
+    }
     diagnostics.push(diagnostic(
         "served_stitched_canonical_markdown",
         format!(
@@ -911,6 +1020,9 @@ fn serve_stitched(
             "served_segments".into(),
             to_json(&segments, "served segments")?,
         );
+        if !applied_errata.is_empty() {
+            object.insert("applied_errata".into(), Value::Array(applied_errata));
+        }
     }
     let value = result(ReadResult {
         status: if truncated {
@@ -969,6 +1081,7 @@ fn single_details(
     ensured: Option<&EnsureReport>,
     material: &StableId,
     segments: &[ServedSegment],
+    applied_errata: &[Value],
 ) -> Result<Option<Value>, ToolError> {
     let mut details = ensured
         .map(|report| ensure_details(report, material, None))
@@ -979,6 +1092,15 @@ fn single_details(
             object.insert(
                 "served_segments".into(),
                 to_json(&segments, "served segments")?,
+            );
+        }
+    }
+    if !applied_errata.is_empty() {
+        let object = details.get_or_insert_with(|| json!({}));
+        if let Some(object) = object.as_object_mut() {
+            object.insert(
+                "applied_errata".into(),
+                Value::Array(applied_errata.to_vec()),
             );
         }
     }

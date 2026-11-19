@@ -25,8 +25,8 @@ use mathscape_orchestrator::change_set_plan::{
 };
 use mathscape_orchestrator::map_edit::plan_map_change_over_head;
 use mathscape_orchestrator::{
-    PAGE_MARKER_STRUCTURAL_KIND, anchor_markdown, markdown_span_id, page_marker_id,
-    quote_matches_range, source_text_hash, valid_temp_id,
+    PAGE_MARKER_STRUCTURAL_KIND, anchor_markdown, locate_quote, markdown_span_id, page_marker_id,
+    quote_matches_range, render_effective_slice, source_text_hash, valid_temp_id,
 };
 use mathscape_store_sqlite::{
     ChangeSetDependency, PendingChangeSet, ProposedChangeRecord, SqliteArtifactStore,
@@ -38,6 +38,7 @@ use sha2::{Digest, Sha256};
 
 mod semantic;
 
+use super::errata::{LoadedErrata, load_active_errata_from_store};
 use super::{GET_CHANGE_SET, LIST_CHANGE_SETS, PROPOSE_CHANGES};
 use crate::McpWorkspace;
 use crate::investigation::staged_change_sets;
@@ -1150,6 +1151,8 @@ fn check_local_ref(result: &mut Vec<Diagnostic>, refs: &mut BTreeSet<String>, lo
 pub(super) struct SnapshotContext {
     pub(super) source: String,
     pub(super) blocks: Vec<MarkdownBlock>,
+    /// Active Markdown errata overlaid onto this immutable snapshot.
+    pub(super) active_errata: LoadedErrata,
     /// `(marker block start, marker block end, zero-based PDF page index)`.
     /// Marker's `{N}------` ids are zero-based PDF page indices.
     markers: Vec<(u64, u64, u32)>,
@@ -1240,9 +1243,12 @@ pub(super) fn load_snapshot(
         0 => Err("快照不属于任何 canonical Markdown 视图，无法映射到 PDF".to_owned()),
         _ => Err("快照属于多个 PDF 的 canonical 视图，映射不唯一".to_owned()),
     };
+    let active_errata = load_active_errata_from_store(store, artifact.as_str())
+        .map_err(|error| Diagnostic::error("snapshot_not_found", error.to_string(), None))?;
     Ok(SnapshotContext {
         source,
         blocks: anchored.blocks,
+        active_errata,
         markers,
         pdf,
     })
@@ -1456,16 +1462,44 @@ fn materialize_span_drafts(
             continue;
         }
         // Cut [start, end) first, then compare: exact, else normalized on
-        // both sides. Never search the rest of the snapshot.
-        let selected = &context.source[start..end];
-        if !quote_matches_range(selected, &input.quote) {
+        // both sides. Never search the rest of the snapshot. When active
+        // markdown errata overlap [start, end), accept effective text (full
+        // slice or a sub-passage whose EffectiveByteMap maps to exactly
+        // [start, end)) as well as raw OCR text for historical compatibility.
+        let raw_selected = &context.source[start..end];
+        let matched_text = if context.active_errata.is_empty() {
+            quote_matches_range(raw_selected, &input.quote).then(|| raw_selected.to_owned())
+        } else {
+            let effective_view = render_effective_slice(
+                &context.source,
+                start..end,
+                &context.active_errata.entries,
+            );
+            if effective_view.applied_errata_ids.is_empty() {
+                quote_matches_range(raw_selected, &input.quote).then(|| raw_selected.to_owned())
+            } else if quote_matches_range(&effective_view.effective_source, &input.quote) {
+                Some(effective_view.effective_source)
+            } else if quote_matches_range(raw_selected, &input.quote) {
+                Some(raw_selected.to_owned())
+            } else {
+                let (sub_ranges, _) = locate_quote(&effective_view.effective_source, &input.quote);
+                let exact_slot_match = sub_ranges.into_iter().any(|(ms, me)| {
+                    effective_view
+                        .byte_map
+                        .effective_range_to_physical(ms, me)
+                        .is_some_and(|phys| phys.start == range.start && phys.end == range.end)
+                });
+                exact_slot_match.then_some(effective_view.effective_source)
+            }
+        };
+        let Some(matched_text) = matched_text else {
             diagnostics.push(Diagnostic::error(
                 "quote_mismatch",
                 "quote does not match the text of the supplied byte range",
                 local,
             ));
             continue;
-        }
+        };
         let block_ids = context.block_ids(range.start, range.end);
         if input.granularity == SpanGranularity::Block && block_ids.is_empty() {
             diagnostics.push(Diagnostic::error(
@@ -1505,8 +1539,8 @@ fn materialize_span_drafts(
             }
             None
         };
-        // Same semantics as discovery: `fingerprint(&text)`.
-        let hash = source_text_hash(selected);
+        // Same semantics as discovery: `fingerprint(&text)` over the matched effective/raw text.
+        let hash = source_text_hash(&matched_text);
         let markdown = MarkdownLocator::new(
             artifact,
             ByteRange::new(range.start, range.end).expect("validated range"),
@@ -2253,6 +2287,7 @@ mod tests {
         SnapshotContext {
             source: String::new(),
             blocks: Vec::new(),
+            active_errata: LoadedErrata::default(),
             markers,
             pdf: Ok((pdf(), pages)),
         }
@@ -2291,6 +2326,7 @@ mod tests {
         let ctx = SnapshotContext {
             source: source.clone(),
             blocks: Vec::new(),
+            active_errata: LoadedErrata::default(),
             markers: vec![
                 (m7 as u64, (m7 + marker_len) as u64, 7),
                 (m8 as u64, (m8 + marker_len) as u64, 8),

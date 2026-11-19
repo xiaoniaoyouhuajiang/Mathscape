@@ -4,6 +4,7 @@
 
 mod canonical;
 mod ensure;
+mod errata;
 mod graph;
 mod grep;
 mod ink;
