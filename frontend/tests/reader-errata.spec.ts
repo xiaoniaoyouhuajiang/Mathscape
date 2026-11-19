@@ -169,3 +169,51 @@ test("canonical Markdown inline errata editing works in-place without losing TOC
   await expect(thmBlock.locator(".errata-block-badge")).toHaveCount(0);
   await expect(thmBlock.locator(".unit-map-badge")).toContainText("定理 1：负二项展开");
 });
+
+test("side-by-side '对照 PDF 第 X 页' drawer opens beside inline errata editor and toggles/dismisses with Esc", async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 840 });
+  await page.evaluate(async () => {
+    const h = (window as any).harness;
+    await h.reader.open("md", "Math notes");
+  });
+
+  const block1 = page.locator('[data-source-block="test-block-1"]');
+  await block1.click();
+  await block1.locator(".block-pill-errata").click();
+
+  const editor = page.locator(".errata-inline-editor");
+  await expect(editor).toBeVisible();
+  const pdfBtn = editor.locator(".errata-pdf-toggle-btn");
+  await expect(pdfBtn).toBeVisible();
+  await pdfBtn.click();
+
+  // Reader panel splits side-by-side: left Markdown + editor, right PDF reference drawer
+  const readerHost = page.locator("#reader");
+  await expect(readerHost).toHaveClass(/has-errata-pdf-pane/);
+  const refPane = page.locator(".errata-pdf-reference-pane");
+  await expect(refPane).toBeVisible();
+  await expect(refPane.locator(".pdf-viewport canvas").first()).toBeVisible({ timeout: 10000 });
+  await expect(refPane.getByLabel("PDF 页码")).toHaveValue("2");
+  await expect(pdfBtn).toHaveText("收起 PDF 对照");
+  // Inline editor remains open and editable beside the PDF reference pane
+  await expect(editor).toBeVisible();
+  const textarea = editor.getByLabel("校对后的 Markdown 源码");
+  await textarea.fill("Inline $x^3$（对照 PDF 修正）。");
+
+  // Pressing Esc once inside editor dismisses PDF reference drawer first while keeping unsaved edits
+  await textarea.press("Escape");
+  await expect(refPane).toHaveCount(0);
+  await expect(readerHost).not.toHaveClass(/has-errata-pdf-pane/);
+  await expect(editor).toBeVisible();
+  await expect(textarea).toHaveValue("Inline $x^3$（对照 PDF 修正）。");
+
+  // Re-open via button and close via header `✕ 关闭对照`, then save with verified_pdf_page
+  await pdfBtn.click();
+  await expect(refPane).toBeVisible();
+  await refPane.getByRole("button", { name: "✕ 关闭对照" }).click();
+  await expect(refPane).toHaveCount(0);
+
+  await textarea.press("Control+Enter");
+  await expect(editor).toBeHidden();
+  await expect(block1).toContainText("对照 PDF 修正");
+});

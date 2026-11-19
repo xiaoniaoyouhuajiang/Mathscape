@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use mathscape_artifact::ArtifactPool;
 use mathscape_domain::{
     AnchoredMarkdown, ContentHash, DiscoveryInput, DiscoverySelectionRequest,
@@ -6,13 +8,16 @@ use mathscape_domain::{
 use mathscape_orchestrator::{
     DiscoveryInputLimits, MAX_MARKDOWN_BYTES, PRODUCT_PATHS_KEY, PreparedUnitDiscoveryRequest,
     ProductPath, anchor_markdown, build_discovery_input, build_unit_discovery_request,
-    resolve_selection,
+    render_effective_slice, resolve_selection,
 };
-use mathscape_store_sqlite::SqliteArtifactStore;
+use mathscape_store_sqlite::{
+    ErrataUnitReviewDecision, MarkdownBlockErrata, SqliteArtifactStore,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
 
+use crate::markdown_errata::to_overlay_entries;
 use crate::{DesktopService, DesktopState};
 
 #[derive(Debug, Serialize)]
@@ -40,6 +45,25 @@ pub struct InkSourceLocation {
     pub stroke_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceErrataReviewItem {
+    pub errata_id: String,
+    pub artifact_id: String,
+    pub first_block_id: String,
+    pub last_block_id: String,
+    pub original_text: String,
+    pub corrected_text: String,
+    pub source_kind: String,
+    pub updated_at: String,
+    pub sent_to_sandbox: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceUnitErrataReview {
+    pub unit_id: String,
+    pub items: Vec<SourceErrataReviewItem>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SourceNodeDetail {
     pub node_id: String,
@@ -56,6 +80,8 @@ pub struct SourceNodeDetail {
     pub ink: Option<InkSourceLocation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_backlink: Option<crate::SourceBacklink>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errata_review: Option<SourceUnitErrataReview>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -225,18 +251,62 @@ impl DesktopService {
                 end: value.get("end")?.as_u64()?,
             })
         });
+        let errata_store =
+            SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3")).ok();
+        let mut active_errata_cache: HashMap<String, Vec<MarkdownBlockErrata>> = HashMap::new();
+        let mut load_active_errata = |art: &str| -> Vec<MarkdownBlockErrata> {
+            if let Some(existing) = active_errata_cache.get(art) {
+                return existing.clone();
+            }
+            let loaded = errata_store
+                .as_ref()
+                .and_then(|store| store.list_active_markdown_errata(art).ok())
+                .unwrap_or_default();
+            active_errata_cache.insert(art.to_owned(), loaded.clone());
+            loaded
+        };
         let excerpt = match (artifact_id, &range) {
             (Some(artifact), Some(range)) if range.end >= range.start => {
-                let artifact_id = StableId::parse(artifact).map_err(|e| e.to_string())?;
-                let bytes = ArtifactPool::open(&self.workspace_root)
-                    .map_err(|e| e.to_string())?
-                    .read_bytes(
-                        &artifact_id,
-                        range.start,
-                        (range.end - range.start).min(64 * 1024) as u32,
+                let parsed_id = StableId::parse(artifact).map_err(|e| e.to_string())?;
+                let active_errata = load_active_errata(artifact);
+                let has_overlap = active_errata
+                    .iter()
+                    .any(|e| e.base_byte_start < range.end && e.base_byte_end > range.start);
+                if has_overlap {
+                    let info = self.content_info(artifact)?;
+                    let full_len = info.byte_size.min(MAX_MARKDOWN_BYTES as u64) as u32;
+                    let full_bytes = ArtifactPool::open(&self.workspace_root)
+                        .map_err(|e| e.to_string())?
+                        .read_bytes(&parsed_id, 0, full_len)
+                        .map_err(|e| e.to_string())?;
+                    let full_source =
+                        String::from_utf8(full_bytes).map_err(|_| "来源文本不是有效 UTF-8")?;
+                    let overlay = to_overlay_entries(&active_errata);
+                    let mut effective = render_effective_slice(
+                        &full_source,
+                        range.start as usize..range.end as usize,
+                        &overlay,
                     )
-                    .map_err(|e| e.to_string())?;
-                Some(String::from_utf8(bytes).map_err(|_| "来源文本不是有效 UTF-8")?)
+                    .effective_source;
+                    if effective.len() > 64 * 1024 {
+                        let mut cut = 64 * 1024;
+                        while cut > 0 && !effective.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        effective.truncate(cut);
+                    }
+                    Some(effective)
+                } else {
+                    let bytes = ArtifactPool::open(&self.workspace_root)
+                        .map_err(|e| e.to_string())?
+                        .read_bytes(
+                            &parsed_id,
+                            range.start,
+                            (range.end - range.start).min(64 * 1024) as u32,
+                        )
+                        .map_err(|e| e.to_string())?;
+                    Some(String::from_utf8(bytes).map_err(|_| "来源文本不是有效 UTF-8")?)
+                }
             }
             _ => None,
         };
@@ -251,6 +321,88 @@ impl DesktopService {
                     .collect()
             })
             .unwrap_or_default();
+        let errata_review = if ink.is_none() {
+            let mut span_locators: Vec<&Value> = Vec::new();
+            if object.kind == mathscape_domain::EntityKind::SourceSemanticUnit {
+                if let Some(spans) = body.get("source_spans").and_then(Value::as_array) {
+                    for span_id_str in spans.iter().filter_map(Value::as_str) {
+                        if let Ok(span_id) = StableId::parse(span_id_str)
+                            && let Some(span_obj) =
+                                snapshot.objects.iter().find(|o| o.stable_id == span_id)
+                        {
+                            span_locators
+                                .push(span_obj.payload.get("payload").unwrap_or(&span_obj.payload));
+                        }
+                    }
+                }
+            } else {
+                span_locators.push(locator);
+            }
+            let review_map: HashMap<String, ErrataUnitReviewDecision> = errata_store
+                .as_ref()
+                .and_then(|store| store.list_errata_unit_reviews(Some(id.as_str())).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| (r.errata_id, r.decision))
+                .collect();
+            let mut seen_errata = HashSet::new();
+            let mut review_items = Vec::new();
+            for loc in span_locators {
+                let Some(art) = loc.pointer("/markdown/artifact").and_then(Value::as_str) else {
+                    continue;
+                };
+                let loc_range = loc.pointer("/markdown/byte_range").and_then(|v| {
+                    Some((v.get("start")?.as_u64()?, v.get("end")?.as_u64()?))
+                });
+                let loc_blocks: HashSet<&str> = loc
+                    .get("marker_block_ids")
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                for errata in load_active_errata(art) {
+                    let block_overlap = !loc_blocks.is_empty()
+                        && errata
+                            .covered_block_ids
+                            .iter()
+                            .any(|b| loc_blocks.contains(b.as_str()));
+                    let byte_overlap = loc_range.is_some_and(|(s, e)| {
+                        errata.base_byte_start < e && errata.base_byte_end > s
+                    });
+                    if !(block_overlap || byte_overlap) {
+                        continue;
+                    }
+                    if !seen_errata.insert(errata.errata_id.clone()) {
+                        continue;
+                    }
+                    let decision = review_map.get(&errata.errata_id).copied();
+                    if decision == Some(ErrataUnitReviewDecision::Acknowledged) {
+                        continue;
+                    }
+                    review_items.push(SourceErrataReviewItem {
+                        errata_id: errata.errata_id,
+                        artifact_id: errata.artifact_id,
+                        first_block_id: errata.first_block_id,
+                        last_block_id: errata.last_block_id,
+                        original_text: errata.original_text,
+                        corrected_text: errata.corrected_text,
+                        source_kind: errata.source_kind.as_str().to_owned(),
+                        updated_at: errata.updated_at,
+                        sent_to_sandbox: decision
+                            == Some(ErrataUnitReviewDecision::SentToSandbox),
+                    });
+                }
+            }
+            if review_items.is_empty() {
+                None
+            } else {
+                Some(SourceUnitErrataReview {
+                    unit_id: id.to_string(),
+                    items: review_items,
+                })
+            }
+        } else {
+            None
+        };
         let pdf_backlink = if ink.is_some() {
             None
         } else if let (Some(pdf_art), Some(page_idx)) = (
@@ -299,6 +451,7 @@ impl DesktopService {
             markdown_block_ids: block_ids,
             ink,
             pdf_backlink,
+            errata_review,
             payload,
         })
     }

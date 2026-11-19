@@ -55,6 +55,7 @@ import {
   buildRoundCiteIndex,
   citeResolver,
   citeTextHtml,
+  INK_NOTE_CITE_PREFIX,
   type CiteIndex,
   type CiteResolver,
   type CiteTarget,
@@ -103,6 +104,7 @@ const DEFAULT_HEIGHT = 520;
 const MIN_WIDTH = 320;
 const MIN_HEIGHT = 280;
 const HANDLE_SIZE = 48;
+const NO_EXTRA_TARGETS: readonly CiteTarget[] = [];
 
 export interface TranscriptEntry {
   ts: string;
@@ -145,7 +147,9 @@ type Toast = (message: string, kind: "success" | "error") => void;
 export interface CiteContext {
   /** Landscape projection nodes currently on the map. */
   nodes: () => readonly IncidenceNode[];
-  /** Select + reveal a projection node; the dock stays open. */
+  /** Additional non-map cite targets (e.g. active live handwrite notes in `ink_documents`). */
+  extraTargets?: () => readonly CiteTarget[];
+  /** Select + reveal a projection node (or open a live ink note); the dock stays open. */
   jump: (nodeId: string) => void;
   /** Map Scene Player: live tool events and process-card replays. */
   scenes?: {
@@ -170,11 +174,13 @@ const FIRST_THREAD_ID = "d1";
 
 export const PARSING_PROBE = { firstMs: 2500, everyMs: 3000 };
 
-/** Cite resolver → scene resolver: unique map hits only (no wrong flash). */
+/** Cite resolver → scene resolver: unique map hits only (skip synthetic ink notes; no wrong flash). */
 function sceneResolve(resolve: CiteResolver): SceneResolve {
   return (id) => {
     const hit = resolve(id);
-    return hit.status === "map" && hit.target ? { nodeId: hit.target.nodeId, label: hit.target.label } : null;
+    if (hit.status !== "map" || !hit.target) return null;
+    if (hit.target.nodeId.startsWith(INK_NOTE_CITE_PREFIX)) return null;
+    return { nodeId: hit.target.nodeId, label: hit.target.label };
   };
 }
 
@@ -323,7 +329,7 @@ export class SandboxDialogueDock {
   /** Last sidebar footprint pushed to the shell; avoids resize feedback loops. */
   private layoutKey = "none";
   private cite: CiteContext | null = null;
-  private citeIndexCache: { nodes: readonly IncidenceNode[]; index: CiteIndex } | null = null;
+  private citeIndexCache: { nodes: readonly IncidenceNode[]; extra: readonly CiteTarget[]; index: CiteIndex } | null = null;
   /** Composer resolver: map index + every tool id this session has seen. */
   private mentionCache: { index: CiteIndex | null; targets: CiteTarget[] } | null = null;
   private composerCache: { index: CiteIndex; events: number; session: string | null; resolve: CiteResolver } | null = null;
@@ -975,7 +981,10 @@ export class SandboxDialogueDock {
   private citeIndex(): CiteIndex | null {
     if (!this.cite) return null;
     const nodes = this.cite.nodes();
-    if (this.citeIndexCache?.nodes !== nodes) this.citeIndexCache = { nodes, index: buildCiteIndex(nodes) };
+    const extra = this.cite.extraTargets?.() ?? NO_EXTRA_TARGETS;
+    if (this.citeIndexCache?.nodes !== nodes || this.citeIndexCache?.extra !== extra) {
+      this.citeIndexCache = { nodes, extra, index: buildCiteIndex(nodes, extra) };
+    }
     return this.citeIndexCache.index;
   }
 

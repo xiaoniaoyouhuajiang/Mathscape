@@ -25,7 +25,8 @@ import {
   type EditContext,
   type UserChangeRequest,
 } from "../map-edit";
-import { sourceNodeDetail } from "../reader/content";
+import { sourceNodeDetail, type SourceUnitErrataReview } from "../reader/content";
+import { computeLineDiff, markErrataUnitReviewed } from "../reader/markdown-errata";
 import { readerTargetId, tryOpenableArtifactId } from "../reader/openable";
 import { markdownRenderer } from "../reader/markdown";
 import type { ReaderFocus } from "../reader/reader";
@@ -374,6 +375,9 @@ export class InspectorController {
     try {
       const detail = await sourceNodeDetail(node.domain_id!);
       if (this.selectedNode?.domain_id !== node.domain_id) return;
+      if (detail.errata_review && detail.errata_review.items.length > 0) {
+        host.append(this.buildErrataReviewCard(node, detail.errata_review));
+      }
       if (detail.excerpt) {
         const preview = document.createElement("div");
         preview.className = "source-preview markdown-body";
@@ -452,6 +456,109 @@ export class InspectorController {
         ),
       );
     }
+  }
+
+  private buildErrataReviewCard(
+    node: IncidenceNode,
+    review: SourceUnitErrataReview,
+  ): HTMLElement {
+    const card = document.createElement("section");
+    card.className = "detail-errata-review";
+    card.setAttribute("aria-label", "原文已校对复核提示");
+
+    const head = document.createElement("div");
+    head.className = "detail-errata-head";
+    const badge = textElement("span", "detail-errata-badge", "原文已校对");
+    const countText = textElement(
+      "span",
+      "detail-errata-summary",
+      `关联原文有 ${review.items.length} 处人工校对待复核`,
+    );
+    head.append(badge, countText);
+    const allSent = review.items.every((item) => item.sent_to_sandbox);
+    const sentPill = textElement("span", "detail-errata-sent-pill", "已发往沙盒");
+    sentPill.hidden = !allSent;
+    head.append(sentPill);
+    card.append(head);
+
+    const details = document.createElement("details");
+    details.className = "detail-errata-diff";
+    details.append(textElement("summary", "", "查看原 OCR vs 校对版 Diff"));
+    for (const item of review.items) {
+      const diffView = document.createElement("div");
+      diffView.className = "errata-diff-view detail-errata-diff-view";
+      const diff = computeLineDiff(item.original_text, item.corrected_text);
+      for (const line of diff.lines) {
+        const row = document.createElement("div");
+        row.className = `errata-diff-line is-${line.kind}`;
+        const prefix = line.kind === "add" ? "+ " : line.kind === "del" ? "− " : "  ";
+        row.textContent = prefix + line.text;
+        diffView.append(row);
+      }
+      details.append(diffView);
+    }
+    card.append(details);
+
+    const actionsRow = document.createElement("div");
+    actionsRow.className = "detail-errata-actions";
+    const errataIds = review.items.map((item) => item.errata_id);
+
+    const sendBtn = textElement("button", "detail-errata-send-btn", "交给沙盒复核陈述");
+    sendBtn.type = "button";
+    sendBtn.title = "把此节点及原 OCR / 校对版差异填入沙盒对话框（不自动发送）";
+    sendBtn.onclick = async () => {
+      const blocks = review.items
+        .map((item, idx) => {
+          const tag = review.items.length > 1 ? `（第 ${idx + 1} 处）` : "";
+          return [
+            `原 OCR${tag}：`,
+            item.original_text.trim(),
+            `校对后${tag}：`,
+            item.corrected_text.trim(),
+          ].join("\n");
+        })
+        .join("\n\n");
+      const prompt = [
+        `请复核已入图节点 ${review.unit_id}（${node.label}）的陈述、摘要与来源关系：其关联原文已对照原书完成人工校对，请检查当前图谱陈述是否需要同步修订并给出提案。`,
+        "",
+        blocks,
+      ].join("\n");
+      let accepted = false;
+      eventBus.emit("insert-agent-feedback", {
+        text: prompt,
+        accept: () => { accepted = true; },
+      });
+      if (!accepted) {
+        this.delegate.showToast("请先进入沙箱并打开沙箱对话，再将复核请求填入对话框。", "error");
+        return;
+      }
+      try {
+        await markErrataUnitReviewed(review.unit_id, errataIds, "sent_to_sandbox");
+        sentPill.hidden = false;
+        this.delegate.showToast("已将原文校对差异填入沙盒对话框，确认后即可发送。", "success");
+      } catch (error) {
+        this.delegate.showToast(`记录复核状态失败：${errorMessage(error)}`, "error");
+      }
+    };
+
+    const ackBtn = textElement("button", "detail-errata-ack-btn", "标记已复核");
+    ackBtn.type = "button";
+    ackBtn.title = "确认当前节点陈述不受影响或已处理，消除此提醒";
+    ackBtn.onclick = async () => {
+      ackBtn.disabled = sendBtn.disabled = true;
+      try {
+        await markErrataUnitReviewed(review.unit_id, errataIds, "acknowledged");
+        card.remove();
+        this.delegate.showToast("已标记该节点的原文校对为已复核。", "success");
+      } catch (error) {
+        ackBtn.disabled = sendBtn.disabled = false;
+        this.delegate.showToast(`标记失败：${errorMessage(error)}`, "error");
+      }
+    };
+
+    actionsRow.append(sendBtn, ackBtn);
+    card.append(actionsRow);
+    return card;
   }
 
   private async mountEditActions(objectId: string, host: HTMLElement): Promise<void> {

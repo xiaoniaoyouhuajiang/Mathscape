@@ -10,6 +10,23 @@ export interface ContentInfo {
   contexts: { conversion_id: string; paths: ProductPath[] }[];
 }
 
+export interface SourceErrataReviewItem {
+  errata_id: string;
+  artifact_id: string;
+  first_block_id: string;
+  last_block_id: string;
+  original_text: string;
+  corrected_text: string;
+  source_kind: string;
+  updated_at: string;
+  sent_to_sandbox: boolean;
+}
+
+export interface SourceUnitErrataReview {
+  unit_id: string;
+  items: SourceErrataReviewItem[];
+}
+
 export interface SourceNodeDetail {
   node_id: string;
   kind: string;
@@ -23,6 +40,7 @@ export interface SourceNodeDetail {
   payload: unknown;
   ink?: { snapshot_id: string; document_id: string; page_id: string; stroke_ids: string[] };
   pdf_backlink?: SourceBacklinkView;
+  errata_review?: SourceUnitErrataReview;
 }
 export function sourceNodeDetail(nodeId: string): Promise<SourceNodeDetail> { return invoke("get_source_node_detail", { nodeId }); }
 

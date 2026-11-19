@@ -1,16 +1,20 @@
 //! Desktop commands and service helpers for the block-level Markdown errata overlay.
 
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use mathscape_domain::StableId;
 use mathscape_orchestrator::{
     ErrataOverlayEntry, normalize_errata_corrected_text, resolve_errata_target_range,
     validate_errata_corrected_text,
 };
 use mathscape_store_sqlite::{
-    MarkdownBlockErrata, MarkdownErrataSourceKind, SqliteArtifactStore, UpsertMarkdownErrata,
+    ErrataUnitReviewDecision, MarkdownBlockErrata, MarkdownErrataSourceKind, SqliteArtifactStore,
+    UpsertMarkdownErrata,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tauri::State;
 
@@ -204,6 +208,7 @@ impl DesktopService {
             outcome.errata.base_byte_end,
             &outcome.errata.covered_block_ids,
         )?;
+        self.notify_errata_changed_ink_cards(&outcome.errata.artifact_id, &affected_unit_ids);
         Ok(SaveMarkdownErrataResponse {
             errata: outcome.errata,
             superseded_ids: outcome.superseded_ids,
@@ -233,10 +238,171 @@ impl DesktopService {
             errata.base_byte_end,
             &errata.covered_block_ids,
         )?;
+        self.notify_errata_changed_ink_cards(&errata.artifact_id, &affected_unit_ids);
         Ok(RevertMarkdownErrataResponse {
             errata,
             affected_unit_ids,
         })
+    }
+
+    /// Broadcasts updated ProblemCards to any connected tablet whose active note
+    /// links directly to `artifact_id` or to one of `affected_unit_ids`.
+    fn notify_errata_changed_ink_cards(&self, artifact_id: &str, affected_unit_ids: &[String]) {
+        let Ok(store) = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
+        else {
+            return;
+        };
+        let mut doc_ids = BTreeSet::new();
+        if let Ok(links) = store.ink_links_to_target("markdown", artifact_id) {
+            for linked in links {
+                doc_ids.insert(linked.note.document_id);
+            }
+        }
+        for unit_id in affected_unit_ids {
+            if let Ok(links) = store.ink_links_to_target("source_object", unit_id) {
+                for linked in links {
+                    doc_ids.insert(linked.note.document_id);
+                }
+            }
+        }
+        drop(store);
+        for doc_id in doc_ids {
+            self.ink_problem_card_changed(&doc_id);
+        }
+    }
+
+    pub fn mark_errata_unit_reviewed(
+        &self,
+        unit_id: &str,
+        errata_ids: &[String],
+        decision: &str,
+    ) -> Result<usize, String> {
+        let parsed = ErrataUnitReviewDecision::parse(decision).map_err(|e| e.to_string())?;
+        let now = crate::discovery::timestamp_now()
+            .map_err(|e| e.to_string())?
+            .as_str()
+            .to_owned();
+        let mut store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
+            .map_err(|e| e.to_string())?;
+        let mut count = 0;
+        for errata_id in errata_ids {
+            if errata_id.trim().is_empty() {
+                continue;
+            }
+            store
+                .mark_errata_unit_reviewed(unit_id, errata_id, parsed, &now)
+                .map_err(|e| e.to_string())?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Returns a map of `unit_id -> unreviewed active errata count` across the
+    /// workspace for lightweight non-blocking badges on the map.
+    pub fn list_unreviewed_errata_units(&self) -> Result<BTreeMap<String, usize>, String> {
+        let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
+            .map_err(|e| e.to_string())?;
+        let active_errata = store
+            .list_all_active_markdown_errata()
+            .map_err(|e| e.to_string())?;
+        if active_errata.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let mut by_artifact: HashMap<&str, Vec<&MarkdownBlockErrata>> = HashMap::new();
+        for errata in &active_errata {
+            by_artifact
+                .entry(errata.artifact_id.as_str())
+                .or_default()
+                .push(errata);
+        }
+        let acknowledged: HashSet<(String, String)> = store
+            .list_errata_unit_reviews(None)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter(|review| review.decision == ErrataUnitReviewDecision::Acknowledged)
+            .map(|review| (review.unit_id, review.errata_id))
+            .collect();
+        let snapshot = store.source_map_snapshot().map_err(|e| e.to_string())?;
+        let spans_by_id: HashMap<&StableId, &Value> = snapshot
+            .objects
+            .iter()
+            .filter(|obj| {
+                obj.kind == mathscape_domain::EntityKind::SourceSpan
+                    && !matches!(
+                        obj.lifecycle,
+                        mathscape_domain::LifecycleStatus::Superseded
+                            | mathscape_domain::LifecycleStatus::Rejected
+                            | mathscape_domain::LifecycleStatus::Deprecated
+                    )
+            })
+            .map(|obj| (&obj.stable_id, obj.payload.get("payload").unwrap_or(&obj.payload)))
+            .collect();
+
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for obj in &snapshot.objects {
+            if obj.kind != mathscape_domain::EntityKind::SourceSemanticUnit
+                || matches!(
+                    obj.lifecycle,
+                    mathscape_domain::LifecycleStatus::Superseded
+                        | mathscape_domain::LifecycleStatus::Rejected
+                        | mathscape_domain::LifecycleStatus::Deprecated
+                )
+            {
+                continue;
+            }
+            let body = obj.payload.get("payload").unwrap_or(&obj.payload);
+            let Some(span_ids) = body.get("source_spans").and_then(Value::as_array) else {
+                continue;
+            };
+            let unit_id = obj.stable_id.to_string();
+            let mut matched_errata = HashSet::new();
+            for raw_span_id in span_ids.iter().filter_map(Value::as_str) {
+                let Ok(parsed_span) = StableId::parse(raw_span_id) else {
+                    continue;
+                };
+                let Some(span_body) = spans_by_id.get(&parsed_span) else {
+                    continue;
+                };
+                let Some(art) = span_body
+                    .pointer("/markdown/artifact")
+                    .and_then(Value::as_str)
+                else {
+                    continue;
+                };
+                let Some(errata_list) = by_artifact.get(art) else {
+                    continue;
+                };
+                let byte_range = span_body.pointer("/markdown/byte_range").and_then(|v| {
+                    Some((v.get("start")?.as_u64()?, v.get("end")?.as_u64()?))
+                });
+                let span_blocks: HashSet<&str> = span_body
+                    .get("marker_block_ids")
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                for errata in errata_list {
+                    let block_overlap = !span_blocks.is_empty()
+                        && errata
+                            .covered_block_ids
+                            .iter()
+                            .any(|b| span_blocks.contains(b.as_str()));
+                    let byte_overlap = byte_range.is_some_and(|(s, e)| {
+                        errata.base_byte_start < e && errata.base_byte_end > s
+                    });
+                    if !(block_overlap || byte_overlap) {
+                        continue;
+                    }
+                    if acknowledged.contains(&(unit_id.clone(), errata.errata_id.clone())) {
+                        continue;
+                    }
+                    matched_errata.insert(errata.errata_id.as_str());
+                }
+            }
+            if !matched_errata.is_empty() {
+                counts.insert(unit_id, matched_errata.len());
+            }
+        }
+        Ok(counts)
     }
 }
 
@@ -283,6 +449,31 @@ pub async fn revert_markdown_errata(
 ) -> Result<RevertMarkdownErrataResponse, String> {
     let service = state.service();
     tauri::async_runtime::spawn_blocking(move || service.revert_markdown_errata(&errata_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn mark_errata_unit_reviewed(
+    state: State<'_, DesktopState>,
+    unit_id: String,
+    errata_ids: Vec<String>,
+    decision: String,
+) -> Result<usize, String> {
+    let service = state.service();
+    tauri::async_runtime::spawn_blocking(move || {
+        service.mark_errata_unit_reviewed(&unit_id, &errata_ids, &decision)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_unreviewed_errata_units(
+    state: State<'_, DesktopState>,
+) -> Result<BTreeMap<String, usize>, String> {
+    let service = state.service();
+    tauri::async_runtime::spawn_blocking(move || service.list_unreviewed_errata_units())
         .await
         .map_err(|e| e.to_string())?
 }

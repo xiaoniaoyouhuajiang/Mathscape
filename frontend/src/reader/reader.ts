@@ -1,8 +1,4 @@
-import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy, type PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
-import { PDF_ZOOM_DEFAULT, PDF_ZOOM_MAX, PDF_ZOOM_MIN, PDF_ZOOM_STEPS, anchoredScroll, canvasRatio, clampZoom, loadZoom, resolveZoom, saveZoom, stepZoom, zoomLabel, type PdfZoomMode } from "./pdf-zoom";
-import { ArtifactPdfTransport } from "./pdf-transport";
-import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
-import { contentInfo, getMarkdownUnitMarkers, readRange, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
+import { contentInfo, getMarkdownUnitMarkers, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
 import { getSourceBacklink } from "./backlink";
 import { markdownRenderer } from "./markdown";
 import { canonicalReaderProjection, gapLabel, pagesLabel, projectionSummary, segmentLabel, splitByPageMarkers, type CanonicalReaderSegment } from "./canonical";
@@ -21,14 +17,12 @@ import {
   revertMarkdownErrata,
   type MarkdownBlockErrata,
 } from "./markdown-errata";
-import { extractAnchorPhrase, mountPdfTextLayer, PdfFindController, type MountedPdfTextLayer } from "./pdf-text-find";
+import { mountPdfViewer, type MountedPdfViewer } from "./pdf-viewer";
 import { showContextMenu } from "../graph/context-menu";
 import { eventBus } from "../core/events";
 import { openInkSnapshot } from "../ink/persistence";
 import { mountInkSnapshotReader, type InkReaderFocus } from "../ink/snapshot-reader";
 import "./reader.css";
-
-GlobalWorkerOptions.workerSrc = workerUrl;
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text = ""): HTMLElementTagNameMap[K] {
   const result = document.createElement(tag);
@@ -63,6 +57,15 @@ export interface ReaderOpenOptions {
   inkFocus?: InkReaderFocus;
 }
 
+interface ErrataPdfReferenceTarget {
+  pdfArtifactId: string;
+  pdfPageIndex: number;
+  candidatePages?: number[];
+  backlinkNote?: string;
+  focusExcerpt?: string;
+  title?: string;
+}
+
 export class ArtifactReader {
   private generation = 0;
   private disposeDocument: (() => void) | undefined;
@@ -73,10 +76,124 @@ export class ArtifactReader {
   /** Last successfully opened artifact — kept across close() for 并排阅读 restore. */
   private lastOpen: { id: string; title: string; options: ReaderOpenOptions } | undefined;
   private overlayCloseHandler: (() => void) | undefined;
+  private mainPane: HTMLElement | null = null;
+  private pdfRefGeneration = 0;
+  private pdfRefPane: HTMLElement | null = null;
+  private pdfRefViewer: MountedPdfViewer | null = null;
+  private pdfRefCloseListeners = new Set<() => void>();
+
   constructor(private host: HTMLElement) {}
 
   setOverlayCloseHandler(handler: (() => void) | undefined): void {
     this.overlayCloseHandler = handler;
+  }
+
+  private scrollContainer(): HTMLElement {
+    return this.host.classList.contains("has-errata-pdf-pane") && this.mainPane
+      ? this.mainPane
+      : this.host;
+  }
+
+  private isPdfReferenceOpen(): boolean {
+    return this.pdfRefPane !== null;
+  }
+
+  private currentPdfReferencePageIndex(): number | null {
+    return this.pdfRefViewer ? Math.max(0, this.pdfRefViewer.currentPage() - 1) : null;
+  }
+
+  private closeErrataPdfReference(): void {
+    this.pdfRefGeneration++;
+    this.pdfRefViewer?.dispose();
+    this.pdfRefViewer = null;
+    this.pdfRefPane?.remove();
+    this.pdfRefPane = null;
+    this.host.classList.remove("has-errata-pdf-pane");
+    const listeners = [...this.pdfRefCloseListeners];
+    this.pdfRefCloseListeners.clear();
+    listeners.forEach((fn) => fn());
+  }
+
+  private async openErrataPdfReference(
+    target: ErrataPdfReferenceTarget,
+    parentGeneration: number,
+    onClosed?: () => void,
+  ): Promise<boolean> {
+    if (parentGeneration !== this.generation) return false;
+    if (onClosed) this.pdfRefCloseListeners.add(onClosed);
+
+    // If the same PDF is already mounted in the reference pane, just jump to the requested page.
+    if (this.pdfRefPane && this.pdfRefViewer && this.pdfRefViewer.artifactId === target.pdfArtifactId) {
+      await this.pdfRefViewer.jumpToPage(target.pdfPageIndex, {
+        candidatePages: target.candidatePages,
+        focusExcerpt: target.focusExcerpt,
+        backlinkNote: target.backlinkNote,
+        pulse: true,
+      });
+      return true;
+    }
+
+    const refGen = ++this.pdfRefGeneration;
+    this.pdfRefViewer?.dispose();
+    this.pdfRefViewer = null;
+    this.pdfRefPane?.remove();
+
+    const pane = element("aside");
+    pane.className = "errata-pdf-reference-pane";
+    pane.setAttribute("aria-label", "原书 PDF 对照面板");
+    const loadingLine = element("p", "正在加载原书 PDF 对照页…");
+    loadingLine.className = "errata-pdf-ref-loading";
+    pane.append(loadingLine);
+
+    this.pdfRefPane = pane;
+    this.host.classList.add("has-errata-pdf-pane");
+    this.host.append(pane);
+
+    try {
+      const pdfInfo = await contentInfo(target.pdfArtifactId);
+      if (parentGeneration !== this.generation || refGen !== this.pdfRefGeneration) return false;
+      if (pdfInfo.media_type !== "application/pdf") {
+        throw new Error(`关联来源不是 PDF（${pdfInfo.media_type}）`);
+      }
+      loadingLine.remove();
+      const mounted = await mountPdfViewer(
+        pane,
+        pdfInfo,
+        () => parentGeneration !== this.generation || refGen !== this.pdfRefGeneration,
+        {
+          pdfPageIndex: target.pdfPageIndex,
+          candidatePages: target.candidatePages,
+          backlinkNote: target.backlinkNote,
+          focusExcerpt: target.focusExcerpt,
+          referenceMode: true,
+          referenceTitle: target.title ?? `对照 PDF 第 ${target.pdfPageIndex + 1} 页`,
+          onCloseReference: () => this.closeErrataPdfReference(),
+        },
+      );
+      if (!mounted || parentGeneration !== this.generation || refGen !== this.pdfRefGeneration) {
+        mounted?.dispose();
+        return false;
+      }
+      this.pdfRefViewer = mounted;
+      return true;
+    } catch (error) {
+      if (parentGeneration === this.generation && refGen === this.pdfRefGeneration && this.pdfRefPane === pane) {
+        pane.replaceChildren();
+        const header = element("div");
+        header.className = "errata-pdf-ref-header";
+        const heading = element("strong", "原书 PDF 对照");
+        heading.className = "errata-pdf-ref-title";
+        const closeBtn = element("button", "✕ 关闭对照");
+        closeBtn.type = "button";
+        closeBtn.className = "errata-pdf-ref-close";
+        closeBtn.onclick = () => this.closeErrataPdfReference();
+        header.append(heading, closeBtn);
+        const msg = element("p", `无法加载 PDF 原页：${error instanceof Error ? error.message : String(error)}`);
+        msg.className = "errata-pdf-ref-error";
+        pane.append(header, msg);
+      }
+      return false;
+    }
   }
 
   private revokeImages(): void {
@@ -86,10 +203,12 @@ export class ArtifactReader {
 
   close(): void {
     this.generation++;
+    this.closeErrataPdfReference();
     this.disposeDocument?.();
     this.disposeDocument = undefined;
     this.revokeImages();
     this.host.replaceChildren();
+    this.mainPane = null;
     this.inkOpen = false;
     this.state = "empty";
     this.error = undefined;
@@ -113,6 +232,9 @@ export class ArtifactReader {
     eventBus.emit("reader-opened");
     const { focus, patch, conversionId } = options;
     const generation = this.generation;
+    const mainPane = element("div");
+    mainPane.className = "reader-main-pane";
+    this.mainPane = mainPane;
     const heading = element("h2", title);
     const status = element("p", "正在读取…");
     if (this.overlayCloseHandler && this.host.parentElement?.id !== "ink-split-reader") {
@@ -123,14 +245,15 @@ export class ArtifactReader {
       closeBtn.className = "reader-close-overlay-btn";
       closeBtn.onclick = () => this.overlayCloseHandler?.();
       headerRow.append(heading, closeBtn);
-      this.host.append(headerRow, status);
+      mainPane.append(headerRow, status);
     } else {
-      this.host.append(heading, status);
+      mainPane.append(heading, status);
     }
+    this.host.append(mainPane);
     try {
       if (isCanonicalMarkdownId(id)) {
         // Logical canonical id: a stitched read-only view, never content_info.
-        await this.canonical(id, title, generation, focus);
+        await this.canonical(id, title, generation, focus, mainPane);
         if (generation !== this.generation) return false;
         status.remove();
         this.state = "ready";
@@ -143,26 +266,26 @@ export class ArtifactReader {
         const snapshot = await openInkSnapshot(info.ink_snapshot_id);
         if (generation !== this.generation) return false;
         if (!snapshot || snapshot.artifact_id !== id) throw new Error("Ink 快照与所选 Artifact 不一致");
-        this.disposeDocument = mountInkSnapshotReader(this.host,snapshot,options.inkFocus);
+        this.disposeDocument = mountInkSnapshotReader(mainPane, snapshot, options.inkFocus);
         this.inkOpen = true;
       } else if (info.media_type === "application/pdf") {
-        await this.pdf(info, generation, options);
+        await this.pdf(info, generation, options, mainPane);
       } else if (info.media_type === "text/markdown") {
-        await this.markdown(info, title, generation, focus, patch, conversionId);
+        await this.markdown(info, title, generation, mainPane, focus, patch, conversionId);
       } else if (info.media_type === "application/json" || info.media_type.startsWith("text/")) {
         const bytes = await readSmallFile(info);
         if (generation !== this.generation) return false;
         const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
         const pre = element("pre", info.media_type === "application/json" ? JSON.stringify(JSON.parse(text), null, 2) : text);
         pre.className = "reader-text";
-        this.host.append(pre);
+        mainPane.append(pre);
       } else if (["image/png", "image/jpeg", "image/webp", "image/gif"].includes(info.media_type)) {
         const bytes = await readSmallFile(info);
         if (generation !== this.generation) return false;
         const img = element("img");
         img.src = this.blobUrl(bytes, info.media_type);
         img.alt = title;
-        this.host.append(img);
+        mainPane.append(img);
       } else {
         throw new Error("当前不支持此文件类型：" + info.media_type);
       }
@@ -188,696 +311,38 @@ export class ArtifactReader {
     return url;
   }
 
-  private async pdf(info: ContentInfo, generation: number, pdfOptions: ReaderOpenOptions = {}): Promise<void> {
-    const requestedPageIndex = pdfOptions.pdfPageIndex;
-    const initial = await readRange(info.artifact_id, 0, Math.min(65536, info.byte_size));
-    if (generation !== this.generation) return;
-    const failure = element("p");
-    let firstFailure: Error | undefined;
-    let rejectRead!: (error: Error) => void;
-    const readFailure = new Promise<never>((_, reject) => { rejectRead = reject; });
-    // Failures can also occur after loading.promise has resolved.
-    void readFailure.catch(() => {});
-    const transport = new ArtifactPdfTransport(info.byte_size, initial,
-      (begin, length) => readRange(info.artifact_id, begin, length),
-      error => {
-        if (generation !== this.generation || firstFailure) return;
-        firstFailure = error;
-        this.state = "error";
-        this.error = error.message;
-        failure.textContent = error.message;
-        console.error("PDF range read failed", { artifactId: info.artifact_id, error });
-        rejectRead(error);
-        dispose();
-      });
-    const loading = getDocument({
-      range: transport, disableAutoFetch: true, disableStream: true,
-      cMapUrl: "/pdf-assets/cmaps/", cMapPacked: true,
-      standardFontDataUrl: "/pdf-assets/standard_fonts/",
-      wasmUrl: "/pdf-assets/wasm/",
-    });
-    let destroyed = false;
-    const dispose = () => {
-      transport.abort();
-      if (destroyed) return;
-      destroyed = true;
-      void loading.destroy().catch(error => console.warn("PDF cleanup failed", error));
-    };
-    this.disposeDocument = dispose;
-    this.host.append(failure);
-    let pdf: PDFDocumentProxy;
-    try {
-      pdf = await Promise.race([loading.promise, readFailure]);
-    } catch (error) {
-      dispose();
-      failure.remove();
-      throw firstFailure ?? error;
-    }
-    if (generation !== this.generation || transport.stopped) return;
-    const controls = element("div");
-    controls.className = "reader-controls";
-    const previous = element("button", "上一页");
-    const next = element("button", "下一页");
-    const pageInput = element("input");
-    pageInput.type = "number"; pageInput.min = "1"; pageInput.max = String(pdf.numPages); pageInput.value = "1";
-    pageInput.setAttribute("aria-label", "PDF 页码");
-    // N3.0 zoom: fit width by default, presets, ±, Ctrl/Cmd +/-/0, Ctrl+wheel and pinch.
-    const outlineToggle = element("button", "目录");
-    outlineToggle.title = "显示或隐藏目录";
-    const viewModeKey = "mathscape:pdf-view-mode";
-    let viewMode: "continuous" | "single" = "continuous";
-    try {
-      if (localStorage.getItem(viewModeKey) === "single") viewMode = "single";
-    } catch { /* Optional preference. */ }
-    const viewModeToggle = element("button", viewMode === "continuous" ? "连续滚动" : "单页视图");
-    viewModeToggle.type = "button";
-    viewModeToggle.title = "切换连续纵向滚动或单页翻页模式";
-    viewModeToggle.setAttribute("aria-pressed", String(viewMode === "continuous"));
-    const zoomOut = element("button", "−"); zoomOut.setAttribute("aria-label", "缩小"); zoomOut.title = "缩小（Ctrl/⌘ −）";
-    const zoomIn = element("button", "＋"); zoomIn.setAttribute("aria-label", "放大"); zoomIn.title = "放大（Ctrl/⌘ +）";
-    const zoom = element("select");
-    zoom.setAttribute("aria-label", "缩放");
-    zoom.title = "Ctrl/⌘ 0 恢复适合宽度；按住 Ctrl/⌘ 滚动或双指捏合可缩放";
-
-    let show!: (number: number, opts?: { scrollToTop?: boolean }) => Promise<void>;
-    let refreshAllHighlights!: () => HTMLElement | null;
-    const findController = new PdfFindController(
-      pdf,
-      (match) => {
-        if (!match) {
-          refreshAllHighlights();
-          return;
-        }
-        void show(match.pageNumber, { scrollToTop: viewMode === "single" }).then(() => {
-          const hitEl = refreshAllHighlights();
-          hitEl?.scrollIntoView({ behavior: "smooth", block: "center" });
-        });
+  private async pdf(
+    info: ContentInfo,
+    generation: number,
+    pdfOptions: ReaderOpenOptions = {},
+    container: HTMLElement = this.host,
+  ): Promise<void> {
+    const mounted = await mountPdfViewer(
+      container,
+      info,
+      () => generation !== this.generation,
+      {
+        pdfPageIndex: pdfOptions.pdfPageIndex,
+        candidatePages: pdfOptions.candidatePages,
+        backlinkNote: pdfOptions.backlinkNote,
+        focusExcerpt: pdfOptions.focusExcerpt,
+        returnTo: pdfOptions.returnTo,
+        onReturnTo: (target) => {
+          void this.open(target.id, target.title, target.options as ReaderOpenOptions | undefined);
+        },
+        onError: (error) => {
+          if (generation !== this.generation) return;
+          this.state = "error";
+          this.error = error.message;
+        },
       },
-      () => { refreshAllHighlights(); },
     );
-
-    controls.append(
-      previous,
-      pageInput,
-      element("span", "/ " + pdf.numPages + " 页"),
-      next,
-      outlineToggle,
-      viewModeToggle,
-      findController.toggleButton,
-      zoomOut,
-      zoom,
-      zoomIn,
-    );
-    if (pdfOptions.returnTo) {
-      const target = pdfOptions.returnTo;
-      const back = element("button", `← ${target.label ?? "返回 Markdown 原文"}`);
-      back.type = "button";
-      back.className = "reader-return-button";
-      back.onclick = () => void this.open(target.id, target.title, target.options);
-      controls.prepend(back);
+    if (!mounted) return;
+    if (generation !== this.generation) {
+      mounted.dispose();
+      return;
     }
-    const candidateChipButtons: Array<{ pageNumber: number; button: HTMLButtonElement }> = [];
-    if (pdfOptions.candidatePages && pdfOptions.candidatePages.length > 1) {
-      const group = element("span");
-      group.className = "reader-candidate-pages";
-      group.append(element("span", "关联页："));
-      for (const idx of pdfOptions.candidatePages) {
-        const targetNum = idx + 1;
-        if (targetNum < 1 || targetNum > pdf.numPages) continue;
-        const chip = element("button", `第 ${targetNum} 页`);
-        chip.type = "button";
-        chip.className = "reader-page-chip";
-        chip.onclick = () => void show(targetNum);
-        candidateChipButtons.push({ pageNumber: targetNum, button: chip });
-        group.append(chip);
-      }
-      if (candidateChipButtons.length > 1) controls.append(group);
-    }
-    const layout = element("div"); layout.className = "pdf-layout";
-    const outline = element("nav"); outline.className = "pdf-outline"; outline.setAttribute("aria-label", "PDF 目录");
-    const viewport = element("div"); viewport.className = "pdf-viewport";
-    viewport.dataset.viewMode = viewMode;
-    layout.append(outline, viewport);
-    if (pdfOptions.backlinkNote) {
-      const note = element("p", pdfOptions.backlinkNote);
-      note.className = "reader-backlink-note";
-      this.host.append(controls, findController.bar, note, layout);
-    } else {
-      this.host.append(controls, findController.bar, layout);
-    }
-    const outlineKey = "mathscape:pdf-outline";
-    const setOutline = (visibleOutline: boolean): void => {
-      outline.hidden = !visibleOutline;
-      outlineToggle.setAttribute("aria-pressed", String(visibleOutline));
-      try { localStorage.setItem(outlineKey, visibleOutline ? "1" : "0"); } catch { /* Optional preference. */ }
-    };
-    let outlineVisible = true;
-    try { outlineVisible = localStorage.getItem(outlineKey) !== "0"; } catch { /* Optional preference. */ }
-    setOutline(outlineVisible);
-    outlineToggle.onclick = () => setOutline(outline.hidden === true);
-
-    let pageNumber = Number.isInteger(requestedPageIndex)
-      ? Math.min(Math.max((requestedPageIndex as number) + 1, 1), pdf.numPages)
-      : 1;
-    const backlinkLandingPage = requestedPageIndex !== undefined ? pageNumber : null;
-    const backlinkPhrase = requestedPageIndex !== undefined ? extractAnchorPhrase(pdfOptions.focusExcerpt) : null;
-    let backlinkTextScrolled = false;
-    let backlinkPulseTimer: ReturnType<typeof setTimeout> | undefined;
-
-    interface PageSlotState {
-      pageNumber: number;
-      baseSize: { width: number; height: number };
-      slotEl: HTMLDivElement;
-      shellEl: HTMLDivElement;
-      mountEpoch: number;
-      pageProxy?: PDFPageProxy;
-      renderTask?: ReturnType<PDFPageProxy["render"]>;
-      textLayer?: MountedPdfTextLayer | null;
-      textLayerPending?: Promise<MountedPdfTextLayer | null>;
-      renderedScale?: number;
-    }
-
-    let renderVersion = 0;
-    let mode: PdfZoomMode = loadZoom(info.artifact_id);
-    let scale = 1;
-    let renderTimer: ReturnType<typeof setTimeout> | undefined;
-    let scrollSyncRaf = 0;
-    let programmaticScroll: { page: number; top: number } | null = null;
-
-    const available = () => ({
-      width: Math.max(1, viewport.clientWidth - 2),
-      height: Math.max(200, viewport.clientHeight || window.innerHeight - viewport.getBoundingClientRect().top - 24),
-    });
-
-    // Fetch the initial target page once to establish accurate base page dimensions.
-    const firstLoadedPage = await pdf.getPage(pageNumber);
-    if (generation !== this.generation || transport.stopped) return;
-    const firstBaseView = firstLoadedPage.getViewport({ scale: 1 });
-    let pageSize = { width: firstBaseView.width, height: firstBaseView.height };
-
-    const slots: PageSlotState[] = [];
-    for (let p = 1; p <= pdf.numPages; p++) {
-      const slotEl = element("div");
-      slotEl.className = "pdf-page-slot";
-      slotEl.dataset.pageNumber = String(p);
-      const shellEl = element("div");
-      shellEl.className = "pdf-page-shell";
-      slotEl.append(shellEl);
-      viewport.append(slotEl);
-      slots.push({
-        pageNumber: p,
-        baseSize: { ...pageSize },
-        slotEl,
-        shellEl,
-        mountEpoch: 0,
-        pageProxy: p === pageNumber ? firstLoadedPage : undefined,
-      });
-    }
-
-    const unmountSlot = (slot: PageSlotState): void => {
-      slot.mountEpoch += 1;
-      slot.renderTask?.cancel();
-      slot.renderTask = undefined;
-      slot.textLayerPending = undefined;
-      slot.textLayer?.dispose();
-      slot.textLayer = null;
-      slot.renderedScale = undefined;
-      slot.shellEl.replaceChildren();
-    };
-
-    const refreshSlotHighlights = (slot: PageSlotState): HTMLElement | null => {
-      if (!slot.textLayer) return null;
-      const focusEl = slot.textLayer.applyHighlights({
-        searchQuery: findController.currentQuery(),
-        activeMatchIndexOnPage: findController.activeMatchForPage(slot.pageNumber),
-        backlinkPhrase: backlinkLandingPage === slot.pageNumber ? backlinkPhrase : null,
-      });
-      if (
-        backlinkLandingPage === slot.pageNumber &&
-        backlinkPhrase &&
-        focusEl &&
-        !backlinkTextScrolled &&
-        !findController.isOpen()
-      ) {
-        backlinkTextScrolled = true;
-        focusEl.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-      return focusEl;
-    };
-
-    refreshAllHighlights = (): HTMLElement | null => {
-      let activeFocusEl: HTMLElement | null = null;
-      for (const slot of slots) {
-        const hit = refreshSlotHighlights(slot);
-        if (hit && findController.activeMatchForPage(slot.pageNumber) !== null) {
-          activeFocusEl = hit;
-        }
-      }
-      return activeFocusEl;
-    };
-
-    const updateActivePageUI = (num: number): void => {
-      pageNumber = num;
-      pageInput.value = String(num);
-      previous.disabled = num === 1;
-      next.disabled = num === pdf.numPages;
-      for (const item of candidateChipButtons) {
-        item.button.setAttribute("aria-pressed", String(item.pageNumber === num));
-      }
-      for (const slot of slots) {
-        slot.slotEl.classList.toggle("is-active-page", slot.pageNumber === num);
-      }
-      pageSize = slots[num - 1]?.baseSize ?? pageSize;
-    };
-
-    const syncSlotDimensions = (): void => {
-      viewport.dataset.viewMode = viewMode;
-      for (const slot of slots) {
-        const visibleInMode = viewMode === "continuous" || slot.pageNumber === pageNumber;
-        slot.slotEl.hidden = !visibleInMode;
-        if (!visibleInMode) {
-          unmountSlot(slot);
-          continue;
-        }
-        const w = slot.baseSize.width * scale;
-        const h = slot.baseSize.height * scale;
-        slot.shellEl.style.width = w + "px";
-        slot.shellEl.style.height = h + "px";
-        slot.shellEl.style.setProperty("--total-scale-factor", String(scale));
-        const canvas = slot.shellEl.querySelector<HTMLCanvasElement>("canvas");
-        if (canvas) {
-          canvas.style.width = w + "px";
-          canvas.style.height = h + "px";
-        }
-        if (slot.textLayer && slot.pageProxy) {
-          slot.textLayer.updateViewport(slot.pageProxy.getViewport({ scale }));
-        }
-      }
-    };
-
-    const presetValues = PDF_ZOOM_STEPS.filter(step => step >= 0.5 && step <= 3);
-    const renderZoomControl = (): void => {
-      const value = mode.kind === "scale" ? "s:" + mode.value : mode.kind;
-      const options: Array<[string, string]> = [["fit-width", zoomLabel({ kind: "fit-width" }, mode.kind === "fit-width" ? scale : resolveZoom({ kind: "fit-width" }, pageSize, available()))],
-        ["fit-page", zoomLabel({ kind: "fit-page" }, mode.kind === "fit-page" ? scale : resolveZoom({ kind: "fit-page" }, pageSize, available()))],
-        ...presetValues.map(step => ["s:" + step, Math.round(step * 100) + "%"] as [string, string])];
-      if (mode.kind === "scale" && !presetValues.includes(mode.value)) options.push([value, Math.round(mode.value * 100) + "%"]);
-      zoom.replaceChildren(...options.map(([key, label]) => new Option(label, key)));
-      zoom.value = value;
-      zoomOut.disabled = scale <= PDF_ZOOM_MIN + 1e-3;
-      zoomIn.disabled = scale >= PDF_ZOOM_MAX - 1e-3;
-      viewport.dataset.scale = String(scale);
-      viewport.dataset.zoomMode = mode.kind;
-    };
-
-    const ensureSlotTextLayer = async (
-      slot: PageSlotState,
-      view: ReturnType<PDFPageProxy["getViewport"]>,
-      version: number,
-    ): Promise<void> => {
-      if (slot.textLayer) {
-        slot.textLayer.updateViewport(view);
-        return;
-      }
-      if (!slot.pageProxy) return;
-      if (!slot.textLayerPending) {
-        const epoch = slot.mountEpoch;
-        const p = mountPdfTextLayer(
-          slot.pageProxy,
-          view,
-          slot.shellEl,
-          () =>
-            transport.stopped ||
-            generation !== this.generation ||
-            slot.mountEpoch !== epoch ||
-            Boolean(slot.slotEl.hidden),
-        ).finally(() => {
-          if (slot.textLayerPending === p) slot.textLayerPending = undefined;
-        });
-        slot.textLayerPending = p;
-      }
-      const mounted = await slot.textLayerPending;
-      if (!mounted) return;
-      if (transport.stopped || generation !== this.generation || Boolean(slot.slotEl.hidden)) {
-        mounted.dispose();
-        return;
-      }
-      if (!slot.textLayer) {
-        slot.textLayer = mounted;
-      } else if (slot.textLayer !== mounted) {
-        mounted.dispose();
-      }
-      if (version === renderVersion) {
-        slot.textLayer.updateViewport(view);
-      }
-    };
-
-    const renderSlotAtScale = async (slot: PageSlotState, version: number, targetScale: number): Promise<void> => {
-      if (transport.stopped || version !== renderVersion || generation !== this.generation) return;
-      if (slot.slotEl.hidden) return;
-      if (
-        slot.renderedScale !== undefined &&
-        Math.abs(slot.renderedScale - targetScale) < 1e-4 &&
-        slot.shellEl.querySelector("canvas") !== null
-      ) {
-        if (slot.pageProxy) {
-          await ensureSlotTextLayer(slot, slot.pageProxy.getViewport({ scale: targetScale }), version);
-        }
-        refreshSlotHighlights(slot);
-        return;
-      }
-
-      slot.renderTask?.cancel();
-      try {
-        if (!slot.pageProxy) {
-          slot.pageProxy = await pdf.getPage(slot.pageNumber);
-        }
-        if (transport.stopped || version !== renderVersion || generation !== this.generation || slot.slotEl.hidden) return;
-        const rawBase = slot.pageProxy.getViewport({ scale: 1 });
-        if (Math.abs(rawBase.width - slot.baseSize.width) > 0.5 || Math.abs(rawBase.height - slot.baseSize.height) > 0.5) {
-          slot.baseSize = { width: rawBase.width, height: rawBase.height };
-          slot.shellEl.style.width = (rawBase.width * targetScale) + "px";
-          slot.shellEl.style.height = (rawBase.height * targetScale) + "px";
-        }
-
-        const view = slot.pageProxy.getViewport({ scale: targetScale });
-        const canvas = element("canvas");
-        const ratio = canvasRatio(window.devicePixelRatio || 1, view.width, view.height);
-        canvas.width = Math.ceil(view.width * ratio);
-        canvas.height = Math.ceil(view.height * ratio);
-        canvas.style.width = view.width + "px";
-        canvas.style.height = view.height + "px";
-        canvas.dataset.ratio = String(ratio);
-
-        const existingCanvas = slot.shellEl.querySelector("canvas");
-        if (!existingCanvas) {
-          slot.shellEl.prepend(canvas);
-        }
-        const task = slot.pageProxy.render({ canvas, viewport: view, transform: [ratio, 0, 0, ratio, 0, 0] });
-        slot.renderTask = task;
-        await task.promise;
-        if (transport.stopped || version !== renderVersion || generation !== this.generation || slot.slotEl.hidden) return;
-        if (existingCanvas && existingCanvas !== canvas) {
-          existingCanvas.replaceWith(canvas);
-        }
-        slot.renderedScale = targetScale;
-
-        await ensureSlotTextLayer(slot, view, version);
-        refreshSlotHighlights(slot);
-      } catch (error) {
-        if (
-          !firstFailure &&
-          !transport.stopped &&
-          version === renderVersion &&
-          generation === this.generation &&
-          !(error instanceof Error && error.name === "RenderingCancelledException")
-        ) {
-          failure.textContent = String(error);
-        }
-      }
-    };
-
-    const computeVisibleRange = (): { first: number; last: number } => {
-      if (viewMode === "single") return { first: pageNumber, last: pageNumber };
-      const vTop = viewport.scrollTop;
-      const vHeight = Math.max(240, viewport.clientHeight || 600);
-      const vBottom = vTop + vHeight;
-      let first = 0;
-      let last = 0;
-      for (const slot of slots) {
-        if (slot.slotEl.hidden) continue;
-        const top = slot.slotEl.offsetTop;
-        const bottom = top + slot.slotEl.offsetHeight;
-        if (bottom >= vTop && top <= vBottom) {
-          if (first === 0) first = slot.pageNumber;
-          last = slot.pageNumber;
-        }
-      }
-      if (first === 0) return { first: pageNumber, last: pageNumber };
-      return { first, last };
-    };
-
-    const syncVirtualWindow = async (version: number): Promise<void> => {
-      if (transport.stopped || version !== renderVersion || generation !== this.generation) return;
-      const targetScale = scale;
-      if (viewMode === "single") {
-        await renderSlotAtScale(slots[pageNumber - 1], version, targetScale);
-        return;
-      }
-      const { first, last } = computeVisibleRange();
-      const mountStart = Math.max(1, Math.min(first - 1, pageNumber));
-      const mountEnd = Math.min(pdf.numPages, Math.max(last + 1, pageNumber));
-      const keepStart = Math.max(1, first - 2);
-      const keepEnd = Math.min(pdf.numPages, last + 2);
-
-      for (const slot of slots) {
-        if (slot.pageNumber !== pageNumber && (slot.pageNumber < keepStart || slot.pageNumber > keepEnd)) {
-          unmountSlot(slot);
-        }
-      }
-
-      // Render the active page first so tests and the user's primary focus settle fastest.
-      const order: PageSlotState[] = [slots[pageNumber - 1]];
-      for (let p = mountStart; p <= mountEnd; p++) {
-        if (p !== pageNumber) order.push(slots[p - 1]);
-      }
-      await Promise.all(order.map((slot) => renderSlotAtScale(slot, version, targetScale)));
-    };
-
-    /** Re-scale immediately (stretching mounted bitmaps around the pointer
-     * anchor), then re-render crisply once zoom settles. */
-    const applyZoom = (next: PdfZoomMode, anchor?: { x: number; y: number }, persist = true): void => {
-      mode = next;
-      if (persist) saveZoom(info.artifact_id, mode);
-      const nextScale = resolveZoom(mode, pageSize, available());
-      if (Math.abs(nextScale - scale) < 1e-4) {
-        renderZoomControl();
-        return;
-      }
-      const x = anchor?.x ?? viewport.clientWidth / 2;
-      const y = anchor?.y ?? viewport.clientHeight / 2;
-      const targetScrollY = viewport.scrollTop + y;
-      let anchorSlot = slots[pageNumber - 1];
-      if (viewMode === "continuous") {
-        for (const slot of slots) {
-          const top = slot.slotEl.offsetTop;
-          const bottom = top + slot.slotEl.offsetHeight;
-          if (targetScrollY >= top && targetScrollY <= bottom) {
-            anchorSlot = slot;
-            break;
-          }
-        }
-      }
-      const slotTopBefore = anchorSlot.slotEl.offsetTop;
-      const slotHeightBefore = Math.max(1, anchorSlot.baseSize.height * scale);
-      const fracY = ((viewport.scrollTop + y) - slotTopBefore) / slotHeightBefore;
-      const beforeWidth = Math.max(1, anchorSlot.baseSize.width * scale);
-      const afterWidth = Math.max(1, anchorSlot.baseSize.width * nextScale);
-
-      scale = nextScale;
-      syncSlotDimensions();
-
-      const slotTopAfter = anchorSlot.slotEl.offsetTop;
-      const slotHeightAfter = Math.max(1, anchorSlot.baseSize.height * nextScale);
-      const nextLeft = anchoredScroll(viewport.scrollLeft, x, beforeWidth, afterWidth);
-      const nextTop = viewMode === "continuous"
-        ? Math.max(0, slotTopAfter + fracY * slotHeightAfter - y)
-        : anchoredScroll(viewport.scrollTop, y, slotHeightBefore, slotHeightAfter);
-      programmaticScroll = { page: pageNumber, top: nextTop };
-      viewport.scrollLeft = nextLeft;
-      viewport.scrollTop = nextTop;
-
-      renderZoomControl();
-      const version = ++renderVersion;
-      if (renderTimer) clearTimeout(renderTimer);
-      renderTimer = setTimeout(() => {
-        renderTimer = undefined;
-        void syncVirtualWindow(version);
-      }, 120);
-    };
-
-    show = async (number: number, opts?: { scrollToTop?: boolean }): Promise<void> => {
-      if (transport.stopped) return;
-      if (!Number.isInteger(number) || number < 1 || number > pdf.numPages) {
-        pageInput.value = String(pageNumber);
-        return;
-      }
-      if (renderTimer) {
-        clearTimeout(renderTimer);
-        renderTimer = undefined;
-      }
-      updateActivePageUI(number);
-      scale = resolveZoom(mode, pageSize, available());
-      syncSlotDimensions();
-      renderZoomControl();
-
-      if (viewMode === "continuous") {
-        const targetTop = slots[number - 1].slotEl.offsetTop;
-        viewport.scrollTop = targetTop;
-        programmaticScroll = { page: number, top: viewport.scrollTop };
-      } else if (opts?.scrollToTop !== false) {
-        viewport.scrollTop = 0;
-        programmaticScroll = { page: number, top: 0 };
-      }
-      await syncVirtualWindow(++renderVersion);
-    };
-
-    viewModeToggle.onclick = () => {
-      viewMode = viewMode === "continuous" ? "single" : "continuous";
-      viewModeToggle.textContent = viewMode === "continuous" ? "连续滚动" : "单页视图";
-      viewModeToggle.setAttribute("aria-pressed", String(viewMode === "continuous"));
-      try { localStorage.setItem(viewModeKey, viewMode); } catch { /* Optional preference. */ }
-      void show(pageNumber);
-    };
-
-    const onScroll = (): void => {
-      if (viewMode !== "continuous" || transport.stopped) return;
-      if (scrollSyncRaf) return;
-      scrollSyncRaf = requestAnimationFrame(() => {
-        scrollSyncRaf = 0;
-        if (transport.stopped || generation !== this.generation || viewMode !== "continuous") return;
-        if (programmaticScroll && Math.abs(viewport.scrollTop - programmaticScroll.top) <= 3) {
-          void syncVirtualWindow(renderVersion);
-          return;
-        }
-        programmaticScroll = null;
-        const probeY = viewport.scrollTop + Math.max(80, viewport.clientHeight * 0.36);
-        let bestPage = pageNumber;
-        for (const slot of slots) {
-          const top = slot.slotEl.offsetTop;
-          const bottom = top + slot.slotEl.offsetHeight;
-          if (probeY >= top && probeY <= bottom) {
-            bestPage = slot.pageNumber;
-            break;
-          }
-          if (top <= probeY) bestPage = slot.pageNumber;
-        }
-        if (bestPage !== pageNumber) {
-          updateActivePageUI(bestPage);
-        }
-        void syncVirtualWindow(renderVersion);
-      });
-    };
-    viewport.addEventListener("scroll", onScroll, { passive: true });
-
-    const oldDispose = this.disposeDocument;
-    const cleanups: Array<() => void> = [
-      () => {
-        if (scrollSyncRaf) cancelAnimationFrame(scrollSyncRaf);
-        if (backlinkPulseTimer) clearTimeout(backlinkPulseTimer);
-        findController.dispose();
-        slots.forEach(unmountSlot);
-      },
-    ];
-    this.disposeDocument = () => {
-      renderVersion++;
-      if (renderTimer) clearTimeout(renderTimer);
-      cleanups.forEach(cleanup => cleanup());
-      oldDispose?.();
-    };
-
-    previous.onclick = () => void show(pageNumber - 1);
-    next.onclick = () => void show(pageNumber + 1);
-    pageInput.onchange = () => void show(pageInput.valueAsNumber);
-    zoom.onchange = () => {
-      const value = zoom.value;
-      applyZoom(value === "fit-width" || value === "fit-page" ? { kind: value } : { kind: "scale", value: clampZoom(Number(value.slice(2))) });
-    };
-    const stepBy = (direction: 1 | -1, anchor?: { x: number; y: number }) => applyZoom({ kind: "scale", value: stepZoom(scale, direction) }, anchor);
-    zoomIn.onclick = () => stepBy(1);
-    zoomOut.onclick = () => stepBy(-1);
-    const visible = () => viewport.isConnected && viewport.getClientRects().length > 0;
-    const isEditableFocus = (el: Element | null) =>
-      Boolean(el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || (el as HTMLElement).isContentEditable));
-    const onKey = (event: KeyboardEvent): void => {
-      // M1: the split 手稿 pane handles its own Ctrl/⌘ zoom first (capture phase).
-      if (event.defaultPrevented || !visible()) return;
-      if ((event.ctrlKey || event.metaKey) && !event.altKey) {
-        if (event.key === "+" || event.key === "=") { stepBy(1); event.preventDefault(); return; }
-        if (event.key === "-" || event.key === "_") { stepBy(-1); event.preventDefault(); return; }
-        if (event.key === "0") { applyZoom(PDF_ZOOM_DEFAULT); event.preventDefault(); return; }
-        if (event.key.toLowerCase() === "f") { findController.open(); event.preventDefault(); return; }
-        return;
-      }
-      if (event.ctrlKey || event.metaKey || event.altKey || isEditableFocus(document.activeElement)) return;
-      if (event.key === "PageDown" || event.key === "ArrowRight") {
-        if (pageNumber < pdf.numPages) {
-          event.preventDefault();
-          void show(pageNumber + 1);
-        }
-      } else if (event.key === "PageUp" || event.key === "ArrowLeft") {
-        if (pageNumber > 1) {
-          event.preventDefault();
-          void show(pageNumber - 1);
-        }
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    cleanups.push(() => window.removeEventListener("keydown", onKey));
-    const pointAt = (clientX: number, clientY: number) => {
-      const rect = viewport.getBoundingClientRect();
-      return { x: clientX - rect.left, y: clientY - rect.top };
-    };
-    viewport.addEventListener("wheel", event => {
-      // Chromium and trackpad pinch both report Ctrl+wheel.
-      if (!(event.ctrlKey || event.metaKey)) return;
-      event.preventDefault();
-      const delta = event.deltaY * (event.deltaMode === 1 ? 33 : event.deltaMode === 2 ? 400 : 1);
-      applyZoom({ kind: "scale", value: clampZoom(scale * Math.exp(-delta * 0.0015)) }, pointAt(event.clientX, event.clientY));
-    }, { passive: false });
-    // WebKit (the macOS app) reports trackpad pinch as gesture events.
-    let gestureStart = 1;
-    type Gesture = Event & { scale: number; clientX: number; clientY: number };
-    viewport.addEventListener("gesturestart", event => { event.preventDefault(); gestureStart = scale; });
-    viewport.addEventListener("gesturechange", event => {
-      event.preventDefault();
-      const gesture = event as Gesture;
-      applyZoom({ kind: "scale", value: clampZoom(gestureStart * gesture.scale) }, pointAt(gesture.clientX, gesture.clientY));
-    });
-    viewport.addEventListener("gestureend", event => event.preventDefault());
-    // Fit modes follow the pane size (window resize, outline toggle, splitter).
-    if (typeof ResizeObserver !== "undefined") {
-      let lastWidth = viewport.clientWidth, lastHeight = viewport.clientHeight;
-      const observer = new ResizeObserver(() => {
-        if (viewport.clientWidth === lastWidth && viewport.clientHeight === lastHeight) return;
-        lastWidth = viewport.clientWidth; lastHeight = viewport.clientHeight;
-        if (mode.kind !== "scale") applyZoom(mode, { x: 0, y: 0 }, false);
-      });
-      observer.observe(viewport);
-      cleanups.push(() => observer.disconnect());
-    }
-
-    if (backlinkLandingPage !== null) {
-      const landingShell = slots[backlinkLandingPage - 1]?.shellEl;
-      if (landingShell) {
-        landingShell.classList.add("is-backlink-target");
-        backlinkPulseTimer = setTimeout(() => landingShell.classList.remove("is-backlink-target"), 2600);
-      }
-    }
-
-    await show(pageNumber);
-    if (transport.stopped) return;
-    const items = await pdf.getOutline().catch(error => {
-      if (firstFailure || transport.stopped) return null;
-      throw error;
-    });
-    if (generation !== this.generation) return;
-    if (!items?.length) outline.append(element("p", "此 PDF 没有内置书签目录，可输入页码跳转。"));
-    const add = (entries: NonNullable<typeof items>, parent: HTMLElement): void => {
-      for (const item of entries) {
-        const button = element("button", item.title);
-        button.disabled = !item.dest;
-        button.onclick = () => void (async () => {
-          const destination = typeof item.dest === "string" ? await pdf.getDestination(item.dest) : item.dest;
-          if (!destination) return;
-          const index = typeof destination[0] === "number" ? destination[0] : await pdf.getPageIndex(destination[0]);
-          if (generation === this.generation) await show(index + 1);
-        })().catch(error => { if (!firstFailure && !transport.stopped && generation === this.generation) failure.textContent = String(error); });
-        parent.append(button);
-        if (item.items.length) { const child = element("div"); parent.append(child); add(item.items, child); }
-      }
-    };
-    if (items) add(items, outline);
+    this.disposeDocument = () => mounted.dispose();
   }
 
   /**
@@ -886,7 +351,13 @@ export class ArtifactReader {
    * coordinates so `✎ N` markers, `Shift+单击` selection, and direct ink-note
    * creation work seamlessly without writing a synthetic stitched Artifact.
    */
-  private async canonical(id: string, title: string, generation: number, focus?: ReaderFocus): Promise<void> {
+  private async canonical(
+    id: string,
+    title: string,
+    generation: number,
+    focus?: ReaderFocus,
+    container: HTMLElement = this.host,
+  ): Promise<void> {
     const projection = await canonicalReaderProjection(id);
     if (generation !== this.generation) return;
     const controls = element("div"); controls.className = "reader-controls";
@@ -918,7 +389,7 @@ export class ArtifactReader {
     paperStage.className = "md-paper-stage";
     paperStage.append(article);
     layout.append(outlineHandle.nav, paperStage);
-    this.host.append(controls, statusHint, layout);
+    container.append(controls, statusHint, layout);
 
     const openCanonicalPdfPage = (pageIndex: number, candidatePages?: number[], returnFocus?: ReaderFocus) => {
       void this.open(projection.source_pdf_artifact_id, `${title} · PDF 原页`, {
@@ -1305,28 +776,90 @@ export class ArtifactReader {
         .map((e) => canonicalItemByDomKey.get(e.domKey))
         .filter((x): x is CanonicalBlockItem => Boolean(x));
       const fallbackPage = seg.allBlocks[cover.startIdx].fallbackPdfPageIndex;
+      const toggleSidePdf = () => {
+        if (this.isPdfReferenceOpen()) {
+          this.closeErrataPdfReference();
+          errataEditor.setPdfReferenceOpen(false);
+          return;
+        }
+        void (async () => {
+          let pdfArtifactId: string | null = projection.source_pdf_artifact_id || null;
+          let targetPage: number | null = fallbackPage;
+          let candidatePages: number[] | undefined;
+          let backlinkNote: string | undefined;
+          if (rangeItems.length > 0) {
+            const firstItem = rangeItems[0];
+            const start = rangeItems[0].block.range.start;
+            const end = rangeItems[rangeItems.length - 1].block.range.end;
+            const blockIds = rangeItems.map((i) => i.block.id);
+            try {
+              const backlink = await getSourceBacklink({
+                artifact_id: firstItem.artifactId,
+                conversion_id: firstItem.conversionId,
+                start,
+                end,
+                block_ids: blockIds,
+              });
+              if (generation !== this.generation) return;
+              if (backlink.pdf_artifact_id && backlink.pdf_page_indices?.length) {
+                pdfArtifactId = backlink.pdf_artifact_id;
+                targetPage = backlink.pdf_page_indices[0];
+                candidatePages = backlink.pdf_page_indices;
+                backlinkNote = backlink.kind === "candidate_pdf_pages" ? backlink.reason : undefined;
+              }
+            } catch {
+              /* Fall back to canonical source PDF + marker page index. */
+            }
+          }
+          if (!pdfArtifactId || targetPage === null) {
+            setStatusHint("当前段落没有对应的 PDF 页映射。");
+            return;
+          }
+          errataEditor.setPdfReferenceOpen(true);
+          await this.openErrataPdfReference(
+            {
+              pdfArtifactId,
+              pdfPageIndex: targetPage,
+              candidatePages,
+              backlinkNote,
+              focusExcerpt: cover.initialText.slice(0, 240),
+              title: `对照 PDF 第 ${targetPage + 1} 页`,
+            },
+            generation,
+            () => errataEditor.setPdfReferenceOpen(false),
+          );
+        })();
+      };
       errataEditor.open({
         anchorElement: anchorEl,
         artifactId: seg.segment.artifact_id,
         baseContentHash: contentHash,
         target: cover,
         verifiedPdfPage: fallbackPage,
-        onOpenPdf: rangeItems.length > 0 ? () => openCanonicalPdfForItems(rangeItems[0], rangeItems) : undefined,
+        getVerifiedPdfPage: () => this.currentPdfReferencePageIndex(),
+        isPdfReferenceOpen: () => this.isPdfReferenceOpen(),
+        onOpenPdf: (rangeItems.length > 0 || (projection.source_pdf_artifact_id && fallbackPage !== null))
+          ? toggleSidePdf
+          : undefined,
+        onClosePdf: () => this.closeErrataPdfReference(),
+        onClose: () => this.closeErrataPdfReference(),
         onSaved: (res) => {
-          const prevScroll = this.host.scrollTop;
+          const scroller = this.scrollContainer();
+          const prevScroll = scroller.scrollTop;
           applyErrataUpdate(seg.segment.artifact_id, res.errata, res.superseded_ids);
           renderCanonicalSegmentBlocks(seg, true);
-          this.host.scrollTop = prevScroll;
+          scroller.scrollTop = prevScroll;
           const unitHint = res.affected_unit_ids.length > 0
             ? `（关联 ${res.affected_unit_ids.length} 个已入图节点，随时可在详情面板复核）`
             : "";
           setStatusHint(`已保存块级校对，当前正文与关联锚点已同步生效${unitHint}。`);
         },
         onReverted: (res) => {
-          const prevScroll = this.host.scrollTop;
+          const scroller = this.scrollContainer();
+          const prevScroll = scroller.scrollTop;
           applyErrataUpdate(seg.segment.artifact_id, undefined, [res.errata.errata_id]);
           renderCanonicalSegmentBlocks(seg, true);
-          this.host.scrollTop = prevScroll;
+          scroller.scrollTop = prevScroll;
           setStatusHint("已恢复该块的原始 OCR 文本。");
         },
       });
@@ -1422,7 +955,15 @@ export class ArtifactReader {
     }
   }
 
-  private async markdown(info: ContentInfo, title: string, generation: number, focus?: ReaderFocus, patch?: ReaderOpenOptions["patch"], conversionId?: string | null): Promise<void> {
+  private async markdown(
+    info: ContentInfo,
+    title: string,
+    generation: number,
+    container: HTMLElement = this.host,
+    focus?: ReaderFocus,
+    patch?: ReaderOpenOptions["patch"],
+    conversionId?: string | null,
+  ): Promise<void> {
     const [initialDoc, unitMarkers, initialErrata] = await Promise.all([
       markdownDocument(info.artifact_id, conversionId ?? info.contexts[0]?.conversion_id ?? null),
       getMarkdownUnitMarkers([info.artifact_id]),
@@ -1452,7 +993,7 @@ export class ArtifactReader {
     paperStage.className = "md-paper-stage";
     paperStage.append(article);
     layout.append(outlineHandle.nav, paperStage);
-    this.host.append(controls, layout);
+    container.append(controls, layout);
     let rawMode = false, version = 0;
     let initialFocusScrolled = false;
     let inkLinks: ReaderInkLinks | undefined;
@@ -1571,28 +1112,81 @@ export class ArtifactReader {
           break;
         }
       }
+      const toggleSidePdf = () => {
+        if (this.isPdfReferenceOpen()) {
+          this.closeErrataPdfReference();
+          errataEditor.setPdfReferenceOpen(false);
+          return;
+        }
+        void (async () => {
+          const contentBlocks = document.blocks.slice(cover.startIdx, cover.endIdx + 1).filter((b) => b.kind !== "page_marker");
+          if (!contentBlocks.length) return;
+          const start = contentBlocks[0].range.start;
+          const end = contentBlocks[contentBlocks.length - 1].range.end;
+          const blockIds = contentBlocks.map((b) => b.id);
+          try {
+            const backlink = await getSourceBacklink({
+              artifact_id: info.artifact_id,
+              conversion_id: currentConversionId(),
+              start,
+              end,
+              block_ids: blockIds,
+            });
+            if (generation !== this.generation) return;
+            if (backlink.kind === "markdown_only" || !backlink.pdf_artifact_id || !backlink.pdf_page_indices?.length) {
+              selection.notifyFeedback(backlink.reason ?? "当前段落没有对应的 PDF 页映射。");
+              return;
+            }
+            const pages = backlink.pdf_page_indices;
+            const targetPage = inferredPage !== null && pages.includes(inferredPage) ? inferredPage : pages[0];
+            errataEditor.setPdfReferenceOpen(true);
+            await this.openErrataPdfReference(
+              {
+                pdfArtifactId: backlink.pdf_artifact_id,
+                pdfPageIndex: targetPage,
+                candidatePages: pages,
+                backlinkNote: backlink.kind === "candidate_pdf_pages" ? backlink.reason : undefined,
+                focusExcerpt: cover.initialText.slice(0, 240),
+                title: `对照 PDF 第 ${targetPage + 1} 页`,
+              },
+              generation,
+              () => errataEditor.setPdfReferenceOpen(false),
+            );
+          } catch (error) {
+            if (generation === this.generation) {
+              selection.notifyFeedback("PDF 回链查询失败：" + (error instanceof Error ? error.message : String(error)));
+            }
+          }
+        })();
+      };
       errataEditor.open({
         anchorElement: anchorEl,
         artifactId: document.snapshot.artifact_id,
         baseContentHash: document.snapshot.content_hash,
         target: cover,
         verifiedPdfPage: inferredPage,
-        onOpenPdf: () => void openPdfForRange({ first: cover.startIdx, last: cover.endIdx }, inferredPage ?? undefined),
+        getVerifiedPdfPage: () => this.currentPdfReferencePageIndex(),
+        isPdfReferenceOpen: () => this.isPdfReferenceOpen(),
+        onOpenPdf: toggleSidePdf,
+        onClosePdf: () => this.closeErrataPdfReference(),
+        onClose: () => this.closeErrataPdfReference(),
         onSaved: async (res) => {
-          const prevScroll = this.host.scrollTop;
+          const scroller = this.scrollContainer();
+          const prevScroll = scroller.scrollTop;
           applyLocalErrataState(res.errata, res.superseded_ids);
           await render();
-          this.host.scrollTop = prevScroll;
+          scroller.scrollTop = prevScroll;
           const unitHint = res.affected_unit_ids.length > 0
             ? `（关联 ${res.affected_unit_ids.length} 个已入图节点，随时可在详情面板复核）`
             : "";
           selection.notifyFeedback(`已保存块级校对，当前正文与关联锚点已同步生效${unitHint}。`);
         },
         onReverted: async (res) => {
-          const prevScroll = this.host.scrollTop;
+          const scroller = this.scrollContainer();
+          const prevScroll = scroller.scrollTop;
           applyLocalErrataState(undefined, [res.errata.errata_id]);
           await render();
-          this.host.scrollTop = prevScroll;
+          scroller.scrollTop = prevScroll;
           selection.notifyFeedback("已恢复该块的原始 OCR 文本。");
         },
       });

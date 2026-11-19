@@ -323,6 +323,7 @@ const DOMAIN_KIND_LABELS: Record<string, string> = {
   Alignment: "对齐线",
   Debt: "一笔账",
   DialectScope: "约定卡",
+  InkNote: "手稿",
 };
 
 export function domainKindLabel(kind: string | null): string {

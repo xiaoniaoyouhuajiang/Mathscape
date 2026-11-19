@@ -6,7 +6,7 @@ import { addressOptions,fillAddressSelect,loadPreferredHost,savePreferredHost,ty
 
 type PairingLink={urls:string[];url_kinds?:string[];expires_at:number;document_id:string};
 
-export interface InkLanStatus {enabled:boolean;running:boolean;port:number;urls:string[];url_kinds?:string[];preferred_host?:string|null;certificate_file_sha256:string|null;assets_ready:boolean;error:string|null}
+export interface InkLanStatus {enabled:boolean;running:boolean;port:number;urls:string[];url_kinds?:string[];preferred_host?:string|null;certificate_file_sha256:string|null;assets_ready:boolean;online_tablets?:number;error:string|null}
 export interface InkWriterView {document_id:string;head_seq:number;writer_epoch:number;session:StoredInkSession|null;remote:boolean;pairing_pending:boolean}
 export interface InkLanMirror {delta:{metadata:InkDocumentMetadata;operations:InkOperation[];head_seq:number;server_head:number;writer:InkWriterView;snapshot_count:number;note?:InkNoteState};connected:boolean;preview:InkStroke|null;client:{pending_count:number;locally_durable:boolean;secure_context:boolean;page_id:string}|null}
 export type InkSetupHandoff = "unbound"|"idle"|"requested"|"ready"|"resumed"|"claimed";
@@ -32,7 +32,7 @@ function seenAt(value:string|undefined):string {
 }
 type LinkKind="pair"|"transfer"|"resume";
 const LINK_NOTES:Record<LinkKind,string>={
-  pair:"二维码两分钟有效，仅供一台设备配对。配对完成后无需主动发送文件，书写操作会自动同步到电脑。",
+  pair:"二维码两分钟有效，仅供一台设备配对。配对后保持平板画板打开，后续新建或切换手稿可直接点「推送到平板」，无需重复扫码。",
   transfer:"转交二维码两分钟有效。新设备扫码前，原平板仍可继续书写和同步；扫码后原平板停止写入，未同步内容保留在原平板。",
   resume:"用正在书写这份手稿的平板扫码或打开链接即可继续。链接不含配对凭据，不会转移书写权。",
 };

@@ -14,9 +14,12 @@ import { InspectorController } from "./inspector/inspector-controller";
 import { LlmSettingsController } from "./llm/settings";
 import { mountSandboxChrome } from "./sandbox/chrome";
 import { SandboxDialogueDock } from "./sandbox/dialogue";
+import { INK_NOTE_CITE_PREFIX, type CiteTarget } from "./sandbox/cite";
 import { SandboxPanelController } from "./sandbox/panel";
 import { DesktopInkWorkspace } from "./ink/desktop";
+import { listInkDocuments } from "./ink/persistence";
 import { connectInkViews, type InkViewSync } from "./ink/views";
+import { listUnreviewedErrataUnits } from "./reader/markdown-errata";
 import {
   closeInkPopover,
   createInkNoteFromContext,
@@ -76,55 +79,101 @@ let splitReaderRequest = 0;
 let splitReaderError: string | undefined;
 
 type ReaderScrollAnchor =
-  | { kind: "block"; block: HTMLElement }
+  | { kind: "block"; block: HTMLElement; offsetFromTop: number }
   | { kind: "ratio"; ratio: number };
 
+let pendingReaderAnchor: ReaderScrollAnchor | null = null;
+let readerAnchorToken = 0;
+
+function readerScrollContainer(): HTMLElement {
+  return el.readerHost.classList.contains("has-errata-pdf-pane")
+    ? (el.readerHost.querySelector<HTMLElement>(".reader-main-pane") ?? el.readerHost)
+    : el.readerHost;
+}
+
 function captureReaderScrollAnchor(): ReaderScrollAnchor | null {
-  if (!reader.hasContent() || el.readerHost.hidden) return null;
-  const preferred = el.readerHost.querySelector<HTMLElement>(
-    ".source-block.is-selected-block, .source-block.is-current-block, .source-block.is-ink-menu-target, .source-block.source-block-focus",
-  );
-  if (preferred) return { kind: "block", block: preferred };
-  const hostRect = el.readerHost.getBoundingClientRect();
-  for (const block of el.readerHost.querySelectorAll<HTMLElement>(".source-block")) {
+  if (!reader.hasContent() || el.readerHost.hidden || el.readerHost.getClientRects().length === 0) {
+    return null;
+  }
+  const scroller = readerScrollContainer();
+  const hostRect = scroller.getBoundingClientRect();
+  if (hostRect.height <= 0) return null;
+
+  const isVisible = (block: HTMLElement): DOMRect | null => {
+    if (block.classList.contains("is-errata-merged-hidden")) return null;
     const rect = block.getBoundingClientRect();
-    if (rect.bottom > hostRect.top + 64) {
-      return { kind: "block", block };
+    if (rect.height <= 0) return null;
+    if (rect.bottom <= hostRect.top + 8 || rect.top >= hostRect.bottom - 8) return null;
+    return rect;
+  };
+
+  // Prefer the active/triggered block ONLY when it is actually inside the current viewport.
+  // Stale off-screen selections or initial `.source-block-focus` anchors must never yank the reader away.
+  const prioritySelectors = [
+    ".source-block.is-ink-menu-target",
+    ".source-block.is-selected-block",
+    ".source-block.is-current-block",
+    ".source-block.source-block-focus",
+  ];
+  for (const selector of prioritySelectors) {
+    for (const candidate of el.readerHost.querySelectorAll<HTMLElement>(selector)) {
+      const rect = isVisible(candidate);
+      if (rect) {
+        const offsetFromTop = Math.max(16, Math.min(hostRect.height - 64, rect.top - hostRect.top));
+        return { kind: "block", block: candidate, offsetFromTop };
+      }
     }
   }
-  const maxScroll = el.readerHost.scrollHeight - el.readerHost.clientHeight;
+
+  for (const block of el.readerHost.querySelectorAll<HTMLElement>(".source-block:not(.is-errata-merged-hidden)")) {
+    const rect = block.getBoundingClientRect();
+    if (rect.height > 0 && rect.bottom > hostRect.top + 32) {
+      const offsetFromTop = Math.max(12, Math.min(hostRect.height - 64, rect.top - hostRect.top));
+      return { kind: "block", block, offsetFromTop };
+    }
+  }
+  const maxScroll = scroller.scrollHeight - scroller.clientHeight;
   if (maxScroll > 1) {
-    return { kind: "ratio", ratio: el.readerHost.scrollTop / maxScroll };
+    return { kind: "ratio", ratio: scroller.scrollTop / maxScroll };
   }
   return null;
 }
 
 function restoreReaderScrollAnchor(anchor: ReaderScrollAnchor | null): void {
   if (!anchor) return;
+  const token = ++readerAnchorToken;
   requestAnimationFrame(() => {
-    if (!inkSplit || !inkOpen || el.readerHost.hidden) return;
+    if (token !== readerAnchorToken || !inkSplit || !inkOpen || el.readerHost.hidden) return;
+    const scroller = readerScrollContainer();
+    const hostRect = scroller.getBoundingClientRect();
+    if (hostRect.height <= 0) return;
     if (anchor.kind === "block" && anchor.block.isConnected) {
-      anchor.block.scrollIntoView({ block: "center", behavior: "instant" });
+      const blockRect = anchor.block.getBoundingClientRect();
+      if (blockRect.height <= 0) return;
+      const desiredOffset = Math.max(12, Math.min(hostRect.height - 64, anchor.offsetFromTop));
+      const delta = (blockRect.top - hostRect.top) - desiredOffset;
+      scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
     } else if (anchor.kind === "ratio") {
-      const maxScroll = el.readerHost.scrollHeight - el.readerHost.clientHeight;
-      if (maxScroll > 0) el.readerHost.scrollTop = anchor.ratio * maxScroll;
+      const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+      if (maxScroll > 0) scroller.scrollTop = anchor.ratio * maxScroll;
     }
   });
 }
 
-function placeReaderInSplit(inSplit: boolean): void {
+function placeReaderInSplit(inSplit: boolean, preCapturedAnchor?: ReaderScrollAnchor | null): void {
   if (inSplit) {
     // Never move #reader into the overlay after an exit (in-flight ensure/open).
     if (!inkSplit || !inkOpen) return;
     const movingIntoSplit = el.readerHost.parentElement !== el.inkSplitReader;
-    const anchor = movingIntoSplit ? captureReaderScrollAnchor() : null;
+    const anchor = preCapturedAnchor ?? pendingReaderAnchor ?? (movingIntoSplit ? captureReaderScrollAnchor() : null);
+    pendingReaderAnchor = null;
     if (movingIntoSplit) {
       el.inkSplitReader.append(el.readerHost);
     }
     el.readerHost.classList.add("reader-panel");
     // Keep host visible only when it has a document; empty state covers the blank case.
     el.readerHost.hidden = !reader.hasContent() && !reader.isLoading();
-    if (movingIntoSplit) restoreReaderScrollAnchor(anchor);
+    if (movingIntoSplit && anchor) restoreReaderScrollAnchor(anchor);
   } else {
     restoreReaderHome({ hide: false });
   }
@@ -284,7 +333,7 @@ async function ensureSplitLeftPane(): Promise<void> {
   renderSplitEmpty(primary);
 }
 
-function setInkSplit(enabled: boolean, opts: { hint?: boolean } = {}): void {
+function setInkSplit(enabled: boolean, opts: { hint?: boolean; anchor?: ReaderScrollAnchor | null } = {}): void {
   if (enabled && window.innerWidth < INK_SPLIT_WINDOW_MIN) {
     shell.showToast(`窗口窄于 ${INK_SPLIT_WINDOW_MIN}px，暂无法并排阅读。`, "error");
     enabled = false;
@@ -301,7 +350,7 @@ function setInkSplit(enabled: boolean, opts: { hint?: boolean } = {}): void {
   el.inkWorkspace.classList.toggle("is-split", enabled);
   el.inkSplitReader.hidden = !enabled;
   el.inkSplitResizer.hidden = !enabled;
-  placeReaderInSplit(enabled);
+  placeReaderInSplit(enabled, opts.anchor);
   inkSplitHandle?.setEnabled(enabled);
   // Per-layout notes-list preference, and fit the page once on entering 并排.
   inkWorkspace.setSplitMode(enabled);
@@ -346,6 +395,9 @@ el.inkSplitReader.addEventListener("pointerdown", () => { inkPaneFocused = false
 
 function openInkWorkspaceFromButton(): Promise<void> {
   scenePlayer?.cancel();
+  // Preserve reader scroll position before hiding workspaceGrid, so clicking
+  // 「并排阅读」 afterwards restores the exact block the user was reading.
+  pendingReaderAnchor = captureReaderScrollAnchor();
   inkOpen = true;
   el.workspaceGrid.hidden = true;
   el.inkWorkspace.hidden = false;
@@ -551,6 +603,8 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
   graphController.renderCurrentGraph(snapshot);
   inspectorController.refreshIfUnlocked();
   loadInkOverlay();
+  void refreshErrataReviewOverlay();
+  void refreshInkCiteTargets();
   sandboxDock.refreshCites();
   void studyHud?.reloadData();
 }
@@ -560,6 +614,35 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
 let inkViews: InkViewSync | undefined;
 function loadInkOverlay(): void {
   void inkViews?.reloadOverlay();
+}
+
+let errataOverlayRevision = 0;
+async function refreshErrataReviewOverlay(): Promise<void> {
+  const rev = ++errataOverlayRevision;
+  const units = await listUnreviewedErrataUnits();
+  if (rev !== errataOverlayRevision) return;
+  graphController.setErrataReviewOverlay(units);
+}
+
+let activeInkCiteTargets: CiteTarget[] = [];
+let inkCiteRevision = 0;
+async function refreshInkCiteTargets(): Promise<void> {
+  const rev = ++inkCiteRevision;
+  try {
+    const docs = await listInkDocuments();
+    if (rev !== inkCiteRevision) return;
+    activeInkCiteTargets = docs
+      .filter((doc) => doc.lifecycle !== "trashed")
+      .map((doc) => ({
+        nodeId: `${INK_NOTE_CITE_PREFIX}${doc.document_id}`,
+        domainId: doc.document_id,
+        domainKind: "InkNote",
+        label: doc.title,
+      }));
+    sandboxDock.refreshCites();
+  } catch {
+    /* Non-fatal in minimal test environments without ink IPC. */
+  }
 }
 
 async function loadSnapshot(): Promise<void> {
@@ -579,9 +662,12 @@ async function loadSnapshot(): Promise<void> {
 
 el.importButton.addEventListener("click", () => void artifactController.importPdf());
 
+eventBus.on("reader-opened", () => { pendingReaderAnchor = null; });
 eventBus.on("source-map-changed", () => void loadSnapshot());
 function showInkWorkspace(opts: { enterSplitWithReader?: boolean; anchor?: ReaderScrollAnchor | null } = {}): void {
   const autoSplit = Boolean(opts.enterSplitWithReader && window.innerWidth >= INK_SPLIT_WINDOW_MIN);
+  const anchor = opts.anchor ?? captureReaderScrollAnchor();
+  if (!autoSplit && anchor) pendingReaderAnchor = anchor;
   // Keep the last reader document for 并排阅读; only hide the host when staying full-screen.
   if (!inkSplit && !autoSplit) el.readerHost.hidden = true;
   inkOpen = true;
@@ -589,8 +675,7 @@ function showInkWorkspace(opts: { enterSplitWithReader?: boolean; anchor?: Reade
   el.inkWorkspace.hidden = false;
   el.inkButton.textContent = "返回地图";
   if (autoSplit) {
-    setInkSplit(true);
-    restoreReaderScrollAnchor(opts.anchor ?? null);
+    setInkSplit(true, { anchor });
   }
 }
 eventBus.on("open-ink-document", ({ documentId }) => {
@@ -619,6 +704,7 @@ setInkContextCreator(async (target, choice, draft) => {
   const receipt = await createInkNoteFromContext(draft, target, choice.role, choice.title);
   closeInkPopover();
   eventBus.emit("ink-links-changed");
+  eventBus.emit("ink-notes-changed");
   showInkWorkspace({ enterSplitWithReader: readerWasOpen, anchor });
   inkPaneFocused = true;
   await inkWorkspace.openDocumentId(receipt.document_id);
@@ -634,6 +720,16 @@ setInkSourceCandidateProvider(() => {
 inkViews = connectInkViews({
   applyOverlay: (overlay) => graphController.setInkOverlay(overlay),
   refreshInspector: () => inspectorController.refreshIfUnlocked(),
+});
+eventBus.on("ink-notes-changed", () => void refreshInkCiteTargets());
+eventBus.on("ink-links-changed", () => void refreshInkCiteTargets());
+eventBus.on("markdown-errata-changed", () => {
+  void refreshErrataReviewOverlay();
+  inspectorController.refreshIfUnlocked();
+});
+eventBus.on("errata-reviews-changed", () => {
+  void refreshErrataReviewOverlay();
+  inspectorController.refreshIfUnlocked();
 });
 eventBus.on("open-ink-link-target", ({ link }) => {
   const target = link.target;
@@ -749,7 +845,14 @@ watchMotion();
 const noNodes: never[] = [];
 sandboxDock.setCiteContext({
   nodes: () => currentSnapshot?.landscape_graph.nodes ?? noNodes,
+  extraTargets: () => activeInkCiteTargets,
   jump: (nodeId) => {
+    if (nodeId.startsWith(INK_NOTE_CITE_PREFIX)) {
+      const documentId = nodeId.slice(INK_NOTE_CITE_PREFIX.length);
+      player.cancel(false);
+      eventBus.emit("open-ink-document", { documentId });
+      return;
+    }
     const token = ++searchNavigation;
     player.cancel(false);
     void (async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IncidenceNode } from "../../src/graph/projection";
-import { buildCiteIndex, buildRoundCiteIndex, citeChipHtml, citeChipParts, citeResolver, resolveCite } from "../../src/sandbox/cite";
+import { buildCiteIndex, buildRoundCiteIndex, citeChipHtml, citeChipParts, citeResolver, INK_NOTE_CITE_PREFIX, mapNodeIds, resolveCite } from "../../src/sandbox/cite";
 import { chipSpans, composerChip, expandComposer, mentionSuggestions, mentionTargets, mentionTrigger, spaceAfterChip, tokenizeComposer } from "../../src/sandbox/composer-chips";
 
 const H1 = "a".repeat(64);
@@ -172,5 +172,22 @@ describe("composer @ mentions", () => {
     expect(mentionTrigger(`@x ${UNIT} y`, 6 + UNIT.length, [[3, 3 + UNIT.length]])).toBeNull();
     // Caret before the @: nothing.
     expect(mentionTrigger("ab @c", 2)).toBeNull();
+  });
+
+  it("includes active 32-hex InkNote targets in @ mentions and chips without polluting map echo ids", () => {
+    const withInk = buildCiteIndex(
+      [node("r-unit", UNIT, "SourceSemanticUnit", "定理 3.2")],
+      [{ nodeId: `${INK_NOTE_CITE_PREFIX}${DOC}`, domainId: DOC, domainKind: "InkNote", label: "尝试证明" }],
+    );
+    const targets = mentionTargets(withInk);
+    const hits = mentionSuggestions(targets, "尝试");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ label: "尝试证明", kind: "手稿", target: { domainId: DOC, nodeId: `${INK_NOTE_CITE_PREFIX}${DOC}` } });
+    expect(mentionSuggestions(targets, "手稿").map((s) => s.target.domainId)).toEqual([DOC]);
+
+    const parts = citeChipParts(resolveCite(DOC, undefined, withInk));
+    expect(parts.jumpNode).toBe(`${INK_NOTE_CITE_PREFIX}${DOC}`);
+    expect(parts.title).toContain("点击打开手稿");
+    expect(mapNodeIds([DOC, UNIT], withInk)).toEqual(["r-unit"]);
   });
 });

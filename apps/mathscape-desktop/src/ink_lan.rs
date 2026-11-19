@@ -74,6 +74,7 @@ pub struct InkLanStatus {
     pub preferred_host: Option<String>,
     pub certificate_file_sha256: Option<String>,
     pub assets_ready: bool,
+    pub online_tablets: usize,
     pub error: Option<String>,
 }
 #[derive(Serialize)]
@@ -1479,6 +1480,7 @@ impl DesktopService {
             preferred_host: settings_now.preferred_host.clone(),
             certificate_file_sha256: Some(fingerprint),
             assets_ready: !INKPAD_ASSETS.is_empty(),
+            online_tablets: self.ink_lan.live.slots.lock().unwrap().len(),
             error: None,
         };
         let state = HttpState {
@@ -1547,7 +1549,10 @@ impl DesktopService {
             status.preferred_host = settings.preferred_host.clone();
             if active.task.is_finished() {
                 status.running = false;
+                status.online_tablets = 0;
                 status.error = Some("InkPad 服务已停止，请重新开启服务。".into());
+            } else {
+                status.online_tablets = self.ink_lan.live.slots.lock().unwrap().len();
             }
             return Ok(status);
         }
@@ -1560,6 +1565,7 @@ impl DesktopService {
             preferred_host: settings.preferred_host,
             certificate_file_sha256: None,
             assets_ready: !INKPAD_ASSETS.is_empty(),
+            online_tablets: 0,
             error: None,
         })
     }

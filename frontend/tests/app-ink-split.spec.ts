@@ -259,7 +259,7 @@ test.describe("N3c side-by-side reading", () => {
     expect(box!.height).toBeGreaterThan(100);
   });
 
-  test("creating a note from an open Markdown reader (desktop or tablet) auto-enters split with compact left toolbar", async ({ page }) => {
+  test("creating a note from an open Markdown reader auto-enters split and pushes directly when tablet is online (QR fallback offline)", async ({ page }) => {
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("mathscape:open-source", { detail: { artifactId: "md-1", title: "正确表述.md" } }));
     });
@@ -271,9 +271,11 @@ test.describe("N3c side-by-side reading", () => {
     const pill = page.locator("#reader .block-action-pill");
     await expect(pill.getByRole("button", { name: "✎ 手写此块" })).toBeVisible();
     await pill.getByRole("button", { name: "✎ 手写此块" }).click();
-    await page.locator(".ink-create-popover").getByRole("button", { name: "用平板书写" }).click();
+    // Tablet is online -> popover explicitly guides the user that it will push directly without rescanning
+    await expect(page.locator(".ink-create-popover .ink-tablet-hint")).toContainText("无需重新扫码");
+    await page.locator(".ink-create-popover").getByRole("button", { name: "推送到平板（已在线）" }).click();
 
-    // Automatically transitions into left-source + right-ink split workspace + tablet pairing panel
+    // Automatically transitions into left-source + right-ink split workspace
     await expect(page.locator("#ink-workspace")).toBeVisible();
     await expect(page.locator("#ink-workspace")).toHaveClass(/is-split/);
     await expect(page.locator("#ink-split-toggle")).toHaveText("退出并排");
@@ -281,9 +283,22 @@ test.describe("N3c side-by-side reading", () => {
     await expect(page.locator("#ink-split-reader .markdown-body")).toContainText("正确表述");
     // Discovery drawer auto-collapses inside split left pane to maximize reading space
     await expect(page.locator("#ink-split-reader .selection-discovery-drawer")).toBeHidden();
-    // Block marker updates live on the left pane and tablet pairing opens on the right pane
+    // Block marker updates live on the left pane
     await expect(page.locator("#ink-split-reader .ink-block-marker")).toHaveText("✎ 1");
     await expect(page.locator("#ink-document-heading")).toContainText("尝试 · 正确表述");
+    // Tablet is online (pushOffline=false): pushes switch_offer directly without popping QR panel,
+    // shows online indicator on `#ink-push-tablet`, and displays a clear success toast!
+    await expect(page.locator("#ink-lan-panel")).toBeHidden();
+    await expect(page.locator("#ink-push-tablet")).toHaveClass(/is-tablet-online/);
+    await expect(page.locator("#ink-push-tablet")).toHaveAttribute("data-tablet-online", "true");
+    expect(await page.evaluate(() => window.appHarness.behavior.pushArgs.length)).toBe(1);
+
+    // Offline fallback: when tablet is offline, shows QR hint and falls back cleanly to opening the pairing panel
+    await page.evaluate(() => { window.appHarness.behavior.pushOffline = true; });
+    await page.locator("#ink-split-reader [data-source-block='b1']").click();
+    await page.locator("#ink-split-reader .block-action-pill").getByRole("button", { name: "✎ 手写此块" }).click();
+    await expect(page.locator(".ink-create-popover .ink-tablet-hint")).toContainText("配对二维码");
+    await page.locator(".ink-create-popover").getByRole("button", { name: "用平板书写" }).click();
     await expect(page.locator("#ink-lan-panel")).toBeVisible();
   });
 

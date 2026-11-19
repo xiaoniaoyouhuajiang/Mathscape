@@ -418,3 +418,63 @@
 .errata-diff-actions {
   display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 9px;
 }
+
+/* Module 2: Side-by-side `对照 PDF 第 X 页` reference drawer */
+.reader-main-pane { min-width: 0; }
+#ink-split-reader > .reader-panel > .reader-main-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
+.has-errata-pdf-pane {
+  display: flex; flex-direction: row; align-items: stretch; overflow: hidden;
+}
+.reader-panel.has-errata-pdf-pane { padding: 0; }
+.has-errata-pdf-pane > .reader-main-pane {
+  flex: 1 1 56%; min-width: 0; height: 100%; overflow: auto; padding: 18px; box-sizing: border-box;
+}
+.has-errata-pdf-pane .errata-editor-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.errata-pdf-reference-pane {
+  flex: 0 0 44%; min-width: 340px; max-width: 52%; height: 100%;
+  display: flex; flex-direction: column; overflow: hidden;
+  padding: 12px 14px; background: #0f1820; border-left: 1px solid #35505e;
+  box-sizing: border-box;
+}
+.errata-pdf-reference-pane .reader-controls {
+  margin-bottom: 8px; gap: 6px; font-size: 12px;
+}
+.errata-pdf-reference-pane .reader-controls button,
+.errata-pdf-reference-pane .reader-controls select,
+.errata-pdf-reference-pane .reader-controls input {
+  padding: 4px 7px; font-size: 12px;
+}
+.errata-pdf-reference-pane .pdf-layout { flex: 1 1 auto; min-height: 0; height: 100%; }
+.errata-pdf-reference-pane .pdf-viewport { height: 100% !important; max-height: none; min-height: 180px; }
+.errata-pdf-reference-pane .pdf-outline { max-height: 100%; }
+.errata-pdf-ref-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 8px; padding-bottom: 7px; border-bottom: 1px solid #2b4450;
+}
+.errata-pdf-ref-title { font-size: 13px; color: #dff2f5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.errata-pdf-ref-close {
+  flex-shrink: 0; background: #1d333d; color: #d8ecf0; border: 1px solid #486a78;
+  border-radius: 5px; padding: 4px 9px; font-size: 12px; cursor: pointer;
+}
+.errata-pdf-ref-close:hover { background: #294652; }
+.errata-pdf-ref-loading, .errata-pdf-ref-error { margin: 12px 4px; font-size: 12.5px; color: #a9c5d1; }
+.errata-pdf-ref-error { color: #f4aca2; }
+.errata-pdf-toggle-btn.is-active {
+  background: #23534d; color: #e2faf3; border-color: #54a897;
+}
+
+/* Narrow left-source + right-ink split: keep PDF reference as a dismissible overlay scoped to left pane */
+#ink-split-reader > .reader-panel.has-errata-pdf-pane {
+  padding: 18px; overflow: auto; display: flex; flex-direction: column;
+}
+#ink-split-reader > .reader-panel.has-errata-pdf-pane > .reader-main-pane {
+  padding: 0; height: auto; overflow: visible; flex: 1 1 auto;
+}
+#ink-split-reader .errata-pdf-reference-pane {
+  position: absolute; inset: 0; z-index: 25;
+  flex: none; width: 100%; min-width: 0; max-width: none; height: 100%;
+  border-left: none; box-shadow: 0 12px 32px rgba(0, 0, 0, .55);
+}

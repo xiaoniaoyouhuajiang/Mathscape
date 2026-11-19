@@ -63,6 +63,8 @@ export interface MathscapeEventMap {
     action: "saved" | "reverted";
     affectedUnitIds: string[];
   };
+  /** 已入图单元的勘误复核状态更新（标记已复核 / 交沙盒复核）；刷新地图微标与详情卡。 */
+  "errata-reviews-changed": { unitId?: string } | void;
   /** 审核工作区处于地图联动分屏模式时，驱动主地图高亮提案涉及的子图与 1 跳上下文。 */
   "review-map-scope": {
     active: boolean;

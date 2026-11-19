@@ -90,6 +90,27 @@ export async function revertMarkdownErrata(
   return response;
 }
 
+export type ErrataUnitReviewDecision = "acknowledged" | "sent_to_sandbox";
+
+export async function markErrataUnitReviewed(
+  unitId: string,
+  errataIds: string[],
+  decision: ErrataUnitReviewDecision,
+): Promise<number> {
+  const count = await invoke<number>("mark_errata_unit_reviewed", { unitId, errataIds, decision });
+  eventBus.emit("errata-reviews-changed", { unitId });
+  return count;
+}
+
+export async function listUnreviewedErrataUnits(): Promise<Record<string, number>> {
+  try {
+    const map = await invoke<Record<string, number> | undefined>("list_unreviewed_errata_units");
+    return map && typeof map === "object" ? map : {};
+  } catch {
+    return {};
+  }
+}
+
 const PAGE_MARKER_LINE = /^\s*\{\d+\}-{16,}\s*$/;
 
 export function containsPageMarkerLine(text: string): boolean {
@@ -424,7 +445,11 @@ export interface InlineErrataOpenArgs {
   baseContentHash: string;
   target: Extract<ResolvedErrataCover, { ok: true }>;
   verifiedPdfPage?: number | null;
+  getVerifiedPdfPage?: () => number | null;
   onOpenPdf?: () => void;
+  onClosePdf?: () => void;
+  isPdfReferenceOpen?: () => boolean;
+  onClose?: () => void;
   onSaved: (response: SaveMarkdownErrataResponse) => Promise<void> | void;
   onReverted?: (response: RevertMarkdownErrataResponse) => Promise<void> | void;
 }
@@ -438,23 +463,51 @@ export interface InlineErrataOpenArgs {
 export class InlineErrataEditorController {
   private currentCard: HTMLElement | null = null;
   private currentAnchor: HTMLElement | null = null;
+  private currentPdfButton: HTMLButtonElement | null = null;
+  private currentPdfOpenLabel = "对照 PDF 原页";
+  private currentOnClose: (() => void) | undefined;
 
   isOpen(): boolean {
     return this.currentCard !== null;
   }
 
-  close(): void {
+  setPdfReferenceOpen(open: boolean): void {
+    if (!this.currentPdfButton) return;
+    this.currentPdfButton.setAttribute("aria-pressed", String(open));
+    this.currentPdfButton.classList.toggle("is-active", open);
+    this.currentPdfButton.textContent = open ? "收起 PDF 对照" : this.currentPdfOpenLabel;
+  }
+
+  close(silent = false): void {
+    const onClose = this.currentOnClose;
     this.currentCard?.remove();
     this.currentCard = null;
     this.currentAnchor?.classList.remove("is-errata-editing");
     this.currentAnchor = null;
+    this.currentPdfButton = null;
+    this.currentOnClose = undefined;
+    if (!silent) onClose?.();
   }
 
   open(args: InlineErrataOpenArgs): void {
     closeErrataDiffPopover();
-    this.close();
+    this.close(true);
 
-    const { anchorElement, artifactId, baseContentHash, target, verifiedPdfPage, onOpenPdf, onSaved, onReverted } = args;
+    const {
+      anchorElement,
+      artifactId,
+      baseContentHash,
+      target,
+      verifiedPdfPage,
+      getVerifiedPdfPage,
+      onOpenPdf,
+      onClosePdf,
+      isPdfReferenceOpen,
+      onClose,
+      onSaved,
+      onReverted,
+    } = args;
+    this.currentOnClose = onClose;
     const card = document.createElement("section");
     card.className = "errata-inline-editor";
     card.setAttribute("role", "region");
@@ -482,12 +535,18 @@ export class InlineErrataEditorController {
     if (onOpenPdf) {
       const pdfBtn = document.createElement("button");
       pdfBtn.type = "button";
-      pdfBtn.className = "errata-btn-ghost";
-      pdfBtn.textContent = verifiedPdfPage !== undefined && verifiedPdfPage !== null
-        ? `对照 PDF 第 ${verifiedPdfPage + 1} 页 ↗`
-        : "对照 PDF 原页 ↗";
-      pdfBtn.title = "查看该块对应的原始 PDF 扫描页";
+      pdfBtn.className = "errata-btn-ghost errata-pdf-toggle-btn";
+      this.currentPdfOpenLabel =
+        verifiedPdfPage !== undefined && verifiedPdfPage !== null
+          ? `对照 PDF 第 ${verifiedPdfPage + 1} 页`
+          : "对照 PDF 原页";
+      const initiallyOpen = Boolean(isPdfReferenceOpen?.());
+      pdfBtn.textContent = initiallyOpen ? "收起 PDF 对照" : this.currentPdfOpenLabel;
+      pdfBtn.setAttribute("aria-pressed", String(initiallyOpen));
+      pdfBtn.classList.toggle("is-active", initiallyOpen);
+      pdfBtn.title = "在侧栏展开或收起该块对应的原始 PDF 扫描页";
       pdfBtn.onclick = () => onOpenPdf();
+      this.currentPdfButton = pdfBtn;
       headerActions.append(pdfBtn);
     }
     const hint = document.createElement("span");
@@ -637,6 +696,7 @@ export class InlineErrataEditorController {
       saveBtn.textContent = "保存中…";
       errorEl.hidden = true;
       try {
+        const liveVerifiedPage = getVerifiedPdfPage?.();
         const res = await saveMarkdownErrata({
           artifact_id: artifactId,
           base_content_hash: baseContentHash,
@@ -644,7 +704,7 @@ export class InlineErrataEditorController {
           last_block_id: target.lastBlockId,
           corrected_text: textarea.value,
           note: noteInput.value.trim() || null,
-          verified_pdf_page: verifiedPdfPage ?? null,
+          verified_pdf_page: liveVerifiedPage ?? verifiedPdfPage ?? null,
         });
         this.close();
         await onSaved(res);
@@ -665,7 +725,11 @@ export class InlineErrataEditorController {
       event.stopPropagation();
       if (event.key === "Escape") {
         event.preventDefault();
-        this.close();
+        if (isPdfReferenceOpen?.() && onClosePdf) {
+          onClosePdf();
+        } else {
+          this.close();
+        }
       } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         void doSave();

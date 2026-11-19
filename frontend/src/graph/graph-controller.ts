@@ -20,6 +20,7 @@ import {
 import { LABEL_HOVER, refreshLabels, syncNodeLabel, type LabelSet } from "./label-hover";
 import { focusSubgraph, type FocusDepth, type FocusLens, type FocusResult } from "./focus";
 import { applyInkOverlay, clearInkOverlay, INK_NOTE_NODE_CLASS, type InkOverlayResult } from "./ink-overlay";
+import { applyErrataReviewOverlay, clearErrataReviewOverlay } from "./errata-overlay";
 import {
   collapseRedundantConversions,
   isAuxiliaryArtifactNode,
@@ -127,6 +128,7 @@ export class GraphController {
   private inkOverlay: InkLinkOverlay | undefined;
   private showInkNotes = false;
   private inkOverlayResult: InkOverlayResult = { drawn: 0, hidden: 0 };
+  private errataReviewOverlay: Record<string, number> = {};
   private inkToggleLabel: HTMLElement | undefined;
   /** Order-invariant base positions computed by deterministic `cose` on the full active landscape. */
   private basePositions = new Map<string, MapPoint>();
@@ -588,9 +590,17 @@ export class GraphController {
     this.refreshInkOverlay();
   }
 
+  /** Block-level Markdown errata: non-blocking unreviewed cue on affected units. */
+  setErrataReviewOverlay(unreviewedByUnitId: Record<string, number>): void {
+    this.errataReviewOverlay = unreviewedByUnitId;
+    this.refreshInkOverlay();
+  }
+
   private refreshInkOverlay(): void {
     if (this.graphCore === null) { this.renderInkToggle(); return; }
+    clearErrataReviewOverlay(this.graphCore);
     this.inkOverlayResult = applyInkOverlay(this.graphCore, this.inkOverlay, this.showInkNotes);
+    applyErrataReviewOverlay(this.graphCore, this.errataReviewOverlay);
     this.applyEffectiveFocusAndSelection();
     this.renderInkToggle();
     this.renderLegend(this.graphCore);
@@ -719,7 +729,10 @@ export class GraphController {
       node.hasClass("orbit-semantic-node") ||
       node.hasClass("spine-header-node");
 
-    if (this.graphCore !== null) clearInkOverlay(this.graphCore);
+    if (this.graphCore !== null) {
+      clearErrataReviewOverlay(this.graphCore);
+      clearInkOverlay(this.graphCore);
+    }
     if (this.graphCore === null) {
       this.graphCore = mountCytoscapeGraph(
         this.elements.graphContainer,
@@ -752,6 +765,7 @@ export class GraphController {
     this.focusRelationScope = posture.inScopeRelationIds;
     applyStagedOverlay(this.graphCore, this.delegate.getSnapshot()?.investigation);
     this.inkOverlayResult = applyInkOverlay(this.graphCore, this.inkOverlay, this.showInkNotes);
+    applyErrataReviewOverlay(this.graphCore, this.errataReviewOverlay);
     this.applyEffectiveFocusAndSelection();
     this.choreographer.applyPosture(
       this.graphCore,

@@ -602,6 +602,18 @@ const styles: StylesheetJson = [
     selector: "node.has-ink-notes",
     style: { "border-color": "#b79be0", "border-width": 2.5 },
   },
+  // Block-level Markdown errata non-blocking review cue (errata-overlay.ts).
+  {
+    selector: "node.has-errata-review",
+    style: {
+      "border-color": "#45c4a3",
+      "border-style": "dashed",
+      "border-width": 2.5,
+      "overlay-color": "#45c4a3",
+      "overlay-opacity": 0.14,
+      "overlay-padding": 5,
+    },
+  },
   {
     selector: "node.ink-note-node",
     style: {

@@ -66,6 +66,108 @@ extraCommands.set("get_desktop_snapshot", () => {
 for (const command of ["list_discovery_runs", "list_parse_jobs", "list_review_items"]) extraCommands.set(command, () => []);
 extraCommands.set("get_llm_settings_summary", () => ({ configured: false }));
 const mdBytes = new TextEncoder().encode(mdSource);
+function tinySamplePdf(): Uint8Array {
+  const s1 = "0 0 0 rg BT /F1 14 Tf 24 340 Td (Page 1 Original Statement) Tj ET\n";
+  const s2 = "0 0 0 rg BT /F1 14 Tf 24 340 Td (Page 2 Formula C_n^r + C_n^{r+1}) Tj ET\n";
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources << /Font << /F1 7 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>",
+    `<< /Length ${s1.length} >>\nstream\n${s1}\nendstream`,
+    `<< /Length ${s2.length} >>\nstream\n${s2}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let data = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((body, i) => { offsets.push(data.length); data += `${i + 1} 0 obj\n${body}\nendobj\n`; });
+  const xref = data.length;
+  data += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach((offset) => { data += `${String(offset).padStart(10, "0")} 00000 n \n`; });
+  data += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return new TextEncoder().encode(data);
+}
+const pdfBytes = tinySamplePdf();
+const errataState = {
+  items: [] as Array<{
+    errata_id: string; artifact_id: string; base_content_hash: string;
+    first_block_id: string; last_block_id: string; covered_block_ids: string[];
+    base_byte_start: number; base_byte_end: number; base_text_hash: string;
+    original_text: string; corrected_text: string; status: "active" | "reverted" | "superseded";
+    source_kind: "manual" | "discovery_patch"; actor: string; note: string | null;
+    verified_pdf_page: number | null; created_at: string; updated_at: string;
+  }>,
+  reviews: new Map<string, "acknowledged" | "sent_to_sandbox">(),
+  seq: 1,
+};
+const syncMockMarkdownLinkLabels = () => {
+  const active = errataState.items.find((e) => e.artifact_id === "md-1" && e.status === "active");
+  const label = active ? active.corrected_text.replace(/^#+\s*/, "").trim().slice(0, 32) : "正确表述";
+  for (const link of links) {
+    if (link.target_kind === "markdown" && link.target_id === "md-1") {
+      link.target_label = label;
+      if (link.target.kind === "markdown") {
+        link.target.label = label;
+        link.target.excerpt = active ? active.corrected_text : mdSource;
+      }
+    }
+  }
+};
+extraCommands.set("list_markdown_errata", (args) =>
+  structuredClone(errataState.items.filter((e) => e.artifact_id === String(args.artifactId) && e.status === "active")),
+);
+extraCommands.set("save_markdown_errata", (args) => {
+  const req = args.request as { artifact_id: string; first_block_id: string; last_block_id: string; corrected_text: string; note?: string | null; verified_pdf_page?: number | null };
+  const superseded: string[] = [];
+  for (const prev of errataState.items) {
+    if (prev.artifact_id === req.artifact_id && prev.status === "active") {
+      prev.status = "superseded";
+      superseded.push(prev.errata_id);
+    }
+  }
+  const entry = {
+    errata_id: `mathscape:markdown-errata/app-${errataState.seq++}`,
+    artifact_id: req.artifact_id,
+    base_content_hash: "sha256:test",
+    first_block_id: req.first_block_id,
+    last_block_id: req.last_block_id,
+    covered_block_ids: [req.first_block_id],
+    base_byte_start: 0,
+    base_byte_end: mdBytes.length,
+    base_text_hash: "sha256:orig",
+    original_text: mdSource,
+    corrected_text: req.corrected_text,
+    status: "active" as const,
+    source_kind: "manual" as const,
+    actor: "mathscape:actor/desktop-user",
+    note: req.note ?? null,
+    verified_pdf_page: req.verified_pdf_page ?? null,
+    created_at: "2026-11-19T00:00:00Z",
+    updated_at: "2026-11-19T00:00:00Z",
+  };
+  errataState.items.push(entry);
+  syncMockMarkdownLinkLabels();
+  return { errata: structuredClone(entry), superseded_ids: superseded, affected_unit_ids: ["unit-thm"] };
+});
+extraCommands.set("revert_markdown_errata", (args) => {
+  const target = errataState.items.find((e) => e.errata_id === String(args.errataId));
+  if (!target) throw new Error("未找到勘误记录");
+  target.status = "reverted";
+  syncMockMarkdownLinkLabels();
+  return { errata: structuredClone(target), affected_unit_ids: ["unit-thm"] };
+});
+extraCommands.set("mark_errata_unit_reviewed", (args) => {
+  const unitId = String(args.unitId);
+  const errataIds = (args.errataIds as string[]) ?? [];
+  const decision = String(args.decision) as "acknowledged" | "sent_to_sandbox";
+  for (const eid of errataIds) errataState.reviews.set(`${unitId}:${eid}`, decision);
+  return errataIds.length;
+});
+extraCommands.set("list_unreviewed_errata_units", () => {
+  const active = errataState.items.filter((e) => e.artifact_id === "md-1" && e.status === "active");
+  const unreviewed = active.filter((e) => errataState.reviews.get(`unit-thm:${e.errata_id}`) !== "acknowledged");
+  return unreviewed.length ? { "unit-thm": unreviewed.length } : {};
+});
 const contentFailures = new Set<string>();
 const contentRequests: string[] = [];
 const detailRequests: string[] = [];
@@ -75,11 +177,28 @@ extraCommands.set("get_source_node_detail", async (args) => {
   detailRequests.push(id);
   if (sourceDetailBehavior.delayMs) await new Promise(resolve => setTimeout(resolve, sourceDetailBehavior.delayMs));
   if (sourceDetailBehavior.failIds.includes(id)) throw new Error("来源对象读取失败");
+  const active = errataState.items.filter((e) => e.artifact_id === "md-1" && e.status === "active");
+  const unreviewed = active.filter((e) => errataState.reviews.get(`${id}:${e.errata_id}`) !== "acknowledged");
+  const effectiveExcerpt = active.length ? active[active.length - 1].corrected_text : mdSource;
   return {
     node_id: id, kind: "SourceSemanticUnit", display_title: "定理 3.2", unit_kind: "statement", parent: null,
-    artifact_id: "md-1", byte_range: { start: 0, end: mdBytes.length }, excerpt: mdSource,
+    artifact_id: "md-1", byte_range: { start: 0, end: mdBytes.length }, excerpt: effectiveExcerpt,
     markdown_block_ids: ["b1"], payload: {},
     pdf_backlink: { kind: "exact_pdf_pages", pdf_artifact_id: "pdf-notes", pdf_page_indices: [1], marker_page_ids: [1] },
+    errata_review: unreviewed.length ? {
+      unit_id: id,
+      items: unreviewed.map((e) => ({
+        errata_id: e.errata_id,
+        artifact_id: e.artifact_id,
+        first_block_id: e.first_block_id,
+        last_block_id: e.last_block_id,
+        original_text: e.original_text,
+        corrected_text: e.corrected_text,
+        source_kind: e.source_kind,
+        updated_at: e.updated_at,
+        sent_to_sandbox: errataState.reviews.get(`${id}:${e.errata_id}`) === "sent_to_sandbox",
+      })),
+    } : undefined,
   };
 });
 extraCommands.set("get_source_backlink", () => ({
@@ -157,12 +276,27 @@ extraCommands.set("semantic_learning_view", () => {
   ],
   };
 });
+const longParts = Array.from({ length: 30 }, (_, i) => `## 第 ${i + 1} 节\n\n这是第 ${i + 1} 段用于验证长文档滚动锚定不漂移的正文内容，包含公式 $a_{${i + 1}} = ${i + 1}^2$。\n\n`);
+const longSource = longParts.join("");
+const longBytes = new TextEncoder().encode(longSource);
+const longBlocks = (() => {
+  const out: Array<{ id: string; kind: string; range: { start: number; end: number } }> = [];
+  let cursor = 0;
+  longParts.forEach((part, idx) => {
+    const len = new TextEncoder().encode(part).length;
+    out.push({ id: `lb-${idx + 1}`, kind: "text", range: { start: cursor, end: cursor + len } });
+    cursor += len;
+  });
+  return out;
+})();
+
 extraCommands.set("get_artifact_content_info", (args) => {
   const id = String(args.artifactId);
   contentRequests.push(id);
   if (contentFailures.has(id)) throw new Error("Artifact 不存在");
   if (id === "md-1") return { artifact_id: id, media_type: "text/markdown", byte_size: mdBytes.length, contexts: [{ conversion_id: "c1", paths: [{ path: "notes.md", artifact_id: "md-1" }] }] };
-  if (id === "pdf-notes") return { artifact_id: id, media_type: "application/pdf", byte_size: 100, contexts: [] };
+  if (id === "md-long") return { artifact_id: id, media_type: "text/markdown", byte_size: longBytes.length, contexts: [{ conversion_id: "c-long", paths: [{ path: "long.md", artifact_id: "md-long" }] }] };
+  if (id === "pdf-notes") return { artifact_id: id, media_type: "application/pdf", byte_size: pdfBytes.length, contexts: [] };
   throw new Error("artifact not found: " + id);
 });
 extraCommands.set("read_artifact_bytes", (args) => {
@@ -170,16 +304,30 @@ extraCommands.set("read_artifact_bytes", (args) => {
   const offset = Number(args.offset ?? 0);
   const length = Number(args.length ?? 0);
   if (id === "md-1") return mdBytes.slice(offset, offset + length).buffer;
+  if (id === "md-long") return longBytes.slice(offset, offset + length).buffer;
+  if (id === "pdf-notes") return pdfBytes.slice(offset, offset + length).buffer;
   return new ArrayBuffer(0);
 });
-extraCommands.set("get_markdown_document", () => ({
-  schema_version: "mathscape.anchored-markdown.v1",
-  artifact_id: "md-1",
-  conversion_id: "c1",
-  source: mdSource,
-  blocks: [{ id: "b1", kind: "heading", range: { start: 0, end: mdBytes.length } }],
-  snapshot: { artifact_id: "md-1", conversion_id: "c1", content_hash: "sha256:test", anchor_scheme: "mathscape-markdown-blocks-1", fingerprint: "fp-md-1", byte_size: mdBytes.length },
-}));
+extraCommands.set("get_markdown_document", (args) => {
+  if (String(args.artifactId) === "md-long") {
+    return {
+      schema_version: "mathscape.anchored-markdown.v1",
+      artifact_id: "md-long",
+      conversion_id: "c-long",
+      source: longSource,
+      blocks: longBlocks,
+      snapshot: { artifact_id: "md-long", conversion_id: "c-long", content_hash: "sha256:long", anchor_scheme: "mathscape-markdown-blocks-1", fingerprint: "fp-md-long", byte_size: longBytes.length },
+    };
+  }
+  return {
+    schema_version: "mathscape.anchored-markdown.v1",
+    artifact_id: "md-1",
+    conversion_id: "c1",
+    source: mdSource,
+    blocks: [{ id: "b1", kind: "heading", range: { start: 0, end: mdBytes.length } }],
+    snapshot: { artifact_id: "md-1", conversion_id: "c1", content_hash: "sha256:test", anchor_scheme: "mathscape-markdown-blocks-1", fingerprint: "fp-md-1", byte_size: mdBytes.length },
+  };
+});
 
 // N3d: a stand-in for search_workspace. Ranking is covered by the Rust
 // tests; this returns real target shapes so navigation runs end to end.

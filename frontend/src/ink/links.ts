@@ -331,6 +331,22 @@ export function openCreateInkPopover(options: {
   const tablet = node("button", "用平板书写", "secondary-button");
   const cancel = node("button", "取消", "secondary-button");
   for (const button of [desktop, tablet, cancel]) button.type = "button";
+  const tabletHint = node("p", "", "ink-tablet-hint");
+  tabletHint.hidden = true;
+  void safeInvoke<{ running?: boolean; online_tablets?: number }>("get_ink_lan_status")
+    .then((status) => {
+      if (!root.isConnected) return;
+      if (status?.running && (status.online_tablets ?? 0) > 0) {
+        tablet.textContent = "推送到平板（已在线）";
+        tablet.classList.add("is-tablet-online");
+        tabletHint.textContent = "检测到平板已连接，创建后将直接推送切换，无需重新扫码。";
+        tabletHint.hidden = false;
+      } else {
+        tabletHint.textContent = "当前未连接平板，点击「用平板书写」后将打开配对二维码。";
+        tabletHint.hidden = false;
+      }
+    })
+    .catch(() => { /* Optional hint when LAN IPC is unavailable. */ });
   const go = async (mode: InkCreateChoice["mode"]) => {
     desktop.disabled = tablet.disabled = true;
     message.textContent = "正在创建手稿…";
@@ -355,7 +371,7 @@ export function openCreateInkPopover(options: {
   fields.append(roleLabelEl, titleLabelEl);
   root.append(node("h3", "新建关联手稿"), target);
   if (options.excerpt) root.append(node("blockquote", options.excerpt, "ink-link-excerpt"));
-  root.append(fields, message, actions);
+  root.append(fields, message, actions, tabletHint);
   desktop.focus();
 }
 

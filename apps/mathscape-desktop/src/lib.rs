@@ -1119,6 +1119,8 @@ pub fn run() {
             markdown_errata::list_markdown_errata_history,
             markdown_errata::save_markdown_errata,
             markdown_errata::revert_markdown_errata,
+            markdown_errata::mark_errata_unit_reviewed,
+            markdown_errata::list_unreviewed_errata_units,
             markdown_patch::run_markdown_patch,
             markdown_patch::get_markdown_patch_review,
             markdown_patch::get_pending_markdown_patch_review,
