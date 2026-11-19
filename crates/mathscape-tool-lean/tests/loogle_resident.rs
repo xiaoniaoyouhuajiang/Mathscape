@@ -180,6 +180,11 @@ fn wait_dead(pid: u32) -> bool {
     })
 }
 
+fn socket_dir() -> tempfile::TempDir {
+    // macOS's per-user TMPDIR can exceed the Unix socket path limit.
+    tempfile::tempdir_in("/tmp").unwrap()
+}
+
 #[test]
 fn lazy_start_then_reuse_with_identical_count_semantics() {
     let env = Env::new("reuse", "");
@@ -434,7 +439,8 @@ fn disabled_instance_falls_back_without_spawning() {
 #[test]
 fn socket_round_trip_toggle_and_shutdown() {
     let env = Env::new("socket", "");
-    let socket = env.dir.join("sock").join("loogle.sock");
+    let socket_dir = socket_dir();
+    let socket = socket_dir.path().join("sock/loogle.sock");
     let host = LoogleResidentHost::start(
         socket.clone(),
         ResidentLoogle::with_policy(
@@ -506,7 +512,8 @@ fn socket_round_trip_toggle_and_shutdown() {
 #[test]
 fn forced_off_host_ignores_the_setting() {
     let env = Env::new("forced", "");
-    let socket = env.dir.join("sock").join("loogle.sock");
+    let socket_dir = socket_dir();
+    let socket = socket_dir.path().join("sock/loogle.sock");
     let host = LoogleResidentHost::start(
         socket.clone(),
         ResidentLoogle::new(mathscape_resident::null_sink()),
