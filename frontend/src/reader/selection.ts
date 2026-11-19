@@ -200,6 +200,7 @@ export class MarkdownSelection {
   private handwriteButton?: HTMLButtonElement;
   private openPdfButton?: HTMLButtonElement;
   private onSelectionChange?: () => void;
+  private onEditErrata?: (range: { first: number; last: number }) => void;
 
   constructor(
     private data: AnchoredMarkdown,
@@ -433,6 +434,10 @@ export class MarkdownSelection {
     this.onSelectionChange = listener;
   }
 
+  setOnEditErrata(listener: ((range: { first: number; last: number }) => void) | undefined): void {
+    this.onEditErrata = listener;
+  }
+
   isWholeSelection(): boolean {
     return this.whole;
   }
@@ -479,7 +484,7 @@ export class MarkdownSelection {
 
   private onClick = (event: Event): void => {
     const target = event.target as Element | null;
-    if (!target || target.closest(".block-action-pill, .ink-block-marker, .page-marker-jump")) return;
+    if (!target || target.closest(".block-action-pill, .ink-block-marker, .page-marker-jump, .unit-map-badge-row, .errata-block-badge, .errata-inline-editor, .errata-diff-popover")) return;
     const block = target.closest<HTMLElement>("[data-source-block]");
     if (!block || !this.article.contains(block)) return;
     const index = this.indexes.get(block.dataset.sourceBlock ?? "") ?? -1;
@@ -521,12 +526,24 @@ export class MarkdownSelection {
     this.refresh();
   };
   private onKey = (event: KeyboardEvent): void => {
+    const target = event.target as HTMLElement | null;
+    if (target && (target.closest(".errata-inline-editor, .errata-diff-popover") || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable)) {
+      return;
+    }
     if (event.key === "Escape" && !event.defaultPrevented && (this.current >= 0 || this.first >= 0 || this.last >= 0)) {
       event.preventDefault();
       this.clearSelection();
       return;
     }
-    if ((event.key === "Enter" || event.key === " ") && (event.target as HTMLElement).hasAttribute("data-source-block")) {
+    if ((event.key === "e" || event.key === "E") && !event.ctrlKey && !event.metaKey && !event.altKey && this.onEditErrata) {
+      const range = this.targetRange();
+      if (range && !this.whole) {
+        event.preventDefault();
+        this.onEditErrata(range);
+        return;
+      }
+    }
+    if ((event.key === "Enter" || event.key === " ") && target?.hasAttribute("data-source-block")) {
       event.preventDefault(); this.onClick(event);
     }
   };

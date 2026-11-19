@@ -248,15 +248,22 @@
   box-shadow: 0 3px 10px rgba(15, 23, 30, .22);
 }
 .source-block.has-ink-marker > .block-action-pill { right: 56px; }
+.source-block.has-errata > .block-action-pill { right: 64px; }
+.source-block.has-ink-marker.has-errata > .block-action-pill { right: 116px; }
 .block-pill-btn {
   background: transparent; color: #dbe9ef; border: none; border-radius: 999px;
   padding: 2px 8px; font-size: 11px; line-height: 1.35; cursor: pointer; white-space: nowrap;
 }
-.block-pill-btn:hover { background: #263b49; color: #ffffff; }
+.block-pill-btn:hover:not(:disabled) { background: #263b49; color: #ffffff; }
+.block-pill-btn:disabled { opacity: .45; cursor: not-allowed; }
 .block-pill-btn.block-pill-primary {
   background: #4e3975; color: #f6f1fd;
 }
-.block-pill-btn.block-pill-primary:hover { background: #5f468e; }
+.block-pill-btn.block-pill-primary:hover:not(:disabled) { background: #5f468e; }
+.block-pill-btn.block-pill-errata {
+  background: #1d4a44; color: #dcf6ef;
+}
+.block-pill-btn.block-pill-errata:hover:not(:disabled) { background: #265f57; color: #ffffff; }
 .source-block.is-ink-menu-target { background: #efe8fa; border-left-color: #8a6fb5; }
 .ink-patch-hint { margin: 6px 0; padding: 6px 10px; border-left: 3px solid #8a6fb5; color: #4b3473; background: #f4effb; font-size: 13px; }
 
@@ -287,4 +294,127 @@
 .source-block.is-outline-pulse {
   outline: 2px solid #3f9c88; outline-offset: 3px; background: rgba(63, 156, 136, 0.12);
   transition: background 0.3s ease;
+}
+
+/* Block-level Markdown errata overlay, inline KaTeX editor, and Diff popover */
+.source-block.is-errata-merged-hidden { display: none !important; }
+.source-block.has-errata { border-left-color: #2c8a78; }
+.source-block.is-errata-editing {
+  background: #e7f4f0; border-left-color: #247e6d; outline: 1px solid #75bcae;
+}
+.errata-block-badge {
+  position: absolute; top: 2px; right: 4px; z-index: 1;
+  padding: 1px 7px; border-radius: 10px;
+  border: 1px solid #7bb8ab; background: #e3f4ef; color: #195e51;
+  font-size: 10.5px; font-weight: 500; line-height: 1.45; cursor: pointer;
+}
+.errata-block-badge:hover { background: #cfece4; border-color: #4f9e8e; }
+.source-block.has-ink-marker > .errata-block-badge { right: 54px; }
+
+.errata-inline-editor {
+  margin: 8px 0 14px; padding: 12px 14px; border-radius: 8px;
+  background: #132028; color: #e5eff4; border: 1px solid #416874;
+  box-shadow: 0 8px 24px rgba(8, 15, 20, .34);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.errata-editor-header {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  padding-bottom: 8px; margin-bottom: 10px; border-bottom: 1px solid #294450;
+}
+.errata-editor-title-group { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+.errata-editor-diff-badge {
+  font-size: 11px; padding: 1px 8px; border-radius: 999px;
+  background: #1d333d; color: #9ec0cb; border: 1px solid #355462;
+}
+.errata-editor-diff-badge.has-changes {
+  background: #1a3b34; color: #9de5d0; border-color: #3d8575;
+}
+.errata-editor-header-actions { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.errata-editor-shortcut-hint { font-size: 11px; color: #89a5b1; }
+.errata-editor-grid {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: stretch;
+}
+#ink-split-reader .errata-editor-grid { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 880px) {
+  .errata-editor-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.errata-editor-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.errata-editor-col-label { font-size: 11px; color: #9ab7c2; font-weight: 500; }
+.errata-editor-input {
+  width: 100%; box-sizing: border-box; min-height: 112px; resize: vertical;
+  padding: 9px 10px; border-radius: 6px;
+  background: #0d171d; color: #e8f2f6; border: 1px solid #3b5d69;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12.5px; line-height: 1.55; tab-size: 2;
+}
+.errata-editor-input:focus { outline: 2px solid #4ca694; border-color: #4ca694; }
+.errata-editor-note-input {
+  width: 100%; box-sizing: border-box; padding: 6px 9px; border-radius: 5px;
+  background: #0f1b22; color: #d5e5ec; border: 1px solid #2e4a56; font-size: 12px;
+}
+.errata-editor-note-input::placeholder { color: #73909c; }
+.errata-katex-warning {
+  padding: 5px 8px; border-radius: 5px; font-size: 11.5px;
+  background: #382814; color: #f6ce84; border: 1px solid #a8762c;
+}
+.errata-katex-warning[hidden] { display: none !important; }
+.errata-editor-preview.markdown-body {
+  flex: 1 1 auto; min-height: 112px; max-height: 320px; overflow: auto;
+  margin: 0; padding: 10px 14px; border-radius: 6px;
+  max-width: none; background: #f4f5f0; color: #1b242c;
+  border: 1px solid #446470; font-size: 14px; line-height: 1.65;
+}
+.errata-preview-empty { color: #7a8a94; font-style: italic; margin: 0; }
+.errata-editor-footer {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  margin-top: 10px; padding-top: 8px; border-top: 1px solid #294450;
+}
+.errata-editor-error { margin: 0; color: #f4aca2; font-size: 12px; flex: 1 1 200px; }
+.errata-editor-error[hidden] { display: none !important; }
+.errata-editor-actions { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+
+.errata-btn-primary, .errata-btn-ghost, .errata-btn-danger {
+  border-radius: 5px; padding: 5px 11px; font-size: 12px; cursor: pointer; border: 1px solid transparent;
+}
+.errata-btn-primary {
+  background: #237464; color: #f1fbf8; border-color: #4ca694; font-weight: 500;
+}
+.errata-btn-primary:hover:not(:disabled) { background: #2b8c79; }
+.errata-btn-primary:disabled { opacity: .45; cursor: default; }
+.errata-btn-ghost {
+  background: #1b2f39; color: #cde1e8; border-color: #3f5d6b;
+}
+.errata-btn-ghost:hover:not(:disabled) { background: #243e4b; }
+.errata-btn-danger {
+  background: #3c2024; color: #f4c3bc; border-color: #8f4b52;
+}
+.errata-btn-danger:hover:not(:disabled) { background: #4f2a2f; }
+
+.errata-diff-popover {
+  position: fixed; z-index: 40; padding: 11px 13px; border-radius: 8px;
+  background: #14212a; color: #e4eef3; border: 1px solid #486b78;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .42); font-size: 12px;
+}
+.errata-diff-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px;
+}
+.errata-diff-close {
+  background: transparent; border: none; color: #9cb7c3; font-size: 13px; cursor: pointer; padding: 2px 5px;
+}
+.errata-diff-close:hover { color: #ffffff; }
+.errata-diff-note { margin: 0 0 8px; color: #b5ced8; font-size: 11.5px; }
+.errata-diff-view {
+  max-height: 210px; overflow: auto; border-radius: 5px;
+  background: #0c151a; border: 1px solid #2b444f; padding: 6px 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px; line-height: 1.5;
+}
+.errata-diff-line { padding: 1px 9px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.errata-diff-line.is-same { color: #a7bcc5; }
+.errata-diff-line.is-del { background: rgba(186, 68, 68, .22); color: #f5b9b2; }
+.errata-diff-line.is-add { background: rgba(52, 158, 121, .24); color: #b9f0da; }
+.errata-diff-status { margin: 6px 0 0; color: #b5d8d0; font-size: 11.5px; }
+.errata-diff-status[hidden] { display: none !important; }
+.errata-diff-actions {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 9px;
 }

@@ -14,7 +14,7 @@ use mathscape_domain::{
     StableId, markdown_offset_of_page, plan_canonical_reader,
 };
 use mathscape_orchestrator::{MAX_MARKDOWN_BYTES, anchor_markdown};
-use mathscape_store_sqlite::SqliteArtifactStore;
+use mathscape_store_sqlite::{MarkdownBlockErrata, SqliteArtifactStore};
 use serde::Serialize;
 use tauri::State;
 
@@ -54,6 +54,8 @@ pub enum CanonicalReaderPiece {
         content_hash: String,
         /// Physical snapshot blocks starting at or after `byte_start` (ranges remain physical snapshot byte offsets).
         blocks: Vec<MarkdownBlock>,
+        /// Active block-level errata overlays overlapping `[byte_start..)` on this physical snapshot.
+        errata: Vec<MarkdownBlockErrata>,
         markdown: String,
     },
     Gap {
@@ -75,7 +77,6 @@ impl DesktopService {
             .into_iter()
             .find(|view| view.canonical_id == id)
             .ok_or("规范解析正文未登记，请刷新地图后重试")?;
-        drop(store);
         let plan = plan_canonical_reader(&view);
         let pool = ArtifactPool::open(&self.workspace_root).map_err(|e| e.to_string())?;
         let mut budget = MAX_MARKDOWN_BYTES;
@@ -108,6 +109,12 @@ impl DesktopService {
                         .into_iter()
                         .filter(|b| b.range.end > byte_start as u64)
                         .collect();
+                    let errata: Vec<MarkdownBlockErrata> = store
+                        .list_active_markdown_errata(segment.markdown_artifact_id.as_str())
+                        .map_err(|e| e.to_string())?
+                        .into_iter()
+                        .filter(|item| item.base_byte_end > byte_start as u64)
+                        .collect();
                     pieces.push(CanonicalReaderPiece::Segment {
                         conversion_id: segment.conversion_id.to_string(),
                         artifact_id: segment.markdown_artifact_id.to_string(),
@@ -119,11 +126,13 @@ impl DesktopService {
                         byte_start: byte_start as u64,
                         content_hash,
                         blocks,
+                        errata,
                         markdown,
                     });
                 }
             }
         }
+        drop(store);
         Ok(CanonicalReaderProjection {
             canonical_id: view.canonical_id.to_string(),
             source_pdf_artifact_id: view.source_pdf_artifact_id.to_string(),

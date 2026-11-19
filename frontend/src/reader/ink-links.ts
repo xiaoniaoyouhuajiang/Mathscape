@@ -35,6 +35,8 @@ export class ReaderInkLinks {
     private readonly isRaw: () => boolean,
     private readonly onOpenPdf?: (range: { first: number; last: number }) => void,
     initialUnitMarkers: readonly MarkdownUnitMarker[] = [],
+    private readonly onEditErrata?: (range: { first: number; last: number }) => void,
+    private readonly coveredBlockIdsFor?: (blockId: string) => string[],
   ) {
     this.unitMarkers = initialUnitMarkers;
     this.hint.className = "ink-patch-hint";
@@ -113,11 +115,12 @@ export class ReaderInkLinks {
     const unitMap = this.unitIdsByBlock();
     for (const wrapper of this.article.querySelectorAll<HTMLElement>("[data-source-block]")) {
       const blockId = wrapper.dataset.sourceBlock ?? "";
-      if (!blockId || wrapper.classList.contains("source-page-marker")) continue;
+      if (!blockId || wrapper.classList.contains("source-page-marker") || wrapper.classList.contains("is-errata-merged-hidden")) continue;
+      const targetBlockIds = this.coveredBlockIdsFor?.(blockId) ?? [blockId];
       const related = overlappingNotesForBlocks(
         this.links.links,
         this.links.unit_links ?? [],
-        [blockId],
+        targetBlockIds,
         unitMap,
         this.data.snapshot.content_hash,
       );
@@ -134,7 +137,7 @@ export class ReaderInkLinks {
         const latestNotes = overlappingNotesForBlocks(
           this.links?.links ?? [],
           this.links?.unit_links ?? [],
-          [blockId],
+          this.coveredBlockIdsFor?.(blockId) ?? [blockId],
           this.unitIdsByBlock(),
           this.data.snapshot.content_hash,
         );
@@ -205,6 +208,24 @@ export class ReaderInkLinks {
     };
     pill.append(linkBtn);
 
+    if (this.onEditErrata) {
+      const rangeBlocks = this.data.blocks.slice(range.first, range.last + 1);
+      const crossesMarker = rangeBlocks.some(b => b.kind === "page_marker");
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "block-pill-btn block-pill-errata";
+      editBtn.textContent = count === 1 ? "✎ 校对" : `✎ 合并校对 ${count} 块`;
+      editBtn.disabled = crossesMarker;
+      editBtn.title = crossesMarker
+        ? "所选区间跨越了 PDF 分页标记，请分段校对"
+        : "就地修正 OCR 错字或公式（快捷键 E），保留全部手稿与地图锚点";
+      editBtn.onclick = (event) => {
+        event.stopPropagation();
+        this.onEditErrata!(range);
+      };
+      pill.append(editBtn);
+    }
+
     if (this.onOpenPdf) {
       const pdfBtn = document.createElement("button");
       pdfBtn.type = "button";
@@ -266,7 +287,7 @@ export class ReaderInkLinks {
 
   private onContextMenu = (event: MouseEvent): void => {
     if (this.isRaw()) return;
-    if ((event.target as Element).closest(".ink-block-marker, .block-action-pill")) return;
+    if ((event.target as Element).closest(".ink-block-marker, .block-action-pill, .errata-block-badge, .errata-inline-editor, .errata-diff-popover")) return;
     const wrapper = (event.target as Element).closest<HTMLElement>("[data-source-block]");
     if (!wrapper || !this.article.contains(wrapper)) return;
     const index = this.data.blocks.findIndex(block => block.id === wrapper.dataset.sourceBlock);
@@ -284,7 +305,15 @@ export class ReaderInkLinks {
     const { clientX: x, clientY: y } = event;
     this.highlight(range);
     const label = markdownPreviewLabel(this.rangeText(range));
+    const rangeCrossesMarker = this.data.blocks.slice(range.first, range.last + 1).some(b => b.kind === "page_marker");
     showContextMenu(x, y, [
+      ...(this.onEditErrata
+        ? [{
+            label: range.first === range.last ? "校对此块 OCR 正文…" : "合并校对所选正文块…",
+            disabled: rangeCrossesMarker,
+            onSelect: () => { this.highlight(null); this.onEditErrata!(range); },
+          }]
+        : []),
       ...(this.onOpenPdf
         ? [{ label: "定位对应 PDF 原页", onSelect: () => { this.highlight(null); this.onOpenPdf!(range); } }]
         : []),

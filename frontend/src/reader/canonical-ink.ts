@@ -37,6 +37,9 @@ export interface CanonicalBlockItem {
 export interface CanonicalInkCallbacks {
   onOpenPdfRange: (item: CanonicalBlockItem, rangeItems: CanonicalBlockItem[]) => void;
   onOpenSnapshot: (artifactId: string, segmentLabel: string, rangeItems: CanonicalBlockItem[]) => void;
+  onEditErrata?: (rangeItems: CanonicalBlockItem[]) => void;
+  coveredBlockIdsFor?: (artifactId: string, blockId: string) => string[];
+  hasPageMarkerBetween?: (firstItem: CanonicalBlockItem, lastItem: CanonicalBlockItem) => boolean;
   onStatusHint?: (message: string | null) => void;
 }
 
@@ -146,18 +149,19 @@ export class CanonicalInkController {
 
     for (const item of this.items) {
       if (item.block.kind === "page_marker") continue;
+      const wrapper = this.wrapperFor(item.domKey);
+      if (!wrapper || wrapper.classList.contains("is-errata-merged-hidden")) continue;
       const data = this.linksByArtifact.get(item.artifactId);
       if (!data) continue;
+      const targetBlockIds = this.callbacks.coveredBlockIdsFor?.(item.artifactId, item.block.id) ?? [item.block.id];
       const related = overlappingNotesForBlocks(
         data.links,
         data.unit_links ?? [],
-        [item.block.id],
+        targetBlockIds,
         getUnitMap(item.segmentIndex),
         item.contentHash,
       );
       if (!related.length) continue;
-      const wrapper = this.wrapperFor(item.domKey);
-      if (!wrapper) continue;
       const marker = document.createElement("button");
       marker.type = "button";
       marker.className = "ink-block-marker";
@@ -171,7 +175,7 @@ export class CanonicalInkController {
         const latestNotes = overlappingNotesForBlocks(
           latestData?.links ?? [],
           latestData?.unit_links ?? [],
-          [item.block.id],
+          this.callbacks.coveredBlockIdsFor?.(item.artifactId, item.block.id) ?? [item.block.id],
           this.unitIdsBySegmentBlock(item.segmentIndex),
           item.contentHash,
         );
@@ -330,6 +334,25 @@ export class CanonicalInkController {
     };
     pill.append(linkBtn);
 
+    if (this.callbacks.onEditErrata) {
+      const firstItem = contentItems[0];
+      const lastItem = contentItems[contentItems.length - 1];
+      const crossesMarker = Boolean(this.callbacks.hasPageMarkerBetween?.(firstItem, lastItem));
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "block-pill-btn block-pill-errata";
+      editBtn.textContent = count === 1 ? "✎ 校对" : `✎ 合并校对 ${count} 块`;
+      editBtn.disabled = crossesMarker;
+      editBtn.title = crossesMarker
+        ? "所选区间跨越了 PDF 分页标记，请分段校对"
+        : "就地修正 OCR 错字或公式（快捷键 E），保留全部手稿与地图锚点";
+      editBtn.onclick = (e) => {
+        e.stopPropagation();
+        this.callbacks.onEditErrata!(contentItems);
+      };
+      pill.append(editBtn);
+    }
+
     const pdfBtn = document.createElement("button");
     pdfBtn.type = "button";
     pdfBtn.className = "block-pill-btn";
@@ -347,7 +370,7 @@ export class CanonicalInkController {
 
   private onClick = (event: Event): void => {
     const target = event.target as Element | null;
-    if (!target || target.closest(".block-action-pill, .ink-block-marker, .page-marker-jump, .unit-map-badge-row")) return;
+    if (!target || target.closest(".block-action-pill, .ink-block-marker, .page-marker-jump, .unit-map-badge-row, .errata-block-badge, .errata-inline-editor, .errata-diff-popover")) return;
     const blockEl = target.closest<HTMLElement>("[data-canonical-key]");
     if (!blockEl || !this.article.contains(blockEl)) return;
     const idx = this.indexByDomKey.get(blockEl.dataset.canonicalKey ?? "") ?? -1;
@@ -393,12 +416,27 @@ export class CanonicalInkController {
   };
 
   private onKey = (event: KeyboardEvent): void => {
+    const target = event.target as HTMLElement | null;
+    if (target && (target.closest(".errata-inline-editor, .errata-diff-popover") || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable)) {
+      return;
+    }
     if (event.key === "Escape" && !event.defaultPrevented && (this.currentIdx >= 0 || this.firstIdx >= 0)) {
       event.preventDefault();
       this.clearSelection();
       return;
     }
-    if ((event.key === "Enter" || event.key === " ") && (event.target as HTMLElement).hasAttribute("data-canonical-key")) {
+    if ((event.key === "e" || event.key === "E") && !event.ctrlKey && !event.metaKey && !event.altKey && this.callbacks.onEditErrata) {
+      const range = this.activeRange();
+      if (range) {
+        const contentItems = this.contentItemsIn(range);
+        if (contentItems.length) {
+          event.preventDefault();
+          this.callbacks.onEditErrata(contentItems);
+          return;
+        }
+      }
+    }
+    if ((event.key === "Enter" || event.key === " ") && target?.hasAttribute("data-canonical-key")) {
       event.preventDefault();
       this.onClick(event);
     }
@@ -406,7 +444,7 @@ export class CanonicalInkController {
 
   private onContextMenu = (event: MouseEvent): void => {
     const target = event.target as Element | null;
-    if (!target || target.closest(".ink-block-marker, .block-action-pill, .unit-map-badge-row")) return;
+    if (!target || target.closest(".ink-block-marker, .block-action-pill, .unit-map-badge-row, .errata-block-badge, .errata-inline-editor, .errata-diff-popover")) return;
     const blockEl = target.closest<HTMLElement>("[data-canonical-key]");
     if (!blockEl || !this.article.contains(blockEl)) return;
     const idx = this.indexByDomKey.get(blockEl.dataset.canonicalKey ?? "") ?? -1;
@@ -430,10 +468,21 @@ export class CanonicalInkController {
     this.highlightMenuTarget(range);
     const label = markdownPreviewLabel(this.rangeText(contentItems));
 
+    const crossesMarker = Boolean(this.callbacks.hasPageMarkerBetween?.(first, contentItems[contentItems.length - 1]));
     showContextMenu(
       x,
       y,
       [
+        ...(this.callbacks.onEditErrata
+          ? [{
+              label: contentItems.length === 1 ? "校对此块 OCR 正文…" : `合并校对这 ${contentItems.length} 块…`,
+              disabled: crossesMarker,
+              onSelect: () => {
+                this.highlightMenuTarget(null);
+                this.callbacks.onEditErrata!(contentItems);
+              },
+            }]
+          : []),
         {
           label: first.fallbackPdfPageIndex !== null
             ? `定位对应 PDF 原页（第 ${first.fallbackPdfPageIndex + 1} 页）`

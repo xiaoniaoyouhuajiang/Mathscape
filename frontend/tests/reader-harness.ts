@@ -83,6 +83,12 @@ setInkContextCreator(async (target, choice, draft) => { ink.creates.push({ targe
 eventBus.on("open-ink-document", ({ documentId }) => { ink.opened.push(documentId); });
 const locatedObjects: string[] = [];
 eventBus.on("locate-domain-object", ({ objectId }) => { locatedObjects.push(objectId); });
+const errataEvents: unknown[] = [];
+eventBus.on("markdown-errata-changed", (detail) => { errataEvents.push(detail); });
+const errataStore = {
+  items: [] as any[],
+  seq: 1,
+};
 const unitMarkers: any[] = [];
 let canonicalProjection: any = null;
 const backlinkRequests: unknown[] = [];
@@ -293,6 +299,73 @@ function handle(command: string, payload: any): any {
       });
     }, behavior.selectionDelay));
   }
+  if (command === "list_markdown_errata") {
+    const aid = (payload as { artifactId: string }).artifactId;
+    return errataStore.items.filter((e) => e.artifact_id === aid && e.status === "active");
+  }
+  if (command === "save_markdown_errata") {
+    const req = (payload as { request: any }).request;
+    const blocks = req.artifact_id === "md"
+      ? anchored("conversion").blocks
+      : canonicalProjection?.pieces?.find((p: any) => p.kind === "segment" && p.artifact_id === req.artifact_id)?.blocks ?? [];
+    const sourceText = req.artifact_id === "md"
+      ? markdown
+      : canonicalProjection?.pieces?.find((p: any) => p.kind === "segment" && p.artifact_id === req.artifact_id)?.markdown ?? "";
+    const byteStartOffset = req.artifact_id === "md"
+      ? 0
+      : canonicalProjection?.pieces?.find((p: any) => p.kind === "segment" && p.artifact_id === req.artifact_id)?.byte_start ?? 0;
+    const firstIdx = blocks.findIndex((b: any) => b.id === req.first_block_id);
+    const lastIdx = blocks.findIndex((b: any) => b.id === req.last_block_id);
+    if (firstIdx < 0 || lastIdx < firstIdx) throw new Error("所选块不存在");
+    const slice = blocks.slice(firstIdx, lastIdx + 1);
+    if (slice.some((b: any) => b.kind === "page_marker")) throw new Error("所选区间包含 PDF 分页标记");
+    const baseStart = slice[0].range.start;
+    const baseEnd = slice[slice.length - 1].range.end;
+    const srcBytes = new TextEncoder().encode(sourceText);
+    const originalText = new TextDecoder().decode(srcBytes.subarray(Math.max(0, baseStart - byteStartOffset), Math.max(0, baseEnd - byteStartOffset)));
+    const newId = `mathscape:markdown-errata/test-${errataStore.seq++}`;
+    const superseded_ids: string[] = [];
+    for (const prev of errataStore.items) {
+      if (prev.artifact_id === req.artifact_id && prev.status === "active" && prev.base_byte_start < baseEnd && prev.base_byte_end > baseStart) {
+        prev.status = "superseded";
+        prev.superseded_by = newId;
+        superseded_ids.push(prev.errata_id);
+      }
+    }
+    const created = {
+      errata_id: newId,
+      artifact_id: req.artifact_id,
+      base_content_hash: req.base_content_hash ?? behavior.documentHash,
+      first_block_id: req.first_block_id,
+      last_block_id: req.last_block_id,
+      covered_block_ids: slice.map((b: any) => b.id),
+      base_byte_start: baseStart,
+      base_byte_end: baseEnd,
+      base_text_hash: "sha256:fixture",
+      original_text: originalText,
+      corrected_text: req.corrected_text,
+      status: "active",
+      source_kind: "manual",
+      actor: "mathscape:actor/desktop-user",
+      note: req.note ?? null,
+      verified_pdf_page: req.verified_pdf_page ?? null,
+      created_at: "2026-11-19T11:00:00+08:00",
+      updated_at: "2026-11-19T11:00:00+08:00",
+    };
+    errataStore.items.push(created);
+    const affected_unit_ids = unitMarkers
+      .filter((u: any) => u.artifact_id === req.artifact_id && u.byte_range.start < baseEnd && u.byte_range.end > baseStart)
+      .map((u: any) => u.unit_id);
+    return { errata: created, superseded_ids, affected_unit_ids };
+  }
+  if (command === "revert_markdown_errata") {
+    const eid = (payload as { errataId: string }).errataId;
+    const item = errataStore.items.find((e) => e.errata_id === eid);
+    if (!item) throw new Error("未找到勘误记录");
+    item.status = "reverted";
+    item.updated_at = "2026-11-19T11:01:00+08:00";
+    return { errata: item, affected_unit_ids: [] };
+  }
   if (command === "get_markdown_document") {
     const doc = anchored((payload as { conversionId: string }).conversionId);
     doc.snapshot.content_hash = behavior.documentHash;
@@ -360,5 +433,5 @@ window.addEventListener("mathscape:open-source", event => {
   });
 });
 Object.assign(window, {
-  harness: { ink, locatedObjects, unitMarkers, setCanonicalProjection: (p: any) => { canonicalProjection = p; }, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ink, locatedObjects, errataStore, errataEvents, unitMarkers, setCanonicalProjection: (p: any) => { canonicalProjection = p; }, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
 });

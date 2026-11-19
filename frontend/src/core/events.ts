@@ -56,6 +56,13 @@ export interface MathscapeEventMap {
   "open-proposal-for-object": { changeSetId?: string | null; objectId?: string | null; mapLinked?: boolean };
   /** 从阅读器内已入图单元徽章跳转到主地图对应领域节点。 */
   "locate-domain-object": { objectId: string; title?: string };
+  /** 块级 Markdown 勘误保存或撤销；通知阅读器、手稿题卡与地图复核提示同步刷新。 */
+  "markdown-errata-changed": {
+    artifactId: string;
+    errataId: string;
+    action: "saved" | "reverted";
+    affectedUnitIds: string[];
+  };
   /** 审核工作区处于地图联动分屏模式时，驱动主地图高亮提案涉及的子图与 1 跳上下文。 */
   "review-map-scope": {
     active: boolean;

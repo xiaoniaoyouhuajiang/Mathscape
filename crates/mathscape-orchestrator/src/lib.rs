@@ -29,6 +29,7 @@ pub use source_facts::*;
 pub use source_registration::*;
 pub use source_review::project_source_review;
 mod markdown_anchors;
+pub mod markdown_errata;
 pub mod markdown_patch;
 mod markdown_patch_producer;
 mod markdown_patch_prompt;
@@ -70,6 +71,12 @@ pub use discovery_validation::{
 pub use markdown_anchors::{
     AnchorError, MAX_MARKDOWN_BYTES, PAGE_MARKER_STRUCTURAL_KIND, anchor_markdown,
     is_page_marker_text, page_marker_id, resolve_selection,
+};
+pub use markdown_errata::{
+    EffectiveByteMap, EffectiveByteSegment, EffectiveByteSegmentKind, EffectiveMarkdownView,
+    ErrataOverlayEntry, ErrataValidationError, MAX_ERRATA_CORRECTED_BYTES, ResolvedErrataTarget,
+    build_effective_markdown, normalize_errata_corrected_text, render_effective_slice,
+    resolve_errata_target_range, validate_errata_corrected_text,
 };
 pub use markdown_patch::MarkdownPdfMapInheritance;
 pub use markdown_patch_producer::{

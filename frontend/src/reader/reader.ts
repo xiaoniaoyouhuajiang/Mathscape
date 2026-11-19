@@ -7,10 +7,20 @@ import { getSourceBacklink } from "./backlink";
 import { markdownRenderer } from "./markdown";
 import { canonicalReaderProjection, gapLabel, pagesLabel, projectionSummary, segmentLabel, splitByPageMarkers, type CanonicalReaderSegment } from "./canonical";
 import { isCanonicalMarkdownId } from "./openable";
-import { markdownDocument, MarkdownSelection, type AnchoredMarkdown, type PatchReviewMode } from "./selection";
+import { markdownDocument, MarkdownSelection, type AnchoredMarkdown, type MarkdownBlock, type PatchReviewMode } from "./selection";
 import { ReaderInkLinks } from "./ink-links";
 import { CanonicalInkController, type CanonicalBlockItem } from "./canonical-ink";
 import { mountMarkdownOutline, type OutlineBlockDescriptor } from "./markdown-outline";
+import {
+  buildBlockErrataLookup,
+  closeErrataDiffPopover,
+  computeErrataCoverRange,
+  InlineErrataEditorController,
+  listMarkdownErrata,
+  openErrataDiffPopover,
+  revertMarkdownErrata,
+  type MarkdownBlockErrata,
+} from "./markdown-errata";
 import { extractAnchorPhrase, mountPdfTextLayer, PdfFindController, type MountedPdfTextLayer } from "./pdf-text-find";
 import { showContextMenu } from "../graph/context-menu";
 import { eventBus } from "../core/events";
@@ -925,10 +935,144 @@ export class ArtifactReader {
 
     const md = markdownRenderer();
     const decoder = new TextDecoder("utf-8", { fatal: true });
-    const segments: Array<{ segment: CanonicalReaderSegment; body: HTMLElement }> = [];
+    interface CanonicalSegBlockEntry {
+      domKey: string;
+      block: MarkdownBlock;
+      rawText: string;
+      fallbackPdfPageIndex: number | null;
+      wrapper: HTMLElement;
+    }
+    interface CanonicalSegState {
+      segmentIndex: number;
+      segment: CanonicalReaderSegment;
+      body: HTMLElement;
+      env: Record<string, unknown>;
+      allBlocks: CanonicalSegBlockEntry[];
+    }
+    const segments: CanonicalSegState[] = [];
     const canonicalItems: CanonicalBlockItem[] = [];
+    const canonicalItemByDomKey = new Map<string, CanonicalBlockItem>();
     const outlineBlocks: OutlineBlockDescriptor[] = [];
+    const outlineBlockByDomKey = new Map<string, OutlineBlockDescriptor>();
+    const errataByArtifact = new Map<string, MarkdownBlockErrata[]>();
+    const errataEditor = new InlineErrataEditorController();
+    let loadedUnitMarkers: Awaited<ReturnType<typeof getMarkdownUnitMarkers>> = [];
     let segIdx = 0;
+
+    const resolveSegmentImages = async (segment: CanonicalReaderSegment, body: HTMLElement): Promise<void> => {
+      const placeholders = body.querySelectorAll<HTMLElement>("[data-image-ref]");
+      if (!placeholders.length) return;
+      let info: ContentInfo | undefined;
+      try { info = await contentInfo(segment.artifact_id); } catch { /* shown per image */ }
+      if (generation !== this.generation) return;
+      const context = info?.contexts.find(c => c.conversion_id === segment.conversion_id) ?? info?.contexts[0];
+      const bases = context?.paths.filter(p => p.artifact_id === segment.artifact_id) ?? [];
+      for (const placeholder of placeholders) {
+        try {
+          const candidates = new Set<string>();
+          for (const base of bases) {
+            const path = resolveProductPath(base.path, placeholder.dataset.imageRef ?? "");
+            context?.paths.filter(p => p.path === path).forEach(p => candidates.add(p.artifact_id));
+          }
+          if (candidates.size !== 1) throw new Error("图片映射缺失或不明确");
+          const imageInfo = await contentInfo([...candidates][0]);
+          if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(imageInfo.media_type)) throw new Error("不支持的图片类型");
+          const data = await readSmallFile(imageInfo);
+          if (generation !== this.generation) return;
+          const img = element("img"); img.alt = placeholder.textContent ?? "";
+          img.src = this.blobUrl(data, imageInfo.media_type);
+          placeholder.replaceWith(img);
+        } catch (error) {
+          placeholder.textContent = "[" + String(error) + "]";
+        }
+      }
+    };
+
+    const applyErrataUpdate = (artifactId: string, saved?: MarkdownBlockErrata, removeIds: readonly string[] = []) => {
+      const drop = new Set(removeIds);
+      const next = (errataByArtifact.get(artifactId) ?? []).filter(
+        (item) => item.status === "active" && !drop.has(item.errata_id),
+      );
+      if (saved && saved.status === "active") {
+        next.push(saved);
+        next.sort((a, b) => a.base_byte_start - b.base_byte_start);
+      }
+      errataByArtifact.set(artifactId, next);
+    };
+
+    let openCanonicalErrataForRange!: (seg: CanonicalSegState, firstIdx: number, lastIdx: number) => void;
+    let canonicalInk: CanonicalInkController | undefined;
+
+    const renderCanonicalSegmentBlocks = (seg: CanonicalSegState, refreshChrome: boolean): void => {
+      const activeList = errataByArtifact.get(seg.segment.artifact_id) ?? [];
+      const lookup = buildBlockErrataLookup(activeList);
+
+      for (let i = 0; i < seg.allBlocks.length; i++) {
+        const entry = seg.allBlocks[i];
+        if (entry.block.kind === "page_marker") continue;
+        const wrapper = entry.wrapper;
+        wrapper.classList.remove("has-errata", "is-errata-merged-hidden");
+        delete wrapper.dataset.errataId;
+        wrapper.querySelectorAll(".errata-block-badge").forEach((el) => el.remove());
+
+        if (lookup.hiddenSecondaryBlockIds.has(entry.block.id)) {
+          wrapper.classList.add("is-errata-merged-hidden");
+          wrapper.replaceChildren();
+          const ob = outlineBlockByDomKey.get(entry.domKey);
+          if (ob) ob.text = "";
+          continue;
+        }
+
+        const activeErrata = lookup.primaryByBlockId.get(entry.block.id);
+        const effectiveText = activeErrata ? activeErrata.corrected_text : entry.rawText;
+        const ci = canonicalItemByDomKey.get(entry.domKey);
+        if (ci) ci.text = effectiveText;
+        const ob = outlineBlockByDomKey.get(entry.domKey);
+        if (ob) ob.text = effectiveText;
+
+        wrapper.innerHTML = md.render(effectiveText, seg.env);
+        if (!wrapper.innerHTML.trim()) wrapper.append(element("pre", effectiveText));
+        wrapper.querySelectorAll("a").forEach((link) => {
+          link.removeAttribute("href");
+          link.title = "链接导航尚未启用";
+        });
+
+        if (activeErrata) {
+          wrapper.classList.add("has-errata");
+          wrapper.dataset.errataId = activeErrata.errata_id;
+          const badge = element("button", "已校对");
+          badge.type = "button";
+          badge.className = "errata-block-badge";
+          badge.title = "查看原 OCR 对比、继续编辑或一键恢复原版";
+          badge.setAttribute("aria-label", "已校对，点击查看原 OCR 对比");
+          const blockIdx = i;
+          badge.addEventListener("click", (event) => {
+            event.stopPropagation();
+            openErrataDiffPopover({
+              anchor: badge,
+              errata: activeErrata,
+              onEdit: () => openCanonicalErrataForRange(seg, blockIdx, blockIdx),
+              onRevert: async () => {
+                const prevScroll = this.host.scrollTop;
+                const res = await revertMarkdownErrata(activeErrata.errata_id);
+                applyErrataUpdate(seg.segment.artifact_id, undefined, [res.errata.errata_id]);
+                renderCanonicalSegmentBlocks(seg, true);
+                this.host.scrollTop = prevScroll;
+                setStatusHint("已恢复该块的原始 OCR 文本。");
+              },
+            });
+          });
+          badge.addEventListener("keydown", (event) => event.stopPropagation());
+          wrapper.append(badge);
+        }
+      }
+
+      if (refreshChrome) {
+        outlineHandle.update(outlineBlocks, loadedUnitMarkers);
+        canonicalInk?.decorate();
+        void resolveSegmentImages(seg.segment, seg.body);
+      }
+    };
 
     for (const piece of projection.pieces) {
       if (piece.kind === "gap") {
@@ -940,6 +1084,9 @@ export class ArtifactReader {
         continue;
       }
       const currentSegIdx = segIdx++;
+      if (!errataByArtifact.has(piece.artifact_id)) {
+        errataByArtifact.set(piece.artifact_id, (piece.errata ?? []).filter((e) => e.status === "active"));
+      }
       const segLbl = segmentLabel(piece);
       const section = element("section"); section.className = "canonical-segment";
       section.dataset.artifactId = piece.artifact_id;
@@ -963,10 +1110,11 @@ export class ArtifactReader {
       header.append(element("span", segLbl), headerActions);
       const body = element("div");
       let activePageIndex: number | null = piece.pages ? piece.pages.from - 1 : null;
+      const segEnv: Record<string, unknown> = {};
+      const segAllBlocks: CanonicalSegBlockEntry[] = [];
 
       if (piece.blocks && piece.blocks.length > 0 && piece.content_hash) {
-        const env = {};
-        md.parse(piece.markdown, env);
+        md.parse(piece.markdown, segEnv);
         const segBytes = new TextEncoder().encode(piece.markdown);
         piece.blocks.forEach((b, blockOrdinal) => {
           const relStart = Math.max(0, b.range.start - piece.byte_start);
@@ -991,6 +1139,7 @@ export class ArtifactReader {
               marker.append(jump);
             }
             body.append(marker);
+            segAllBlocks.push({ domKey, block: b, rawText: text, fallbackPdfPageIndex: activePageIndex, wrapper: marker });
             return;
           }
 
@@ -1011,12 +1160,10 @@ export class ArtifactReader {
           if (isFocused) wrapper.classList.add("source-block-focus");
           wrapper.tabIndex = 0;
           wrapper.setAttribute("aria-label", `分段 ${currentSegIdx + 1} 原文块 ${blockOrdinal + 1}`);
-          wrapper.title = `分段 ${currentSegIdx + 1} · 第 ${blockOrdinal + 1} 块 · 单击选择，Shift+单击连选多块，右键手写或反查 PDF`;
-          wrapper.innerHTML = md.render(text, env);
-          if (!wrapper.innerHTML.trim()) wrapper.append(element("pre", text));
+          wrapper.title = `分段 ${currentSegIdx + 1} · 第 ${blockOrdinal + 1} 块 · 单击选择，Shift+单击连选多块，按 E 就地校对，右键手写或反查 PDF`;
           body.append(wrapper);
 
-          canonicalItems.push({
+          const item: CanonicalBlockItem = {
             domKey,
             segmentIndex: currentSegIdx,
             segmentLabel: segLbl,
@@ -1026,15 +1173,20 @@ export class ArtifactReader {
             block: b,
             text,
             fallbackPdfPageIndex: activePageIndex,
-          });
-          outlineBlocks.push({
+          };
+          canonicalItems.push(item);
+          canonicalItemByDomKey.set(domKey, item);
+          const ob: OutlineBlockDescriptor = {
             id: b.id,
             domKey,
             artifactId: piece.artifact_id,
             range: b.range,
             text,
             kind: b.kind,
-          });
+          };
+          outlineBlocks.push(ob);
+          outlineBlockByDomKey.set(domKey, ob);
+          segAllBlocks.push({ domKey, block: b, rawText: text, fallbackPdfPageIndex: activePageIndex, wrapper });
         });
       } else {
         let fallbackOrdinal = 0;
@@ -1072,14 +1224,140 @@ export class ArtifactReader {
       }
       section.append(header, body);
       article.append(section);
-      segments.push({ segment: piece, body });
+      const segState: CanonicalSegState = {
+        segmentIndex: currentSegIdx,
+        segment: piece,
+        body,
+        env: segEnv,
+        allBlocks: segAllBlocks,
+      };
+      segments.push(segState);
+      if (segAllBlocks.length > 0) {
+        renderCanonicalSegmentBlocks(segState, false);
+      }
     }
 
-    let canonicalInk: CanonicalInkController | undefined;
+    const openCanonicalPdfForItems = (firstItem: CanonicalBlockItem, rangeItems: CanonicalBlockItem[]) => {
+      void (async () => {
+        const start = rangeItems[0].block.range.start;
+        const end = rangeItems[rangeItems.length - 1].block.range.end;
+        const blockIds = rangeItems.map((i) => i.block.id);
+        const returnFocus: ReaderFocus = { start, end, blockIds };
+        try {
+          const backlink = await getSourceBacklink({
+            artifact_id: firstItem.artifactId,
+            conversion_id: firstItem.conversionId,
+            start,
+            end,
+            block_ids: blockIds,
+          });
+          if (generation !== this.generation) return;
+          if (backlink.pdf_artifact_id && backlink.pdf_page_indices?.length) {
+            await this.open(backlink.pdf_artifact_id, `${title} · PDF 原页`, {
+              pdfPageIndex: backlink.pdf_page_indices[0],
+              candidatePages: backlink.pdf_page_indices,
+              backlinkNote: backlink.kind === "candidate_pdf_pages" ? backlink.reason : undefined,
+              focusExcerpt: firstItem.text.slice(0, 240),
+              returnTo: {
+                id,
+                title,
+                options: { focus: returnFocus },
+                label: "返回规范解析正文",
+              },
+            });
+            return;
+          }
+        } catch {
+          /* Fall back to page marker index if available. */
+        }
+        if (firstItem.fallbackPdfPageIndex !== null) {
+          openCanonicalPdfPage(firstItem.fallbackPdfPageIndex, undefined, returnFocus);
+        } else {
+          setStatusHint("当前段落没有对应的 PDF 页映射。");
+        }
+      })();
+    };
+
+    openCanonicalErrataForRange = (seg: CanonicalSegState, firstIdx: number, lastIdx: number) => {
+      const contentHash = seg.segment.content_hash;
+      if (!contentHash) return;
+      const activeList = errataByArtifact.get(seg.segment.artifact_id) ?? [];
+      const cover = computeErrataCoverRange(
+        seg.allBlocks.map((entry) => ({ block: entry.block, rawText: entry.rawText })),
+        firstIdx,
+        lastIdx,
+        activeList,
+      );
+      if (!cover.ok) {
+        setStatusHint(cover.reason);
+        return;
+      }
+      setStatusHint(null);
+      let anchorEl = seg.allBlocks[cover.startIdx].wrapper;
+      for (let i = cover.endIdx; i >= cover.startIdx; i--) {
+        if (!seg.allBlocks[i].wrapper.classList.contains("is-errata-merged-hidden")) {
+          anchorEl = seg.allBlocks[i].wrapper;
+          break;
+        }
+      }
+      const rangeItems = seg.allBlocks
+        .slice(cover.startIdx, cover.endIdx + 1)
+        .map((e) => canonicalItemByDomKey.get(e.domKey))
+        .filter((x): x is CanonicalBlockItem => Boolean(x));
+      const fallbackPage = seg.allBlocks[cover.startIdx].fallbackPdfPageIndex;
+      errataEditor.open({
+        anchorElement: anchorEl,
+        artifactId: seg.segment.artifact_id,
+        baseContentHash: contentHash,
+        target: cover,
+        verifiedPdfPage: fallbackPage,
+        onOpenPdf: rangeItems.length > 0 ? () => openCanonicalPdfForItems(rangeItems[0], rangeItems) : undefined,
+        onSaved: (res) => {
+          const prevScroll = this.host.scrollTop;
+          applyErrataUpdate(seg.segment.artifact_id, res.errata, res.superseded_ids);
+          renderCanonicalSegmentBlocks(seg, true);
+          this.host.scrollTop = prevScroll;
+          const unitHint = res.affected_unit_ids.length > 0
+            ? `（关联 ${res.affected_unit_ids.length} 个已入图节点，随时可在详情面板复核）`
+            : "";
+          setStatusHint(`已保存块级校对，当前正文与关联锚点已同步生效${unitHint}。`);
+        },
+        onReverted: (res) => {
+          const prevScroll = this.host.scrollTop;
+          applyErrataUpdate(seg.segment.artifact_id, undefined, [res.errata.errata_id]);
+          renderCanonicalSegmentBlocks(seg, true);
+          this.host.scrollTop = prevScroll;
+          setStatusHint("已恢复该块的原始 OCR 文本。");
+        },
+      });
+    };
+
     let fallbackMenuListener: ((event: MouseEvent) => void) | undefined;
     if (canonicalItems.length > 0) {
       canonicalInk = new CanonicalInkController(canonicalItems, article, {
         onStatusHint: setStatusHint,
+        coveredBlockIdsFor: (artifactId, blockId) => {
+          const active = errataByArtifact.get(artifactId) ?? [];
+          const match = active.find((e) => e.status === "active" && e.first_block_id === blockId);
+          return match?.covered_block_ids.length ? match.covered_block_ids : [blockId];
+        },
+        hasPageMarkerBetween: (firstItem, lastItem) => {
+          const seg = segments[firstItem.segmentIndex];
+          if (!seg) return false;
+          const a = seg.allBlocks.findIndex((e) => e.block.id === firstItem.block.id);
+          const b = seg.allBlocks.findIndex((e) => e.block.id === lastItem.block.id);
+          if (a < 0 || b < a) return false;
+          return seg.allBlocks.slice(a, b + 1).some((e) => e.block.kind === "page_marker");
+        },
+        onEditErrata: (rangeItems) => {
+          const seg = segments[rangeItems[0].segmentIndex];
+          if (!seg) return;
+          const firstIdx = seg.allBlocks.findIndex((e) => e.block.id === rangeItems[0].block.id);
+          const lastIdx = seg.allBlocks.findIndex((e) => e.block.id === rangeItems[rangeItems.length - 1].block.id);
+          if (firstIdx >= 0 && lastIdx >= firstIdx) {
+            openCanonicalErrataForRange(seg, firstIdx, lastIdx);
+          }
+        },
         onOpenSnapshot: (artifactId, segLbl, rangeItems) => {
           const start = rangeItems[0].block.range.start;
           const end = rangeItems[rangeItems.length - 1].block.range.end;
@@ -1088,46 +1366,7 @@ export class ArtifactReader {
             focus: { start, end, blockIds },
           });
         },
-        onOpenPdfRange: (firstItem, rangeItems) => {
-          void (async () => {
-            const start = rangeItems[0].block.range.start;
-            const end = rangeItems[rangeItems.length - 1].block.range.end;
-            const blockIds = rangeItems.map((i) => i.block.id);
-            const returnFocus: ReaderFocus = { start, end, blockIds };
-            try {
-              const backlink = await getSourceBacklink({
-                artifact_id: firstItem.artifactId,
-                conversion_id: firstItem.conversionId,
-                start,
-                end,
-                block_ids: blockIds,
-              });
-              if (generation !== this.generation) return;
-              if (backlink.pdf_artifact_id && backlink.pdf_page_indices?.length) {
-                await this.open(backlink.pdf_artifact_id, `${title} · PDF 原页`, {
-                  pdfPageIndex: backlink.pdf_page_indices[0],
-                  candidatePages: backlink.pdf_page_indices,
-                  backlinkNote: backlink.kind === "candidate_pdf_pages" ? backlink.reason : undefined,
-                  focusExcerpt: firstItem.text.slice(0, 240),
-                  returnTo: {
-                    id,
-                    title,
-                    options: { focus: returnFocus },
-                    label: "返回规范解析正文",
-                  },
-                });
-                return;
-              }
-            } catch {
-              /* Fall back to page marker index if available. */
-            }
-            if (firstItem.fallbackPdfPageIndex !== null) {
-              openCanonicalPdfPage(firstItem.fallbackPdfPageIndex, undefined, returnFocus);
-            } else {
-              setStatusHint("当前段落没有对应的 PDF 页映射。");
-            }
-          })();
-        },
+        onOpenPdfRange: openCanonicalPdfForItems,
       });
     } else {
       fallbackMenuListener = (event: MouseEvent): void => {
@@ -1160,6 +1399,8 @@ export class ArtifactReader {
     }
 
     this.disposeDocument = () => {
+      errataEditor.close();
+      closeErrataDiffPopover();
       canonicalInk?.dispose();
       outlineHandle.dispose();
       if (fallbackMenuListener) article.removeEventListener("contextmenu", fallbackMenuListener);
@@ -1172,46 +1413,23 @@ export class ArtifactReader {
     article.querySelectorAll("a").forEach(link => { link.removeAttribute("href"); link.title = "链接导航尚未启用"; });
 
     const uniqueSegArtifacts = [...new Set(segments.map((s) => s.segment.artifact_id))];
-    const unitMarkers = await getMarkdownUnitMarkers(uniqueSegArtifacts);
+    loadedUnitMarkers = await getMarkdownUnitMarkers(uniqueSegArtifacts);
     if (generation !== this.generation) return;
-    outlineHandle.update(outlineBlocks, unitMarkers);
-    canonicalInk?.setUnitMarkers(unitMarkers);
-    for (const { segment, body } of segments) {
-      const placeholders = body.querySelectorAll<HTMLElement>("[data-image-ref]");
-      if (!placeholders.length) continue;
-      let info: ContentInfo | undefined;
-      try { info = await contentInfo(segment.artifact_id); } catch { /* shown per image */ }
-      if (generation !== this.generation) return;
-      const context = info?.contexts.find(c => c.conversion_id === segment.conversion_id) ?? info?.contexts[0];
-      const bases = context?.paths.filter(p => p.artifact_id === segment.artifact_id) ?? [];
-      for (const placeholder of placeholders) {
-        try {
-          const candidates = new Set<string>();
-          for (const base of bases) {
-            const path = resolveProductPath(base.path, placeholder.dataset.imageRef ?? "");
-            context?.paths.filter(p => p.path === path).forEach(p => candidates.add(p.artifact_id));
-          }
-          if (candidates.size !== 1) throw new Error("图片映射缺失或不明确");
-          const imageInfo = await contentInfo([...candidates][0]);
-          if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(imageInfo.media_type)) throw new Error("不支持的图片类型");
-          const data = await readSmallFile(imageInfo);
-          if (generation !== this.generation) return;
-          const img = element("img"); img.alt = placeholder.textContent ?? "";
-          img.src = this.blobUrl(data, imageInfo.media_type);
-          placeholder.replaceWith(img);
-        } catch (error) {
-          placeholder.textContent = "[" + String(error) + "]";
-        }
-      }
+    outlineHandle.update(outlineBlocks, loadedUnitMarkers);
+    canonicalInk?.setUnitMarkers(loadedUnitMarkers);
+    for (const seg of segments) {
+      await resolveSegmentImages(seg.segment, seg.body);
     }
   }
 
   private async markdown(info: ContentInfo, title: string, generation: number, focus?: ReaderFocus, patch?: ReaderOpenOptions["patch"], conversionId?: string | null): Promise<void> {
-    const [initialDoc, unitMarkers] = await Promise.all([
+    const [initialDoc, unitMarkers, initialErrata] = await Promise.all([
       markdownDocument(info.artifact_id, conversionId ?? info.contexts[0]?.conversion_id ?? null),
       getMarkdownUnitMarkers([info.artifact_id]),
+      listMarkdownErrata(info.artifact_id),
     ]);
     let document = initialDoc;
+    let activeErrata: MarkdownBlockErrata[] = initialErrata.filter((e) => e.status === "active");
     if (generation !== this.generation) return;
     const controls = element("div"); controls.className = "reader-controls";
     const raw = element("button", "查看原文");
@@ -1236,7 +1454,9 @@ export class ArtifactReader {
     layout.append(outlineHandle.nav, paperStage);
     this.host.append(controls, layout);
     let rawMode = false, version = 0;
+    let initialFocusScrolled = false;
     let inkLinks: ReaderInkLinks | undefined;
+    const errataEditor = new InlineErrataEditorController();
     const currentConversionId = (): string | null =>
       info.contexts[Number(contextSelect.value) || 0]?.conversion_id ?? conversionId ?? null;
     const resolveFocusedBlockRange = (doc: AnchoredMarkdown): { first: number; last: number } | null => {
@@ -1255,6 +1475,15 @@ export class ArtifactReader {
       inkLinks?.create(range, bounds.left, bounds.bottom + 4);
     };
     let selection!: MarkdownSelection;
+    const applyLocalErrataState = (saved?: MarkdownBlockErrata, removeIds: readonly string[] = []) => {
+      const drop = new Set(removeIds);
+      const next = activeErrata.filter((item) => item.status === "active" && !drop.has(item.errata_id));
+      if (saved && saved.status === "active") {
+        next.push(saved);
+        next.sort((a, b) => a.base_byte_start - b.base_byte_start);
+      }
+      activeErrata = next;
+    };
     const openPdfForRange = async (range: { first: number; last: number }, preferredPageIndex?: number): Promise<void> => {
       const contentBlocks = document.blocks.slice(range.first, range.last + 1).filter(b => b.kind !== "page_marker");
       if (!contentBlocks.length) {
@@ -1281,9 +1510,15 @@ export class ArtifactReader {
         const targetPage = preferredPageIndex !== undefined && pages.includes(preferredPageIndex)
           ? preferredPageIndex
           : pages[0];
-        const excerptBytes = new TextEncoder().encode(document.source).subarray(start, Math.min(end, start + 360));
+        const lookup = buildBlockErrataLookup(activeErrata);
+        const firstErrata = lookup.byAnyBlockId.get(contentBlocks[0].id);
         let focusExcerpt = "";
-        try { focusExcerpt = new TextDecoder("utf-8", { fatal: false }).decode(excerptBytes); } catch { /* optional */ }
+        if (firstErrata) {
+          focusExcerpt = firstErrata.corrected_text.slice(0, 240);
+        } else {
+          const excerptBytes = new TextEncoder().encode(document.source).subarray(start, Math.min(end, start + 360));
+          try { focusExcerpt = new TextDecoder("utf-8", { fatal: false }).decode(excerptBytes); } catch { /* optional */ }
+        }
         await this.open(backlink.pdf_artifact_id, `${title} · PDF 原页`, {
           pdfPageIndex: targetPage,
           candidatePages: pages,
@@ -1305,6 +1540,63 @@ export class ArtifactReader {
         }
       }
     };
+    let render!: () => Promise<void>;
+    const openErrataForRange = (range: { first: number; last: number }): void => {
+      if (rawMode) return;
+      const sourceBytes = new TextEncoder().encode(document.source);
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      const items = document.blocks.map((block) => ({
+        block,
+        rawText: decoder.decode(sourceBytes.subarray(block.range.start, block.range.end)),
+      }));
+      const cover = computeErrataCoverRange(items, range.first, range.last, activeErrata);
+      if (!cover.ok) {
+        selection.notifyFeedback(cover.reason);
+        return;
+      }
+      let anchorEl = article.querySelector<HTMLElement>(`[data-source-block="${CSS.escape(cover.firstBlockId)}"]`);
+      for (let idx = cover.endIdx; idx >= cover.startIdx; idx--) {
+        const candidate = article.querySelector<HTMLElement>(`[data-source-block="${CSS.escape(document.blocks[idx].id)}"]`);
+        if (candidate && !candidate.classList.contains("is-errata-merged-hidden")) {
+          anchorEl = candidate;
+          break;
+        }
+      }
+      if (!anchorEl) return;
+      let inferredPage: number | null = null;
+      for (let idx = cover.startIdx - 1; idx >= 0; idx--) {
+        if (document.blocks[idx].kind === "page_marker") {
+          const m = /^\s*\{(\d+)\}-{16,}\s*$/.exec(items[idx].rawText);
+          if (m) inferredPage = Number(m[1]);
+          break;
+        }
+      }
+      errataEditor.open({
+        anchorElement: anchorEl,
+        artifactId: document.snapshot.artifact_id,
+        baseContentHash: document.snapshot.content_hash,
+        target: cover,
+        verifiedPdfPage: inferredPage,
+        onOpenPdf: () => void openPdfForRange({ first: cover.startIdx, last: cover.endIdx }, inferredPage ?? undefined),
+        onSaved: async (res) => {
+          const prevScroll = this.host.scrollTop;
+          applyLocalErrataState(res.errata, res.superseded_ids);
+          await render();
+          this.host.scrollTop = prevScroll;
+          const unitHint = res.affected_unit_ids.length > 0
+            ? `（关联 ${res.affected_unit_ids.length} 个已入图节点，随时可在详情面板复核）`
+            : "";
+          selection.notifyFeedback(`已保存块级校对，当前正文与关联锚点已同步生效${unitHint}。`);
+        },
+        onReverted: async (res) => {
+          const prevScroll = this.host.scrollTop;
+          applyLocalErrataState(undefined, [res.errata.errata_id]);
+          await render();
+          this.host.scrollTop = prevScroll;
+          selection.notifyFeedback("已恢复该块的原始 OCR 文本。");
+        },
+      });
+    };
     selection = new MarkdownSelection(
       document,
       article,
@@ -1321,12 +1613,26 @@ export class ArtifactReader {
       () => rawMode,
       (range) => void openPdfForRange(range),
       unitMarkers,
+      (range) => openErrataForRange(range),
+      (blockId) => {
+        const match = activeErrata.find((e) => e.status === "active" && e.first_block_id === blockId);
+        return match?.covered_block_ids.length ? match.covered_block_ids : [blockId];
+      },
     );
     selection.setOnSelectionChange(() => inkLinks?.syncActionPill());
+    selection.setOnEditErrata((range) => openErrataForRange(range));
     controls.after(inkLinks.hint);
-    this.disposeDocument = () => { selection.dispose(); inkLinks?.dispose(); outlineHandle.dispose(); };
-    const render = async (): Promise<void> => {
+    this.disposeDocument = () => {
+      errataEditor.close();
+      closeErrataDiffPopover();
+      selection.dispose();
+      inkLinks?.dispose();
+      outlineHandle.dispose();
+    };
+    render = async (): Promise<void> => {
       const current = ++version;
+      errataEditor.close();
+      closeErrataDiffPopover();
       this.revokeImages();
       if (rawMode) {
         outlineHandle.setHiddenForRaw(true);
@@ -1341,6 +1647,7 @@ export class ArtifactReader {
       md.parse(document.source, environment);
       const sourceBytes = new TextEncoder().encode(document.source);
       const decoder = new TextDecoder("utf-8", { fatal: true });
+      const errataLookup = buildBlockErrataLookup(activeErrata);
       const outlineBlocks: OutlineBlockDescriptor[] = [];
       article.replaceChildren();
       document.blocks.forEach((block, i) => {
@@ -1357,7 +1664,7 @@ export class ArtifactReader {
         if (isFocused) wrapper.classList.add("source-block-focus");
         wrapper.tabIndex = 0;
         wrapper.setAttribute("aria-label", `原文块 ${i + 1}`);
-        wrapper.title = `第 ${i + 1} 块 · 单击选择，按住 Shift 单击可连选多块，右键手写或反查 PDF`;
+        wrapper.title = `第 ${i + 1} 块 · 单击选择，按住 Shift 单击连选多块，按 E 就地校对，右键手写或反查 PDF`;
         const text = decoder.decode(sourceBytes.subarray(block.range.start, block.range.end));
         if (block.kind === "page_marker") {
           const page = /^\s*\{(\d+)\}-{16,}\s*$/.exec(text)?.[1];
@@ -1388,20 +1695,58 @@ export class ArtifactReader {
           article.append(wrapper);
           return;
         }
-        wrapper.innerHTML = md.render(text, environment);
-        if (!wrapper.innerHTML.trim()) wrapper.append(element("pre", text));
+        if (errataLookup.hiddenSecondaryBlockIds.has(block.id)) {
+          wrapper.classList.add("is-errata-merged-hidden");
+          article.append(wrapper);
+          return;
+        }
+        const blockErrata = errataLookup.primaryByBlockId.get(block.id);
+        const effectiveText = blockErrata ? blockErrata.corrected_text : text;
+        wrapper.innerHTML = md.render(effectiveText, environment);
+        if (!wrapper.innerHTML.trim()) wrapper.append(element("pre", effectiveText));
+        if (blockErrata) {
+          wrapper.classList.add("has-errata");
+          wrapper.dataset.errataId = blockErrata.errata_id;
+          const badge = element("button", "已校对");
+          badge.type = "button";
+          badge.className = "errata-block-badge";
+          badge.title = "查看原 OCR 对比、继续编辑或一键恢复原版";
+          badge.setAttribute("aria-label", "已校对，点击查看原 OCR 对比");
+          const blockIdx = i;
+          badge.addEventListener("click", (event) => {
+            event.stopPropagation();
+            openErrataDiffPopover({
+              anchor: badge,
+              errata: blockErrata,
+              onEdit: () => openErrataForRange({ first: blockIdx, last: blockIdx }),
+              onRevert: async () => {
+                const prevScroll = this.host.scrollTop;
+                const res = await revertMarkdownErrata(blockErrata.errata_id);
+                applyLocalErrataState(undefined, [res.errata.errata_id]);
+                await render();
+                this.host.scrollTop = prevScroll;
+                selection.notifyFeedback("已恢复该块的原始 OCR 文本。");
+              },
+            });
+          });
+          badge.addEventListener("keydown", (event) => event.stopPropagation());
+          wrapper.append(badge);
+        }
         article.append(wrapper);
         outlineBlocks.push({
           id: block.id,
           domKey: block.id,
           artifactId: info.artifact_id,
           range: block.range,
-          text,
+          text: effectiveText,
           kind: block.kind,
         });
       });
       outlineHandle.update(outlineBlocks, unitMarkers);
-      if (focus) (article.querySelector<HTMLElement>(".source-block-focus") as HTMLElement | null)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (focus && !initialFocusScrolled) {
+        initialFocusScrolled = true;
+        (article.querySelector<HTMLElement>(".source-block-focus") as HTMLElement | null)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
       selection.refresh();
       inkLinks?.decorate();
       article.querySelectorAll("a").forEach(link => {
@@ -1435,6 +1780,8 @@ export class ArtifactReader {
     raw.onclick = () => { rawMode = !rawMode; raw.textContent = rawMode ? "查看渲染" : "查看原文"; void render(); };
     contextSelect.onchange = () => {
       const current = ++version;
+      errataEditor.close();
+      closeErrataDiffPopover();
       selection.dispose();
       this.revokeImages();
       article.textContent = "正在切换转换来源…";
@@ -1452,6 +1799,7 @@ export class ArtifactReader {
         );
         controls.after(selection.panel);
         selection.setOnSelectionChange(() => inkLinks?.syncActionPill());
+        selection.setOnEditErrata((range) => openErrataForRange(range));
         inkLinks?.setDocument(document);
         raw.disabled = false;
         return render();

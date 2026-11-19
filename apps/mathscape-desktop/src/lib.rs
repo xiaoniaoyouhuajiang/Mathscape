@@ -23,6 +23,7 @@ pub use ink_lan::{
 mod llm_settings;
 mod loogle_host;
 mod map_edit;
+mod markdown_errata;
 mod markdown_patch;
 mod registration;
 mod resident_log;
@@ -54,6 +55,9 @@ pub use llm_settings::{
     LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,
 };
 pub use map_edit::{commit_map_change, get_map_object_edit_context, plan_map_change};
+pub use markdown_errata::{
+    RevertMarkdownErrataResponse, SaveMarkdownErrataRequest, SaveMarkdownErrataResponse,
+};
 pub use markdown_patch::{
     DesktopMarkdownPatchPreview, DesktopMarkdownPatchReview, PreviewMarkdownPatchRequest,
     RunMarkdownPatchRequest, SubmitMarkdownPatchDecisionRequest,
@@ -1111,6 +1115,10 @@ pub fn run() {
             discovery::accept_discovery_result,
             discovery::run_discovery,
             discovery::resume_discovery_after_patch,
+            markdown_errata::list_markdown_errata,
+            markdown_errata::list_markdown_errata_history,
+            markdown_errata::save_markdown_errata,
+            markdown_errata::revert_markdown_errata,
             markdown_patch::run_markdown_patch,
             markdown_patch::get_markdown_patch_review,
             markdown_patch::get_pending_markdown_patch_review,
