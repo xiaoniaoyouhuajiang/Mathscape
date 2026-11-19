@@ -218,8 +218,15 @@ fn one_process_serves_many_turns_and_threads() {
     let path = executor
         .thread_state_path("sandbox-1", &first.thread_id)
         .expect("rollout path");
-    assert!(path.starts_with(&home), "{}", path.display());
     assert!(path.is_file());
+    assert!(
+        path.canonicalize()
+            .unwrap()
+            .starts_with(home.canonicalize().unwrap()),
+        "{} is not under {}",
+        path.display(),
+        home.display()
+    );
 
     block_on(executor.close_session("sandbox-1")).unwrap();
     assert!(executor.live_sessions().is_empty());
