@@ -86,5 +86,15 @@ test("overview titles breathe and provenance lights up only for the active node"
   await page.evaluate(() => window.appHarness.selectNode("article-a"));
   await expect.poll(() => opacity("ev-a")).toBe(1);
   expect(await opacity("ev-b")).toBeLessThan(0.1);
+  // Crossing an unrelated edge en route out of the canvas must not leave a
+  // stale element-hover highlight on top of the selected node's spotlight.
+  await page.evaluate(() => {
+    const cy = (document.querySelector("#graph") as unknown as { _cyreg: { cy: Core } })._cyreg.cy;
+    cy.$id("ev-b").emit("mouseover");
+  });
+  await expect.poll(() => opacity("ev-b")).toBe(1);
+  await page.locator("#graph").dispatchEvent("mouseleave");
+  await expect.poll(() => opacity("ev-b")).toBeLessThan(0.1);
+  expect(await opacity("ev-a")).toBe(1);
   expect(await page.evaluate(() => window.appHarness.graphPaint().nodes.length)).toBe(44);
 });
