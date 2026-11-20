@@ -279,6 +279,17 @@ test.describe("Scene tools (fourth slice)", () => {
       ];
       await run(page, dock, [scripted]);
       const win = page.locator(".canvas-panel .scene-act[data-act='locate']");
+      const hudQuote = page.locator(".canvas-panel .scene-hud-type-text");
+      const expectRenderedHud = async () => {
+        await expect(hudQuote.locator("strong")).toHaveText("定理 7");
+        await expect(hudQuote.locator(".katex")).toHaveCount(3);
+        await expect(hudQuote.locator(".katex-error")).toHaveCount(0);
+        await expect(hudQuote).not.toContainText("**定理 7**");
+        await expect(hudQuote).not.toContainText("$$");
+        expect(await hudQuote.locator("script, a").count()).toBe(0);
+        expect(await hudQuote.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
+      };
+      await expectRenderedHud();
       await expect(win.locator(".scene-locate-quote strong")).toHaveText("定理 7");
       await expect(win.locator(".katex")).toHaveCount(3);
       await expect(win.locator(".katex-error")).toHaveCount(0);
@@ -304,11 +315,13 @@ test.describe("Scene tools (fourth slice)", () => {
       const agent = dock.locator(".sandbox-line.role-agent").last();
       await agent.locator(".sandbox-process-summary[aria-expanded='false']").click();
       await agent.locator(".sandbox-step-replay").click();
+      await expectRenderedHud();
       await expect(win.locator(".katex")).toHaveCount(3);
       await expect(win.locator(".scene-locate-category")).toHaveText(["原文", "匹配", "页码"]);
       await expect(win.locator(".scene-locate-details")).not.toHaveAttribute("open", "");
       await hud.getByRole("button", { name: "停止" }).click();
       await agent.locator(".sandbox-process-replay").click();
+      await expectRenderedHud();
       await expect(win.locator(".katex")).toHaveCount(3);
       await expect(win.locator(".scene-act-verdict")).toHaveText("规范化后匹配 · 具体页码不可确定");
       await hud.getByRole("button", { name: "停止" }).click();

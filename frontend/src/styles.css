@@ -1514,6 +1514,26 @@ button.is-tablet-online::before {
   white-space: pre;
 }
 
+/* Only the locate quote is rich text; search queries keep their plain input. */
+.scene-hud-type.is-locate-quote .scene-hud-type-text {
+  min-width: 0;
+  max-height: 64px;
+  overflow: auto;
+  white-space: nowrap;
+  text-overflow: clip;
+  line-height: 1.65;
+}
+.scene-hud-type.is-locate-quote p,
+.scene-hud-type.is-locate-quote .katex-display,
+.scene-hud-type.is-locate-quote .katex-display > .katex {
+  display: inline;
+  margin: 0;
+}
+.scene-hud-type.is-locate-quote p + p::before { content: " "; white-space: pre; }
+.scene-hud-type.is-locate-quote .katex-display > .katex > .katex-html { display: inline-block; }
+.scene-hud-type.is-locate-quote .katex { font-size: 1em; }
+.scene-hud-type.is-locate-quote .scene-hud-caret { display: none; }
+
 .scene-hud-caret {
   flex: none;
   width: 1px;

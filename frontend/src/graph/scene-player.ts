@@ -266,10 +266,10 @@ export class ScenePlayer {
     this.hudSummary.className = "scene-hud-summary";
     this.hudStep = document.createElement("span");
     this.hudStep.className = "scene-hud-step";
-    this.hudType = document.createElement("span");
+    this.hudType = document.createElement("div");
     this.hudType.className = "scene-hud-type";
     this.hudType.hidden = true;
-    this.hudTypeText = document.createElement("span");
+    this.hudTypeText = document.createElement("div");
     this.hudTypeText.className = "scene-hud-type-text";
     const caret = document.createElement("span");
     caret.className = "scene-hud-caret";
@@ -476,14 +476,19 @@ export class ScenePlayer {
       await this.performPropose(scene, act, token);
       return;
     }
-    // `material.locate` types its quote like a search query.
-    const typed = act?.kind === "typewriter" ? act.text : act?.kind === "locate" ? clip(act.quote.replace(/\s+/g, " "), 60) : undefined;
+    const typed = act?.kind === "typewriter" ? act.text : act?.kind === "locate" ? act.quote : undefined;
     // 目录 / 页图 / 定位 windows need the result; Lean / Loogle also show their running state.
     const windowAct: WindowAct | undefined =
       act && isWindowAct(act) && (part !== "call" || RUNNING_WINDOWS.has(act.kind)) ? act : undefined;
     const parsing = !!scene.act && isParsingRun(scene);
     const running = scene.status === "running" && !!windowAct;
-    if (typed === undefined) this.setTyped(null);
+    // Locate quotes are reading content: render complete Markdown/math, never
+    // a 60-character or mid-typing source fragment. Search keeps its typewriter.
+    if (act?.kind === "locate") {
+      this.setTyped(act.quote, true);
+      this.hudType.classList.add("is-locate-quote");
+      this.hudTypeText.innerHTML = renderBubbleHtml(act.quote);
+    } else if (typed === undefined) this.setTyped(null);
     else if (part === "result" || this.reduced) this.setTyped(typed, true);
     else if (!(await this.typewrite(typed, token))) return;
     const core = this.host.core();
@@ -734,6 +739,7 @@ export class ScenePlayer {
   /** HUD typewriter line: `null` hides it; `done` shows the text at once. */
   private setTyped(text: string | null, done = false): void {
     this.hudType.hidden = text === null;
+    this.hudType.classList.remove("is-locate-quote");
     this.hudTypeText.textContent = text ?? "";
     this.hudType.classList.toggle("is-typing", text !== null && !done);
     if (text !== null) this.hudType.dataset.full = text;
@@ -1330,11 +1336,6 @@ function fillBlocked(win: HTMLElement, act: ProposeAct): void {
   }
   win.append(list);
   if (act.blocks.length > 8) win.append(element("p", "scene-act-foot", `另有 ${act.blocks.length - 8} 个问题`));
-}
-
-function clip(text: string, max: number): string {
-  const chars = [...text];
-  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : text;
 }
 
 const ghostId = (localRef: string): string => `scene-ghost:${localRef}`;
