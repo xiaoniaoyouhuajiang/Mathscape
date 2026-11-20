@@ -442,7 +442,7 @@ function graphStyles(): StylesheetJson {
       style: {
         label: "data(label)",
         "text-wrap": (node: NodeSingular) => mapLabelScale(node) > 1 ? "ellipsis" : "wrap",
-        "text-max-width": (node: NodeSingular) => `${150 * mapLabelScale(node)}px`,
+        "text-max-width": (node: NodeSingular) => `${(node.data("nodeType") === "pdf" && mapLabelScale(node) > 1 ? 120 : 150) * mapLabelScale(node)}px`,
         "text-events": "yes",
         "font-size": "11px",
         "background-color": t.accent,
