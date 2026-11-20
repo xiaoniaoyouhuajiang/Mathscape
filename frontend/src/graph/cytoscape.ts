@@ -2,6 +2,7 @@ import { graphPalette, resolveGraphColor, watchGraphTheme } from "./theme";
 import cytoscape, {
   type Core,
   type ElementDefinition,
+  type NodeSingular,
   type StylesheetJson,
 } from "cytoscape";
 
@@ -15,6 +16,8 @@ import {
 import { FOCUS_CONTRACTION_KIND } from "./focus";
 import { computeLandscapeLayout, type MapPoint } from "./layout";
 import { NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
+import { nodeHalo } from "./node-glyph";
+import { AUTO_LABEL_HIDDEN, mapLabelScale } from "./label-density";
 import {
   bindLabelHover,
   LABEL_HOVER,
@@ -427,8 +430,8 @@ function graphStyles(): StylesheetJson {
         "background-opacity": visual.backgroundOpacity,
         "border-color": resolveGraphColor(visual.border),
         "border-style": visual.borderStyle,
-        "border-width": 1.5,
-        "font-size": `${visual.fontSize}px`,
+        "border-width": 1,
+        "font-size": (node: NodeSingular) => visual.fontSize * mapLabelScale(node),
       },
     };
   });
@@ -439,7 +442,8 @@ function graphStyles(): StylesheetJson {
       style: {
         label: "data(label)",
         "text-wrap": "wrap",
-        "text-max-width": "150px",
+        "text-max-width": (node: NodeSingular) => 150 * mapLabelScale(node),
+        "text-events": "yes",
         "font-size": "11px",
         "background-color": t.accent,
         "border-width": 1,
@@ -456,15 +460,28 @@ function graphStyles(): StylesheetJson {
     },
     ...nodeTypeStyles,
     {
+      selector: 'node[nodeType = "semantic_unit"], node[nodeType = "shared_theory"]',
+      style: {
+        "background-image": nodeHalo(t.accent),
+        "background-width": 38, "background-height": 38,
+        "background-clip": "none", "background-image-containment": "over",
+        "bounds-expansion": 14,
+        "background-opacity": 0.8,
+      },
+    },
+    {
       selector: 'node[nodeType = "shared_entity"]',
       style: {
-        "underlay-color": t.gold, "underlay-opacity": 0.08, "underlay-padding": 6, "underlay-shape": "ellipse",
+        "background-image": nodeHalo(t.gold, true),
+        "background-width": 48, "background-height": 48,
+        "background-clip": "none", "background-image-containment": "over",
+        "bounds-expansion": 16,
         "text-halign": "left", "text-valign": "center", "text-margin-x": -12, "text-margin-y": 0,
       },
     },
     {
       selector: 'node[lifecycle = "candidate"]',
-      style: { "border-style": "dashed", "border-color": t.candidate, "background-opacity": 0.18 },
+      style: { "border-style": "dashed", "border-color": t.candidate, "background-opacity": 0.18, "background-image": nodeHalo(t.candidate) },
     },
     {
       selector: 'node[elementKind = "junction"]',
@@ -608,6 +625,7 @@ function graphStyles(): StylesheetJson {
         opacity: 0.84,
         "background-color": t.candidate,
         "background-opacity": 0.16,
+        "background-image": nodeHalo(t.candidate),
         "border-style": "dashed",
         "border-width": 2,
         "border-color": t.candidate,
@@ -942,8 +960,14 @@ function graphStyles(): StylesheetJson {
       },
     },
     {
+      selector: `node.${AUTO_LABEL_HIDDEN}`,
+      style: { "text-opacity": 0, "text-events": "no" },
+    },
+    {
       selector: "node.is-focus-root",
       style: {
+        "text-opacity": 1,
+        "text-events": "yes",
         "border-width": 4,
         "border-color": t.gold,
         "underlay-color": t.gold,
@@ -981,6 +1005,8 @@ function graphStyles(): StylesheetJson {
     {
       selector: "node.is-selected-primary, node:selected",
       style: {
+        "text-opacity": 1,
+        "text-events": "yes",
         "border-width": 3.6,
         "border-color": t.gold,
         "underlay-color": t.gold,

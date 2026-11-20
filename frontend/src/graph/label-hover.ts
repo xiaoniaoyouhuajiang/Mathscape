@@ -12,6 +12,8 @@ export const LABEL_RECESS = "label-recess";
 
 /** 焦点 / 悬停共用的标签层级，并压在所有其他标签之上。 */
 export const LABEL_HOVER_STYLE = {
+  "text-opacity": 1,
+  "text-events": "yes",
   "text-background-opacity": 0,
   "text-background-shape": "roundrectangle",
   "text-background-padding": "3px",
@@ -26,6 +28,7 @@ export const LABEL_HOVER_STYLE = {
 /** 会与悬停标签重叠的邻接标签：暂时藏起文字和底，移出后恢复。 */
 export const LABEL_RECESS_STYLE = {
   "text-opacity": 0,
+  "text-events": "no",
   "text-background-opacity": 0,
   "text-border-opacity": 0,
 } as const;
