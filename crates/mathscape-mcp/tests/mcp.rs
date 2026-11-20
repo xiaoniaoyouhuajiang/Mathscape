@@ -1752,6 +1752,7 @@ fn missing_managed_object_is_business_not_found() {
 }
 
 #[test]
+#[cfg(unix)]
 fn symlinked_managed_object_is_forbidden() {
     let f = fixture();
     let target = f.root.join("secret-managed-target");
@@ -2095,6 +2096,7 @@ fn grep_does_not_scan_past_the_byte_cap() {
 }
 
 #[test]
+#[cfg(unix)]
 fn grep_missing_object_is_not_found_and_symlink_is_forbidden() {
     let f = fixture();
     for path in managed_object_files(&f.root) {

@@ -545,17 +545,21 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::{fs, os::unix::fs::PermissionsExt, path::Path, thread, time::Duration};
 
+    #[cfg(unix)]
     use tempfile::TempDir;
 
     use super::*;
+    #[cfg(unix)]
     use crate::{
         DEFAULT_LEAN_TOOLCHAIN, DEFAULT_MATHLIB_REFERENCE, DEFAULT_PROFILE_ID,
         LeanEnvironmentProbe, LeanEnvironmentState, LeanFingerprintStatus, LeanProfileState,
         LeanProjectConfig, ManagedLeanProfileMetadata, fingerprint_environment,
     };
 
+    #[cfg(unix)]
     fn executable(path: &Path, body: &str) {
         fs::write(path, body).unwrap();
         let mut permissions = fs::metadata(path).unwrap().permissions();
@@ -563,6 +567,7 @@ mod tests {
         fs::set_permissions(path, permissions).unwrap();
     }
 
+    #[cfg(unix)]
     fn profile_fixture(lake_body: &str) -> (TempDir, TempDir, ManagedLeanProfile) {
         let store_root = TempDir::new().unwrap();
         let project = TempDir::new().unwrap();
@@ -709,6 +714,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn checks_success_and_removes_scratch() {
         let (_store_root, _project, profile) = profile_fixture(
             r#"#!/bin/sh
@@ -741,6 +747,7 @@ exit 0
     }
 
     #[test]
+    #[cfg(unix)]
     fn reports_lean_diagnostics_and_profile_mismatch() {
         let (_store_root, _project, profile) = profile_fixture(
             r#"#!/bin/sh
@@ -773,6 +780,7 @@ exit 1
     }
 
     #[test]
+    #[cfg(unix)]
     fn reports_coded_diagnostics_from_stdout() {
         let (_store_root, _project, profile) = profile_fixture(
             r#"#!/bin/sh
@@ -804,6 +812,7 @@ exit 1
     }
 
     #[test]
+    #[cfg(unix)]
     fn unparsed_stdout_failure_still_yields_a_diagnostic() {
         let (_store_root, _project, profile) = profile_fixture(
             r#"#!/bin/sh
@@ -834,6 +843,7 @@ exit 1
     }
 
     #[test]
+    #[cfg(unix)]
     fn maps_timeout_and_cancellation() {
         let (_store_root, _project, profile) = profile_fixture(
             r#"#!/bin/sh
