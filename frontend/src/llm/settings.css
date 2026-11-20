@@ -114,6 +114,7 @@
   border-top: 1px solid var(--ms-border);
 }
 
+.motion-settings,
 .workspace-settings-form {
   display: grid;
   gap: 17px;
