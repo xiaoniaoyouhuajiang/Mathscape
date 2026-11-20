@@ -9,7 +9,7 @@
 
 #![cfg(target_os = "linux")]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use futures::{FutureExt, StreamExt, executor::block_on};
@@ -19,22 +19,7 @@ use mathscape_agent::{
 };
 
 fn fixture_program() -> PathBuf {
-    if let Some(path) = std::env::var_os("CARGO_BIN_EXE_mathscape-codex-fixture")
-        .or_else(|| std::env::var_os("CARGO_BIN_EXE_mathscape_codex_fixture"))
-    {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return path;
-        }
-    }
-    let exe = std::env::current_exe().expect("current_exe");
-    let candidate = exe
-        .parent()
-        .and_then(Path::parent)
-        .expect("target/<profile>/deps")
-        .join("mathscape-codex-fixture");
-    assert!(candidate.is_file(), "missing {}", candidate.display());
-    candidate
+    PathBuf::from(env!("CARGO_BIN_EXE_mathscape-codex-fixture"))
 }
 
 struct Wrapper {
