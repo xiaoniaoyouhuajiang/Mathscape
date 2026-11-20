@@ -26,7 +26,7 @@ export function mapLabelScale(node: NodeSingular): number {
 function priority(node: NodeSingular): number {
   if (node.hasClass("is-staged") || node.hasClass("is-staged-conflict") || node.data("nodeType") === "debt") return 100;
   switch (node.data("nodeType")) {
-    case "shared_entity": case "shared_theory": return 80;
+    case "shared_entity": case "shared_theory": return 95;
     case "pdf": return 70;
     case "markdown": case "ink_snapshot": return 60;
     case "semantic_unit": return 40;
@@ -117,7 +117,7 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
           id: node.id(), box: base,
           alternatives: alternatives
             .filter(b => b.x1 >= 2 && b.y1 >= 2 && b.x2 <= core.width() - 2 && b.y2 <= core.height() - 2),
-          priority: heads.has(node.id()) ? Math.max(85, priority(node)) : priority(node),
+          priority: heads.has(node.id()) ? Math.max(node.data("nodeType") === "semantic_unit" ? 90 : 85, priority(node)) : priority(node),
           protected: protectedLabel,
         });
       });
