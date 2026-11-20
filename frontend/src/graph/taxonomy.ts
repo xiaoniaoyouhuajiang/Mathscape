@@ -287,6 +287,13 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
 
 export const NODE_TYPE_ORDER = Object.keys(NODE_TYPES) as NodeTypeKey[];
 
+/** Original (pre-constellation) glyph sizes; taxonomy and hit shapes are shared. */
+export const CLASSIC_NODE_SIZES: Partial<Record<NodeTypeKey, { width: number; height: number }>> = {
+  pdf: { width: 31, height: 20 }, markdown: { width: 30, height: 18 },
+  semantic_unit: { width: 22, height: 22 }, source_span: { width: 20, height: 14 },
+  shared_entity: { width: 26, height: 26 }, shared_theory: { width: 30, height: 26 },
+};
+
 export type EdgeTypeKey =
   | "relation"
   | "alignment"

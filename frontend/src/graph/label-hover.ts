@@ -236,7 +236,7 @@ export function bindLabelHover(core: Core, options: LabelHoverOptions = {}): voi
   });
   // Cytoscape can miss an element's mouseout when the canvas moves or the
   // pointer leaves it directly. Never retain a bright edge/expanded title then.
-  core.on("pan zoom", clear);
+  core.on("pan zoom appearancechange", clear);
   const container = core.container?.();
   if (container) {
     container.addEventListener("mouseleave", clear);

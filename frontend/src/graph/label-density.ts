@@ -1,4 +1,5 @@
 import type { Core, EdgeSingular, NodeCollection, NodeSingular } from "cytoscape";
+import { getMapStyle } from "../shell/map-style";
 import { labelBox, LABEL_HOVER, refreshLabels, type LabelBox, type LabelEle, type LabelSet } from "./label-hover";
 import { placeMapLabels, type MapLabel, type LabelSegment } from "./label-placement";
 export type { MapLabel } from "./label-placement";
@@ -11,6 +12,13 @@ const ZERO_OFFSET = { x: 0, y: 0 };
 
 export function mapLabelOffset(node: NodeSingular): { x: number; y: number } {
   return node.scratch(OFFSET_KEY) ?? ZERO_OFFSET;
+}
+
+/** Clear only generated presentation state before repainting either style. */
+export function resetMapLabelDensity(core: Core): void {
+  core.scratch(SCALE_KEY, 1);
+  core.nodes().forEach(node => { node.scratch(OFFSET_KEY, ZERO_OFFSET); });
+  core.nodes().removeClass(AUTO_LABEL_HIDDEN);
 }
 
 /** Stable, screen-space decluttering, never node or edge filtering. */
@@ -44,7 +52,7 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
     applying = true;
     try {
       const nodes = core.nodes(':visible').filter(node => node.data("elementKind") !== "junction") as NodeCollection;
-      const dense = enabled() && nodes.length >= DENSE_MAP_SIZE;
+      const dense = getMapStyle() === "constellation" && enabled() && nodes.length >= DENSE_MAP_SIZE;
       const scale = dense ? Math.max(1, 1 / core.zoom()) : 1;
       if (core.scratch(SCALE_KEY) !== scale) {
         core.scratch(SCALE_KEY, scale);

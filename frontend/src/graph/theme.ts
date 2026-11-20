@@ -1,5 +1,6 @@
 import type { Core } from "cytoscape";
 import { THEME_CHANGED } from "../shell/theme-manager";
+import { MAP_STYLE_CHANGED } from "../shell/map-style";
 
 /** Cytoscape paints a canvas and cannot resolve CSS variables itself. */
 export function graphPalette() {
@@ -23,4 +24,11 @@ export function resolveGraphColor(value: string): string {
 export function watchGraphTheme(core: Core, update: () => void): void {
   window.addEventListener(THEME_CHANGED, update);
   core.one("destroy", () => window.removeEventListener(THEME_CHANGED, update));
+}
+
+/** Map appearance is separate from the review graph's theme-only repaint. */
+export function watchGraphAppearance(core: Core, update: () => void): void {
+  watchGraphTheme(core, update);
+  window.addEventListener(MAP_STYLE_CHANGED, update);
+  core.one("destroy", () => window.removeEventListener(MAP_STYLE_CHANGED, update));
 }
