@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test:reader": "playwright test",
     "test:unit": "vitest run",
+    "check:i18n": "node scripts/check-i18n-ratchet.mjs",
     "test:unit:watch": "vitest",
     "tauri:dev": "cd ../apps/mathscape-desktop && node ../../frontend/node_modules/@tauri-apps/cli/tauri.js dev",
     "tauri:dev:local_1": "cd ../apps/mathscape-desktop && MATHSCAPE_WORKSPACE_ROOT=\"$PWD/../../.mathscape-dev/workspace\" ../../frontend/node_modules/.bin/tauri dev",

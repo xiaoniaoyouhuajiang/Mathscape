@@ -1,14 +1,20 @@
+import { t, type MessageKey } from "../i18n";
+
 export const THEMES = {
-  obsidian: "深空星图 · Obsidian",
-  parchment: "暖宣手稿 · Parchment",
-  slate: "青岩静夜 · Slate",
-} as const;
+  obsidian: "theme.obsidian",
+  parchment: "theme.parchment",
+  slate: "theme.slate",
+} as const satisfies Record<string, MessageKey>;
 export type Theme = keyof typeof THEMES;
 export const THEME_STORAGE_KEY = "mathscape.theme";
 export const THEME_CHANGED = "mathscape:themechange";
 
 export function isTheme(value: unknown): value is Theme {
   return typeof value === "string" && Object.hasOwn(THEMES, value);
+}
+
+export function themeLabel(theme: Theme): string {
+  return t(THEMES[theme]);
 }
 
 export function getTheme(): Theme {
@@ -24,9 +30,9 @@ export function setTheme(theme: Theme): void {
 
 export function mountThemeToggle(button: HTMLButtonElement): void {
   const sync = () => {
-    const label = THEMES[getTheme()];
-    button.title = `当前主题：${label}；点击切换`;
-    button.setAttribute("aria-label", `切换主题，当前：${label}`);
+    const label = themeLabel(getTheme());
+    button.title = t("theme.toggleTitle", { label });
+    button.setAttribute("aria-label", t("theme.toggleAriaLabel", { label }));
   };
   sync();
   button.addEventListener("click", () => {

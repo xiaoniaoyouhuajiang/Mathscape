@@ -1,3 +1,4 @@
+import { initializeLocale } from "./i18n";
 import { initializeTheme } from "./shell/theme-manager";
 import { initializeMapStyle } from "./shell/map-style";
 import { invoke } from "@tauri-apps/api/core";
@@ -55,6 +56,7 @@ import { StudyHudController } from "./semantic/study-hud";
 import { TutorialPlayer } from "./tutorial/player";
 import "./tutorial/tutorial.css";
 
+initializeLocale();
 initializeTheme();
 initializeMapStyle();
 

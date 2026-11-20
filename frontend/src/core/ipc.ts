@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { hasMessage, t } from "../i18n";
 
 /**
  * Error thrown by `safeInvoke` when a command returns a structured error
@@ -24,18 +25,30 @@ function structured(error: unknown): { code: string; message: string; details?: 
   return { code: value.code, message: value.message, details };
 }
 
+const CODE_PREFIX = /^([a-z][a-z0-9_]*): /;
+
+/**
+ * Prefers the `error.<code>` dictionary entry for a stable code, from a
+ * structured error or a `code: 说明` message, over the backend's text.
+ */
+function localized(code: string | undefined, message: string): string {
+  const key = `error.${code ?? CODE_PREFIX.exec(message)?.[1] ?? ""}`;
+  return hasMessage(key) ? t(key) : message;
+}
+
 /**
  * Extract a human-readable message from an arbitrary error payload.
  */
 export function errorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return localized(undefined, error);
+  if (error instanceof CommandError) return localized(error.code, error.message);
+  if (error instanceof Error) return localized(undefined, error.message);
   const value = structured(error);
-  if (value) return value.message;
+  if (value) return localized(value.code, value.message);
   if (error !== null && typeof error === "object" && typeof (error as { message?: unknown }).message === "string") {
     return (error as { message: string }).message;
   }
-  return "发生了未知错误";
+  return t("error.unknown");
 }
 
 /** Stable error code of a command failure, if the command returned one. */
