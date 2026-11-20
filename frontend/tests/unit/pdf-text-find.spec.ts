@@ -3,6 +3,7 @@ import {
   extractAnchorPhrase,
   findSpanMatchesInPage,
   normalizeSearchText,
+  readPageTextStrings,
 } from "../../src/reader/pdf-text-find";
 
 describe("pdf-text-find pure helpers", () => {
@@ -25,5 +26,23 @@ describe("pdf-text-find pure helpers", () => {
 
     const multi = findSpanMatchesInPage(spans, "母函数");
     expect(multi).toEqual([{ spanIndices: [4] }, { spanIndices: [5] }]);
+  });
+});
+
+describe("readPageTextStrings", () => {
+  it("reads every chunk without ReadableStream async iteration (WebKit)", async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue({ items: [{ str: "Trace-based" }, { type: "beginMarkedContent" }] });
+        controller.enqueue({ items: [{ str: " JIT" }] });
+        controller.close();
+      },
+    });
+    Object.defineProperty(stream, Symbol.asyncIterator, { value: undefined });
+    const page = { streamTextContent: () => stream } as unknown as Parameters<typeof readPageTextStrings>[0];
+
+    const strs = await readPageTextStrings(page);
+    expect(strs).toEqual(["Trace-based", "", " JIT"]);
+    expect(findSpanMatchesInPage(strs, "trace")).toHaveLength(1);
   });
 });
