@@ -107,17 +107,17 @@
   background: var(--ms-control-hover);
 }
 
+.motion-settings,
+.workspace-settings-form,
 .llm-settings-form {
   display: grid;
   gap: 17px;
   padding: 24px 26px 26px;
-  border-top: 1px solid var(--ms-border);
 }
 
-.workspace-settings-form {
-  display: grid;
-  gap: 17px;
-  padding: 24px 26px 26px;
+.workspace-settings-form,
+.llm-settings-form {
+  border-top: 1px solid var(--ms-border);
 }
 
 .settings-section-heading {
@@ -172,7 +172,7 @@
   font-size: 11px;
 }
 
-.settings-field input,
+.settings-field input:not([type="checkbox"]),
 .settings-field select {
   width: 100%;
   min-height: 40px;
