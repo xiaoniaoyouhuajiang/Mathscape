@@ -350,12 +350,15 @@ fn write_metadata(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
+    #[cfg(unix)]
     use tempfile::TempDir;
 
     use super::*;
 
+    #[cfg(unix)]
     fn executable(path: &Path, body: &str) {
         fs::write(path, body).unwrap();
         let mut permissions = fs::metadata(path).unwrap().permissions();
@@ -363,6 +366,7 @@ mod tests {
         fs::set_permissions(path, permissions).unwrap();
     }
 
+    #[cfg(unix)]
     fn fixture() -> (TempDir, TempDir, ManagedLeanProfileSpec) {
         let store_root = TempDir::new().unwrap();
         let project = TempDir::new().unwrap();
@@ -416,6 +420,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn registers_and_loads_a_pinned_profile() {
         let (store_root, _project, spec) = fixture();
         let store = LeanProfileStore::new(store_root.path()).unwrap();
