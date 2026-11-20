@@ -290,11 +290,35 @@ describe("material.locate", () => {
     expect(draft.seeds[0]).toMatch(/^mathscape:artifact\//);
   });
 
-  it("page unresolved: the diagnostic is the note", () => {
+  it("page unresolved: the localized diagnostic retains its original in details", () => {
     const act = scene("locate_page_unresolved").act as LocateAct;
     expect(act.phase).toBe("ok");
     expect(act.page).toBeUndefined();
-    expect(act.reason).toContain("no single PDF page");
+    expect(act.reason).toBeUndefined();
+    expect(act.diagnostics).toEqual([expect.objectContaining({ category: "page", code: "page_unresolved", message: expect.stringContaining("暂不能标注具体页码"), original: expect.stringContaining("no single PDF page") })]);
+    expect(scene("locate_page_unresolved").summary).toBe("精确匹配 · 具体页码不可确定");
+  });
+
+  it("keeps every diagnostic category, snapshot coverage and unmodified quote", () => {
+    const pair = structuredClone(fx.locate_ok);
+    const raw = pair.result!.payload!.raw as { result: { structuredContent: Record<string, unknown> } };
+    const payload = raw.result.structuredContent;
+    payload.page = null;
+    payload.diagnostics = [
+      { code: "matched_raw_ocr_fallback", message: "raw OCR bytes" },
+      { code: "matched_normalized", message: "normalized spacing" },
+      { code: "page_markers_absent", snapshot_pages: { from: 45, to: 49 }, message: "snapshot covers pages 45–49 but has no page markers" },
+      { code: "candidates_truncated", message: "some candidates omitted" },
+      { code: "future_diagnostic", message: "future diagnostic text" },
+    ];
+    const act = compileToolScene(pair.call, pair.result!)!.act as LocateAct;
+    expect(act.quote).toBe((pair.call.payload!.raw as { arguments: { quote: string } }).arguments.quote);
+    expect(act.diagnostics!.map(item => item.category)).toEqual(["source", "match", "page", "candidates", "other"]);
+    expect(act.diagnostics![2].message).toContain("第 45–49 页，但缺少分页标记");
+    expect(act.page).toBeUndefined();
+    expect(act.diagnostics![4].original).toBe("future diagnostic text");
+    (payload.diagnostics as Record<string, unknown>[])[2].snapshot_pages = null;
+    expect((compileToolScene(pair.call, pair.result!)!.act as LocateAct).diagnostics![2].message).toBe("快照缺少分页标记，不能确定引文所在页。");
   });
 
   it("not found / invalid range: mismatch reason", () => {

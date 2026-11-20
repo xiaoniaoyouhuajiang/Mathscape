@@ -249,12 +249,67 @@ test.describe("Scene tools (fourth slice)", () => {
     await expect(hud.locator(".scene-hud-type-text")).toContainText("8. 证明", { timeout: 4000 });
     const win = page.locator(".canvas-panel .scene-act[data-act='locate']");
     await expect(win.locator(".scene-act-mark")).toContainText("8. 证明", { timeout: 4000 });
+    await expect(win.locator(".scene-locate-quote strong")).toHaveText("8. 证明");
+    await expect(win.locator(".scene-locate-quote .katex")).toHaveCount(1);
     await expect(win.locator(".scene-act-meta")).toHaveText("第 8 页");
     await expect(win.locator(".scene-act-verdict")).toHaveText("精确匹配 · 第 8 页");
     await expect.poll(() => page.evaluate(() => window.appHarness.nodeClasses("r-cite-art"))).toContain("sandbox-echo-seed");
     await expect(win.locator(".scene-act-reason")).toHaveText("引文与原文不一致", { timeout: 8000 });
     await expect(win.locator(".scene-act-quote")).toHaveAttribute("data-phase", "miss");
   });
+
+  for (const theme of ["obsidian", "parchment", "slate"]) {
+    test(`locate reading preview and categorized diagnostics, live and replay: ${theme}`, async ({ page }, info) => {
+      await page.evaluate(theme => localStorage.setItem("mathscape.theme", theme), theme);
+      const dock = await enterSandbox(page);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      const quote = "**定理 7** 设方程\n\n$$p_1 x_1 + p_2 x_2 + \\dots + p_n x_n = r$$\n\n非负整数解的个数为 $b_r$。\n\n"
+        + "较长的原文仍保留完整段落，不截断公式。\n\n".repeat(20)
+        + "$$E = mc^2$$\n\n引文末尾。\n\n<script>window.locateUnsafe = true</script>\n\n[外部链接](https://example.com)";
+      const scripted = step("locate_ok", 30, 80);
+      (scripted.args as { quote: string }).quote = quote;
+      const payload = (scripted.result as { structuredContent: Record<string, unknown> }).structuredContent;
+      payload.page = null;
+      payload.page_granularity_available = false;
+      payload.match = "normalized";
+      payload.diagnostics = [
+        { code: "matched_raw_ocr_fallback", message: "quote matched raw OCR bytes" },
+        { code: "matched_normalized", message: "matched after normalization" },
+        { code: "page_markers_absent", snapshot_pages: { from: 45, to: 49 }, message: `snapshot ${CITE_ART} covers pages 45–49 but has no page markers` },
+      ];
+      await run(page, dock, [scripted]);
+      const win = page.locator(".canvas-panel .scene-act[data-act='locate']");
+      await expect(win.locator(".scene-locate-quote strong")).toHaveText("定理 7");
+      await expect(win.locator(".katex")).toHaveCount(3);
+      await expect(win.locator(".katex-error")).toHaveCount(0);
+      await expect(win.locator(".scene-locate-quote")).toContainText("引文末尾");
+      await expect(win.locator(".scene-act-verdict")).toHaveText("规范化后匹配 · 具体页码不可确定");
+      await expect(win.locator(".scene-act-meta")).toHaveCount(0);
+      await expect(win.locator(".scene-locate-category")).toHaveText(["原文", "匹配", "页码"]);
+      await expect(win.locator(".scene-locate-message").last()).toContainText("第 45–49 页，但缺少分页标记");
+      await expect(win.locator(".scene-locate-original").first()).toBeHidden();
+      expect(await win.locator(".scene-locate-quote").evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+      expect(await win.locator("script, a").count()).toBe(0);
+      await page.screenshot({ path: info.outputPath(`locate-${theme}.png`) });
+      await win.locator("summary").click();
+      await expect(win.locator(".scene-locate-artifact")).toHaveText(CITE_ART);
+      await expect(win.locator(".scene-locate-original")).toHaveCount(3);
+      expect(await win.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+      await page.screenshot({ path: info.outputPath(`locate-details-${theme}.png`) });
+      const hud = page.locator(".canvas-panel .scene-hud");
+      await hud.getByRole("button", { name: "停止" }).click();
+      const agent = dock.locator(".sandbox-line.role-agent").last();
+      await agent.locator(".sandbox-step-replay").click();
+      await expect(win.locator(".katex")).toHaveCount(3);
+      await expect(win.locator(".scene-locate-category")).toHaveText(["原文", "匹配", "页码"]);
+      await expect(win.locator(".scene-locate-details")).not.toHaveAttribute("open", "");
+      await hud.getByRole("button", { name: "停止" }).click();
+      await agent.locator(".sandbox-process-replay").click();
+      await expect(win.locator(".katex")).toHaveCount(3);
+      await expect(win.locator(".scene-act-verdict")).toHaveText("规范化后匹配 · 具体页码不可确定");
+      await hud.getByRole("button", { name: "停止" }).click();
+    });
+  }
 
   test("change sets: light HUD; consecutive same-tool calls coalesce", async ({ page }) => {
     const dock = await enterSandbox(page);

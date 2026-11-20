@@ -87,6 +87,7 @@ import type {
   ToolScene,
 } from "../sandbox/scene/types";
 import { PROPOSE_STEP_CAP } from "../sandbox/scene/types";
+import { renderBubbleHtml } from "../sandbox/bubble";
 
 export { SCENE_PACING, type ScenePart } from "./scene-pacing";
 
@@ -1263,21 +1264,45 @@ function fillLean(win: HTMLElement, act: LeanAct, elapsed?: number): void {
 /** Locate window: the quote (highlighted when it matched), page, or why not. */
 function fillLocate(win: HTMLElement, act: LocateAct): void {
   actHead(win, "原文定位", act.page !== undefined ? `第 ${act.page} 页` : undefined);
-  const quote = element("blockquote", "scene-act-quote");
-  const text = clip(act.quote, 240);
-  if (act.phase === "ok") quote.append(element("mark", "scene-act-mark", text));
-  else quote.textContent = text;
+  const quote = element("blockquote", "scene-act-quote scene-locate-quote");
+  // Keep complete Markdown/math blocks: clipping source can cut a TeX delimiter.
+  // The bounded preview scrolls instead; raw HTML and external links stay inert.
+  quote.innerHTML = renderBubbleHtml(act.quote);
+  if (act.phase === "ok") quote.classList.add("scene-act-mark");
   quote.dataset.phase = act.phase;
   win.append(quote);
   if (act.phase === "ok") {
-    const verdict = element("p", "scene-act-verdict", [act.match ?? "已定位", act.page !== undefined ? `第 ${act.page} 页` : ""].filter(Boolean).join(" · "));
+    const verdict = element("p", "scene-act-verdict");
+    verdict.append(element("span", "scene-locate-match", act.match ?? "已定位"), " · ",
+      element("span", "scene-locate-page", act.page !== undefined ? `第 ${act.page} 页` : "具体页码不可确定"));
     verdict.dataset.verdict = "ok";
     win.append(verdict);
-    if (act.reason) win.append(element("p", "scene-act-foot", act.reason));
   } else if (act.phase !== "running") {
     const verdict = element("p", "scene-act-reason", act.reason ?? "未定位");
     verdict.dataset.verdict = act.phase;
     win.append(verdict);
+  }
+  if (act.diagnostics?.length) {
+    const list = element("ul", "scene-locate-diagnostics");
+    const labels = { page: "页码", match: "匹配", source: "原文", candidates: "候选", other: "补充说明" };
+    for (const diagnostic of act.diagnostics) {
+      const item = element("li", "scene-locate-diagnostic");
+      item.dataset.category = diagnostic.category;
+      item.append(element("span", "scene-locate-category", labels[diagnostic.category]),
+        element("span", "scene-locate-message", diagnostic.message));
+      list.append(item);
+    }
+    win.append(list);
+  }
+  if (act.artifactId || act.diagnostics?.length) {
+    const details = document.createElement("details");
+    details.className = "scene-locate-details";
+    details.append(element("summary", "", "技术详情"));
+    if (act.artifactId) details.append(element("p", "scene-act-note", "快照 ID"), element("code", "scene-locate-artifact", act.artifactId));
+    for (const diagnostic of act.diagnostics ?? []) {
+      details.append(element("code", "scene-locate-code", diagnostic.code), element("p", "scene-locate-original", diagnostic.original));
+    }
+    win.append(details);
   }
 }
 

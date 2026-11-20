@@ -30,6 +30,7 @@ import {
   type LeanAct,
   type LeanDiagnostic,
   type LocateAct,
+  type LocateDiagnostic,
   type MathlibAct,
   type OutlineRow,
   type ParsingAct,
@@ -461,7 +462,7 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
             ? `${count} 处候选，未唯一定位`
             : inner === "not_found"
               ? `未找到：${payloadError(payload) ?? "引文与原文不一致"}`
-              : `${MATCH_LABEL[str(payload?.match) ?? ""] ?? "已定位"}${page !== undefined ? ` · 第 ${page} 页` : ""}`,
+              : `${MATCH_LABEL[str(payload?.match) ?? ""] ?? "已定位"} · ${page !== undefined ? `第 ${page} 页` : "具体页码不可确定"}`,
       seeds: artifact ? [artifact] : [],
       layers: [],
     };
@@ -903,6 +904,36 @@ function locatePage(payload: Json | undefined): number | undefined {
   return index !== undefined ? index + 1 : undefined;
 }
 
+/** Localize by diagnostic code/fields, never by parsing the agent-facing English. */
+function locateDiagnostics(payload: Json | undefined): LocateDiagnostic[] {
+  return list(payload?.diagnostics).filter(isObject).map((item): LocateDiagnostic => {
+    const code = str(item.code) ?? "unknown";
+    const original = str(item.message) ?? "";
+    const base = { code, original };
+    switch (code) {
+      case "page_markers_absent": {
+        const pages = isObject(item.snapshot_pages) ? item.snapshot_pages : undefined;
+        const from = num(pages?.from);
+        const to = num(pages?.to);
+        const known = from !== undefined && to !== undefined && Number.isInteger(from) && Number.isInteger(to) && from >= 1 && to >= from;
+        return { ...base, category: "page", message: known
+          ? `快照覆盖第 ${from === to ? from : `${from}–${to}`} 页，但缺少分页标记，不能确定引文所在页。`
+          : "快照缺少分页标记，不能确定引文所在页。" };
+      }
+      case "page_unresolved":
+        return { ...base, category: "page", message: "该引文无法对应到单一 PDF 页；可引用原文段落，暂不能标注具体页码。" };
+      case "matched_normalized":
+        return { ...base, category: "match", message: "引文经空白或 TeX 间距规范化后匹配。" };
+      case "matched_raw_ocr_fallback":
+        return { ...base, category: "source", message: "引文匹配的是修订前的 OCR 文本，请对照已勘误的原文核验。" };
+      case "candidates_truncated":
+        return { ...base, category: "candidates", message: "候选过多，仅列出部分结果；可加长引文或缩小范围。" };
+      default:
+        return { ...base, category: "other", message: "工具返回了补充说明，详见技术详情。" };
+    }
+  });
+}
+
 function locateAct(args: Json, payload: Json | undefined, status: SceneStatus): LocateAct {
   const inner = str(payload?.status);
   const phase: LocateAct["phase"] =
@@ -911,7 +942,7 @@ function locateAct(args: Json, payload: Json | undefined, status: SceneStatus): 
   const count = num(payload?.candidate_count);
   const reason =
     phase === "ok"
-      ? list(payload?.diagnostics).filter(isObject).map((item) => str(item.message)).find(Boolean)
+      ? undefined
       : phase === "ambiguous"
         ? `${count ?? list(payload?.candidates).length} 处候选：加长引文或用 within 缩小范围`
         : phase === "running"
@@ -921,6 +952,8 @@ function locateAct(args: Json, payload: Json | undefined, status: SceneStatus): 
     kind: "locate",
     phase,
     quote: str(args.quote) ?? "",
+    artifactId: str(payload?.artifact_id) ?? str(args.artifact_id),
+    diagnostics: locateDiagnostics(payload),
     ...(str(payload?.match) ? { match: MATCH_LABEL[str(payload?.match)!] ?? str(payload?.match) } : {}),
     ...(page !== undefined ? { page } : {}),
     ...(count !== undefined ? { candidates: count } : {}),
