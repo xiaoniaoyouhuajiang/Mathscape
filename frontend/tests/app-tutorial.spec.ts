@@ -191,7 +191,7 @@ test.describe("teaser tutorial", () => {
     }
   });
 
-  test("map labels: hovering a compact node shows a full uncropped pill that does not overlap other visible labels", async ({ page }) => {
+  test("map labels: hovering a compact node shows a full uncropped halo label that does not overlap other visible labels", async ({ page }) => {
     test.setTimeout(120_000);
     await page.addInitScript(() => localStorage.setItem("mathscape:reduce-motion", "on"));
     await page.goto("/tests/app.html");
@@ -238,7 +238,9 @@ test.describe("teaser tutorial", () => {
       const bg = Number.parseFloat(node.style("text-background-opacity") || "0");
       const others = [...cy.nodes(), ...cy.edges()].filter((e) => {
         if (e.id() === nodeId || !e.visible() || e.hasClass("label-recess")) return false;
-        const text = e.style("label") || e.data("label") || "";
+        // A tutorial can intentionally suppress an edge label. Its backing
+        // data is not visible text and must not count as a collision.
+        const text = e.style("label") || "";
         const opacity = Number.parseFloat(e.style("text-opacity") || "1");
         return Boolean(text) && opacity > 0.05;
       });
@@ -266,7 +268,7 @@ test.describe("teaser tutorial", () => {
       const cropped = bb.w + 4 < textW || bb.h + 4 < textH;
       const full = String(node.data("fullLabel") ?? "");
       return {
-        hovered, overlaps, cropped, backgroundOpacity: bg, label, full,
+        hovered, overlaps, cropped, backgroundOpacity: bg, outlineWidth: Number.parseFloat(node.style("text-outline-width") || "0"), label, full,
         expanded: !full || label === full, bb: { w: bb.w, h: bb.h }, textW, textH,
       };
     }, id);
@@ -284,7 +286,8 @@ test.describe("teaser tutorial", () => {
           expect(m.expanded, `${shot}: ${m.label}`).toBe(true);
           expect(m.overlaps, `${shot}: ${m.label}`).toEqual([]);
           expect(m.cropped, `${shot}: ${m.label} box=${JSON.stringify(m.bb)} text=${m.textW}x${m.textH}`).toBe(false);
-          expect(m.backgroundOpacity, `${shot}: ${m.label}`).toBeGreaterThan(0.8);
+          expect(m.backgroundOpacity, `${shot}: ${m.label}`).toBe(0);
+          expect(m.outlineWidth, `${shot}: ${m.label}`).toBeGreaterThanOrEqual(2);
         }
         await page.mouse.move(8, 8);
         await page.waitForTimeout(150);

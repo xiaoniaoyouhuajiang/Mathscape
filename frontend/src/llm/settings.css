@@ -31,11 +31,11 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #7c6850;
+  background: var(--ms-panel-raised);
 }
 
 .settings-button.is-configured .settings-dot {
-  background: #57b79e;
+  background: var(--ms-control);
   box-shadow: 0 0 9px rgb(87 183 158 / 50%);
 }
 
@@ -214,17 +214,17 @@
   padding: 11px 12px;
   border: 1px solid var(--ms-selected);
   border-radius: 8px;
-  color: #a7d3ca;
-  background: #132824;
+  color: var(--ms-text-secondary);
+  background: var(--ms-panel-raised);
   font-size: 10px;
   line-height: 1.5;
   white-space: pre-wrap;
 }
 
 .settings-result[data-kind="error"] {
-  border-color: #654545;
-  color: #e0bcbc;
-  background: #2b1b1b;
+  border-color: var(--ms-error-border);
+  color: var(--ms-error);
+  background: var(--ms-error-bg);
 }
 
 .settings-actions {

@@ -1,3 +1,4 @@
+import { graphPalette, resolveGraphColor, watchGraphTheme } from "./theme";
 import cytoscape, {
   type Core,
   type ElementDefinition,
@@ -13,7 +14,7 @@ import {
 } from "./projection";
 import { FOCUS_CONTRACTION_KIND } from "./focus";
 import { computeLandscapeLayout, type MapPoint } from "./layout";
-import { EDGE_TYPES, NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
+import { NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
 import {
   bindLabelHover,
   LABEL_HOVER,
@@ -412,608 +413,640 @@ function edgeClasses(directed: boolean, semantic = false): string {
 // Cytoscape stylesheet
 // ---------------------------------------------------------------------------
 
-const nodeTypeStyles: StylesheetJson = NODE_TYPE_ORDER.map((key) => {
-  const visual = NODE_TYPES[key];
-  return {
-    selector: `node[nodeType = "${key}"]`,
-    style: {
-      shape: visual.shape,
-      width: `${visual.width}px`,
-      height: `${visual.height}px`,
-      "background-color": visual.background,
-      "background-opacity": visual.backgroundOpacity,
-      "border-color": visual.border,
-      "border-style": visual.borderStyle,
-      "border-width": 1.5,
-      "font-size": `${visual.fontSize}px`,
-    },
-  };
-});
+function graphStyles(): StylesheetJson {
+  const t = graphPalette();
+  const nodeTypeStyles: StylesheetJson = NODE_TYPE_ORDER.map((key) => {
+    const visual = NODE_TYPES[key];
+    return {
+      selector: `node[nodeType = "${key}"]`,
+      style: {
+        shape: visual.shape,
+        width: `${visual.width}px`,
+        height: `${visual.height}px`,
+        "background-color": resolveGraphColor(visual.background),
+        "background-opacity": visual.backgroundOpacity,
+        "border-color": resolveGraphColor(visual.border),
+        "border-style": visual.borderStyle,
+        "border-width": 1.5,
+        "font-size": `${visual.fontSize}px`,
+      },
+    };
+  });
 
-const styles: StylesheetJson = [
-  {
-    selector: "node",
-    style: {
-      label: "data(label)",
-      "text-wrap": "wrap",
-      "text-max-width": "150px",
-      "font-size": "11px",
-      "background-color": "#59918b",
-      "border-width": 1,
-      "border-color": "#8bbab4",
-      color: "#dbe7e9",
-      "text-background-color": "#0c131a",
-      "text-background-opacity": 0.82,
-      "text-background-padding": "3px",
+  return [
+    {
+      selector: "node",
+      style: {
+        label: "data(label)",
+        "text-wrap": "wrap",
+        "text-max-width": "150px",
+        "font-size": "11px",
+        "background-color": t.accent,
+        "border-width": 1,
+        "border-color": t.accent,
+        color: t.text,
+        "text-background-color": t.canvas,
+        "text-background-opacity": 0,
+        "text-background-padding": "3px",
+        "text-outline-color": t.canvas,
+        "text-outline-width": 2,
+        "text-valign": "bottom",
+        "text-margin-y": 7,
+      },
     },
-  },
-  ...nodeTypeStyles,
-  {
-    selector: 'node[elementKind = "junction"]',
-    style: {
-      shape: "ellipse",
-      width: "12px",
-      height: "12px",
-      "background-color": "#b47b49",
-      "background-opacity": 0.6,
-      "border-width": 0,
-      label: "",
+    ...nodeTypeStyles,
+    {
+      selector: 'node[nodeType = "shared_entity"]',
+      style: {
+        "underlay-color": t.gold, "underlay-opacity": 0.08, "underlay-padding": 6, "underlay-shape": "ellipse",
+        "text-halign": "left", "text-valign": "center", "text-margin-x": -12, "text-margin-y": 0,
+      },
     },
-  },
-  {
-    selector: "node.is-boundary",
-    style: {
-      "background-opacity": 0.45,
-      "border-style": "dashed",
-      "border-width": 2,
+    {
+      selector: 'node[lifecycle = "candidate"]',
+      style: { "border-style": "dashed", "border-color": t.candidate, "background-opacity": 0.18 },
     },
-  },
-  {
-    selector: "edge",
-    style: {
-      label: "data(role)",
-      width: 1.5,
-      "curve-style": "bezier",
-      "line-color": EDGE_TYPES.incidence.color,
-      "target-arrow-color": EDGE_TYPES.incidence.color,
-      "target-arrow-shape": "triangle",
-      "font-size": "9px",
-      color: "#9aa9b4",
-      // 连线上的字水平放、垫深色圆角底：不跟着线转，压在线上和交叉处也读得清。
-      "text-rotation": "none",
-      "text-background-color": "#0c131a",
-      "text-background-opacity": 0.88,
-      "text-background-shape": "roundrectangle",
-      "text-background-padding": "2px",
+    {
+      selector: 'node[elementKind = "junction"]',
+      style: {
+        shape: "ellipse",
+        width: "12px",
+        height: "12px",
+        "background-color": t.gold,
+        "background-opacity": 0.6,
+        "border-width": 0,
+        label: "",
+      },
     },
-  },
-  {
-    selector: "edge.semantic-edge",
-    style: {
-      label: "data(label)",
-      "line-color": EDGE_TYPES.relation.color,
-      "target-arrow-color": EDGE_TYPES.relation.color,
-      color: "#c9a87a",
+    {
+      selector: "node.is-boundary",
+      style: {
+        "background-opacity": 0.45,
+        "border-style": "dashed",
+        "border-width": 2,
+      },
     },
-  },
-  {
-    selector: "edge.evidence-edge",
-    style: {
-      label: "data(label)",
-      width: 1.2,
-      "line-style": "dashed",
-      "line-color": EDGE_TYPES.evidence.color,
-      "target-arrow-shape": "none",
-      color: "#9db2aa",
-      "font-size": "8px",
+    {
+      selector: "edge",
+      style: {
+        label: "data(role)",
+        width: 1.2,
+        "curve-style": "bezier",
+        "line-color": t.edge,
+        "target-arrow-color": t.edge,
+        "target-arrow-shape": "triangle",
+        "font-size": "9px",
+        color: t.text,
+        // 连线标签水平放，以细描边光晕保持清晰，不遮住其他星轨。
+        "text-rotation": "none",
+        // At rest, titles take priority. Relation text is available on hover
+        // or selection rather than competing with nearby mathematical nodes.
+        "text-opacity": 0,
+        "text-background-color": t.canvas,
+        "text-background-opacity": 0,
+        "text-background-shape": "roundrectangle",
+        "text-background-padding": "2px",
+        "text-outline-color": t.canvas,
+        "text-outline-width": 2,
+      },
     },
-  },
-  {
-    selector: "edge.is-directed",
-    style: {
-      width: 2.2,
-      "target-arrow-shape": "triangle",
-      "target-arrow-color": "#f0c27d",
-      "arrow-scale": 1.55,
+    {
+      selector: "edge.semantic-edge",
+      style: {
+        label: "data(label)",
+        "line-color": t.edge,
+        "target-arrow-color": t.edge,
+        color: t.text,
+      },
     },
-  },
-  {
-    selector: "edge.is-undirected",
-    style: {
-      "target-arrow-shape": "none",
-      "line-style": "dashed",
+    {
+      selector: "edge.evidence-edge",
+      style: {
+        label: "data(label)",
+        width: 1.2,
+        "line-style": "dashed",
+        "line-dash-pattern": [3, 4],
+        "line-color": t.muted,
+        "target-arrow-shape": "none",
+        color: t.text,
+        "font-size": "8px",
+      },
     },
-  },
-  {
-    selector: "edge.alignment-edge",
-    style: {
-      width: 2.4,
-      "line-color": EDGE_TYPES.alignment.color,
-      "target-arrow-color": EDGE_TYPES.alignment.color,
-      color: "#eadc9a",
+    {
+      selector: "edge.is-directed",
+      style: {
+        width: 1.2,
+        "target-arrow-shape": "triangle",
+        "target-arrow-color": t.accent,
+        "arrow-scale": 1.55,
+      },
     },
-  },
-  {
-    selector: "edge.debt-edge",
-    style: {
-      width: 1.4,
-      "line-style": "dashed",
-      "line-color": EDGE_TYPES.debt.color,
-      "target-arrow-shape": "none",
-      color: "#e9cc7f",
-      "font-size": "8px",
+    {
+      selector: "edge.is-undirected",
+      style: {
+        "target-arrow-shape": "none",
+        "line-style": "dashed",
+      },
     },
-  },
-  {
-    selector: "edge.semantic-link-edge",
-    style: {
-      width: 1.2,
-      "line-style": "dotted",
-      "target-arrow-shape": "none",
-      "font-size": "8px",
+    {
+      selector: "edge.alignment-edge",
+      style: {
+        width: 1.2,
+        "line-color": t.primaryEdge,
+        "target-arrow-color": t.primaryEdge,
+        color: t.text,
+      },
     },
-  },
-  // Declared last so a contracted path keeps its own weight and arrow colour
-  // instead of inheriting the directed-relation emphasis.
-  {
-    selector: "edge.contracted-edge",
-    style: {
-      label: "data(label)",
-      width: 1.6,
-      "line-style": "dotted",
-      "line-color": EDGE_TYPES.contracted.color,
-      "target-arrow-shape": "triangle",
-      "target-arrow-color": EDGE_TYPES.contracted.color,
-      "arrow-scale": 1.2,
-      color: "#9fb2c2",
-      "font-size": "9px",
+    {
+      selector: "edge.debt-edge",
+      style: {
+        width: 1.4,
+        "line-style": "dashed",
+        "line-color": t.warning,
+        "target-arrow-shape": "none",
+        color: t.warning,
+        "font-size": "8px",
+      },
     },
-  },
-  {
-    selector: ".is-retired",
-    style: {
-      opacity: 0.4,
-      "border-style": "dashed",
-      "line-style": "dashed",
+    {
+      selector: "edge.semantic-link-edge",
+      style: {
+        width: 1.2,
+        "line-style": "dotted",
+        "target-arrow-shape": "none",
+        "font-size": "8px",
+      },
     },
-  },
-  // Phase2 staged proposals (staged-overlay.ts): dashed, translucent, badged.
-  {
-    selector: ".is-staged",
-    style: {
-      opacity: 0.6,
-      "border-style": "dashed",
-      "border-width": 2,
-      "border-color": "#ffd84a",
-      "line-style": "dashed",
-      "line-color": "#ffd84a",
+    // Declared last so a contracted path keeps its own weight and arrow colour
+    // instead of inheriting the directed-relation emphasis.
+    {
+      selector: "edge.contracted-edge",
+      style: {
+        label: "data(label)",
+        width: 1.6,
+        "line-style": "dotted",
+        "line-color": t.edge,
+        "target-arrow-shape": "triangle",
+        "target-arrow-color": t.edge,
+        "arrow-scale": 1.2,
+        color: t.text,
+        "font-size": "9px",
+      },
     },
-  },
-  {
-    selector: ".is-staged-conflict",
-    style: {
-      "border-style": "double",
-      "border-width": 4,
-      "border-color": "#e0913f",
+    {
+      selector: ".is-retired",
+      style: {
+        opacity: 0.4,
+        "border-style": "dashed",
+        "line-style": "dashed",
+      },
     },
-  },
-  // N2 "我的手稿" overlay (ink-overlay.ts): synthesized, never projected.
-  {
-    selector: "node.has-ink-notes",
-    style: { "border-color": "#b79be0", "border-width": 2.5 },
-  },
-  // Block-level Markdown errata non-blocking review cue (errata-overlay.ts).
-  {
-    selector: "node.has-errata-review",
-    style: {
-      "border-color": "#45c4a3",
-      "border-style": "dashed",
-      "border-width": 2.5,
-      "overlay-color": "#45c4a3",
-      "overlay-opacity": 0.14,
-      "overlay-padding": 5,
+    // Phase2 staged proposals (staged-overlay.ts): dashed, translucent, badged.
+    {
+      selector: ".is-staged",
+      style: {
+        opacity: 0.6,
+        "border-style": "dashed",
+        "border-width": 2,
+        "border-color": t.candidate,
+        "line-style": "dashed",
+        "line-color": t.candidate,
+      },
     },
-  },
-  {
-    selector: "node.ink-note-node",
-    style: {
-      shape: "round-rectangle",
-      width: "26px",
-      height: "18px",
-      "background-color": "#3d3157",
-      "border-color": "#b79be0",
-      "border-width": 1.5,
-      "border-style": "solid",
-      color: "#e7dcf7",
-      "font-size": "10px",
+    {
+      selector: ".is-staged-conflict",
+      style: {
+        "border-style": "double",
+        "border-width": 4,
+        "border-color": t.error,
+      },
     },
-  },
-  {
-    selector: "edge.ink-note-edge",
-    style: {
-      width: 1.2,
-      "line-color": "#9a7fc4",
-      "line-style": "dashed",
-      "target-arrow-shape": "none",
-      "curve-style": "straight",
-      label: "",
-      opacity: 0.8,
+    // N2 "我的手稿" overlay (ink-overlay.ts): synthesized, never projected.
+    {
+      selector: "node.has-ink-notes",
+      style: { "border-color": t.candidate, "border-width": 2.5 },
     },
-  },
-  {
-    selector: "edge.ink-note-edge.is-primary",
-    style: { width: 2 },
-  },
-  // A-PR3 sandbox echo (graph/sandbox-echo.ts) and the Map Scene Player
-  // (graph/scene-player.ts) share these: transient, never persisted.
-  // Seeds = what a tool call asked about, hits = what its result returned;
-  // `-fade` is the second half of the 2–3s pulse.
-  {
-    selector: "node.sandbox-echo-seed, node.sandbox-echo-hit",
-    style: {
-      "overlay-opacity": 0.28,
-      "overlay-padding": 7,
-      "transition-property": "overlay-opacity",
-      "transition-duration": 280,
+    // Block-level Markdown errata non-blocking review cue (errata-overlay.ts).
+    {
+      selector: "node.has-errata-review",
+      style: {
+        "border-color": t.success,
+        "border-style": "dashed",
+        "border-width": 2.5,
+        "overlay-color": t.success,
+        "overlay-opacity": 0.14,
+        "overlay-padding": 5,
+      },
     },
-  },
-  { selector: "node.sandbox-echo-seed", style: { "overlay-color": "#f2b84b" } },
-  { selector: "node.sandbox-echo-hit", style: { "overlay-color": "#4fc3d9" } },
-  { selector: "node.sandbox-echo-fade", style: { "overlay-opacity": 0.1 } },
-  // Sync ensure: the PDF a waiting material.read is parsing (「解析中」).
-  {
-    selector: "node.scene-parsing",
-    style: { "overlay-color": "#c9a227", "overlay-opacity": 0.34, "border-style": "dashed" },
-  },
-  {
-    selector: "edge.sandbox-echo-edge",
-    style: { "overlay-color": "#4fc3d9", "overlay-opacity": 0.22, "overlay-padding": 3 },
-  },
-  { selector: "edge.sandbox-echo-edge.sandbox-echo-fade", style: { "overlay-opacity": 0.08 } },
-  // propose_changes scene (scene-player.ts): transient ghosts for proposed
-  // units not yet on the map (same dashed yellow as the staged overlay),
-  // relations drawn one by one, blocked items in red, superseded ones faded.
-  {
-    selector: "node.scene-ghost",
-    style: {
-      shape: "round-rectangle",
-      width: "30px",
-      height: "22px",
-      "background-color": "#3a3416",
-      "background-opacity": 0.55,
-      "border-width": 2,
-      "border-style": "dashed",
-      "border-color": "#ffd84a",
-      color: "#fff1b0",
-      "font-size": "10px",
-      opacity: 0.9,
+    {
+      selector: "node.ink-note-node",
+      style: {
+        shape: "round-rectangle",
+        width: "26px",
+        height: "18px",
+        "background-color": t.candidate,
+        "border-color": t.candidate,
+        "border-width": 1.5,
+        "border-style": "solid",
+        color: t.text,
+        "font-size": "10px",
+      },
     },
-  },
-  { selector: "node.scene-ghost-span", style: { width: "16px", height: "12px", "font-size": "9px" } },
-  {
-    selector: "node.scene-ghost-semantic",
-    style: { "background-opacity": 0.7, "border-width": 2.2, "font-size": "10px", opacity: 0.95 },
-  },
-  { selector: "node.scene-ghost-theory", style: { shape: "hexagon", "background-color": "#284765", "border-color": "#8ed8ff", color: "#d9f3ff" } },
-  { selector: "node.scene-ghost-concept", style: { shape: "ellipse", "background-color": "#23554f", "border-color": "#70d9c5", color: "#d8fff7" } },
-  { selector: "node.scene-ghost-declaration", style: { shape: "round-rectangle", "background-color": "#49346b", "border-color": "#c69cff", color: "#f1e4ff" } },
-  { selector: "node.scene-ghost-problem-schema", style: { shape: "diamond", "background-color": "#63421f", "border-color": "#ffc16b", color: "#fff0cf" } },
-  { selector: "node.scene-ghost-debt", style: { shape: "diamond", "background-color": "#554318", "border-color": "#f0ce70", color: "#fff0b0" } },
-  { selector: "node.scene-ghost-dialect-scope", style: { shape: "round-rectangle", "background-color": "#214c49", "border-color": "#77d5b5", color: "#d9fff0" } },
-  { selector: "edge.scene-ghost-alignment-edge", style: { "line-color": "#8fb6ff", "target-arrow-color": "#8fb6ff", color: "#dbe6ff" } },
-  { selector: "edge.scene-ghost-theory-edge, edge.scene-ghost-uses-edge", style: { "line-color": "#8ed8ff", "target-arrow-color": "#8ed8ff", color: "#d9f3ff" } },
-  { selector: "edge.scene-ghost-debt-edge", style: { "line-color": "#f0ce70", "target-arrow-color": "#f0ce70", color: "#fff0b0" } },
-  { selector: "edge.scene-ghost-scope-edge", style: { "line-color": "#77d5b5", "target-arrow-color": "#77d5b5", color: "#d9fff0" } },
-  {
-    selector: "edge.scene-ghost-edge",
-    style: {
-      label: "data(label)",
-      width: 1.6,
-      "line-style": "dashed",
-      "line-color": "#ffd84a",
-      "target-arrow-shape": "triangle",
-      "target-arrow-color": "#ffd84a",
-      color: "#fff1b0",
-      "font-size": "9px",
-      opacity: 0.85,
+    {
+      selector: "edge.ink-note-edge",
+      style: {
+        width: 1.2,
+        "line-color": t.candidate,
+        "line-style": "dashed",
+        "target-arrow-shape": "none",
+        "curve-style": "straight",
+        label: "",
+        opacity: 0.8,
+      },
     },
-  },
-  {
-    selector: "node.scene-propose-hit",
-    style: { "overlay-color": "#ffd84a", "overlay-opacity": 0.3, "overlay-padding": 7 },
-  },
-  {
-    selector: "edge.scene-propose-edge",
-    style: { "overlay-color": "#ffd84a", "overlay-opacity": 0.3, "overlay-padding": 3 },
-  },
-  {
-    selector: "node.scene-propose-semantic-hit",
-    style: { "overlay-opacity": 0.34, "overlay-padding": 8 },
-  },
-  { selector: "node.scene-propose-theory-hit", style: { "overlay-color": "#8ed8ff" } },
-  { selector: "node.scene-propose-concept-hit", style: { "overlay-color": "#70d9c5" } },
-  { selector: "node.scene-propose-declaration-hit", style: { "overlay-color": "#c69cff" } },
-  { selector: "node.scene-propose-problem-schema-hit", style: { "overlay-color": "#ffc16b" } },
-  { selector: "node.scene-propose-debt-hit", style: { "overlay-color": "#f0ce70" } },
-  { selector: "node.scene-propose-dialect-scope-hit", style: { "overlay-color": "#77d5b5" } },
-  { selector: "edge.scene-propose-alignment-edge", style: { "overlay-color": "#8fb6ff", "overlay-opacity": 0.38, "overlay-padding": 4 } },
-  { selector: "edge.scene-propose-theory-edge, edge.scene-propose-uses-edge", style: { "overlay-color": "#8ed8ff", "overlay-opacity": 0.32, "overlay-padding": 4 } },
-  { selector: "edge.scene-propose-debt-edge", style: { "overlay-color": "#f0ce70", "overlay-opacity": 0.38, "overlay-padding": 4 } },
-  { selector: "edge.scene-propose-scope-edge", style: { "overlay-color": "#77d5b5", "overlay-opacity": 0.32, "overlay-padding": 4 } },
-  {
-    selector: "node.scene-blocked",
-    style: { "border-color": "#e0564a", "border-style": "solid", "border-width": 3, color: "#ffb4ab" },
-  },
-  {
-    selector: "edge.scene-blocked",
-    style: { "line-color": "#e0564a", "target-arrow-color": "#e0564a" },
-  },
-  {
-    selector: ".scene-blocked-flash",
-    style: { "overlay-color": "#e0564a", "overlay-opacity": 0.45, "overlay-padding": 8 },
-  },
-  {
-    selector: ".scene-retired",
-    style: { opacity: 0.22, "transition-property": "opacity", "transition-duration": 400 },
-  },
+    {
+      selector: "edge.ink-note-edge.is-primary",
+      style: { width: 2 },
+    },
+    // A-PR3 sandbox echo (graph/sandbox-echo.ts) and the Map Scene Player
+    // (graph/scene-player.ts) share these: transient, never persisted.
+    // Seeds = what a tool call asked about, hits = what its result returned;
+    // `-fade` is the second half of the 2–3s pulse.
+    {
+      selector: "node.sandbox-echo-seed, node.sandbox-echo-hit",
+      style: {
+        "overlay-opacity": 0.28,
+        "overlay-padding": 7,
+        "transition-property": "overlay-opacity",
+        "transition-duration": 280,
+      },
+    },
+    { selector: "node.sandbox-echo-seed", style: { "overlay-color": t.gold } },
+    { selector: "node.sandbox-echo-hit", style: { "overlay-color": t.accent } },
+    { selector: "node.sandbox-echo-fade", style: { "overlay-opacity": 0.1 } },
+    // Sync ensure: the PDF a waiting material.read is parsing (「解析中」).
+    {
+      selector: "node.scene-parsing",
+      style: { "overlay-color": t.accent, "overlay-opacity": 0.34, "border-style": "dashed" },
+    },
+    {
+      selector: "edge.sandbox-echo-edge",
+      style: { "overlay-color": t.accent, "overlay-opacity": 0.22, "overlay-padding": 3 },
+    },
+    { selector: "edge.sandbox-echo-edge.sandbox-echo-fade", style: { "overlay-opacity": 0.08 } },
+    // propose_changes scene (scene-player.ts): transient ghosts for proposed
+    // units not yet on the map (same dashed yellow as the staged overlay),
+    // relations drawn one by one, blocked items in red, superseded ones faded.
+    {
+      selector: "node.scene-ghost",
+      style: {
+        shape: "round-rectangle",
+        width: "30px",
+        height: "22px",
+        "background-color": t.candidate,
+        "background-opacity": 0.55,
+        "border-width": 2,
+        "border-style": "dashed",
+        "border-color": t.candidate,
+        color: t.text,
+        "font-size": "10px",
+        opacity: 0.9,
+      },
+    },
+    { selector: "node.scene-ghost-span", style: { width: "16px", height: "12px", "font-size": "9px" } },
+    {
+      selector: "node.scene-ghost-semantic",
+      style: { "background-opacity": 0.7, "border-width": 2.2, "font-size": "10px", opacity: 0.95 },
+    },
+    { selector: "node.scene-ghost-theory", style: { shape: "hexagon", "background-color": t.candidate, "border-color": t.candidate, color: t.text } },
+    { selector: "node.scene-ghost-concept", style: { shape: "ellipse", "background-color": t.candidate, "border-color": t.candidate, color: t.text } },
+    { selector: "node.scene-ghost-declaration", style: { shape: "round-rectangle", "background-color": t.candidate, "border-color": t.candidate, color: t.text } },
+    { selector: "node.scene-ghost-problem-schema", style: { shape: "diamond", "background-color": t.candidate, "border-color": t.candidate, color: t.text } },
+    { selector: "node.scene-ghost-debt", style: { shape: "diamond", "background-color": t.warning, "border-color": t.warning, color: t.warning } },
+    { selector: "node.scene-ghost-dialect-scope", style: { shape: "round-rectangle", "background-color": t.candidate, "border-color": t.candidate, color: t.text } },
+    { selector: "edge.scene-ghost-alignment-edge", style: { "line-color": t.candidate, "target-arrow-color": t.candidate, color: t.text } },
+    { selector: "edge.scene-ghost-theory-edge, edge.scene-ghost-uses-edge", style: { "line-color": t.candidate, "target-arrow-color": t.candidate, color: t.text } },
+    { selector: "edge.scene-ghost-debt-edge", style: { "line-color": t.warning, "target-arrow-color": t.warning, color: t.warning } },
+    { selector: "edge.scene-ghost-scope-edge", style: { "line-color": t.candidate, "target-arrow-color": t.candidate, color: t.text } },
+    {
+      selector: "edge.scene-ghost-edge",
+      style: {
+        label: "data(label)",
+        width: 1.6,
+        "line-style": "dashed",
+        "line-color": t.candidate,
+        "target-arrow-shape": "triangle",
+        "target-arrow-color": t.candidate,
+        color: t.text,
+        "font-size": "9px",
+        opacity: 0.85,
+      },
+    },
+    {
+      selector: "node.scene-propose-hit",
+      style: { "overlay-color": t.candidate, "overlay-opacity": 0.3, "overlay-padding": 7 },
+    },
+    {
+      selector: "edge.scene-propose-edge",
+      style: { "overlay-color": t.candidate, "overlay-opacity": 0.3, "overlay-padding": 3 },
+    },
+    {
+      selector: "node.scene-propose-semantic-hit",
+      style: { "overlay-opacity": 0.34, "overlay-padding": 8 },
+    },
+    { selector: "node.scene-propose-theory-hit", style: { "overlay-color": t.candidate } },
+    { selector: "node.scene-propose-concept-hit", style: { "overlay-color": t.candidate } },
+    { selector: "node.scene-propose-declaration-hit", style: { "overlay-color": t.candidate } },
+    { selector: "node.scene-propose-problem-schema-hit", style: { "overlay-color": t.candidate } },
+    { selector: "node.scene-propose-debt-hit", style: { "overlay-color": t.warning } },
+    { selector: "node.scene-propose-dialect-scope-hit", style: { "overlay-color": t.candidate } },
+    { selector: "edge.scene-propose-alignment-edge", style: { "overlay-color": t.candidate, "overlay-opacity": 0.38, "overlay-padding": 4 } },
+    { selector: "edge.scene-propose-theory-edge, edge.scene-propose-uses-edge", style: { "overlay-color": t.candidate, "overlay-opacity": 0.32, "overlay-padding": 4 } },
+    { selector: "edge.scene-propose-debt-edge", style: { "overlay-color": t.warning, "overlay-opacity": 0.38, "overlay-padding": 4 } },
+    { selector: "edge.scene-propose-scope-edge", style: { "overlay-color": t.candidate, "overlay-opacity": 0.32, "overlay-padding": 4 } },
+    {
+      selector: "node.scene-blocked",
+      style: { "border-color": t.error, "border-style": "solid", "border-width": 3, color: t.error },
+    },
+    {
+      selector: "edge.scene-blocked",
+      style: { "line-color": t.error, "target-arrow-color": t.error },
+    },
+    {
+      selector: ".scene-blocked-flash",
+      style: { "overlay-color": t.error, "overlay-opacity": 0.45, "overlay-padding": 8 },
+    },
+    {
+      selector: ".scene-retired",
+      style: { opacity: 0.22, "transition-property": "opacity", "transition-duration": 400 },
+    },
 
-  // 地图姿态与增量生长动效（GraphChoreographer & StudySpinePosture）
-  {
-    selector: ".is-choreo-entering",
-    style: { opacity: 0.05 },
-  },
-  {
-    selector: ".is-choreo-entered",
-    style: {
-      opacity: 1,
-      "transition-property": "opacity",
-      "transition-duration": 220,
+    // 地图姿态与增量生长动效（GraphChoreographer & StudySpinePosture）
+    {
+      selector: ".is-choreo-entering",
+      style: { opacity: 0.05 },
     },
-  },
-  {
-    selector: "node.spine-header-node",
-    style: {
-      "border-width": 2.5,
-      "border-color": "#7ec6d4",
-      "text-max-width": "260px",
-      "font-size": "12px",
-      color: "#edf7f9",
+    {
+      selector: ".is-choreo-entered",
+      style: {
+        opacity: 1,
+        "transition-property": "opacity",
+        "transition-duration": 220,
+      },
     },
-  },
-  {
-    selector: "node.spine-unit-node",
-    style: {
-      "text-valign": "center",
-      "text-halign": "right",
-      "text-margin-x": 10,
-      "text-max-width": "240px",
+    {
+      selector: "node.spine-header-node",
+      style: {
+        "border-width": 2.5,
+        "border-color": t.accent,
+        "text-max-width": "260px",
+        "font-size": "12px",
+        color: t.text,
+      },
     },
-  },
-  {
-    selector: "node.orbit-semantic-node",
-    style: {
-      "text-max-width": "210px",
-      "font-size": "12px",
+    {
+      selector: "node.spine-unit-node",
+      style: {
+        "text-valign": "center",
+        "text-halign": "right",
+        "text-margin-x": 10,
+        "text-max-width": "240px",
+      },
     },
-  },
-  {
-    selector: "node.orbit-outer-node",
-    style: {
-      "text-max-width": "210px",
+    {
+      selector: "node.orbit-semantic-node",
+      style: {
+        "text-max-width": "210px",
+        "font-size": "12px",
+      },
     },
-  },
-  {
-    selector: "node.study-status-mastered",
-    style: {
-      "border-color": "#52cc96",
-      "border-width": 3.2,
-      "border-style": "solid",
-      "underlay-color": "#52cc96",
-      "underlay-opacity": 0.16,
-      "underlay-padding": 4,
+    {
+      selector: "node.orbit-outer-node",
+      style: {
+        "text-max-width": "210px",
+      },
     },
-  },
-  {
-    selector: "node.study-status-studying",
-    style: {
-      "border-color": "#64c7de",
-      "border-width": 2.8,
-      "border-style": "solid",
+    {
+      selector: "node.study-status-mastered",
+      style: {
+        "border-color": t.success,
+        "border-width": 3.2,
+        "border-style": "solid",
+        "underlay-color": t.success,
+        "underlay-opacity": 0.16,
+        "underlay-padding": 4,
+      },
     },
-  },
-  {
-    selector: "node.study-cat-diff",
-    style: {
-      "underlay-color": "#e3aa4b",
-      "underlay-opacity": 0.22,
-      "underlay-padding": 5,
+    {
+      selector: "node.study-status-studying",
+      style: {
+        "border-color": t.accent,
+        "border-width": 2.8,
+        "border-style": "solid",
+      },
     },
-  },
-  {
-    selector: "node.study-cat-cross",
-    style: {
-      "underlay-color": "#8ca8ff",
-      "underlay-opacity": 0.22,
-      "underlay-padding": 5,
+    {
+      selector: "node.study-cat-diff",
+      style: {
+        "underlay-color": t.gold,
+        "underlay-opacity": 0.22,
+        "underlay-padding": 5,
+      },
     },
-  },
-  {
-    selector: "edge.spine-tree-edge",
-    style: {
-      label: "",
-      width: 1.5,
-      "line-color": "#4b7582",
-      "target-arrow-color": "#4b7582",
-      "arrow-scale": 1.15,
-      opacity: 0.72,
+    {
+      selector: "node.study-cat-cross",
+      style: {
+        "underlay-color": t.candidate,
+        "underlay-opacity": 0.22,
+        "underlay-padding": 5,
+      },
     },
-  },
-  {
-    selector: "edge.spine-arc-edge",
-    style: {
-      "curve-style": "unbundled-bezier",
-      "control-point-distances": "data(spineArcOffset)",
-      "control-point-weights": 0.5,
-      width: 1.9,
-      opacity: 0.88,
+    {
+      selector: "edge.spine-tree-edge",
+      style: {
+        label: "",
+        width: 1.2,
+        "line-color": t.accent,
+        "target-arrow-color": t.accent,
+        "arrow-scale": 1.15,
+        opacity: 0.72,
+      },
     },
-  },
-  {
-    selector: "node.is-study-signal-hit",
-    style: {
-      "border-width": 3.2,
-      "border-color": "#ffd875",
-      "z-index": 26,
-      opacity: 1,
+    {
+      selector: "edge.spine-arc-edge",
+      style: {
+        "curve-style": "unbundled-bezier",
+        "control-point-distances": "data(spineArcOffset)",
+        "control-point-weights": 0.5,
+        width: 1.9,
+        opacity: 0.88,
+      },
     },
-  },
-  {
-    selector: "edge.is-study-signal-hit",
-    style: {
-      width: 2.8,
-      "z-index": 24,
-      opacity: 1,
+    {
+      selector: "node.is-study-signal-hit",
+      style: {
+        "border-width": 3.2,
+        "border-color": t.gold,
+        "z-index": 26,
+        opacity: 1,
+      },
     },
-  },
-  {
-    selector: "node.is-study-signal-muted",
-    style: {
-      opacity: 0.24,
+    {
+      selector: "edge.is-study-signal-hit",
+      style: {
+        width: 2.8,
+        "z-index": 24,
+        opacity: 1,
+      },
     },
-  },
-  {
-    selector: "edge.is-study-signal-muted",
-    style: {
-      opacity: 0.14,
-      "text-opacity": 0,
-      "text-background-opacity": 0,
-      "text-border-opacity": 0,
+    {
+      selector: "node.is-study-signal-muted",
+      style: {
+        opacity: 0.24,
+      },
     },
-  },
+    {
+      selector: "edge.is-study-signal-muted",
+      style: {
+        opacity: 0.14,
+        "text-opacity": 0,
+        "text-background-opacity": 0,
+        "text-border-opacity": 0,
+      },
+    },
 
-  // 单击选中高亮（Selection Spotlight）：凸显当前节点及其直接关联边/邻居，退后其余背景且隐藏无关连线标签。
-  {
-    selector: "node.is-selection-receded",
-    style: {
-      opacity: 0.2,
+    // 单击选中高亮（Selection Spotlight）：凸显当前节点及其直接关联边/邻居，退后其余背景且隐藏无关连线标签。
+    {
+      selector: "node.is-selection-receded",
+      style: {
+        opacity: 0.2,
+      },
     },
-  },
-  {
-    selector: "edge.is-selection-receded",
-    style: {
-      opacity: 0.12,
-      "text-opacity": 0,
-      "text-background-opacity": 0,
-      "text-border-opacity": 0,
+    {
+      selector: "edge.is-selection-receded",
+      style: {
+        opacity: 0.12,
+        "text-opacity": 0,
+        "text-background-opacity": 0,
+        "text-border-opacity": 0,
+      },
     },
-  },
-  {
-    selector: "node.is-focus-root",
-    style: {
-      "border-width": 4,
-      "border-color": "#ffd89a",
-      "underlay-color": "#ffd89a",
-      "underlay-opacity": 0.25,
-      "underlay-padding": 6,
-      "z-index": 32,
-      opacity: 1,
+    {
+      selector: "node.is-focus-root",
+      style: {
+        "border-width": 4,
+        "border-color": t.gold,
+        "underlay-color": t.gold,
+        "underlay-opacity": 0.25,
+        "underlay-padding": 6,
+        "z-index": 32,
+        opacity: 1,
+      },
     },
-  },
-  {
-    selector: "edge.is-focus-root",
-    style: {
-      width: 3.4,
-      "underlay-color": "#ffd89a",
-      "underlay-opacity": 0.25,
-      "underlay-padding": 4,
-      "z-index": 32,
-      opacity: 1,
+    {
+      selector: "edge.is-focus-root",
+      style: {
+        width: 3.4,
+        "underlay-color": t.gold,
+        "underlay-opacity": 0.25,
+        "underlay-padding": 4,
+        "z-index": 32,
+        opacity: 1,
+      },
     },
-  },
-  {
-    selector: "node.is-selected-neighbor",
-    style: {
-      "border-width": 2.6,
-      "border-color": "#9eb6ff",
-      "underlay-color": "#9eb6ff",
-      "underlay-opacity": 0.2,
-      "underlay-padding": 5,
-      "z-index": 36,
-      opacity: 1,
-      color: "#eef4ff",
-      "text-background-opacity": 0.92,
+    {
+      selector: "node.is-selected-neighbor",
+      style: {
+        "border-width": 2.6,
+        "border-color": t.accent,
+        "underlay-color": t.accent,
+        "underlay-opacity": 0.2,
+        "underlay-padding": 5,
+        "z-index": 36,
+        opacity: 1,
+        color: t.text,
+        "text-background-opacity": 0,
+      },
     },
-  },
-  {
-    selector: "node.is-selected-primary, node:selected",
-    style: {
-      "border-width": 3.6,
-      "border-color": "#ffd84a",
-      "underlay-color": "#ffd84a",
-      "underlay-opacity": 0.3,
-      "underlay-padding": 7,
-      "z-index": 50,
-      opacity: 1,
-      color: "#fff6dc",
-      "text-background-color": "#0c131a",
-      "text-background-opacity": 0.95,
-      "text-border-color": "#6e5a2a",
-      "text-border-width": 1,
-      "text-border-opacity": 1,
+    {
+      selector: "node.is-selected-primary, node:selected",
+      style: {
+        "border-width": 3.6,
+        "border-color": t.gold,
+        "underlay-color": t.gold,
+        "underlay-opacity": 0.3,
+        "underlay-padding": 7,
+        "z-index": 50,
+        opacity: 1,
+        color: t.gold,
+        "text-background-color": t.canvas,
+        "text-background-opacity": 0,
+        "text-border-color": t.canvas,
+        "text-border-width": 0,
+        "text-border-opacity": 1,
+      },
     },
-  },
-  {
-    selector: "edge.is-selected-edge, edge:selected",
-    style: {
-      width: 3.2,
-      opacity: 1,
-      "z-index": 45,
-      color: "#ffe6a6",
-      "text-background-color": "#0c131a",
-      "text-background-opacity": 0.95,
-      "text-border-color": "#6e5a2a",
-      "text-border-width": 1,
-      "text-border-opacity": 1,
+    {
+      selector: "edge.is-selected-edge, edge:selected",
+      style: {
+        "text-opacity": 1,
+        width: 3.2,
+        opacity: 1,
+        "z-index": 45,
+        color: t.gold,
+        "text-background-color": t.canvas,
+        "text-background-opacity": 0,
+        "text-border-color": t.canvas,
+        "text-border-width": 0,
+        "text-border-opacity": 1,
+      },
     },
-  },
 
-  // Out-of-focus context: placed after staged / ink / selection rules so out-of-focus
-  // elements are always faint, label-free, and non-interactive.
-  {
-    selector: ".is-out-of-focus",
-    style: {
-      opacity: 0.08,
-      events: "no",
-      label: "",
-      "underlay-opacity": 0,
+    {
+      selector: "edge.is-theme-hover",
+      style: { "line-color": t.accent, "target-arrow-color": t.accent, width: 1.8 },
     },
-  },
 
-  {
-    selector: `node.${LABEL_HOVER}`,
-    style: { ...LABEL_HOVER_STYLE },
-  },
-  {
-    selector: `edge.${LABEL_HOVER}`,
-    style: {
-      "text-background-color": "#0c131a",
-      "text-background-opacity": 0.94,
-      "text-background-shape": "roundrectangle",
-      "text-background-padding": "3px",
-      "text-border-color": "#6e5a2a",
-      "text-border-width": 1,
-      "text-border-opacity": 1,
-      "z-index": 1000,
-      "z-index-compare": "manual",
-      "z-compound-depth": "top",
-      opacity: 1,
+    // Out-of-focus context: placed after staged / ink / selection rules so out-of-focus
+    // elements are always faint, label-free, and non-interactive.
+    {
+      selector: ".is-out-of-focus",
+      style: {
+        opacity: 0.08,
+        events: "no",
+        label: "",
+        "underlay-opacity": 0,
+      },
     },
-  },
-  {
-    selector: `.${LABEL_RECESS}`,
-    style: { ...LABEL_RECESS_STYLE },
-  },
-];
+
+    {
+      selector: `node.${LABEL_HOVER}`,
+      style: { ...LABEL_HOVER_STYLE },
+    },
+    {
+      selector: `edge.${LABEL_HOVER}`,
+      style: {
+        "text-opacity": 1,
+        "text-background-color": t.canvas,
+        "text-background-opacity": 0,
+        "text-background-shape": "roundrectangle",
+        "text-background-padding": "3px",
+        "text-border-color": t.canvas,
+        "text-border-width": 0,
+        "text-border-opacity": 1,
+        "z-index": 1000,
+        "z-index-compare": "manual",
+        "z-compound-depth": "top",
+        opacity: 1,
+      },
+    },
+    {
+      selector: `.${LABEL_RECESS}`,
+      style: { ...LABEL_RECESS_STYLE },
+    },
+  ];
+
+}
 
 export const OUT_OF_FOCUS_CLASS = "is-out-of-focus";
 export const FOCUS_ROOT_CLASS = "is-focus-root";
@@ -1025,6 +1058,12 @@ export const SELECTION_RECEDED_CLASS = "is-selection-receded";
 // ---------------------------------------------------------------------------
 // Graph mounting
 // ---------------------------------------------------------------------------
+
+function fitLandscape(core: Core): void {
+  core.fit(undefined, 48);
+  // Sparse maps should not turn a star into a large flowchart block.
+  if (core.zoom() > 1.35) core.zoom({ level: 1.35, renderedPosition: { x: core.width() / 2, y: core.height() / 2 } });
+}
 
 export function mountCytoscapeGraph(
   container: HTMLElement,
@@ -1044,14 +1083,24 @@ export function mountCytoscapeGraph(
   const core = cytoscape({
     container,
     elements,
-    style: styles,
+    style: graphStyles(),
     layout: { name: "preset", fit: false },
     minZoom: 0.08,
     maxZoom: 4,
   });
   if (core.elements().nonempty() && core.width() > 0 && core.height() > 0) {
-    core.fit(undefined, 28);
+    fitLandscape(core);
   }
+  watchGraphTheme(core, () => {
+    core.style(graphStyles());
+    // Label texture caches include the old outline colour.
+    refreshLabels(core, core.elements() as unknown as LabelSet);
+  });
+  const linked = (node: import("cytoscape").NodeSingular, active: boolean) => {
+    node.connectedEdges().toggleClass("is-theme-hover", active);
+  };
+  core.on("mouseover", "node", event => linked(event.target, true));
+  core.on("mouseout", "node", event => linked(event.target, false));
   bindLabelHover(core, options?.labelHover);
   return core;
 }

@@ -750,6 +750,21 @@ const appHarness = {
     const box = node.renderedBoundingBox({});
     return { selected: node.selected(), dx: (box.x1 + box.x2) / 2 - cy.width() / 2, dy: (box.y1 + box.y2) / 2 - cy.height() / 2, width: cy.width(), height: cy.height() };
   },
+  themeStatePaint: () => {
+    const cy = core();
+    const probes = cy.add([
+      { group: "nodes", data: { id: "theme-candidate-probe", nodeType: "shared_entity", label: "候选" }, classes: "is-staged" },
+      { group: "nodes", data: { id: "theme-debt-probe", nodeType: "debt", label: "一笔账" } },
+    ]);
+    const [candidate, debt] = [...probes];
+    const value = { candidateShape: candidate.style("shape"), candidateBorder: candidate.style("border-style"), candidateColor: candidate.style("border-color"), debtShape: debt.style("shape"), debtBorder: debt.style("border-style"), debtColor: debt.style("border-color") };
+    probes.remove();
+    return value;
+  },
+  graphPaint: () => ({
+    nodes: core().nodes().map(node => ({ id: node.id(), type: node.data("nodeType"), shape: node.style("shape"), border: node.style("border-style"), borderColor: node.style("border-color"), color: node.style("color"), labelBackground: node.style("text-background-opacity"), position: node.position() })),
+    edges: core().edges().map(edge => ({ id: edge.id(), color: edge.style("line-color") })),
+  }),
   labels: () => Object.fromEntries(core().nodes().map(node => [node.id(), String(node.data("label"))])),
   inkNodes: () => core().nodes(".ink-note-node").map(node => `${node.id()}=${String(node.data("label"))}`),
   selectNode: (id: string) => { core().getElementById(id).emit("tap"); },

@@ -1,3 +1,4 @@
+import { THEME_CHANGED } from "../shell/theme-manager";
 import type { Core, EdgeSingular, NodeSingular } from "cytoscape";
 import type { DesktopSnapshot } from "../artifact/types";
 import {
@@ -147,6 +148,9 @@ export class GraphController {
     private readonly elements: GraphControllerElements,
     private readonly delegate: GraphControllerDelegate,
   ) {
+    window.addEventListener(THEME_CHANGED, () => {
+      if (this.graphCore) this.renderLegend(this.graphCore);
+    });
     this.initFilterSettings();
     this.bindDOMControls();
   }
@@ -1072,7 +1076,7 @@ export class GraphController {
       }
     }
     if (core.nodes(`.${INK_NOTE_NODE_CLASS}`).nonempty()) {
-      items.push(this.legendItem(this.nodeSwatch({ shape: "round-rectangle", background: "#3d3157", border: "#b79be0", borderStyle: "solid" } as NodeTypeVisual), "我的手稿"));
+      items.push(this.legendItem(this.nodeSwatch({ shape: "round-rectangle", background: "var(--ms-candidate)", border: "var(--ms-candidate)", borderStyle: "solid" } as NodeTypeVisual), "我的手稿"));
     }
     this.elements.graphLegend.replaceChildren(...items);
   }
@@ -1088,7 +1092,7 @@ export class GraphController {
     const shape =
       visual.shape === "ellipse" ? "is-round" : visual.shape === "diamond" ? "is-diamond" : "is-rect";
     const swatch = document.createElement("span");
-    swatch.className = `legend-dot ${shape}${visual.borderStyle === "dashed" ? " is-dashed" : ""}`;
+    swatch.className = `legend-dot ${shape} is-${visual.shape}${visual.borderStyle === "dashed" ? " is-dashed" : ""}`;
     swatch.style.backgroundColor = visual.background;
     swatch.style.borderColor = visual.border;
     return swatch;

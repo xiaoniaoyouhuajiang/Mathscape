@@ -527,7 +527,7 @@ export class TutorialPlayer {
 
   private nodeSwatch(visual: NodeTypeVisual): HTMLElement {
     const shape = visual.shape === "ellipse" ? "is-round" : visual.shape === "diamond" ? "is-diamond" : "is-rect";
-    const swatch = el("span", `legend-dot ${shape}${visual.borderStyle === "dashed" ? " is-dashed" : ""}`);
+    const swatch = el("span", `legend-dot ${shape} is-${visual.shape}${visual.borderStyle === "dashed" ? " is-dashed" : ""}`);
     swatch.style.backgroundColor = visual.background;
     swatch.style.borderColor = visual.border;
     return swatch;

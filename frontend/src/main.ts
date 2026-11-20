@@ -1,3 +1,4 @@
+import { initializeTheme } from "./shell/theme-manager";
 import { invoke } from "@tauri-apps/api/core";
 import { ArtifactController } from "./artifact/artifact-controller";
 import { renderLeanStatus } from "./artifact/lean-status";
@@ -52,6 +53,8 @@ import "./semantic/semantic.css";
 import { StudyHudController } from "./semantic/study-hud";
 import { TutorialPlayer } from "./tutorial/player";
 import "./tutorial/tutorial.css";
+
+initializeTheme();
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (app === null) {

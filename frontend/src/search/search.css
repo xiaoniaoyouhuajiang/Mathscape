@@ -9,14 +9,14 @@
 .workspace-search-input:focus { outline: 1px solid var(--ms-accent); }
 .workspace-search-trash { flex: none; display: flex; align-items: center; gap: 4px; color: var(--ms-text-secondary); font-size: 12px; white-space: nowrap; }
 .workspace-search-status { margin: 0; color: var(--ms-text-muted); font-size: 12px; }
-.workspace-search-status.is-error { color: #f0a3a3; }
+.workspace-search-status.is-error { color: var(--ms-error); }
 .workspace-search-results { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 10px; }
 .workspace-search-results:empty { display: none; }
 .workspace-search-group { display: grid; gap: 2px; }
 .workspace-search-group-title { padding: 2px 6px; color: var(--ms-text-muted); font-size: 11px; letter-spacing: .04em; }
 .workspace-search-option { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 7px; cursor: pointer; }
 .workspace-search-option[aria-selected="true"] { background: var(--ms-selected); outline: 1px solid var(--ms-accent); }
-.workspace-search-option.is-trashed .workspace-search-title { color: #b8a98a; }
+.workspace-search-option.is-trashed .workspace-search-title { color: var(--ms-text-muted); }
 .workspace-search-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .workspace-search-title { overflow: hidden; color: var(--ms-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-search-title mark { color: inherit; background: rgb(240 200 90 / 32%); border-radius: 2px; }

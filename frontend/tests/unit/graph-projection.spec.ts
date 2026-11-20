@@ -118,8 +118,8 @@ describe("graph projection and taxonomy", () => {
     it("ensures all node types have complete visual styles defined", () => {
       for (const [key, visual] of Object.entries(NODE_TYPES)) {
         expect(visual.label).toBeTruthy();
-        expect(visual.background).toMatch(/^#[0-9a-f]{6}$/i);
-        expect(visual.border).toMatch(/^#[0-9a-f]{6}$/i);
+        expect(visual.background).toMatch(/^(#[0-9a-f]{6}|var\(--ms-[\w-]+\))$/i);
+        expect(visual.border).toMatch(/^(#[0-9a-f]{6}|var\(--ms-[\w-]+\))$/i);
         expect(["solid", "dashed"]).toContain(visual.borderStyle);
         expect(visual.width).toBeGreaterThan(0);
         expect(visual.height).toBeGreaterThan(0);
@@ -129,7 +129,7 @@ describe("graph projection and taxonomy", () => {
     it("ensures all edge types have complete visual styles defined", () => {
       for (const [key, visual] of Object.entries(EDGE_TYPES)) {
         expect(visual.label).toBeTruthy();
-        expect(visual.color).toMatch(/^#[0-9a-f]{6}$/i);
+        expect(visual.color).toMatch(/^(#[0-9a-f]{6}|var\(--ms-[\w-]+\))$/i);
         expect(typeof visual.dashed).toBe("boolean");
       }
     });

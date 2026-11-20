@@ -9,12 +9,12 @@
 .task-attempt > strong { color: var(--ms-text-secondary); font-size: 13px; }
 .task-status { font-size: 13px; }
 .task-timeline { margin: 10px 0; padding-left: 22px; display: grid; gap: 4px; color: var(--ms-text-muted); font-size: 12px; }
-.task-timeline .status-completed { color: #75c69f; }
-.task-timeline .status-partial, .task-timeline .status-needs_attention { color: #e0b46e; }
-.task-timeline .status-failed, .task-timeline .status-cancelled { color: #df8b83; }
+.task-timeline .status-completed { color: var(--ms-text-muted); }
+.task-timeline .status-partial, .task-timeline .status-needs_attention { color: var(--ms-text-secondary); }
+.task-timeline .status-failed, .task-timeline .status-cancelled { color: var(--ms-text-secondary); }
 .admission-dialog { border: 1px solid var(--ms-border); border-radius: 14px; padding: 24px; background: var(--ms-panel); color: var(--ms-text); }
 .discovery-task-window button, .admission-dialog button { background: var(--ms-control); color: var(--ms-text); border: 1px solid var(--ms-control-border); border-radius: 6px; cursor: pointer; }
 .discovery-task-window button:disabled { cursor: default; opacity: .45; }
-.discovery-task-window .task-cancel:not(:disabled) { border-color: #8c5f58; color: #efc7bf; }
+.discovery-task-window .task-cancel:not(:disabled) { border-color: var(--ms-control-border); color: var(--ms-text); }
 .admission-dialog button { margin: 6px; padding: 8px 16px; }
 .admission-dialog::backdrop { background: #142a3655; }
