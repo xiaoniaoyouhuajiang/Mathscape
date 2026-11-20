@@ -17,7 +17,7 @@ import { FOCUS_CONTRACTION_KIND } from "./focus";
 import { computeLandscapeLayout, type MapPoint } from "./layout";
 import { NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
 import { nodeHalo } from "./node-glyph";
-import { AUTO_LABEL_HIDDEN, mapLabelScale } from "./label-density";
+import { AUTO_LABEL_HIDDEN, mapLabelOffset, mapLabelScale } from "./label-density";
 import {
   bindLabelHover,
   LABEL_HOVER,
@@ -431,7 +431,7 @@ function graphStyles(): StylesheetJson {
         "border-color": resolveGraphColor(visual.border),
         "border-style": visual.borderStyle,
         "border-width": 1,
-        "font-size": (node: NodeSingular) => visual.fontSize * mapLabelScale(node),
+        "font-size": (node: NodeSingular) => (mapLabelScale(node) > 1 ? Math.max(11, visual.fontSize) : visual.fontSize) * mapLabelScale(node),
       },
     };
   });
@@ -455,7 +455,8 @@ function graphStyles(): StylesheetJson {
         "text-outline-color": t.canvas,
         "text-outline-width": 2,
         "text-valign": "bottom",
-        "text-margin-y": 7,
+        "text-margin-x": (node: NodeSingular) => mapLabelOffset(node).x / node.cy().zoom(),
+        "text-margin-y": (node: NodeSingular) => 14 * mapLabelScale(node) + mapLabelOffset(node).y / node.cy().zoom(),
       },
     },
     ...nodeTypeStyles,
@@ -476,7 +477,9 @@ function graphStyles(): StylesheetJson {
         "background-width": 48, "background-height": 48,
         "background-clip": "none", "background-image-containment": "over",
         "bounds-expansion": 16,
-        "text-halign": "left", "text-valign": "center", "text-margin-x": -12, "text-margin-y": 0,
+        "text-halign": "left", "text-valign": "center",
+        "text-margin-x": (node: NodeSingular) => -12 * mapLabelScale(node) + mapLabelOffset(node).x / node.cy().zoom(),
+        "text-margin-y": (node: NodeSingular) => mapLabelOffset(node).y / node.cy().zoom(),
       },
     },
     {
@@ -639,7 +642,7 @@ function graphStyles(): StylesheetJson {
       style: {
         // Pending titles include an explicit status badge: keep that longer
         // label below the node, not in the neighboring node's horizontal slot.
-        "text-halign": "center", "text-valign": "bottom", "text-margin-x": 0, "text-margin-y": 7,
+        "text-halign": "center", "text-valign": "bottom",
       },
     },
     {

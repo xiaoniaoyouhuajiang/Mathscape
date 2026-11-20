@@ -34,8 +34,9 @@ test("large maps declutter readable names without removing or moving objects", a
 
 test("overview titles breathe and provenance lights up only for the active node", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => {
-    const entity = (id: string, label: string, kind = "SourceSemanticUnit") => ({ id, label, element_kind: "entity", domain_id: id, domain_kind: kind, relation_kind: null, layer: "source", summary: null, lifecycle: "active", parent: null, boundary: false });
+    const entity = (id: string, label: string, kind = "SourceSemanticUnit") => ({ id, label, element_kind: "entity", domain_id: id, domain_kind: kind, relation_kind: null, layer: "source", summary: kind === "SourceArtifact" ? "application/pdf · synthetic fixture" : null, lifecycle: "active", parent: null, boundary: false });
     const nodes = [
       ...Array.from({ length: 40 }, (_, i) => entity(`unit-${i}`, `示例内容单元 ${i}`)),
       entity("article-a", "A synthetic mathematical article with a deliberately long title.pdf", "SourceArtifact"),
@@ -52,6 +53,8 @@ test("overview titles breathe and provenance lights up only for the active node"
   await page.goto("/tests/app.html");
   await expect(page.locator("#service-state")).toContainText("本地内核已连接");
   await page.getByRole("button", { name: "总览", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.appHarness.graphPaint().nodes.length)).toBe(44);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   await page.evaluate(() => {
     window.appHarness.zoomTo(0.5);
     const cy = (document.querySelector("#graph") as unknown as { _cyreg: { cy: Core } })._cyreg.cy;
@@ -74,7 +77,14 @@ test("overview titles breathe and provenance lights up only for the active node"
     cy.$id("article-a").emit(active ? "mouseover" : "mouseout");
   }, active);
   await expect.poll(() => opacity("span-a")).toBe(0);
-  await expect.poll(() => opacity("article-b")).toBe(0);
+  await expect.poll(() => page.evaluate(() => {
+    const cy = (document.querySelector("#graph") as unknown as { _cyreg: { cy: Core } })._cyreg.cy;
+    const a = cy.$id("article-a"), b = cy.$id("article-b");
+    if (Number(b.style("text-opacity")) === 0) return true;
+    const opts = { includeNodes: false, includeEdges: false, includeLabels: true, includeOverlays: false, includeUnderlays: false };
+    const x = a.renderedBoundingBox(opts), y = b.renderedBoundingBox(opts);
+    return !(x.x1 < y.x2 && y.x1 < x.x2 && x.y1 < y.y2 && y.y1 < x.y2);
+  })).toBe(true);
   await expect.poll(() => opacity("article-a")).toBe(1);
   expect(await opacity("ev-a")).toBeLessThan(0.1);
   expect(await opacity("ev-b")).toBeLessThan(0.1);
