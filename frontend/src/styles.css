@@ -1091,7 +1091,7 @@ code {
 .ink-session-list > p { color: var(--ms-text-muted); font-size: 11px; }
 .ink-session-item { display: grid; gap: 5px; width: 100%; padding: 10px; border: 1px solid var(--ms-border); border-radius: 8px; color: var(--ms-text-secondary); background: var(--ms-panel-raised); text-align: left; cursor: pointer; }
 .ink-session-item:hover { border-color: var(--ms-accent); background: var(--ms-control-hover); }
-.ink-session-item.is-active { border-color: var(--ms-accent); background: var(--ms-selected); }
+.ink-session-item:is(.is-active, .is-context) { border-color: var(--ms-star-gold); background: var(--ms-current-bg); box-shadow: inset 3px 0 var(--ms-star-gold); }
 .ink-session-item strong { overflow: hidden; font-size: 12px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 .ink-session-item span { color: var(--ms-text-muted); font-size: 10px; }
 .ink-desktop-main { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
@@ -1121,7 +1121,7 @@ code {
 #desktop-ink-summary { margin-left: auto; white-space: nowrap; }
 .ink-export-actions { display: flex; gap: 5px; }
 .ink-export-actions .secondary-button { min-height: 27px; padding: 0 8px; font-size: 10px; }
-.ink-session-item.is-context { border-color: var(--ms-control-border); background: var(--ms-panel-raised); }
+.ink-session-item .ink-session-context { color: var(--ms-text-secondary); line-height: 1.5; }
 @media (max-width: 760px) {
   .ink-desktop-body { grid-template-columns: 165px minmax(0, 1fr); }
   .ink-desktop-header { padding: 0 12px; }
@@ -1890,19 +1890,26 @@ button.is-tablet-online::before {
 /* Handwriting workbench: navigation, document commands, then writing tools.
    Keep consistent hit targets; group wrapping must not strand Return alone. */
 .ink-desktop-shell { container-type: inline-size; }
-.ink-desktop-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px 16px; padding: 16px 20px 12px; }
-.ink-desktop-header h2 { max-width: none; font-size: 21px; }
+.ink-desktop-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 10px 16px 8px; }
+.ink-document-heading { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 10px; }
+.ink-desktop-header h2 { min-width: 0; max-width: none; margin: 0; font-size: 19px; }
+.ink-state-row { grid-column: 1 / -1; flex-wrap: wrap; gap: 4px; margin-top: 0; }
 .ink-document-nav { display: flex; align-self: start; align-items: center; gap: 6px; }
 .ink-desktop-actions { grid-column: 1 / -1; justify-content: flex-start; gap: 8px 0; }
 .ink-command-group, .ink-tool-buttons > .ink-tool-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-right: 12px; margin-right: 12px; border-right: 1px solid var(--ms-border); }
 .ink-command-group:last-of-type, .ink-tool-buttons > .ink-tool-group:last-child { padding-right: 0; margin-right: 0; border-right: 0; }
-.ink-persistence-status { flex-basis: 100%; max-width: 100%; margin-top: 2px; font-size: 10px; }
+.ink-persistence-status { flex: 1 1 180px; max-width: 420px; margin-top: 0; font-size: 11px; }
 .ink-state-badge.is-editable, .ink-state-badge.is-saved { color: var(--ms-text-muted); background: transparent; border-color: transparent; }
 .ink-desktop-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px 16px; padding: 12px 16px; }
 .ink-tool-buttons { grid-column: 1 / -1; flex-wrap: wrap; gap: 8px 0; }
 .ink-desktop-actions button, .ink-document-nav button, .ink-desktop-toolbar button, .ink-desktop-toolbar select { min-height: 32px; padding: 0 9px; font-size: 12px; line-height: 1.2; white-space: nowrap; }
 .ink-brush-controls { min-width: 0; gap: 12px; flex-wrap: wrap; font-size: 11px; }
 .ink-page-controls { flex-wrap: wrap; gap: 4px; }
+@container (min-width: 1000px) {
+  .ink-document-heading { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+  .ink-desktop-header h2 { max-width: 48cqw; }
+  .ink-state-row { flex-wrap: nowrap; }
+}
 @container (max-width: 780px) {
   .ink-desktop-toolbar { grid-template-columns: minmax(0, 1fr); }
   .ink-page-controls { justify-self: start; }

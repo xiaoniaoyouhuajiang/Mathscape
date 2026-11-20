@@ -28,6 +28,7 @@
   --ms-warning: #f2a089;
   --ms-error: #e89284;
   --ms-candidate: #baace5;
+  --ms-ink: #baace5;
 
   /* Math Map Constellation Tokens */
   --ms-map-dot: rgba(168, 198, 245, 0.14);
@@ -67,6 +68,7 @@
   --ms-warning: #a13e2b;
   --ms-error: #b83c2e;
   --ms-candidate: #7253a0;
+  --ms-ink: #7253a0;
 
   /* Math Map Astronomical Manuscript Tokens */
   --ms-map-dot: rgba(38, 83, 141, 0.14);
@@ -106,6 +108,7 @@
   --ms-warning: #e9a18c;
   --ms-error: #e89a8e;
   --ms-candidate: #bbafe0;
+  --ms-ink: #bbafe0;
 
   /* Math Map Slate Constellation Tokens */
   --ms-map-dot: rgba(102, 189, 176, 0.13);
@@ -137,6 +140,7 @@
   --ms-error-bg: color-mix(in srgb, var(--ms-error) 10%, var(--ms-panel));
   --ms-current-bg: color-mix(in srgb, var(--ms-star-gold) 9%, var(--ms-panel-raised));
   --ms-candidate-bg: color-mix(in srgb, var(--ms-candidate) 10%, var(--ms-panel));
+  --ms-ink-bg: color-mix(in srgb, var(--ms-ink) 10%, var(--ms-panel-raised));
   --ms-accent-bg: color-mix(in srgb, var(--ms-accent) 9%, var(--ms-panel));
   --ms-success-border: color-mix(in srgb, var(--ms-success) 38%, var(--ms-border));
   --ms-warning-border: color-mix(in srgb, var(--ms-warning) 38%, var(--ms-border));
@@ -159,4 +163,6 @@ button:not(:disabled):hover { border-color: var(--ms-accent); }
   --ms-panel-raised: #eeece5;
   --ms-selected: #dde5f0;
   --ms-accent: #26538d;
+  --ms-ink: #7253a0;
+  --ms-ink-bg: #eee8f5;
 }

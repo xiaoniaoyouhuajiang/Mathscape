@@ -10,7 +10,7 @@ export function graphPalette() {
     text: read("text"), muted: read("text-muted"), secondary: read("text-secondary"),
     canvas: read("map-label-halo"), panel: read("panel-raised"), accent: read("accent"),
     gold: read("star-gold"), warning: read("warning"), error: read("error"),
-    success: read("success"), candidate: read("candidate"), core: read("map-node-core"),
+    success: read("success"), candidate: read("candidate"), ink: read("ink"), core: read("map-node-core"),
     edge: read("map-edge-secondary"), primaryEdge: read("map-edge-primary"),
   };
 }

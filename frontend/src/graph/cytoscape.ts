@@ -665,7 +665,7 @@ function graphStyles(): StylesheetJson {
     // N2 "我的手稿" overlay (ink-overlay.ts): synthesized, never projected.
     {
       selector: "node.has-ink-notes",
-      style: { "border-color": t.candidate, "border-width": 2.5 },
+      style: { "border-color": t.ink, "border-width": 2.5 },
     },
     // Block-level Markdown errata non-blocking review cue (errata-overlay.ts).
     {
@@ -685,8 +685,8 @@ function graphStyles(): StylesheetJson {
         shape: "round-rectangle",
         width: "26px",
         height: "18px",
-        "background-color": t.candidate,
-        "border-color": t.candidate,
+        "background-color": t.ink,
+        "border-color": t.ink,
         "border-width": 1.5,
         "border-style": "solid",
         color: t.text,
@@ -697,7 +697,7 @@ function graphStyles(): StylesheetJson {
       selector: "edge.ink-note-edge",
       style: {
         width: 1.2,
-        "line-color": t.candidate,
+        "line-color": t.ink,
         "line-style": "dashed",
         "target-arrow-shape": "none",
         "curve-style": "straight",
