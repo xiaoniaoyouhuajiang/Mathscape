@@ -10,6 +10,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
+use futures::SinkExt;
 use mathscape_domain::{
     INK_LAN_DOCUMENT_BYTES, INK_LAN_OPERATION_BYTES, INK_LAN_PROTOCOL_VERSION, InkLabStroke,
     InkLanOperation, validate_ink_preview,
@@ -701,6 +702,22 @@ async fn send(socket: &mut WebSocket, value: Value) -> bool {
         .is_ok()
 }
 async fn socket_loop(mut socket: WebSocket, state: HttpState) {
+    serve_socket(&mut socket, state).await;
+    let _ = tokio::time::timeout(Duration::from_secs(1), async {
+        let _ = socket.send(Message::Close(None)).await;
+        if socket.flush().await.is_err() {
+            return;
+        }
+        while let Some(Ok(message)) = socket.recv().await {
+            if matches!(message, Message::Close(_)) {
+                break;
+            }
+        }
+        let _ = socket.flush().await;
+    })
+    .await;
+}
+async fn serve_socket(mut socket: &mut WebSocket, state: HttpState) {
     let first = tokio::time::timeout(Duration::from_secs(10), socket.recv()).await;
     let Ok(Some(Ok(Message::Text(text)))) = first else {
         return;
@@ -947,10 +964,9 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
         }
     }
     release(&state, &credential_hash, &instance);
-    let _ = socket.send(Message::Close(None)).await;
 }
 async fn standby_loop(
-    mut socket: WebSocket,
+    mut socket: &mut WebSocket,
     state: HttpState,
     protocol_version: String,
     client_id: String,
@@ -1113,7 +1129,6 @@ async fn standby_loop(
         }
     }
     release_standby(&state, &client_id, &instance);
-    let _ = socket.send(Message::Close(None)).await;
 }
 fn release_standby(state: &HttpState, client_id: &str, instance: &str) {
     let mut standby = state.live.standby_slots.lock().unwrap();
