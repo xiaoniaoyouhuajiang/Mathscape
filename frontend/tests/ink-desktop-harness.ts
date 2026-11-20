@@ -7,6 +7,7 @@ import { connectInkViews } from "../src/ink/views";
 import { GraphController } from "../src/graph/graph-controller";
 import { a, b, documents, snapshots, evidence, evidenceRequests, calls, notes, noteCalls, behavior, links, linkCalls, exports, sourceLabels, overlayCalls } from "./ink-mock-store";
 import { projectInk } from "../src/ink/model";
+import { exportBehavior } from "./ink-mock-store";
 import "../src/styles.css";
 
 const workspaceHost = document.querySelector<HTMLElement>("#ink-test-host")!;
@@ -70,7 +71,7 @@ const visibleStrokeCount = () => {
   const document = id ? documents.get(id) : undefined;
   return document ? projectInk(document).visible.length : 0;
 };
-const harness = { visibleBounds, visibleStrokeCount, map, links, linkCalls, exports, notes, noteCalls, workspace, documents: { a: a.document_id, b: b.document_id }, snapshots, calls, behavior, evidenceRequests, storedDocuments:documents };
+const harness = { visibleBounds, visibleStrokeCount, map, links, linkCalls, exports, exportBehavior, notes, noteCalls, workspace, documents: { a: a.document_id, b: b.document_id }, snapshots, calls, behavior, evidenceRequests, storedDocuments:documents };
 declare global { interface Window { inkDesktopHarness: typeof harness } }
 window.inkDesktopHarness = harness;
 void workspace.open();

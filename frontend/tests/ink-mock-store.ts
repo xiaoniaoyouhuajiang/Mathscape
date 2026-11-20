@@ -22,6 +22,7 @@ const noteState = (id: string) => { const document = documents.get(id)!; return 
 const summary = (document: InkDocument) => ({ document_id: document.document_id, title: document.title, created_at: document.created_at, head_seq: document.operations.length, session_count: 1, active_session_id: sessions.get(document.document_id), updated_at: document.created_at, page_count: document.pages.length, snapshot_count: snapshots.get(document.document_id)?.length ?? 0, remote_active: behavior.remoteDocumentId === document.document_id, ...notes.get(document.document_id)! });
 const structuredError = (code: string, message: string, details?: Record<string, unknown>) => ({ code, message, details });
 const behavior = { preferredHost: null as string|null, pushOffline:false, pushNeedsTakeover:false, pushArgs:[] as unknown[], noLanAddress: false, renameConflictTitle: "", delayedDocumentId: "", delayMs: 0, appendDelay: 0, snapshotDelay: 0, failAppend: false, appendErrorCode: "", mirrorPolls: 0, loseEvidenceAck: false, remoteDocumentId:"", pairingPending:false,epoch:1,setupStep:0,remoteConnected:true,remotePending:0,setupDocumentId:"" as string|null,handoff:"",transferConfirmation:false,pairingArgs:[] as unknown[],strictPairing:false,autoRequest:true,revokedDocument:"",failCreate:false,recoveryFile:"", snapshotLabelConflict: null as string|null, snapshotLabelDelay: 0 };
+const exportBehavior = { cancelExport: false, failExport: false };
 const snapshotLabelRequests = new Map<string, unknown>();
 const snapshotLabelCalls: Array<Record<string, unknown>> = [];
 
@@ -50,6 +51,12 @@ const overlayCalls = { count: 0 };
 
 mockIPC(async (command, payload) => {
   const args = payload as Record<string, unknown>;
+  if (command === "export_ink_file") {
+    if (exportBehavior.cancelExport) return null;
+    if (exportBehavior.failExport) throw structuredError("export_failed", "无法写入文件");
+    exports.push({ fileName: args.fileName as string, contents: args.format === "json" ? new TextDecoder().decode(new Uint8Array(args.contents as number[])) : JSON.stringify(args.contents) });
+    return "/tmp/" + args.fileName;
+  }
   if (command === "get_ink_link_overlay") {
     overlayCalls.count++;
     const live = liveLinks().filter(link => link.target_kind === "source_object");
@@ -396,5 +403,5 @@ mockIPC(async (command, payload) => {
 
 /** Extra commands a harness adds (e.g. the app shell's snapshot). */
 export const extraCommands = new Map<string, (args: Record<string, unknown>) => unknown>();
-export { snapshotLabelCalls };
+export { snapshotLabelCalls, exportBehavior };
 export { a, b, documents, sessions, snapshots, evidence, evidenceRequests, calls, notes, noteCalls, noteState, behavior, links, linkCalls, exports, sourceLabels, overlayCalls };

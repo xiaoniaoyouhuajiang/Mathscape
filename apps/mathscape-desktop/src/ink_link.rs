@@ -728,22 +728,45 @@ pub async fn export_ink_unsaved_writing(
     file_name: String,
     contents: String,
 ) -> Result<Option<String>, InkCommandError> {
-    serde_json::from_str::<Value>(&contents)
-        .map_err(|_| InkCommandError::new("validation_failed", "导出内容不是有效 JSON。"))?;
+    export_ink_file(app, file_name, "json".into(), contents.into_bytes()).await
+}
+
+fn validate_ink_export(format: &str, contents: &[u8]) -> Result<(), InkCommandError> {
+    match format {
+        "json" => serde_json::from_slice::<Value>(contents)
+            .map(|_| ())
+            .map_err(|_| InkCommandError::new("validation_failed", "导出内容不是有效 JSON。")),
+        "png" if contents.starts_with(b"\x89PNG\r\n\x1a\n") => Ok(()),
+        _ => Err(InkCommandError::new("validation_failed", "导出格式或内容无效。")),
+    }
+}
+
+fn ink_export_name(file_name: &str, format: &str) -> String {
     let name: String = file_name
         .chars()
         .filter(|c| !matches!(c, '/' | '\\' | ':') && !c.is_control())
         .take(120)
         .collect();
+    if name.trim_matches('.').trim().is_empty() {
+        format!("Mathscape-ink.{format}")
+    } else {
+        name
+    }
+}
+
+#[tauri::command]
+pub async fn export_ink_file(
+    app: AppHandle,
+    file_name: String,
+    format: String,
+    contents: Vec<u8>,
+) -> Result<Option<String>, InkCommandError> {
+    validate_ink_export(&format, &contents)?;
     let selected = app
         .dialog()
         .file()
-        .add_filter("Ink JSON recovery", &["json"])
-        .set_file_name(if name.is_empty() {
-            "Mathscape-未保存笔迹.json".into()
-        } else {
-            name
-        })
+        .add_filter(if format == "json" { "Ink JSON" } else { "PNG" }, &[format.as_str()])
+        .set_file_name(ink_export_name(&file_name, &format))
         .blocking_save_file();
     let Some(selected) = selected else {
         return Ok(None);
@@ -754,4 +777,23 @@ pub async fn export_ink_unsaved_writing(
     std::fs::write(&path, contents)
         .map_err(|error| InkCommandError::new("export_failed", error.to_string()))?;
     Ok(Some(path.to_string_lossy().into()))
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    #[test]
+    fn ink_export_validation_and_names() {
+        assert_eq!(ink_export_name("a/b\\c:d\n.json", "json"), "abcd.json");
+        assert_eq!(ink_export_name("...", "png"), "Mathscape-ink.png");
+        assert_eq!(ink_export_name("", "json"), "Mathscape-ink.json");
+        assert!(validate_ink_export("json", b"{}").is_ok());
+        assert!(validate_ink_export("json", b"").is_err());
+        assert!(validate_ink_export("json", b"invalid").is_err());
+        assert!(validate_ink_export("png", b"\x89PNG\r\n\x1a\n").is_ok());
+        assert!(validate_ink_export("png", b"").is_err());
+        assert!(validate_ink_export("png", b"not png").is_err());
+        assert!(validate_ink_export("other", b"{}").is_err());
+    }
 }
