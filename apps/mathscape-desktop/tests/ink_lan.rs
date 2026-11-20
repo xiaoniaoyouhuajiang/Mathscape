@@ -1081,6 +1081,13 @@ async fn trashing_closes_the_tablet_with_an_old_pad_compatible_code_and_restore_
     assert_eq!(closed["type"], "session_closed");
     assert_eq!(closed["code"], "writer_revoked");
     assert_eq!(closed["reason"], "document_trashed");
+    let close = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(close, Message::Close(_)));
+    socket.flush().await.unwrap();
 
     // Reconnecting (old or new pad) gets the same fencing code.
     let mut again = f.socket("client-trash").await;
