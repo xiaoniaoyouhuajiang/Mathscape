@@ -1143,11 +1143,6 @@ export function mountCytoscapeGraph(
     // Label texture caches include the old outline colour.
     refreshLabels(core, core.elements() as unknown as LabelSet);
   });
-  const linked = (node: import("cytoscape").NodeSingular, active: boolean) => {
-    node.connectedEdges().toggleClass("is-theme-hover", active);
-  };
-  core.on("mouseover", "node", event => linked(event.target, true));
-  core.on("mouseout", "node", event => linked(event.target, false));
   bindLabelHover(core, options?.labelHover);
   bindLabelLeaders(core);
   return core;

@@ -9,6 +9,7 @@ import type { CollectionReturnValue, Core, EventObject, NodeSingular } from "cyt
 
 export const LABEL_HOVER = "label-hover";
 export const LABEL_RECESS = "label-recess";
+const RELATED_EDGE_HOVER = "is-theme-hover";
 
 /** 焦点 / 悬停共用的标签层级，并压在所有其他标签之上。 */
 export const LABEL_HOVER_STYLE = {
@@ -195,12 +196,12 @@ export function bindLabelHover(core: Core, options: LabelHoverOptions = {}): voi
 
   const clear = (): void => {
     if (core.destroyed()) return;
-    const els = core.elements(`.${LABEL_HOVER}, .${LABEL_RECESS}`);
+    const els = core.elements(`.${LABEL_HOVER}, .${LABEL_RECESS}, .${RELATED_EDGE_HOVER}`);
     if (els.empty()) return;
     token += 1;
     const nodes = els.nodes();
     core.batch(() => {
-      els.removeClass(`${LABEL_HOVER} ${LABEL_RECESS}`);
+      els.removeClass(`${LABEL_HOVER} ${LABEL_RECESS} ${RELATED_EDGE_HOVER}`);
       nodes.forEach((node) => applyNodeLabel(node));
     });
     refreshLabels(core, nodes as unknown as LabelSet);
@@ -212,6 +213,9 @@ export function bindLabelHover(core: Core, options: LabelHoverOptions = {}): voi
     clear();
     const my = ++token;
     target.addClass(LABEL_HOVER);
+    // One transient owner for the title and its connected edges. A separate
+    // mouseover listener could otherwise outlive canvas exit/pan/zoom cleanup.
+    if (target.isNode()) (target as NodeSingular).connectedEdges().addClass(RELATED_EDGE_HOVER);
     const nodes = (target.isNode() ? target : core.collection()) as unknown as LabelSet;
     if (target.isNode()) applyNodeLabel(target as NodeSingular);
     refreshLabels(core, nodes, () => {
