@@ -561,6 +561,7 @@ async fn expiry_predecessor_and_conflicting_replay_never_change_committed_histor
     assert_eq!(mirror.delta.operations.len(), 1);
     assert_eq!(mirror.delta.server_head, 1);
     socket.close(None).await.unwrap();
+    drop(database);
     f.cleanup().await;
 }
 
@@ -602,6 +603,7 @@ async fn explicit_stop_fences_old_authentication_and_recovery_import_is_an_indep
             .head_seq,
         0
     );
+    drop(database);
     f.cleanup().await;
 }
 
