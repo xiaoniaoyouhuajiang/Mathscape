@@ -2,6 +2,7 @@
 // workspace switching, the shared overlay cache and the inspector run exactly
 // as in the desktop app; only the Tauri commands are mocked.
 import type { Core } from "cytoscape";
+import type { InvestigationSnapshot } from "../src/artifact/types";
 import { mockWindows } from "@tauri-apps/api/mocks";
 import { a, b, behavior, documents, extraCommands, links, noteCalls, notes, snapshots, snapshotLabelCalls, sourceLabels } from "./ink-mock-store";
 
@@ -55,6 +56,18 @@ extraCommands.set("get_desktop_snapshot", () => {
   if (sessionStorage.getItem("harness.richMap") === "1") {
     (value.landscape_graph.nodes as unknown[]).push(structuredClone(citeNode), ...structuredClone(richMapNodes));
     (value.landscape_graph.edges as unknown[]).push(...structuredClone(richMapEdges));
+  }
+  // Same backend projection/marks contract as real investigation maps.
+  if (sessionStorage.getItem("harness.themeStates") === "1") {
+    (value.landscape_graph.nodes as unknown[]).push(
+      { id: "r-theme-candidate", element_kind: "entity", domain_id: "theme-candidate", domain_kind: "SemanticEntity", relation_kind: null, layer: "global_semantic", label: "有界性", summary: "概念", lifecycle: "active", parent: null, boundary: false },
+      { id: "r-theme-debt", element_kind: "entity", domain_id: "theme-debt", domain_kind: "Debt", relation_kind: null, layer: "global_semantic", label: "Debt：待补假设", summary: "待补紧性条件", lifecycle: "active", parent: null, boundary: false },
+    );
+    (value as typeof value & { investigation: InvestigationSnapshot }).investigation = {
+      investigation_id: "theme-investigation",
+      staged: { "theme-candidate": { staged: true, change_set_id: "theme-proposal", change_set_version: 1, change_sets: ["theme-proposal@1"], replaces_revision: null } },
+      conflicts: [],
+    };
   }
   // Sync ensure: while the harness "Marker" runs, the PDF node says 解析中.
   if (sandboxRound.parsingNow) {
@@ -750,6 +763,10 @@ const appHarness = {
     const box = node.renderedBoundingBox({});
     return { selected: node.selected(), dx: (box.x1 + box.x2) / 2 - cy.width() / 2, dy: (box.y1 + box.y2) / 2 - cy.height() / 2, width: cy.width(), height: cy.height() };
   },
+  graphPaint: () => ({
+    nodes: core().nodes().map(node => ({ id: node.id(), type: node.data("nodeType"), staged: node.hasClass("is-staged"), label: node.data("label"), shape: node.style("shape"), border: node.style("border-style"), borderColor: node.style("border-color"), color: node.style("color"), labelBackground: node.style("text-background-opacity"), position: node.position() })),
+    edges: core().edges().map(edge => ({ id: edge.id(), color: edge.style("line-color") })),
+  }),
   labels: () => Object.fromEntries(core().nodes().map(node => [node.id(), String(node.data("label"))])),
   inkNodes: () => core().nodes(".ink-note-node").map(node => `${node.id()}=${String(node.data("label"))}`),
   selectNode: (id: string) => { core().getElementById(id).emit("tap"); },

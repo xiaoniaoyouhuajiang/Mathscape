@@ -1,5 +1,6 @@
 import { mountDetailResizer } from "./panel-resizer";
 import { requiredElement } from "../core/dom";
+import { mountThemeToggle } from "./theme-manager";
 
 export interface AppElements {
   shell: HTMLElement;
@@ -72,6 +73,7 @@ export class AppShell {
   ) {
     this.isParseActive = options.isParseActive ?? (() => false);
     this.elements = this.mount(root);
+    mountThemeToggle(requiredElement<HTMLButtonElement>("#theme-toggle-button", root));
     this.initSidebarToggle();
     this.initViewMenu();
     const detailPanel = this.elements.workspaceGrid.querySelector<HTMLElement>(".detail-panel");
@@ -83,7 +85,33 @@ export class AppShell {
   <div class="shell">
     <header class="topbar">
       <div class="brand-block">
-        <div class="brand-mark">M</div>
+        <svg class="brand-mark" width="38" height="38" viewBox="0 0 38 38" aria-hidden="true" focusable="false">
+  <defs>
+    <radialGradient id="ms-brand-flare" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffe29e" stop-opacity="0.95" />
+      <stop offset="45%" stop-color="#eab665" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#050811" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect x="0.5" y="0.5" width="37" height="37" rx="9.5" fill="#060913" stroke="#8ec0ff" stroke-opacity="0.26" />
+  <polyline
+    points="6.5,23.5 13,13 17.5,25.5 23,23.8 27.8,13.5 32.5,22.5"
+    fill="none"
+    stroke="#b8d6ff"
+    stroke-opacity="0.72"
+    stroke-width="1.35"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="13" cy="13" r="7.5" fill="url(#ms-brand-flare)" />
+  <path d="M9,13 H17 M13,9 V17" stroke="#ffd88a" stroke-width="0.9" stroke-linecap="round" stroke-opacity="0.85" />
+  <circle cx="6.5" cy="23.5" r="1.35" fill="#dceaff" />
+  <circle cx="13" cy="13" r="2.2" fill="#fffdf7" />
+  <circle cx="17.5" cy="25.5" r="1.45" fill="#dceaff" />
+  <circle cx="23" cy="23.8" r="1.35" fill="#dceaff" />
+  <circle cx="27.8" cy="13.5" r="1.65" fill="#e8f2ff" />
+  <circle cx="32.5" cy="22.5" r="1.2" fill="#bfd8ff" />
+</svg>
         <div>
           <div class="brand">Mathscape</div>
           <div class="tagline">数学景观 · 来源视图</div>
@@ -100,6 +128,7 @@ export class AppShell {
       <div class="topbar-actions">
         <span id="service-state" class="service-state">正在连接本地内核</span>
         <button id="workspace-search-button" class="secondary-button workspace-search-button" type="button" title="搜索手稿、材料、来源单元和命名快照（⌘K / Ctrl+K）" aria-keyshortcuts="Meta+K Control+K"><svg class="topbar-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.4 10.4 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>搜索</span></button>
+        <button id="theme-toggle-button" class="icon-button" type="button" aria-label="切换主题"><svg class="topbar-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10 3.5a6.5 6.5 0 0 0 0 13Z" fill="currentColor"/></svg></button>
         <button id="llm-settings-button" class="icon-button settings-button" type="button" title="设置">
           <span aria-hidden="true">⚙</span>
           <span id="llm-settings-label" class="sr-only">设置</span>

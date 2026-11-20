@@ -1,3 +1,4 @@
+import { graphPalette, watchGraphTheme } from "../graph/theme";
 import cytoscape, { type Core, type ElementDefinition, type StylesheetJson } from "cytoscape";
 
 export interface ReviewGraphUnit {
@@ -46,53 +47,57 @@ const unitId = (ref: string) => `review-unit:${ref}`;
 const relationId = (id: string) => `review-relation:${id}`;
 const evidenceId = (id: string) => `review-evidence:${id}`;
 
-const STYLE: StylesheetJson = [
-  {
-    selector: "node.unit",
-    style: {
-      label: "data(label)", "font-size": 10, color: "#dfeae7", "text-wrap": "wrap", "text-max-width": "120px",
-      "text-valign": "bottom", "text-margin-y": 4, width: 22, height: 22,
-      "background-color": "#3fb8a4", "border-width": 2, "border-color": "#1b2a31",
+function reviewStyles(): StylesheetJson {
+  const t = graphPalette();
+  return [
+    {
+      selector: "node.unit",
+      style: {
+        label: "data(label)", "font-size": 10, color: t.text, "text-wrap": "wrap", "text-max-width": "120px",
+        "text-valign": "bottom", "text-margin-y": 4, width: 22, height: 22,
+        "background-color": t.accent, "border-width": 2, "border-color": t.accent,
+      },
     },
-  },
-  { selector: "node.state-blocked", style: { "background-color": "#e0913f" } },
-  { selector: "node.state-pending", style: { "background-color": "#7d8a90" } },
-  { selector: "node.state-registered", style: { "background-color": "#4e9d6c" } },
-  { selector: "node.is-selected", style: { "border-color": "#5bd67a", "border-width": 3 } },
-  {
-    selector: "node.is-current",
-    style: { "overlay-color": "#ffd84a", "overlay-opacity": 0.28, "overlay-padding": 7, "border-color": "#ffd84a" },
-  },
-  {
-    selector: "node.evidence",
-    style: { shape: "round-rectangle", width: 9, height: 9, "background-color": "#c9b35c", label: "", "border-width": 0 },
-  },
-  {
-    selector: "edge",
-    style: { width: 1.5, "curve-style": "bezier", "target-arrow-shape": "triangle", "arrow-scale": 0.8 },
-  },
-  { selector: "edge.structure", style: { "line-style": "dashed", "line-color": "#56707a", "target-arrow-color": "#56707a" } },
-  {
-    selector: "edge.semantic",
-    style: {
-      "line-color": "#8fb6d8", "target-arrow-color": "#8fb6d8", label: "data(label)", "font-size": 9,
-      color: "#bcd6ea", "text-background-color": "#131c24", "text-background-opacity": 0.85, "text-background-padding": "2px",
+    { selector: "node.state-blocked", style: { "background-color": t.warning } },
+    { selector: "node.state-pending", style: { "background-color": t.candidate } },
+    { selector: "node.state-registered", style: { "background-color": t.success } },
+    { selector: "node.is-selected", style: { "border-color": t.success, "border-width": 3 } },
+    {
+      selector: "node.is-current",
+      style: { "overlay-color": t.gold, "overlay-opacity": 0.28, "overlay-padding": 7, "border-color": t.gold },
     },
-  },
-  {
-    selector: "node.external",
-    style: {
-      label: "data(label)", "font-size": 9, color: "#a9bcc2", "text-wrap": "wrap", "text-max-width": "120px",
-      "text-valign": "bottom", "text-margin-y": 4, width: 16, height: 16, shape: "diamond",
-      "background-color": "#1b2a31", "border-width": 2, "border-style": "dashed", "border-color": "#8fa3aa",
+    {
+      selector: "node.evidence",
+      style: { shape: "round-rectangle", width: 9, height: 9, "background-color": t.accent, label: "", "border-width": 0 },
     },
-  },
-  { selector: "node.external-cross", style: { "border-color": "#b48ee0" } },
-  { selector: "edge.semantic.cross", style: { "line-style": "dashed", "line-color": "#b48ee0", "target-arrow-color": "#b48ee0" } },
-  { selector: "edge.evidence", style: { "line-style": "dotted", "line-color": "#8a7d4a", "target-arrow-shape": "none", width: 1 } },
-  { selector: "edge.is-current", style: { "line-color": "#ffd84a", "target-arrow-color": "#ffd84a", width: 3 } },
-];
+    {
+      selector: "edge",
+      style: { width: 1.5, "curve-style": "bezier", "target-arrow-shape": "triangle", "arrow-scale": 0.8 },
+    },
+    { selector: "edge.structure", style: { "line-style": "dashed", "line-color": t.accent, "target-arrow-color": t.accent } },
+    {
+      selector: "edge.semantic",
+      style: {
+        "line-color": t.accent, "target-arrow-color": t.accent, label: "data(label)", "font-size": 9,
+        color: t.text, "text-background-color": t.canvas, "text-background-opacity": 0, "text-outline-color": t.canvas, "text-outline-width": 2, "text-background-padding": "2px",
+      },
+    },
+    {
+      selector: "node.external",
+      style: {
+        label: "data(label)", "font-size": 9, color: t.text, "text-wrap": "wrap", "text-max-width": "120px",
+        "text-valign": "bottom", "text-margin-y": 4, width: 16, height: 16, shape: "diamond",
+        "background-color": t.accent, "border-width": 2, "border-style": "dashed", "border-color": t.accent,
+      },
+    },
+    { selector: "node.external-cross", style: { "border-color": t.candidate } },
+    { selector: "edge.semantic.cross", style: { "line-style": "dashed", "line-color": t.candidate, "target-arrow-color": t.candidate } },
+    { selector: "edge.evidence", style: { "line-style": "dotted", "line-color": t.accent, "target-arrow-shape": "none", width: 1 } },
+    { selector: "edge.is-current", style: { "line-color": t.gold, "target-arrow-color": t.gold, width: 3 } },
+  ];
 
+
+}
 /** Standalone Cytoscape view over one run's candidate units. */
 export class ReviewGraph {
   private core: Core;
@@ -138,7 +143,8 @@ export class ReviewGraph {
     host.dataset.unitCount = String(units.length);
     host.dataset.externalCount = String(outside.size);
     host.dataset.relationCount = String(elements.filter(element => element.classes?.toString().startsWith("semantic")).length);
-    this.core = cytoscape({ container: host, elements, style: STYLE, minZoom: 0.2, maxZoom: 3 });
+    this.core = cytoscape({ container: host, elements, style: reviewStyles(), minZoom: 0.2, maxZoom: 3 });
+    watchGraphTheme(this.core, () => this.core.style(reviewStyles()));
     const children = new Set(structure.map(edge => edge.child));
     const roots = [...units.filter(unit => !children.has(unit.ref)).map(unit => unitId(unit.ref)), ...[...outside.keys()].map(unitId)];
     this.core.layout(roots.length > 0 && roots.length < units.length + outside.size

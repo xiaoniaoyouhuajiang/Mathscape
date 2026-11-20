@@ -1,5 +1,5 @@
 /**
- * 地图标签悬停：展开全文、垫深色底、提到最上层，并暂时藏起会挡住它的邻接标签。
+ * 地图标签悬停：展开全文、描边光晕、提到最上层，并暂时藏起会挡住它的邻接标签。
  *
  * Cytoscape 3.34 只改 `label` 数据或 class 时，标签的包围盒和纹理仍可能沿用旧文字的
  * 宽度，新标签会被裁成旧宽度（悬停截图里「定理 3.2.3 Cassini…」左侧缺字、没有深色底）。
@@ -10,15 +10,12 @@ import type { CollectionReturnValue, Core, EventObject, NodeSingular } from "cyt
 export const LABEL_HOVER = "label-hover";
 export const LABEL_RECESS = "label-recess";
 
-/** 焦点 / 悬停共用的深色圆角底，并压在所有其他标签之上。 */
+/** 焦点 / 悬停共用的标签层级，并压在所有其他标签之上。 */
 export const LABEL_HOVER_STYLE = {
-  color: "#f4f1e4",
-  "text-background-color": "#0c131a",
-  "text-background-opacity": 0.94,
+  "text-background-opacity": 0,
   "text-background-shape": "roundrectangle",
   "text-background-padding": "3px",
-  "text-border-color": "#6e5a2a",
-  "text-border-width": 1,
+  "text-border-width": 0,
   "text-border-opacity": 1,
   opacity: 1,
   "z-index": 1000,
@@ -82,7 +79,9 @@ export function syncNodeLabel(node: NodeSingular, full: boolean): boolean {
   if (inkCount > 0) parts.push(`✎${inkCount}`);
   if (errataCount > 0) parts.push("已校对");
   const suffix = parts.length ? ` · ${parts.join(" · ")}` : "";
-  const next = suffix && !rawBase.endsWith(suffix) ? `${rawBase}${suffix}` : rawBase;
+  const prefix = node.data("elementKind") === "junction" ? "" : node.hasClass("is-staged") ? "〔未审批〕" : node.hasClass("is-staged-conflict") ? "〔提案冲突〕" : "";
+  const base = rawBase.replace(/^〔(未审批|提案冲突)〕/, "");
+  const next = prefix + (suffix && !base.endsWith(suffix) ? `${base}${suffix}` : base);
   if (node.data("label") === next) return false;
   node.data("label", next);
   return true;
@@ -181,7 +180,7 @@ export interface LabelHoverOptions {
 
 /**
  * 给已挂载的地图绑定悬停：有 `fullLabel` / `compactLabel` 时展开全文，
- * 垫深色底并提到最上层；会重叠的邻接标签暂时藏起。
+ * 提到最上层；会重叠的邻接标签暂时藏起。
  */
 export function bindLabelHover(core: Core, options: LabelHoverOptions = {}): void {
   const isFull = options.isFull ?? (() => false);

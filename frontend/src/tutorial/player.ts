@@ -453,14 +453,13 @@ export class TutorialPlayer {
   }
 
   /**
-   * 像 `fit` 一样把焦点（含标签）放进画面，但不放到底部图例下面：
-   * 可用高度扣掉图例，标签整块留在图例上方。
+   * 像 `fit` 一样把焦点（含标签）放进画面。
+   * 画布与底部图例各占一行，无需再从画布高度扣掉图例。
    */
   private viewportFor(core: Core, eles: ReturnType<Core["elements"]>): { zoom: number; pan: { x: number; y: number } } {
     const pad = 56;
     const width = this.canvas.clientWidth || core.width();
     const height = this.canvas.clientHeight || core.height();
-    const legend = this.legend.offsetHeight ? this.legend.offsetHeight + 16 : 0;
     // 不用 includeLabels：标签文字刚换过，此时 Cytoscape 量到的还是旧标签的尺寸，
     // 而且会把这个旧尺寸缓存下来，导致新标签被裁掉。按标签的最大尺寸手动留边：
     // 标签在节点上方，最宽 text-max-width（220px）。
@@ -469,7 +468,7 @@ export class TutorialPlayer {
     box.w = box.x2 - box.x1;
     box.h = box.y2 - box.y1;
     const availW = Math.max(40, width - pad * 2);
-    const availH = Math.max(40, height - legend - pad * 2);
+    const availH = Math.max(40, height - pad * 2);
     const zoom = Math.min(core.maxZoom(), Math.max(core.minZoom(), Math.min(availW / Math.max(box.w, 1), availH / Math.max(box.h, 1))));
     return {
       zoom,
@@ -527,7 +526,7 @@ export class TutorialPlayer {
 
   private nodeSwatch(visual: NodeTypeVisual): HTMLElement {
     const shape = visual.shape === "ellipse" ? "is-round" : visual.shape === "diamond" ? "is-diamond" : "is-rect";
-    const swatch = el("span", `legend-dot ${shape}${visual.borderStyle === "dashed" ? " is-dashed" : ""}`);
+    const swatch = el("span", `legend-dot ${shape} is-${visual.shape}${visual.borderStyle === "dashed" ? " is-dashed" : ""}`);
     swatch.style.backgroundColor = visual.background;
     swatch.style.borderColor = visual.border;
     return swatch;

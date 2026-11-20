@@ -1,3 +1,5 @@
+@import "../theme.css";
+
 .settings-button {
   display: inline-flex;
   min-height: 36px;
@@ -5,10 +7,10 @@
   gap: 8px;
   max-width: 260px;
   padding: 0 12px;
-  border: 1px solid #34434e;
+  border: 1px solid var(--ms-control-border);
   border-radius: 9px;
-  color: #a9b5be;
-  background: #111b23;
+  color: var(--ms-text-muted);
+  background: var(--ms-panel);
   cursor: pointer;
 }
 
@@ -20,8 +22,8 @@
 }
 
 .settings-button:hover {
-  border-color: #54726f;
-  color: #d6e3e0;
+  border-color: var(--ms-accent);
+  color: var(--ms-text);
 }
 
 .settings-dot {
@@ -29,11 +31,11 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #7c6850;
+  background: var(--ms-panel-raised);
 }
 
 .settings-button.is-configured .settings-dot {
-  background: #57b79e;
+  background: var(--ms-control);
   box-shadow: 0 0 9px rgb(87 183 158 / 50%);
 }
 
@@ -56,10 +58,10 @@
   width: min(620px, 100%);
   max-height: min(760px, calc(100vh - 48px));
   overflow: auto;
-  border: 1px solid #34444e;
+  border: 1px solid var(--ms-control-border);
   border-radius: 16px;
-  color: #dfe8e9;
-  background: #101920;
+  color: var(--ms-text);
+  background: var(--ms-panel);
   box-shadow: 0 28px 90px rgb(0 0 0 / 55%);
 }
 
@@ -68,7 +70,7 @@
   align-items: flex-start;
   justify-content: space-between;
   padding: 24px 26px 20px;
-  border-bottom: 1px solid #293640;
+  border-bottom: 1px solid var(--ms-border);
 }
 
 .settings-header h2 {
@@ -78,12 +80,12 @@
 
 .settings-header p {
   margin: 0;
-  color: #7f8e99;
+  color: var(--ms-text-muted);
   font-size: 11px;
 }
 
 .settings-eyebrow {
-  color: #71908d;
+  color: var(--ms-text-muted);
   font-size: 9px;
   font-weight: 650;
   letter-spacing: 0.14em;
@@ -94,22 +96,22 @@
   height: 32px;
   border: 0;
   border-radius: 8px;
-  color: #84939e;
+  color: var(--ms-text-muted);
   background: transparent;
   cursor: pointer;
   font-size: 22px;
 }
 
 .settings-close:hover {
-  color: #dfe8e9;
-  background: #1b2730;
+  color: var(--ms-text);
+  background: var(--ms-control-hover);
 }
 
 .llm-settings-form {
   display: grid;
   gap: 17px;
   padding: 24px 26px 26px;
-  border-top: 1px solid #293640;
+  border-top: 1px solid var(--ms-border);
 }
 
 .workspace-settings-form {
@@ -127,28 +129,28 @@
 
 .settings-section-heading h3 {
   margin: 4px 0 0;
-  color: #dfe8e9;
+  color: var(--ms-text);
   font: 500 17px Georgia, serif;
 }
 
 .settings-scope {
   flex: 0 0 auto;
   padding: 4px 7px;
-  border: 1px solid #34434e;
+  border: 1px solid var(--ms-control-border);
   border-radius: 999px;
-  color: #758690;
+  color: var(--ms-text-muted);
   font-size: 9px;
 }
 
 .settings-advanced {
   padding: 10px 12px;
-  border: 1px solid #293943;
+  border: 1px solid var(--ms-border);
   border-radius: 8px;
-  background: #0d171e;
+  background: var(--ms-panel-deep);
 }
 
 .settings-advanced summary {
-  color: #8fa0aa;
+  color: var(--ms-text-muted);
   cursor: pointer;
   font-size: 10px;
 }
@@ -166,7 +168,7 @@
 .settings-field {
   display: grid;
   gap: 7px;
-  color: #9ba9b3;
+  color: var(--ms-text-secondary);
   font-size: 11px;
 }
 
@@ -175,21 +177,20 @@
   width: 100%;
   min-height: 40px;
   padding: 0 11px;
-  border: 1px solid #34434e;
+  border: 1px solid var(--ms-control-border);
   border-radius: 8px;
-  outline: none;
-  color: #dbe6e6;
-  background: #0b141b;
+  color: var(--ms-text);
+  background: var(--ms-panel-deep);
 }
 
 .settings-field input:focus,
 .settings-field select:focus {
-  border-color: #618f86;
-  box-shadow: 0 0 0 2px rgb(69 119 108 / 16%);
+  border-color: var(--ms-accent);
+  box-shadow: 0 0 0 2px rgb(158 201 255 / 16%);
 }
 
 .settings-field small {
-  color: #71808c;
+  color: var(--ms-text-muted);
   font-size: 9px;
   line-height: 1.45;
 }
@@ -198,32 +199,32 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #84939e;
+  color: var(--ms-text-muted);
   font-size: 10px;
 }
 
 .connection-test-note {
   margin: -5px 0 0;
-  color: #697985;
+  color: var(--ms-text-muted);
   font-size: 9px;
   line-height: 1.45;
 }
 
 .settings-result {
   padding: 11px 12px;
-  border: 1px solid #31534e;
+  border: 1px solid var(--ms-selected);
   border-radius: 8px;
-  color: #a7d3ca;
-  background: #132824;
+  color: var(--ms-text-secondary);
+  background: var(--ms-panel-raised);
   font-size: 10px;
   line-height: 1.5;
   white-space: pre-wrap;
 }
 
 .settings-result[data-kind="error"] {
-  border-color: #654545;
-  color: #e0bcbc;
-  background: #2b1b1b;
+  border-color: var(--ms-error-border);
+  color: var(--ms-error);
+  background: var(--ms-error-bg);
 }
 
 .settings-actions {
@@ -245,15 +246,15 @@
 }
 
 .settings-secondary {
-  border: 1px solid #3a4954;
-  color: #b7c2c9;
-  background: #151f27;
+  border: 1px solid var(--ms-control-border);
+  color: var(--ms-text-secondary);
+  background: var(--ms-control);
 }
 
 .settings-primary {
-  border: 1px solid #5b887f;
-  color: #e4f1ee;
-  background: #255e56;
+  border: 1px solid var(--ms-control-border);
+  color: var(--ms-action-text);
+  background: var(--ms-action);
 }
 
 .settings-actions button:disabled {
