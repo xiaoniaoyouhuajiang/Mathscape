@@ -1,4 +1,5 @@
 import { THEMES, THEME_CHANGED, getTheme, setTheme, isTheme } from "../shell/theme-manager";
+import { MAP_STYLES, MAP_STYLE_CHANGED, getMapStyle, setMapStyle, isMapStyle } from "../shell/map-style";
 import { invoke } from "@tauri-apps/api/core";
 import { eventBus } from "../core/events";
 import { motionPreference, setMotionPreference, type MotionPreference } from "../core/motion";
@@ -124,6 +125,14 @@ export class LlmSettingsController {
               </div>
               <span class="settings-scope">本机</span>
             </div>
+            <label class="settings-field">显示主题
+              <select name="theme" aria-label="显示主题">${Object.entries(THEMES).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>
+              <small>立即生效，自动记住本机的选择。</small>
+            </label>
+            <label class="settings-field">地图风格
+              <select name="map-style" aria-label="地图风格">${Object.entries(MAP_STYLES).map(([value, label]) => `<option value="${value}">${label}${value === "constellation" ? "（默认）" : ""}</option>`).join("")}</select>
+              <small>星座：轻量星核与疏排标签；原版：较大节点、标签常显。独立于显示主题，立即生效并自动记住。</small>
+            </label>
             <label class="settings-field">
               <span>减少动效</span>
               <select name="reduce-motion">
@@ -135,10 +144,6 @@ export class LlmSettingsController {
             </label>
           </section>
           <form class="workspace-settings-form settings-section">
-            <label class="settings-field">显示主题
-              <select name="theme" aria-label="显示主题">${Object.entries(THEMES).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>
-              <small>立即生效，自动记住本机的选择。</small>
-            </label>
             <div class="settings-section-heading">
               <div>
                 <span class="settings-eyebrow">MAP CONSTRUCTION</span>
@@ -262,6 +267,11 @@ export class LlmSettingsController {
     syncTheme();
     theme.onchange = () => { if (isTheme(theme.value)) setTheme(theme.value); };
     window.addEventListener(THEME_CHANGED, syncTheme);
+    const mapStyle = required<HTMLSelectElement>(host, "select[name=map-style]");
+    const syncMapStyle = () => { mapStyle.value = getMapStyle(); };
+    syncMapStyle();
+    mapStyle.onchange = () => { if (isMapStyle(mapStyle.value)) setMapStyle(mapStyle.value); };
+    window.addEventListener(MAP_STYLE_CHANGED, syncMapStyle);
     this.form = required<HTMLFormElement>(host, ".llm-settings-form");
     this.workspaceForm = required<HTMLFormElement>(host, ".workspace-settings-form");
     this.admission = required<HTMLSelectElement>(host, "select[name=discovery-admission]");

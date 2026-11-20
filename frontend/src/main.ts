@@ -1,4 +1,5 @@
 import { initializeTheme } from "./shell/theme-manager";
+import { initializeMapStyle } from "./shell/map-style";
 import { invoke } from "@tauri-apps/api/core";
 import { ArtifactController } from "./artifact/artifact-controller";
 import { renderLeanStatus } from "./artifact/lean-status";
@@ -55,6 +56,7 @@ import { TutorialPlayer } from "./tutorial/player";
 import "./tutorial/tutorial.css";
 
 initializeTheme();
+initializeMapStyle();
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (app === null) {

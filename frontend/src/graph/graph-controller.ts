@@ -29,6 +29,7 @@ import {
   type MapPoint,
 } from "./layout";
 import { GraphChoreographer } from "./choreographer";
+import { bindMapLabelDensity } from "./label-density";
 import {
   buildOrganicPosture,
   buildStudyOverviewPosture,
@@ -750,6 +751,7 @@ export class GraphController {
         },
       );
       this.bindGraphInteractions(this.graphCore);
+      bindMapLabelDensity(this.graphCore, () => !this.studyActive);
     } else {
       syncCytoscapeGraph(this.graphCore, this.displayedGraph, this.renderMode, {
         positions: posture.positions,

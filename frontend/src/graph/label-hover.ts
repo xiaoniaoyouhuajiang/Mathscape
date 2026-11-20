@@ -9,9 +9,13 @@ import type { CollectionReturnValue, Core, EventObject, NodeSingular } from "cyt
 
 export const LABEL_HOVER = "label-hover";
 export const LABEL_RECESS = "label-recess";
+const RELATED_EDGE_HOVER = "is-theme-hover";
 
 /** 焦点 / 悬停共用的标签层级，并压在所有其他标签之上。 */
 export const LABEL_HOVER_STYLE = {
+  "text-opacity": 1,
+  "text-events": "yes",
+  "text-wrap": "wrap",
   "text-background-opacity": 0,
   "text-background-shape": "roundrectangle",
   "text-background-padding": "3px",
@@ -26,6 +30,7 @@ export const LABEL_HOVER_STYLE = {
 /** 会与悬停标签重叠的邻接标签：暂时藏起文字和底，移出后恢复。 */
 export const LABEL_RECESS_STYLE = {
   "text-opacity": 0,
+  "text-events": "no",
   "text-background-opacity": 0,
   "text-border-opacity": 0,
 } as const;
@@ -191,12 +196,12 @@ export function bindLabelHover(core: Core, options: LabelHoverOptions = {}): voi
 
   const clear = (): void => {
     if (core.destroyed()) return;
-    const els = core.elements(`.${LABEL_HOVER}, .${LABEL_RECESS}`);
+    const els = core.elements(`.${LABEL_HOVER}, .${LABEL_RECESS}, .${RELATED_EDGE_HOVER}`);
     if (els.empty()) return;
     token += 1;
     const nodes = els.nodes();
     core.batch(() => {
-      els.removeClass(`${LABEL_HOVER} ${LABEL_RECESS}`);
+      els.removeClass(`${LABEL_HOVER} ${LABEL_RECESS} ${RELATED_EDGE_HOVER}`);
       nodes.forEach((node) => applyNodeLabel(node));
     });
     refreshLabels(core, nodes as unknown as LabelSet);
@@ -208,6 +213,9 @@ export function bindLabelHover(core: Core, options: LabelHoverOptions = {}): voi
     clear();
     const my = ++token;
     target.addClass(LABEL_HOVER);
+    // One transient owner for the title and its connected edges. A separate
+    // mouseover listener could otherwise outlive canvas exit/pan/zoom cleanup.
+    if (target.isNode()) (target as NodeSingular).connectedEdges().addClass(RELATED_EDGE_HOVER);
     const nodes = (target.isNode() ? target : core.collection()) as unknown as LabelSet;
     if (target.isNode()) applyNodeLabel(target as NodeSingular);
     refreshLabels(core, nodes, () => {
@@ -226,4 +234,16 @@ export function bindLabelHover(core: Core, options: LabelHoverOptions = {}): voi
     if (!target.hasClass(LABEL_HOVER)) return;
     clear();
   });
+  // Cytoscape can miss an element's mouseout when the canvas moves or the
+  // pointer leaves it directly. Never retain a bright edge/expanded title then.
+  core.on("pan zoom appearancechange", clear);
+  const container = core.container?.();
+  if (container) {
+    container.addEventListener("mouseleave", clear);
+    container.addEventListener("pointercancel", clear);
+    core.one("destroy", () => {
+      container.removeEventListener("mouseleave", clear);
+      container.removeEventListener("pointercancel", clear);
+    });
+  }
 }

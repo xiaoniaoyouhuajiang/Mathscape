@@ -1,7 +1,9 @@
-import { graphPalette, resolveGraphColor, watchGraphTheme } from "./theme";
+import { graphPalette, resolveGraphColor, watchGraphAppearance } from "./theme";
+import { getMapStyle } from "../shell/map-style";
 import cytoscape, {
   type Core,
   type ElementDefinition,
+  type NodeSingular,
   type StylesheetJson,
 } from "cytoscape";
 
@@ -14,7 +16,10 @@ import {
 } from "./projection";
 import { FOCUS_CONTRACTION_KIND } from "./focus";
 import { computeLandscapeLayout, type MapPoint } from "./layout";
-import { NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
+import { NODE_TYPES, NODE_TYPE_ORDER, CLASSIC_NODE_SIZES, nodeTypeKey } from "./taxonomy";
+import { nodeHalo } from "./node-glyph";
+import { AUTO_LABEL_HIDDEN, mapLabelOffset, mapLabelScale, resetMapLabelDensity } from "./label-density";
+import { bindLabelLeaders } from "./label-leaders";
 import {
   bindLabelHover,
   LABEL_HOVER,
@@ -415,8 +420,9 @@ function edgeClasses(directed: boolean, semantic = false): string {
 
 function graphStyles(): StylesheetJson {
   const t = graphPalette();
+  const constellation = getMapStyle() === "constellation";
   const nodeTypeStyles: StylesheetJson = NODE_TYPE_ORDER.map((key) => {
-    const visual = NODE_TYPES[key];
+    const visual = constellation ? NODE_TYPES[key] : { ...NODE_TYPES[key], ...CLASSIC_NODE_SIZES[key] };
     return {
       selector: `node[nodeType = "${key}"]`,
       style: {
@@ -427,8 +433,8 @@ function graphStyles(): StylesheetJson {
         "background-opacity": visual.backgroundOpacity,
         "border-color": resolveGraphColor(visual.border),
         "border-style": visual.borderStyle,
-        "border-width": 1.5,
-        "font-size": `${visual.fontSize}px`,
+        "border-width": constellation ? 1 : 1.5,
+        "font-size": constellation ? (node: NodeSingular) => (mapLabelScale(node) > 1 ? Math.max(11, visual.fontSize) : visual.fontSize) * mapLabelScale(node) : `${visual.fontSize}px`,
       },
     };
   });
@@ -438,10 +444,13 @@ function graphStyles(): StylesheetJson {
       selector: "node",
       style: {
         label: "data(label)",
-        "text-wrap": "wrap",
-        "text-max-width": "150px",
+        "text-wrap": constellation ? (node: NodeSingular) => mapLabelScale(node) > 1 ? "ellipsis" : "wrap" : "wrap",
+        "text-max-width": constellation ? (node: NodeSingular) => `${(node.data("nodeType") === "pdf" && mapLabelScale(node) > 1 ? 120 : 150) * mapLabelScale(node)}px` : "150px",
+        "text-events": "yes",
         "font-size": "11px",
         "background-color": t.accent,
+        "background-image": "none",
+        "bounds-expansion": 0,
         "border-width": 1,
         "border-color": t.accent,
         color: t.text,
@@ -451,20 +460,39 @@ function graphStyles(): StylesheetJson {
         "text-outline-color": t.canvas,
         "text-outline-width": 2,
         "text-valign": "bottom",
-        "text-margin-y": 7,
+        "text-margin-x": constellation ? (node: NodeSingular) => mapLabelOffset(node).x / node.cy().zoom() : 0,
+        "text-margin-y": constellation ? (node: NodeSingular) => 14 * mapLabelScale(node) + mapLabelOffset(node).y / node.cy().zoom() : 7,
       },
     },
     ...nodeTypeStyles,
     {
+      selector: 'node[nodeType = "semantic_unit"], node[nodeType = "shared_theory"]',
+      style: constellation ? {
+        "background-image": nodeHalo(t.accent),
+        "background-width": 38, "background-height": 38,
+        "background-clip": "none", "background-image-containment": "over",
+        "bounds-expansion": 14,
+        "background-opacity": 0.8,
+      } : {},
+    },
+    {
       selector: 'node[nodeType = "shared_entity"]',
-      style: {
+      style: constellation ? {
+        "background-image": nodeHalo(t.gold, true),
+        "background-width": 48, "background-height": 48,
+        "background-clip": "none", "background-image-containment": "over",
+        "bounds-expansion": 16,
+        "text-halign": "left", "text-valign": "center",
+        "text-margin-x": (node: NodeSingular) => -12 * mapLabelScale(node) + mapLabelOffset(node).x / node.cy().zoom(),
+        "text-margin-y": (node: NodeSingular) => mapLabelOffset(node).y / node.cy().zoom(),
+      } : {
         "underlay-color": t.gold, "underlay-opacity": 0.08, "underlay-padding": 6, "underlay-shape": "ellipse",
         "text-halign": "left", "text-valign": "center", "text-margin-x": -12, "text-margin-y": 0,
       },
     },
     {
       selector: 'node[lifecycle = "candidate"]',
-      style: { "border-style": "dashed", "border-color": t.candidate, "background-opacity": 0.18 },
+      style: { "border-style": "dashed", "border-color": t.candidate, "background-opacity": 0.18, "background-image": constellation ? nodeHalo(t.candidate) : "none" },
     },
     {
       selector: 'node[elementKind = "junction"]',
@@ -523,7 +551,8 @@ function graphStyles(): StylesheetJson {
       selector: "edge.evidence-edge",
       style: {
         label: "data(label)",
-        width: 1.2,
+        width: constellation ? 0.8 : 1.2,
+        opacity: constellation ? 0.07 : 1,
         "line-style": "dashed",
         "line-dash-pattern": [3, 4],
         "line-color": t.muted,
@@ -608,6 +637,7 @@ function graphStyles(): StylesheetJson {
         opacity: 0.84,
         "background-color": t.candidate,
         "background-opacity": 0.16,
+        "background-image": constellation ? nodeHalo(t.candidate) : "none",
         "border-style": "dashed",
         "border-width": 2,
         "border-color": t.candidate,
@@ -620,7 +650,8 @@ function graphStyles(): StylesheetJson {
       style: {
         // Pending titles include an explicit status badge: keep that longer
         // label below the node, not in the neighboring node's horizontal slot.
-        "text-halign": "center", "text-valign": "bottom", "text-margin-x": 0, "text-margin-y": 7,
+        "text-halign": "center", "text-valign": "bottom",
+        ...(constellation ? {} : { "text-margin-x": 0, "text-margin-y": 7 }),
       },
     },
     {
@@ -942,8 +973,19 @@ function graphStyles(): StylesheetJson {
       },
     },
     {
+      selector: "edge.evidence-edge.is-selection-receded",
+      style: { opacity: constellation ? 0.025 : 0.12 },
+    },
+    {
+      selector: `node.${AUTO_LABEL_HIDDEN}`,
+      style: { "text-opacity": 0, "text-events": "no" },
+    },
+    {
       selector: "node.is-focus-root",
       style: {
+        "text-opacity": 1,
+        "text-events": "yes",
+        "text-wrap": "wrap",
         "border-width": 4,
         "border-color": t.gold,
         "underlay-color": t.gold,
@@ -981,6 +1023,9 @@ function graphStyles(): StylesheetJson {
     {
       selector: "node.is-selected-primary, node:selected",
       style: {
+        "text-opacity": 1,
+        "text-events": "yes",
+        "text-wrap": "wrap",
         "border-width": 3.6,
         "border-color": t.gold,
         "underlay-color": t.gold,
@@ -1014,7 +1059,7 @@ function graphStyles(): StylesheetJson {
 
     {
       selector: "edge.is-theme-hover",
-      style: { "line-color": t.accent, "target-arrow-color": t.accent, width: 1.8 },
+      style: { "line-color": t.accent, "target-arrow-color": t.accent, width: 1.8, opacity: 1 },
     },
 
     // Out-of-focus context: placed after staged / ink / selection rules so out-of-focus
@@ -1101,17 +1146,15 @@ export function mountCytoscapeGraph(
   if (core.elements().nonempty() && core.width() > 0 && core.height() > 0) {
     fitLandscape(core);
   }
-  watchGraphTheme(core, () => {
+  watchGraphAppearance(core, () => {
+    core.emit("appearancechange");
+    resetMapLabelDensity(core);
     core.style(graphStyles());
     // Label texture caches include the old outline colour.
     refreshLabels(core, core.elements() as unknown as LabelSet);
   });
-  const linked = (node: import("cytoscape").NodeSingular, active: boolean) => {
-    node.connectedEdges().toggleClass("is-theme-hover", active);
-  };
-  core.on("mouseover", "node", event => linked(event.target, true));
-  core.on("mouseout", "node", event => linked(event.target, false));
   bindLabelHover(core, options?.labelHover);
+  bindLabelLeaders(core);
   return core;
 }
 

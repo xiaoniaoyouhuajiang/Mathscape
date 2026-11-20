@@ -61,8 +61,8 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
   pdf: {
     label: "PDF",
     shape: "round-rectangle",
-    width: 31,
-    height: 20,
+    width: 22,
+    height: 15,
     background: "var(--ms-accent)",
     border: "var(--ms-accent)",
     borderStyle: "solid",
@@ -72,8 +72,8 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
   markdown: {
     label: "Markdown 正文",
     shape: "cut-rectangle",
-    width: 30,
-    height: 18,
+    width: 20,
+    height: 13,
     background: "var(--ms-accent)",
     border: "var(--ms-accent)",
     borderStyle: "solid",
@@ -131,8 +131,8 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
   semantic_unit: {
     label: "内容单元",
     shape: "ellipse",
-    width: 22,
-    height: 22,
+    width: 13,
+    height: 13,
     background: "var(--ms-accent)",
     border: "var(--ms-accent)",
     borderStyle: "solid",
@@ -142,8 +142,8 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
   source_span: {
     label: "原文证据",
     shape: "round-rectangle",
-    width: 20,
-    height: 14,
+    width: 12,
+    height: 8,
     background: "var(--ms-accent)",
     border: "var(--ms-accent)",
     borderStyle: "dashed",
@@ -198,8 +198,8 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
   shared_entity: {
     label: "共享对象",
     shape: "star",
-    width: 26,
-    height: 26,
+    width: 16,
+    height: 16,
     background: "var(--ms-map-node-core)",
     border: "var(--ms-star-gold)",
     borderStyle: "solid",
@@ -209,8 +209,8 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
   shared_theory: {
     label: "理论",
     shape: "round-octagon",
-    width: 30,
-    height: 26,
+    width: 18,
+    height: 16,
     background: "var(--ms-accent)",
     border: "var(--ms-accent)",
     borderStyle: "solid",
@@ -286,6 +286,13 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
 };
 
 export const NODE_TYPE_ORDER = Object.keys(NODE_TYPES) as NodeTypeKey[];
+
+/** Original (pre-constellation) glyph sizes; taxonomy and hit shapes are shared. */
+export const CLASSIC_NODE_SIZES: Partial<Record<NodeTypeKey, { width: number; height: number }>> = {
+  pdf: { width: 31, height: 20 }, markdown: { width: 30, height: 18 },
+  semantic_unit: { width: 22, height: 22 }, source_span: { width: 20, height: 14 },
+  shared_entity: { width: 26, height: 26 }, shared_theory: { width: 30, height: 26 },
+};
 
 export type EdgeTypeKey =
   | "relation"
