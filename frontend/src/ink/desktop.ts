@@ -78,6 +78,7 @@ interface SessionListRow {
   action: HTMLButtonElement;
   title: HTMLElement;
   detail: HTMLElement;
+  context: HTMLElement;
   summary: SessionSummary;
   trashed: boolean;
 }
@@ -540,8 +541,10 @@ export class DesktopInkWorkspace {
       }
       row.summary = summary;
       row.trashed = trashView;
-      const { button, action } = row;
+      const { button, action, context } = row;
       const isCurrentDocument = summary.document_id === this.documentState?.document_id;
+      context.hidden = !isCurrentDocument;
+      context.textContent = isCurrentDocument ? this.currentSessionContext() : "";
       button.classList.toggle("is-active", isCurrentDocument && !this.readOnly);
       button.classList.toggle("is-context", isCurrentDocument && this.readOnly);
       if (isCurrentDocument) button.setAttribute("aria-current", this.readOnly ? "location" : "true");
@@ -574,11 +577,14 @@ export class DesktopInkWorkspace {
     button.className = "ink-session-item";
     const title = document.createElement("strong");
     const detail = document.createElement("span");
-    button.append(title, detail);
+    const context = document.createElement("span");
+    context.className = "ink-session-context";
+    context.hidden = true;
+    button.append(title, context, detail);
     const action = document.createElement("button");
     action.type = "button";
     action.className = "ink-session-action";
-    const row = { element: container, button, action, title, detail, summary, trashed };
+    const row = { element: container, button, action, title, detail, context, summary, trashed };
     button.addEventListener("click", () => void (row.trashed ? this.openTrashed(row.summary) : this.openDocument(row.summary)));
     action.addEventListener("click", () => void (row.trashed
       ? this.restoreDocument(row.summary.document_id, row.summary.lifecycle_revision ?? 0)
@@ -1860,13 +1866,29 @@ export class DesktopInkWorkspace {
       this.renderViewState();
       this.showToast(message, "error");
     } else {
-      element(this.host, "#ink-persistence-status").textContent = message;
+      const status = element(this.host, "#ink-persistence-status");
+      status.textContent = message;
+      status.title = message;
     }
+  }
+
+  private currentSessionContext(): string {
+    if (this.currentSnapshot) return "当前查看 · 历史快照 · 只读";
+    if (this.trashedView) return "当前查看 · 回收站 · 只读";
+    if (this.mirrorMode) {
+      const connection = this.writerView?.pairing_pending ? "等待平板配对" : this.writerPresence?.connected ? "平板已连接" : "平板离线";
+      return `当前查看 · ${connection} · 电脑只读`;
+    }
+    return this.readOnly ? "当前查看 · 只读" : "当前查看 · 可编辑";
   }
 
   private renderViewState(): void {
     if (!this.documentState) return;
-    element(this.host, "#ink-document-heading").textContent = this.documentState.title;
+    const heading = element(this.host, "#ink-document-heading");
+    heading.textContent = this.documentState.title;
+    heading.title = this.documentState.title;
+    const currentRow = this.sessionRows.get(this.documentState.document_id);
+    if (currentRow) currentRow.context.textContent = this.currentSessionContext();
     const mode = element(this.host, "#ink-mode-badge");
     const editable = element(this.host, "#ink-editability-badge");
     const saved = element(this.host, "#ink-save-badge");

@@ -482,7 +482,7 @@ type SandboxAct = "" | "search" | "outline" | "outline_empty" | "page_image" | "
 /** `script` (fourth slice): the round replays real tool steps (from
  * tests/fixtures/scene-tool-events.json) with their own call / result times. */
 interface ScriptStep { id: string; tool: string; args: unknown; result?: unknown; status?: string; callAt: number; resultAt?: number }
-const sandboxRound: { delayMs: number; gapMs: number; cite: boolean; act: SandboxAct; parsingNow: boolean; script: ScriptStep[] | null } = { delayMs: 30, gapMs: 0, cite: false, act: "", parsingNow: false, script: null };
+const sandboxRound: { delayMs: number; gapMs: number; cite: boolean; act: SandboxAct; parsingNow: boolean; script: ScriptStep[] | null; replyText?: string } = { delayMs: 30, gapMs: 0, cite: false, act: "", parsingNow: false, script: null };
 /** 1×1 PNG for the page-image window. */
 const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 function actStep(act: Exclude<SandboxAct, "">): { tool: string; args: Record<string, unknown>; result: Record<string, unknown> } {
@@ -620,9 +620,9 @@ extraCommands.set("sandbox_send_message", (args) => {
     }
     event(5, "usage", { input_tokens: 120, output_tokens: 30 });
     event(6, "turn_end", { outcome: "completed" });
-    const text = sandboxRound.cite
+    const text = sandboxRound.replyText ?? (sandboxRound.cite
       ? `依据 ${citeUnitId}，有 $\\sum_{n=1}^{\\infty} a_n < \\infty$。未知对象 ${"f".repeat(64)}。`
-      : "找到 1 条：定理 3.2。";
+      : "找到 1 条：定理 3.2。");
     const reply = { ts: new Date().toISOString(), role: "agent", text, round_id: rid, outcome: "completed", thread_id: thread };
     transcript.push(reply);
     emitDialogue({ kind: "transcript", sandbox_session_id: id, entry: reply });
