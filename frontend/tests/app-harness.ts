@@ -765,9 +765,9 @@ const appHarness = {
   },
   graphPaint: () => ({
     nodes: core().nodes().map(node => ({ id: node.id(), type: node.data("nodeType"), staged: node.hasClass("is-staged"), label: node.data("label"), shape: node.style("shape"), border: node.style("border-style"), borderColor: node.style("border-color"), color: node.style("color"), labelBackground: node.style("text-background-opacity"), labelOpacity: node.style("text-opacity"), renderedFontSize: Number.parseFloat(node.style("font-size")) * core().zoom(), width: node.width(), position: node.position() })),
-  zoomTo: (level: number) => { const cy = core(); cy.zoom({ level, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }); },
     edges: core().edges().map(edge => ({ id: edge.id(), color: edge.style("line-color") })),
   }),
+  zoomTo: (level: number) => { const cy = core(); cy.zoom({ level, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }); },
   labels: () => Object.fromEntries(core().nodes().map(node => [node.id(), String(node.data("label"))])),
   inkNodes: () => core().nodes(".ink-note-node").map(node => `${node.id()}=${String(node.data("label"))}`),
   selectNode: (id: string) => { core().getElementById(id).emit("tap"); },

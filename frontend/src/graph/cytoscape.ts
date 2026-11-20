@@ -442,7 +442,7 @@ function graphStyles(): StylesheetJson {
       style: {
         label: "data(label)",
         "text-wrap": "wrap",
-        "text-max-width": (node: NodeSingular) => 150 * mapLabelScale(node),
+        "text-max-width": (node: NodeSingular) => `${150 * mapLabelScale(node)}px`,
         "text-events": "yes",
         "font-size": "11px",
         "background-color": t.accent,

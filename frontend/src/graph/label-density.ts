@@ -1,5 +1,5 @@
-import type { Core, NodeSingular } from "cytoscape";
-import { boxesOverlap, labelBox, LABEL_HOVER, type LabelBox, type LabelSet } from "./label-hover";
+import type { Core, NodeCollection, NodeSingular } from "cytoscape";
+import { boxesOverlap, labelBox, LABEL_HOVER, refreshLabels, type LabelBox, type LabelEle, type LabelSet } from "./label-hover";
 
 export const AUTO_LABEL_HIDDEN = "is-auto-label-hidden";
 const SCALE_KEY = "mathscape.labelScale";
@@ -52,12 +52,15 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
     if (core.destroyed()) return;
     applying = true;
     try {
-      const nodes = core.nodes(':visible').filter(node => node.data("elementKind") !== "junction");
+      const nodes = core.nodes(':visible').filter(node => node.data("elementKind") !== "junction") as NodeCollection;
       const dense = enabled() && nodes.length >= DENSE_MAP_SIZE;
       const scale = dense ? Math.max(1, 1 / core.zoom()) : 1;
       if (core.scratch(SCALE_KEY) !== scale) {
         core.scratch(SCALE_KEY, scale);
-        (core.nodes() as unknown as LabelSet).updateStyle();
+        // Font mappings alone leave Cytoscape's label/wrap textures at their
+        // previous size. Measure only after both render frames have settled.
+        refreshLabels(core, core.nodes() as unknown as LabelSet, schedule);
+        return;
       }
       if (!dense) {
         core.nodes().removeClass(AUTO_LABEL_HIDDEN);
@@ -67,7 +70,7 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
       const labels: MapLabel[] = [];
       nodes.forEach(node => {
         if (!node.data("label") || node.hasClass("is-out-of-focus") || node.hasClass("label-recess")) return;
-        const box = labelBox(node);
+        const box = labelBox(node as unknown as LabelEle);
         if (box.w <= 0 || box.h <= 0) return;
         const x1 = box.x1 * zoom + pan.x, x2 = box.x2 * zoom + pan.x;
         const y1 = box.y1 * zoom + pan.y, y2 = box.y2 * zoom + pan.y;
@@ -79,7 +82,7 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
         });
       });
       const visible = visibleMapLabels(labels);
-      core.batch(() => nodes.forEach(node => node.toggleClass(AUTO_LABEL_HIDDEN, !visible.has(node.id()))));
+      core.batch(() => { nodes.forEach(node => { node.toggleClass(AUTO_LABEL_HIDDEN, !visible.has(node.id())); }); });
     } finally {
       applying = false;
     }
