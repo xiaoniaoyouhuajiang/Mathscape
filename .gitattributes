@@ -1,0 +1,4 @@
+/fixtures/emir/**/*.md text eol=lf
+/fixtures/emir/**/*.json text eol=lf
+/testdata/marker/**/run/**/*.md text eol=lf
+/testdata/marker/**/run/**/*.json text eol=lf
