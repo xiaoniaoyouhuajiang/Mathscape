@@ -1,3 +1,5 @@
+@import "../theme.css";
+
 /* Sandbox panel — reuses the settings dialog shell (llm/settings.css); only sandbox-specific bits live here. */
 
 .sandbox-dialog {
@@ -25,7 +27,7 @@
 
 .sandbox-section + .sandbox-section {
   padding-top: 22px;
-  border-top: 1px solid #293640;
+  border-top: 1px solid var(--ms-border);
 }
 
 .sandbox-input {
@@ -33,21 +35,21 @@
   box-sizing: border-box;
   min-height: 38px;
   padding: 0 12px;
-  border: 1px solid #34434e;
+  border: 1px solid var(--ms-control-border);
   border-radius: 10px;
   outline: none;
-  color: #dbe6e6;
-  background: #0b141b;
+  color: var(--ms-text);
+  background: var(--ms-panel-deep);
   font: inherit;
   font-size: 12px;
 }
 
 .sandbox-input::placeholder {
-  color: #66747e;
+  color: var(--ms-text-muted);
 }
 
 .sandbox-input:focus {
-  border-color: #618f86;
+  border-color: var(--ms-focus);
   box-shadow: 0 0 0 2px rgb(69 119 108 / 16%);
 }
 
@@ -80,41 +82,41 @@
 }
 
 .sandbox-btn:focus-visible {
-  outline: 2px solid #618f86;
+  outline: 2px solid var(--ms-focus);
   outline-offset: 2px;
 }
 
 .sandbox-btn-primary {
-  border-color: #5b887f;
-  color: #e4f1ee;
-  background: #255e56;
+  border-color: var(--ms-control-border);
+  color: var(--ms-action-text);
+  background: var(--ms-action);
   font-weight: 600;
 }
 
 .sandbox-btn-primary:hover {
-  background: #2c6e65;
+  background: var(--ms-action-hover);
 }
 
 .sandbox-btn-secondary {
-  border-color: #3a4954;
-  color: #c6d1d7;
-  background: #1a2630;
+  border-color: var(--ms-border);
+  color: var(--ms-text-secondary);
+  background: var(--ms-control);
 }
 
 .sandbox-btn-secondary:hover {
-  border-color: #4a5b67;
-  background: #20303b;
+  border-color: var(--ms-control-border);
+  background: var(--ms-control-hover);
 }
 
 .sandbox-btn-quiet {
-  border-color: #2c3943;
-  color: #8f9ea8;
+  border-color: var(--ms-border);
+  color: var(--ms-text-muted);
   background: transparent;
 }
 
 .sandbox-btn-quiet:hover {
-  color: #c6d1d7;
-  background: #151f27;
+  color: var(--ms-text-secondary);
+  background: var(--ms-panel-raised);
 }
 
 .sandbox-btn-danger {
@@ -132,12 +134,12 @@
 /* Paths and ids: monospace, small, single line; paths truncate from the left so the tail stays visible. */
 .sandbox-digest {
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: #b7c2c9;
+  color: var(--ms-text-secondary);
 }
 
 .sandbox-id {
   font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: #dbe6e6;
+  color: var(--ms-text);
 }
 
 .sandbox-path {
@@ -157,7 +159,7 @@
   align-items: baseline;
   gap: 8px;
   min-width: 0;
-  color: #7f8e99;
+  color: var(--ms-text-muted);
   font-size: 11px;
 }
 
@@ -171,7 +173,7 @@
 
 .sandbox-hint {
   margin: 0;
-  color: #71808c;
+  color: var(--ms-text-muted);
   font-size: 11px;
   line-height: 1.6;
 }
@@ -181,8 +183,8 @@
   margin: 4px 0;
   padding: 6px 10px;
   border-radius: 8px;
-  color: #a9b8c1;
-  background: #0b141b;
+  color: var(--ms-text-secondary);
+  background: var(--ms-panel-deep);
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
   overflow-wrap: anywhere;
   user-select: all;
@@ -203,9 +205,9 @@
   gap: 10px;
   min-width: 0;
   padding: 14px 16px;
-  border: 1px solid #293943;
+  border: 1px solid var(--ms-border);
   border-radius: 12px;
-  background: #0d171e;
+  background: var(--ms-panel);
 }
 
 .sandbox-item.state-discarded {
@@ -220,7 +222,7 @@
 }
 
 .sandbox-meta strong {
-  color: #dfe8e9;
+  color: var(--ms-text);
   font-size: 13px;
 }
 
@@ -253,7 +255,7 @@
 .sandbox-summary::before {
   content: "▸";
   flex: 0 0 auto;
-  color: #71808c;
+  color: var(--ms-text-muted);
   font-size: 11px;
   transition: transform 120ms ease;
 }
@@ -272,7 +274,7 @@
 .sandbox-summary-time {
   margin-left: auto;
   flex: 0 0 auto;
-  color: #7f8e99;
+  color: var(--ms-text-muted);
   font-size: 11px;
 }
 
@@ -310,13 +312,13 @@
 }
 
 .sandbox-facts dt {
-  color: #71808c;
+  color: var(--ms-text-muted);
 }
 
 .sandbox-facts dd {
   min-width: 0;
   margin: 0;
-  color: #b7c2c9;
+  color: var(--ms-text-secondary);
   overflow-wrap: anywhere;
 }
 
@@ -342,7 +344,7 @@
 
 .sandbox-empty {
   padding: 4px 2px;
-  color: #71808c;
+  color: var(--ms-text-muted);
   font-size: 12px;
 }
 
@@ -416,10 +418,10 @@
   min-height: 280px;
   max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);
-  border: 1px solid #3a4a55;
+  border: 1px solid var(--ms-control-border);
   border-radius: 14px;
-  color: #dbe6e6;
-  background: rgb(12 19 26 / 97%);
+  color: var(--ms-text);
+  background: var(--ms-panel-deep);
   box-shadow: 0 18px 48px rgb(0 0 0 / 45%);
   overflow: hidden;
 }
@@ -433,7 +435,7 @@
   align-items: flex-start;
   gap: 6px;
   padding: 12px 12px 10px 16px;
-  border-bottom: 1px solid #293640;
+  border-bottom: 1px solid var(--ms-border);
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -458,7 +460,7 @@
 }
 
 .sandbox-dock-status {
-  color: #8fa3a8;
+  color: var(--ms-text-muted);
   font-size: 11px;
 }
 
@@ -472,7 +474,7 @@
   gap: 0.4rem;
   margin-top: 0.35rem;
   font-size: 0.78rem;
-  color: var(--muted, #6b7280);
+  color: var(--ms-text-muted);
 }
 
 .sandbox-dock-pickers {
@@ -509,8 +511,8 @@
   font-size: 0.78rem;
   padding: 0.15rem 0.35rem;
   border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--border, #d1d5db) 80%, transparent);
-  background: var(--surface, #fff);
+  border: 1px solid color-mix(in srgb, var(--ms-border) 80%, transparent);
+  background: var(--ms-control);
   color: inherit;
 }
 
@@ -542,7 +544,7 @@
 .sandbox-dock-icon {
   width: 28px;
   height: 28px;
-  border: 1px solid #34434e;
+  border: 1px solid var(--ms-control-border);
   border-radius: 8px;
   color: #c9d6d6;
   background: transparent;
@@ -669,7 +671,7 @@
   padding: 0;
   border: 1px solid #4a6a7a;
   border-radius: 999px;
-  color: #dbe6e6;
+  color: var(--ms-text);
   background: rgb(18 28 36 / 96%);
   box-shadow: 0 10px 28px rgb(0 0 0 / 40%);
   cursor: grab;
@@ -711,7 +713,7 @@
 .sandbox-line-role {
   display: block;
   margin-bottom: 2px;
-  color: #8fa3a8;
+  color: var(--ms-text-muted);
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -783,13 +785,13 @@
 
 .sandbox-line-text.markdown-body blockquote {
   padding-left: 8px;
-  border-left: 2px solid #3a4954;
+  border-left: 2px solid var(--ms-border);
   color: #a9b6bd;
 }
 
 .sandbox-line-text.markdown-body th,
 .sandbox-line-text.markdown-body td {
-  border-color: #3a4954;
+  border-color: var(--ms-border);
   padding: 3px 6px;
 }
 
@@ -849,13 +851,13 @@ button.sandbox-cite:focus-visible {
 .sandbox-cite.is-label {
   border-style: dashed;
   background: #1a252d;
-  color: #b7c2c9;
+  color: var(--ms-text-secondary);
 }
 
 .sandbox-cite.is-unknown {
   border-color: #33414b;
   background: #182128;
-  color: #7f8e99;
+  color: var(--ms-text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
 }
@@ -894,7 +896,7 @@ button.sandbox-cite:focus-visible {
 .sandbox-turn-status.tone-error { color: #f0aaa2; }
 
 .sandbox-line-pending {
-  color: #8fa3a8;
+  color: var(--ms-text-muted);
   font-size: 12px;
 }
 
@@ -921,7 +923,7 @@ button.sandbox-cite:focus-visible {
 
 .sandbox-process-live {
   margin: 4px 0 0;
-  color: #8fa3a8;
+  color: var(--ms-text-muted);
   font-size: 12px;
 }
 
@@ -942,9 +944,9 @@ button.sandbox-cite:focus-visible {
 }
 
 .sandbox-step {
-  border: 1px solid #34434e;
+  border: 1px solid var(--ms-control-border);
   border-radius: 8px;
-  background: #0b141b;
+  background: var(--ms-panel-deep);
 }
 
 .sandbox-step.is-running,
@@ -1009,7 +1011,7 @@ button.sandbox-cite:focus-visible {
 }
 
 .sandbox-step-label {
-  color: #8fa3a8;
+  color: var(--ms-text-muted);
   font-size: 10px;
   letter-spacing: 0.06em;
 }
@@ -1217,7 +1219,7 @@ button.sandbox-cite:focus-visible {
   gap: 0.5rem;
   margin: 0 0 0.4rem;
   font-size: 0.8rem;
-  color: var(--muted, #6b7280);
+  color: var(--ms-text-muted);
 }
 
 .sandbox-dock-readonly[hidden] {

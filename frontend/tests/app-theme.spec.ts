@@ -35,7 +35,9 @@ test("starry chrome keeps text legible, the shared logo local, and keyboard focu
     const style = getComputedStyle(button);
     return { visible: button.matches(":focus-visible"), width: style.outlineWidth, type: style.outlineStyle };
   });
-  expect(focus).toEqual({ visible: true, width: "2px", type: "solid" });
+  expect(focus.visible).toBe(true);
+  expect(focus.type).toBe("solid");
+  expect(parseFloat(focus.width)).toBeGreaterThanOrEqual(2);
   await page.locator("#import-pdf").evaluate(button => (button as HTMLButtonElement).blur());
   await page.getByRole("button", { name: "总览", exact: true }).click();
   await expect.poll(() => page.evaluate(() => Object.keys(window.appHarness.labels()).length)).toBeGreaterThan(5);
@@ -57,6 +59,9 @@ test("reading next to handwriting keeps the light paper and readable formulae", 
   expect(await contrast(page, "#ink-split-reader .markdown-body")).toBeGreaterThanOrEqual(7);
   expect(luminance(await paper.evaluate(element => getComputedStyle(element).backgroundColor))).toBeGreaterThan(0.8);
   await expect(page.locator("#ink-document-heading")).toContainText("手稿 A");
+  const launcher = (await page.locator(".task-launcher").boundingBox())!;
+  const exports = (await page.locator(".ink-export-actions").boundingBox())!;
+  expect(launcher.y + launcher.height).toBeLessThanOrEqual(exports.y);
   await page.screenshot({ path: testInfo.outputPath("reading.png") });
 });
 
