@@ -23,12 +23,15 @@ for (const theme of ["obsidian", "parchment", "slate"] as const) {
       await page.setViewportSize({ width: 1600, height: 1000 });
       await page.addInitScript(theme => {
         localStorage.setItem("mathscape.theme", theme);
-        document.documentElement.dataset.theme = theme;
+        document.addEventListener("DOMContentLoaded", () => {
+          document.documentElement.dataset.theme = theme;
+        }, { once: true });
       }, theme);
     });
 
     test("current manuscript stays distinct while connected, offline and editable", async ({ page }, info) => {
       await page.goto("/tests/ink-desktop.html");
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       await expect(page.locator("#ink-session-list .ink-session-item")).toHaveCount(2);
       await page.evaluate(() => {
         const h = window.inkDesktopHarness;
@@ -61,6 +64,7 @@ for (const theme of ["obsidian", "parchment", "slate"] as const) {
       test(`header preserves grouped commands and canvas space at ${width}px`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 1000 });
         await page.goto("/tests/ink-desktop.html");
+        await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
         await expect(page.locator("#ink-document-heading")).toHaveText("手稿 A");
         const header = page.locator(".ink-desktop-header");
         const bounds = (await header.boundingBox())!;
@@ -80,17 +84,22 @@ for (const theme of ["obsidian", "parchment", "slate"] as const) {
     }
 
     test("paper manuscript marker is purple, legible and opens the linked note", async ({ page }, info) => {
-      await page.goto("/tests/reader.html");
-      await page.waitForFunction(() => "harness" in window);
-      await page.evaluate(async () => {
-        const h = (window as any).harness;
-        h.ink.links = [{
-          note: { document_id: "note-1", title: "验算手稿", title_mode: "auto", title_revision: 0, lifecycle: "active", lifecycle_revision: 0, trashed_at: null, last_used_at: 1, created_at: "unix:1" },
-          link: { link_id: "purple-link", document_id: "note-1", target_kind: "markdown", target_key: "md:x", target_id: "md", target: { kind: "markdown", artifact_id: "md", content_hash: "test-hash", first_block: "test-block-1", last_block: "test-block-1", block_ids: ["test-block-1"], start: 0, end: 1, block_hash: "h", excerpt: "x", label: "x" }, target_revision: "test-hash", target_label: "x", role: "attempt", is_primary: true, state: "active", created_at: 1, removed_at: null, target_status: "active" },
-        }];
-        await h.reader.open("md", "数学笔记");
+      await page.goto("/tests/app.html");
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await page.waitForFunction(() => "appHarness" in window);
+      await page.evaluate(() => {
+        const h = window.appHarness;
+        h.links.push({
+          link_id: "purple-link", document_id: h.documents.b, target_kind: "markdown", target_key: "md:md-1:b1", target_id: "md-1",
+          target: { kind: "markdown", artifact_id: "md-1", content_hash: "sha256:test", first_block: "b1", last_block: "b1", block_ids: ["b1"], start: 0, end: 1, block_hash: "h", excerpt: "正确表述", label: "正确表述" },
+          target_revision: "sha256:test", target_label: "正确表述", role: "check", is_primary: true, state: "active", created_at: 1, removed_at: null, target_status: "active",
+        });
       });
-      const marker = page.getByLabel("原文块 2", { exact: true }).locator(".ink-block-marker");
+      await page.locator("#ink-button").click();
+      await page.getByRole("button", { name: /手稿 A/ }).click();
+      await page.locator("#ink-split-toggle").click();
+      await page.locator("#ink-split-empty").getByRole("button", { name: "正确表述.md" }).click();
+      const marker = page.locator("#ink-split-reader .ink-block-marker");
       await expect(marker).toHaveText("✎ 1");
       await expectLegible(marker);
       const [r, g, b] = await marker.evaluate(element => getComputedStyle(element).color.match(/[\d.]+/g)!.slice(0, 3).map(Number));
@@ -98,13 +107,14 @@ for (const theme of ["obsidian", "parchment", "slate"] as const) {
       expect(r).toBeGreaterThan(g + 20);
       await page.screenshot({ path: info.outputPath(`reader-marker-${theme}.png`) });
       await marker.click();
-      await page.locator(".ink-related-popover").getByRole("button", { name: "验算手稿" }).click();
-      expect(await page.evaluate(() => (window as any).harness.ink.opened)).toEqual(["note-1"]);
+      await page.locator(".ink-related-popover").getByRole("button", { name: "手稿 B" }).click();
+      await expect(page.locator("#ink-document-heading")).toHaveText("手稿 B");
     });
 
     test("chat inline code, code blocks and formulae remain readable", async ({ page }, info) => {
       await page.addInitScript(() => sessionStorage.setItem("harness.sandbox", "1"));
       await page.goto("/tests/app.html");
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       await expect(page.locator(".sandbox-banner")).toBeVisible();
       await page.locator(".sandbox-banner").getByRole("button", { name: "对话", exact: true }).click();
       await page.evaluate(() => {
