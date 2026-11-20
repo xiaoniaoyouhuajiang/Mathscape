@@ -1898,7 +1898,7 @@ button.is-tablet-online::before {
 .ink-desktop-actions { grid-column: 1 / -1; justify-content: flex-start; gap: 8px 0; }
 .ink-command-group, .ink-tool-buttons > .ink-tool-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-right: 12px; margin-right: 12px; border-right: 1px solid var(--ms-border); }
 .ink-command-group:last-of-type, .ink-tool-buttons > .ink-tool-group:last-child { padding-right: 0; margin-right: 0; border-right: 0; }
-.ink-persistence-status { flex: 1 1 180px; max-width: 420px; margin-top: 0; font-size: 11px; }
+.ink-persistence-status { flex: 1 1 180px; max-width: 420px; margin-top: 0; margin-inline-start: 12px; font-size: 11px; }
 .ink-state-badge.is-editable, .ink-state-badge.is-saved { color: var(--ms-text-muted); background: transparent; border-color: transparent; }
 .ink-desktop-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px 16px; padding: 12px 16px; }
 .ink-tool-buttons { grid-column: 1 / -1; flex-wrap: wrap; gap: 8px 0; }
