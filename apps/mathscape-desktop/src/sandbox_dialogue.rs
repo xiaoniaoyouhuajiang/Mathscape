@@ -1615,6 +1615,7 @@ mod tests {
             |u| matches!(u, DialogueUpdate::AgentEvent { event, .. } if event["type"] == "tool_call"),
         );
         tauri::async_runtime::block_on(state.cancel_session_round(&fx.session_id));
+        tauri::async_runtime::block_on(state.close_harness_session(&fx.session_id));
         let session_dir = {
             let home = fx.home.lock().unwrap();
             home.discard_session(&fx.session_id).unwrap();
