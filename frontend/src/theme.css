@@ -1,0 +1,162 @@
+/* Theme 1 (Default): Obsidian Starry — 深空曜石黑 + 冰蓝辅星 + 暖金主星 */
+:root,
+:root[data-theme="obsidian"] {
+  color-scheme: dark;
+  --ms-canvas: #05070d;
+  --ms-background: #06080e;
+  --ms-panel: #0a0e17;
+  --ms-panel-raised: #101624;
+  --ms-panel-deep: #070a12;
+  --ms-control: #131b2c;
+  --ms-control-hover: #1b263d;
+  --ms-border: #182030;
+  --ms-control-border: #243047;
+  --ms-text: #edf3ff;
+  --ms-text-secondary: #b8c6de;
+  --ms-text-muted: #8999b5;
+  --ms-accent: #8ec0ff;
+  --ms-star-gold: #eab665;
+  --ms-focus: #8ec0ff;
+  --ms-action: #1c3558;
+  --ms-action-hover: #254673;
+  --ms-action-text: #f0f6ff;
+  --ms-selected: #172742;
+  --ms-fragment-bg: #0d1320;
+  --ms-paper: #f4f5f0;
+  --ms-paper-text: #222d38;
+  --ms-success: #7fc4a8;
+  --ms-warning: #f2a089;
+  --ms-error: #e89284;
+  --ms-candidate: #baace5;
+
+  /* Math Map Constellation Tokens */
+  --ms-map-dot: rgba(168, 198, 245, 0.14);
+  --ms-map-nebula: rgba(42, 74, 132, 0.14);
+  --ms-map-edge-primary: rgba(234, 182, 101, 0.48);
+  --ms-map-edge-secondary: rgba(142, 192, 255, 0.32);
+  --ms-map-node-core: #fafcff;
+  --ms-map-label-halo: #05070d;
+}
+
+/* Theme 2: Warm Parchment — 暖宣手稿 + 深普鲁士墨蓝 + 古籍琥珀金（日间无缝阅读） */
+:root[data-theme="parchment"] {
+  color-scheme: light;
+  --ms-canvas: #f7f5ef;
+  --ms-background: #f4f2eb;
+  --ms-panel: #efece3;
+  --ms-panel-raised: #f8f6f0;
+  --ms-panel-deep: #e8e4d9;
+  --ms-control: #e5e0d4;
+  --ms-control-hover: #dad4c5;
+  --ms-border: #dad5c8;
+  --ms-control-border: #c2bcb0;
+  --ms-text: #1a2433;
+  --ms-text-secondary: #354356;
+  --ms-text-muted: #556275;
+  --ms-accent: #26538d;
+  --ms-star-gold: #b5791f;
+  --ms-focus: #26538d;
+  --ms-action: #234b80;
+  --ms-action-hover: #1b3c69;
+  --ms-action-text: #f7f9fc;
+  --ms-selected: #dde5f0;
+  --ms-fragment-bg: #faf9f5;
+  --ms-paper: #faf9f5;
+  --ms-paper-text: #1d2633;
+  --ms-success: #266d53;
+  --ms-warning: #a13e2b;
+  --ms-error: #b83c2e;
+  --ms-candidate: #7253a0;
+
+  /* Math Map Astronomical Manuscript Tokens */
+  --ms-map-dot: rgba(38, 83, 141, 0.14);
+  --ms-map-nebula: rgba(181, 121, 31, 0.06);
+  --ms-map-edge-primary: rgba(181, 121, 31, 0.52);
+  --ms-map-edge-secondary: rgba(38, 83, 141, 0.30);
+  --ms-map-node-core: #26538d;
+  --ms-map-label-halo: #f7f5ef;
+}
+
+/* Theme 3: Quiet Slate — 青岩静夜（低反差炭灰 + 松石青 + 暖砂金） */
+:root[data-theme="slate"] {
+  color-scheme: dark;
+  --ms-canvas: #0a0f14;
+  --ms-background: #0c1116;
+  --ms-panel: #111921;
+  --ms-panel-raised: #17222c;
+  --ms-panel-deep: #0e151b;
+  --ms-control: #182530;
+  --ms-control-hover: #213341;
+  --ms-border: #1e2a34;
+  --ms-control-border: #2c3d4a;
+  --ms-text: #e6eff0;
+  --ms-text-secondary: #b8cccf;
+  --ms-text-muted: #869ca3;
+  --ms-accent: #66bdb0;
+  --ms-star-gold: #e0be74;
+  --ms-focus: #66bdb0;
+  --ms-action: #1f4c47;
+  --ms-action-hover: #27605a;
+  --ms-action-text: #ecf8f6;
+  --ms-selected: #193836;
+  --ms-fragment-bg: #131d26;
+  --ms-paper: #f4f5f0;
+  --ms-paper-text: #222d38;
+  --ms-success: #7cc9b0;
+  --ms-warning: #e9a18c;
+  --ms-error: #e89a8e;
+  --ms-candidate: #bbafe0;
+
+  /* Math Map Slate Constellation Tokens */
+  --ms-map-dot: rgba(102, 189, 176, 0.13);
+  --ms-map-nebula: rgba(54, 112, 106, 0.12);
+  --ms-map-edge-primary: rgba(224, 190, 116, 0.45);
+  --ms-map-edge-secondary: rgba(102, 189, 176, 0.32);
+  --ms-map-node-core: #f2fbf9;
+  --ms-map-label-halo: #0a0f14;
+}
+
+:is(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--ms-focus);
+  outline-offset: 3px;
+}
+
+.md-paper-stage > .markdown-body,
+.markdown-patch-pane .markdown-body,
+.errata-editor-preview.markdown-body,
+.pdf-page-shell {
+  color-scheme: light;
+  --ms-focus: #26538d;
+}
+
+/* Status never borrows the current-item gold. These tinted surfaces also
+   adapt to parchment; no light-on-dark badge colours leak into daylight. */
+:root {
+  --ms-success-bg: color-mix(in srgb, var(--ms-success) 10%, var(--ms-panel));
+  --ms-warning-bg: color-mix(in srgb, var(--ms-warning) 10%, var(--ms-panel));
+  --ms-error-bg: color-mix(in srgb, var(--ms-error) 10%, var(--ms-panel));
+  --ms-current-bg: color-mix(in srgb, var(--ms-star-gold) 9%, var(--ms-panel-raised));
+  --ms-candidate-bg: color-mix(in srgb, var(--ms-candidate) 10%, var(--ms-panel));
+  --ms-accent-bg: color-mix(in srgb, var(--ms-accent) 9%, var(--ms-panel));
+  --ms-success-border: color-mix(in srgb, var(--ms-success) 38%, var(--ms-border));
+  --ms-warning-border: color-mix(in srgb, var(--ms-warning) 38%, var(--ms-border));
+  --ms-error-border: color-mix(in srgb, var(--ms-error) 38%, var(--ms-border));
+}
+button:not(:disabled):hover { border-color: var(--ms-accent); }
+
+/* Inline controls inside a book belong to the paper, not the surrounding
+   workspace. Review fragments deliberately do not inherit these paper roles. */
+.md-paper-stage > .markdown-body,
+.markdown-patch-pane .markdown-body,
+.errata-editor-preview.markdown-body {
+  --ms-text: var(--ms-paper-text);
+  --ms-text-secondary: #354356;
+  --ms-text-muted: #556275;
+  --ms-control: #e5e3d9;
+  --ms-control-hover: #dad7ca;
+  --ms-control-border: #bcb6a9;
+  --ms-border: #d8d4c9;
+  --ms-panel-raised: #eeece5;
+  --ms-selected: #dde5f0;
+  --ms-accent: #26538d;
+}

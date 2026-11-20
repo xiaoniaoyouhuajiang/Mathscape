@@ -4,11 +4,11 @@
 
 来源层保存“哪份材料、哪段原文、如何得到”：Work/Edition 表达书目，Artifact 表达内容，ConversionRun 表达派生，SourceSpan 定位证据，SourceSemanticUnit 表达局部数学言语单元，SourceUnitRelation 表达有证据的来源关系。
 
-语义层计划表达可复用的数学对象、命题、表示和方法；对齐层连接来源局部表达与共享实体，并保留假设、证据和未完成义务。不同书中相似文字仍是不同来源，不因名称、相似度或模型判断直接合并。
+首条语义实现包含 SemanticEntity（concept / declaration / theory / problem_schema）、Alignment、地图 Debt 和最小 DialectScope，由 DomainPayload 包裹来源与语义 payload。对齐层连接来源局部表达与共享实体，并保留假设、证据和未完成义务；这些对象经提案、人工接受进入地图，接受不提升可信状态。不同书中相似文字仍是不同来源，不因名称、相似度或模型判断直接合并。
 
-R 是表示，D 是固定表示内推理，T 是跨表示运输，X 是图扩展与宏。它们应从语义、对齐与证明状态派生，不能取代来源证据。上述语义能力仍处探索阶段；研究依据是外部 [EMIR](../../docs/rdtx/emir-source-semantics-alignment.md) 与 [R/D/T/X](../../docs/rdtx/rdtx-map-construction-spec.md)，不是当前数据库的完整实现说明。
+R 是表示，D 是固定表示内推理，T 是跨表示运输，X 是图扩展与宏。它们应从语义、对齐与证明状态派生，不能取代来源证据。完整证明、R/D/T/X 构建及 Lean 编排仍未形成端到端实现；首条语义写路径见 [契约](semantic-write-contract.md)。研究依据是外部 [EMIR](../../docs/rdtx/emir-source-semantics-alignment.md) 与 [R/D/T/X](../../docs/rdtx/rdtx-map-construction-spec.md)，不是当前数据库的完整实现说明。
 
-EMIR 区分来源方言 DialectScope、连接方言与共享表示的 RepresentationBinding，以及证明局部 ProofContext/ProofState。单个证明步骤不应复制整套方言环境；这些是后续语义开发的设计依据，当前来源登记可保留未上下文化状态。
+EMIR 区分来源方言 DialectScope、连接方言与共享表示的 RepresentationBinding，以及证明局部 ProofContext/ProofState。单个证明步骤不应复制整套方言环境；当前已实现最小 DialectScope；RepresentationBinding、ProofContext/ProofState 仍是后续设计范围，来源登记可保留未上下文化状态。
 
 ## 身份与修订
 
@@ -22,7 +22,7 @@ EMIR 区分来源方言 DialectScope、连接方言与共享表示的 Representa
 
 ## 定位与输入授权
 
-Markdown 定位使用原始 UTF-8 字节半开区间，保留换行、空白间隙与原文。块是物理锚点，不是数学单元；渲染后的 DOM、KaTeX 文本或模型重写不能作为定位依据。
+Markdown 定位使用原始 UTF-8 字节半开区间，保留换行、空白间隙与原文。校对以独立 errata 叠加层保存，不改物理字节；有效正文可与原始 OCR 不同，读取与定位须保留到物理区间的映射（见 [canonical 契约](canonical-markdown.md)）。块是物理锚点，不是数学单元；渲染后的 DOM、KaTeX 文本或模型重写不能作为定位依据。
 
 后端从受管 Artifact 重读并核验快照、转换归属与选区；客户端传来的哈希和“已解析结果”不具权威性。请求内 bN 句柄不能跨请求或批次复用。超限必须拒绝或显式规划，不能静默截断或扩大授权范围。
 
@@ -35,6 +35,8 @@ Ink 区分可编辑 `InkDocument`、书写会话、追加式操作历史和固�
 LAN 写入租约绑定 document/session/writer/epoch；短时配对和设备凭据只持久保存摘要。持久消息的 client_seq 与文档绝对操作序号相同，同时校验前驱 command_id；ACK 绑定原请求、操作身份和保存序号。断线、刷新和正常重启不改变 epoch，明确接管或撤销才阻断旧端；旧端 outbox 不改身份自动重投。恢复导入验证完整 Ink JSON 后创建独立文档和导入回执，保留原采集片段及操作历史，不生成旧操作的虚假 ACK。
 
 用户指定 Ink 选区的来源登记是独立入口：只创建可定位的 SourceSpan，不伪造 discovery run，也不自动晋升为数学单元或证明。请求绑定快照和选区，事务保存地图对象、成员 revision 与幂等回执；相同证据复用，退役对象须经现有治理流程处理。草稿删除、快照清理与引用保护待系统级删除模型统一设计，自动保存不意味着永久留存。
+
+用户研读进度独立保存在 `study_marks`（migration 25），状态为 `unread` / `studying` / `mastered`，不修订地图对象，也不等同于由对齐线派生的「别的材料里见过」。
 
 ## 从提案到登记
 
@@ -61,4 +63,5 @@ LAN 写入租约绑定 document/session/writer/epoch；短时配对和设备凭�
 - 身份与来源：[domain](../crates/mathscape-domain/src/lib.rs)、[source](../crates/mathscape-domain/src/source/mod.rs)、[trust](../crates/mathscape-domain/src/trust.rs)。
 - 不可信阶段 DTO：[staged_discovery](../crates/mathscape-domain/src/staged_discovery.rs)；定位：[selector_resolver](../crates/mathscape-orchestrator/src/selector_resolver.rs)、[occurrence_resolver](../crates/mathscape-orchestrator/src/occurrence_resolver.rs)。
 - 验证与登记：[unit_discovery](../crates/mathscape-orchestrator/src/unit_discovery.rs)、[source_facts](../crates/mathscape-orchestrator/src/source_facts.rs)、[source_registration](../crates/mathscape-orchestrator/src/source_registration.rs)、[原子提交](../crates/mathscape-store-sqlite/src/source_map.rs)。
+- 语义对象与受控变更：[semantic](../crates/mathscape-domain/src/semantic/mod.rs)、[规划](../crates/mathscape-orchestrator/src/semantic_plan.rs)、[读投影](../crates/mathscape-orchestrator/src/semantic_view.rs)；共享对象与理论检索见 [search providers](../crates/mathscape-query/src/search/providers.rs)。
 - 登记生命周期：[契约](../crates/mathscape-domain/src/registration.rs)、[规划](../crates/mathscape-orchestrator/src/registration.rs)、[原子撤回与重新登记](../crates/mathscape-store-sqlite/src/registration.rs)。

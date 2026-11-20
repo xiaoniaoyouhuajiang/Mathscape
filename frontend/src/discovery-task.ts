@@ -8,6 +8,7 @@ let result: HTMLElement;
 let launcher: HTMLButtonElement;
 let cancel: HTMLButtonElement;
 let timeline: HTMLOListElement;
+let bottomToolbarObserver: ResizeObserver | undefined;
 const attemptOutputs = new Map<number, { reasoning: HTMLElement; output: HTMLElement }>();
 import type {
   DiscoveryProgress,
@@ -38,6 +39,22 @@ export function mountDiscoveryTask(): void {
   result = panel.querySelector(".task-result")!;
   panel.hidden = true;
   document.body.append(launcher, panel);
+}
+
+export function reserveDiscoveryTaskSpace(bottomToolbar: HTMLElement): void {
+  mountDiscoveryTask();
+  bottomToolbarObserver ??= new ResizeObserver(entries => {
+    for (const entry of entries) updateBottomInset(entry.target);
+  });
+  bottomToolbarObserver.disconnect();
+  bottomToolbarObserver.observe(bottomToolbar);
+  updateBottomInset(bottomToolbar);
+}
+
+function updateBottomInset(bottomToolbar: Element): void {
+  const inset = `${bottomToolbar.getBoundingClientRect().height}px`;
+  launcher.style.setProperty("--task-bottom-inset", inset);
+  panel!.style.setProperty("--task-bottom-inset", inset);
 }
 
 /** Application lifetime owns the promise and output, independent of readers. */

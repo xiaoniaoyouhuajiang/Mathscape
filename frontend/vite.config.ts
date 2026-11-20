@@ -31,8 +31,12 @@ export default defineConfig({
   }],
   server: {
     strictPort: true,
-    // 教程只读投影在仓库的 fixtures/ 下（frontend 之外）。
-    fs: { allow: [searchForWorkspaceRoot(process.cwd()), fileURLToPath(new URL("../fixtures/", import.meta.url))] },
+    // 教程投影和桌面／前端共用的品牌资源位于 frontend 之外。
+    fs: { allow: [
+      searchForWorkspaceRoot(process.cwd()),
+      fileURLToPath(new URL("../fixtures/", import.meta.url)),
+      fileURLToPath(new URL("../apps/mathscape-desktop/icons/", import.meta.url)),
+    ] },
     watch: {
       ignored: ["**/apps/mathscape-desktop/**"],
     },

@@ -1,3 +1,4 @@
+import { initializeTheme } from "./shell/theme-manager";
 import { invoke } from "@tauri-apps/api/core";
 import { ArtifactController } from "./artifact/artifact-controller";
 import { renderLeanStatus } from "./artifact/lean-status";
@@ -6,7 +7,7 @@ import { eventBus } from "./core/events";
 import { errorMessage } from "./core/ipc";
 import { reducedMotion, watchMotion } from "./core/motion";
 import { DiscoveryLedgerController } from "./discovery/discovery-ledger";
-import { mountDiscoveryTask } from "./discovery-task";
+import { mountDiscoveryTask, reserveDiscoveryTaskSpace } from "./discovery-task";
 import { GraphController } from "./graph/graph-controller";
 import { SandboxEcho } from "./graph/sandbox-echo";
 import { ScenePlayer } from "./graph/scene-player";
@@ -52,6 +53,8 @@ import "./semantic/semantic.css";
 import { StudyHudController } from "./semantic/study-hud";
 import { TutorialPlayer } from "./tutorial/player";
 import "./tutorial/tutorial.css";
+
+initializeTheme();
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (app === null) {
@@ -386,7 +389,7 @@ const closeInkWorkspace = () => {
   });
   loadInkOverlay();
 };
-inkWorkspace = new DesktopInkWorkspace(el.inkHost, closeInkWorkspace, (message, kind) => shell.showToast(message, kind));
+inkWorkspace = new DesktopInkWorkspace(el.inkHost, closeInkWorkspace, (message, kind) => shell.showToast(message, kind), reserveDiscoveryTaskSpace);
 inkSplitHandle = mountInkSplitResizer(el.inkWorkspace, el.inkSplitReader, el.inkSplitResizer);
 el.inkHost.addEventListener("pointerdown", () => { inkPaneFocused = true; }, true);
 el.inkSplitReader.addEventListener("pointerdown", () => { inkPaneFocused = false; }, true);

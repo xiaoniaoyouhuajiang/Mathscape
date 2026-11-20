@@ -1,6 +1,7 @@
 import cytoscape from "cytoscape";
 import { describe, expect, it } from "vitest";
 import { applyStagedOverlay, stagedConflict, stagedMark } from "../../src/graph/staged-overlay";
+import { syncNodeLabel } from "../../src/graph/label-hover";
 import type { InvestigationSnapshot } from "../../src/artifact/types";
 
 const investigation: InvestigationSnapshot = {
@@ -36,5 +37,21 @@ describe("staged map overlay", () => {
     expect(stagedMark(undefined, "unit-new")).toBeNull();
     expect(stagedConflict(investigation, "unit-old")).toEqual(["cs-2@1", "cs-3@1"]);
     expect(stagedConflict(investigation, "unit-new")).toBeNull();
+  });
+
+  it("keeps the pending badge when labels compact or expand, then clears it with the staged mark", () => {
+    const core = cytoscape({ headless: true, elements: [
+      { data: { id: "pending", domainId: "unit-new", elementKind: "entity", label: "有界性", compactLabel: "有界性", fullLabel: "概念：有界性" } },
+    ] });
+    const node = core.getElementById("pending");
+    applyStagedOverlay(core, investigation);
+    syncNodeLabel(node, false);
+    expect(node.data("label")).toBe("〔未审批〕有界性");
+    syncNodeLabel(node, true);
+    expect(node.data("label")).toBe("〔未审批〕概念：有界性");
+    applyStagedOverlay(core, null);
+    syncNodeLabel(node, false);
+    expect(node.data("label")).toBe("有界性");
+    core.destroy();
   });
 });

@@ -1,24 +1,26 @@
+@import "../theme.css";
+
 /* N3d workspace search (⌘K / Ctrl+K). */
 .workspace-search { position: fixed; inset: 0; z-index: 80; display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; background: rgb(5 10 14 / 55%); }
 .workspace-search[hidden] { display: none; }
-.workspace-search-box { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; width: min(640px, calc(100vw - 32px)); max-height: 72vh; padding: 12px; border: 1px solid #354b54; border-radius: 12px; color: #dce8e5; background: #16242b; box-shadow: 0 18px 48px rgb(0 0 0 / 50%); }
+.workspace-search-box { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; width: min(640px, calc(100vw - 32px)); max-height: 72vh; padding: 12px; border: 1px solid var(--ms-border); border-radius: 12px; color: var(--ms-text); background: var(--ms-panel-raised); box-shadow: 0 18px 48px rgb(0 0 0 / 50%); }
 .workspace-search-head { display: flex; align-items: center; gap: 10px; }
-.workspace-search-input { flex: 1; min-width: 0; box-sizing: border-box; padding: 9px 11px; border: 1px solid #4d6c74; border-radius: 8px; color: #e9f2ef; background: #0f1b20; font: inherit; font-size: 15px; }
-.workspace-search-input:focus { outline: 1px solid #77afa2; }
-.workspace-search-trash { flex: none; display: flex; align-items: center; gap: 4px; color: #9fb6b2; font-size: 12px; white-space: nowrap; }
-.workspace-search-status { margin: 0; color: #8fa8a4; font-size: 12px; }
-.workspace-search-status.is-error { color: #f0a3a3; }
+.workspace-search-input { flex: 1; min-width: 0; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ms-control-border); border-radius: 8px; color: var(--ms-text); background: var(--ms-panel-deep); font: inherit; font-size: 15px; }
+.workspace-search-input:focus { outline: 1px solid var(--ms-accent); }
+.workspace-search-trash { flex: none; display: flex; align-items: center; gap: 4px; color: var(--ms-text-secondary); font-size: 12px; white-space: nowrap; }
+.workspace-search-status { margin: 0; color: var(--ms-text-muted); font-size: 12px; }
+.workspace-search-status.is-error { color: var(--ms-error); }
 .workspace-search-results { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 10px; }
 .workspace-search-results:empty { display: none; }
 .workspace-search-group { display: grid; gap: 2px; }
-.workspace-search-group-title { padding: 2px 6px; color: #7f9a96; font-size: 11px; letter-spacing: .04em; }
+.workspace-search-group-title { padding: 2px 6px; color: var(--ms-text-muted); font-size: 11px; letter-spacing: .04em; }
 .workspace-search-option { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 7px; cursor: pointer; }
-.workspace-search-option[aria-selected="true"] { background: #21403f; outline: 1px solid #4f8a7e; }
-.workspace-search-option.is-trashed .workspace-search-title { color: #b8a98a; }
+.workspace-search-option[aria-selected="true"] { background: var(--ms-selected); outline: 1px solid var(--ms-accent); }
+.workspace-search-option.is-trashed .workspace-search-title { color: var(--ms-text-muted); }
 .workspace-search-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
-.workspace-search-title { overflow: hidden; color: #e4efec; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-search-title { overflow: hidden; color: var(--ms-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-search-title mark { color: inherit; background: rgb(240 200 90 / 32%); border-radius: 2px; }
-.workspace-search-subtitle { overflow: hidden; color: #88a19e; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-search-locate { flex: none; padding: 2px 8px; border: 1px solid #3b5961; border-radius: 6px; color: #bcd3cf; background: #1a2d33; font-size: 11px; cursor: pointer; }
-.workspace-search-locate:hover { border-color: #77afa2; }
-.workspace-search-hint { margin: 0; color: #6f8884; font-size: 11px; }
+.workspace-search-subtitle { overflow: hidden; color: var(--ms-text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-search-locate { flex: none; padding: 2px 8px; border: 1px solid var(--ms-control-border); border-radius: 6px; color: var(--ms-text-secondary); background: var(--ms-control); font-size: 11px; cursor: pointer; }
+.workspace-search-locate:hover { border-color: var(--ms-accent); }
+.workspace-search-hint { margin: 0; color: var(--ms-text-muted); font-size: 11px; }

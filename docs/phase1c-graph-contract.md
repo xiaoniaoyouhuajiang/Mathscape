@@ -193,18 +193,19 @@ Agent 下一步即可 `material.read({ "artifact_id": content_ref.artifact_id, "
 | --- | --- | --- | --- | --- |
 | `node_id` | string | — | 与 `seed_ids` 二选一（恰好一个） | 都给/都不给 → `invalid_arg` |
 | `seed_ids` | string[] | — | 1–**8** 个，不可重复 | 空/重复/>8 → `invalid_arg` |
+| `preset` | enum | **`heuristic`**（省略 `edge_types` 时） | `heuristic \| structural \| semantic_only \| raw` | 未知值 → `invalid_arg` |
 | `depth` | int | **1** | 0–**3**（0 = 只回种子） | >3 → `invalid_arg` |
 | `direction` | enum | **`both`** | `both \| in \| out`（§5.4） | 其他 → `invalid_arg` |
-| `edge_types` | enum[] | **`["conversion","located_in","contains_span","has_part"]`** | §7 闭集，不含 `unknown` | 未知值 → `invalid_arg`；`[]` = 不走边，只回种子 |
-| `node_kinds` | enum[] | 省略 = 不限制 | `artifact \| source_span \| source_unit \| snapshot \| note` | 未知值 → `invalid_arg` |
+| `edge_types` | enum[] | 按 `preset` 选择 | §7 闭集，不含 `unknown` | 未知值 → `invalid_arg`；`[]` = 不走边，只回种子 |
+| `node_kinds` | enum[] | 省略 = 不限制 | `artifact \| source_span \| source_unit \| semantic_entity \| debt \| dialect_scope \| snapshot \| note` | 未知值 → `invalid_arg` |
 | `max_nodes` | int | **40** | 1–**100** | >100 → `invalid_arg` |
 | `max_edges` | int | **80** | 1–**200** | >200 → `invalid_arg` |
 | `include_trashed` | bool | **false** | — | — |
 | `include_virtual` | bool | **false** | 仅 `false` | `true` → `invalid_arg` |
 | `scope` | enum | `accepted` | 同 Phase0 | — |
 
-- **省略 `edge_types` ≠ 空数组**：省略 = 结构四件套；`[]` = 不遍历任何边。
-- 要语义边必须**显式列出**，且需要结构边时要一起列：`["contains_span","has_part","proves","states"]`。
+- **省略 `edge_types` ≠ 空数组**：省略时默认 `heuristic`；`[]` = 不遍历任何边。显式给 `edge_types` 而不指定 `preset` 时走 `raw`，只遍历列出的类型。
+- `heuristic` 支持跨书语义桥接，来源溯源、局部约定 / Debt 挂接可免深度；非种子的 theory 书架与外部 Artifact 作为边界，不借枢纽无限扩散。`structural` 限于单来源结构与推理；`semantic_only` 探索共享语义网；`raw` 保留一关系一跳的旧规则，省略 `edge_types` 时使用 `conversion` / `located_in` / `contains_span` / `has_part` / `has_snapshot`。
 - `include_trashed=false`：隐藏 lifecycle 为 `superseded | rejected | deprecated` 的节点/关系（与 `workspace.search` 的 `retired()` 一致），以及回收站中的 note / snapshot；种子本身例外（§3.2 `seed_retired`）。[待核] 命名见 §12。
 - `node_kinds` **只过滤输出，不切断遍历**：BFS 仍穿过被过滤节点计算深度，只是不返回它们；端点被过滤的边一并省略（附 `nodes_filtered`）。这是为了避开 opt_solutions Task 4 (b) 的「过滤切断链路」问题，同时不引入收缩虚拟边。
 
@@ -291,11 +292,11 @@ Agent 下一步即可 `material.read({ "artifact_id": content_ref.artifact_id, "
 
 ### 5.3 BFS 规则 [锁定]
 1. 遍历对象：`landscape` 投影（`mathscape_query::project_landscape` 的 IncidenceGraph 语义），**未过滤**的全图，关系作为超边。
-2. **关系节点透明**：entity → relation → entity 记 **1 跳**（实体跳）；关系不占 `depth`。所有关系类型同价（1 跳），**不**沿用 Desktop 的 `conversion`/`located_in` 免深度规则（见 §9、§12）。
+2. **关系节点透明**：关系不占节点深度；`raw` 下 entity → relation → entity 记 **1 跳**。其他 preset 按 typed-hop 规则计算 0 / 1 成本，来源溯源和局部上下文可零成本挂接；实现见 `crates/mathscape-mcp/src/tools/graph.rs` 的 `evaluate_typed_hop`。
 3. **关系计入预算**：每个返回的关系 = `edges[]` 中 1 个对象，计 1 个 `max_edges`（无论端点数）；关系不出现在 `nodes[]`，不占 `max_nodes`。`max_nodes` 只数实体节点（含种子）。
-4. 只沿 `edge_types` 中的关系扩展；同一关系只要类型在集合内且端点都可见即返回。不在集合内的关系**既不扩展也不返回**（MCP 比 Desktop 更窄：Desktop 会显示范围内两端可见的 `cites`，MCP 不返回，只在 `edge_types_filtered` 计数）。
+4. 关系须通过 preset / 显式 `edge_types` 的类型筛选及对应的 typed-hop / 边界规则；过滤掉的类型既不扩展也不返回，沿用 `edge_types_filtered` 诊断。
 5. `relation_kind = unknown` 永不遍历、不返回（fail-closed，同 Task 4.0），计入 `unknown_relation_skipped`。
-6. visited 去重；节点 `depth` 为到最近种子的最短实体跳数，`via_edge` 为首次到达所经关系 id（种子为 `null`）；多种子时附 `seed_of`（最近种子 id，Should）。
+6. visited 去重；节点 `depth` 为到最近种子的最短成本（`raw` 为实体跳数），`via_edge` 为首次到达所经关系 id（种子为 `null`）；多种子时附 `seed_of`（最近种子 id，Should）。
 7. 内部访问上限：遍历过程中实际访问（含被 `node_kinds` 过滤、被退役隐藏的）实体数 ≤ **2000**，超出即停并 `visit_limit_reached`（防止 `node_kinds` 过滤后的隐藏爆炸）。
 8. 输出排序确定性：`nodes` 按 `(depth, kind, canonical_id)`；`edges` 按 `(min endpoint depth, relation, id)`。
 9. 种子是关系 id（如 ConversionRun）：不展开，返回空邻域 + `relation_seed`；种子 kind 不支持：跳过该种子 + `unsupported_node_kind`，其余种子照常；全部种子都不可展开时 `status: ok`、`nodes` 只含可返回的种子最小节点。
@@ -326,7 +327,7 @@ Agent 下一步即可 `material.read({ "artifact_id": content_ref.artifact_id, "
 | 字段 | 必有 | 说明 |
 | --- | --- | --- |
 | `id` | Must | 图内 id（= `canonical_id`；get 另回显 `canonical_id`） |
-| `kind` | Must | `artifact \| source_span \| source_unit \| snapshot \| note \| relation \| unsupported`（`relation` 仅 `graph.get` 直接查关系 id 时出现） |
+| `kind` | Must | `artifact \| source_span \| source_unit \| semantic_entity \| debt \| dialect_scope \| snapshot \| note \| relation \| unsupported`（`relation` 仅 `graph.get` 直接查关系 id 时出现） |
 | `entity_kind` | Must | 原 `EntityKind`（PascalCase，如 `SourceSemanticUnit`）；note 为 `InkDocument` |
 | `label` | Must | 投影 label（中文显示名）；无则用 id 尾部 |
 | `lifecycle` | Must | `LifecycleStatus` snake_case；note/snapshot 为 `active \| trashed`；未知为 `null` |
@@ -336,6 +337,7 @@ Agent 下一步即可 `material.read({ "artifact_id": content_ref.artifact_id, "
 | `revision` | Should | 有来源才出 |
 | `media_type` | Should | artifact / snapshot 节点 |
 | `unit_kind` | Should | source_unit 的 payload `unit_kind`（如 `theorem`） |
+| `semantic` | get，语义对象时 | 共享对象 / Debt / DialectScope / Alignment 的 payload 详情；对齐线仍以关系投影，语义对象没有材料正文 `content_ref`（`semantic_node`） |
 | `summary` | Should | 投影 summary（短元数据，**不是正文**） |
 | `boundary` | May | 投影 `boundary` 标记 |
 | `edge_summary` | get Should | §4.2 |
@@ -409,14 +411,16 @@ PDF artifact 的 `artifact_head` 为 `pdf_pages {1,1}`；Agent 应优先 `pdf.ou
 
 ## 7. relation 枚举（闭集）[锁定]
 
-与 `mathscape_graph::ProjectionRelationKind`（serde snake_case）逐字一致，即 `SourceUnitRelationKind` 9 值 + 投影合成 3 值：
+MCP 闭集以 `crates/mathscape-mcp/src/tools/graph.rs` 的 `RELATION_TYPES` 为准，共 21 值，包含来源关系、Ink 读时边和语义投影关系。下表的 ✅ 只表示 `preset=raw` 且省略 `edge_types` 的旧结构默认集；其他 preset 见 §5.1：
 
-| relation | 来源 | 层 | 默认 `edge_types` |
+| relation | 来源 | 层 | `raw` 默认 `edge_types` |
 | --- | --- | --- | --- |
 | `conversion` | `ConversionRun`（PDF → Markdown） | 结构桥接 | ✅ |
 | `located_in` | 合成：SourceSpan → artifact（Markdown / 手稿快照） | 结构桥接 | ✅ |
 | `contains_span` | 合成：unit → span | 结构桥接 | ✅ |
 | `has_part` | 合成（`parent_unit`）或领域关系 | 结构桥接 | ✅ |
+| `has_snapshot` | 读时合成：note → snapshot | 手稿桥接 | ✅ |
+| `note_link` | 读时合成：note → linked target | 手稿链接 | opt-in |
 | `states` | 领域 | 语义 | opt-in |
 | `proves` | 领域（原文证明关系，**不是**内核证书） | 语义 | opt-in |
 | `poses` | 领域 | 语义 | opt-in |
@@ -425,6 +429,13 @@ PDF artifact 的 `artifact_head` 为 `pdf_pages {1,1}`；Agent 应优先 `pdf.ou
 | `explains` | 领域 | 语义 | opt-in |
 | `applies_method` | 领域 | 语义 | opt-in |
 | `cites` | 领域（跨文献） | 语义 | opt-in |
+| `aligns` | Alignment：unit → semantic entity | 语义桥接 | opt-in |
+| `in_theory` | entity → theory | 语义上下文 | opt-in |
+| `debt_on` | debt → holder | 语义上下文 | opt-in |
+| `scope_of` | dialect scope → anchor unit | 来源约定 | opt-in |
+| `uses_entity` | entity → used entity | 语义引用 | opt-in |
+| `of_concept` | declaration → concept | 语义引用 | opt-in |
+| `paid_by` | debt → payer | 还账引用 | opt-in |
 
 - 输出中**不会**出现 `unknown`：投影里的 `unknown` 关系被跳过并计数（`unknown_relation_skipped`）。`edge_types` 传 `unknown` → `invalid_arg`。
 - 新增枚举值 = 改本文档 + `tools/list` 描述；内部投影改名不得直接泄露给 Agent（Codex 风险 8）。Agent 侧应把未来出现的陌生 `relation` 当作不透明字符串原样引用，不推断语义。
@@ -440,7 +451,7 @@ PDF artifact 的 `artifact_head` 为 `pdf_pages {1,1}`；Agent 应优先 `pdf.ou
 3. `content_ref` 为 `null`：看 `content_unavailable.reason`；`no_span_locator` 时用 R2 看结构邻居，**不要**猜字节区间。
 
 **R2 · 浅结构邻域**
-`graph.neighborhood(node_id, depth=1)`（全默认）→ 取相邻 span / 父章节 unit 的 `content_ref` → `material.read`。
+`graph.neighborhood(node_id, preset="structural", depth=1)`→ 取相邻 span / 父章节 unit 的 `content_ref` → `material.read`。
 
 **R3 · 证明/推导溯源（opt-in）**
 `graph.neighborhood(node_id, depth=2, edge_types=["contains_span","has_part","proves","states"], max_nodes=60)` → 对 `proves`/`states` 端点再 `graph.get` 拿 `content_ref`。先看 `edge_types_filtered` / `edge_summary` 是否真有这类边，再打开。
@@ -449,7 +460,7 @@ PDF artifact 的 `artifact_head` 为 `pdf_pages {1,1}`；Agent 应优先 `pdf.ou
 只在需要跨文献时加 `cites`，且保持 `depth ≤ 2`、显式 `max_nodes`；遇 `truncated` 先缩小 `edge_types` 或 `depth`，不要只调大 cap。
 
 **R5 · 从材料找内容单元**
-`graph.neighborhood(node_id=<markdown artifact>, direction="in", depth=2, node_kinds=["source_unit"])` → 得到该 Markdown 的内容单元（span 被 `node_kinds` 过滤但仍穿过）。从 PDF 出发需 `direction="both"`、`depth=3`（PDF `out`→Markdown `in`→span `in`→unit，方向混合，单向 `in`/`out` 走不通）。
+`graph.neighborhood(node_id=<markdown artifact>, preset="raw", direction="in", depth=2, node_kinds=["source_unit"])` → 得到该 Markdown 的内容单元（span 被 `node_kinds` 过滤但仍穿过）。从 PDF 出发用 `direction="both"`、`depth=3`（PDF `out`→Markdown `in`→span `in`→unit，方向混合，单向 `in`/`out` 走不通）。
 
 **R6 · note / snapshot**
 `graph.get` 可返回元数据（标题、lifecycle、快照的 `document_id`），`content_ref: null` + `ink_out_of_scope`。1c 不能读手稿内容，Agent 应如实说明。
@@ -458,24 +469,17 @@ PDF artifact 的 `artifact_head` 为 `pdf_pages {1,1}`；Agent 应优先 `pdf.ou
 
 ## 9. Desktop 与 MCP 默认值差异
 
-MCP 以 **Agent 可组合参数**为准；Desktop「聚焦此来源」的策略只作为可选配方，**不是** MCP 默认。
+MCP 当前默认 `heuristic`，不等同于 Desktop「聚焦此来源」。两者都可对来源 / 上下文桥接免深度，但 MCP 还提供跨书语义桥和 hub-sink 边界；不要用旧的“一关系一跳、仅结构边”解释默认返回。
 
-| 维度 | Desktop 聚焦（opt_solutions Task 4） | MCP 1c 默认 | 在 MCP 中复现 Desktop 的近似参数 |
-| --- | --- | --- | --- |
-| 方向 | 单向，沿派生方向向下游 | `both` | PDF 种子：`direction="out"` 无法覆盖 span→Markdown（located_in 指向上游），需 `both` + `edge_types` 结构四件套 |
-| 深度计量 | `conversion`/`located_in` 免深度；`contains_span`/`has_part` 计深度 | 所有关系 1 实体跳 | 「深度 1 = 这份 PDF 的全部内容单元」≈ MCP `depth=3`（PDF→MD→span→unit） |
-| 可穿越集合 | 结构 4 种可穿越，语义 8 种禁止穿越 | 同（默认结构 4 种） | 默认即可 |
-| 范围内语义边 | 显示（`cites` 等两端可见即保留） | 不返回，只计数 | 显式加入 `edge_types` |
-| 虚拟收缩边 | `FocusContraction` | 无（`include_virtual` 仅 false） | 不可复现；用 `node_kinds` 过滤 + 原始边 |
-| 规模 | 全图快照内淡化 | `max_nodes` 40 / `max_edges` 80 | 显式放大到 100 / 200 |
-
-Desktop 配方（文档示例，非默认）：
+需要复现旧 MCP 1c 的结构路径时显式选 `raw`。例如从 PDF 沿 PDF → Markdown → span → unit 取浅层来源单元：
 ```json
 { "name": "graph.neighborhood",
-  "arguments": { "node_id": "mathscape:artifact/sha256/<pdf>", "direction": "both", "depth": 3,
+  "arguments": { "node_id": "mathscape:artifact/sha256/<pdf>", "preset": "raw",
+                 "direction": "both", "depth": 3,
+                 "edge_types": ["conversion", "located_in", "contains_span", "has_part"],
                  "node_kinds": ["artifact", "source_unit"], "max_nodes": 100, "max_edges": 200 } }
 ```
-注意：`both` 会额外带出 PDF 的上游（若有），这是与 Desktop 单向聚焦的已知差异。
+这只是显式结构配方，不保证与 Desktop 聚焦范围完全相同；MCP 仍有节点 / 边预算，也不返回 Desktop 的虚拟收缩边（`include_virtual` 仅允许 false）。
 
 ---
 

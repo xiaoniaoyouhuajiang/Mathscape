@@ -1,6 +1,6 @@
 # 架构
 
-Mathscape 是面向数学学习者和研究者的本地优先桌面应用。当前实现聚焦材料摄取、来源发现、人工审核与来源图；数学语义解释和跨领域关联是目标，不能把当前来源抽取能力等同于该目标已经实现。
+Mathscape 是面向数学学习者和研究者的本地优先桌面应用。当前实现覆盖材料摄取、来源发现、人工审核、来源图，以及首条 EMIR 语义提案 → 接受 → 地图 / 学习视图路径；这不等于完整数学理解或跨领域推理已经实现。
 
 ## 软件目标
 
@@ -24,8 +24,8 @@ Mathscape 是面向数学学习者和研究者的本地优先桌面应用。当�
 
 | 模块 | 职责与边界 |
 | --- | --- |
-| `mathscape-domain` | 身份、修订、来源实体、角色化超边、MapPatch 和传输契约；不依赖 UI、数据库或供应商 |
-| `mathscape-store-sqlite` | 目录、发现运行、接受决定、来源对象的持久化、事务与类型化读取 |
+| `mathscape-domain` | 身份、修订、来源与语义实体、角色化超边、MapPatch 和传输契约；不依赖 UI、数据库或供应商 |
+| `mathscape-store-sqlite` | 目录、发现运行、接受决定、来源与语义对象的持久化、事务与类型化读取 |
 | `mathscape-artifact` | Workspace、不可变受管字节、导入、完整性检查；调用存储层登记目录 |
 | `mathscape-pdf` / `mathscape-tool-marker` | PDF 检查与选区 / 外部转换进程；无地图写入权限 |
 | `mathscape-llm` | 供应商中立调用契约、凭据解析和传输适配；不决定任务或可信性 |
@@ -35,7 +35,7 @@ Mathscape 是面向数学学习者和研究者的本地优先桌面应用。当�
 
 依赖从应用指向上述能力模块，领域层不反向依赖应用。前端通过 Tauri 命令操作，不能直接访问 SQLite 或任意主机文件。实际依赖以各 crate 的 Cargo.toml 为准。
 
-`mathscape-tool-lean` 已具备第一切片的项目配置、受管 Lean/mathlib profile、环境探测、环境指纹和 argv-safe runner；并已实现受 fingerprint 约束的声明 exporter、本地 Loogle adapter、隔离 scratch 上的 `lean.check` 核心和 profile-local 的不可变验收回执。回执中的源文件使用现有 `mathscape:artifact/sha256/<digest>` stable id，当前仍保存在 profile-local receipt store，尚未登记到 Workspace 的 ArtifactPool。`mathscape-mcp` 已追加 `mathlib.search`、`lean.check`、绑定 round 的 `artifact.stage`，以及 Phase2-0 的 `propose_changes` / `get_change_set`；前两者是只读工具，`artifact.stage` 只写 Workspace staging，Phase2 工具只暂存和回读来源层提案，不写 ArtifactPool、地图或 accepted 图。通用文件暂存契约见 [`artifact-staging-contract.md`](artifact-staging-contract.md)，写路径契约见 [`phase2-write-contract.md`](phase2-write-contract.md)。探测在缺少 `lake-manifest.json` 时不会调用可能创建 manifest 的 `lake env`，以保持用户工程只读。当前开发 profile 固定 Lean 4.33.1 与 mathlib v4.33.1，profile metadata、编译缓存和 Lean 回执位于 Mathscape 管理目录。Lean 工具契约已冻结于 [`lean-tool-contract.md`](lean-tool-contract.md)。`mathscape-validation`、`mathscape-fixture` 仍是模块占位；校验实际位于 domain、orchestrator 和 store 中。CLI 仍是基础操作入口，尚未接入完整 workflow。
+`mathscape-tool-lean` 已具备第一切片的项目配置、受管 Lean/mathlib profile、环境探测、环境指纹和 argv-safe runner；并已实现受 fingerprint 约束的声明 exporter、本地 Loogle adapter、隔离 scratch 上的 `lean.check` 核心和 profile-local 的不可变验收回执。回执中的源文件使用现有 `mathscape:artifact/sha256/<digest>` stable id，当前仍保存在 profile-local receipt store，尚未登记到 Workspace 的 ArtifactPool。`mathscape-mcp` 已追加 `mathlib.search`、`lean.check`、绑定 round 的 `artifact.stage`，以及 Phase2-0 的 `propose_changes` / `get_change_set`；前两者是只读工具，`artifact.stage` 只写 Workspace staging，Phase2 工具暂存和回读来源及语义层提案（共享对象、对齐线、Debt、最小 DialectScope；语义对象可提议退役），不写 ArtifactPool、地图或 accepted 图。通用文件暂存契约见 [`artifact-staging-contract.md`](artifact-staging-contract.md)，写路径契约见 [`phase2-write-contract.md`](phase2-write-contract.md)。探测在缺少 `lake-manifest.json` 时不会调用可能创建 manifest 的 `lake env`，以保持用户工程只读。当前开发 profile 固定 Lean 4.33.1 与 mathlib v4.33.1，profile metadata、编译缓存和 Lean 回执位于 Mathscape 管理目录。Lean 工具契约已冻结于 [`lean-tool-contract.md`](lean-tool-contract.md)。`mathscape-validation`、`mathscape-fixture` 仍是模块占位；校验实际位于 domain、orchestrator 和 store 中。CLI 仍是基础操作入口，尚未接入完整 workflow。
 
 ## 当前主流程
 
@@ -67,7 +67,7 @@ SQLite 的 Artifact Catalog 与 Source Map 通过同一读事务组成景观快�
 
 手写采用另一条输入路径：桌面画板或 HTTPS InkPad → IndexedDB outbox → Ink 应用服务 → SQLite 操作历史 → 固定前缀快照 → Artifact Pool → Ink SourceSpan。快照创建先持久固定请求及前缀，来源选区由后端重绑定受管字节，再经 orchestrator 构建 SourceSpan 和原子登记回执；不经过发现模型或自动创建数学解释。景观图的 `located_in` 连接 Ink 证据与快照，专用只读 Reader 支持选区定位和返回当前可编辑文档。
 
-P3 的 Axum HTTPS/WSS 服务属于 DesktopService，静态画板随应用打包；短时单次二维码换取指定手稿的设备租约，持久请求复用本地写入验证及 durable ACK。配对后电脑只读镜像，预览不落历史，SQLite 前缀用于快照。断线保留 epoch，显式接管才转移写入权；平板持有时，转交二维码在新设备领取的同一事务中撤销旧凭据，原平板在此之前可继续同步。首次设置可绑定手稿：HTTP 设置码只用于公开证书与检测，书写衔接码只在 URL fragment 和 HTTPS 请求体中出现，由它换取已有凭据恢复或一次性配对；旧队列可导出并导入独立恢复草稿。网络不开放通用 Tauri 命令或 Workspace 文件读取。服务可恢复不等于设备已信任 TLS，正式端到端验收还需目标平板验证。
+P3 的 Axum HTTPS/WSS 服务属于 DesktopService，静态画板随应用打包；短时单次二维码换取指定手稿的设备租约，持久请求复用本地写入验证及 durable ACK。配对后电脑只读镜像，预览不落历史，SQLite 前缀用于快照。断线保留 epoch，显式接管才转移写入权；平板持有时，转交二维码在新设备领取的同一事务中撤销旧凭据，原平板在此之前可继续同步。首次设置可绑定手稿：HTTP 设置码只用于公开证书与检测，书写衔接码只在 URL fragment 和 HTTPS 请求体中出现，由它换取已有凭据恢复或一次性配对；旧队列可导出并导入独立恢复草稿。网络不开放通用 Tauri 命令或 Workspace 文件读取。被收回写入权的平板还可维持只读 standby 通道，接收电脑「推送到平板」后确认切换，无需重新扫码；它不授予旧 epoch 写权限。服务可恢复不等于设备已信任 TLS，正式端到端验收还需目标平板验证。
 
 `GraphProjection` 保留第一类超边及带角色端点；`IncidenceGraph` 把超边展开为关系节点与连接边。端点方向由 Rust 显式给出，前端不能从角色名称猜测或自行折叠关系。渲染 ID 确定性派生，petgraph 内存索引不能用作持久身份。
 
@@ -75,10 +75,13 @@ P3 的 Axum HTTPS/WSS 服务属于 DesktopService，静态画板随应用打包�
 
 材料与来源投影在景观图中联结，前端以统一地图及材料/来源等过滤选项浏览；显式证据模式展开 SourceSpan。内容单元详情可预览渲染后的原文并跳到 Markdown 锚点。活动地图默认排除退役对象，显示退役选项查看当前 tombstone，登记快照则读取回执绑定的历史 revision；过滤和隐藏不删除来源记录。
 
+`workspace.search` 支持 `theory` / `semantic_entity`，`scope=investigation` 可检索本调查的暂存对象；`graph.get` / `graph.neighborhood` 可读取和遍历语义图。Desktop 的 `get_semantic_object` / `semantic_learning_view` 提供详情与学习投影，`set_study_marks` 独立保存用户研读进度；接受提案不提升证明或对齐可信度。语义写路径见 [契约](semantic-write-contract.md)。
+
 ## 代码入口与探索范围
 
 - 调用链：[Desktop discovery](../apps/mathscape-desktop/src/discovery.rs)、[workflow](../crates/mathscape-orchestrator/src/discovery_workflow.rs)、[Planner](../crates/mathscape-orchestrator/src/fact_planner.rs)。
 - 数据到视图：[query](../crates/mathscape-query/src/lib.rs)、[graph](../crates/mathscape-graph/src/lib.rs)、[审核投影](../crates/mathscape-orchestrator/src/source_review.rs)。
+- 语义路径：[领域对象](../crates/mathscape-domain/src/semantic/mod.rs)、[提案编译](../crates/mathscape-mcp/src/tools/propose/semantic.rs)、[语义投影](../crates/mathscape-query/src/semantic_graph.rs)、[Desktop 详情与学习视图](../apps/mathscape-desktop/src/semantic.rs)。
 - 版本化任务：[prompts](../prompts/README.md)。单阶段 v3 留作离线回放与比较，非 Desktop 默认路径。
 
-共享数学实体、DialectScope、证明状态、R/D/T/X 构建及 Lean 验证尚未形成端到端应用能力。新的 Agent 架构仍待验证；当前 A/B 流程是实现现状，不是未来数学理解必须遵循的顺序。
+共享数学实体、对齐线、Debt 和最小 DialectScope 已接通首条应用路径；完整证明状态编排、RepresentationBinding / ProofContext、R/D/T/X 构建及 Lean 联动验证仍未形成端到端应用能力。当前 A/B 流程是来源发现的实现现状，不是未来数学理解必须遵循的顺序。

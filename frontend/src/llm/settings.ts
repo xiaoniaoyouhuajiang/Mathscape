@@ -1,3 +1,4 @@
+import { THEMES, THEME_CHANGED, getTheme, setTheme, isTheme } from "../shell/theme-manager";
 import { invoke } from "@tauri-apps/api/core";
 import { eventBus } from "../core/events";
 import { motionPreference, setMotionPreference, type MotionPreference } from "../core/motion";
@@ -134,6 +135,10 @@ export class LlmSettingsController {
             </label>
           </section>
           <form class="workspace-settings-form settings-section">
+            <label class="settings-field">显示主题
+              <select name="theme" aria-label="显示主题">${Object.entries(THEMES).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>
+              <small>立即生效，自动记住本机的选择。</small>
+            </label>
             <div class="settings-section-heading">
               <div>
                 <span class="settings-eyebrow">MAP CONSTRUCTION</span>
@@ -252,6 +257,11 @@ export class LlmSettingsController {
       </div>
     `;
     this.overlay = required<HTMLElement>(host, ".settings-overlay");
+    const theme = required<HTMLSelectElement>(host, "select[name=theme]");
+    const syncTheme = () => { theme.value = getTheme(); };
+    syncTheme();
+    theme.onchange = () => { if (isTheme(theme.value)) setTheme(theme.value); };
+    window.addEventListener(THEME_CHANGED, syncTheme);
     this.form = required<HTMLFormElement>(host, ".llm-settings-form");
     this.workspaceForm = required<HTMLFormElement>(host, ".workspace-settings-form");
     this.admission = required<HTMLSelectElement>(host, "select[name=discovery-admission]");

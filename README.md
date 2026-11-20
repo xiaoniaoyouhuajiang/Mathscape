@@ -2,7 +2,7 @@
 
 Mathscape（“数学景观”）是面向数学学习者和研究者的本地优先工具，目标是将重要数学材料转成可追溯的超图，在多个视图中组织笔记、理解证明并探索跨领域关联。LLM 提出候选，程序验证与用户审核控制登记。
 
-当前已打通 PDF 导入、Marker 转换、阅读选区、LLM 来源发现、审核登记和来源图浏览。数学语义、对齐与 Lean 编排仍未形成端到端实现；Agent 调度是待实验方向。
+当前已打通 PDF 导入、Marker 转换、阅读选区、LLM 来源发现、审核登记和来源图浏览。首条 EMIR 语义路径已支持共享对象、对齐线、Debt 与最小 DialectScope 的提案、人工接受和地图 / 学习视图；接受不提升可信状态。完整证明、R/D/T/X 构建及 Lean 编排仍未形成端到端实现。
 
 ## 结构
 
@@ -40,10 +40,10 @@ cargo test --workspace
 
 ```sh
 npm --prefix frontend install
-npm --prefix frontend run tauri:dev:local
+npm --prefix frontend run tauri:dev:local_1
 ```
 
-`tauri:dev:local` 将自包含 Workspace 放在仓库的 `.mathscape-dev/workspace/`
+`tauri:dev:local_1` 将自包含 Workspace 放在仓库的 `.mathscape-dev/workspace/`
 中，该目录已被 Git 忽略，便于直接检查 SQLite、对象池与调试状态。普通
 `tauri:dev` 则使用操作系统应用数据目录；也可以通过
 `MATHSCAPE_WORKSPACE_ROOT` 显式指定任意 Workspace。
@@ -52,7 +52,7 @@ npm --prefix frontend run tauri:dev:local
 
 ```sh
 MATHSCAPE_MARKER_EXECUTABLE=/absolute/path/to/marker/bin/marker_single \
-  npm --prefix frontend run tauri:dev:local
+  npm --prefix frontend run tauri:dev:local_1
 ```
 
 应用会使用该环境自己的 Python 探测 `marker-pdf` 版本；当前固定 profiles 支持
