@@ -290,15 +290,19 @@ test.describe("Scene tools (fourth slice)", () => {
       await expect(win.locator(".scene-locate-original").first()).toBeHidden();
       expect(await win.locator(".scene-locate-quote").evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
       expect(await win.locator("script, a").count()).toBe(0);
-      await page.screenshot({ path: info.outputPath(`locate-${theme}.png`) });
+      await page.screenshot({ path: info.outputPath(`locate-${theme}.png`), animations: "disabled" });
       await win.locator("summary").click();
       await expect(win.locator(".scene-locate-artifact")).toHaveText(CITE_ART);
       await expect(win.locator(".scene-locate-original")).toHaveCount(3);
       expect(await win.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
-      await page.screenshot({ path: info.outputPath(`locate-details-${theme}.png`) });
+      expect((await win.boundingBox())!.y + (await win.boundingBox())!.height).toBeLessThanOrEqual(860);
+      await page.screenshot({ path: info.outputPath(`locate-details-${theme}.png`), animations: "disabled" });
+      await win.locator(".scene-locate-quote").evaluate(el => el.scrollTop = el.scrollHeight);
+      await expect(win.locator(".katex").last()).toBeInViewport();
       const hud = page.locator(".canvas-panel .scene-hud");
       await hud.getByRole("button", { name: "停止" }).click();
       const agent = dock.locator(".sandbox-line.role-agent").last();
+      await agent.locator(".sandbox-process-summary[aria-expanded='false']").click();
       await agent.locator(".sandbox-step-replay").click();
       await expect(win.locator(".katex")).toHaveCount(3);
       await expect(win.locator(".scene-locate-category")).toHaveText(["原文", "匹配", "页码"]);
@@ -307,6 +311,20 @@ test.describe("Scene tools (fourth slice)", () => {
       await agent.locator(".sandbox-process-replay").click();
       await expect(win.locator(".katex")).toHaveCount(3);
       await expect(win.locator(".scene-act-verdict")).toHaveText("规范化后匹配 · 具体页码不可确定");
+      await hud.getByRole("button", { name: "停止" }).click();
+      await page.setViewportSize({ width: 900, height: 680 });
+      await agent.locator(".sandbox-process-replay").click();
+      // At this width the existing dock floats over the map; collapse it to
+      // inspect the bounded excerpt instead of measuring an occluded window.
+      await dock.getByTitle("收起为浮动入口").click();
+      await expect(dock).toBeHidden();
+      await expect(win.locator(".katex")).toHaveCount(3);
+      expect(await win.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+      const box = (await win.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(900);
+      expect(box.y + box.height).toBeLessThanOrEqual(680);
+      await page.screenshot({ path: info.outputPath(`locate-narrow-${theme}.png`), animations: "disabled" });
       await hud.getByRole("button", { name: "停止" }).click();
     });
   }

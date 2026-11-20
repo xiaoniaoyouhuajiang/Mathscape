@@ -772,6 +772,12 @@ export class ScenePlayer {
     else fillBlocked(win, act);
     this.host.hudHost.append(win);
     this.actWindow = win;
+    if (act.kind === "locate") {
+      // Long reading content must scroll below the replay controls, not cover
+      // them. Measure before placement so the bounded height participates.
+      const top = Math.max(ACT_MARGIN, this.hud.getBoundingClientRect().bottom - this.host.hudHost.getBoundingClientRect().top + ACT_MARGIN);
+      win.style.setProperty("--scene-locate-top", `${top}px`);
+    }
     if (!this.placeBeside(win, anchor)) win.classList.add("is-stage");
     this.renderRunning();
     return win;
@@ -792,6 +798,7 @@ export class ScenePlayer {
     const height = win.offsetHeight;
     const hostWidth = this.host.hudHost.clientWidth;
     const hostHeight = this.host.hudHost.clientHeight;
+    const minTop = Number.parseFloat(win.style.getPropertyValue("--scene-locate-top")) || ACT_MARGIN;
     if (hostWidth <= 0 || hostHeight <= 0) return false;
     const halfH = node.renderedOuterHeight() / 2;
     // Beside the node: right, left, below, above — the first that fits whole;
@@ -803,12 +810,15 @@ export class ScenePlayer {
       { left: x - width / 2, top: y - halfH - ACT_GAP - height },
     ];
     const fits = (c: { left: number; top: number }) =>
-      c.left >= ACT_MARGIN && c.top >= ACT_MARGIN && c.left + width <= hostWidth - ACT_MARGIN && c.top + height <= hostHeight - ACT_MARGIN;
+      c.left >= ACT_MARGIN && c.top >= minTop && c.left + width <= hostWidth - ACT_MARGIN && c.top + height <= hostHeight - ACT_MARGIN;
     const spot = candidates.find(fits) ?? candidates[0];
     const left = clamp(spot.left, ACT_MARGIN, Math.max(ACT_MARGIN, hostWidth - width - ACT_MARGIN));
-    const top = clamp(spot.top, ACT_MARGIN, Math.max(ACT_MARGIN, hostHeight - height - ACT_MARGIN));
+    const top = clamp(spot.top, minTop, Math.max(minTop, hostHeight - height - ACT_MARGIN));
     win.style.left = `${Math.round(left)}px`;
     win.style.top = `${Math.round(top)}px`;
+    // Technical details can grow after placement; keep their lower edge inside
+    // the stage as well, without changing any other tool's window layout.
+    if (win.dataset.act === "locate") win.style.setProperty("--scene-locate-top", `${Math.round(top)}px`);
     win.classList.add("is-anchored");
     win.dataset.anchor = anchor;
     return true;
