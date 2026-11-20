@@ -79,7 +79,9 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
         members.forEach(n => { clusterBounds.set(n.id(), bb); });
         const ranked = members.toArray().filter(n => priority(n) >= 40).sort((a, b) =>
           priority(b) - priority(a) || b.connectedEdges().not('.evidence-edge').length - a.connectedEdges().not('.evidence-edge').length || a.id().localeCompare(b.id()));
-        if (ranked[0]) heads.add(ranked[0].id());
+        // Isolated exercises must not take the only open title slot of a
+        // substantial neighbouring constellation.
+        if (ranked[0] && members.length >= 3) heads.add(ranked[0].id());
       }
       nodes.forEach(node => {
         if (!node.data("label") || node.hasClass("is-out-of-focus") || node.hasClass("label-recess")) return;
