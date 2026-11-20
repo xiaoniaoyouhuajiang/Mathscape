@@ -68,6 +68,19 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
         return { x1: p.x - w / 2, x2: p.x + w / 2, y1: p.y - h / 2, y2: p.y + h / 2, w, h };
       });
       const edges: LabelSegment[] = core.edges(':visible').filter(edge => Number(edge.style("opacity")) > 0.15).map(edge => ({ a: (edge as EdgeSingular).renderedSourceEndpoint(), b: (edge as EdgeSingular).renderedTargetEndpoint() }));
+      const clusterBounds = new Map<string, LabelBox>();
+      const heads = new Set<string>();
+      // Provenance links do not define the visible constellation's clusters.
+      const structure = core.nodes(':visible').union(core.edges(':visible').not('.evidence-edge'));
+      for (const component of structure.components()) {
+        const members = component.nodes().filter(n => n.data("elementKind") !== "junction") as NodeCollection;
+        if (members.empty()) continue;
+        const bb = members.renderedBoundingBox({ includeLabels: false, includeOverlays: false, includeUnderlays: false });
+        members.forEach(n => { clusterBounds.set(n.id(), bb); });
+        const ranked = members.toArray().filter(n => priority(n) >= 40).sort((a, b) =>
+          priority(b) - priority(a) || b.connectedEdges().not('.evidence-edge').length - a.connectedEdges().not('.evidence-edge').length || a.id().localeCompare(b.id()));
+        if (ranked[0]) heads.add(ranked[0].id());
+      }
       nodes.forEach(node => {
         if (!node.data("label") || node.hasClass("is-out-of-focus") || node.hasClass("label-recess")) return;
         const protectedLabel = node.selected() || node.hasClass(LABEL_HOVER) || node.hasClass("is-selected-primary") || node.hasClass("is-focus-root");
@@ -84,14 +97,25 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
         baseBoxes.set(node.id(), base);
         const p = node.renderedPosition(), hw = node.renderedOuterWidth() / 2, hh = node.renderedOuterHeight() / 2;
         const at = (x: number, y: number): LabelBox => ({ x1: x, x2: x + base.w, y1: y, y2: y + base.h, w: base.w, h: base.h });
-        // A file bundle can occupy every immediately adjacent slot. Allow its
-        // material caption to sit just outside that cluster, never over glyphs.
-        const clearances = priority(node) >= 60 || protectedLabel ? [12, 36, 60, 84] : [12];
+        const alternatives = [at(p.x - base.w / 2, p.y - hh - 12 - base.h), at(p.x - hw - 12 - base.w, p.y - base.h / 2), at(p.x + hw + 12, p.y - base.h / 2)];
+        // Keep a readable identity for every constellation. A short annotation
+        // leader ties perimeter captions to their actual glyph (not a new edge).
+        const cluster = clusterBounds.get(node.id());
+        if (cluster && (heads.has(node.id()) || priority(node) >= 60 || protectedLabel)) {
+          for (const gap of [12, 30, 48, 66, 84, 102]) {
+            for (const x of [p.x - base.w / 2, cluster.x1, cluster.x2 - base.w]) alternatives.push(
+              at(x, cluster.y1 - gap - base.h), at(x, cluster.y2 + gap),
+            );
+            for (const y of [p.y - base.h / 2, cluster.y1, cluster.y2 - base.h]) alternatives.push(
+              at(cluster.x1 - gap - base.w, y), at(cluster.x2 + gap, y),
+            );
+          }
+        }
         labels.push({
           id: node.id(), box: base,
-          alternatives: clearances.flatMap(gap => [at(p.x - base.w / 2, p.y - hh - gap - base.h), at(p.x - hw - gap - base.w, p.y - base.h / 2), at(p.x + hw + gap, p.y - base.h / 2), at(p.x - base.w / 2, p.y + hh + gap)])
+          alternatives: alternatives
             .filter(b => b.x1 >= 2 && b.y1 >= 2 && b.x2 <= core.width() - 2 && b.y2 <= core.height() - 2),
-          priority: priority(node),
+          priority: heads.has(node.id()) ? Math.max(85, priority(node)) : priority(node),
           protected: protectedLabel,
         });
       });

@@ -18,6 +18,7 @@ import { computeLandscapeLayout, type MapPoint } from "./layout";
 import { NODE_TYPES, NODE_TYPE_ORDER, nodeTypeKey } from "./taxonomy";
 import { nodeHalo } from "./node-glyph";
 import { AUTO_LABEL_HIDDEN, mapLabelOffset, mapLabelScale } from "./label-density";
+import { bindLabelLeaders } from "./label-leaders";
 import {
   bindLabelHover,
   LABEL_HOVER,
@@ -1148,6 +1149,7 @@ export function mountCytoscapeGraph(
   core.on("mouseover", "node", event => linked(event.target, true));
   core.on("mouseout", "node", event => linked(event.target, false));
   bindLabelHover(core, options?.labelHover);
+  bindLabelLeaders(core);
   return core;
 }
 

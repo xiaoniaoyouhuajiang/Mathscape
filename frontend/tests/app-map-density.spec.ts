@@ -64,6 +64,12 @@ test("overview titles breathe and provenance lights up only for the active node"
     cy.$id("article-b").position({ x: x + 20, y: y + 8 });
     cy.$id("span-a").position({ x: x + 180, y: y + 130 });
     cy.$id("span-b").position({ x: x + 300, y: y + 130 });
+    // A crowded ring forces a caption outside the glyphs; its leader must
+    // identify the original object without adding a relationship or moving it.
+    for (let i = 0; i < 8; i++) {
+      const angle = i * Math.PI / 4;
+      cy.$id(`unit-${i}`).position({ x: x + 50 * Math.cos(angle), y: y + 50 * Math.sin(angle) });
+    }
     // Public synthetic style fixtures, never copied from a workspace.
     cy.add(["a", "b"].map(id => ({ group: "edges" as const, classes: "evidence-edge semantic-edge is-undirected", data: { id: `ev-${id}`, source: `article-${id}`, target: `span-${id}`, label: "原文证据" } })));
   });
@@ -86,6 +92,7 @@ test("overview titles breathe and provenance lights up only for the active node"
     return !(x.x1 < y.x2 && y.x1 < x.x2 && x.y1 < y.y2 && y.y1 < x.y2);
   })).toBe(true);
   await expect.poll(() => opacity("article-a")).toBe(1);
+  await expect.poll(() => page.locator(".map-label-leaders path").getAttribute("d")).not.toBe("");
   expect(await opacity("ev-a")).toBeLessThan(0.1);
   expect(await opacity("ev-b")).toBeLessThan(0.1);
   await hover(true);
