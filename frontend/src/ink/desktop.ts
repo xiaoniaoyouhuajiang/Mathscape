@@ -216,6 +216,7 @@ export class DesktopInkWorkspace {
     private readonly host: HTMLElement,
     private readonly onClose: () => void,
     private readonly showToast: (message: string, kind: "success" | "error") => void,
+    private readonly onFooterMount?: (footer: HTMLElement) => void,
   ) {}
 
   async open(): Promise<void> {
@@ -374,6 +375,7 @@ export class DesktopInkWorkspace {
       '</div><div class="ink-brush-controls"><span id="desktop-ink-palette-host"></span><label title="之后创建的笔迹使用此笔宽">笔宽<input id="desktop-ink-width" type="range" min="1" max="16" step="0.5" value="4" aria-label="笔迹宽度"><output id="desktop-ink-width-value">4</output></label><label class="ink-check-control"><input id="desktop-ink-finger" type="checkbox">手指书写</label></div><div class="ink-page-controls"><label id="desktop-ink-follow-label" hidden><input id="desktop-ink-follow-pad" type="checkbox" checked>跟随平板页</label><select id="desktop-ink-page" aria-label="手稿页面"></select><button id="desktop-ink-add-page" class="secondary-button" type="button">新增页面</button><button id="desktop-ink-zoom-out" class="secondary-button" type="button" aria-label="缩小" title="缩小（Ctrl/⌘+−）">−</button><button id="desktop-ink-fit" class="secondary-button" type="button" title="整页（Ctrl/⌘+0）">整页</button><button id="desktop-ink-zoom-in" class="secondary-button" type="button" aria-label="放大" title="放大（Ctrl/⌘+＋）">＋</button></div></nav>',
       '<div id="ink-trash-banner" class="ink-trash-banner" role="status" hidden><span>这份手稿在回收站中，只能查看和导出。</span><button id="ink-trash-restore" class="secondary-button" type="button">恢复手稿</button></div><div id="ink-link-bar" class="ink-link-bar" aria-label="手稿关联" hidden></div><div id="desktop-ink-evidence" hidden></div><div id="ink-empty-state" class="ink-empty-state" hidden><p>还没有打开的手稿。</p><button id="ink-empty-create" class="secondary-button" type="button">新建手稿</button></div><div id="desktop-ink-board" class="ink-desktop-board" aria-label="手稿画板"></div><footer class="ink-desktop-footer"><input id="desktop-ink-title" class="ink-desktop-title" maxlength="'+INK_TITLE_MAX+'" value="" placeholder="留空恢复自动标题" aria-label="手稿标题" title="点击改名；回车保存，Esc 取消" readonly><span id="desktop-ink-status">请选择一个手稿或新建手稿。</span><span id="desktop-ink-summary">—</span><div class="ink-export-actions"><button id="desktop-ink-export-json" class="secondary-button" type="button">导出 Ink JSON</button><button id="desktop-ink-export-png" class="secondary-button" type="button">导出 PNG</button></div></footer></main></div><section id="ink-lan-panel" hidden></section><div id="ink-dialog" class="ink-dialog" role="dialog" aria-modal="true" aria-labelledby="ink-dialog-text" hidden><div class="ink-dialog-box"><p id="ink-dialog-text"></p><div id="ink-dialog-extra" class="ink-dialog-extra"></div><div id="ink-dialog-actions" class="ink-dialog-actions"></div></div></div></div>',
     ].join("");
+    this.onFooterMount?.(element(this.host, ".ink-desktop-footer"));
     element<HTMLButtonElement>(this.host, "#ink-close").addEventListener("click", () => void this.close());
     const splitBtn = element<HTMLButtonElement>(this.host, "#ink-split-toggle");
     if (this.listMode === "split") {
