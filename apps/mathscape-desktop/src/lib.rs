@@ -1169,6 +1169,7 @@ pub fn run() {
             ink_link::get_ink_markdown_links,
             ink_link::get_ink_link_overlay,
             ink_link::export_ink_unsaved_writing,
+            ink_link::export_ink_file,
             ink_lan::start_ink_lan,
             ink_lan::stop_ink_lan,
             ink_lan::get_ink_lan_status,

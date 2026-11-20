@@ -172,6 +172,10 @@ export function exportInkUnsavedWriting(fileName: string, contents: string): Pro
   return safeInvoke("export_ink_unsaved_writing", { fileName, contents });
 }
 
+export function exportInkFile(fileName: string, format: "json" | "png", contents: Uint8Array): Promise<string | null> {
+  return safeInvoke("export_ink_file", { fileName, format, contents: Array.from(contents) });
+}
+
 /** Notes whose Markdown range overlaps any of `blockIds` (§6.5), one entry
  * per note (primary link first), so the count matches the block markers. */
 export function overlappingNotes(links: InkLinkedNote[], blockIds: readonly string[]): InkLinkedNote[] {

@@ -54,6 +54,7 @@ import { errorCode, safeInvoke } from "../core/ipc";
 import {
   INK_LINK_ROLES,
   exportInkUnsavedWriting,
+  exportInkFile,
   linkInkNote,
   listInkNoteLinks,
   openAddLinkPopover,
@@ -120,17 +121,6 @@ function displayTimestamp(value: string): string {
   const unix = /^unix:(\d+)$/.exec(value);
   const date = unix ? new Date(Number(unix[1]) * 1000) : new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
-function download(bytes: Blob, name: string): void {
-  const url = URL.createObjectURL(bytes);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = name;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
 }
 
 type PersistenceState = "loading" | "saved" | "pending" | "syncing" | "error";
@@ -437,7 +427,7 @@ export class DesktopInkWorkspace {
     element<HTMLButtonElement>(this.host, "#desktop-ink-zoom-out").addEventListener("click", () => this.board?.zoom(1 / 1.3));
     element<HTMLButtonElement>(this.host, "#desktop-ink-fit").addEventListener("click", () => this.board?.fit());
     element<HTMLButtonElement>(this.host, "#desktop-ink-zoom-in").addEventListener("click", () => this.board?.zoom(1.3));
-    element<HTMLButtonElement>(this.host, "#desktop-ink-export-json").addEventListener("click", () => this.exportJson());
+    element<HTMLButtonElement>(this.host, "#desktop-ink-export-json").addEventListener("click", () => void this.exportJson());
     element<HTMLButtonElement>(this.host, "#desktop-ink-export-png").addEventListener("click", () => void this.exportPng());
     for (const type of ["pen", "erase", "partial_erase", "select"] as const) {
       element<HTMLButtonElement>(this.host, "#desktop-ink-" + type).addEventListener("click", () => {
@@ -1577,13 +1567,14 @@ export class DesktopInkWorkspace {
     else this.status("当前手稿列表尚未加载完成。", true);
   }
 
-  private exportJson(): void {
+  private async exportJson(): Promise<void> {
     if (!this.documentState) return;
     try {
       const json = encodeInk(this.documentState);
       const suffix = this.readOnly ? `snapshot-head-${this.logicalHead}` : "current";
-      download(new Blob([json], { type: "application/json" }), `mathscape-ink-${this.documentState.document_id}-${suffix}.json`);
-      this.status(this.readOnly ? "历史快照 Ink JSON 已生成下载。" : "当前手稿 Ink JSON 已生成下载。", false);
+      const label = this.readOnly ? "历史快照" : "当前手稿";
+      const path = await exportInkFile(`mathscape-ink-${this.documentState.document_id}-${suffix}.json`, "json", new TextEncoder().encode(json));
+      this.status(path ? `${label} Ink JSON 已保存到 ${path}。` : "已取消导出。", false);
     } catch (error) {
       this.status("Ink JSON 导出失败：" + errorText(error), true);
     }
@@ -1596,8 +1587,8 @@ export class DesktopInkWorkspace {
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
       if (!blob) throw new Error("PNG 生成失败");
       const suffix = this.readOnly ? `snapshot-head-${this.logicalHead}` : "current";
-      download(blob, `mathscape-ink-${this.documentState.document_id}-${suffix}.png`);
-      this.status("当前页面 PNG 预览已生成下载；完整编辑历史请使用 Ink JSON。", false);
+      const path = await exportInkFile(`mathscape-ink-${this.documentState.document_id}-${suffix}.png`, "png", new Uint8Array(await blob.arrayBuffer()));
+      this.status(path ? `当前页面 PNG 预览已保存到 ${path}；完整编辑历史请使用 Ink JSON。` : "已取消导出。", false);
     } catch (error) {
       this.status("PNG 导出失败：" + errorText(error), true);
     }

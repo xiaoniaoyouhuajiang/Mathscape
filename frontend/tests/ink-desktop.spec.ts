@@ -11,6 +11,33 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator("#ink-session-list .ink-session-item")).toHaveCount(2);
 });
 
+test("JSON and PNG exports report the selected full path", async ({ page }) => {
+  const id = await page.evaluate(() => window.inkDesktopHarness.workspace.currentDocumentId());
+  await page.locator("#desktop-ink-export-json").click();
+  await expect(page.locator("#desktop-ink-status")).toHaveText(`当前手稿 Ink JSON 已保存到 /tmp/mathscape-ink-${id}-current.json。`);
+  await page.locator("#desktop-ink-export-png").click();
+  await expect(page.locator("#desktop-ink-status")).toHaveText(`当前页面 PNG 预览已保存到 /tmp/mathscape-ink-${id}-current.png；完整编辑历史请使用 Ink JSON。`);
+  const files = await page.evaluate(() => window.inkDesktopHarness.exports);
+  expect(JSON.parse(files[0].contents).document_id).toBe(id);
+  expect(JSON.parse(files[1].contents).slice(0, 8)).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+});
+
+test("export cancellation is neutral and writes nothing", async ({ page }) => {
+  await page.evaluate(() => { window.inkDesktopHarness.exportBehavior.cancelExport = true; });
+  for (const format of ["json", "png"]) {
+    await page.locator(`#desktop-ink-export-${format}`).click();
+    await expect(page.locator("#desktop-ink-status")).toHaveText("已取消导出。");
+  }
+  expect(await page.evaluate(() => window.inkDesktopHarness.exports)).toHaveLength(0);
+});
+
+test("export errors use the error status", async ({ page }) => {
+  await page.evaluate(() => { window.inkDesktopHarness.exportBehavior.failExport = true; });
+  await page.locator("#desktop-ink-export-json").click();
+  await expect(page.locator("#desktop-ink-status")).toContainText("Ink JSON 导出失败：");
+  expect(await page.evaluate(() => window.inkDesktopHarness.exports)).toHaveLength(0);
+});
+
 test("saved snapshots follow their document across session switches", async ({ page }) => {
   await page.getByRole("button", { name: "保存快照" }).click(); await page.locator("#ink-dialog [data-choice=ok]").click();
   await expect(page.locator("#ink-snapshot-list .ink-session-item")).toHaveCount(1);
