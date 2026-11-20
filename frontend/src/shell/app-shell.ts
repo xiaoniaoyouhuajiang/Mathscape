@@ -1,5 +1,6 @@
 import { mountDetailResizer } from "./panel-resizer";
 import { requiredElement } from "../core/dom";
+import brandIcon from "../../../apps/mathscape-desktop/icons/icon-512.png";
 
 export interface AppElements {
   shell: HTMLElement;
@@ -83,7 +84,7 @@ export class AppShell {
   <div class="shell">
     <header class="topbar">
       <div class="brand-block">
-        <div class="brand-mark">M</div>
+        <img class="brand-mark" src="${brandIcon}" width="38" height="38" alt="" />
         <div>
           <div class="brand">Mathscape</div>
           <div class="tagline">数学景观 · 来源视图</div>

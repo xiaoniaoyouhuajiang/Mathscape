@@ -1,0 +1,41 @@
+/* Quiet constellation: brand/chrome roles only. Object types, lifecycle,
+   learning marks, debts and proposal states keep their own visual encoding. */
+:root {
+  color-scheme: dark;
+  --ms-canvas: #0c1430;
+  --ms-background: #090f22;
+  --ms-panel: #111c35;
+  --ms-panel-raised: #182642;
+  --ms-panel-deep: #0d172c;
+  --ms-control: #1c2e4c;
+  --ms-control-hover: #263e62;
+  --ms-border: #2d3e5b;
+  --ms-control-border: #657fa5;
+  --ms-text: #e8f1ff;
+  --ms-text-secondary: #c0cfe5;
+  --ms-text-muted: #a0b2ce;
+  --ms-accent: #9ec9ff;
+  --ms-focus: #9ec9ff;
+  --ms-action: #274c7c;
+  --ms-action-hover: #315e95;
+  --ms-action-text: #edf5ff;
+  --ms-selected: #263f65;
+  --ms-paper: #f4f5f0;
+  --ms-paper-text: #222d38;
+  /* Semantic status roles are deliberately independent of the brand accent. */
+  --ms-success: #a9dcc9;
+  --ms-warning: #e8bd7c;
+  --ms-error: #f0a08a;
+}
+
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--ms-focus);
+  outline-offset: 3px;
+}
+
+/* A dark outer workspace must not recolor documents, PDF text layers or ink. */
+.markdown-body,
+.pdf-page-shell {
+  color-scheme: light;
+  --ms-focus: #365e9d;
+}

@@ -18,7 +18,7 @@
 .change-set-review-summary { margin: 0; padding: 6px 8px; border: 1px solid var(--review-border); border-radius: 6px; font-size: 12px; background: var(--review-panel-deep); }
 .change-set-review-feedback { margin: 0; }
 .change-set-review-actions { align-items: center; justify-content: flex-end; }
-.change-set-review-actions button { border: 1px solid var(--review-border-strong); border-radius: 5px; background: #1d3138; color: #d6ece5; padding: 4px 9px; cursor: pointer; font-size: 12px; }
+.change-set-review-actions button { border: 1px solid var(--review-border-strong); border-radius: 5px; background: var(--ms-control); color: var(--ms-text); padding: 4px 9px; cursor: pointer; font-size: 12px; }
 .change-set-review-spacer { flex: 1; }
 
 /* Staged badges in the map detail panel. */

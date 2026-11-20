@@ -4,14 +4,14 @@
 .semantic-term { color: #8fa3ad; }
 .semantic-value { color: #dbe7e9; }
 .semantic-muted { color: #8fa3ad; font-size: 11px; margin: 2px 0; }
-.semantic-card { border: 1px solid #34505a; border-radius: 8px; padding: 8px 10px; background: rgba(20, 34, 42, 0.6); }
+.semantic-card { border: 1px solid var(--ms-control-border); border-radius: 8px; padding: 8px 10px; background: rgba(20, 34, 42, 0.6); }
 .semantic-card h4 { margin: 0 0 6px; font-size: 12px; color: #c8d8de; }
 .semantic-dialect-card { border-color: #9cc3d1; background: rgba(63, 85, 96, 0.35); }
 .semantic-convention { margin: 2px 0; font-size: 12px; }
 .semantic-tag { color: #9cc3d1; }
 .semantic-table { border-collapse: collapse; font-size: 12px; width: 100%; }
 .semantic-table caption { text-align: left; color: #8fa3ad; font-size: 11px; padding-bottom: 4px; }
-.semantic-table td { border-top: 1px solid #2b3f48; padding: 3px 4px; }
+.semantic-table td { border-top: 1px solid var(--ms-border); padding: 3px 4px; }
 .semantic-list { margin: 0; padding-left: 18px; font-size: 12px; }
 .semantic-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 /* 一笔账：暗金虚线小标签；已还清改金色实线（契约 S9.1）。 */
@@ -22,9 +22,9 @@
 .semantic-debt-meta { color: #b9a77c; font-size: 11px; }
 .semantic-feedback-button { justify-self: start; border: 1px solid #9eb6ff; color: #cfdcff; background: transparent; border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
 .semantic-feedback-button:hover { background: rgba(158, 182, 255, 0.12); }
-.learning-view { position: fixed; inset: 7% 10%; z-index: 60; background: #0f1a21; border: 1px solid #34505a; border-radius: 12px; display: flex; flex-direction: column; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5); }
+.learning-view { position: fixed; inset: 7% 10%; z-index: 60; background: var(--ms-panel); border: 1px solid var(--ms-control-border); border-radius: 12px; display: flex; flex-direction: column; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5); }
 .learning-view[hidden] { display: none; }
-.learning-view-header { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #2b3f48; }
+.learning-view-header { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--ms-border); }
 .learning-view-title-wrap { display: grid; gap: 2px; min-width: 220px; flex: 1; }
 .learning-view-title-wrap h2 { margin: 0; font-size: 16px; }
 .learning-view-subtitle { margin: 0; }
@@ -36,7 +36,7 @@
 .learning-filter-pill { border: 1px solid #35505b; border-radius: 999px; background: #14232c; color: #b6cbd2; padding: 3px 10px; font-size: 12px; cursor: pointer; }
 .learning-filter-pill.is-active { border-color: #5fc2ad; background: #1d3f3c; color: #ebfaf7; }
 .learning-view-units, .learning-view-conventions { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.learning-unit { display: grid; gap: 4px; padding: 7px 10px; padding-left: calc(10px + var(--outline-depth, 0) * 18px); border: 1px solid #283d46; border-radius: 8px; background: rgba(19, 31, 39, 0.65); font-size: 13px; }
+.learning-unit { display: grid; gap: 4px; padding: 7px 10px; padding-left: calc(10px + var(--outline-depth, 0) * 18px); border: 1px solid var(--ms-border); border-radius: 8px; background: rgba(19, 31, 39, 0.65); font-size: 13px; }
 .learning-unit.status-mastered { border-color: rgba(102, 184, 146, 0.45); background: rgba(20, 39, 34, 0.45); }
 .learning-unit.status-studying { border-color: rgba(224, 185, 108, 0.5); }
 .learning-unit-top { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -74,10 +74,10 @@
 .semantic-markdown p { margin: 0 0 4px; }
 .semantic-markdown p:last-child { margin-bottom: 0; }
 .semantic-statement-box { padding: 6px 8px; border-radius: 6px; background: rgba(15, 25, 32, 0.72); border: 1px solid #304b56; color: #eef7f5; }
-.semantic-comparison-panel { display: grid; gap: 10px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid #2b3f48; }
+.semantic-comparison-panel { display: grid; gap: 10px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--ms-border); }
 .semantic-alignment-banner { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 8px; background: rgba(31, 52, 65, 0.55); border: 1px solid #45687a; }
 .semantic-relation-pill { border-radius: 999px; padding: 2px 8px; font-size: 11px; background: #2c5163; color: #d8eef8; }
-.semantic-status-pill { margin-left: auto; border-radius: 999px; padding: 2px 8px; font-size: 11px; border: 1px solid #4d6b70; color: #b5cdd4; }
+.semantic-status-pill { margin-left: auto; border-radius: 999px; padding: 2px 8px; font-size: 11px; border: 1px solid var(--ms-control-border); color: #b5cdd4; }
 .semantic-plain-note { width: 100%; font-size: 12px; color: #cfe2e6; }
 .semantic-side-by-side { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; align-items: start; }
 .semantic-pane { border: 1px solid #35505b; border-radius: 8px; padding: 9px 11px; background: rgba(18, 30, 37, 0.75); display: grid; gap: 7px; }
