@@ -25,7 +25,10 @@ for (const theme of ["obsidian", "parchment", "slate"] as const) {
     });
 
     test("map has legible chrome, crisp brand, quiet labels and keyboard focus", async ({ page }, testInfo) => {
-      await page.addInitScript(() => sessionStorage.setItem("harness.richMap", "1"));
+      await page.addInitScript(() => {
+        sessionStorage.setItem("harness.richMap", "1");
+        sessionStorage.setItem("harness.themeStates", "1");
+      });
       await page.goto("/tests/app.html");
       await expect(page.locator("#service-state")).toContainText("本地内核已连接");
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
@@ -52,12 +55,16 @@ for (const theme of ["obsidian", "parchment", "slate"] as const) {
       const paint = await page.evaluate(() => window.appHarness.graphPaint());
       expect(new Set(paint.nodes.map(node => node.shape)).size).toBeGreaterThan(2);
       expect(paint.nodes.every(node => Number(node.labelBackground) === 0)).toBe(true);
-      const states = await page.evaluate(() => window.appHarness.themeStatePaint());
-      expect(states.candidateShape).toBe("star");
-      expect(states.candidateBorder).toBe("dashed");
-      expect(states.debtShape).toBe("tag");
-      expect(states.debtBorder).toBe("dashed");
-      expect(states.debtColor).not.toBe(states.candidateColor);
+      const candidate = paint.nodes.find(node => node.id === "r-theme-candidate")!;
+      const debt = paint.nodes.find(node => node.id === "r-theme-debt")!;
+      expect(candidate.staged).toBe(true);
+      expect(candidate.label).toContain("〔未审批〕");
+      expect(candidate.shape).toBe("star");
+      expect(candidate.border).toBe("dashed");
+      expect(debt.shape).toBe("tag");
+      expect(debt.border).toBe("dashed");
+      expect(debt.borderColor).not.toBe(candidate.borderColor);
+      await expect(page.locator("#graph-legend")).toContainText("候选／未审批");
       await page.screenshot({ path: testInfo.outputPath(`map-${theme}.png`) });
     });
 
@@ -74,6 +81,11 @@ for (const theme of ["obsidian", "parchment", "slate"] as const) {
       await expect(paper).toHaveCSS("color-scheme", "light");
       expect(await contrast(page, "#ink-split-reader .markdown-body")).toBeGreaterThanOrEqual(7);
       expect(luminance(await paper.evaluate(element => getComputedStyle(element).backgroundColor))).toBeGreaterThan(0.8);
+      const returnButton = (await page.locator("#ink-close").boundingBox())!;
+      const title = (await page.locator("#ink-document-heading").boundingBox())!;
+      expect(Math.abs(returnButton.y - title.y)).toBeLessThan(28);
+      const heights = await page.locator("#ink-list-toggle, #ink-save-now, #desktop-ink-erase, #desktop-ink-pan").evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().height));
+      expect(new Set(heights).size).toBe(1);
       const launcher = (await page.locator(".task-launcher").boundingBox())!;
       const exports = (await page.locator(".ink-export-actions").boundingBox())!;
       expect(launcher.y + launcher.height).toBeLessThanOrEqual(exports.y);
@@ -103,6 +115,17 @@ for (const theme of ["obsidian", "parchment", "slate"] as const) {
       const fragment = review.locator(".review-fragment.markdown-body").first();
       const brightness = luminance(await fragment.evaluate(element => getComputedStyle(element).backgroundColor));
       expect(brightness < 0.08).toBe(theme !== "parchment");
+      for (const selector of [".brand", ".tagline", "#service-state"]) {
+        expect(await contrast(page, selector, ".topbar"), selector).toBeGreaterThanOrEqual(4.5);
+      }
+      const dialogueButton = page.locator(".sandbox-banner").getByRole("button", { name: "对话", exact: true });
+      await expect(dialogueButton).toBeEnabled();
+      const dialogueColors = await dialogueButton.evaluate(button => {
+        const style = getComputedStyle(button);
+        return { text: style.color, background: style.backgroundColor, opacity: style.opacity };
+      });
+      expect((Math.max(luminance(dialogueColors.text), luminance(dialogueColors.background)) + 0.05) / (Math.min(luminance(dialogueColors.text), luminance(dialogueColors.background)) + 0.05)).toBeGreaterThanOrEqual(4.5);
+      expect(dialogueColors.opacity).toBe("1");
       // Focus the review: the conversation remains available via its banner.
       await page.getByRole("button", { name: "关闭对话", exact: true }).click();
       await page.screenshot({ path: testInfo.outputPath(`review-${theme}.png`) });

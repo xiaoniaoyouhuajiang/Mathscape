@@ -1075,6 +1075,9 @@ export class GraphController {
         items.push(this.legendItem(this.edgeSwatch(EDGE_TYPES[key]), EDGE_TYPES[key].label));
       }
     }
+    if (core.nodes(".is-staged").nonempty()) {
+      items.push(this.legendItem(this.nodeSwatch({ ...NODE_TYPES.shared_entity, background: "var(--ms-candidate)", border: "var(--ms-candidate)", borderStyle: "dashed" }), "候选／未审批"));
+    }
     if (core.nodes(`.${INK_NOTE_NODE_CLASS}`).nonempty()) {
       items.push(this.legendItem(this.nodeSwatch({ shape: "round-rectangle", background: "var(--ms-candidate)", border: "var(--ms-candidate)", borderStyle: "solid" } as NodeTypeVisual), "我的手稿"));
     }

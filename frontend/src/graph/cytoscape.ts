@@ -605,12 +605,22 @@ function graphStyles(): StylesheetJson {
     {
       selector: ".is-staged",
       style: {
-        opacity: 0.6,
+        opacity: 0.84,
+        "background-color": t.candidate,
+        "background-opacity": 0.16,
         "border-style": "dashed",
         "border-width": 2,
         "border-color": t.candidate,
         "line-style": "dashed",
         "line-color": t.candidate,
+      },
+    },
+    {
+      selector: "node.is-staged",
+      style: {
+        // Pending titles include an explicit status badge: keep that longer
+        // label below the node, not in the neighboring node's horizontal slot.
+        "text-halign": "center", "text-valign": "bottom", "text-margin-x": 0, "text-margin-y": 7,
       },
     },
     {

@@ -5,10 +5,10 @@
 .tutorial-provenance, .tutorial-counter { font-size: 12px; color: var(--ms-text-secondary); }
 .tutorial-close { margin-left: auto; }
 .tutorial-stage { position: relative; display: grid; grid-template-columns: 1fr minmax(280px, 380px); min-height: 0; }
-.tutorial-map-wrap { position: relative; min-height: 0; }
-.tutorial-map { position: absolute; inset: 0; }
+.tutorial-map-wrap { position: relative; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) 64px; }
+.tutorial-map { position: relative; min-height: 0; grid-row: 1; }
 /* 图例沿用主地图底栏（.map-legend），只调整位置。 */
-.tutorial-legend { left: 12px; bottom: 10px; max-width: calc(100% - 24px); }
+.tutorial-legend { grid-row: 2; margin: 0 12px 10px; max-width: calc(100% - 24px); }
 .tutorial-card { overflow: auto; margin: 12px; padding: 12px 14px; border-radius: 10px; background: var(--ms-panel-raised); border: 1px solid rgba(158, 182, 255, 0.28); backdrop-filter: blur(6px); font-size: 13px; }
 .tutorial-card-caption { margin: 0 0 6px; font-size: 14px; color: var(--ms-text-secondary); }
 .tutorial-card-title { display: block; margin-bottom: 6px; }

@@ -79,7 +79,9 @@ export function syncNodeLabel(node: NodeSingular, full: boolean): boolean {
   if (inkCount > 0) parts.push(`✎${inkCount}`);
   if (errataCount > 0) parts.push("已校对");
   const suffix = parts.length ? ` · ${parts.join(" · ")}` : "";
-  const next = suffix && !rawBase.endsWith(suffix) ? `${rawBase}${suffix}` : rawBase;
+  const prefix = node.data("elementKind") === "junction" ? "" : node.hasClass("is-staged") ? "〔未审批〕" : node.hasClass("is-staged-conflict") ? "〔提案冲突〕" : "";
+  const base = rawBase.replace(/^〔(未审批|提案冲突)〕/, "");
+  const next = prefix + (suffix && !base.endsWith(suffix) ? `${base}${suffix}` : base);
   if (node.data("label") === next) return false;
   node.data("label", next);
   return true;

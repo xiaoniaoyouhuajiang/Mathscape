@@ -357,7 +357,8 @@
 /* Top bar while the window works in a sandbox copy: unmistakable, always visible. */
 .shell.is-sandbox .topbar {
   border-bottom: 2px solid var(--ms-control-border);
-  background: linear-gradient(90deg, rgb(64 45 14 / 92%), rgb(13 20 27 / 88%) 55%);
+  background-color: var(--ms-background);
+  background-image: linear-gradient(90deg, color-mix(in srgb, var(--ms-star-gold) 7%, var(--ms-background)), var(--ms-background) 65%);
 }
 
 .shell.is-sandbox .brand-mark {
@@ -1225,3 +1226,6 @@ button.sandbox-cite:focus-visible {
 .sandbox-dock-readonly[hidden] {
   display: none;
 }
+
+.sandbox-banner .sandbox-btn-quiet { color: var(--ms-text); background: var(--ms-control); border-color: var(--ms-control-border); }
+.sandbox-banner .sandbox-btn-quiet:hover { color: var(--ms-text); background: var(--ms-control-hover); border-color: var(--ms-accent); }
