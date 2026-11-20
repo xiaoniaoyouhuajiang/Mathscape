@@ -4,7 +4,7 @@ use std::{
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Command, ExitStatus, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -12,6 +12,11 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime},
 };
+
+#[cfg(windows)]
+use command_group::{CommandGroup, GroupChild as Child};
+#[cfg(not(windows))]
+use std::process::Child;
 
 use crate::LeanRunnerError;
 
@@ -271,20 +276,19 @@ impl LeanRunner {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        configure_child_process(&mut process);
-        let mut child = process.spawn().map_err(|source| LeanRunnerError::Spawn {
+        let mut child = spawn_child(&mut process).map_err(|source| LeanRunnerError::Spawn {
             program: command.program().to_owned(),
             source,
         })?;
 
-        let Some(stdout) = child.stdout.take() else {
+        let Some(stdout) = child_stdio(&mut child).stdout.take() else {
             let _ = terminate_child(&mut child, &self.options);
             return Err(LeanRunnerError::Capture {
                 program: command.program().to_owned(),
                 reason: "stdout pipe was not created",
             });
         };
-        let Some(stderr) = child.stderr.take() else {
+        let Some(stderr) = child_stdio(&mut child).stderr.take() else {
             let _ = terminate_child(&mut child, &self.options);
             return Err(LeanRunnerError::Capture {
                 program: command.program().to_owned(),
@@ -503,14 +507,30 @@ fn terminate_child(
     child.wait().map(|status| (status, true))
 }
 
-#[cfg(unix)]
-fn configure_child_process(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
+#[cfg(windows)]
+fn spawn_child(command: &mut Command) -> io::Result<Child> {
+    command.group().kill_on_drop(true).spawn()
 }
 
-#[cfg(not(unix))]
-fn configure_child_process(_command: &mut Command) {}
+#[cfg(not(windows))]
+fn spawn_child(command: &mut Command) -> io::Result<Child> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command.spawn()
+}
+
+#[cfg(windows)]
+fn child_stdio(child: &mut Child) -> &mut std::process::Child {
+    child.inner()
+}
+
+#[cfg(not(windows))]
+fn child_stdio(child: &mut Child) -> &mut std::process::Child {
+    child
+}
 
 #[cfg(unix)]
 fn request_interrupt(child: &mut Child) -> io::Result<()> {
@@ -544,12 +564,43 @@ fn send_process_group_signal(child: &Child, signal: nix::sys::signal::Signal) ->
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, thread, time::Duration};
+    use std::{io::Write, path::PathBuf, thread, time::Duration};
 
     use super::*;
 
-    fn shell(script: &str, cwd: &Path) -> LeanCommand {
-        LeanCommand::new("/bin/sh", cwd).args([OsString::from("-c"), OsString::from(script)])
+    fn fixture(mode: &str, cwd: &Path) -> LeanCommand {
+        LeanCommand::new(std::env::current_exe().unwrap(), cwd)
+            .args(["--exact", "runner::tests::fixture_process", "--nocapture"])
+            .env("MATHSCAPE_LEAN_RUNNER_FIXTURE", mode)
+    }
+
+    #[test]
+    fn fixture_process() {
+        let Ok(mode) = std::env::var("MATHSCAPE_LEAN_RUNNER_FIXTURE") else {
+            return;
+        };
+        match mode.as_str() {
+            "output" => {
+                io::stderr().write_all(b"0123456789").unwrap();
+                std::process::exit(7);
+            }
+            "wait" => thread::sleep(Duration::from_secs(10)),
+            "descendant" => {
+                let command = fixture("descendant_wait", &std::env::current_dir().unwrap());
+                let mut child = Command::new(command.program())
+                    .args(command.arguments())
+                    .envs(command.environment())
+                    .spawn()
+                    .unwrap();
+                child.wait().unwrap();
+            }
+            "descendant_wait" => {
+                println!("descendant-ready");
+                io::stdout().flush().unwrap();
+                thread::sleep(Duration::from_secs(4));
+            }
+            _ => panic!("unknown fixture mode: {mode}"),
+        }
     }
 
     #[test]
@@ -561,7 +612,7 @@ mod tests {
             .unwrap();
         let run = LeanRunner::new(options)
             .run(
-                &shell("printf 0123456789 >&2; exit 7", &cwd),
+                &fixture("output", &cwd),
                 &LeanCancellation::new(),
             )
             .unwrap();
@@ -581,7 +632,7 @@ mod tests {
             .graceful_shutdown(Duration::from_millis(50));
         let run = LeanRunner::new(options)
             .run(
-                &shell("trap 'exit 130' INT; while :; do :; done", &cwd),
+                &fixture("wait", &cwd),
                 &LeanCancellation::new(),
             )
             .unwrap();
@@ -600,11 +651,59 @@ mod tests {
                 .poll_interval(Duration::from_millis(5))
                 .unwrap(),
         );
-        let command = shell("trap 'exit 130' INT; while :; do :; done", &cwd);
+        let command = fixture("wait", &cwd);
         let worker = thread::spawn(move || runner.run(&command, &signal));
         thread::sleep(Duration::from_millis(50));
         cancellation.cancel();
         let run = worker.join().unwrap().unwrap();
         assert_eq!(run.status(), LeanRunStatus::Cancelled);
+    }
+
+    #[test]
+    fn timeout_terminates_descendants_holding_output_pipes() {
+        let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let options = LeanRunnerOptions::new(Duration::from_millis(500))
+            .unwrap()
+            .poll_interval(Duration::from_millis(5))
+            .unwrap()
+            .graceful_shutdown(Duration::from_millis(50));
+        let run = LeanRunner::new(options)
+            .run(&fixture("descendant", &cwd), &LeanCancellation::new())
+            .unwrap();
+        assert_eq!(run.status(), LeanRunStatus::TimedOut);
+        assert!(run.stdout().lossy().contains("descendant-ready"));
+        assert!(run.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn cancellation_terminates_descendants_holding_output_pipes() {
+        let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let cancellation = LeanCancellation::new();
+        let signal = cancellation.clone();
+        let command = fixture("descendant", &cwd);
+        let runner = LeanRunner::new(LeanRunnerOptions::new(Duration::from_secs(2)).unwrap());
+        let worker = thread::spawn(move || runner.run(&command, &signal));
+        thread::sleep(Duration::from_millis(500));
+        cancellation.cancel();
+        let run = worker.join().unwrap().unwrap();
+        assert_eq!(run.status(), LeanRunStatus::Cancelled);
+        assert!(run.stdout().lossy().contains("descendant-ready"));
+        assert!(run.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn cancellation_before_spawn_has_empty_output() {
+        let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let cancellation = LeanCancellation::new();
+        cancellation.cancel();
+        let run = LeanRunner::default()
+            .run(&fixture("output", &cwd), &cancellation)
+            .unwrap();
+        assert_eq!(run.status(), LeanRunStatus::Cancelled);
+        assert_eq!(run.exit_code(), None);
+        assert!(run.stdout().bytes().is_empty());
+        assert!(run.stderr().bytes().is_empty());
+        assert!(!run.stdout().is_truncated());
+        assert!(!run.stderr().is_truncated());
     }
 }
