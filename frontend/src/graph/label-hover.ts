@@ -14,6 +14,7 @@ export const LABEL_RECESS = "label-recess";
 export const LABEL_HOVER_STYLE = {
   "text-opacity": 1,
   "text-events": "yes",
+  "text-wrap": "wrap",
   "text-background-opacity": 0,
   "text-background-shape": "roundrectangle",
   "text-background-padding": "3px",

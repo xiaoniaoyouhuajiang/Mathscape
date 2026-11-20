@@ -441,7 +441,7 @@ function graphStyles(): StylesheetJson {
       selector: "node",
       style: {
         label: "data(label)",
-        "text-wrap": "wrap",
+        "text-wrap": (node: NodeSingular) => mapLabelScale(node) > 1 ? "ellipsis" : "wrap",
         "text-max-width": (node: NodeSingular) => `${150 * mapLabelScale(node)}px`,
         "text-events": "yes",
         "font-size": "11px",
@@ -540,7 +540,8 @@ function graphStyles(): StylesheetJson {
       selector: "edge.evidence-edge",
       style: {
         label: "data(label)",
-        width: 1.2,
+        width: 0.8,
+        opacity: 0.07,
         "line-style": "dashed",
         "line-dash-pattern": [3, 4],
         "line-color": t.muted,
@@ -960,6 +961,10 @@ function graphStyles(): StylesheetJson {
       },
     },
     {
+      selector: "edge.evidence-edge.is-selection-receded",
+      style: { opacity: 0.025 },
+    },
+    {
       selector: `node.${AUTO_LABEL_HIDDEN}`,
       style: { "text-opacity": 0, "text-events": "no" },
     },
@@ -968,6 +973,7 @@ function graphStyles(): StylesheetJson {
       style: {
         "text-opacity": 1,
         "text-events": "yes",
+        "text-wrap": "wrap",
         "border-width": 4,
         "border-color": t.gold,
         "underlay-color": t.gold,
@@ -1007,6 +1013,7 @@ function graphStyles(): StylesheetJson {
       style: {
         "text-opacity": 1,
         "text-events": "yes",
+        "text-wrap": "wrap",
         "border-width": 3.6,
         "border-color": t.gold,
         "underlay-color": t.gold,
@@ -1040,7 +1047,7 @@ function graphStyles(): StylesheetJson {
 
     {
       selector: "edge.is-theme-hover",
-      style: { "line-color": t.accent, "target-arrow-color": t.accent, width: 1.8 },
+      style: { "line-color": t.accent, "target-arrow-color": t.accent, width: 1.8, opacity: 1 },
     },
 
     // Out-of-focus context: placed after staged / ink / selection rules so out-of-focus

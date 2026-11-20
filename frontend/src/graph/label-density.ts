@@ -70,6 +70,10 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
       const labels: MapLabel[] = [];
       nodes.forEach(node => {
         if (!node.data("label") || node.hasClass("is-out-of-focus") || node.hasClass("label-recess")) return;
+        const protectedLabel = node.selected() || node.hasClass(LABEL_HOVER) || node.hasClass("is-selected-primary") || node.hasClass("is-focus-root");
+        // Provenance belongs to close inspection, not the overview's title layer.
+        // Keep every glyph/hit target; hover and selection still reveal its name.
+        if (!protectedLabel && zoom < 1.2 && ["source_span", "conversion_run"].includes(node.data("nodeType"))) return;
         const box = labelBox(node as unknown as LabelEle);
         if (box.w <= 0 || box.h <= 0) return;
         const x1 = box.x1 * zoom + pan.x, x2 = box.x2 * zoom + pan.x;
@@ -78,10 +82,10 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
         labels.push({
           id: node.id(), box: { x1, x2, y1, y2, w: x2 - x1, h: y2 - y1 },
           priority: priority(node),
-          protected: node.selected() || node.hasClass(LABEL_HOVER) || node.hasClass("is-selected-primary") || node.hasClass("is-focus-root"),
+          protected: protectedLabel,
         });
       });
-      const visible = visibleMapLabels(labels);
+      const visible = visibleMapLabels(labels, 12);
       core.batch(() => { nodes.forEach(node => { node.toggleClass(AUTO_LABEL_HIDDEN, !visible.has(node.id())); }); });
     } finally {
       applying = false;
@@ -90,7 +94,7 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
   const schedule = () => {
     if (!applying && frame === null) frame = requestAnimationFrame(update);
   };
-  core.on("zoom pan resize add remove data position select unselect class", schedule);
+  core.on("zoom pan resize add remove data position select unselect class style", schedule);
   core.one("destroy", () => { if (frame !== null) cancelAnimationFrame(frame); });
   schedule();
 }
