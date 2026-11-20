@@ -20,6 +20,12 @@ External 是预留的显式模式，不是 Managed 导入失败时的回退。�
 
 代码：[Artifact Pool](../crates/mathscape-artifact/src/pool.rs)、[Workspace](../crates/mathscape-artifact/src/workspace.rs)、[store](../crates/mathscape-store-sqlite/src/lib.rs)、[发现记录](../crates/mathscape-store-sqlite/src/discovery.rs)。
 
+## 研读进度与 Markdown 校对
+
+migration 25 的 `study_marks` 保存用户本地 `unread` / `studying` / `mastered` 状态与可选笔记，不写地图对象或提升可信度。migration 26 的 `markdown_block_errata` 在不可变物理 Markdown 上保存块 / 连续块范围的校对叠加层，保留原文、校对文、物理字节范围、作者及 manual / discovery_patch 来源；支持历史、替代与撤销。已接受的发现校对也写入该叠加层，不生成替换原快照的新 Artifact。
+
+受影响来源单元的非阻塞审核确认存入 `markdown_errata_unit_reviews`，决定为 `acknowledged` / `sent_to_sandbox`，不创建地图提交。Desktop 提供 `list_markdown_errata` / `list_markdown_errata_history` / `save_markdown_errata` / `revert_markdown_errata` 和单元审核入口。Reader 及 MCP 的 read / grep / locate 使用有效校对正文，定位仍映射到物理快照；详见 [canonical 契约](canonical-markdown.md)。代码：[Desktop 校对服务](../apps/mathscape-desktop/src/markdown_errata.rs)、[发现校对接入](../apps/mathscape-desktop/src/markdown_patch.rs)、[叠加与字节映射](../crates/mathscape-orchestrator/src/markdown_errata.rs)。
+
 ## 手稿历史、快照与来源证据
 
 Ink 的文档、会话、操作顺序、写入者 epoch 和 durable ACK 保存在 SQLite（migration 13）；前端 IndexedDB outbox 先保留待提交操作，后台持久确认后才移除。快照（migration 14）把固定历史前缀导入 Artifact Pool，不随着当前手稿编辑而覆盖。
@@ -33,6 +39,8 @@ migration 15 增加快照请求绑定和独立的 Ink 来源证据回执。快�
 migration 16 保存 LAN 服务设置、配对摘要、设备租约、写入权转移审计和恢复导入回执。配对领取、设备授权校验与操作提交/快照前缀固定分别在同一事务中进行；不同文档、会话或旧 epoch 的请求不能写入。正常退出保留启用状态及凭据，重启重新签发同一 CA 下的叶证书；显式停止服务则撤销凭据和待配对二维码。Workspace 的 `ink-lan/trust/` 包含公开根证书和私有 CA 密钥，搬迁或备份时应一同保护，丢失其中之一不静默更换信任根。
 
 远端 IndexedDB 按 session/epoch 保留草稿头、逐条历史及未确认队列；每笔只追加新的历史操作，避免每次复制整稿。durable ACK 才移除 outbox，历史仍用于离线打开与恢复导出。Service Worker 仅缓存静态画板，不缓存认证或材料 API；Origin 改变后浏览器旧队列不会自动迁移。`#doc=` 恢复入口只在本机 IndexedDB 中选择该手稿已保存的凭据，不携带或签发凭据；设置衔接时平板通过 HTTPS 提交本机凭据供服务端判断是否可恢复，服务端不记录不匹配的凭据。转交和设置衔接的配对状态只在内存和既有 `ink_pairings` 表中，不新增迁移。WebSocket 预览是最多 2048 点、短时失效的内存数据，最终持久笔迹保留原始样本。电脑镜像的快照只涵盖已保存前缀；平板快照先排空 outbox。代码：[LAN 服务](../apps/mathscape-desktop/src/ink_lan.rs)、[租约事务](../crates/mathscape-store-sqlite/src/ink_lan.rs)、[平板存储](../frontend/src/ink/pad-store.ts)。
+
+被收回写入权或会话失效的平板可保持只读 standby WSS 连接，等待电脑「推送到平板」并在平板确认切换；不能借此提交旧 epoch 的笔迹。`ink-lan/standby.key` 另存工作区级待命 token（Unix 写入权限 0600），备份 / 搬迁时应作为敏感材料保护，不能把“设备凭据只存摘要”误用于此文件。正常重启保留该 token；显式停止服务轮换 token，并阻断旧设备凭据的 standby 回退认证。
 
 ## PDF、Marker 与阅读器
 
@@ -60,6 +68,6 @@ Profile 保存凭据引用；Desktop 使用系统钥匙串，API key 不进入 S
 
 Prompt、manifest 与 Schema 有独立版本和指纹；模型配置和生成参数也影响可重放性。旧 prompt 包因回放、比较和测试保留，不能因主文档精简而删除。
 
-Lean 当前已完成受管 Lean/mathlib profile、环境配置、Lean/Lake 探测、环境指纹、受限进程 runner、声明 exporter、本地 Loogle adapter、隔离 scratch 上的 `lean.check` 核心和 profile-local 的源文件/验收回执存储；回执源文件使用现有 `mathscape:artifact/sha256/<digest>` stable id，但尚未登记到 Workspace ArtifactPool。`mathscape-mcp` 已注册 `mathlib.search` / `lean.check`、绑定 round 的 `artifact.stage` 和 Phase2-0 的 `propose_changes` / `get_change_set`；前两者读取 profile，`artifact.stage` 只写 Workspace staging，Phase2 工具只暂存和回读来源层提案。Lean 工具契约见 [`lean-tool-contract.md`](lean-tool-contract.md)，通用文件暂存契约见 [`artifact-staging-contract.md`](artifact-staging-contract.md)，写路径契约见 [`phase2-write-contract.md`](phase2-write-contract.md)。与 LLM 联动的 workflow 应用仍未完成。未来形式有效性、来源翻译忠实性和人工审核须独立记录，不能把任一工具结果当作全局数学认证。
+Lean 当前已完成受管 Lean/mathlib profile、环境配置、Lean/Lake 探测、环境指纹、受限进程 runner、声明 exporter、本地 Loogle adapter、隔离 scratch 上的 `lean.check` 核心和 profile-local 的源文件/验收回执存储；回执源文件使用现有 `mathscape:artifact/sha256/<digest>` stable id，但尚未登记到 Workspace ArtifactPool。`mathscape-mcp` 已注册 `mathlib.search` / `lean.check`、绑定 round 的 `artifact.stage` 和 Phase2-0 的 `propose_changes` / `get_change_set`；前两者读取 profile，`artifact.stage` 只写 Workspace staging，Phase2 工具暂存和回读来源及语义层提案（共享对象、对齐线、Debt、最小 DialectScope；语义对象可提议退役），接受仍须用户显式操作。Lean 工具契约见 [`lean-tool-contract.md`](lean-tool-contract.md)，通用文件暂存契约见 [`artifact-staging-contract.md`](artifact-staging-contract.md)，写路径契约见 [`phase2-write-contract.md`](phase2-write-contract.md) 及 [语义扩展](semantic-write-contract.md)。与 LLM 联动的 workflow 应用仍未完成。未来形式有效性、来源翻译忠实性和人工审核须独立记录，不能把任一工具结果当作全局数学认证。
 
 代码：[LLM](../crates/mathscape-llm/src/lib.rs)、[设置与凭据](../apps/mathscape-desktop/src/llm_settings.rs)、[版本化任务](../prompts/README.md)、[Lean 基础切片](../crates/mathscape-tool-lean/src/lib.rs)。
