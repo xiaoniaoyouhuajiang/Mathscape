@@ -81,5 +81,5 @@ jobs:
         if: failure()
         with:
           name: playwright-${{ matrix.browser }}
-          path: frontend/.test-runs/
+          path: .test-runs/
           retention-days: 7
