@@ -1290,7 +1290,7 @@ function fillLocate(win: HTMLElement, act: LocateAct): void {
   win.append(quote);
   if (act.phase === "ok") {
     const verdict = element("p", "scene-act-verdict");
-    verdict.append(element("span", "scene-locate-match", act.match ?? t("scene.locate.matched")), " · ",
+    verdict.append(element("span", "scene-locate-match", act.match ?? t("scene.locate.located")), " · ",
       element("span", "scene-locate-page", act.page !== undefined ? t("scene.locate.page", { page: act.page }) : t("scene.locate.pageUnknown")));
     verdict.dataset.verdict = "ok";
     win.append(verdict);
@@ -1302,16 +1302,13 @@ function fillLocate(win: HTMLElement, act: LocateAct): void {
   if (act.diagnostics?.length) {
     const list = element("ul", "scene-locate-diagnostics");
     const labels = {
-      page: t("scene.locate.category.page"),
-      match: t("scene.locate.category.match"),
-      source: t("scene.locate.category.source"),
-      candidates: t("scene.locate.category.candidates"),
-      other: t("scene.locate.category.other"),
-    };
+      page: "scene.locate.category.page", match: "scene.locate.category.match", source: "scene.locate.category.source",
+      candidates: "scene.locate.category.candidates", other: "scene.locate.category.other",
+    } as const;
     for (const diagnostic of act.diagnostics) {
       const item = element("li", "scene-locate-diagnostic");
       item.dataset.category = diagnostic.category;
-      item.append(element("span", "scene-locate-category", labels[diagnostic.category]),
+      item.append(element("span", "scene-locate-category", t(labels[diagnostic.category])),
         element("span", "scene-locate-message", diagnostic.message));
       list.append(item);
     }

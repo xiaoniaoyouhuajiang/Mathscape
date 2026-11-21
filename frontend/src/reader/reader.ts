@@ -1,4 +1,5 @@
 import { contentInfo, getMarkdownUnitMarkers, readSmallFile, resolveProductPath, type ContentInfo } from "./content";
+import { t } from "../i18n";
 import { getSourceBacklink } from "./backlink";
 import { markdownRenderer } from "./markdown";
 import { canonicalReaderProjection, gapLabel, pagesLabel, projectionSummary, segmentLabel, splitByPageMarkers, type CanonicalReaderSegment } from "./canonical";
@@ -25,7 +26,6 @@ import { eventBus } from "../core/events";
 import { openInkSnapshot } from "../ink/persistence";
 import { mountInkSnapshotReader, type InkReaderFocus } from "../ink/snapshot-reader";
 import "./reader.css";
-import { t } from "../i18n";
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text = ""): HTMLElementTagNameMap[K] {
   const result = document.createElement(tag);
@@ -309,7 +309,7 @@ export class ArtifactReader {
             ...(fallback?.id === artifactId ? fallback.options : {}),
             focus: snapshotFocus,
             preferCanonical: false,
-            notice: t("reader.canonical.noLanding"),
+            notice: t("reader.canonical.noPositionNotice"),
           });
         }
         status.remove();
@@ -386,7 +386,7 @@ export class ArtifactReader {
       return await this.open(fallback.id, fallback.title, {
         ...fallback.options,
         preferCanonical: false,
-        notice: t("reader.canonical.unavailable"),
+        notice: t("reader.canonical.unreadableNotice"),
         noticeDetail: this.error,
       });
     } finally {
@@ -1081,8 +1081,8 @@ export class ArtifactReader {
         const note = element("div");
         note.className = "canonical-landing-note";
         note.setAttribute("role", "status");
-        note.append(element("span", t("reader.canonical.pageInOtherSnapshot", { page: landing.pageIndex + 1 })));
-        const openSnapshot = element("button", t("reader.canonical.openInSnapshot"));
+        note.append(element("span", t("reader.canonical.pageFromOtherSnapshot", { page: landing.pageIndex + 1 })));
+        const openSnapshot = element("button", t("reader.canonical.viewInSnapshot"));
         openSnapshot.type = "button";
         openSnapshot.onclick = () => void this.open(snapshotId, t("reader.snapshotTitle", { title }), { focus: snapshotFocus });
         note.append(openSnapshot);
@@ -1091,7 +1091,13 @@ export class ArtifactReader {
       }
       // A page start reads from the top; a block keeps the height it had, or is centred.
       const top = landing.kind !== "block" ? 12 : focus.viewportTop ?? centredTop;
-      pin = pinToViewportTop(landingTarget, top, (target) => this.scrollerOf(target), this.host);
+      // Coming from a snapshot with more above its first block than this view has:
+      // the block keeps its height by leaving that much room above the document.
+      let lead = 0;
+      const makeRoom = landing.kind === "block" && focus.viewportTop !== undefined
+        ? (px: number) => { lead += px; layout.style.marginTop = `${lead}px`; }
+        : undefined;
+      pin = pinToViewportTop(landingTarget, top, (target) => this.scrollerOf(target), this.host, makeRoom);
       pin.apply();
       pin.watch(article);
       this.settleLanding = pin.apply;
@@ -1235,19 +1241,19 @@ export class ArtifactReader {
       card.setAttribute("role", "note");
       card.hidden = true;
       const text = element("span");
-      const button = element("button", t(edge === "start" ? "reader.boundary.continueUp" : "reader.boundary.continueDown"));
+      const button = element("button", t(edge === "start" ? "reader.boundary.readUp" : "reader.boundary.readDown"));
       button.type = "button";
-      button.title = t("reader.boundary.enterTitle");
+      button.title = t("reader.boundary.buttonTitle");
       card.append(text, button);
       return { card, text, button };
     };
     const startCard = canonicalTarget ? boundaryCard("start") : undefined;
     const endCard = canonicalTarget ? boundaryCard("end") : undefined;
     if (canonicalTarget && startCard && endCard) {
-      const continueReading = element("button", t("reader.canonical.continueReading"));
+      const continueReading = element("button", t("reader.canonical.continue"));
       continueReading.type = "button";
       continueReading.className = "reader-canonical-entry";
-      continueReading.title = t("reader.canonical.continueReadingTitle");
+      continueReading.title = t("reader.canonical.continueTitle");
       continueReading.onclick = () => enterCanonical(currentReadingBlock());
       controls.append(continueReading);
       paperStage.prepend(startCard.card);

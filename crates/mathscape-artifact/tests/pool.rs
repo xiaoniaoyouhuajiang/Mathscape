@@ -96,6 +96,7 @@ fn generated_bytes_use_the_same_content_addressed_pool() {
             .next()
             .is_none()
     );
+    drop(pool);
     directory.cleanup();
 }
 

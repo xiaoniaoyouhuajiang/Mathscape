@@ -3,6 +3,7 @@
  * "手写这段" and the patch-derived document hint. Block-level only.
  */
 import { showContextMenu } from "../graph/context-menu";
+import { t } from "../i18n";
 import { eventBus } from "../core/events";
 import {
   getInkMarkdownLinks,
@@ -16,7 +17,6 @@ import {
 } from "../ink/links";
 import type { MarkdownUnitMarker } from "./content";
 import { matchUnitsToBlocks } from "./markdown-outline";
-import { t } from "../i18n";
 import type { AnchoredMarkdown, MarkdownSelection } from "./selection";
 
 const MENU_TARGET_CLASS = "is-ink-menu-target";

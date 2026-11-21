@@ -186,6 +186,25 @@ test("the toolbar entry uses the first block on screen", async ({ page }) => {
   expect(Math.abs(after - before)).toBeLessThanOrEqual(1);
 });
 
+test("switching at the very top of the document keeps the first block where it was", async ({ page }) => {
+  await setUp(page);
+  // A snapshot can carry more above its first block than the stitched view does
+  // (here: an arrival notice), and at scrollTop 0 there is nothing to scroll back.
+  await open(page, "seg-a", "母函数 · 解析快照", { notice: "规范解析正文暂时打不开（有分段读取失败），已保留在解析快照中。" });
+  await expect(page.locator("[data-source-block='sa-1']")).toBeVisible();
+  expect(await page.locator("#reader").evaluate(host => host.scrollTop)).toBe(0);
+  const before = await top(page, "[data-source-block='sa-1']");
+  const second = await top(page, "[data-source-block='sa-2']");
+  await page.locator(".reader-canonical-entry").click();
+  const located = page.locator(".canonical-reader .source-block-focus");
+  await expect(located).toHaveAttribute("data-source-block", "sa-1");
+  expect(await page.locator("#reader").evaluate(host => host.scrollTop)).toBe(0);
+  expect(Math.abs(await top(page, ".canonical-reader [data-source-block='sa-1']") - before)).toBeLessThanOrEqual(1);
+  expect(Math.abs(await top(page, ".canonical-reader [data-source-block='sa-2']") - second)).toBeLessThanOrEqual(1);
+  // The room made above the document is only what the first block needed.
+  await expect(page.locator(".canonical-reader")).toBeInViewport();
+});
+
 test("the boundary card lands on the PDF page when the stitched view shows it from another snapshot", async ({ page }) => {
   await setUp(page);
   await open(page, "seg-b", "母函数 · 解析快照", {});
