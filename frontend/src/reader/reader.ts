@@ -1090,7 +1090,13 @@ export class ArtifactReader {
       }
       // A page start reads from the top; a block keeps the height it had, or is centred.
       const top = landing.kind !== "block" ? 12 : focus.viewportTop ?? centredTop;
-      pin = pinToViewportTop(landingTarget, top, (target) => this.scrollerOf(target), this.host);
+      // Coming from a snapshot with more above its first block than this view has:
+      // the block keeps its height by leaving that much room above the document.
+      let lead = 0;
+      const makeRoom = landing.kind === "block" && focus.viewportTop !== undefined
+        ? (px: number) => { lead += px; layout.style.marginTop = `${lead}px`; }
+        : undefined;
+      pin = pinToViewportTop(landingTarget, top, (target) => this.scrollerOf(target), this.host, makeRoom);
       pin.apply();
       pin.watch(article);
       this.settleLanding = pin.apply;

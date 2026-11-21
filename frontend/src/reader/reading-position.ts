@@ -24,13 +24,15 @@ export function isInViewport(element: HTMLElement, scroller: HTMLElement): boole
 /**
  * Holds `target` at `top` px below the scroll viewport's top while late layout
  * (images, formula fonts) still shifts the page, and lets go for good as soon
- * as the reader scrolls on their own.
+ * as the reader scrolls on their own. At the very top of the document nothing
+ * is left to scroll back, so `makeRoom` is asked for the missing px above.
  */
 export function pinToViewportTop(
   find: () => HTMLElement | null,
   top: number | ((target: HTMLElement, scroller: HTMLElement) => number),
   scrollerOf: (target: HTMLElement) => HTMLElement,
   listenOn: HTMLElement,
+  makeRoom?: (px: number) => void,
 ): { apply: () => void; watch: (content: HTMLElement) => void; dispose: () => void } {
   let released = false;
   let observer: ResizeObserver | undefined;
@@ -48,6 +50,9 @@ export function pinToViewportTop(
     const scroller = scrollerOf(target);
     const wanted = typeof top === "number" ? top : top(target, scroller);
     scroller.scrollTop += viewportTopOf(target, scroller) - wanted;
+    if (!makeRoom) return;
+    const short = wanted - viewportTopOf(target, scroller);
+    if (short >= 1) makeRoom(short);
   };
   return {
     apply,
