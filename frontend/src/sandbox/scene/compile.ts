@@ -15,6 +15,7 @@
  * a result carrying `details.map_signal` records the parse (done / failed).
  */
 import { shortStableId } from "../../core/stable-id";
+import { t } from "../../i18n";
 import { relationLabel, unitKindLabel } from "../../review/labels";
 import type { AgentEventLike } from "../format";
 import { MCP_STARTUP_TOOL } from "../steps";
@@ -462,7 +463,7 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
             ? `${count} 处候选，未唯一定位`
             : inner === "not_found"
               ? `未找到：${payloadError(payload) ?? "引文与原文不一致"}`
-              : `${MATCH_LABEL[str(payload?.match) ?? ""] ?? "已定位"} · ${page !== undefined ? `第 ${page} 页` : "具体页码不可确定"}`,
+              : `${MATCH_LABEL[str(payload?.match) ?? ""] ?? t("scene.locate.located")} · ${page !== undefined ? t("scene.locate.page", { page }) : t("scene.locate.pageUnknown")}`,
       seeds: artifact ? [artifact] : [],
       layers: [],
     };
@@ -917,19 +918,19 @@ function locateDiagnostics(payload: Json | undefined): LocateDiagnostic[] {
         const to = num(pages?.to);
         const known = from !== undefined && to !== undefined && Number.isInteger(from) && Number.isInteger(to) && from >= 1 && to >= from;
         return { ...base, category: "page", message: known
-          ? `快照覆盖第 ${from === to ? from : `${from}–${to}`} 页，但缺少分页标记，不能确定引文所在页。`
-          : "快照缺少分页标记，不能确定引文所在页。" };
+          ? t("scene.locate.note.pagesWithoutMarkers", { pages: from === to ? from : `${from}–${to}` })
+          : t("scene.locate.note.noPageMarkers") };
       }
       case "page_unresolved":
-        return { ...base, category: "page", message: "该引文无法对应到单一 PDF 页；可引用原文段落，暂不能标注具体页码。" };
+        return { ...base, category: "page", message: t("scene.locate.note.pageUnresolved") };
       case "matched_normalized":
-        return { ...base, category: "match", message: "引文经空白或 TeX 间距规范化后匹配。" };
+        return { ...base, category: "match", message: t("scene.locate.note.matchedNormalized") };
       case "matched_raw_ocr_fallback":
-        return { ...base, category: "source", message: "引文匹配的是修订前的 OCR 文本，请对照已勘误的原文核验。" };
+        return { ...base, category: "source", message: t("scene.locate.note.matchedRawOcr") };
       case "candidates_truncated":
-        return { ...base, category: "candidates", message: "候选过多，仅列出部分结果；可加长引文或缩小范围。" };
+        return { ...base, category: "candidates", message: t("scene.locate.note.candidatesTruncated") };
       default:
-        return { ...base, category: "other", message: "工具返回了补充说明，详见技术详情。" };
+        return { ...base, category: "other", message: t("scene.locate.note.other") };
     }
   });
 }

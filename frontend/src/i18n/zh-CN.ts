@@ -1,6 +1,6 @@
 /**
  * 界面文案的源语言字典。新增文案先加在这里，再在 en.ts 补对应译文；
- * 键名按模块分段（`theme.*`、`reader.*`、`error.*`），`{name}` 是插值占位符。
+ * 键名按模块分段（`theme.*`、`reader.*`、`scene.*`、`error.*`），`{name}` 是插值占位符。
  */
 export const zhCN = {
   "theme.obsidian": "深空星图 · Obsidian",
@@ -30,6 +30,23 @@ export const zhCN = {
   "reader.return.dismissTitle": "不再显示",
   "reader.return.dismissAriaLabel": "不再显示回到出发处",
   "reader.blockLabelFallback": "定位块",
+  "scene.locate.located": "已定位",
+  "scene.locate.page": "第 {page} 页",
+  "scene.locate.pageUnknown": "具体页码不可确定",
+  "scene.locate.category.page": "页码",
+  "scene.locate.category.match": "匹配",
+  "scene.locate.category.source": "原文",
+  "scene.locate.category.candidates": "候选",
+  "scene.locate.category.other": "补充说明",
+  "scene.locate.technicalDetails": "技术详情",
+  "scene.locate.snapshotId": "快照 ID",
+  "scene.locate.note.pagesWithoutMarkers": "快照覆盖第 {pages} 页，但缺少分页标记，不能确定引文所在页。",
+  "scene.locate.note.noPageMarkers": "快照缺少分页标记，不能确定引文所在页。",
+  "scene.locate.note.pageUnresolved": "该引文无法对应到单一 PDF 页；可引用原文段落，暂不能标注具体页码。",
+  "scene.locate.note.matchedNormalized": "引文经空白或 TeX 间距规范化后匹配。",
+  "scene.locate.note.matchedRawOcr": "引文匹配的是修订前的 OCR 文本，请对照已勘误的原文核验。",
+  "scene.locate.note.candidatesTruncated": "候选过多，仅列出部分结果；可加长引文或缩小范围。",
+  "scene.locate.note.other": "工具返回了补充说明，详见技术详情。",
   "error.unknown": "发生了未知错误",
 } satisfies Record<string, string>;
 
