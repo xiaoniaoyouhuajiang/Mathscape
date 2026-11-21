@@ -194,7 +194,9 @@ fn one_process_serves_many_turns_and_threads() {
         let params = &start["params"];
         assert_eq!(params["ephemeral"], false);
         assert_eq!(params["threadSource"], "mathscape");
-        let args = params["config"]["mcp_servers.mathscape.args"].as_array().unwrap();
+        let args = params["config"]["mcp_servers.mathscape.args"]
+            .as_array()
+            .unwrap();
         assert_eq!(args.len(), 5);
         assert_eq!(args[0], "mcp");
         assert_eq!(args[1], "--workspace");
