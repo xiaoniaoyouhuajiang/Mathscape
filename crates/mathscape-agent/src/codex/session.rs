@@ -879,10 +879,24 @@ mod tests {
     use super::*;
     use crate::{CapabilityState, CommandOutput};
 
+    fn fixture_path(parts: &[&str]) -> PathBuf {
+        parts
+            .iter()
+            .fold(PathBuf::from(env!("CARGO_MANIFEST_DIR")), |path, part| path.join(part))
+    }
+
+    fn resolved(path: &Path) -> String {
+        absolute_path(path).display().to_string()
+    }
+
+    fn round_file() -> PathBuf {
+        fixture_path(&["session", "current_round"])
+    }
+
     fn request(backend: AgentBackend) -> crate::StartRoundRequest {
         crate::StartRoundRequest {
             backend,
-            workspace: PathBuf::from("/tmp/mathscape-ws"),
+            workspace: fixture_path(&["test-workspace"]),
             input_ref: "explain 紧集".into(),
             tools_allow: vec!["workspace.search".into(), "material.read".into()],
             harness: HarnessContext::default(),
@@ -893,7 +907,7 @@ mod tests {
         SessionSpec {
             backend: AgentBackend::Codex,
             session_key: "s1".into(),
-            workspace: PathBuf::from("/tmp/mathscape-ws"),
+            workspace: fixture_path(&["test-workspace"]),
             tools_allow: vec!["workspace.search".into(), "material.read".into()],
             harness: HarnessContext::default(),
             round_file: None,
@@ -901,19 +915,17 @@ mod tests {
         }
     }
 
-    const ROUND_FILE: &str = "/tmp/mathscape-ws-session/current_round";
-
     #[test]
     fn thread_start_registers_mcp_without_credentials() {
         let message = thread_start_message(
             2,
             &spec(true),
             Path::new("mathscape"),
-            Path::new(ROUND_FILE),
+            &round_file(),
             None,
         );
         let params = &message["params"];
-        assert_eq!(params["cwd"], "/tmp/mathscape-ws");
+        assert_eq!(params["cwd"], resolved(&spec(true).workspace));
         assert_eq!(params["sandbox"], "read-only");
         assert_eq!(params["approvalPolicy"], "on-request");
         assert_eq!(params["ephemeral"], true);
@@ -947,9 +959,9 @@ mod tests {
             json!([
                 "mcp",
                 "--workspace",
-                "/tmp/mathscape-ws",
+                resolved(&spec(true).workspace),
                 "--round-file",
-                ROUND_FILE
+                resolved(&round_file())
             ])
         );
         let text = message.to_string().to_ascii_lowercase();
@@ -971,7 +983,7 @@ mod tests {
             2,
             &spec(false),
             Path::new("mathscape"),
-            Path::new(ROUND_FILE),
+            &round_file(),
             Some("gpt-test"),
         );
         assert_eq!(start["params"]["ephemeral"], false);
@@ -980,13 +992,13 @@ mod tests {
             "thr_1",
             &spec(false),
             Path::new("mathscape"),
-            Path::new(ROUND_FILE),
+            &round_file(),
             Some("gpt-test"),
         );
         assert_eq!(resume["method"], "thread/resume");
         let params = &resume["params"];
         assert_eq!(params["threadId"], "thr_1");
-        assert_eq!(params["cwd"], "/tmp/mathscape-ws");
+        assert_eq!(params["cwd"], resolved(&spec(false).workspace));
         assert_eq!(params["approvalPolicy"], "on-request");
         assert_eq!(params["excludeTurns"], true);
         assert_eq!(params["model"], "gpt-test");
@@ -1041,12 +1053,12 @@ mod tests {
     fn harness_grants_switch_to_session_permission_profile() {
         let mut request = request(AgentBackend::Codex);
         request.harness = HarnessContext {
-            skill_roots: vec![PathBuf::from("/tmp/repo/skills")],
-            read_roots: vec![PathBuf::from("/tmp/lean/profiles")],
-            scratch_dir: Some(PathBuf::from("/tmp/session/scratch")),
+            skill_roots: vec![fixture_path(&["repo", "skills"])],
+            read_roots: vec![fixture_path(&["lean", "profiles"])],
+            scratch_dir: Some(fixture_path(&["session", "scratch"])),
             env: vec![(
                 "MATHSCAPE_LEAN_PROFILE_ROOT".into(),
-                "/tmp/lean/profiles".into(),
+                fixture_path(&["lean", "profiles"]).display().to_string(),
             )],
             instructions: Some("Skill index: mathscape-worknet v0.6".into()),
         };
@@ -1056,7 +1068,7 @@ mod tests {
             2,
             &spec,
             Path::new("mathscape"),
-            Path::new(ROUND_FILE),
+            &round_file(),
             None,
         );
         let params = &message["params"];
@@ -1066,10 +1078,13 @@ mod tests {
         assert_eq!(config["default_permissions"], SESSION_PERMISSION_PROFILE);
         let grants = &config["permissions.mathscape-session.filesystem"];
         assert_eq!(grants[":minimal"], "read");
-        assert_eq!(grants["/tmp/mathscape-ws"], "read");
-        assert_eq!(grants["/tmp/repo/skills"], "read");
-        assert_eq!(grants["/tmp/lean/profiles"], "read");
-        assert_eq!(grants["/tmp/session/scratch"], "write");
+        assert_eq!(grants[resolved(&spec.workspace)], "read");
+        assert_eq!(grants[resolved(&request.harness.skill_roots[0])], "read");
+        assert_eq!(grants[resolved(&request.harness.read_roots[0])], "read");
+        assert_eq!(
+            grants[resolved(request.harness.scratch_dir.as_ref().unwrap())],
+            "write"
+        );
         assert!(grants.get(":root").is_none());
         assert_eq!(
             grants
@@ -1089,7 +1104,7 @@ mod tests {
             1
         );
         let instructions = params["developerInstructions"].as_str().unwrap();
-        assert!(instructions.contains("/tmp/session/scratch"));
+        assert!(instructions.contains(&resolved(request.harness.scratch_dir.as_ref().unwrap())));
         assert!(instructions.contains("mathscape-worknet v0.6"));
     }
 
@@ -1097,12 +1112,15 @@ mod tests {
     fn skill_roots_are_registered_only_when_present() {
         assert!(skill_roots_message(4, &HarnessContext::default()).is_none());
         let harness = HarnessContext {
-            skill_roots: vec![PathBuf::from("/tmp/repo/skills")],
+            skill_roots: vec![fixture_path(&["repo", "skills"])],
             ..HarnessContext::default()
         };
         let message = skill_roots_message(4, &harness).unwrap();
         assert_eq!(message["method"], "skills/extraRoots/set");
-        assert_eq!(message["params"]["extraRoots"], json!(["/tmp/repo/skills"]));
+        assert_eq!(
+            message["params"]["extraRoots"],
+            json!([resolved(&harness.skill_roots[0])])
+        );
     }
 
     #[test]
@@ -1113,7 +1131,7 @@ mod tests {
             2,
             &spec,
             Path::new("mathscape"),
-            Path::new(ROUND_FILE),
+            &round_file(),
             None,
         );
         let instructions = message["params"]["developerInstructions"].as_str().unwrap();
@@ -1170,7 +1188,7 @@ mod tests {
             2,
             &spec(true),
             Path::new("mathscape"),
-            Path::new(ROUND_FILE),
+            &round_file(),
             Some("gpt-test"),
         );
         assert_eq!(message["params"]["model"], "gpt-test");
