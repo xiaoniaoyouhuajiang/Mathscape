@@ -247,10 +247,13 @@ test("a stitched view that cannot be read keeps the snapshot the reader asked fo
   await expect(page.locator(".canonical-reader")).toHaveCount(0);
   await expect(page.locator("[data-source-block='sb-21']")).toHaveClass(/source-block-focus/);
   const notice = page.locator(".canonical-status-hint");
-  await expect(notice).toContainText("规范解析正文暂时打不开（缺少分段文件）");
+  await expect(notice).toContainText("规范解析正文暂时打不开（有分段读取失败），已保留在解析快照中。");
+  await expect(notice).toHaveAttribute("title", /缺少分段文件/);
   // The block is far below the top of the snapshot; the notice stays on screen with it.
   await expect.poll(() => page.locator("#reader").evaluate(host => host.scrollTop)).toBeGreaterThan(200);
   await expect(notice).toBeInViewport({ ratio: 1 });
+  await notice.getByRole("button", { name: "知道了" }).click();
+  await expect(notice).toHaveCount(0);
 });
 
 test("the return chip keeps its size when the reader pane is a flex column, as in side-by-side mode", async ({ page }) => {

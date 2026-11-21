@@ -80,6 +80,8 @@ export interface ReaderOpenOptions {
   preferCanonical?: boolean;
   /** Shown above a physical snapshot the reader fell back to. */
   notice?: string;
+  /** Technical cause behind `notice`, shown on hover only. */
+  noticeDetail?: string;
 }
 
 interface ErrataPdfReferenceTarget {
@@ -327,7 +329,7 @@ export class ArtifactReader {
       } else if (info.media_type === "application/pdf") {
         await this.pdf(info, generation, options, mainPane);
       } else if (info.media_type === "text/markdown") {
-        await this.markdown(info, title, generation, mainPane, focus, patch, conversionId, options.notice);
+        await this.markdown(info, title, generation, mainPane, focus, patch, conversionId, options.notice, options.noticeDetail);
       } else if (info.media_type === "application/json" || info.media_type.startsWith("text/")) {
         const bytes = await readSmallFile(info);
         if (generation !== this.generation) return false;
@@ -383,7 +385,8 @@ export class ArtifactReader {
       return await this.open(fallback.id, fallback.title, {
         ...fallback.options,
         preferCanonical: false,
-        notice: `规范解析正文暂时打不开（${this.error ?? "读取失败"}），已保留在解析快照中。`,
+        notice: "规范解析正文暂时打不开（有分段读取失败），已保留在解析快照中。",
+        noticeDetail: this.error,
       });
     } finally {
       if (this.snapshotFallback === fallback) this.snapshotFallback = undefined;
@@ -1126,6 +1129,7 @@ export class ArtifactReader {
     patch?: ReaderOpenOptions["patch"],
     conversionId?: string | null,
     notice?: string,
+    noticeDetail?: string,
   ): Promise<void> {
     const [initialDoc, unitMarkers, initialErrata] = await Promise.all([
       markdownDocument(info.artifact_id, conversionId ?? info.contexts[0]?.conversion_id ?? null),
@@ -1158,10 +1162,15 @@ export class ArtifactReader {
     layout.append(outlineHandle.nav, paperStage);
     container.append(controls, layout);
     if (notice) {
-      const note = element("p", notice);
-      // Stays on screen: the located block is usually far below the top.
+      const note = element("p");
+      // Stays on screen until dismissed: the located block is usually far below the top.
       note.className = "canonical-status-hint is-arrival-notice";
       note.setAttribute("role", "status");
+      if (noticeDetail) note.title = noticeDetail;
+      const dismiss = element("button", "知道了");
+      dismiss.type = "button";
+      dismiss.onclick = () => note.remove();
+      note.append(element("span", notice), dismiss);
       controls.after(note);
     }
     let rawMode = false, version = 0;
