@@ -1,4 +1,4 @@
-import { THEMES, THEME_CHANGED, getTheme, setTheme, isTheme } from "../shell/theme-manager";
+import { THEMES, THEME_CHANGED, getTheme, setTheme, isTheme, themeLabel } from "../shell/theme-manager";
 import { MAP_STYLES, MAP_STYLE_CHANGED, getMapStyle, setMapStyle, isMapStyle } from "../shell/map-style";
 import { invoke } from "@tauri-apps/api/core";
 import { eventBus } from "../core/events";
@@ -126,7 +126,7 @@ export class LlmSettingsController {
               <span class="settings-scope">本机</span>
             </div>
             <label class="settings-field">显示主题
-              <select name="theme" aria-label="显示主题">${Object.entries(THEMES).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>
+              <select name="theme" aria-label="显示主题">${(Object.keys(THEMES) as (keyof typeof THEMES)[]).map(value => `<option value="${value}">${themeLabel(value)}</option>`).join("")}</select>
               <small>立即生效，自动记住本机的选择。</small>
             </label>
             <label class="settings-field">地图风格

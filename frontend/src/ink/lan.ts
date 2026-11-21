@@ -1,5 +1,6 @@
 import QRCode from "qrcode";
 import { safeInvoke } from "../core/ipc";
+import { formatDateTime } from "../i18n";
 import { inkId,type InkDocumentMetadata,type InkOperation,type InkStroke } from "./model";
 import type { InkNoteState, StoredInkSession } from "./persistence";
 import { addressOptions,fillAddressSelect,loadPreferredHost,savePreferredHost,type AddressOption } from "./lan-addresses";
@@ -28,7 +29,7 @@ export function explainInkLanError(error:unknown):string {
 function seenAt(value:string|undefined):string {
   if(!value)return "";
   const time=value.startsWith("unix:")?Number(value.slice(5))*1000:Date.parse(value);
-  return Number.isFinite(time)?new Date(time).toLocaleString("zh-CN",{hour12:false}):"";
+  return Number.isFinite(time)?formatDateTime(time,{hour12:false}):"";
 }
 type LinkKind="pair"|"transfer"|"resume";
 const LINK_NOTES:Record<LinkKind,string>={

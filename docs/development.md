@@ -108,6 +108,15 @@ migration 25 增加用户本地 `study_marks`；migration 26 增加不可变 Mar
 
 测试诊断常位于 `.test-runs/`；只清理属于相应测试的临时目录，不删除开发 Workspace 来掩盖升级问题。完整请求和模型输出属于私有材料，排障分享前需去除敏感内容与密钥。
 
+## 界面语言
+
+界面目前以中文为源语言，英文逐模块补齐；默认语言保持 zh-CN，英文字典覆盖全部界面前不跟随系统语言。
+
+- 新增或改动的界面文案放进 `frontend/src/i18n/zh-CN.ts`，同时在 `en.ts` 补译文，代码里调用 `t(key, params)`；`en.ts` 缺键时 `tsc` 报错。日期和数字用 `formatDateTime` 或带当前 locale 的 `Intl`，不写死 `zh-CN`。
+- `npm --prefix frontend run check:i18n`（也在 `test:unit` 中运行）统计 `frontend/src` 注释之外含中文的行数，超过 `frontend/i18n-baseline.json` 即失败；迁移后用 `-- --update` 下调基线，基线只降不升。
+- 后端给人看的错误带稳定 code：结构化 `{code, message}`，或以 `code: 说明` 开头的字符串。前端 `errorMessage` 优先显示字典里的 `error.<code>`，没有条目时原样显示后端文字。新增的枚举（如语义层标签）由后端输出 kind，名称只在前端字典里维护。
+- 地图里的材料、对象名、摘要等用户数据和模型生成内容不翻译。Playwright 测试固定在 zh-CN 下按中文文案断言；新测试优先用 role 或 testid 定位。
+
 ## 文档规则
 
 README 加四份主文档构成新人阅读路径。新增能力优先更新对应主文档；只有形成独立、长期维护的边界才新增文档。字段、函数签名和测试细节由代码、Schema 与测试承担；协议版本放在版本化资源中，主文档文件名不递增 v1/v2/v3。历史开发记录交给 Git，探索方向不能写成已实现规范。
