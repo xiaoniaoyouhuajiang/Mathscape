@@ -42,9 +42,10 @@ fn write_script(path: &Path, body: &str) {
 
 impl Env {
     fn new(tag: &str, start: &str) -> Self {
-        // Short name: the socket tests bind inside this directory, and macOS
-        // limits Unix socket paths to 104 bytes under its long `$TMPDIR`.
-        let dir = std::env::temp_dir().join(format!("msl-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "mathscape-loogle-resident-{tag}-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         let project = dir.join("project");
         let cache = dir.join("cache");
