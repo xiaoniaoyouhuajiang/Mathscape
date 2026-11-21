@@ -1,4 +1,5 @@
 mod backlink;
+mod canonical_parse;
 mod canonical_reader;
 mod change_set_anchors;
 mod change_sets;
@@ -36,6 +37,7 @@ mod skill_pack;
 pub use registration::RegistrationSourceContext;
 mod workspace_settings;
 pub use backlink::{SourceBacklink, SourceBacklinkRequest};
+pub use canonical_parse::{CanonicalParseLeases, ParseCanonicalPagesRequest};
 pub use canonical_reader::{CanonicalReaderPiece, CanonicalReaderProjection};
 pub use content::{ArtifactContentInfo, ContentContext, SourceNodeDetail};
 pub use discovery::{
@@ -1078,6 +1080,8 @@ pub fn run() {
             content::get_markdown_unit_markers,
             content::read_artifact_bytes,
             canonical_reader::get_canonical_reader_projection,
+            canonical_parse::parse_canonical_pages,
+            canonical_parse::get_canonical_parse_leases,
             change_sets::get_change_set_investigation,
             change_sets::list_pending_change_sets,
             change_sets::get_change_set_snapshot,

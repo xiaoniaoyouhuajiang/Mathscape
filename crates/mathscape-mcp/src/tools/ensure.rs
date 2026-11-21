@@ -1,5 +1,6 @@
 //! Canonical markdown ensure: the internal path behind `material.read` on a
-//! scanned PDF. Not an MCP tool.
+//! scanned PDF, and behind the desktop reader's 「解析这几页」
+//! ([`ensure_canonical_pages`]). Not an MCP tool.
 //!
 //! Synchronous: the `material.read` call that needs Marker waits for it.
 //! Order: plan → probe Marker → claim lease (per-PDF lock + global slot +
@@ -32,7 +33,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use mathscape_agent::{
-    Capability, CapabilityProbe, CapabilityState, locate_marker_executable, probe_capability,
+    Capability, CapabilityProbe, CapabilityState, ToolError, ToolErrorCode,
+    locate_marker_executable, probe_capability,
 };
 use mathscape_artifact::ArtifactPool;
 use mathscape_domain::{
@@ -40,7 +42,7 @@ use mathscape_domain::{
     parser_policy_from_tool_version, plan_page_cover,
 };
 use mathscape_orchestrator::promote_marker_inventory;
-use mathscape_pdf::{PdfPageIndex, PdfSelection};
+use mathscape_pdf::{PdfEngine, PdfOpenOptions, PdfPageIndex, PdfSelection};
 use mathscape_store_sqlite::{
     CanonicalEnsureClaim, CanonicalEnsureClaimOutcome, CanonicalEnsureLease, CanonicalEnsureLimits,
     CanonicalEnsureOutcome, SqliteArtifactStore, unix_millis_now,
@@ -90,6 +92,19 @@ pub struct EnsurePolicy {
     pub poll_interval: Duration,
 }
 
+impl EnsurePolicy {
+    /// A person asking for a few pages from the desktop reader: same locks,
+    /// lease and per-request size, but no rolling page budget. The budget
+    /// guards against an agent reading through a whole book; a reader's own
+    /// click must not be refused because an agent just used the window.
+    pub fn desktop() -> Self {
+        Self {
+            window_pages: u32::MAX,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for EnsurePolicy {
     fn default() -> Self {
         Self {
@@ -108,7 +123,7 @@ impl Default for EnsurePolicy {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum EnsureStatus {
+pub enum EnsureStatus {
     /// Existing snapshots already cover every requested page: one contains
     /// the request, or several are stitched by page (possibly including one
     /// that another read's ensure promoted while this read waited). Marker
@@ -125,6 +140,10 @@ pub(super) enum EnsureStatus {
     /// Marker, inventory validation, promotion or the sync deadline failed.
     /// The lease is released (or failed) before the read returns.
     Failed,
+    /// Only for an ensure scoped to one canonical view
+    /// ([`ensure_canonical_pages`]): the installed Marker writes a different
+    /// lineage, so its pages would never appear in that view. Marker not run.
+    LineageMismatch,
 }
 
 impl EnsureStatus {
@@ -135,13 +154,14 @@ impl EnsureStatus {
             Self::BlockedBudget => "canonical_ensure_blocked_budget",
             Self::CapabilityUnavailable => "canonical_ensure_capability_unavailable",
             Self::Failed => "canonical_ensure_failed",
+            Self::LineageMismatch => "canonical_ensure_lineage_mismatch",
         }
     }
 }
 
 /// Structured ensure outcome, embedded in `material.read` `details.ensure`.
 #[derive(Clone, Debug, Serialize)]
-pub(super) struct EnsureReport {
+pub struct EnsureReport {
     pub status: EnsureStatus,
     pub requested: InclusivePageRange,
     /// Requested pages no snapshot covers (union of every lineage), as
@@ -236,7 +256,7 @@ impl EnsureReport {
 
 /// One Marker run claimed by an ensure call.
 #[derive(Clone, Debug, Serialize)]
-pub(super) struct EnsureRun {
+pub struct EnsureRun {
     pub marker_range: InclusivePageRange,
     pub ensure_id: String,
     pub idempotency_key: String,
@@ -332,6 +352,92 @@ pub(super) fn ensure(
     requested: InclusivePageRange,
     total_pages: u32,
 ) -> EnsureReport {
+    ensure_scoped(
+        workspace,
+        pdf,
+        pdf_path,
+        requested,
+        total_pages,
+        None,
+        ENSURE_ACTOR,
+    )
+}
+
+/// Ensures pages of one registered canonical view, for a caller that shows
+/// exactly that view (the desktop reader's gap card). Same locks, lease,
+/// idempotency and promotion as `material.read`, with two differences:
+/// coverage is judged against this view alone, so pages parsed only by
+/// another lineage (an older Marker) still count as missing here; and when
+/// the installed Marker would write a different lineage, nothing is run
+/// ([`EnsureStatus::LineageMismatch`]). `owner` labels the lease.
+///
+/// Synchronous: returns after Marker finished, failed, or
+/// [`EnsurePolicy::sync_timeout`] passed. `Err` only for a request that
+/// cannot be planned (unknown view, pages outside the PDF, PDF not readable).
+pub fn ensure_canonical_pages(
+    workspace: &McpWorkspace,
+    canonical_id: &StableId,
+    pages: InclusivePageRange,
+    owner: &str,
+) -> Result<EnsureReport, ToolError> {
+    let index = CanonicalIndex::load(workspace)?;
+    let view = index.by_id(canonical_id.as_str()).ok_or_else(|| {
+        ToolError::new(
+            ToolErrorCode::InvalidArg,
+            format!("canonical markdown view {canonical_id} is not registered"),
+        )
+    })?;
+    let pdf = view.source_pdf_artifact_id.clone();
+    let pool = workspace.pool()?;
+    let pdf_path = pool.managed_path(&pdf).map_err(|error| {
+        ToolError::new(
+            ToolErrorCode::Internal,
+            format!("the source PDF of {canonical_id} is not readable: {error}"),
+        )
+    })?;
+    drop(pool);
+    let total_pages = match view.total_pages {
+        Some(total) => total,
+        None => PdfEngine
+            .probe(&pdf_path, &PdfOpenOptions::new())
+            .map(|probe| probe.page_count())
+            .map_err(|error| {
+                ToolError::new(
+                    ToolErrorCode::Internal,
+                    format!("failed to read the PDF page count: {error}"),
+                )
+            })?,
+    };
+    if pages.to > total_pages {
+        return Err(ToolError::new(
+            ToolErrorCode::InvalidArg,
+            format!(
+                "pages {}–{} are outside the PDF ({total_pages} pages)",
+                pages.from, pages.to
+            ),
+        ));
+    }
+    drop(index);
+    Ok(ensure_scoped(
+        workspace,
+        &pdf,
+        &pdf_path,
+        pages,
+        total_pages,
+        Some(canonical_id),
+        owner,
+    ))
+}
+
+fn ensure_scoped(
+    workspace: &McpWorkspace,
+    pdf: &StableId,
+    pdf_path: &Path,
+    requested: InclusivePageRange,
+    total_pages: u32,
+    scope: Option<&StableId>,
+    owner: &str,
+) -> EnsureReport {
     let policy = workspace.ensure_policy();
     let started = Instant::now();
     let deadline = started + policy.sync_timeout;
@@ -344,12 +450,14 @@ pub(super) fn ensure(
     let mut canonical_id: Option<String> = None;
     loop {
         let plan = match CanonicalIndex::load(workspace) {
-            Ok(index) => plan_ensure(
-                &index.all_for_pdf(pdf.as_str(), Some(requested)),
-                requested,
-                total_pages,
-                policy.max_pages_per_request,
-            ),
+            Ok(index) => {
+                let views = match scope {
+                    // One view: another lineage's pages are not shown there.
+                    Some(canonical) => index.by_id(canonical.as_str()).into_iter().collect(),
+                    None => index.all_for_pdf(pdf.as_str(), Some(requested)),
+                };
+                plan_ensure(&views, requested, total_pages, policy.max_pages_per_request)
+            }
             Err(error) => {
                 let plan = first_plan.unwrap_or_else(|| EnsurePlan {
                     requested,
@@ -450,6 +558,20 @@ pub(super) fn ensure(
                 return finish(report, started, waited_for, runs, canonical_id);
             }
         };
+        if let Some(canonical) = scope
+            && &key.canonical_id() != canonical
+        {
+            let report = EnsureReport::new(
+                EnsureStatus::LineageMismatch,
+                &shown,
+                format!(
+                    "the installed Marker ({}) writes canonical markdown {}, not the requested view {canonical}; its pages would not appear in that view, so Marker was not run",
+                    ready.version,
+                    key.canonical_id()
+                ),
+            );
+            return finish(report, started, waited_for, runs, canonical_id);
+        }
         let ensure_id = new_ensure_id();
         let claim = CanonicalEnsureClaim {
             ensure_id: ensure_id.clone(),
@@ -459,7 +581,7 @@ pub(super) fn ensure(
             parser_profile: key.parser_profile().to_owned(),
             parser_policy_version: key.parser_policy_version().to_owned(),
             pages: range,
-            owner: format!("{ENSURE_ACTOR}/{}", std::process::id()),
+            owner: format!("{owner}/{}", std::process::id()),
         };
         canonical_id = Some(claim.canonical_id.to_string());
 

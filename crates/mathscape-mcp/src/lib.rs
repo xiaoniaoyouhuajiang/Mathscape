@@ -52,5 +52,5 @@ mod workspace;
 pub use protocol::{
     JSONRPC_VERSION, LATEST_PROTOCOL_VERSION, McpServer, SERVER_NAME, SUPPORTED_PROTOCOL_VERSIONS,
 };
-pub use tools::EnsurePolicy;
+pub use tools::{EnsurePolicy, EnsureReport, EnsureRun, EnsureStatus, ensure_canonical_pages};
 pub use workspace::{McpWorkspace, WorkspaceOpenError};
