@@ -1,4 +1,5 @@
 /** Scroll position helpers shared by the snapshot reader and the 「规范解析正文」 view. */
+import { t } from "../i18n";
 
 /** Nearest ancestor that actually scrolls; `fallback` when none does yet. */
 export function scrollParentOf(element: HTMLElement, fallback: HTMLElement): HTMLElement {
@@ -24,13 +25,15 @@ export function isInViewport(element: HTMLElement, scroller: HTMLElement): boole
 /**
  * Holds `target` at `top` px below the scroll viewport's top while late layout
  * (images, formula fonts) still shifts the page, and lets go for good as soon
- * as the reader scrolls on their own.
+ * as the reader scrolls on their own. At the very top of the document nothing
+ * is left to scroll back, so `makeRoom` is asked for the missing px above.
  */
 export function pinToViewportTop(
   find: () => HTMLElement | null,
   top: number | ((target: HTMLElement, scroller: HTMLElement) => number),
   scrollerOf: (target: HTMLElement) => HTMLElement,
   listenOn: HTMLElement,
+  makeRoom?: (px: number) => void,
 ): { apply: () => void; watch: (content: HTMLElement) => void; dispose: () => void } {
   let released = false;
   let observer: ResizeObserver | undefined;
@@ -48,6 +51,9 @@ export function pinToViewportTop(
     const scroller = scrollerOf(target);
     const wanted = typeof top === "number" ? top : top(target, scroller);
     scroller.scrollTop += viewportTopOf(target, scroller) - wanted;
+    if (!makeRoom) return;
+    const short = wanted - viewportTopOf(target, scroller);
+    if (short >= 1) makeRoom(short);
   };
   return {
     apply,
@@ -88,14 +94,14 @@ export function mountReturnPoint(options: {
   const back = document.createElement("button");
   back.type = "button";
   back.className = "reader-return-btn";
-  back.textContent = `↩ 回到出发处 · ${options.label}`;
-  back.title = "滚回刚才定位到的那一块";
+  back.textContent = t("reader.return.back", { label: options.label });
+  back.title = t("reader.return.backTitle");
   const dismiss = document.createElement("button");
   dismiss.type = "button";
   dismiss.className = "reader-return-dismiss";
   dismiss.textContent = "×";
-  dismiss.title = "不再显示";
-  dismiss.setAttribute("aria-label", "不再显示回到出发处");
+  dismiss.title = t("reader.return.dismissTitle");
+  dismiss.setAttribute("aria-label", t("reader.return.dismissAriaLabel"));
   chip.append(back, dismiss);
   container.append(chip);
 
@@ -139,5 +145,5 @@ export function blockLabel(element: HTMLElement, limit = 18): string {
   copy.querySelectorAll(".katex-mathml, button, .ink-block-marker, .block-action-pill, .unit-map-badge-row").forEach(node => node.remove());
   const text = (copy.textContent ?? "").replace(/\s+/g, " ").trim();
   const chars = [...text];
-  return chars.length > limit ? chars.slice(0, limit).join("") + "…" : text || "定位块";
+  return chars.length > limit ? chars.slice(0, limit).join("") + "…" : text || t("reader.blockLabelFallback");
 }
