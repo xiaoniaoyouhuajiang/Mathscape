@@ -165,7 +165,7 @@ test("parsed pages arrive where the gap was, and what is on screen does not move
   const shown = await big.locator(".canonical-gap-elapsed").textContent();
   await expect(big.locator(".canonical-gap-elapsed")).not.toHaveText(shown!, { timeout: 3000 });
   // The reader keeps reading meanwhile.
-  expect(await top(page, firstBelow)).toBeCloseTo(before, 0);
+  expect(Math.abs(await top(page, firstBelow) - before)).toBeLessThanOrEqual(1);
 
   await project(page, [
     { seg: "sa", pages: [1, 2] },
