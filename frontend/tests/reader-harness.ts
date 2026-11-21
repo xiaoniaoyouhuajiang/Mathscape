@@ -98,6 +98,12 @@ function setMarkdownSnapshot(id: string, doc: AnchoredMarkdown): void {
   files[id] = { media: "text/markdown", bytes: new TextEncoder().encode(doc.source) };
 }
 const backlinkRequests: unknown[] = [];
+// 「解析这几页」: what the backend would answer, set by the test.
+const gapParse = {
+  requests: [] as unknown[],
+  leases: [] as unknown[],
+  respond: null as null | ((request: unknown) => unknown),
+};
 const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash", markdownOnlyReason: null as string | null, canonicalProjectionError: null as string | null };
 const byteOffset = (text: string): number => new TextEncoder().encode(markdown.slice(0, markdown.indexOf(text))).length;
 function patchReview(status: string): unknown {
@@ -139,6 +145,15 @@ function handle(command: string, payload: any): any {
   if (command === "get_markdown_unit_markers") {
     const wanted = new Set<string>(payload.artifactIds ?? []);
     return structuredClone(unitMarkers.filter(m => wanted.has(m.artifact_id)));
+  }
+  if (command === "get_canonical_parse_leases") {
+    return { now_ms: Date.now(), leases: structuredClone(gapParse.leases) };
+  }
+  if (command === "parse_canonical_pages") {
+    gapParse.requests.push(payload.request);
+    return gapParse.respond
+      ? gapParse.respond(payload.request)
+      : { status: "capability_unavailable", requested: { from: payload.request.first_page, to: payload.request.last_page }, missing: [], waited_ms: 0, message: "Marker is not installed" };
   }
   if (command === "get_canonical_reader_projection") {
     if (behavior.canonicalProjectionError) throw new Error(behavior.canonicalProjectionError);
@@ -442,5 +457,5 @@ window.addEventListener("mathscape:open-source", event => {
   });
 });
 Object.assign(window, {
-  harness: { ink, locatedObjects, errataStore, errataEvents, unitMarkers, setCanonicalProjection: (p: any) => { canonicalProjection = p; }, setMarkdownSnapshot, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ink, locatedObjects, errataStore, errataEvents, unitMarkers, setCanonicalProjection: (p: any) => { canonicalProjection = p; }, gapParse, setMarkdownSnapshot, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
 });

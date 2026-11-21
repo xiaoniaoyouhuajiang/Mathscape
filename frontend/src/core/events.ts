@@ -25,7 +25,8 @@ export interface OpenReviewDetail {
 }
 
 export interface MathscapeEventMap {
-  "source-map-changed": { reason?: string } | void;
+  /** `preserveReader`: redraw the map without closing the open reader document. */
+  "source-map-changed": { reason?: string; preserveReader?: boolean } | void;
   "discovery-runs-changed": void;
   "open-source": OpenSourceDetail;
   "open-ink-document": { documentId: string };

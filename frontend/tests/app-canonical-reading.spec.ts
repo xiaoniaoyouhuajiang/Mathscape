@@ -51,3 +51,39 @@ test.describe("source backtracking reads in the stitched view", () => {
     await expect(reader.locator(".canonical-reader [data-source-block='lb-1']")).toHaveCount(1);
   });
 });
+
+// 「解析这几页」 adds snapshots, so the map is redrawn; that must not close the
+// document the pages are arriving in.
+test("pages parsed from a gap arrive in the open reader while the map refreshes", async ({ page }) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem("harness.sandbox", "1");
+    sessionStorage.setItem("harness.canonical", "1");
+    sessionStorage.setItem("harness.canonicalGap", "1");
+  });
+  await page.setViewportSize({ width: 1400, height: 860 });
+  await page.goto("/tests/app.html");
+  await expect(page.locator("#graph")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => Object.keys(window.appHarness.labels()).length)).toBeGreaterThan(0);
+  await page.evaluate(() => window.appHarness.selectNode("r-cite-unit"));
+  await page.locator("#node-detail").getByRole("button", { name: "打开并定位原文" }).click();
+
+  const reader = page.locator("#reader");
+  const located = reader.locator(".canonical-reader [data-source-block='b1']");
+  await expect(located).toBeInViewport();
+  await located.evaluate(block => { (block as unknown as { kept: boolean }).kept = true; });
+  const loads = await page.evaluate(() => window.appHarness.canonicalGap.snapshotLoads);
+
+  await reader.getByRole("button", { name: "解析第 5–6 页" }).click();
+  await expect(reader.locator(".canonical-reader [data-source-block='nb1']")).toBeVisible();
+  await expect(reader.locator(".canonical-gap")).toHaveCount(0);
+  expect(await page.evaluate(() => window.appHarness.canonicalGap.requests)).toEqual([
+    { canonical_id: "mathscape:canonical-markdown/v1/mathscape.marker.math-ocr.v1/marker-1/pdf-notes", first_page: 5, last_page: 6 },
+  ]);
+  // The map was read again, and the reader is still open on the same nodes.
+  await expect.poll(() => page.evaluate(() => window.appHarness.canonicalGap.snapshotLoads)).toBeGreaterThan(loads);
+  await expect(page.locator("#graph")).toBeVisible();
+  await expect(reader.locator("h2").first()).toHaveText("notes.pdf · 规范解析正文");
+  await expect(located).toBeInViewport();
+  expect(await located.evaluate(block => (block as unknown as { kept?: boolean }).kept)).toBe(true);
+});
+

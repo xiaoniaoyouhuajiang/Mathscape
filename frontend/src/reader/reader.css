@@ -276,8 +276,36 @@
   border-left: 3px solid var(--ms-control-border); color: var(--ms-text-muted); background: var(--ms-panel-raised); font-size: 12px;
 }
 .canonical-gap {
-  margin: 16px 0; padding: 14px 12px; border: 1px dashed var(--ms-control-border); border-radius: 4px;
+  margin: 16px 0; padding: 12px 14px; border: 1px dashed var(--ms-control-border); border-radius: 6px;
   color: var(--ms-text-muted); background: var(--ms-panel-raised); font-size: 13px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.canonical-gap[data-state="running"], .canonical-gap[data-state="starting"], .canonical-gap[data-state="queued"] {
+  border-style: solid; border-color: color-mix(in srgb, var(--ms-action) 55%, var(--ms-border));
+}
+.canonical-gap.is-failed { border-style: solid; border-color: color-mix(in srgb, var(--ms-star-gold) 55%, var(--ms-border)); }
+.canonical-gap-label { margin: 0; }
+.canonical-gap-actions { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.canonical-gap-caption { font-size: 12px; color: var(--ms-text-muted); }
+.canonical-gap button {
+  padding: 5px 12px; font-size: 12px; cursor: pointer; border-radius: 5px;
+  background: var(--ms-control); color: var(--ms-text); border: 1px solid var(--ms-control-border);
+}
+.canonical-gap button:hover:not(:disabled) { background: var(--ms-selected); }
+.canonical-gap button.canonical-gap-parse { background: var(--ms-action); color: var(--ms-action-text); border-color: var(--ms-action); }
+.canonical-gap button.canonical-gap-parse:hover:not(:disabled) { background: var(--ms-action-hover); }
+.canonical-gap button:disabled { opacity: .5; cursor: default; }
+.canonical-gap-status {
+  display: flex; align-items: center; justify-content: center; gap: 4px 8px; flex-wrap: wrap;
+  color: var(--ms-text); font-size: 13px;
+}
+.canonical-gap-elapsed { font-variant-numeric: tabular-nums; }
+.canonical-gap-hint { flex-basis: 100%; font-size: 12px; color: var(--ms-text-muted); }
+.canonical-gap-detail { flex-basis: 100%; font-size: 12px; color: var(--ms-text-muted); text-align: left; }
+.canonical-gap-detail summary { cursor: pointer; text-align: center; }
+.canonical-gap-detail pre {
+  margin: 6px 0 0; padding: 8px; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  border: 1px solid var(--ms-border); border-radius: 4px; background: var(--ms-panel-deep); font-size: 11px;
 }
 .canonical-status-hint {
   margin: 0 0 10px; padding: 6px 10px; border-left: 3px solid var(--ms-accent); border-radius: 4px;

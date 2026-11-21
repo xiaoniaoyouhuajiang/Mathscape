@@ -603,7 +603,7 @@ artifactController = new ArtifactController(
   },
 );
 
-function renderSnapshot(snapshot: DesktopSnapshot): void {
+function renderSnapshot(snapshot: DesktopSnapshot, options: { preserveReader?: boolean } = {}): void {
   currentSnapshot = snapshot;
   inspectorController.updateSelectedNodeFromSnapshot(snapshot);
   shell.renderWorkspaceInfo({
@@ -617,7 +617,9 @@ function renderSnapshot(snapshot: DesktopSnapshot): void {
     { state: el.leanState, summary: el.leanSummary, profiles: el.leanProfiles, problem: el.leanProblem },
     snapshot.lean,
   );
-  graphController.renderCurrentGraph(snapshot);
+  // preserveReader skips onBeforeRenderGraph, which also settles scene state.
+  if (options.preserveReader) scenePlayer?.beforeGraphSync();
+  graphController.renderCurrentGraph(snapshot, options.preserveReader ? { preserveReader: true } : undefined);
   inspectorController.refreshIfUnlocked();
   loadInkOverlay();
   void refreshErrataReviewOverlay();
@@ -662,11 +664,11 @@ async function refreshInkCiteTargets(): Promise<void> {
   }
 }
 
-async function loadSnapshot(): Promise<void> {
+async function loadSnapshot(options: { preserveReader?: boolean } = {}): Promise<void> {
   shell.setBusy(true, "正在读取 Workspace");
   try {
     const snapshot = await invoke<DesktopSnapshot>("get_desktop_snapshot");
-    renderSnapshot(snapshot);
+    renderSnapshot(snapshot, options);
     void discoveryLedger.loadDiscoveryRuns();
     shell.updateServiceState("本地内核已连接", true);
   } catch (error: unknown) {
@@ -680,7 +682,7 @@ async function loadSnapshot(): Promise<void> {
 el.importButton.addEventListener("click", () => void artifactController.importPdf());
 
 eventBus.on("reader-opened", () => { pendingReaderAnchor = null; });
-eventBus.on("source-map-changed", () => void loadSnapshot());
+eventBus.on("source-map-changed", (detail) => void loadSnapshot({ preserveReader: Boolean(detail && detail.preserveReader) }));
 function showInkWorkspace(opts: { enterSplitWithReader?: boolean; anchor?: ReaderScrollAnchor | null } = {}): void {
   const autoSplit = Boolean(opts.enterSplitWithReader && window.innerWidth >= INK_SPLIT_WINDOW_MIN);
   const anchor = opts.anchor ?? captureReaderScrollAnchor();

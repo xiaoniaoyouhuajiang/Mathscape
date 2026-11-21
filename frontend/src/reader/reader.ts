@@ -2,7 +2,8 @@ import { contentInfo, getMarkdownUnitMarkers, readSmallFile, resolveProductPath,
 import { t } from "../i18n";
 import { getSourceBacklink } from "./backlink";
 import { markdownRenderer } from "./markdown";
-import { canonicalReaderProjection, gapLabel, pagesLabel, projectionSummary, segmentLabel, splitByPageMarkers, type CanonicalReaderSegment } from "./canonical";
+import { canonicalReaderProjection, pagesLabel, projectionSummary, segmentLabel, splitByPageMarkers, type CanonicalReaderPiece, type CanonicalReaderProjection, type CanonicalReaderSegment, type PageRange } from "./canonical";
+import { canonicalParseLeases, dismissGapParse, gapCardState, gapParseJob, onGapParseChange, renderGapCard, startGapParse, tickGapCards, type ParseLease } from "./canonical-gap";
 import { isCanonicalMarkdownId } from "./openable";
 import { focusMatchesBlock, pageIndexOfBlock, planCanonicalLanding, snapshotPageSpan, type CanonicalLanding } from "./canonical-landing";
 import { blockLabel, centredTop, isInViewport, mountReturnPoint, pinToViewportTop, scrollParentOf, viewportTopOf } from "./reading-position";
@@ -473,7 +474,8 @@ export class ArtifactReader {
     }
     if (landing.kind === "snapshot") return landing;
     const controls = element("div"); controls.className = "reader-controls";
-    controls.append(element("span", projectionSummary(projection)));
+    const summary = element("span", projectionSummary(projection));
+    controls.append(summary);
     const openRootPdf = element("button", "打开原始 PDF");
     openRootPdf.type = "button";
     openRootPdf.onclick = () => void this.open(projection.source_pdf_artifact_id, `${title} · 原始 PDF`, {
@@ -526,12 +528,21 @@ export class ArtifactReader {
       wrapper: HTMLElement;
     }
     interface CanonicalSegState {
+      /** Position among the shown segments; renumbered when a parse adds one before it. */
       segmentIndex: number;
+      /** The index its blocks' labels were written for. */
+      labelled: number;
+      key: string;
       segment: CanonicalReaderSegment;
+      section: HTMLElement;
       body: HTMLElement;
       env: Record<string, unknown>;
       allBlocks: CanonicalSegBlockEntry[];
+      items: CanonicalBlockItem[];
+      outline: OutlineBlockDescriptor[];
     }
+    const stateBySection = new Map<HTMLElement, CanonicalSegState>();
+    const gapCards = new Map<HTMLElement, PageRange>();
     const segments: CanonicalSegState[] = [];
     const canonicalItems: CanonicalBlockItem[] = [];
     const canonicalItemByDomKey = new Map<string, CanonicalBlockItem>();
@@ -540,7 +551,9 @@ export class ArtifactReader {
     const errataByArtifact = new Map<string, MarkdownBlockErrata[]>();
     const errataEditor = new InlineErrataEditorController();
     let loadedUnitMarkers: Awaited<ReturnType<typeof getMarkdownUnitMarkers>> = [];
-    let segIdx = 0;
+    // Block keys stay unique when a later parse inserts a segment in the middle.
+    let nextSegKey = 0;
+    let built = false;
 
     /** Resolves to whether the segment had images to place (they shift the layout). */
     const resolveSegmentImages = async (segment: CanonicalReaderSegment, body: HTMLElement): Promise<boolean> => {
@@ -659,16 +672,23 @@ export class ArtifactReader {
       }
     };
 
-    for (const piece of projection.pieces) {
-      if (piece.kind === "gap") {
-        const gap = element("div", gapLabel(piece));
-        gap.className = "canonical-gap";
-        gap.setAttribute("role", "note");
-        gap.dataset.pages = `${piece.pages.from}-${piece.pages.to}`;
-        article.append(gap);
-        continue;
-      }
-      const currentSegIdx = segIdx++;
+    const pieceKey = (piece: CanonicalReaderPiece): string => piece.kind === "gap"
+      ? `gap|${piece.pages.from}-${piece.pages.to}`
+      : [piece.conversion_id, piece.artifact_id, piece.pages?.from, piece.pages?.to, piece.byte_start].join("|");
+    let shownPieces = projection.pieces.map(pieceKey);
+
+    const mountGap = (pages: PageRange): HTMLElement => {
+      const gap = element("div");
+      gap.className = "canonical-gap";
+      gap.dataset.pages = `${pages.from}-${pages.to}`;
+      gapCards.set(gap, pages);
+      return gap;
+    };
+
+    const mountSegment = (piece: CanonicalReaderSegment): CanonicalSegState => {
+      const segKey = nextSegKey++;
+      const segItems: CanonicalBlockItem[] = [];
+      const segOutline: OutlineBlockDescriptor[] = [];
       if (!errataByArtifact.has(piece.artifact_id)) {
         errataByArtifact.set(piece.artifact_id, (piece.errata ?? []).filter((e) => e.status === "active"));
       }
@@ -701,11 +721,11 @@ export class ArtifactReader {
       if (piece.blocks && piece.blocks.length > 0 && piece.content_hash) {
         md.parse(piece.markdown, segEnv);
         const segBytes = new TextEncoder().encode(piece.markdown);
-        piece.blocks.forEach((b, blockOrdinal) => {
+        piece.blocks.forEach((b) => {
           const relStart = Math.max(0, b.range.start - piece.byte_start);
           const relEnd = Math.min(segBytes.length, Math.max(relStart, b.range.end - piece.byte_start));
           const text = decoder.decode(segBytes.subarray(relStart, relEnd));
-          const domKey = `${currentSegIdx}:${b.id}`;
+          const domKey = `${segKey}:${b.id}`;
           if (b.kind === "page_marker") {
             const pageMatch = /^\s*\{(\d+)\}-{16,}\s*$/.exec(text)?.[1];
             if (pageMatch !== undefined) activePageIndex = Number(pageMatch);
@@ -736,16 +756,14 @@ export class ArtifactReader {
           wrapper.dataset.segmentArtifactId = piece.artifact_id;
           wrapper.dataset.segmentLabel = segLbl;
           if (activePageIndex !== null) wrapper.dataset.pdfPageIndex = String(activePageIndex);
-          const isFocused = Boolean(focus && landing.kind === "block" && focusMatchesBlock(focus, piece.artifact_id, b));
+          const isFocused = Boolean(!built && focus && landing.kind === "block" && focusMatchesBlock(focus, piece.artifact_id, b));
           if (isFocused) wrapper.classList.add("source-block-focus");
           wrapper.tabIndex = 0;
-          wrapper.setAttribute("aria-label", `分段 ${currentSegIdx + 1} 原文块 ${blockOrdinal + 1}`);
-          wrapper.title = `分段 ${currentSegIdx + 1} · 第 ${blockOrdinal + 1} 块 · 单击选择，Shift+单击连选多块，按 E 就地校对，右键手写或反查 PDF`;
           body.append(wrapper);
 
           const item: CanonicalBlockItem = {
             domKey,
-            segmentIndex: currentSegIdx,
+            segmentIndex: 0,
             segmentLabel: segLbl,
             artifactId: piece.artifact_id,
             conversionId: piece.conversion_id,
@@ -754,7 +772,7 @@ export class ArtifactReader {
             text,
             fallbackPdfPageIndex: activePageIndex,
           };
-          canonicalItems.push(item);
+          segItems.push(item);
           canonicalItemByDomKey.set(domKey, item);
           const ob: OutlineBlockDescriptor = {
             id: b.id,
@@ -764,7 +782,7 @@ export class ArtifactReader {
             text,
             kind: b.kind,
           };
-          outlineBlocks.push(ob);
+          segOutline.push(ob);
           outlineBlockByDomKey.set(domKey, ob);
           segAllBlocks.push({ domKey, block: b, rawText: text, fallbackPdfPageIndex: activePageIndex, wrapper });
         });
@@ -785,7 +803,7 @@ export class ArtifactReader {
             body.append(marker);
             continue;
           }
-          const domKey = `${currentSegIdx}:chunk-${fallbackOrdinal++}`;
+          const domKey = `${segKey}:chunk-${fallbackOrdinal++}`;
           const block = element("div"); block.className = "source-block";
           block.dataset.canonicalKey = domKey;
           if (activePageIndex !== null) block.dataset.pdfPageIndex = String(activePageIndex);
@@ -794,7 +812,7 @@ export class ArtifactReader {
           block.innerHTML = md.render(chunk.text, {});
           if (!block.innerHTML.trim()) block.append(element("pre", chunk.text));
           body.append(block);
-          outlineBlocks.push({
+          segOutline.push({
             id: domKey,
             domKey,
             artifactId: piece.artifact_id,
@@ -805,19 +823,53 @@ export class ArtifactReader {
       }
       if (piece.pages) section.dataset.pages = `${piece.pages.from}-${piece.pages.to}`;
       section.append(header, body);
-      article.append(section);
       const segState: CanonicalSegState = {
-        segmentIndex: currentSegIdx,
+        segmentIndex: 0,
+        labelled: -1,
+        key: pieceKey(piece),
         segment: piece,
+        section,
         body,
         env: segEnv,
         allBlocks: segAllBlocks,
+        items: segItems,
+        outline: segOutline,
       };
-      segments.push(segState);
+      stateBySection.set(section, segState);
       if (segAllBlocks.length > 0) {
         renderCanonicalSegmentBlocks(segState, false);
       }
+      return segState;
+    };
+
+    /** Rebuilds the document-order lists from the sections now in the article. */
+    const reindex = (): void => {
+      segments.length = 0;
+      canonicalItems.length = 0;
+      outlineBlocks.length = 0;
+      for (const section of article.querySelectorAll<HTMLElement>(":scope > .canonical-segment")) {
+        const state = stateBySection.get(section);
+        if (!state) continue;
+        const index = segments.length;
+        state.segmentIndex = index;
+        segments.push(state);
+        for (const item of state.items) { item.segmentIndex = index; canonicalItems.push(item); }
+        for (const block of state.outline) outlineBlocks.push(block);
+        if (state.labelled === index) continue;
+        state.labelled = index;
+        state.allBlocks.forEach((entry, blockOrdinal) => {
+          if (entry.block.kind === "page_marker") return;
+          entry.wrapper.setAttribute("aria-label", `分段 ${index + 1} 原文块 ${blockOrdinal + 1}`);
+          entry.wrapper.title = `分段 ${index + 1} · 第 ${blockOrdinal + 1} 块 · 单击选择，Shift+单击连选多块，按 E 就地校对，右键手写或反查 PDF`;
+        });
+      }
+    };
+
+    for (const piece of projection.pieces) {
+      article.append(piece.kind === "gap" ? mountGap(piece.pages) : mountSegment(piece).section);
     }
+    reindex();
+    built = true;
 
     const openCanonicalPdfForItems = (firstItem: CanonicalBlockItem, rangeItems: CanonicalBlockItem[]) => {
       void (async () => {
@@ -977,7 +1029,7 @@ export class ArtifactReader {
     };
 
     let fallbackMenuListener: ((event: MouseEvent) => void) | undefined;
-    if (canonicalItems.length > 0) {
+    const mountInk = (): void => {
       canonicalInk = new CanonicalInkController(canonicalItems, article, {
         onStatusHint: setStatusHint,
         coveredBlockIdsFor: (artifactId, blockId) => {
@@ -1012,6 +1064,9 @@ export class ArtifactReader {
         },
         onOpenPdfRange: openCanonicalPdfForItems,
       });
+    };
+    if (canonicalItems.length > 0) {
+      mountInk();
     } else {
       fallbackMenuListener = (event: MouseEvent): void => {
         const block = (event.target as Element).closest<HTMLElement>(".source-block:not(.source-page-marker)");
@@ -1042,6 +1097,211 @@ export class ArtifactReader {
       article.addEventListener("contextmenu", fallbackMenuListener);
     }
 
+    // 「解析这几页」: the gap cards, the parse they wait for, and its pages
+    // arriving in place.
+    const pdfId = projection.source_pdf_artifact_id;
+    let leases: ParseLease[] = [];
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let liveParses = new Set<string>();
+    const renderGaps = (): void => {
+      const job = gapParseJob(id);
+      for (const [card, pages] of gapCards) {
+        const hasBefore = Boolean(card.previousElementSibling?.classList.contains("canonical-segment"));
+        const hasAfter = Boolean(card.nextElementSibling?.classList.contains("canonical-segment"));
+        const state = gapCardState(pages, pdfId, job, leases);
+        // Untouched while nothing changed: an open 「技术详情」 or a focused button stays.
+        const stamp = JSON.stringify([state, hasBefore, hasAfter]);
+        if (card.dataset.stamp === stamp) continue;
+        // A card that grows or shrinks (status line, failure) must not push the
+        // text being read: below it when the pages asked for end the gap
+        // (the reader came up from there), otherwise above it.
+        if ("pages" in state) card.dataset.keeps = hasAfter && state.pages.to === pages.to ? "below" : "above";
+        const scroller = this.scrollerOf(card);
+        const below = card.nextElementSibling as HTMLElement | null;
+        const anchor = card.dataset.keeps === "below" && below && isInViewport(below, scroller) ? below : firstVisibleBlock();
+        const anchorTop = anchor ? viewportTopOf(anchor, scroller) : 0;
+        renderGapCard(card, {
+          gap: pages,
+          hasBefore,
+          hasAfter,
+          state,
+          onParse: (range) => {
+            startGapParse(id, pdfId, range);
+            renderGaps();
+            void pollLeases();
+          },
+          onDismiss: () => { dismissGapParse(id); renderGaps(); },
+          onOpenPdf: (pageIndex) => openCanonicalPdfPage(pageIndex, undefined, {
+            start: 0,
+            end: 0,
+            pdfPageIndex: pageIndex,
+            viewportTop: viewportTopOf(card, this.scrollerOf(card)),
+          }),
+        });
+        card.dataset.stamp = stamp;
+        if (anchor) scroller.scrollTop += viewportTopOf(anchor, scroller) - anchorTop;
+      }
+    };
+    const pollLeases = async (): Promise<void> => {
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
+      let live: ParseLease[] = [];
+      try { live = await canonicalParseLeases(); } catch { /* No signal: the cards stay actionable. */ }
+      if (generation !== this.generation) return;
+      leases = live;
+      const parses = new Set(live.filter(lease => lease.pdfId === pdfId).map(lease => `${lease.pages.from}-${lease.pages.to}`));
+      const job = gapParseJob(id);
+      // A parse of this book ended, whoever started it (an agent's read too): show its pages.
+      if ([...liveParses].some(pages => !parses.has(pages))) void refresh();
+      liveParses = parses;
+      renderGaps();
+      // Slower while nothing runs: an agent's read may start a parse of this book at any time.
+      if (gapCards.size) pollTimer = setTimeout(() => void pollLeases(), parses.size || (job && !job.failure) ? 3000 : 10_000);
+    };
+    const elapsedTimer = setInterval(() => { for (const card of gapCards.keys()) tickGapCards(card); }, 1000);
+
+    const disableLinks = (root: HTMLElement): void => {
+      root.querySelectorAll("a").forEach(link => { link.removeAttribute("href"); link.title = "链接导航尚未启用"; });
+    };
+
+    /** First block on screen: what the reader is looking at. */
+    const firstVisibleBlock = (): HTMLElement | null => {
+      const scroller = this.scrollerOf(article);
+      for (const state of segments) {
+        if (!isInViewport(state.section, scroller)) continue;
+        for (const child of state.body.children) {
+          if (isInViewport(child as HTMLElement, scroller)) return child as HTMLElement;
+        }
+      }
+      return null;
+    };
+
+    /**
+     * Brings the view up to `next` without redrawing what is already shown:
+     * segments keep their DOM (formulas, images, selection, an open errata
+     * editor), only the gaps and the newly parsed segments are placed.
+     */
+    const applyProjection = async (next: CanonicalReaderProjection): Promise<void> => {
+      const nextKeys = next.pieces.map(pieceKey);
+      if (nextKeys.length === shownPieces.length && nextKeys.every((key, index) => key === shownPieces[index])) {
+        renderGaps();
+        return;
+      }
+      const scroller = this.scrollerOf(article);
+      // What stays where it is on screen. A gap on screen that is being filled
+      // grows from the end that was asked for: the text below it stays when its
+      // last pages arrive, otherwise the new text starts where the card was.
+      let anchor: HTMLElement | null = firstVisibleBlock();
+      let anchorAfter: Element | null | undefined;
+      const filled = [...gapCards].find(([card, pages]) =>
+        !nextKeys.includes(pieceKey({ kind: "gap", pages })) && isInViewport(card, scroller))?.[0];
+      if (filled) {
+        const below = filled.nextElementSibling as HTMLElement | null;
+        if (filled.dataset.keeps === "below" && below && isInViewport(below, scroller)) {
+          anchor = below;
+        } else {
+          anchor = filled;
+          anchorAfter = filled.previousElementSibling;
+        }
+      }
+      const anchorTop = anchor ? viewportTopOf(anchor, scroller) : 0;
+      // Every shown segment must still be shown, unchanged and in the same order.
+      let cursor = 0;
+      const kept = segments.every((state) => {
+        const at = nextKeys.indexOf(state.key, cursor);
+        cursor = at + 1;
+        return at >= 0;
+      });
+      if (!kept) {
+        const reading = firstVisibleBlock();
+        const key = reading?.dataset.canonicalKey;
+        const item = key ? canonicalItemByDomKey.get(key) : undefined;
+        void this.open(id, title, item ? {
+          focus: {
+            start: item.block.range.start,
+            end: item.block.range.end,
+            blockIds: [item.block.id],
+            artifactId: item.artifactId,
+            viewportTop: viewportTopOf(reading!, scroller),
+          },
+        } : {});
+        return;
+      }
+      const shown = new Map(segments.map(state => [state.key, state]));
+      const sections = segments.map(state => state.section);
+      const firstPiece = (): Element | null => article.querySelector(":scope > .canonical-segment, :scope > .canonical-gap");
+      for (const card of gapCards.keys()) card.remove();
+      gapCards.clear();
+      const added: CanonicalSegState[] = [];
+      let upcoming = 0;
+      for (const piece of next.pieces) {
+        const before = sections[upcoming] ?? null;
+        if (piece.kind === "gap") {
+          article.insertBefore(mountGap(piece.pages), before);
+        } else if (shown.has(pieceKey(piece))) {
+          upcoming += 1;
+        } else {
+          const state = mountSegment(piece);
+          disableLinks(state.section);
+          added.push(state);
+          article.insertBefore(state.section, before);
+        }
+      }
+      shownPieces = nextKeys;
+      summary.textContent = projectionSummary(next);
+      if (canonicalInk) {
+        canonicalInk.reindex(reindex);
+      } else {
+        reindex();
+        if (canonicalItems.length > 0) {
+          if (fallbackMenuListener) article.removeEventListener("contextmenu", fallbackMenuListener);
+          fallbackMenuListener = undefined;
+          mountInk();
+        }
+      }
+      outlineHandle.update(outlineBlocks, loadedUnitMarkers);
+      if (anchorAfter !== undefined) anchor = (anchorAfter ? anchorAfter.nextElementSibling : firstPiece()) as HTMLElement | null;
+      renderGaps();
+      if (anchor) {
+        const held = anchor;
+        // WebKit does not anchor scrolling: what was being read stays where it was.
+        pin?.dispose();
+        pin = pinToViewportTop(() => held, anchorTop, (target) => this.scrollerOf(target), this.host);
+        pin.apply();
+        pin.watch(article);
+        this.settleLanding = pin.apply;
+      }
+      if (!added.length) return;
+      const markers = await getMarkdownUnitMarkers([...new Set(added.map(state => state.segment.artifact_id))]);
+      if (generation !== this.generation) return;
+      loadedUnitMarkers = [...loadedUnitMarkers, ...markers];
+      outlineHandle.update(outlineBlocks, loadedUnitMarkers);
+      canonicalInk?.setUnitMarkers(loadedUnitMarkers);
+      pin?.apply();
+      for (const state of added) {
+        const placed = await resolveSegmentImages(state.segment, state.body);
+        if (generation !== this.generation) return;
+        if (placed) pin?.apply();
+      }
+    };
+    let refreshing: Promise<void> = Promise.resolve();
+    const refresh = (): Promise<void> => {
+      refreshing = refreshing.then(async () => {
+        if (generation !== this.generation) return;
+        try {
+          const next = await canonicalReaderProjection(id);
+          if (generation === this.generation) await applyProjection(next);
+        } catch { /* The view keeps what it shows; the next parse event tries again. */ }
+      });
+      return refreshing;
+    };
+    const offGapParse = onGapParseChange((event) => {
+      if (event.canonicalId !== id || generation !== this.generation) return;
+      if (event.filled) void refresh();
+      else renderGaps();
+      void pollLeases();
+    });
+
     // Where the reader arrived: the block itself, or the start of its PDF page
     // when that page is shown from another snapshot.
     const landingTarget = (): HTMLElement | null => {
@@ -1052,7 +1312,8 @@ export class ArtifactReader {
       if (landing.kind !== "page") return null;
       const marker = article.querySelector<HTMLElement>(`.source-page-marker[data-pdf-page-index="${landing.pageIndex}"]`);
       if (marker) return marker;
-      return [...article.querySelectorAll<HTMLElement>(".canonical-segment[data-pages]")].find((section) => {
+      // Not parsed (yet): the gap card the reader left for the PDF page.
+      return [...article.querySelectorAll<HTMLElement>(".canonical-segment[data-pages], .canonical-gap[data-pages]")].find((section) => {
         const [from, to] = (section.dataset.pages ?? "").split("-").map(Number);
         return from <= landing.pageIndex + 1 && landing.pageIndex + 1 <= to;
       }) ?? null;
@@ -1069,9 +1330,13 @@ export class ArtifactReader {
       this.settleLanding = undefined;
       disposeReturnPoint?.();
       if (fallbackMenuListener) article.removeEventListener("contextmenu", fallbackMenuListener);
+      offGapParse();
+      clearTimeout(pollTimer);
+      clearInterval(elapsedTimer);
     };
 
     if (!projection.pieces.length) article.append(element("p", "规范解析正文暂无可读快照。"));
+    renderGaps();
     const arrivedAt = landingTarget();
     if (focus && arrivedAt) {
       if (landing.kind === "page" && focus.artifactId) {
@@ -1090,7 +1355,9 @@ export class ArtifactReader {
         else arrivedAt.after(note);
       }
       // A page start reads from the top; a block keeps the height it had, or is centred.
-      const top = landing.kind !== "block" ? 12 : focus.viewportTop ?? centredTop;
+      // Back from the PDF to a place without a block (a gap card): where it was on screen.
+      const backToPlace = landing.kind === "page" && !focus.artifactId && focus.viewportTop !== undefined;
+      const top = landing.kind === "block" ? focus.viewportTop ?? centredTop : backToPlace ? focus.viewportTop! : 12;
       // Coming from a snapshot with more above its first block than this view has:
       // the block keeps its height by leaving that much room above the document.
       let lead = 0;
@@ -1111,9 +1378,10 @@ export class ArtifactReader {
         });
       }
     }
-    article.querySelectorAll("a").forEach(link => { link.removeAttribute("href"); link.title = "链接导航尚未启用"; });
+    disableLinks(article);
 
     const uniqueSegArtifacts = [...new Set(segments.map((s) => s.segment.artifact_id))];
+    if (gapCards.size) void pollLeases();
     loadedUnitMarkers = await getMarkdownUnitMarkers(uniqueSegArtifacts);
     if (generation !== this.generation) return landing;
     outlineHandle.update(outlineBlocks, loadedUnitMarkers);
