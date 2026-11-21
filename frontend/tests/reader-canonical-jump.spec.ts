@@ -201,6 +201,23 @@ test("the boundary card lands on the PDF page when the stitched view shows it fr
   const hint = page.locator(".canonical-landing-note");
   await expect(hint).toContainText("PDF 第 2 页在规范解析正文中由另一个解析快照显示");
   await expect(hint).toBeInViewport({ ratio: 1 });
+  // Readable on the paper in every theme: text and background must differ clearly in lightness.
+  for (const theme of ["obsidian", "parchment", "slate"]) {
+    await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
+    const contrast = await hint.evaluate((node) => {
+      const probe = document.createElement("canvas").getContext("2d")!;
+      const lum = (colour: string) => {
+        probe.fillStyle = "#000"; probe.fillStyle = colour; probe.fillRect(0, 0, 1, 1);
+        const [r, g, b] = [...probe.getImageData(0, 0, 1, 1).data].slice(0, 3)
+          .map(v => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const style = getComputedStyle(node);
+      const [a, b] = [lum(style.color), lum(style.backgroundColor)].sort((x, y) => y - x);
+      return (a + 0.05) / (b + 0.05);
+    });
+    expect(contrast, theme).toBeGreaterThan(4.5);
+  }
   const after = await top(page, ".canonical-reader .source-page-marker[data-pdf-page-index='1']");
   expect(Math.abs(after - 12)).toBeLessThanOrEqual(1);
   // Earlier pages are above now: the reader can keep scrolling up.
@@ -229,7 +246,11 @@ test("a stitched view that cannot be read keeps the snapshot the reader asked fo
   expect(await open(page, "seg-b", "定理 2", { focus: await focusOf(page, "sb-21"), preferCanonical: true })).toBe(true);
   await expect(page.locator(".canonical-reader")).toHaveCount(0);
   await expect(page.locator("[data-source-block='sb-21']")).toHaveClass(/source-block-focus/);
-  await expect(page.locator(".canonical-status-hint")).toContainText("规范解析正文暂时打不开（缺少分段文件）");
+  const notice = page.locator(".canonical-status-hint");
+  await expect(notice).toContainText("规范解析正文暂时打不开（缺少分段文件）");
+  // The block is far below the top of the snapshot; the notice stays on screen with it.
+  await expect.poll(() => page.locator("#reader").evaluate(host => host.scrollTop)).toBeGreaterThan(200);
+  await expect(notice).toBeInViewport({ ratio: 1 });
 });
 
 test("the return chip keeps its size when the reader pane is a flex column, as in side-by-side mode", async ({ page }) => {

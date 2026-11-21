@@ -1159,7 +1159,8 @@ export class ArtifactReader {
     container.append(controls, layout);
     if (notice) {
       const note = element("p", notice);
-      note.className = "canonical-status-hint";
+      // Stays on screen: the located block is usually far below the top.
+      note.className = "canonical-status-hint is-arrival-notice";
       note.setAttribute("role", "status");
       controls.after(note);
     }
