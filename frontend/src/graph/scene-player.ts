@@ -87,6 +87,7 @@ import type {
   ToolScene,
 } from "../sandbox/scene/types";
 import { PROPOSE_STEP_CAP } from "../sandbox/scene/types";
+import { renderBubbleHtml } from "../sandbox/bubble";
 
 export { SCENE_PACING, type ScenePart } from "./scene-pacing";
 
@@ -265,10 +266,10 @@ export class ScenePlayer {
     this.hudSummary.className = "scene-hud-summary";
     this.hudStep = document.createElement("span");
     this.hudStep.className = "scene-hud-step";
-    this.hudType = document.createElement("span");
+    this.hudType = document.createElement("div");
     this.hudType.className = "scene-hud-type";
     this.hudType.hidden = true;
-    this.hudTypeText = document.createElement("span");
+    this.hudTypeText = document.createElement("div");
     this.hudTypeText.className = "scene-hud-type-text";
     const caret = document.createElement("span");
     caret.className = "scene-hud-caret";
@@ -475,14 +476,19 @@ export class ScenePlayer {
       await this.performPropose(scene, act, token);
       return;
     }
-    // `material.locate` types its quote like a search query.
-    const typed = act?.kind === "typewriter" ? act.text : act?.kind === "locate" ? clip(act.quote.replace(/\s+/g, " "), 60) : undefined;
+    const typed = act?.kind === "typewriter" ? act.text : act?.kind === "locate" ? act.quote : undefined;
     // 目录 / 页图 / 定位 windows need the result; Lean / Loogle also show their running state.
     const windowAct: WindowAct | undefined =
       act && isWindowAct(act) && (part !== "call" || RUNNING_WINDOWS.has(act.kind)) ? act : undefined;
     const parsing = !!scene.act && isParsingRun(scene);
     const running = scene.status === "running" && !!windowAct;
-    if (typed === undefined) this.setTyped(null);
+    // Locate quotes are reading content: render complete Markdown/math, never
+    // a 60-character or mid-typing source fragment. Search keeps its typewriter.
+    if (act?.kind === "locate") {
+      this.setTyped(act.quote, true);
+      this.hudType.classList.add("is-locate-quote");
+      this.hudTypeText.innerHTML = renderBubbleHtml(act.quote);
+    } else if (typed === undefined) this.setTyped(null);
     else if (part === "result" || this.reduced) this.setTyped(typed, true);
     else if (!(await this.typewrite(typed, token))) return;
     const core = this.host.core();
@@ -733,6 +739,7 @@ export class ScenePlayer {
   /** HUD typewriter line: `null` hides it; `done` shows the text at once. */
   private setTyped(text: string | null, done = false): void {
     this.hudType.hidden = text === null;
+    this.hudType.classList.remove("is-locate-quote");
     this.hudTypeText.textContent = text ?? "";
     this.hudType.classList.toggle("is-typing", text !== null && !done);
     if (text !== null) this.hudType.dataset.full = text;
@@ -771,6 +778,12 @@ export class ScenePlayer {
     else fillBlocked(win, act);
     this.host.hudHost.append(win);
     this.actWindow = win;
+    if (act.kind === "locate") {
+      // Long reading content must scroll below the replay controls, not cover
+      // them. Measure before placement so the bounded height participates.
+      const top = Math.max(ACT_MARGIN, this.hud.getBoundingClientRect().bottom - this.host.hudHost.getBoundingClientRect().top + ACT_MARGIN);
+      win.style.setProperty("--scene-locate-top", `${top}px`);
+    }
     if (!this.placeBeside(win, anchor)) win.classList.add("is-stage");
     this.renderRunning();
     return win;
@@ -791,6 +804,7 @@ export class ScenePlayer {
     const height = win.offsetHeight;
     const hostWidth = this.host.hudHost.clientWidth;
     const hostHeight = this.host.hudHost.clientHeight;
+    const minTop = Number.parseFloat(win.style.getPropertyValue("--scene-locate-top")) || ACT_MARGIN;
     if (hostWidth <= 0 || hostHeight <= 0) return false;
     const halfH = node.renderedOuterHeight() / 2;
     // Beside the node: right, left, below, above — the first that fits whole;
@@ -802,12 +816,15 @@ export class ScenePlayer {
       { left: x - width / 2, top: y - halfH - ACT_GAP - height },
     ];
     const fits = (c: { left: number; top: number }) =>
-      c.left >= ACT_MARGIN && c.top >= ACT_MARGIN && c.left + width <= hostWidth - ACT_MARGIN && c.top + height <= hostHeight - ACT_MARGIN;
+      c.left >= ACT_MARGIN && c.top >= minTop && c.left + width <= hostWidth - ACT_MARGIN && c.top + height <= hostHeight - ACT_MARGIN;
     const spot = candidates.find(fits) ?? candidates[0];
     const left = clamp(spot.left, ACT_MARGIN, Math.max(ACT_MARGIN, hostWidth - width - ACT_MARGIN));
-    const top = clamp(spot.top, ACT_MARGIN, Math.max(ACT_MARGIN, hostHeight - height - ACT_MARGIN));
+    const top = clamp(spot.top, minTop, Math.max(minTop, hostHeight - height - ACT_MARGIN));
     win.style.left = `${Math.round(left)}px`;
     win.style.top = `${Math.round(top)}px`;
+    // Technical details can grow after placement; keep their lower edge inside
+    // the stage as well, without changing any other tool's window layout.
+    if (win.dataset.act === "locate") win.style.setProperty("--scene-locate-top", `${Math.round(top)}px`);
     win.classList.add("is-anchored");
     win.dataset.anchor = anchor;
     return true;
@@ -1263,21 +1280,45 @@ function fillLean(win: HTMLElement, act: LeanAct, elapsed?: number): void {
 /** Locate window: the quote (highlighted when it matched), page, or why not. */
 function fillLocate(win: HTMLElement, act: LocateAct): void {
   actHead(win, "原文定位", act.page !== undefined ? `第 ${act.page} 页` : undefined);
-  const quote = element("blockquote", "scene-act-quote");
-  const text = clip(act.quote, 240);
-  if (act.phase === "ok") quote.append(element("mark", "scene-act-mark", text));
-  else quote.textContent = text;
+  const quote = element("blockquote", "scene-act-quote scene-locate-quote");
+  // Keep complete Markdown/math blocks: clipping source can cut a TeX delimiter.
+  // The bounded preview scrolls instead; raw HTML and external links stay inert.
+  quote.innerHTML = renderBubbleHtml(act.quote);
+  if (act.phase === "ok") quote.classList.add("scene-act-mark");
   quote.dataset.phase = act.phase;
   win.append(quote);
   if (act.phase === "ok") {
-    const verdict = element("p", "scene-act-verdict", [act.match ?? "已定位", act.page !== undefined ? `第 ${act.page} 页` : ""].filter(Boolean).join(" · "));
+    const verdict = element("p", "scene-act-verdict");
+    verdict.append(element("span", "scene-locate-match", act.match ?? "已定位"), " · ",
+      element("span", "scene-locate-page", act.page !== undefined ? `第 ${act.page} 页` : "具体页码不可确定"));
     verdict.dataset.verdict = "ok";
     win.append(verdict);
-    if (act.reason) win.append(element("p", "scene-act-foot", act.reason));
   } else if (act.phase !== "running") {
     const verdict = element("p", "scene-act-reason", act.reason ?? "未定位");
     verdict.dataset.verdict = act.phase;
     win.append(verdict);
+  }
+  if (act.diagnostics?.length) {
+    const list = element("ul", "scene-locate-diagnostics");
+    const labels = { page: "页码", match: "匹配", source: "原文", candidates: "候选", other: "补充说明" };
+    for (const diagnostic of act.diagnostics) {
+      const item = element("li", "scene-locate-diagnostic");
+      item.dataset.category = diagnostic.category;
+      item.append(element("span", "scene-locate-category", labels[diagnostic.category]),
+        element("span", "scene-locate-message", diagnostic.message));
+      list.append(item);
+    }
+    win.append(list);
+  }
+  if (act.artifactId || act.diagnostics?.length) {
+    const details = document.createElement("details");
+    details.className = "scene-locate-details";
+    details.append(element("summary", "", "技术详情"));
+    if (act.artifactId) details.append(element("p", "scene-act-note", "快照 ID"), element("code", "scene-locate-artifact", act.artifactId));
+    for (const diagnostic of act.diagnostics ?? []) {
+      details.append(element("code", "scene-locate-code", diagnostic.code), element("p", "scene-locate-original", diagnostic.original));
+    }
+    win.append(details);
   }
 }
 
@@ -1295,11 +1336,6 @@ function fillBlocked(win: HTMLElement, act: ProposeAct): void {
   }
   win.append(list);
   if (act.blocks.length > 8) win.append(element("p", "scene-act-foot", `另有 ${act.blocks.length - 8} 个问题`));
-}
-
-function clip(text: string, max: number): string {
-  const chars = [...text];
-  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : text;
 }
 
 const ghostId = (localRef: string): string => `scene-ghost:${localRef}`;

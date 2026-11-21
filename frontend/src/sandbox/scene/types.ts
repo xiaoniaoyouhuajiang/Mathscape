@@ -292,6 +292,14 @@ export interface LeanAct {
   error?: string;
 }
 
+export interface LocateDiagnostic {
+  code: string;
+  category: "page" | "match" | "source" | "candidates" | "other";
+  message: string;
+  /** Unmodified tool diagnostic, shown only in technical details. */
+  original: string;
+}
+
 /** `material.locate`: the quote, the match and its page, or why not. */
 export interface LocateAct {
   kind: "locate";
@@ -303,6 +311,8 @@ export interface LocateAct {
   page?: number;
   candidates?: number;
   reason?: string;
+  artifactId?: string;
+  diagnostics?: LocateDiagnostic[];
 }
 
 export type SceneAct =
