@@ -193,8 +193,18 @@ export class CanonicalInkController {
     this.refreshSelectionUI();
   }
 
+  /** Block wrappers are created once and re-rendered in place, so one index
+   * serves every decorate pass; a per-block attribute query is quadratic. */
+  private wrappers: Map<string, HTMLElement> | undefined;
+
   private wrapperFor(domKey: string): HTMLElement | null {
-    return this.article.querySelector<HTMLElement>(`[data-canonical-key="${CSS.escape(domKey)}"]`);
+    const cached = this.wrappers?.get(domKey);
+    if (cached?.isConnected) return cached;
+    this.wrappers = new Map();
+    for (const el of this.article.querySelectorAll<HTMLElement>("[data-canonical-key]")) {
+      this.wrappers.set(el.dataset.canonicalKey!, el);
+    }
+    return this.wrappers.get(domKey) ?? null;
   }
 
   private clearSelection(): void {

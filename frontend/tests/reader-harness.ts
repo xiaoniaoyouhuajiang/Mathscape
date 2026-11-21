@@ -91,8 +91,14 @@ const errataStore = {
 };
 const unitMarkers: any[] = [];
 let canonicalProjection: any = null;
+// Extra physical Markdown snapshots (e.g. the segments of a canonical view).
+const markdownSnapshots: Record<string, AnchoredMarkdown> = {};
+function setMarkdownSnapshot(id: string, doc: AnchoredMarkdown): void {
+  markdownSnapshots[id] = doc;
+  files[id] = { media: "text/markdown", bytes: new TextEncoder().encode(doc.source) };
+}
 const backlinkRequests: unknown[] = [];
-const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash", markdownOnlyReason: null as string | null };
+const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash", markdownOnlyReason: null as string | null, canonicalProjectionError: null as string | null };
 const byteOffset = (text: string): number => new TextEncoder().encode(markdown.slice(0, markdown.indexOf(text))).length;
 function patchReview(status: string): unknown {
   const start = byteOffset("x^2");
@@ -135,6 +141,7 @@ function handle(command: string, payload: any): any {
     return structuredClone(unitMarkers.filter(m => wanted.has(m.artifact_id)));
   }
   if (command === "get_canonical_reader_projection") {
+    if (behavior.canonicalProjectionError) throw new Error(behavior.canonicalProjectionError);
     if (!canonicalProjection) throw new Error("规范解析正文未登记");
     return structuredClone(canonicalProjection);
   }
@@ -367,6 +374,8 @@ function handle(command: string, payload: any): any {
     return { errata: item, affected_unit_ids: [] };
   }
   if (command === "get_markdown_document") {
+    const extra = markdownSnapshots[(payload as { artifactId: string }).artifactId];
+    if (extra) return structuredClone(extra);
     const doc = anchored((payload as { conversionId: string }).conversionId);
     doc.snapshot.content_hash = behavior.documentHash;
     return doc;
@@ -433,5 +442,5 @@ window.addEventListener("mathscape:open-source", event => {
   });
 });
 Object.assign(window, {
-  harness: { ink, locatedObjects, errataStore, errataEvents, unitMarkers, setCanonicalProjection: (p: any) => { canonicalProjection = p; }, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ink, locatedObjects, errataStore, errataEvents, unitMarkers, setCanonicalProjection: (p: any) => { canonicalProjection = p; }, setMarkdownSnapshot, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
 });
