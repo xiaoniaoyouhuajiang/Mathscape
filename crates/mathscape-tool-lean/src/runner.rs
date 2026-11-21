@@ -553,11 +553,23 @@ fn request_force_kill(child: &mut Child) -> io::Result<()> {
 }
 
 #[cfg(unix)]
-fn send_process_group_signal(child: &Child, signal: nix::sys::signal::Signal) -> io::Result<()> {
+fn send_process_group_signal(
+    child: &mut Child,
+    signal: nix::sys::signal::Signal,
+) -> io::Result<()> {
     use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
     let process_group = Pid::from_raw(-(child.id() as i32));
-    match kill(process_group, signal) {
+    let signal_group = || match kill(process_group, signal) {
         Ok(()) | Err(Errno::ESRCH) => Ok(()),
+        Err(error) => Err(error),
+    };
+    match signal_group() {
+        Ok(()) => Ok(()),
+        // macOS refuses to signal a group whose leader is an unreaped zombie.
+        // Reap it, then signal whatever descendants are left in the group.
+        Err(Errno::EPERM) if child.try_wait()?.is_some() => {
+            signal_group().map_err(|error| io::Error::other(error.to_string()))
+        }
         Err(error) => Err(io::Error::other(error.to_string())),
     }
 }

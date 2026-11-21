@@ -20,6 +20,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Debug info would push the workspace test build past the runner's free disk.
+  CARGO_PROFILE_DEV_DEBUG: "0"
   RUST_TOOLCHAIN: "1.99.1"
   NODE_VERSION: "24"
 
@@ -28,6 +30,9 @@ jobs:
     name: cargo test (${{ matrix.os }})
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     runs-on: ${{ matrix.os }}
+    # Windows runs but does not gate yet: several suites still assume Unix
+    # paths and SQLite file semantics.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:

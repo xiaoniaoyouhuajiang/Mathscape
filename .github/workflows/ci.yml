@@ -15,6 +15,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Debug info would push the workspace test build past the runner's free disk.
+  CARGO_PROFILE_DEV_DEBUG: "0"
   # Pinned so new Clippy lints arrive in a deliberate bump, not in an unrelated PR.
   RUST_TOOLCHAIN: "1.99.1"
   NODE_VERSION: "24"
@@ -79,5 +81,5 @@ jobs:
         if: failure()
         with:
           name: playwright-${{ matrix.browser }}
-          path: .test-runs/
+          path: frontend/.test-runs/
           retention-days: 7

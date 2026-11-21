@@ -403,6 +403,7 @@ export function computeLandscapeLayout(
   if (primaryIds.length > 0) {
     const headless = cytoscape({
       headless: true,
+      styleEnabled: true,
       elements: simElements,
       style: [
         {
