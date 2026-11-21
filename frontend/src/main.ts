@@ -29,8 +29,8 @@ import {
   setInkSourceCandidateProvider,
 } from "./ink/links";
 import { ArtifactReader, type ReaderOpenOptions } from "./reader/reader";
-import { sourceNodeDetail } from "./reader/content";
-import { findSourceArtifactNode, readerTargetId, splitSourceItemsFrom } from "./reader/openable";
+import { readingFocusOf, sourceNodeDetail } from "./reader/content";
+import { findSourceArtifactNode, isCanonicalMarkdownId, readerTargetId, splitSourceItemsFrom } from "./reader/openable";
 import { mountReviewWorkspace } from "./review/workspace";
 import { AppShell } from "./shell/app-shell";
 import {
@@ -245,8 +245,9 @@ async function openSplitReader(target: SplitReaderTarget): Promise<void> {
         if (!detail.artifact_id) throw new Error("关联的来源对象没有可打开的原文");
         artifactId = detail.artifact_id;
         options = {
-          focus: detail.byte_range ? { ...detail.byte_range, blockIds: detail.markdown_block_ids } : undefined,
+          focus: readingFocusOf(detail, target.title),
           inkFocus: detail.ink,
+          preferCanonical: true,
         };
       }
     }
@@ -276,7 +277,10 @@ function openPrimaryInSplit(link: InkNoteLink): void {
   if (target.kind === "markdown") {
     void openSplitReader({
       kind: "artifact", id: target.artifact_id, title: link.target_label,
-      options: { focus: { start: target.start, end: target.end, blockIds: target.block_ids } },
+      options: {
+        focus: { start: target.start, end: target.end, blockIds: target.block_ids, label: link.target_label },
+        preferCanonical: true,
+      },
     });
     return;
   }
@@ -458,6 +462,10 @@ const reviewWorkspace = mountReviewWorkspace(el.reviewWorkspaceHost, {
   getGraph: () => currentSnapshot?.landscape_graph,
 });
 const reader = new ArtifactReader(el.readerHost);
+reader.setCanonicalResolver((artifactId) => {
+  const node = findSourceArtifactNode(currentSnapshot?.landscape_graph.nodes ?? [], artifactId);
+  return node?.domain_id && isCanonicalMarkdownId(node.domain_id) ? { id: node.domain_id, title: node.label } : undefined;
+});
 reader.setOverlayCloseHandler(() => {
   reader.close();
   el.readerHost.hidden = true;
@@ -562,7 +570,9 @@ inspectorController = new InspectorController(el.nodeDetail, {
       restoreReaderHome({ hide: false });
     }
     el.readerHost.hidden = false;
-    void reader.open(artifactId, title, { focus });
+    // Reading from a map node continues in the stitched 规范解析正文 when the
+    // snapshot belongs to one; discovery and review open snapshots themselves.
+    void reader.open(artifactId, title, { focus, preferCanonical: true });
   },
   createParseForm: (pdf, marker) => artifactController.createParseForm(pdf, marker),
   refreshSnapshot: () => loadSnapshot(),
@@ -766,7 +776,8 @@ eventBus.on("open-ink-link-target", ({ link }) => {
     const artifact = findSourceArtifactNode(nodes, target.artifact_id);
     el.readerHost.hidden = false;
     void reader.open(target.artifact_id, artifact?.label ?? link.target_label, {
-      focus: { start: target.start, end: target.end, blockIds: target.block_ids },
+      focus: { start: target.start, end: target.end, blockIds: target.block_ids, label: link.target_label },
+      preferCanonical: true,
     });
   })();
 });
@@ -912,8 +923,9 @@ async function openMapReader(target: SplitReaderTarget, current: () => boolean):
         if (!detail.artifact_id) throw new Error("该来源对象没有可打开的原文");
         artifactId = detail.artifact_id;
         options = {
-          focus: detail.byte_range ? { ...detail.byte_range, blockIds: detail.markdown_block_ids } : undefined,
+          focus: readingFocusOf(detail, target.title),
           inkFocus: detail.ink,
+          preferCanonical: true,
         };
       }
     }
@@ -948,7 +960,7 @@ async function openSearchResult(hit: SearchHit, action: SearchAction): Promise<v
   }
   const domainId = target.kind === "artifact" ? target.artifact_id : target.kind === "source_object" ? target.object_id : target.node_id;
   const readerTarget: SplitReaderTarget | undefined = target.kind === "artifact"
-    ? { kind: "artifact", id: domainId, title: hit.title }
+    ? { kind: "artifact", id: domainId, title: hit.title, options: { preferCanonical: true } }
     : target.kind === "source_object" ? { kind: "source_object", id: domainId, title: hit.title } : undefined;
   // 并排阅读: source results open in the left pane, the note stays.
   if (action === "open" && readerTarget && split) { await openSplitReader(readerTarget); return; }

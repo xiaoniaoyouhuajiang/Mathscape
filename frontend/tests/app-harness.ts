@@ -48,11 +48,39 @@ const richMapEdges = [
   { id: "e-al-in", source: "r-cite-unit", target: "rel-al-1", relation_id: "rel:al:1", role: "source", ordinal: null, direction: "into_relation", directed: true },
   { id: "e-al-out", source: "rel-al-1", target: "r-sem-c", relation_id: "rel:al:1", role: "target", ordinal: null, direction: "out_of_relation", directed: true },
 ];
+const canonicalMarkdownId = "mathscape:canonical-markdown/v1/mathscape.marker.math-ocr.v1/marker-1/pdf-notes";
+// md-long is an earlier parse run (PDF pages 1–3); md-1 continues on page 4.
+extraCommands.set("get_canonical_reader_projection", () => ({
+  canonical_id: canonicalMarkdownId, source_pdf_artifact_id: "pdf-notes", head_artifact_id: "md-1", total_pages: 4,
+  coverage: { covered: [{ from: 1, to: 4 }], missing: [], head_covered: [{ from: 4, to: 4 }] },
+  skipped: [],
+  pieces: [
+    {
+      kind: "segment", conversion_id: "c-long", artifact_id: "md-long",
+      snapshot_pages: { from: 1, to: 3 }, pages: { from: 1, to: 3 }, overlap: null, overlap_trimmed: false,
+      is_head: false, byte_start: 0, content_hash: "sha256:long", blocks: longBlocks, markdown: longSource,
+    },
+    {
+      kind: "segment", conversion_id: "c1", artifact_id: "md-1",
+      snapshot_pages: { from: 4, to: 4 }, pages: { from: 4, to: 4 }, overlap: null, overlap_trimmed: false,
+      is_head: true, byte_start: 0, content_hash: "sha256:test",
+      blocks: [{ id: "b1", kind: "heading", range: { start: 0, end: mdBytes.length } }], markdown: mdSource,
+    },
+  ],
+}));
 extraCommands.set("get_desktop_snapshot", () => {
   const custom = (window as unknown as { __CUSTOM_BUNDLE__?: { snapshot: unknown } }).__CUSTOM_BUNDLE__;
   if (custom?.snapshot) return structuredClone(custom.snapshot);
   const value = structuredClone(snapshot);
   if (sessionStorage.getItem("harness.sandbox") === "1") value.landscape_graph.nodes.push(structuredClone(citeNode), structuredClone(citeArtNode));
+  // The Markdown snapshots folded into one 「规范解析正文」 node, as the real map shows them.
+  if (sessionStorage.getItem("harness.canonical") === "1") {
+    const md = (value.landscape_graph.nodes as { id: string }[]).find(node => node.id === "r-md-1");
+    Object.assign(md!, {
+      domain_id: canonicalMarkdownId, label: "notes.pdf · 规范解析正文",
+      openable_artifact_id: "md-1", aliased_artifact_ids: ["md-long", "md-1"],
+    });
+  }
   if (sessionStorage.getItem("harness.richMap") === "1") {
     (value.landscape_graph.nodes as unknown[]).push(structuredClone(citeNode), ...structuredClone(richMapNodes));
     (value.landscape_graph.edges as unknown[]).push(...structuredClone(richMapEdges));

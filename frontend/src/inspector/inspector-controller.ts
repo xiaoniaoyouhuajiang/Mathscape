@@ -25,7 +25,7 @@ import {
   type EditContext,
   type UserChangeRequest,
 } from "../map-edit";
-import { sourceNodeDetail, type SourceUnitErrataReview } from "../reader/content";
+import { readingFocusOf, sourceNodeDetail, type SourceUnitErrataReview } from "../reader/content";
 import { computeLineDiff, markErrataUnitReviewed } from "../reader/markdown-errata";
 import { readerTargetId, tryOpenableArtifactId } from "../reader/openable";
 import { markdownRenderer } from "../reader/markdown";
@@ -396,9 +396,7 @@ export class InspectorController {
           this.delegate.onOpenReaderWithFocus(
             detail.artifact_id!,
             detail.display_title ?? node.label,
-            detail.byte_range
-              ? { ...detail.byte_range, blockIds: detail.markdown_block_ids }
-              : undefined!,
+            readingFocusOf(detail, detail.display_title ?? node.label)!,
           );
         };
         insertedButtons.push(button);

@@ -37,6 +37,8 @@ export class ReaderInkLinks {
     initialUnitMarkers: readonly MarkdownUnitMarker[] = [],
     private readonly onEditErrata?: (range: { first: number; last: number }) => void,
     private readonly coveredBlockIdsFor?: (blockId: string) => string[],
+    /** Present when this snapshot belongs to a 「规范解析正文」 view. */
+    private readonly onContinueInCanonical?: (range: { first: number; last: number }) => void,
   ) {
     this.unitMarkers = initialUnitMarkers;
     this.hint.className = "ink-patch-hint";
@@ -316,6 +318,9 @@ export class ReaderInkLinks {
         : []),
       ...(this.onOpenPdf
         ? [{ label: "定位对应 PDF 原页", onSelect: () => { this.highlight(null); this.onOpenPdf!(range); } }]
+        : []),
+      ...(this.onContinueInCanonical
+        ? [{ label: "在规范解析正文中从这里继续阅读", onSelect: () => { this.highlight(null); this.onContinueInCanonical!(range); } }]
         : []),
       { label: "新建关联手稿…", onSelect: () => this.create(range, x, y) },
       {

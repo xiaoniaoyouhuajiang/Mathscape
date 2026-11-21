@@ -3,6 +3,8 @@ import { getSourceBacklink } from "./backlink";
 import { markdownRenderer } from "./markdown";
 import { canonicalReaderProjection, gapLabel, pagesLabel, projectionSummary, segmentLabel, splitByPageMarkers, type CanonicalReaderSegment } from "./canonical";
 import { isCanonicalMarkdownId } from "./openable";
+import { focusMatchesBlock, pageIndexOfBlock, planCanonicalLanding, snapshotPageSpan, type CanonicalLanding } from "./canonical-landing";
+import { blockLabel, isInViewport, mountReturnPoint, pinToViewportTop, scrollParentOf, viewportTopOf } from "./reading-position";
 import { markdownDocument, MarkdownSelection, type AnchoredMarkdown, type MarkdownBlock, type PatchReviewMode } from "./selection";
 import { ReaderInkLinks } from "./ink-links";
 import { CanonicalInkController, type CanonicalBlockItem } from "./canonical-ink";
@@ -30,7 +32,25 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, text = ""): HTML
   return result;
 }
 
-export interface ReaderFocus { start: number; end: number; blockIds?: string[] }
+export interface ReaderFocus {
+  start: number;
+  end: number;
+  blockIds?: string[];
+  /** Physical snapshot the coordinates belong to. The 「规范解析正文」 view only
+   * matches blocks of that snapshot when it is set. */
+  artifactId?: string;
+  /** Zero-based PDF page of the position: where the 「规范解析正文」 view lands
+   * when it shows that page from another snapshot. */
+  pdfPageIndex?: number;
+  /** Put the block this many px below the top of the reader instead of
+   * centering it, so a switch of view does not move what is being read. */
+  viewportTop?: number;
+  /** Names the block on the 「回到出发处」 chip. */
+  label?: string;
+}
+
+/** The 「规范解析正文」 view a physical snapshot is stitched into. */
+export interface CanonicalReadingTarget { id: string; title: string }
 
 export interface ReaderReturnTarget {
   id: string;
@@ -55,6 +75,11 @@ export interface ReaderOpenOptions {
   patch?: { runId: string; mode: PatchReviewMode };
   conversionId?: string | null;
   inkFocus?: InkReaderFocus;
+  /** Reading, not discovery or review: a Markdown snapshot that belongs to a
+   * 「规范解析正文」 opens there, at the same block. Ignored with `patch`. */
+  preferCanonical?: boolean;
+  /** Shown above a physical snapshot the reader fell back to. */
+  notice?: string;
 }
 
 interface ErrataPdfReferenceTarget {
@@ -81,8 +106,14 @@ export class ArtifactReader {
   private pdfRefPane: HTMLElement | null = null;
   private pdfRefViewer: MountedPdfViewer | null = null;
   private pdfRefCloseListeners = new Set<() => void>();
+  private canonicalResolver: ((artifactId: string) => CanonicalReadingTarget | undefined) | undefined;
 
   constructor(private host: HTMLElement) {}
+
+  /** Physical snapshot id → the 「规范解析正文」 view it belongs to, if any. */
+  setCanonicalResolver(resolver: ((artifactId: string) => CanonicalReadingTarget | undefined) | undefined): void {
+    this.canonicalResolver = resolver;
+  }
 
   setOverlayCloseHandler(handler: (() => void) | undefined): void {
     this.overlayCloseHandler = handler;
@@ -227,6 +258,17 @@ export class ArtifactReader {
 
   /** False means the read failed or was superseded by another open/close. */
   async open(id: string, title: string, options: ReaderOpenOptions = {}): Promise<boolean> {
+    if (options.preferCanonical && !options.patch && !isCanonicalMarkdownId(id)) {
+      const canonical = this.canonicalResolver?.(id);
+      if (canonical) {
+        const focus = options.focus ?? { start: 0, end: 0 };
+        return this.openCanonicalAt(canonical, { ...focus, artifactId: focus.artifactId ?? id }, {
+          id,
+          title,
+          options: { ...options, preferCanonical: false },
+        });
+      }
+    }
     this.close();
     this.state = "loading";
     eventBus.emit("reader-opened");
@@ -253,8 +295,19 @@ export class ArtifactReader {
     try {
       if (isCanonicalMarkdownId(id)) {
         // Logical canonical id: a stitched read-only view, never content_info.
-        await this.canonical(id, title, generation, focus, mainPane);
+        const landing = await this.canonical(id, title, generation, focus, mainPane);
         if (generation !== this.generation) return false;
+        if (landing.kind === "snapshot" && focus?.artifactId) {
+          // The position is not readable in the stitched view: keep the snapshot.
+          const { artifactId, pdfPageIndex: _page, viewportTop: _top, ...snapshotFocus } = focus;
+          const fallback = this.snapshotFallback;
+          return this.open(artifactId, fallback?.id === artifactId ? fallback.title : title, {
+            ...(fallback?.id === artifactId ? fallback.options : {}),
+            focus: snapshotFocus,
+            preferCanonical: false,
+            notice: "这一处在规范解析正文中没有对应的可读位置，已保留在解析快照中。",
+          });
+        }
         status.remove();
         this.state = "ready";
         this.lastOpen = { id, title, options: { ...options } };
@@ -271,7 +324,7 @@ export class ArtifactReader {
       } else if (info.media_type === "application/pdf") {
         await this.pdf(info, generation, options, mainPane);
       } else if (info.media_type === "text/markdown") {
-        await this.markdown(info, title, generation, mainPane, focus, patch, conversionId);
+        await this.markdown(info, title, generation, mainPane, focus, patch, conversionId, options.notice);
       } else if (info.media_type === "application/json" || info.media_type.startsWith("text/")) {
         const bytes = await readSmallFile(info);
         if (generation !== this.generation) return false;
@@ -303,6 +356,27 @@ export class ArtifactReader {
       }
       return false;
     }
+  }
+
+  /** Snapshot to go back to when the stitched view cannot show the position. */
+  private snapshotFallback: { id: string; title: string; options: ReaderOpenOptions } | undefined;
+
+  private async openCanonicalAt(
+    canonical: CanonicalReadingTarget,
+    focus: ReaderFocus,
+    fallback: { id: string; title: string; options: ReaderOpenOptions },
+  ): Promise<boolean> {
+    this.snapshotFallback = fallback;
+    try {
+      return await this.open(canonical.id, canonical.title, { focus });
+    } finally {
+      if (this.snapshotFallback === fallback) this.snapshotFallback = undefined;
+    }
+  }
+
+  /** The element that scrolls the open document. */
+  private scrollerOf(element: HTMLElement): HTMLElement {
+    return scrollParentOf(element, this.scrollContainer());
   }
 
   private blobUrl(bytes: Uint8Array, media: string): string {
@@ -357,9 +431,27 @@ export class ArtifactReader {
     generation: number,
     focus?: ReaderFocus,
     container: HTMLElement = this.host,
-  ): Promise<void> {
+  ): Promise<CanonicalLanding> {
     const projection = await canonicalReaderProjection(id);
-    if (generation !== this.generation) return;
+    if (generation !== this.generation) return { kind: "none" };
+    let landing: CanonicalLanding = focus ? planCanonicalLanding(projection, focus) : { kind: "none" };
+    if (focus?.artifactId && landing.kind === "needs_page") {
+      // The block's page is shown from another snapshot; find which page it is.
+      let pageIndex: number | undefined;
+      try {
+        const backlink = await getSourceBacklink({
+          artifact_id: focus.artifactId,
+          conversion_id: null,
+          start: focus.start,
+          end: focus.end,
+          block_ids: focus.blockIds ?? [],
+        });
+        pageIndex = backlink.marker_page_ids?.[0] ?? backlink.pdf_page_indices?.[0];
+      } catch { /* No page mapping: the snapshot stays the place to read it. */ }
+      if (generation !== this.generation) return { kind: "none" };
+      landing = pageIndex === undefined ? { kind: "snapshot" } : planCanonicalLanding(projection, focus, pageIndex);
+    }
+    if (landing.kind === "snapshot") return landing;
     const controls = element("div"); controls.className = "reader-controls";
     controls.append(element("span", projectionSummary(projection)));
     const openRootPdf = element("button", "打开原始 PDF");
@@ -430,12 +522,13 @@ export class ArtifactReader {
     let loadedUnitMarkers: Awaited<ReturnType<typeof getMarkdownUnitMarkers>> = [];
     let segIdx = 0;
 
-    const resolveSegmentImages = async (segment: CanonicalReaderSegment, body: HTMLElement): Promise<void> => {
+    /** Resolves to whether the segment had images to place (they shift the layout). */
+    const resolveSegmentImages = async (segment: CanonicalReaderSegment, body: HTMLElement): Promise<boolean> => {
       const placeholders = body.querySelectorAll<HTMLElement>("[data-image-ref]");
-      if (!placeholders.length) return;
+      if (!placeholders.length) return false;
       let info: ContentInfo | undefined;
       try { info = await contentInfo(segment.artifact_id); } catch { /* shown per image */ }
-      if (generation !== this.generation) return;
+      if (generation !== this.generation) return false;
       const context = info?.contexts.find(c => c.conversion_id === segment.conversion_id) ?? info?.contexts[0];
       const bases = context?.paths.filter(p => p.artifact_id === segment.artifact_id) ?? [];
       for (const placeholder of placeholders) {
@@ -449,7 +542,7 @@ export class ArtifactReader {
           const imageInfo = await contentInfo([...candidates][0]);
           if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(imageInfo.media_type)) throw new Error("不支持的图片类型");
           const data = await readSmallFile(imageInfo);
-          if (generation !== this.generation) return;
+          if (generation !== this.generation) return false;
           const img = element("img"); img.alt = placeholder.textContent ?? "";
           img.src = this.blobUrl(data, imageInfo.media_type);
           placeholder.replaceWith(img);
@@ -457,6 +550,7 @@ export class ArtifactReader {
           placeholder.textContent = "[" + String(error) + "]";
         }
       }
+      return true;
     };
 
     const applyErrataUpdate = (artifactId: string, saved?: MarkdownBlockErrata, removeIds: readonly string[] = []) => {
@@ -600,6 +694,7 @@ export class ArtifactReader {
             marker.dataset.canonicalKey = domKey;
             marker.dataset.sourceBlock = b.id;
             const pageNum = pageMatch !== undefined ? Number(pageMatch) : activePageIndex;
+            if (pageNum !== null) marker.dataset.pdfPageIndex = String(pageNum);
             marker.append(element("span", pageNum !== null ? `PDF 第 ${pageNum + 1} 页` : "PDF 页边界"));
             if (pageNum !== null) {
               const jump = element("button", "查看原页 ↗");
@@ -621,13 +716,7 @@ export class ArtifactReader {
           wrapper.dataset.segmentArtifactId = piece.artifact_id;
           wrapper.dataset.segmentLabel = segLbl;
           if (activePageIndex !== null) wrapper.dataset.pdfPageIndex = String(activePageIndex);
-          const isFocused = Boolean(
-            focus && (
-              focus.blockIds?.length
-                ? focus.blockIds.includes(b.id)
-                : focus.end > focus.start && b.range.start < focus.end && b.range.end > focus.start
-            ),
-          );
+          const isFocused = Boolean(focus && landing.kind === "block" && focusMatchesBlock(focus, piece.artifact_id, b));
           if (isFocused) wrapper.classList.add("source-block-focus");
           wrapper.tabIndex = 0;
           wrapper.setAttribute("aria-label", `分段 ${currentSegIdx + 1} 原文块 ${blockOrdinal + 1}`);
@@ -665,6 +754,7 @@ export class ArtifactReader {
           if (chunk.kind === "page") {
             activePageIndex = chunk.pageId;
             const marker = element("div"); marker.className = "source-block source-page-marker";
+            marker.dataset.pdfPageIndex = String(chunk.pageId);
             marker.append(element("span", `PDF 第 ${chunk.pageId + 1} 页`));
             const jump = element("button", "查看原页 ↗");
             jump.type = "button";
@@ -693,6 +783,7 @@ export class ArtifactReader {
           });
         }
       }
+      if (piece.pages) section.dataset.pages = `${piece.pages.from}-${piece.pages.to}`;
       section.append(header, body);
       article.append(section);
       const segState: CanonicalSegState = {
@@ -931,28 +1022,77 @@ export class ArtifactReader {
       article.addEventListener("contextmenu", fallbackMenuListener);
     }
 
+    // Where the reader arrived: the block itself, or the start of its PDF page
+    // when that page is shown from another snapshot.
+    const landingTarget = (): HTMLElement | null => {
+      if (landing.kind === "block") return article.querySelector<HTMLElement>(".source-block-focus");
+      if (landing.kind === "segment") {
+        return article.querySelector<HTMLElement>(`.canonical-segment[data-artifact-id="${CSS.escape(landing.artifactId)}"]`);
+      }
+      if (landing.kind !== "page") return null;
+      const marker = article.querySelector<HTMLElement>(`.source-page-marker[data-pdf-page-index="${landing.pageIndex}"]`);
+      if (marker) return marker;
+      return [...article.querySelectorAll<HTMLElement>(".canonical-segment[data-pages]")].find((section) => {
+        const [from, to] = (section.dataset.pages ?? "").split("-").map(Number);
+        return from <= landing.pageIndex + 1 && landing.pageIndex + 1 <= to;
+      }) ?? null;
+    };
+    let pin: ReturnType<typeof pinToViewportTop> | undefined;
+    let disposeReturnPoint: (() => void) | undefined;
+
     this.disposeDocument = () => {
       errataEditor.close();
       closeErrataDiffPopover();
       canonicalInk?.dispose();
       outlineHandle.dispose();
+      pin?.dispose();
+      disposeReturnPoint?.();
       if (fallbackMenuListener) article.removeEventListener("contextmenu", fallbackMenuListener);
     };
 
     if (!projection.pieces.length) article.append(element("p", "规范解析正文暂无可读快照。"));
-    if (focus) {
-      article.querySelector<HTMLElement>(".source-block-focus")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const arrivedAt = landingTarget();
+    if (focus && arrivedAt) {
+      if (landing.kind === "page" && focus.artifactId) {
+        const snapshotId = focus.artifactId;
+        const { pdfPageIndex: _page, viewportTop: _top, artifactId: _artifact, ...snapshotFocus } = focus;
+        setStatusHint(`这一块所在的 PDF 第 ${landing.pageIndex + 1} 页在规范解析正文中由另一个解析快照显示，已定位到该页开头。`);
+        const openSnapshot = element("button", "在原快照中查看这一块");
+        openSnapshot.type = "button";
+        openSnapshot.className = "canonical-status-action";
+        openSnapshot.onclick = () => void this.open(snapshotId, `${title} · 解析快照`, { focus: snapshotFocus });
+        statusHint.append(" ", openSnapshot);
+      }
+      if (focus.viewportTop !== undefined) {
+        pin = pinToViewportTop(landingTarget, focus.viewportTop, (target) => this.scrollerOf(target), this.host);
+        pin.apply();
+      } else {
+        arrivedAt.scrollIntoView(landing.kind === "block" ? { behavior: "smooth", block: "center" } : { block: "start" });
+      }
+      if (landing.kind !== "segment") {
+        disposeReturnPoint = mountReturnPoint({
+          container,
+          listenOn: this.host,
+          label: focus.label ?? (landing.kind === "page" ? `PDF 第 ${landing.pageIndex + 1} 页` : blockLabel(arrivedAt)),
+          find: landingTarget,
+          scrollerOf: (target) => this.scrollerOf(target),
+        });
+      }
     }
     article.querySelectorAll("a").forEach(link => { link.removeAttribute("href"); link.title = "链接导航尚未启用"; });
 
     const uniqueSegArtifacts = [...new Set(segments.map((s) => s.segment.artifact_id))];
     loadedUnitMarkers = await getMarkdownUnitMarkers(uniqueSegArtifacts);
-    if (generation !== this.generation) return;
+    if (generation !== this.generation) return landing;
     outlineHandle.update(outlineBlocks, loadedUnitMarkers);
     canonicalInk?.setUnitMarkers(loadedUnitMarkers);
+    pin?.apply();
     for (const seg of segments) {
-      await resolveSegmentImages(seg.segment, seg.body);
+      const placed = await resolveSegmentImages(seg.segment, seg.body);
+      if (generation !== this.generation) return landing;
+      if (placed) pin?.apply();
     }
+    return landing;
   }
 
   private async markdown(
@@ -963,6 +1103,7 @@ export class ArtifactReader {
     focus?: ReaderFocus,
     patch?: ReaderOpenOptions["patch"],
     conversionId?: string | null,
+    notice?: string,
   ): Promise<void> {
     const [initialDoc, unitMarkers, initialErrata] = await Promise.all([
       markdownDocument(info.artifact_id, conversionId ?? info.contexts[0]?.conversion_id ?? null),
@@ -994,12 +1135,109 @@ export class ArtifactReader {
     paperStage.append(article);
     layout.append(outlineHandle.nav, paperStage);
     container.append(controls, layout);
+    if (notice) {
+      const note = element("p", notice);
+      note.className = "canonical-status-hint";
+      note.setAttribute("role", "status");
+      controls.after(note);
+    }
     let rawMode = false, version = 0;
     let initialFocusScrolled = false;
     let inkLinks: ReaderInkLinks | undefined;
+    let selection!: MarkdownSelection;
     const errataEditor = new InlineErrataEditorController();
     const currentConversionId = (): string | null =>
       info.contexts[Number(contextSelect.value) || 0]?.conversion_id ?? conversionId ?? null;
+
+    // Reading on past this snapshot: it is one parse run's pages, while the
+    // 「规范解析正文」 view stitches every run. Review of a patch stays here.
+    const canonicalTarget = patch ? undefined : this.canonicalResolver?.(info.artifact_id);
+    let encoded: { of: AnchoredMarkdown; bytes: Uint8Array } | undefined;
+    const blockText = (index: number): string => {
+      if (encoded?.of !== document) encoded = { of: document, bytes: new TextEncoder().encode(document.source) };
+      const { range } = document.blocks[index];
+      return new TextDecoder().decode(encoded.bytes.subarray(range.start, range.end));
+    };
+    const blockElement = (index: number): HTMLElement | null =>
+      article.querySelector<HTMLElement>(`[data-source-block="${CSS.escape(document.blocks[index].id)}"]`);
+    const enterCanonical = (index: number | null): void => {
+      if (!canonicalTarget) return;
+      const block = index === null ? undefined : document.blocks[index];
+      const wrapper = index === null ? null : blockElement(index);
+      const snapshotFocus = block ? { start: block.range.start, end: block.range.end, blockIds: [block.id] } : undefined;
+      void this.openCanonicalAt(
+        canonicalTarget,
+        snapshotFocus
+          ? {
+              ...snapshotFocus,
+              artifactId: info.artifact_id,
+              pdfPageIndex: pageIndexOfBlock(document.blocks, blockText, index!),
+              viewportTop: wrapper ? viewportTopOf(wrapper, this.scrollerOf(wrapper)) : undefined,
+            }
+          : { start: 0, end: 0, artifactId: info.artifact_id },
+        { id: info.artifact_id, title, options: { conversionId: currentConversionId(), focus: snapshotFocus } },
+      );
+    };
+    /** The block being read: the selection or located block when it is on
+     * screen, otherwise the first block showing in the reader. */
+    const currentReadingBlock = (): number | null => {
+      if (rawMode) return null;
+      const onScreen = (index: number): boolean => {
+        const wrapper = document.blocks[index].kind === "page_marker" ? null : blockElement(index);
+        return Boolean(wrapper && isInViewport(wrapper, this.scrollerOf(wrapper)));
+      };
+      const range = selection.targetRange();
+      if (range) {
+        for (let index = range.first; index <= range.last; index++) if (onScreen(index)) return index;
+      }
+      const located = article.querySelector<HTMLElement>(".source-block-focus")?.dataset.sourceBlock;
+      const locatedIndex = located ? document.blocks.findIndex(block => block.id === located) : -1;
+      if (locatedIndex >= 0 && onScreen(locatedIndex)) return locatedIndex;
+      const first = document.blocks.findIndex((_, index) => onScreen(index));
+      return first >= 0 ? first : null;
+    };
+    const boundaryCard = (edge: "start" | "end"): { card: HTMLElement; text: HTMLElement; button: HTMLButtonElement } => {
+      const card = element("div");
+      card.className = `reader-boundary-card is-${edge}`;
+      card.setAttribute("role", "note");
+      card.hidden = true;
+      const text = element("span");
+      const button = element("button", edge === "start" ? "继续向上阅读" : "继续向下阅读");
+      button.type = "button";
+      button.title = "进入按页序拼接的规范解析正文，停在这一块";
+      card.append(text, button);
+      return { card, text, button };
+    };
+    const startCard = canonicalTarget ? boundaryCard("start") : undefined;
+    const endCard = canonicalTarget ? boundaryCard("end") : undefined;
+    if (canonicalTarget && startCard && endCard) {
+      const continueReading = element("button", "在规范解析正文中继续阅读");
+      continueReading.type = "button";
+      continueReading.className = "reader-canonical-entry";
+      continueReading.title = "切换到按页序拼接的完整正文并停在当前这一块，可以继续向前或向后阅读";
+      continueReading.onclick = () => enterCanonical(currentReadingBlock());
+      controls.append(continueReading);
+      paperStage.prepend(startCard.card);
+      paperStage.append(endCard.card);
+    }
+    const refreshBoundaryCards = (): void => {
+      if (!startCard || !endCard) return;
+      const content = document.blocks.map((block, index) => (block.kind === "page_marker" ? -1 : index)).filter(index => index >= 0);
+      const span = snapshotPageSpan(document.blocks, blockText);
+      const usable = !rawMode && content.length > 0;
+      // A snapshot that starts on the first PDF page has nothing before it.
+      startCard.card.hidden = !usable || span?.first === 0;
+      endCard.card.hidden = !usable;
+      startCard.text.textContent = span
+        ? `本快照从 PDF 第 ${span.first + 1} 页开始。要接着往前读，请进入规范解析正文。`
+        : "本快照只包含一次解析的页。要接着往前读，请进入规范解析正文。";
+      endCard.text.textContent = span
+        ? `本快照到 PDF 第 ${span.last + 1} 页为止。要接着往后读，请进入规范解析正文。`
+        : "本快照只包含一次解析的页。要接着往后读，请进入规范解析正文。";
+      startCard.button.onclick = () => enterCanonical(content[0]);
+      endCard.button.onclick = () => enterCanonical(content[content.length - 1]);
+    };
+    let disposeReturnPoint: (() => void) | undefined;
     const resolveFocusedBlockRange = (doc: AnchoredMarkdown): { first: number; last: number } | null => {
       if (!focus) return null;
       const matched: number[] = [];
@@ -1015,7 +1253,6 @@ export class ArtifactReader {
       const bounds = anchor.getBoundingClientRect();
       inkLinks?.create(range, bounds.left, bounds.bottom + 4);
     };
-    let selection!: MarkdownSelection;
     const applyLocalErrataState = (saved?: MarkdownBlockErrata, removeIds: readonly string[] = []) => {
       const drop = new Set(removeIds);
       const next = activeErrata.filter((item) => item.status === "active" && !drop.has(item.errata_id));
@@ -1212,6 +1449,12 @@ export class ArtifactReader {
         const match = activeErrata.find((e) => e.status === "active" && e.first_block_id === blockId);
         return match?.covered_block_ids.length ? match.covered_block_ids : [blockId];
       },
+      canonicalTarget
+        ? (range) => {
+            const index = document.blocks.findIndex((block, i) => i >= range.first && i <= range.last && block.kind !== "page_marker");
+            enterCanonical(index >= 0 ? index : null);
+          }
+        : undefined,
     );
     selection.setOnSelectionChange(() => inkLinks?.syncActionPill());
     selection.setOnEditErrata((range) => openErrataForRange(range));
@@ -1222,12 +1465,14 @@ export class ArtifactReader {
       selection.dispose();
       inkLinks?.dispose();
       outlineHandle.dispose();
+      disposeReturnPoint?.();
     };
     render = async (): Promise<void> => {
       const current = ++version;
       errataEditor.close();
       closeErrataDiffPopover();
       this.revokeImages();
+      refreshBoundaryCards();
       if (rawMode) {
         outlineHandle.setHiddenForRaw(true);
         article.replaceChildren(element("pre", document.source));
@@ -1339,7 +1584,17 @@ export class ArtifactReader {
       outlineHandle.update(outlineBlocks, unitMarkers);
       if (focus && !initialFocusScrolled) {
         initialFocusScrolled = true;
-        (article.querySelector<HTMLElement>(".source-block-focus") as HTMLElement | null)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        const located = article.querySelector<HTMLElement>(".source-block-focus");
+        located?.scrollIntoView({ behavior: "smooth", block: "center" });
+        if (located) {
+          disposeReturnPoint = mountReturnPoint({
+            container,
+            listenOn: this.host,
+            label: focus.label ?? blockLabel(located),
+            find: () => article.querySelector<HTMLElement>(".source-block-focus"),
+            scrollerOf: (target) => this.scrollerOf(target),
+          });
+        }
       }
       selection.refresh();
       inkLinks?.decorate();

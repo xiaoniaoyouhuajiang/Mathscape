@@ -44,6 +44,25 @@ export interface SourceNodeDetail {
 }
 export function sourceNodeDetail(nodeId: string): Promise<SourceNodeDetail> { return invoke("get_source_node_detail", { nodeId }); }
 
+/**
+ * Reader focus for a source unit / span: its block in the physical snapshot,
+ * plus what the 「规范解析正文」 view needs to land on the same place (owning
+ * snapshot, PDF page) and to name it on the 「回到出发处」 chip.
+ */
+export function readingFocusOf(detail: SourceNodeDetail, label?: string | null): {
+  start: number; end: number; blockIds: string[]; artifactId?: string; pdfPageIndex?: number; label?: string;
+} | undefined {
+  if (!detail.byte_range) return undefined;
+  const backlink = detail.pdf_backlink && detail.pdf_backlink.kind !== "markdown_only" ? detail.pdf_backlink : undefined;
+  return {
+    ...detail.byte_range,
+    blockIds: detail.markdown_block_ids,
+    artifactId: detail.artifact_id ?? undefined,
+    pdfPageIndex: backlink?.marker_page_ids?.[0] ?? backlink?.pdf_page_indices?.[0],
+    label: (label ?? detail.display_title) || undefined,
+  };
+}
+
 export interface MarkdownUnitMarker {
   unit_id: string;
   title: string;
