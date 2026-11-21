@@ -14,20 +14,7 @@ use mathscape_agent::{
 };
 
 fn fixture_program() -> PathBuf {
-    if let Some(path) = std::env::var_os("CARGO_BIN_EXE_mathscape-codex-fixture") {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return path;
-        }
-    }
-    let exe = std::env::current_exe().expect("current_exe");
-    let candidate = exe
-        .parent()
-        .and_then(Path::parent)
-        .expect("target/<profile>/deps")
-        .join("mathscape-codex-fixture");
-    assert!(candidate.is_file(), "missing {}", candidate.display());
-    candidate
+    PathBuf::from(env!("CARGO_BIN_EXE_mathscape-codex-fixture"))
 }
 
 static N: AtomicU64 = AtomicU64::new(0);
@@ -207,11 +194,18 @@ fn one_process_serves_many_turns_and_threads() {
         let params = &start["params"];
         assert_eq!(params["ephemeral"], false);
         assert_eq!(params["threadSource"], "mathscape");
-        let args = params["config"]["mcp_servers.mathscape.args"].to_string();
-        assert!(args.contains("--round-file"), "{args}");
-        assert!(
-            args.contains(&env.round_file().display().to_string()),
-            "{args}"
+        let args = params["config"]["mcp_servers.mathscape.args"].as_array().unwrap();
+        assert_eq!(args.len(), 5);
+        assert_eq!(args[0], "mcp");
+        assert_eq!(args[1], "--workspace");
+        assert_eq!(
+            Path::new(args[2].as_str().unwrap()).canonicalize().unwrap(),
+            env.root.path().join("ws").canonicalize().unwrap()
+        );
+        assert_eq!(args[3], "--round-file");
+        assert_eq!(
+            Path::new(args[4].as_str().unwrap()).canonicalize().unwrap(),
+            env.round_file().canonicalize().unwrap()
         );
         let instructions = params["developerInstructions"].as_str().unwrap();
         assert!(!instructions.contains(round1.as_str()));
