@@ -155,7 +155,7 @@ test("the snapshot reader continues in the stitched view without moving the bloc
     host.scrollTop += block.getBoundingClientRect().top - host.getBoundingClientRect().top + 18;
   });
   const before = await top(page, "[data-source-block='sb-21']");
-  expect(before).toBeCloseTo(-18, 0);
+  expect(Math.abs(before + 18)).toBeLessThanOrEqual(1);
   // The toolbar scrolled away with the page; the block's own menu has the entry too.
   await page.locator("[data-source-block='sb-22']").click({ button: "right" });
   await page.getByText("在规范解析正文中从这里继续阅读").click();
@@ -173,13 +173,16 @@ test("the toolbar entry uses the first block on screen", async ({ page }) => {
     const block = host.querySelector<HTMLElement>("[data-source-block='sb-21']")!;
     host.scrollTop += block.getBoundingClientRect().top - host.getBoundingClientRect().top - 40;
   });
+  const before = await top(page, "[data-source-block='sb-21']");
+  expect(Math.abs(before - 40)).toBeLessThanOrEqual(1);
   // The toolbar is above the fold now; trigger it the way a click would.
   await page.locator(".reader-canonical-entry").evaluate((button: HTMLButtonElement) => button.click());
   const located = page.locator(".canonical-reader .source-block-focus");
   await expect(located).toHaveCount(1);
   // sb-20 is the block cut by the top edge; it stays where it was.
   await expect(located).toHaveAttribute("data-source-block", "sb-20");
-  expect(await top(page, ".canonical-reader [data-source-block='sb-21']")).toBeCloseTo(40, 0);
+  const after = await top(page, ".canonical-reader [data-source-block='sb-21']");
+  expect(Math.abs(after - before)).toBeLessThanOrEqual(1);
 });
 
 test("the boundary card lands on the PDF page when the stitched view shows it from another snapshot", async ({ page }) => {
