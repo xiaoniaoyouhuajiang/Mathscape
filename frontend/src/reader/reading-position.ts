@@ -1,5 +1,7 @@
 /** Scroll position helpers shared by the snapshot reader and the 「规范解析正文」 view. */
 
+import { t } from "../i18n";
+
 /** Nearest ancestor that actually scrolls; `fallback` when none does yet. */
 export function scrollParentOf(element: HTMLElement, fallback: HTMLElement): HTMLElement {
   for (let node = element.parentElement; node; node = node.parentElement) {
@@ -88,14 +90,14 @@ export function mountReturnPoint(options: {
   const back = document.createElement("button");
   back.type = "button";
   back.className = "reader-return-btn";
-  back.textContent = `↩ 回到出发处 · ${options.label}`;
-  back.title = "滚回刚才定位到的那一块";
+  back.textContent = t("reader.returnPoint.label", { label: options.label });
+  back.title = t("reader.returnPoint.title");
   const dismiss = document.createElement("button");
   dismiss.type = "button";
   dismiss.className = "reader-return-dismiss";
   dismiss.textContent = "×";
-  dismiss.title = "不再显示";
-  dismiss.setAttribute("aria-label", "不再显示回到出发处");
+  dismiss.title = t("reader.returnPoint.dismissTitle");
+  dismiss.setAttribute("aria-label", t("reader.returnPoint.dismissAriaLabel"));
   chip.append(back, dismiss);
   container.append(chip);
 
@@ -139,5 +141,5 @@ export function blockLabel(element: HTMLElement, limit = 18): string {
   copy.querySelectorAll(".katex-mathml, button, .ink-block-marker, .block-action-pill, .unit-map-badge-row").forEach(node => node.remove());
   const text = (copy.textContent ?? "").replace(/\s+/g, " ").trim();
   const chars = [...text];
-  return chars.length > limit ? chars.slice(0, limit).join("") + "…" : text || "定位块";
+  return chars.length > limit ? chars.slice(0, limit).join("") + "…" : text || t("reader.blockLabelFallback");
 }

@@ -70,16 +70,14 @@ pub(super) fn save_patch_set_in(
             },
         )
         .optional()?
-    {
-        if stored_run != patch_set.run_id.as_str()
+        && (stored_run != patch_set.run_id.as_str()
             || stored_base != patch_set.base_snapshot.artifact_id.as_str()
             || stored_input != patch_set.base_input_fingerprint.as_str()
-            || stored_fingerprint != patch_set.fingerprint.as_str()
-        {
-            return Err(SqliteStoreError::DiscoveryInvariant(
-                "Markdown patch set identity conflicts with the stored record".into(),
-            ));
-        }
+            || stored_fingerprint != patch_set.fingerprint.as_str())
+    {
+        return Err(SqliteStoreError::DiscoveryInvariant(
+            "Markdown patch set identity conflicts with the stored record".into(),
+        ));
     }
     if let Some(stored_id) = connection
         .query_row(

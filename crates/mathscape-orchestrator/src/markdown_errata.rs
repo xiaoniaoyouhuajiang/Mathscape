@@ -61,7 +61,11 @@ impl EffectiveByteMap {
     /// - Offsets landing inside an errata-overridden region snap cleanly to
     ///   that errata's physical block slot boundaries (`raw_start` / `raw_end`),
     ///   guaranteeing valid UTF-8 boundaries and stable `SourceSpan` anchoring.
-    pub fn effective_range_to_physical(&self, eff_start: usize, eff_end: usize) -> Option<TextByteRange> {
+    pub fn effective_range_to_physical(
+        &self,
+        eff_start: usize,
+        eff_end: usize,
+    ) -> Option<TextByteRange> {
         if eff_start >= eff_end || self.segments.is_empty() {
             return None;
         }
@@ -76,7 +80,9 @@ impl EffectiveByteMap {
             .find(|seg| last_byte >= seg.eff_start && last_byte < seg.eff_end)?;
 
         let phys_start = match start_seg.kind {
-            EffectiveByteSegmentKind::Raw => start_seg.raw_start + (eff_start - start_seg.eff_start),
+            EffectiveByteSegmentKind::Raw => {
+                start_seg.raw_start + (eff_start - start_seg.eff_start)
+            }
             EffectiveByteSegmentKind::Errata { .. } => start_seg.raw_start,
         };
         let phys_end = match end_seg.kind {
@@ -301,7 +307,10 @@ pub fn resolve_errata_target_range(
         let mut expanded = false;
         for errata in active_errata {
             if errata.base_byte_start < range_end && errata.base_byte_end > range_start {
-                if let Some(e_first) = doc.blocks.iter().position(|b| b.id == errata.first_block_id)
+                if let Some(e_first) = doc
+                    .blocks
+                    .iter()
+                    .position(|b| b.id == errata.first_block_id)
                     && e_first < start_idx
                 {
                     start_idx = e_first;
@@ -321,10 +330,7 @@ pub fn resolve_errata_target_range(
     }
 
     let blocks = &doc.blocks[start_idx..=end_idx];
-    if blocks
-        .iter()
-        .any(|b| b.kind == PAGE_MARKER_STRUCTURAL_KIND)
-    {
+    if blocks.iter().any(|b| b.kind == PAGE_MARKER_STRUCTURAL_KIND) {
         return Err(ErrataValidationError::ContainsPageMarker);
     }
 

@@ -23,9 +23,7 @@ use mathscape_mcp::{McpServer, McpWorkspace};
 use mathscape_orchestrator::{
     anchor_markdown, normalize_errata_corrected_text, resolve_errata_target_range,
 };
-use mathscape_store_sqlite::{
-    MarkdownErrataSourceKind, SqliteArtifactStore, UpsertMarkdownErrata,
-};
+use mathscape_store_sqlite::{MarkdownErrataSourceKind, SqliteArtifactStore, UpsertMarkdownErrata};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -285,16 +283,14 @@ impl ErrataFixture {
             .unwrap();
 
         // Save a manual errata on Snapshot 1 fixing `C_r^{n+1}` -> `C_n^{r+1}` (and slightly lengthening the block).
-        let doc1 = anchor_markdown(
-            StableId::parse(&snap1).unwrap(),
-            None,
-            snap1_body.clone(),
-        )
-        .unwrap();
+        let doc1 =
+            anchor_markdown(StableId::parse(&snap1).unwrap(), None, snap1_body.clone()).unwrap();
         let target1_block = doc1
             .blocks
             .iter()
-            .find(|b| snap1_body[b.range.start as usize..b.range.end as usize].contains("C_r^{n+1}"))
+            .find(|b| {
+                snap1_body[b.range.start as usize..b.range.end as usize].contains("C_r^{n+1}")
+            })
             .unwrap();
         let resolved1 = resolve_errata_target_range(
             &doc1,
@@ -332,16 +328,14 @@ impl ErrataFixture {
             .unwrap();
 
         // Save a discovery_patch errata on Snapshot 2 fixing `错误定理名称` -> `二项式反演定理`.
-        let doc2 = anchor_markdown(
-            StableId::parse(&snap2).unwrap(),
-            None,
-            snap2_body.clone(),
-        )
-        .unwrap();
+        let doc2 =
+            anchor_markdown(StableId::parse(&snap2).unwrap(), None, snap2_body.clone()).unwrap();
         let target2_block = doc2
             .blocks
             .iter()
-            .find(|b| snap2_body[b.range.start as usize..b.range.end as usize].contains("错误定理名称"))
+            .find(|b| {
+                snap2_body[b.range.start as usize..b.range.end as usize].contains("错误定理名称")
+            })
             .unwrap();
         let resolved2 = resolve_errata_target_range(
             &doc2,
@@ -425,7 +419,10 @@ fn material_read_applies_errata_for_md_byte_range_single_pdf_snapshot_and_stitch
     assert_eq!(applied.len(), 1, "{md_read}");
     assert_eq!(applied[0]["errata_id"], f.errata1_id);
     assert_eq!(applied[0]["source_kind"], "manual");
-    assert_eq!(applied[0]["physical_byte_range"]["start"], f.errata1_range.0);
+    assert_eq!(
+        applied[0]["physical_byte_range"]["start"],
+        f.errata1_range.0
+    );
     assert_eq!(applied[0]["physical_byte_range"]["end"], f.errata1_range.1);
 
     // 2. Direct md_byte_range read strictly inside page 2 (no errata overlap).
@@ -439,7 +436,12 @@ fn material_read_applies_errata_for_md_byte_range_single_pdf_snapshot_and_stitch
         }),
     );
     assert!(!is_error, "{clean_read}");
-    assert!(clean_read["text"].as_str().unwrap().contains("范德蒙德恒等式"));
+    assert!(
+        clean_read["text"]
+            .as_str()
+            .unwrap()
+            .contains("范德蒙德恒等式")
+    );
     assert!(!diagnostic_codes(&clean_read).contains(&"markdown_errata_applied".to_owned()));
     assert!(clean_read["details"]["applied_errata"].is_null());
 
@@ -520,8 +522,14 @@ fn material_grep_searches_effective_text_and_maps_hits_back_to_readable_physical
     assert_eq!(hit_new["status"], "ok", "{hit_new}");
     let hits = hit_new["hits"].as_array().unwrap();
     assert_eq!(hits.len(), 1, "{hit_new}");
-    assert_eq!(hits[0]["locator"]["md_byte_range"]["start"], f.errata1_range.0);
-    assert_eq!(hits[0]["locator"]["md_byte_range"]["end"], f.errata1_range.1);
+    assert_eq!(
+        hits[0]["locator"]["md_byte_range"]["start"],
+        f.errata1_range.0
+    );
+    assert_eq!(
+        hits[0]["locator"]["md_byte_range"]["end"],
+        f.errata1_range.1
+    );
     assert!(hits[0]["snippet"].as_str().unwrap().contains("C_n^{r+1}"));
 
     // Passing the hit's locator unchanged to material.read quotes the corrected text.
@@ -554,8 +562,12 @@ fn material_grep_searches_effective_text_and_maps_hits_back_to_readable_physical
     assert!(!is_error, "{after_hit}");
     let after_hits = after_hit["hits"].as_array().unwrap();
     assert_eq!(after_hits.len(), 1, "{after_hit}");
-    let phys_start = after_hits[0]["locator"]["md_byte_range"]["start"].as_u64().unwrap() as usize;
-    let phys_end = after_hits[0]["locator"]["md_byte_range"]["end"].as_u64().unwrap() as usize;
+    let phys_start = after_hits[0]["locator"]["md_byte_range"]["start"]
+        .as_u64()
+        .unwrap() as usize;
+    let phys_end = after_hits[0]["locator"]["md_byte_range"]["end"]
+        .as_u64()
+        .unwrap() as usize;
     assert_eq!(&f.snap1_body[phys_start..phys_end], "范德蒙德恒等式");
 
     // 4. Grepping the PDF id scans canonical snapshots through their effective text.
@@ -568,7 +580,12 @@ fn material_grep_searches_effective_text_and_maps_hits_back_to_readable_physical
     let pdf_hits = pdf_grep["hits"].as_array().unwrap();
     assert_eq!(pdf_hits.len(), 1, "{pdf_grep}");
     assert_eq!(pdf_hits[0]["artifact_id"], f.snap2);
-    assert!(pdf_hits[0]["snippet"].as_str().unwrap().contains("二项式反演定理"));
+    assert!(
+        pdf_hits[0]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("二项式反演定理")
+    );
 }
 
 #[test]
@@ -576,8 +593,7 @@ fn material_locate_and_propose_changes_roundtrip_with_errata_and_r2_soundness() 
     let f = ErrataFixture::new();
 
     // A. Locate & propose the FULL corrected block.
-    let full_quote =
-        "组合数恒等式（已人工核对原书）：$C_n^r + C_n^{r+1} = C_{n+1}^{r+1}$ (3)，是杨辉三角的核心递推性质。";
+    let full_quote = "组合数恒等式（已人工核对原书）：$C_n^r + C_n^{r+1} = C_{n+1}^{r+1}$ (3)，是杨辉三角的核心递推性质。";
     let (loc_full, is_error) = call(
         &f.server,
         "material.locate",

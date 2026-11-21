@@ -122,7 +122,8 @@ const PROPOSED_CHANGE_SETS_MIGRATION: &str =
     include_str!("../../../migrations/0023_proposed_change_sets.sql");
 const PHASE2_PR_B_MIGRATION: &str = include_str!("../../../migrations/0024_phase2_pr_b.sql");
 const STUDY_MARKS_MIGRATION: &str = include_str!("../../../migrations/0025_study_marks.sql");
-const MARKDOWN_ERRATA_MIGRATION: &str = include_str!("../../../migrations/0026_markdown_errata.sql");
+const MARKDOWN_ERRATA_MIGRATION: &str =
+    include_str!("../../../migrations/0026_markdown_errata.sql");
 const SUPPORTED_SCHEMA_VERSION: i64 = 26;
 
 #[derive(Debug, Error)]
@@ -2555,13 +2556,12 @@ fn validate_discovery_run_recovery_schema(connection: &Connection) -> Result<(),
             });
         }
     }
-    for index in ["discovery_run_dispositions_by_decision"] {
-        if !schema_object_exists(connection, "index", index)? {
-            return Err(SqliteStoreError::MissingSchemaObject {
-                object_kind: "index",
-                name: index,
-            });
-        }
+    let index = "discovery_run_dispositions_by_decision";
+    if !schema_object_exists(connection, "index", index)? {
+        return Err(SqliteStoreError::MissingSchemaObject {
+            object_kind: "index",
+            name: index,
+        });
     }
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if version >= 12 {

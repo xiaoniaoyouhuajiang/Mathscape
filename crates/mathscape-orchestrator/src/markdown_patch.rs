@@ -224,7 +224,7 @@ pub fn rewrite_patch_set_replacements(
     }
     for patch in &mut rewritten.patches {
         if let Some(replacement) = replacements.get(&patch.patch_ref) {
-            if replacement.as_bytes().len() > mathscape_domain::MAX_REPLACEMENT_BYTES
+            if replacement.len() > mathscape_domain::MAX_REPLACEMENT_BYTES
                 || replacement.contains('\0')
             {
                 return Err(format!("replacement for {} is invalid", patch.patch_ref));
@@ -318,9 +318,7 @@ fn range_is_single_block(blocks: &[InputBlock], range: &TextByteRange) -> bool {
         .any(|block| block.range.start <= range.start && range.end <= block.range.end)
 }
 
-fn issue_map<'a>(
-    issues: &'a [CanonicalDiscoveryIssue],
-) -> HashMap<&'a str, &'a CanonicalDiscoveryIssue> {
+fn issue_map(issues: &[CanonicalDiscoveryIssue]) -> HashMap<&str, &CanonicalDiscoveryIssue> {
     issues
         .iter()
         .map(|issue| (issue.issue_ref.as_str(), issue))
@@ -400,9 +398,7 @@ pub fn resolve_patch_proposals(
             });
             continue;
         };
-        if text.is_empty()
-            || proposal.replacement.as_bytes().len() > mathscape_domain::MAX_REPLACEMENT_BYTES
-        {
+        if text.is_empty() || proposal.replacement.len() > mathscape_domain::MAX_REPLACEMENT_BYTES {
             diagnostics.push(PatchDiagnostic {
                 code: "invalid_value".into(),
                 path: format!("{path}.replacement"),

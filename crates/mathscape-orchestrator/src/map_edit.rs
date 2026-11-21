@@ -484,14 +484,12 @@ fn plan(
                             .filter_map(|id| final_map.get(id))
                             .filter_map(source_context)
                             .collect::<BTreeSet<_>>();
-                        if contexts.len() == 1 {
-                            if let Some(artifact) = contexts
+                        if contexts.len() == 1
+                            && let Some(artifact) = contexts
                                 .iter()
                                 .find_map(|value| value.strip_prefix("artifact:"))
-                            {
-                                out.payload["payload"]["surface_content_artifact"] =
-                                    json!(artifact);
-                            }
+                        {
+                            out.payload["payload"]["surface_content_artifact"] = json!(artifact);
                         }
                     }
                 }

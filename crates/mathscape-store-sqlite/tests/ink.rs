@@ -3,7 +3,6 @@ use mathscape_store_sqlite::{SqliteArtifactStore, SqliteStoreError};
 use rusqlite::Connection;
 use std::{
     fs,
-    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -191,7 +190,7 @@ fn closed_session_can_resume_with_same_epoch_after_restart() {
 
 #[test]
 fn failed_request_rolls_back_operation_head_and_can_retry() {
-    let path = PathBuf::from(std::env::temp_dir()).join(format!(
+    let path = std::env::temp_dir().join(format!(
         "mathscape-ink-p1-{}-{}.sqlite3",
         std::process::id(),
         SystemTime::now()

@@ -381,7 +381,10 @@ pub(crate) fn project_semantic_layer(
             )?;
         }
         let mut seen_used = BTreeSet::new();
-        for ptr in ["/declaration/uses_entities", "/problem_schema/uses_entities"] {
+        for ptr in [
+            "/declaration/uses_entities",
+            "/problem_schema/uses_entities",
+        ] {
             for used in payload
                 .pointer(ptr)
                 .and_then(Value::as_array)

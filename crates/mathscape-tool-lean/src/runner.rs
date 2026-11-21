@@ -611,10 +611,7 @@ mod tests {
             .max_output_bytes(4)
             .unwrap();
         let run = LeanRunner::new(options)
-            .run(
-                &fixture("output", &cwd),
-                &LeanCancellation::new(),
-            )
+            .run(&fixture("output", &cwd), &LeanCancellation::new())
             .unwrap();
         assert_eq!(run.status(), LeanRunStatus::Failed);
         assert_eq!(run.exit_code(), Some(7));
@@ -631,10 +628,7 @@ mod tests {
             .unwrap()
             .graceful_shutdown(Duration::from_millis(50));
         let run = LeanRunner::new(options)
-            .run(
-                &fixture("wait", &cwd),
-                &LeanCancellation::new(),
-            )
+            .run(&fixture("wait", &cwd), &LeanCancellation::new())
             .unwrap();
         assert_eq!(run.status(), LeanRunStatus::TimedOut);
         assert!(run.elapsed() < Duration::from_secs(2));

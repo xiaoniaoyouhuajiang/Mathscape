@@ -117,7 +117,7 @@ fn one_canonical_markdown_node_per_pdf_after_registry_sync() {
     let mut pool = ArtifactPool::create(&workspace).unwrap();
     let source = pool
         .import_file(
-            &write_file(directory.path(), "source.pdf", b"%PDF-1.7\nsource\n"),
+            write_file(directory.path(), "source.pdf", b"%PDF-1.7\nsource\n"),
             ArtifactMetadata::new(
                 None,
                 MediaType::parse("application/pdf").unwrap(),
@@ -135,28 +135,28 @@ fn one_canonical_markdown_node_per_pdf_after_registry_sync() {
         .unwrap();
     let early = pool
         .import_file(
-            &write_file(directory.path(), "early.md", b"# pages 1-2\n"),
+            write_file(directory.path(), "early.md", b"# pages 1-2\n"),
             derived("text/markdown", "early.md"),
             actor(),
         )
         .unwrap();
     let late = pool
         .import_file(
-            &write_file(directory.path(), "late.md", b"# pages 3-4\n"),
+            write_file(directory.path(), "late.md", b"# pages 3-4\n"),
             derived("text/markdown", "late.md"),
             actor(),
         )
         .unwrap();
     let failed = pool
         .import_file(
-            &write_file(directory.path(), "failed.md", b"# failed\n"),
+            write_file(directory.path(), "failed.md", b"# failed\n"),
             derived("text/markdown", "failed.md"),
             actor(),
         )
         .unwrap();
     let metadata = pool
         .import_file(
-            &write_file(
+            write_file(
                 directory.path(),
                 "source_meta.json",
                 br#"{"page_stats":[]}"#,
@@ -382,7 +382,7 @@ fn one_canonical_markdown_node_per_pdf_after_registry_sync() {
     let mut pool = ArtifactPool::open(&workspace).unwrap();
     let other = pool
         .import_file(
-            &write_file(directory.path(), "fast.md", b"# fast profile\n"),
+            write_file(directory.path(), "fast.md", b"# fast profile\n"),
             derived("text/markdown", "fast.md"),
             actor(),
         )

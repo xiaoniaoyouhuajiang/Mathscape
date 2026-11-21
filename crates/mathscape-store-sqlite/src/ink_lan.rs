@@ -488,11 +488,7 @@ impl SqliteArtifactStore {
     /// read-only standby push channel during zero-rescan upgrade (before the
     /// tablet caches a workspace standby token). Rejects unknown, expired, and
     /// globally-revoked (`revoke_ink_lan`) credentials.
-    pub fn can_ink_standby(
-        &self,
-        credential: &str,
-        now: i64,
-    ) -> Result<bool, SqliteStoreError> {
+    pub fn can_ink_standby(&self, credential: &str, now: i64) -> Result<bool, SqliteStoreError> {
         digest(credential)?;
         let row: Option<(i64, Option<i64>, String, bool)> = self
             .connection

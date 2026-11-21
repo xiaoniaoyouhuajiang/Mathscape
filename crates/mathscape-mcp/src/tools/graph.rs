@@ -833,7 +833,9 @@ impl Graph {
         }
         self.objects
             .get(node.entity_id().as_str())
-            .is_some_and(|obj| str_at(inner_payload(&obj.payload), "/semantic_kind") == Some("theory"))
+            .is_some_and(|obj| {
+                str_at(inner_payload(&obj.payload), "/semantic_kind") == Some("theory")
+            })
             || node.summary_ref().is_some_and(|s| s.starts_with("理论"))
     }
 
@@ -1752,7 +1754,9 @@ fn validate(args: NeighborhoodArgs) -> Result<Applied, ToolError> {
         Some("raw") => Preset::Raw,
         Some(other) => {
             return Err(invalid(
-                format!("preset must be one of heuristic, structural, semantic_only, raw; got `{other}`"),
+                format!(
+                    "preset must be one of heuristic, structural, semantic_only, raw; got `{other}`"
+                ),
                 json!({ "field": "preset", "value": other, "allowed": PRESETS }),
             ));
         }
@@ -1779,7 +1783,11 @@ fn validate(args: NeighborhoodArgs) -> Result<Applied, ToolError> {
         }
     };
     let edge_types = match args.edge_types {
-        None => preset.default_edge_types().iter().map(|s| (*s).to_owned()).collect(),
+        None => preset
+            .default_edge_types()
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
         Some(values) => validate_enum("edge_types", &values, &RELATION_TYPES)?,
     };
     let node_kinds = match args.node_kinds {
@@ -1875,16 +1883,20 @@ fn evaluate_typed_hop(
             Preset::SemanticOnly => match hop_class {
                 HopClass::SemanticBridge => {
                     // Only allow entering semantic web from a seed source_unit; never drop back out to textbooks.
-                    if rel_kind == "aligns" && target_kind == "source_unit" {
-                        None
-                    } else if current_kind == "source_unit" && !current_is_seed {
+                    if (rel_kind == "aligns" && target_kind == "source_unit")
+                        || (current_kind == "source_unit" && !current_is_seed)
+                    {
                         None
                     } else {
                         Some((1, NodeMode::Full))
                     }
                 }
                 HopClass::ContextAttach if rel_kind == "debt_on" => {
-                    let next = if target_is_theory { NodeMode::Sink } else { NodeMode::Full };
+                    let next = if target_is_theory {
+                        NodeMode::Sink
+                    } else {
+                        NodeMode::Full
+                    };
                     Some((0, next))
                 }
                 HopClass::ContainerHub => {
@@ -1937,7 +1949,11 @@ fn evaluate_typed_hop(
                     // debt --debt_on--> holder
                     "debt_on" if preset == Preset::Heuristic => {
                         let cost = if backward { 0 } else { 1 };
-                        let next = if target_is_theory { NodeMode::Sink } else { NodeMode::Full };
+                        let next = if target_is_theory {
+                            NodeMode::Sink
+                        } else {
+                            NodeMode::Full
+                        };
                         Some((cost, next))
                     }
                     _ => None,
@@ -1958,7 +1974,11 @@ fn evaluate_typed_hop(
                 },
                 HopClass::SourceReasoning => Some((1, NodeMode::Full)),
                 HopClass::SemanticBridge if preset == Preset::Heuristic => {
-                    let next = if target_is_theory { NodeMode::Sink } else { NodeMode::Full };
+                    let next = if target_is_theory {
+                        NodeMode::Sink
+                    } else {
+                        NodeMode::Full
+                    };
                     Some((1, next))
                 }
                 HopClass::ContainerHub if preset == Preset::Heuristic => {
@@ -2167,7 +2187,9 @@ pub(super) fn call_neighborhood(
                             transitions
                                 .entry(target)
                                 .and_modify(|existing| {
-                                    if cost < existing.0 || (cost == existing.0 && next_mode > existing.1) {
+                                    if cost < existing.0
+                                        || (cost == existing.0 && next_mode > existing.1)
+                                    {
                                         *existing = (cost, next_mode);
                                     }
                                 })

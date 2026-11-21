@@ -202,12 +202,11 @@ const SELECT_COLUMNS: &str = "
 
 fn map_errata_row(row: &rusqlite::Row<'_>) -> Result<MarkdownBlockErrata, SqliteStoreError> {
     let covered_json: String = row.get(5)?;
-    let covered_block_ids: Vec<String> = serde_json::from_str(&covered_json).map_err(|_| {
-        SqliteStoreError::InvalidStoredValue {
+    let covered_block_ids: Vec<String> =
+        serde_json::from_str(&covered_json).map_err(|_| SqliteStoreError::InvalidStoredValue {
             field: "markdown_block_errata.covered_block_ids_json",
             value: covered_json,
-        }
-    })?;
+        })?;
     let start_i64: i64 = row.get(6)?;
     let end_i64: i64 = row.get(7)?;
     let base_byte_start = u64::try_from(start_i64).map_err(|_| SqliteStoreError::IntegerRange {
@@ -222,10 +221,12 @@ fn map_errata_row(row: &rusqlite::Row<'_>) -> Result<MarkdownBlockErrata, Sqlite
     let source_kind_raw: String = row.get(12)?;
     let verified_page_i64: Option<i64> = row.get(15)?;
     let verified_pdf_page = match verified_page_i64 {
-        Some(v) => Some(u32::try_from(v).map_err(|_| SqliteStoreError::IntegerRange {
-            field: "markdown_block_errata.verified_pdf_page",
-            value: v as u64,
-        })?),
+        Some(v) => Some(
+            u32::try_from(v).map_err(|_| SqliteStoreError::IntegerRange {
+                field: "markdown_block_errata.verified_pdf_page",
+                value: v as u64,
+            })?,
+        ),
         None => None,
     };
     Ok(MarkdownBlockErrata {
@@ -366,18 +367,16 @@ pub(crate) fn upsert_markdown_errata(
             "markdown errata requires a non-empty block range",
         ));
     }
-    let start_i64 = i64::try_from(input.base_byte_start).map_err(|_| {
-        SqliteStoreError::IntegerRange {
+    let start_i64 =
+        i64::try_from(input.base_byte_start).map_err(|_| SqliteStoreError::IntegerRange {
             field: "markdown_block_errata.base_byte_start",
             value: input.base_byte_start,
-        }
-    })?;
-    let end_i64 = i64::try_from(input.base_byte_end).map_err(|_| {
-        SqliteStoreError::IntegerRange {
+        })?;
+    let end_i64 =
+        i64::try_from(input.base_byte_end).map_err(|_| SqliteStoreError::IntegerRange {
             field: "markdown_block_errata.base_byte_end",
             value: input.base_byte_end,
-        }
-    })?;
+        })?;
     let covered_json = serde_json::to_string(&input.covered_block_ids).map_err(|_| {
         SqliteStoreError::ArtifactInvariant("failed to serialize covered_block_ids")
     })?;

@@ -86,8 +86,7 @@ pub fn object_detail_with_scope(
     let accepted = store
         .map_edit_snapshot()
         .map_err(|error| error.to_string())?;
-    let (snapshot, overlay) =
-        merged_snapshot(&store, service.investigation_id(), include_staged)?;
+    let (snapshot, overlay) = merged_snapshot(&store, service.investigation_id(), include_staged)?;
     let mut detail = semantic_object_detail(&snapshot, object_id)
         .ok_or_else(|| format!("not_found：{object_id} 不是语义对象"))?;
     if let Some(overlay) = overlay
@@ -123,8 +122,7 @@ pub fn learning_with_scope(
     include_staged: bool,
 ) -> Result<LearningView, String> {
     let store = open_store(service)?;
-    let (snapshot, overlay) =
-        merged_snapshot(&store, service.investigation_id(), include_staged)?;
+    let (snapshot, overlay) = merged_snapshot(&store, service.investigation_id(), include_staged)?;
     let canonical_views = store
         .list_canonical_markdown()
         .map_err(|error| error.to_string())?;

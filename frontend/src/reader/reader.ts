@@ -25,6 +25,7 @@ import { eventBus } from "../core/events";
 import { openInkSnapshot } from "../ink/persistence";
 import { mountInkSnapshotReader, type InkReaderFocus } from "../ink/snapshot-reader";
 import "./reader.css";
+import { t } from "../i18n";
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text = ""): HTMLElementTagNameMap[K] {
   const result = document.createElement(tag);
@@ -308,7 +309,7 @@ export class ArtifactReader {
             ...(fallback?.id === artifactId ? fallback.options : {}),
             focus: snapshotFocus,
             preferCanonical: false,
-            notice: "这一处在规范解析正文中没有对应的可读位置，已保留在解析快照中。",
+            notice: t("reader.canonical.noLanding"),
           });
         }
         status.remove();
@@ -385,7 +386,7 @@ export class ArtifactReader {
       return await this.open(fallback.id, fallback.title, {
         ...fallback.options,
         preferCanonical: false,
-        notice: "规范解析正文暂时打不开（有分段读取失败），已保留在解析快照中。",
+        notice: t("reader.canonical.unavailable"),
         noticeDetail: this.error,
       });
     } finally {
@@ -1080,10 +1081,10 @@ export class ArtifactReader {
         const note = element("div");
         note.className = "canonical-landing-note";
         note.setAttribute("role", "status");
-        note.append(element("span", `这一块所在的 PDF 第 ${landing.pageIndex + 1} 页在规范解析正文中由另一个解析快照显示，已定位到该页开头。`));
-        const openSnapshot = element("button", "在原快照中查看这一块");
+        note.append(element("span", t("reader.canonical.pageInOtherSnapshot", { page: landing.pageIndex + 1 })));
+        const openSnapshot = element("button", t("reader.canonical.openInSnapshot"));
         openSnapshot.type = "button";
-        openSnapshot.onclick = () => void this.open(snapshotId, `${title} · 解析快照`, { focus: snapshotFocus });
+        openSnapshot.onclick = () => void this.open(snapshotId, t("reader.snapshotTitle", { title }), { focus: snapshotFocus });
         note.append(openSnapshot);
         if (arrivedAt.classList.contains("canonical-segment")) arrivedAt.prepend(note);
         else arrivedAt.after(note);
@@ -1098,7 +1099,7 @@ export class ArtifactReader {
         disposeReturnPoint = mountReturnPoint({
           container,
           listenOn: this.host,
-          label: focus.label ?? (landing.kind === "page" ? `PDF 第 ${landing.pageIndex + 1} 页` : blockLabel(arrivedAt)),
+          label: focus.label ?? (landing.kind === "page" ? t("reader.pdfPage", { page: landing.pageIndex + 1 }) : blockLabel(arrivedAt)),
           find: landingTarget,
           scrollerOf: (target) => this.scrollerOf(target),
         });
@@ -1167,7 +1168,7 @@ export class ArtifactReader {
       note.className = "canonical-status-hint is-arrival-notice";
       note.setAttribute("role", "status");
       if (noticeDetail) note.title = noticeDetail;
-      const dismiss = element("button", "知道了");
+      const dismiss = element("button", t("reader.notice.dismiss"));
       dismiss.type = "button";
       dismiss.onclick = () => note.remove();
       note.append(element("span", notice), dismiss);
@@ -1234,19 +1235,19 @@ export class ArtifactReader {
       card.setAttribute("role", "note");
       card.hidden = true;
       const text = element("span");
-      const button = element("button", edge === "start" ? "继续向上阅读" : "继续向下阅读");
+      const button = element("button", t(edge === "start" ? "reader.boundary.continueUp" : "reader.boundary.continueDown"));
       button.type = "button";
-      button.title = "进入按页序拼接的规范解析正文，停在这一块";
+      button.title = t("reader.boundary.enterTitle");
       card.append(text, button);
       return { card, text, button };
     };
     const startCard = canonicalTarget ? boundaryCard("start") : undefined;
     const endCard = canonicalTarget ? boundaryCard("end") : undefined;
     if (canonicalTarget && startCard && endCard) {
-      const continueReading = element("button", "在规范解析正文中继续阅读");
+      const continueReading = element("button", t("reader.canonical.continueReading"));
       continueReading.type = "button";
       continueReading.className = "reader-canonical-entry";
-      continueReading.title = "切换到按页序拼接的完整正文并停在当前这一块，可以继续向前或向后阅读";
+      continueReading.title = t("reader.canonical.continueReadingTitle");
       continueReading.onclick = () => enterCanonical(currentReadingBlock());
       controls.append(continueReading);
       paperStage.prepend(startCard.card);
@@ -1261,11 +1262,11 @@ export class ArtifactReader {
       startCard.card.hidden = !usable || span?.first === 0;
       endCard.card.hidden = !usable;
       startCard.text.textContent = span
-        ? `本快照从 PDF 第 ${span.first + 1} 页开始。要接着往前读，请进入规范解析正文。`
-        : "本快照只包含一次解析的页。要接着往前读，请进入规范解析正文。";
+        ? t("reader.boundary.startsAtPage", { page: span.first + 1 })
+        : t("reader.boundary.startUnknown");
       endCard.text.textContent = span
-        ? `本快照到 PDF 第 ${span.last + 1} 页为止。要接着往后读，请进入规范解析正文。`
-        : "本快照只包含一次解析的页。要接着往后读，请进入规范解析正文。";
+        ? t("reader.boundary.endsAtPage", { page: span.last + 1 })
+        : t("reader.boundary.endUnknown");
       startCard.button.onclick = () => enterCanonical(content[0]);
       endCard.button.onclick = () => enterCanonical(content[content.length - 1]);
     };

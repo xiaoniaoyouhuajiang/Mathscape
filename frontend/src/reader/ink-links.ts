@@ -16,6 +16,7 @@ import {
 } from "../ink/links";
 import type { MarkdownUnitMarker } from "./content";
 import { matchUnitsToBlocks } from "./markdown-outline";
+import { t } from "../i18n";
 import type { AnchoredMarkdown, MarkdownSelection } from "./selection";
 
 const MENU_TARGET_CLASS = "is-ink-menu-target";
@@ -320,7 +321,7 @@ export class ReaderInkLinks {
         ? [{ label: "定位对应 PDF 原页", onSelect: () => { this.highlight(null); this.onOpenPdf!(range); } }]
         : []),
       ...(this.onContinueInCanonical
-        ? [{ label: "在规范解析正文中从这里继续阅读", onSelect: () => { this.highlight(null); this.onContinueInCanonical!(range); } }]
+        ? [{ label: t("reader.canonical.continueFromHere"), onSelect: () => { this.highlight(null); this.onContinueInCanonical!(range); } }]
         : []),
       { label: "新建关联手稿…", onSelect: () => this.create(range, x, y) },
       {

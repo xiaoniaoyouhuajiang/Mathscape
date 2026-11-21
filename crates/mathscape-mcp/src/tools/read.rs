@@ -727,17 +727,18 @@ fn serve_canonical_snapshot(
     } else {
         None
     };
-    let (text, truncated, applied_errata) =
-        if !errata.is_empty() && let Some(source) = whole_source.as_deref() {
-            let view = build_effective_markdown(source, &errata.entries);
-            let capped = cap_at_char_boundary(&view.effective_source, MAX_READ_BYTES).to_owned();
-            let truncated = capped.len() < view.effective_source.len();
-            let applied = errata.applied_within_prefix(&view.byte_map, capped.len());
-            (capped, truncated, applied)
-        } else {
-            let (text, truncated) = read_markdown_prefix(pool, &served)?;
-            (text, truncated, Vec::new())
-        };
+    let (text, truncated, applied_errata) = if !errata.is_empty()
+        && let Some(source) = whole_source.as_deref()
+    {
+        let view = build_effective_markdown(source, &errata.entries);
+        let capped = cap_at_char_boundary(&view.effective_source, MAX_READ_BYTES).to_owned();
+        let truncated = capped.len() < view.effective_source.len();
+        let applied = errata.applied_within_prefix(&view.byte_map, capped.len());
+        (capped, truncated, applied)
+    } else {
+        let (text, truncated) = read_markdown_prefix(pool, &served)?;
+        (text, truncated, Vec::new())
+    };
     // The body is the snapshot from byte 0 (text offsets are snapshot
     // offsets); served_segments says where the requested pages are inside it.
     let mut segments = Vec::new();

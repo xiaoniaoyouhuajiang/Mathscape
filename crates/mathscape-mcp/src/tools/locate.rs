@@ -136,11 +136,8 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
             .collect::<Vec<_>>();
         (mapped, normalized)
     } else {
-        let view = render_effective_slice(
-            source,
-            phys_start..phys_end,
-            &context.active_errata.entries,
-        );
+        let view =
+            render_effective_slice(source, phys_start..phys_end, &context.active_errata.entries);
         let (eff_ranges, eff_normalized) = locate_quote(&view.effective_source, &args.quote);
         let mut mapped = eff_ranges
             .into_iter()

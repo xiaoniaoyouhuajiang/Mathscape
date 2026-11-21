@@ -88,6 +88,7 @@ import type {
 } from "../sandbox/scene/types";
 import { PROPOSE_STEP_CAP } from "../sandbox/scene/types";
 import { renderBubbleHtml } from "../sandbox/bubble";
+import { t } from "../i18n";
 
 export { SCENE_PACING, type ScenePart } from "./scene-pacing";
 
@@ -1289,8 +1290,8 @@ function fillLocate(win: HTMLElement, act: LocateAct): void {
   win.append(quote);
   if (act.phase === "ok") {
     const verdict = element("p", "scene-act-verdict");
-    verdict.append(element("span", "scene-locate-match", act.match ?? "已定位"), " · ",
-      element("span", "scene-locate-page", act.page !== undefined ? `第 ${act.page} 页` : "具体页码不可确定"));
+    verdict.append(element("span", "scene-locate-match", act.match ?? t("scene.locate.matched")), " · ",
+      element("span", "scene-locate-page", act.page !== undefined ? t("scene.locate.page", { page: act.page }) : t("scene.locate.pageUnknown")));
     verdict.dataset.verdict = "ok";
     win.append(verdict);
   } else if (act.phase !== "running") {
@@ -1300,7 +1301,13 @@ function fillLocate(win: HTMLElement, act: LocateAct): void {
   }
   if (act.diagnostics?.length) {
     const list = element("ul", "scene-locate-diagnostics");
-    const labels = { page: "页码", match: "匹配", source: "原文", candidates: "候选", other: "补充说明" };
+    const labels = {
+      page: t("scene.locate.category.page"),
+      match: t("scene.locate.category.match"),
+      source: t("scene.locate.category.source"),
+      candidates: t("scene.locate.category.candidates"),
+      other: t("scene.locate.category.other"),
+    };
     for (const diagnostic of act.diagnostics) {
       const item = element("li", "scene-locate-diagnostic");
       item.dataset.category = diagnostic.category;
@@ -1313,8 +1320,8 @@ function fillLocate(win: HTMLElement, act: LocateAct): void {
   if (act.artifactId || act.diagnostics?.length) {
     const details = document.createElement("details");
     details.className = "scene-locate-details";
-    details.append(element("summary", "", "技术详情"));
-    if (act.artifactId) details.append(element("p", "scene-act-note", "快照 ID"), element("code", "scene-locate-artifact", act.artifactId));
+    details.append(element("summary", "", t("scene.locate.technicalDetails")));
+    if (act.artifactId) details.append(element("p", "scene-act-note", t("scene.locate.snapshotId")), element("code", "scene-locate-artifact", act.artifactId));
     for (const diagnostic of act.diagnostics ?? []) {
       details.append(element("code", "scene-locate-code", diagnostic.code), element("p", "scene-locate-original", diagnostic.original));
     }

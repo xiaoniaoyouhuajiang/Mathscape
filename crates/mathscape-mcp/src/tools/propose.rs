@@ -1470,11 +1470,8 @@ fn materialize_span_drafts(
         let matched_text = if context.active_errata.is_empty() {
             quote_matches_range(raw_selected, &input.quote).then(|| raw_selected.to_owned())
         } else {
-            let effective_view = render_effective_slice(
-                &context.source,
-                start..end,
-                &context.active_errata.entries,
-            );
+            let effective_view =
+                render_effective_slice(&context.source, start..end, &context.active_errata.entries);
             if effective_view.applied_errata_ids.is_empty() {
                 quote_matches_range(raw_selected, &input.quote).then(|| raw_selected.to_owned())
             } else if quote_matches_range(&effective_view.effective_source, &input.quote) {
