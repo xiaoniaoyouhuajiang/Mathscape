@@ -430,6 +430,7 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
         )
         .unwrap();
     assert_eq!(migration, "workspace_settings_v1");
+    drop(connection);
     cleanup(&directory);
 }
 
@@ -460,6 +461,7 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
         )
         .unwrap();
     assert_eq!(migration, "workspace_settings_v1");
+    drop(connection);
     cleanup(&directory);
 }
 
@@ -499,6 +501,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
             .unwrap(),
         "discovery_runs_v1"
     );
+    drop(connection);
     cleanup(&directory);
 }
 
@@ -572,6 +575,7 @@ fn repairs_a_v5_discovery_schema_missing_result_fingerprint() {
             .unwrap(),
         "discovery_acceptance_by_run"
     );
+    drop(connection);
     cleanup(&directory);
 }
 
@@ -609,6 +613,8 @@ fn persists_and_replaces_a_versioned_workspace_settings_document() {
         })
         .unwrap();
     assert_eq!(count, 1);
+    drop(connection);
+    drop(store);
     cleanup(&directory);
 }
 
@@ -640,6 +646,7 @@ fn persists_versioned_llm_profiles_without_secret_material() {
     assert_eq!(reopened.profile(), &profile);
     let bytes = fs::read(&database).unwrap();
     assert!(!String::from_utf8_lossy(&bytes).contains("fixture-secret"));
+    drop(store);
     cleanup(&directory);
 }
 
@@ -739,6 +746,7 @@ fn atomically_persists_and_replaces_discovery_checkpoints() {
     let replaced = store.discovery_checkpoint(&run_id).unwrap().unwrap();
     assert_eq!(replaced.checkpoint, checkpoint);
     assert_eq!(store.discovery_run_count().unwrap(), 1);
+    drop(store);
     cleanup(&directory);
 }
 
@@ -791,6 +799,7 @@ fn discarding_a_run_is_idempotent_and_blocks_acceptance() {
         plan: json!({"version":"fixture"}),
     };
     assert!(store.save_registration_plan(&record).is_err());
+    drop(store);
     cleanup(&directory);
 }
 
@@ -936,6 +945,7 @@ fn restoring_review_preserves_audit_cycles_and_rejects_stale_decisions() {
         reopened.discovery_disposition_history(&run).unwrap().len(),
         4
     );
+    drop(reopened);
     cleanup(&directory);
 }
 
@@ -1046,6 +1056,7 @@ fn only_a_run_awaiting_patch_review_moves_onto_a_patched_snapshot() {
         store.save_discovery_checkpoint(&invalid),
         Err(SqliteStoreError::DiscoveryInvariant(_))
     ));
+    drop(store);
     cleanup(&directory);
 }
 
@@ -1127,6 +1138,7 @@ fn upgrading_to_v10_preserves_discovery_runs_and_their_children() {
         .unwrap()
         .count();
     assert_eq!(violations, 0);
+    drop(connection);
     cleanup(&directory);
 }
 
@@ -1157,6 +1169,7 @@ fn persists_an_immutable_acceptance_decision_and_registration_plan() {
     store.save_registration_plan(&record).unwrap();
     store.save_registration_plan(&record).unwrap();
     assert_eq!(store.registration_plan(&decision_id).unwrap(), Some(record));
+    drop(store);
     cleanup(&directory);
 }
 
