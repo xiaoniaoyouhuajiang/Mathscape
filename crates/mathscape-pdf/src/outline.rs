@@ -276,13 +276,13 @@ fn walk_siblings(
                 "embedded outline is unreadable: bookmark nesting exceeds {MAX_OUTLINE_DEPTH}"
             ));
         }
-        if let Ok(id) = current.as_reference() {
-            if !walk.visited.insert(id) {
-                return Some(
-                    "embedded outline is unreadable: bookmark graph contains a cycle in /First or /Next"
-                        .to_owned(),
-                );
-            }
+        if let Ok(id) = current.as_reference()
+            && !walk.visited.insert(id)
+        {
+            return Some(
+                "embedded outline is unreadable: bookmark graph contains a cycle in /First or /Next"
+                    .to_owned(),
+            );
         }
         walk.nodes += 1;
         if walk.nodes > MAX_OUTLINE_NODES {
@@ -295,15 +295,12 @@ fn walk_siblings(
         if let Some(warning) = step.warning {
             return Some(warning);
         }
-        if let Some(first) = step.first {
-            if let Some(warning) = walk_siblings(document, &first, depth + 1, walk) {
-                return Some(warning);
-            }
+        if let Some(first) = step.first
+            && let Some(warning) = walk_siblings(document, &first, depth + 1, walk)
+        {
+            return Some(warning);
         }
-        match step.next {
-            Some(next) => current = next,
-            None => return None,
-        }
+        current = step.next?;
     }
 }
 
@@ -381,10 +378,10 @@ fn walk_name_kids(
                 "embedded outline is unreadable: named destination tree exceeds {MAX_OUTLINE_NODES} nodes"
             ));
         }
-        if let Ok(child) = document.get_dictionary(id) {
-            if let Some(warning) = walk_name_kids(document, child, depth + 1, walk) {
-                return Some(warning);
-            }
+        if let Ok(child) = document.get_dictionary(id)
+            && let Some(warning) = walk_name_kids(document, child, depth + 1, walk)
+        {
+            return Some(warning);
         }
     }
     None

@@ -250,7 +250,7 @@ async fn custom_openai_compatible_stream_collects_structured_json_and_usage() {
             .push((kind.to_string(), text.to_string()));
     }));
     let response = backend.execute_stream(request()).await.unwrap();
-    let events = events.lock().unwrap();
+    let events = events.lock().unwrap().clone();
     assert_eq!(
         events
             .iter()

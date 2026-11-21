@@ -354,7 +354,7 @@ impl DesktopService {
             )),
         )
         .map_err(fail)?;
-        let mut pool = ArtifactPool::open(&self.workspace_root()).map_err(fail)?;
+        let mut pool = ArtifactPool::open(self.workspace_root()).map_err(fail)?;
         let imported = pool
             .import_bytes(manifest_json.as_bytes(), metadata, actor)
             .map_err(fail)?;
@@ -429,7 +429,7 @@ impl DesktopService {
         ) {
             return Err("快照 Artifact 媒体类型无效".into());
         }
-        let mut pool = ArtifactPool::open(&self.workspace_root()).map_err(fail)?;
+        let mut pool = ArtifactPool::open(self.workspace_root()).map_err(fail)?;
         let verification = pool
             .verify(&snapshot_artifact)
             .map_err(|error| snapshot_error(format!("快照 Artifact 校验失败：{error}")))?;

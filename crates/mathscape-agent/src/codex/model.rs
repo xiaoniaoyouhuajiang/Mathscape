@@ -83,7 +83,11 @@ fn catalog_override_path(root: &Path) -> Option<PathBuf> {
     } else {
         PathBuf::from(&raw)
     };
-    Some(if path.is_absolute() { path } else { root.join(path) })
+    Some(if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    })
 }
 
 /// Effort the next round will use for `model`, given the configured value and
@@ -690,7 +694,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(list_models(Some(&home), None).unwrap().len(), 3);
-        std::fs::write(home.join("config.toml"), "model_catalog_json = \"nope.json\"\n").unwrap();
+        std::fs::write(
+            home.join("config.toml"),
+            "model_catalog_json = \"nope.json\"\n",
+        )
+        .unwrap();
         assert_eq!(
             ids(&list_models(Some(&home), None).unwrap()),
             ["m-one", "m-two", "group/m-three"]

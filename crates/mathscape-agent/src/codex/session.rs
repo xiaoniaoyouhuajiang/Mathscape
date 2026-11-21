@@ -882,7 +882,9 @@ mod tests {
     fn fixture_path(parts: &[&str]) -> PathBuf {
         parts
             .iter()
-            .fold(PathBuf::from(env!("CARGO_MANIFEST_DIR")), |path, part| path.join(part))
+            .fold(PathBuf::from(env!("CARGO_MANIFEST_DIR")), |path, part| {
+                path.join(part)
+            })
     }
 
     fn resolved(path: &Path) -> String {
@@ -917,13 +919,8 @@ mod tests {
 
     #[test]
     fn thread_start_registers_mcp_without_credentials() {
-        let message = thread_start_message(
-            2,
-            &spec(true),
-            Path::new("mathscape"),
-            &round_file(),
-            None,
-        );
+        let message =
+            thread_start_message(2, &spec(true), Path::new("mathscape"), &round_file(), None);
         let params = &message["params"];
         assert_eq!(params["cwd"], resolved(&spec(true).workspace));
         assert_eq!(params["sandbox"], "read-only");
@@ -1064,13 +1061,7 @@ mod tests {
         };
         let mut spec = spec(true);
         spec.harness = request.harness.clone();
-        let message = thread_start_message(
-            2,
-            &spec,
-            Path::new("mathscape"),
-            &round_file(),
-            None,
-        );
+        let message = thread_start_message(2, &spec, Path::new("mathscape"), &round_file(), None);
         let params = &message["params"];
         // A legacy sandbox mode would override the profile.
         assert!(params.get("sandbox").is_none());
@@ -1127,13 +1118,7 @@ mod tests {
     fn empty_tools_allow_does_not_invent_a_restriction_list() {
         let mut spec = spec(true);
         spec.tools_allow.clear();
-        let message = thread_start_message(
-            2,
-            &spec,
-            Path::new("mathscape"),
-            &round_file(),
-            None,
-        );
+        let message = thread_start_message(2, &spec, Path::new("mathscape"), &round_file(), None);
         let instructions = message["params"]["developerInstructions"].as_str().unwrap();
         assert!(instructions.contains("fixed read-only tool list"));
         assert!(!instructions.contains("Call only these"));

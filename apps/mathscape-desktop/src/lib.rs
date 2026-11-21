@@ -54,7 +54,6 @@ pub use ink::{
 pub use llm_settings::{
     LlmConnectionTest, LlmProfileView, LlmSettingsError, LlmSettingsSnapshot, SaveLlmProfileRequest,
 };
-pub use map_edit::{commit_map_change, get_map_object_edit_context, plan_map_change};
 pub use markdown_errata::{
     RevertMarkdownErrataResponse, SaveMarkdownErrataRequest, SaveMarkdownErrataResponse,
 };

@@ -45,6 +45,7 @@ export function isFittedCentered(g: BoardGeometry, tolerance = 1.5): boolean {
 
 /** Wait until the board geometry stops changing (ResizeObserver + rAF settled). */
 export async function settledGeometry(page: Page): Promise<BoardGeometry> {
+  await page.locator("#desktop-ink-board .ink-settled").waitFor({ state: "attached" });
   let last = "";
   for (let i = 0; i < 20; i++) {
     const g = await boardGeometry(page);

@@ -74,10 +74,7 @@ struct StandbyKeyFile {
 fn standby_key_path(workspace_root: &std::path::Path) -> std::path::PathBuf {
     workspace_root.join("ink-lan/standby.key")
 }
-fn write_standby_key(
-    workspace_root: &std::path::Path,
-    key: &StandbyKeyFile,
-) -> Result<(), String> {
+fn write_standby_key(workspace_root: &std::path::Path, key: &StandbyKeyFile) -> Result<(), String> {
     use std::io::Write;
     let dir = workspace_root.join("ink-lan");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -579,11 +576,10 @@ async fn pair(
             if transferred {
                 // The previous holder's credential is revoked in the same transaction.
                 let _ = state.live.control.send(Control::Revoke(lease.document_id.clone()));
-                if let Some(setup) = state.live.setup.lock().unwrap().as_mut() {
-                    if setup.pairing.as_ref().is_some_and(|p| p.token_hash == token_hash) {
+                if let Some(setup) = state.live.setup.lock().unwrap().as_mut()
+                    && setup.pairing.as_ref().is_some_and(|p| p.token_hash == token_hash) {
                         setup.outcome = Some("claimed");
                     }
-                }
             }
             let mut body = json!({"protocol_version":INK_LAN_PROTOCOL_VERSION,"lease":lease});
             if let Ok(key) = state
@@ -638,7 +634,7 @@ enum ClientMessage {
         credential: Option<String>,
     },
     OperationSubmit {
-        request: InkLanOperation,
+        request: Box<InkLanOperation>,
     },
     PreviewStroke {
         stroke: InkLabStroke,
@@ -717,59 +713,51 @@ async fn socket_loop(mut socket: WebSocket, state: HttpState) {
     })
     .await;
 }
-async fn serve_socket(mut socket: &mut WebSocket, state: HttpState) {
+async fn serve_socket(socket: &mut WebSocket, state: HttpState) {
     let first = tokio::time::timeout(Duration::from_secs(10), socket.recv()).await;
     let Ok(Some(Ok(Message::Text(text)))) = first else {
         return;
     };
-    let (protocol_version, credential, client_id) = match serde_json::from_str::<ClientMessage>(&text)
-    {
-        Ok(ClientMessage::Hello {
-            protocol_version,
-            credential,
-            client_id,
-        }) => (protocol_version, credential, client_id),
-        Ok(ClientMessage::HelloStandby {
-            protocol_version,
-            client_id,
-            standby_token,
-            credential,
-        }) => {
-            standby_loop(
-                socket,
-                state,
+    let (protocol_version, credential, client_id) =
+        match serde_json::from_str::<ClientMessage>(&text) {
+            Ok(ClientMessage::Hello {
+                protocol_version,
+                credential,
+                client_id,
+            }) => (protocol_version, credential, client_id),
+            Ok(ClientMessage::HelloStandby {
                 protocol_version,
                 client_id,
                 standby_token,
                 credential,
-            )
-            .await;
-            return;
-        }
-        _ => {
-            send(
-                &mut socket,
-                error("authentication_failed", "连接认证失败。"),
-            )
-            .await;
-            return;
-        }
-    };
+            }) => {
+                standby_loop(
+                    socket,
+                    state,
+                    protocol_version,
+                    client_id,
+                    standby_token,
+                    credential,
+                )
+                .await;
+                return;
+            }
+            _ => {
+                send(socket, error("authentication_failed", "连接认证失败。")).await;
+                return;
+            }
+        };
     if protocol_version != INK_LAN_PROTOCOL_VERSION || client_id.is_empty() || client_id.len() > 200
     {
         send(
-            &mut socket,
+            socket,
             error("protocol_mismatch", "InkPad 版本不兼容，请重新加载页面。"),
         )
         .await;
         return;
     }
     let Ok(credential_hash) = hash(&credential) else {
-        send(
-            &mut socket,
-            error("authentication_failed", "连接认证失败。"),
-        )
-        .await;
+        send(socket, error("authentication_failed", "连接认证失败。")).await;
         return;
     };
     let service = state.service.clone();
@@ -783,12 +771,12 @@ async fn serve_socket(mut socket: &mut WebSocket, state: HttpState) {
     let (lease, document) = match context {
         Ok(Ok(value)) => value,
         Ok(Err(message)) if message.contains(TRASHED_REASON) => {
-            send(&mut socket, public_error(&message)).await;
+            send(socket, public_error(&message)).await;
             return;
         }
         Ok(Err(message)) => {
             send(
-                &mut socket,
+                socket,
                 error(
                     error_code(&message),
                     "会话已失效或书写权已转移，待同步内容仍保留在本机。",
@@ -837,7 +825,7 @@ async fn serve_socket(mut socket: &mut WebSocket, state: HttpState) {
     };
     if admission.is_err() {
         send(
-            &mut socket,
+            socket,
             error(
                 "device_busy",
                 "此手稿已在另一个画板窗口打开，请关闭那个窗口后重试。",
@@ -871,7 +859,7 @@ async fn serve_socket(mut socket: &mut WebSocket, state: HttpState) {
     }
     if full.to_string().len() > INK_LAN_DOCUMENT_BYTES {
         send(
-            &mut socket,
+            socket,
             error(
                 "operation_limit",
                 "此手稿超过当前传输上限，请在电脑查看或导出原稿。",
@@ -881,7 +869,7 @@ async fn serve_socket(mut socket: &mut WebSocket, state: HttpState) {
         release(&state, &credential_hash, &instance);
         return;
     }
-    if !send(&mut socket, full).await {
+    if !send(socket, full).await {
         release(&state, &credential_hash, &instance);
         return;
     }
@@ -891,33 +879,34 @@ async fn serve_socket(mut socket: &mut WebSocket, state: HttpState) {
         tokio::select! {
             event=control.recv()=>{
                 if let Ok(Control::Trashed(doc))=&event {
-                    if *doc==lease.document_id {send(&mut socket,trashed_closed()).await;break;}
+                    if *doc==lease.document_id {send(socket,trashed_closed()).await;break;}
                     continue;
                 }
                 if let Ok(Control::Note(note))=&event {
-                    if note.document_id==lease.document_id && !send(&mut socket,json!({"type":"note_metadata","note":note})).await {break;}
+                    if note.document_id==lease.document_id && !send(socket,json!({"type":"note_metadata","note":note})).await {break;}
                     continue;
                 }
                 if let Ok(Control::SwitchOffer(payload))=&event {
                     // Every connected tablet receives the offer; the first to claim wins.
-                    if !send(&mut socket, payload.clone()).await {break;}
+                    if !send(socket, payload.clone()).await {break;}
                     continue;
                 }
                 if let Ok(Control::ProblemCard{document_id,payload})=&event {
                     // §10: only the tablet writing this note sees its card.
-                    if document_id==&lease.document_id && !send(&mut socket, payload.clone()).await {break;}
+                    if document_id==&lease.document_id && !send(socket, payload.clone()).await {break;}
                     continue;
                 }
                 let code=match event {Ok(Control::Stop(revoke))=>Some(if revoke{"writer_revoked"}else{"server_restart"}),Ok(Control::Revoke(doc)) if doc==lease.document_id=>Some("writer_revoked"),Ok(Control::Replace(old)) if old==instance=>Some("connection_replaced"),Err(broadcast::error::RecvError::Lagged(_))=>Some("reconnect_required"),_=>None};
-                if let Some(code)=code {send(&mut socket,json!({"type":"session_closed","code":code})).await;break;}
+                if let Some(code)=code {send(socket,json!({"type":"session_closed","code":code})).await;break;}
             }
-            _=heartbeat.tick()=>{if last_seen.elapsed()>Duration::from_secs(50){break;}if socket.send(Message::Ping(Vec::new().into())).await.is_err(){break;}}
+            _=heartbeat.tick()=>{if last_seen.elapsed()>Duration::from_secs(50){break;}
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err(){break;}}
             incoming=socket.recv()=>{
                 let Some(Ok(message))=incoming else{break;};last_seen=Instant::now();
                 match message {Message::Pong(_)=>continue,Message::Ping(data)=>{if socket.send(Message::Pong(data)).await.is_err(){break;}continue;},Message::Close(_)=>break,Message::Text(text)=>{
                     if !state.live.slots.lock().unwrap().get(&credential_hash).is_some_and(|slot|slot.instance==instance){break;}
                     let parsed=serde_json::from_str::<ClientMessage>(&text);
-                    let Ok(message)=parsed else {if !send(&mut socket,error("invalid_message","消息格式无效，内容未写入。")).await{break;}continue;};
+                    let Ok(message)=parsed else {if !send(socket,error("invalid_message","消息格式无效，内容未写入。")).await{break;}continue;};
                     let reply=match message {
                         ClientMessage::OperationSubmit{request}=>{
                             let request_id=request.request_id.clone();let command=match &request.operation {mathscape_domain::InkLabOperation::Stroke{stroke,..}=>Some(stroke.id.clone()),_=>None};let service=state.service.clone();let credential=credential_hash.clone();
@@ -958,15 +947,15 @@ async fn serve_socket(mut socket: &mut WebSocket, state: HttpState) {
                         ClientMessage::Ping=>Some(json!({"type":"pong"})),
                         ClientMessage::Hello{..}|ClientMessage::HelloStandby{..}=>Some(error("invalid_message","连接已经认证。")),
                     };
-                    if let Some(reply)=reply {if !send(&mut socket,reply).await{break;}}
-                },_=>{send(&mut socket,error("invalid_message","只接受版本化 JSON 消息。")).await;}}
+                    if let Some(reply)=reply&& !send(socket,reply).await{break;}
+                },_=>{send(socket,error("invalid_message","只接受版本化 JSON 消息。")).await;}}
             }
         }
     }
     release(&state, &credential_hash, &instance);
 }
 async fn standby_loop(
-    mut socket: &mut WebSocket,
+    socket: &mut WebSocket,
     state: HttpState,
     protocol_version: String,
     client_id: String,
@@ -976,7 +965,7 @@ async fn standby_loop(
     if protocol_version != INK_LAN_PROTOCOL_VERSION || client_id.is_empty() || client_id.len() > 200
     {
         send(
-            &mut socket,
+            socket,
             error("protocol_mismatch", "InkPad 版本不兼容，请重新加载页面。"),
         )
         .await;
@@ -986,11 +975,7 @@ async fn standby_loop(
         .live
         .load_or_create_standby_key(state.service.workspace_root())
     else {
-        send(
-            &mut socket,
-            error("service_unavailable", "待命服务暂时不可用。"),
-        )
-        .await;
+        send(socket, error("service_unavailable", "待命服务暂时不可用。")).await;
         return;
     };
     let token_valid = standby_token
@@ -1024,11 +1009,7 @@ async fn standby_loop(
         } else {
             "authentication_failed"
         };
-        send(
-            &mut socket,
-            error(code, "待命认证已失效，请重新扫码配对。"),
-        )
-        .await;
+        send(socket, error(code, "待命认证已失效，请重新扫码配对。")).await;
         return;
     }
     let Ok(instance) = secret() else {
@@ -1042,7 +1023,7 @@ async fn standby_loop(
         }
     }
     if !send(
-        &mut socket,
+        socket,
         json!({
             "type": "standby_ready",
             "protocol_version": INK_LAN_PROTOCOL_VERSION,
@@ -1060,7 +1041,7 @@ async fn standby_loop(
         tokio::select! {
             event = control.recv() => {
                 if let Ok(Control::SwitchOffer(payload)) = &event {
-                    if !send(&mut socket, payload.clone()).await {
+                    if !send(socket, payload.clone()).await {
                         break;
                     }
                     continue;
@@ -1072,7 +1053,7 @@ async fn standby_loop(
                     _ => None,
                 };
                 if let Some(code) = code {
-                    send(&mut socket, json!({"type": "session_closed", "code": code})).await;
+                    send(socket, json!({"type": "session_closed", "code": code})).await;
                     break;
                 }
             }
@@ -1116,13 +1097,13 @@ async fn standby_loop(
                             Err(_) => Some(error("invalid_message", "消息格式无效，内容未写入。")),
                         };
                         if let Some(reply) = reply
-                            && !send(&mut socket, reply).await
+                            && !send(socket, reply).await
                         {
                             break;
                         }
                     }
                     _ => {
-                        send(&mut socket, error("invalid_message", "只接受版本化 JSON 消息。")).await;
+                        send(socket, error("invalid_message", "只接受版本化 JSON 消息。")).await;
                     }
                 }
             }
@@ -1648,16 +1629,15 @@ impl DesktopService {
     pub async fn cancel_ink_setup(&self) {
         let previous = self.ink_lan.live.setup.lock().unwrap().take();
         // An unclaimed hand-off pairing would otherwise keep the desktop read-only.
-        if let Some(setup) = previous {
-            if let (Some(document), Some(_), None) = (
+        if let Some(setup) = previous
+            && let (Some(document), Some(_), None) = (
                 setup.document_id.as_ref(),
                 setup.live_pairing(),
                 setup.outcome,
-            ) {
-                if let Ok(mut database) = store(self) {
-                    let _ = database.cancel_ink_pairing(document, now());
-                }
-            }
+            )
+            && let Ok(mut database) = store(self)
+        {
+            let _ = database.cancel_ink_pairing(document, now());
         }
         let active = self.ink_lan.setup_server.lock().await.take();
         if let Some(active) = active {
@@ -1762,10 +1742,10 @@ impl DesktopService {
     }
     pub async fn start_ink_lan(&self, port: Option<u16>) -> Result<InkLanStatus, String> {
         let mut running = self.ink_lan.running.lock().await;
-        if let Some(active) = running.as_ref() {
-            if !active.task.is_finished() {
-                return Ok(active.status.clone());
-            }
+        if let Some(active) = running.as_ref()
+            && !active.task.is_finished()
+        {
+            return Ok(active.status.clone());
         }
         running.take();
         let settings = store(self)?.ink_lan_settings().map_err(|e| e.to_string())?;

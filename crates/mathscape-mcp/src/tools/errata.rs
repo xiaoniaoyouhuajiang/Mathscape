@@ -3,9 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use mathscape_agent::{ToolError, ToolErrorCode};
-use mathscape_orchestrator::{
-    EffectiveByteMap, EffectiveByteSegmentKind, ErrataOverlayEntry,
-};
+use mathscape_orchestrator::{EffectiveByteMap, EffectiveByteSegmentKind, ErrataOverlayEntry};
 use mathscape_store_sqlite::{MarkdownBlockErrata, SqliteArtifactStore, SqliteStoreError};
 use serde_json::{Value, json};
 

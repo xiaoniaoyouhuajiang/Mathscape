@@ -532,7 +532,9 @@ fn staged_title(
             };
             anchors
                 .head_title(end_id)
-                .or_else(|| staged_object(versions, end_id).and_then(|o| payload_short_title(&o.payload)))
+                .or_else(|| {
+                    staged_object(versions, end_id).and_then(|o| payload_short_title(&o.payload))
+                })
                 .unwrap_or_else(|| end_id.to_owned())
         };
         let label = base
@@ -542,7 +544,12 @@ fn staged_title(
             .filter(|s| !s.trim().is_empty())
             .or_else(|| base.payload.get("relation").and_then(Value::as_str))
             .unwrap_or("对齐");
-        return Some(format!("{} —{}→ {}", end_title("source"), label, end_title("target")));
+        return Some(format!(
+            "{} —{}→ {}",
+            end_title("source"),
+            label,
+            end_title("target")
+        ));
     }
     payload_short_title(&base.payload)
 }
@@ -564,7 +571,11 @@ fn collect_retire_cascades(
     let retire_targets: BTreeSet<String> = objects
         .iter()
         .filter(|obj| obj.get("op").and_then(Value::as_str) == Some("retire"))
-        .filter_map(|obj| obj.get("target_id").and_then(Value::as_str).map(str::to_owned))
+        .filter_map(|obj| {
+            obj.get("target_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
         .collect();
     if retire_targets.is_empty() {
         return out;
@@ -590,7 +601,12 @@ fn collect_retire_cascades(
         if version.record.state != "staged" {
             continue;
         }
-        let Some(staged_ids) = version.record.result.get("staged_ids").and_then(Value::as_object) else {
+        let Some(staged_ids) = version
+            .record
+            .result
+            .get("staged_ids")
+            .and_then(Value::as_object)
+        else {
             continue;
         };
         let Some(proposed) = version
@@ -613,10 +629,8 @@ fn collect_retire_cascades(
             let Some(debt_id) = staged_ids.get(local_ref).and_then(Value::as_str) else {
                 continue;
             };
-            let payload = resolve_local_refs(
-                obj.get("payload").unwrap_or(&Value::Null),
-                staged_ids,
-            );
+            let payload =
+                resolve_local_refs(obj.get("payload").unwrap_or(&Value::Null), staged_ids);
             let status = payload.get("status").and_then(Value::as_str).unwrap_or("");
             if !matches!(status, "open" | "claimed_paid") {
                 continue;
@@ -2649,14 +2663,25 @@ mod tests {
         let staged_new =
             crate::semantic::object_detail_with_scope(&service, &new_theory_id, true).unwrap();
         assert!(staged_new.staged.is_some());
-        assert!(staged_new.staged.as_ref().unwrap().accepted_payload.is_none());
+        assert!(
+            staged_new
+                .staged
+                .as_ref()
+                .unwrap()
+                .accepted_payload
+                .is_none()
+        );
         let staged_edited =
             crate::semantic::object_detail_with_scope(&service, &entity_id, true).unwrap();
-        assert!(staged_edited.staged.as_ref().unwrap().accepted_payload.is_some());
-        assert_eq!(
-            staged_edited.payload["home_theory"],
-            json!(new_theory_id)
+        assert!(
+            staged_edited
+                .staged
+                .as_ref()
+                .unwrap()
+                .accepted_payload
+                .is_some()
         );
+        assert_eq!(staged_edited.payload["home_theory"], json!(new_theory_id));
         accept(&fx, vec![sel(&move_shelf)]).unwrap();
         assert_eq!(
             semantic_payload(&fx, &entity_id)["payload"]["home_theory"],
@@ -2689,7 +2714,13 @@ mod tests {
             retire_view.retire_cascades.get(&alignment_id),
             Some(&vec![debt_id.clone()])
         );
-        assert!(retire_view.target_object_title.as_deref().unwrap_or("").contains("单调收敛定理"));
+        assert!(
+            retire_view
+                .target_object_title
+                .as_deref()
+                .unwrap_or("")
+                .contains("单调收敛定理")
+        );
         accept(&fx, vec![sel(&retire)]).unwrap();
         assert_ne!(semantic_payload(&fx, &alignment_id)["lifecycle"], "active");
         assert_eq!(

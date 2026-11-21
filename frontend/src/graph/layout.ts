@@ -426,6 +426,13 @@ export function computeLandscapeLayout(
         },
       ],
     });
+    // With styles disabled `node.style()` returns the node itself, and cose's
+    // `parseFloat(node.style("padding"))` then stringifies that self-containing
+    // collection, which overflows WebKit's stack. Padding only bounds compound
+    // parents, which this layout never creates.
+    for (const node of headless.nodes()) {
+      (node as unknown as { style: () => string }).style = () => "0";
+    }
     try {
       // Override headless 0×0 dimensions so `cose` computes gravity & component
       // row wrapping against the real viewport aspect ratio without affine-stretching

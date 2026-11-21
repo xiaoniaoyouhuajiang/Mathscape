@@ -281,7 +281,7 @@ test.describe("M1 keyboard shortcuts", () => {
     // A real lasso, then Esc clears the selection (its frame disappears).
     await lassoRect(page, -110, -90, 110, 90);
     await expect(remove).toBeEnabled();
-    expect(await paintedBounds(page, "input")).not.toBeNull();
+    await expect.poll(() => paintedBounds(page, "input")).not.toBeNull();
     await page.keyboard.press("Escape");
     await expect(remove).toBeDisabled();
     await expect.poll(() => paintedBounds(page, "input")).toBeNull();

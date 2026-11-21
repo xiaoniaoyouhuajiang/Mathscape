@@ -292,5 +292,6 @@ test("the return chip keeps its size when the reader pane is a flex column, as i
     document.querySelector(".reader-return-point")!.getBoundingClientRect().top,
     document.querySelector(".md-reader-layout")!.getBoundingClientRect().bottom,
   ]);
-  expect(chipTop).toBeGreaterThanOrEqual(contentBottom);
+  // Layout positions are fractional; allow sub-pixel rounding of the scrolled chip.
+  expect(chipTop).toBeGreaterThanOrEqual(contentBottom - 1);
 });

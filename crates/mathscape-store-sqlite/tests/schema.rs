@@ -1200,7 +1200,10 @@ fn study_marks_sidecar_upserts_lists_and_clears_unread_without_touching_map() {
 
     let marks = store.list_study_marks().unwrap();
     assert_eq!(marks.len(), 2);
-    assert_eq!(marks["mathscape:source-unit/u1"].status, StudyStatus::Mastered);
+    assert_eq!(
+        marks["mathscape:source-unit/u1"].status,
+        StudyStatus::Mastered
+    );
     assert_eq!(
         marks["mathscape:source-unit/u2"].note.as_deref(),
         Some("证明第三步待补")
@@ -1232,7 +1235,12 @@ fn markdown_errata_sidecar_upserts_supersedes_reverts_and_tracks_unit_reviews() 
 
     let mut store = SqliteArtifactStore::open_in_memory().unwrap();
     let artifact = "mathscape:artifact/md-demo";
-    assert!(store.list_active_markdown_errata(artifact).unwrap().is_empty());
+    assert!(
+        store
+            .list_active_markdown_errata(artifact)
+            .unwrap()
+            .is_empty()
+    );
 
     // 1. Insert single-block errata E1 on bytes [10, 40)
     let out1 = store
@@ -1344,9 +1352,17 @@ fn markdown_errata_sidecar_upserts_supersedes_reverts_and_tracks_unit_reviews() 
         .unwrap()
         .unwrap();
     assert_eq!(reverted.status, MarkdownErrataStatus::Reverted);
-    assert!(store.list_active_markdown_errata(artifact).unwrap().is_empty());
+    assert!(
+        store
+            .list_active_markdown_errata(artifact)
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
-        store.list_markdown_errata_history(artifact, None).unwrap().len(),
+        store
+            .list_markdown_errata_history(artifact, None)
+            .unwrap()
+            .len(),
         2
     );
     assert_eq!(store.map_edit_snapshot().unwrap().base_commit, None);

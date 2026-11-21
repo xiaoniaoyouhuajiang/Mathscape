@@ -737,7 +737,10 @@ fn validate_ink_export(format: &str, contents: &[u8]) -> Result<(), InkCommandEr
             .map(|_| ())
             .map_err(|_| InkCommandError::new("validation_failed", "导出内容不是有效 JSON。")),
         "png" if contents.starts_with(b"\x89PNG\r\n\x1a\n") => Ok(()),
-        _ => Err(InkCommandError::new("validation_failed", "导出格式或内容无效。")),
+        _ => Err(InkCommandError::new(
+            "validation_failed",
+            "导出格式或内容无效。",
+        )),
     }
 }
 
@@ -765,7 +768,10 @@ pub async fn export_ink_file(
     let selected = app
         .dialog()
         .file()
-        .add_filter(if format == "json" { "Ink JSON" } else { "PNG" }, &[format.as_str()])
+        .add_filter(
+            if format == "json" { "Ink JSON" } else { "PNG" },
+            &[format.as_str()],
+        )
         .set_file_name(ink_export_name(&file_name, &format))
         .blocking_save_file();
     let Some(selected) = selected else {

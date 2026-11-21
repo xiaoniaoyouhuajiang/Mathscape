@@ -752,8 +752,20 @@ fn heuristic_hub_sink_stops_theory_and_foreign_book_explosion() {
     let book_b_other = unit("book_b_other");
 
     writer.unit(&book_b_sec, "section", "B书 §2", None, &[]);
-    writer.unit(&book_b_thm, "statement", "B书 定理 2.1", Some(&book_b_sec), &[]);
-    writer.unit(&book_b_other, "problem", "B书 无关习题 2.9", Some(&book_b_sec), &[]);
+    writer.unit(
+        &book_b_thm,
+        "statement",
+        "B书 定理 2.1",
+        Some(&book_b_sec),
+        &[],
+    );
+    writer.unit(
+        &book_b_other,
+        "problem",
+        "B书 无关习题 2.9",
+        Some(&book_b_sec),
+        &[],
+    );
     writer.insert(
         theory,
         "entity",
@@ -830,17 +842,36 @@ fn heuristic_hub_sink_stops_theory_and_foreign_book_explosion() {
     assert_eq!(res["status"], "ok", "{res}");
     assert_no_dangling_edges(&res);
     let ids = node_ids(&res);
-    for expected in [cassini, qpow, theory, debt, book_b_thm.as_str(), book_b_sec.as_str()] {
-        assert!(ids.contains(&expected.to_owned()), "missing {expected} in {ids:?}");
+    for expected in [
+        cassini,
+        qpow,
+        theory,
+        debt,
+        book_b_thm.as_str(),
+        book_b_sec.as_str(),
+    ] {
+        assert!(
+            ids.contains(&expected.to_owned()),
+            "missing {expected} in {ids:?}"
+        );
     }
-    assert!(!ids.contains(&unrelated.to_owned()), "theory hub leaked {unrelated}: {ids:?}");
-    assert!(!ids.contains(&book_b_other), "foreign section leaked {book_b_other}: {ids:?}");
+    assert!(
+        !ids.contains(&unrelated.to_owned()),
+        "theory hub leaked {unrelated}: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&book_b_other),
+        "foreign section leaked {book_b_other}: {ids:?}"
+    );
 
     // Seeding directly on `theory` DOES list all shelf members at depth 1.
     let shelf = hood(&f, json!({ "node_id": theory, "depth": 1 }));
     let shelf_ids = node_ids(&shelf);
     for member in [cassini, qpow, unrelated] {
-        assert!(shelf_ids.contains(&member.to_owned()), "missing shelf member {member}: {shelf_ids:?}");
+        assert!(
+            shelf_ids.contains(&member.to_owned()),
+            "missing shelf member {member}: {shelf_ids:?}"
+        );
     }
 }
 
@@ -884,7 +915,10 @@ fn direction_follows_from_and_to_sides() {
         "{ids:?}"
     );
 
-    let conversion = hood(&f, json!({ "node_id": f.pdf, "preset": "raw", "direction": "out" }));
+    let conversion = hood(
+        &f,
+        json!({ "node_id": f.pdf, "preset": "raw", "direction": "out" }),
+    );
     assert!(node_ids(&conversion).contains(&f.markdown), "{conversion}");
     assert!(edge_relations(&conversion).contains(&"conversion".to_owned()));
 }

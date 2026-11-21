@@ -265,8 +265,9 @@ pub fn validate_live_references(map: &BTreeMap<String, MapEditObject>) -> Vec<Im
                     message: "原文证据缺少物理定位".into(),
                 });
             }
-        } else if o.kind == "SourceUnitRelation" {
-            if o.endpoints
+        } else if o.kind == "SourceUnitRelation"
+            && (o
+                .endpoints
                 .iter()
                 .filter(|e| e.role().as_str() == "source")
                 .count()
@@ -276,14 +277,13 @@ pub fn validate_live_references(map: &BTreeMap<String, MapEditObject>) -> Vec<Im
                     .filter(|e| e.role().as_str() == "target")
                     .count()
                     != 1
-                || !o.endpoints.iter().any(|e| e.role().as_str() == "evidence")
-            {
-                errors.push(ImpactDiagnostic {
-                    code: "invalid_relation".into(),
-                    object_id: Some(o.object_id.clone()),
-                    message: "来源关系需要来源、目标和原文证据端点".into(),
-                });
-            }
+                || !o.endpoints.iter().any(|e| e.role().as_str() == "evidence"))
+        {
+            errors.push(ImpactDiagnostic {
+                code: "invalid_relation".into(),
+                object_id: Some(o.object_id.clone()),
+                message: "来源关系需要来源、目标和原文证据端点".into(),
+            });
         }
     }
     errors

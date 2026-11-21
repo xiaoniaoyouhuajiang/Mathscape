@@ -316,7 +316,7 @@ pub enum DesktopDiscoveryError {
 }
 
 enum DiscoveryStart {
-    Fresh(PreparedUnitDiscoveryRequest),
+    Fresh(Box<PreparedUnitDiscoveryRequest>),
     Resume(Box<PatchResumePlan>),
 }
 
@@ -335,10 +335,10 @@ enum PatchResumeDecision {
     },
     /// Legacy replay: an approval that promoted a separate patched artifact.
     Apply {
-        base_document: AnchoredMarkdown,
-        selected: MarkdownPatchSet,
+        base_document: Box<AnchoredMarkdown>,
+        selected: Box<MarkdownPatchSet>,
         /// The promoted artifact as read back from the Artifact Pool.
-        patched_document: AnchoredMarkdown,
+        patched_document: Box<AnchoredMarkdown>,
     },
 }
 
@@ -1085,7 +1085,7 @@ impl DesktopService {
             .with_patch_excluded_ranges(excluded)
             .with_run_id(run_id.clone());
         let prepared = match start {
-            DiscoveryStart::Fresh(prepared) => prepared,
+            DiscoveryStart::Fresh(prepared) => *prepared,
             DiscoveryStart::Resume(plan) => {
                 let PatchResumePlan {
                     prepared,
@@ -1198,7 +1198,7 @@ impl DesktopService {
             .map_err(DesktopDiscoveryError::Input)?;
         Ok(DiscoveryExecution {
             run_id: new_discovery_run_id()?,
-            start: DiscoveryStart::Fresh(prepared),
+            start: DiscoveryStart::Fresh(Box::new(prepared)),
             profile,
             policy,
         })
@@ -1291,9 +1291,9 @@ impl DesktopService {
                         .markdown_document(&patched_artifact_id, Some(&conversion_id))
                         .map_err(resume)?;
                     PatchResumeDecision::Apply {
-                        base_document,
-                        selected,
-                        patched_document,
+                        base_document: Box::new(base_document),
+                        selected: Box::new(selected),
+                        patched_document: Box::new(patched_document),
                     }
                 }
             }

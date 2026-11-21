@@ -10,9 +10,7 @@ use mathscape_orchestrator::{
     ProductPath, anchor_markdown, build_discovery_input, build_unit_discovery_request,
     render_effective_slice, resolve_selection,
 };
-use mathscape_store_sqlite::{
-    ErrataUnitReviewDecision, MarkdownBlockErrata, SqliteArtifactStore,
-};
+use mathscape_store_sqlite::{ErrataUnitReviewDecision, MarkdownBlockErrata, SqliteArtifactStore};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
@@ -351,9 +349,9 @@ impl DesktopService {
                 let Some(art) = loc.pointer("/markdown/artifact").and_then(Value::as_str) else {
                     continue;
                 };
-                let loc_range = loc.pointer("/markdown/byte_range").and_then(|v| {
-                    Some((v.get("start")?.as_u64()?, v.get("end")?.as_u64()?))
-                });
+                let loc_range = loc
+                    .pointer("/markdown/byte_range")
+                    .and_then(|v| Some((v.get("start")?.as_u64()?, v.get("end")?.as_u64()?)));
                 let loc_blocks: HashSet<&str> = loc
                     .get("marker_block_ids")
                     .and_then(Value::as_array)
@@ -387,8 +385,7 @@ impl DesktopService {
                         corrected_text: errata.corrected_text,
                         source_kind: errata.source_kind.as_str().to_owned(),
                         updated_at: errata.updated_at,
-                        sent_to_sandbox: decision
-                            == Some(ErrataUnitReviewDecision::SentToSandbox),
+                        sent_to_sandbox: decision == Some(ErrataUnitReviewDecision::SentToSandbox),
                     });
                 }
             }
@@ -625,7 +622,12 @@ impl DesktopService {
                             | mathscape_domain::LifecycleStatus::Deprecated
                     )
             })
-            .map(|obj| (&obj.stable_id, obj.payload.get("payload").unwrap_or(&obj.payload)))
+            .map(|obj| {
+                (
+                    &obj.stable_id,
+                    obj.payload.get("payload").unwrap_or(&obj.payload),
+                )
+            })
             .collect();
 
         let mut out = Vec::new();
@@ -666,7 +668,9 @@ impl DesktopService {
                 let Some(span_body) = spans_by_id.get(&parsed_span) else {
                     continue;
                 };
-                let Some(art) = span_body.pointer("/markdown/artifact").and_then(Value::as_str)
+                let Some(art) = span_body
+                    .pointer("/markdown/artifact")
+                    .and_then(Value::as_str)
                 else {
                     continue;
                 };

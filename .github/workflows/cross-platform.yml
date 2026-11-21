@@ -1,0 +1,74 @@
+name: Cross-platform
+
+# macOS and Windows minutes are expensive on a private repo, so this runs on
+# main, nightly, and on pull requests labelled `ci:full`.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 18 * * *" # 02:00 Asia/Shanghai
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Debug info would push the workspace test build past the runner's free disk.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  RUST_TOOLCHAIN: "1.99.1"
+  NODE_VERSION: "24"
+
+jobs:
+  test:
+    name: cargo test (${{ matrix.os }})
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: cargo test --workspace --locked --no-fail-fast
+
+  package:
+    name: tauri build (${{ matrix.os }})
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            bundles: deb
+          - os: macos-latest
+            bundles: app
+          - os: windows-latest
+            bundles: nsis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          cache-key: package
+          build-frontend: "false"
+      # tauri.conf.json keeps bundling off for local builds; turn it on here.
+      - name: tauri build
+        shell: bash
+        working-directory: apps/mathscape-desktop
+        run: >
+          node ../../frontend/node_modules/@tauri-apps/cli/tauri.js build
+          --config '{"bundle":{"active":true}}'
+          --bundles ${{ matrix.bundles }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mathscape-${{ matrix.os }}-${{ matrix.bundles }}
+          path: target/release/bundle/
+          retention-days: 7

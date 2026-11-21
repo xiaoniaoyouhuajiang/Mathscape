@@ -12,6 +12,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("JSON and PNG exports report the selected full path", async ({ page }) => {
+  // The session list renders before the current document finishes opening.
+  await expect.poll(() => page.evaluate(() => window.inkDesktopHarness.workspace.currentDocumentId())).toBeTruthy();
   const id = await page.evaluate(() => window.inkDesktopHarness.workspace.currentDocumentId());
   await page.locator("#desktop-ink-export-json").click();
   await expect(page.locator("#desktop-ink-status")).toHaveText(`当前手稿 Ink JSON 已保存到 /tmp/mathscape-ink-${id}-current.json。`);

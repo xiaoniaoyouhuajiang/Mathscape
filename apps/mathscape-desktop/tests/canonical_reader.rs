@@ -65,7 +65,7 @@ fn marker_pages(pages: std::ops::RangeInclusive<u32>) -> String {
 
 fn import_markdown(pool: &mut ArtifactPool, dir: &Path, name: &str, text: &str) -> StableId {
     pool.import_file(
-        &write(dir, name, text.as_bytes()),
+        write(dir, name, text.as_bytes()),
         ArtifactMetadata::derived(
             MediaType::parse("text/markdown").unwrap(),
             Some(name.into()),
@@ -135,7 +135,7 @@ fn canonical_reader_stitches_registered_segments_in_page_order() {
     let mut pool = ArtifactPool::create(&workspace).unwrap();
     let pdf = pool
         .import_file(
-            &write(&dir, "book.pdf", b"%PDF-1.7\nbook\n"),
+            write(&dir, "book.pdf", b"%PDF-1.7\nbook\n"),
             ArtifactMetadata::new(
                 None,
                 MediaType::parse("application/pdf").unwrap(),

@@ -374,8 +374,8 @@ pub fn learning_view_with_context(
 
         let ent_label = entity_label(entity);
         let rel = text(p, "relation").unwrap_or("").to_owned();
-        let is_staged = ctx.staged_ids.contains(a.object_id.as_str())
-            || ctx.staged_ids.contains(target);
+        let is_staged =
+            ctx.staged_ids.contains(a.object_id.as_str()) || ctx.staged_ids.contains(target);
 
         unit_targets
             .entry(source)
@@ -423,7 +423,9 @@ pub fn learning_view_with_context(
             continue;
         };
         let p = payload(u);
-        let targets = unit_targets.remove(u.object_id.as_str()).unwrap_or_default();
+        let targets = unit_targets
+            .remove(u.object_id.as_str())
+            .unwrap_or_default();
         let category = if targets.is_empty() {
             "unaligned"
         } else if targets.iter().any(|t| !t.mastered_in.is_empty()) {
@@ -437,15 +439,12 @@ pub fn learning_view_with_context(
         let parent_unit = text(p, "parent_unit")
             .or_else(|| text(p, "parent"))
             .map(str::to_owned);
-        let unit_staged = ctx.staged_ids.contains(&u.object_id)
-            || targets.iter().any(|t| t.staged);
+        let unit_staged = ctx.staged_ids.contains(&u.object_id) || targets.iter().any(|t| t.staged);
 
         if let Some(entry) = by_material.get_mut(material.as_str()) {
             entry.outline_units.push(StudyOutlineUnit {
                 unit_id: u.object_id.clone(),
-                unit_title: text(p, "display_title")
-                    .unwrap_or("来源单元")
-                    .to_owned(),
+                unit_title: text(p, "display_title").unwrap_or("来源单元").to_owned(),
                 unit_kind: text(p, "kind").unwrap_or("statement").to_owned(),
                 parent_unit,
                 study_status: mark
@@ -518,7 +517,8 @@ pub fn learning_view_with_context(
                     })
                     .unwrap_or_default();
                 let baseline_vals = baseline_conventions.get(&(material.as_str(), key.clone()));
-                let is_baseline_match = convention.get("basis").and_then(Value::as_str) == Some("mathlib")
+                let is_baseline_match = convention.get("basis").and_then(Value::as_str)
+                    == Some("mathlib")
                     || baseline_vals.is_some_and(|vals| vals.contains(&val_str));
                 let diff_note = if !is_baseline_match
                     && let Some(vals) = baseline_vals
@@ -582,7 +582,11 @@ pub fn learning_view_with_context(
                 .get(&b.unit_id)
                 .copied()
                 .unwrap_or((u64::MAX, u64::MAX));
-            (pos_a.0, pos_a.1, a.unit_title.as_str()).cmp(&(pos_b.0, pos_b.1, b.unit_title.as_str()))
+            (pos_a.0, pos_a.1, a.unit_title.as_str()).cmp(&(
+                pos_b.0,
+                pos_b.1,
+                b.unit_title.as_str(),
+            ))
         });
     }
     LearningView {
@@ -871,31 +875,57 @@ mod tests {
         };
 
         let mut ctx = LearningViewContext::default();
-        ctx.artifact_aliases.insert("md-a-ch1".into(), "canon-a".into());
-        ctx.artifact_aliases.insert("md-a-ch2".into(), "canon-a".into());
+        ctx.artifact_aliases
+            .insert("md-a-ch1".into(), "canon-a".into());
+        ctx.artifact_aliases
+            .insert("md-a-ch2".into(), "canon-a".into());
         ctx.study_marks.insert(
             "mathscape:source-unit/a-def".into(),
-            StudyMarkEntry { status: "mastered".into(), note: None },
+            StudyMarkEntry {
+                status: "mastered".into(),
+                note: None,
+            },
         );
 
         let view = learning_view_with_context(&snap, &ctx);
         assert_eq!(view.materials.len(), 2);
-        let book_a = view.materials.iter().find(|m| m.artifact_id == "canon-a").unwrap();
-        let book_b = view.materials.iter().find(|m| m.artifact_id == "md-b").unwrap();
+        let book_a = view
+            .materials
+            .iter()
+            .find(|m| m.artifact_id == "canon-a")
+            .unwrap();
+        let book_b = view
+            .materials
+            .iter()
+            .find(|m| m.artifact_id == "md-b")
+            .unwrap();
 
         // 1. Canonical folding merged ch1 & ch2 into `canon-a`
         assert_eq!(book_a.aliased_artifact_ids, vec!["md-a-ch1", "md-a-ch2"]);
         // 2. Outline units ordered by (page, byte_start), including unaligned section!
-        let outline_titles: Vec<&str> = book_a.outline_units.iter().map(|u| u.unit_title.as_str()).collect();
+        let outline_titles: Vec<&str> = book_a
+            .outline_units
+            .iter()
+            .map(|u| u.unit_title.as_str())
+            .collect();
         assert_eq!(outline_titles, vec!["§1 数列基础", "定义 1.1", "推论 2.1"]);
         assert_eq!(book_a.outline_units[0].category, "unaligned");
         assert_eq!(book_a.outline_units[1].study_status, "mastered");
         // 3. Book B sees `fib` as `mastered_elsewhere` because Book A's `a-def` is mastered!
         assert_eq!(book_b.outline_units[0].category, "mastered_elsewhere");
-        assert_eq!(book_b.outline_units[0].targets[0].mastered_in, vec!["canon-a"]);
+        assert_eq!(
+            book_b.outline_units[0].targets[0].mastered_in,
+            vec!["canon-a"]
+        );
         // 4. Convention baseline comparison
         assert!(book_a.conventions_detail[0].is_baseline_match);
         assert!(!book_b.conventions_detail[0].is_baseline_match);
-        assert!(book_b.conventions_detail[0].diff_note.as_deref().unwrap().contains('0'));
+        assert!(
+            book_b.conventions_detail[0]
+                .diff_note
+                .as_deref()
+                .unwrap()
+                .contains('0')
+        );
     }
 }

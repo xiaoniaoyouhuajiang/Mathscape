@@ -247,7 +247,11 @@ impl DesktopService {
 
     /// Broadcasts updated ProblemCards to any connected tablet whose active note
     /// links directly to `artifact_id` or to one of `affected_unit_ids`.
-    pub(crate) fn notify_errata_changed_ink_cards(&self, artifact_id: &str, affected_unit_ids: &[String]) {
+    pub(crate) fn notify_errata_changed_ink_cards(
+        &self,
+        artifact_id: &str,
+        affected_unit_ids: &[String],
+    ) {
         let Ok(store) = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))
         else {
             return;
@@ -335,7 +339,12 @@ impl DesktopService {
                             | mathscape_domain::LifecycleStatus::Deprecated
                     )
             })
-            .map(|obj| (&obj.stable_id, obj.payload.get("payload").unwrap_or(&obj.payload)))
+            .map(|obj| {
+                (
+                    &obj.stable_id,
+                    obj.payload.get("payload").unwrap_or(&obj.payload),
+                )
+            })
             .collect();
 
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -372,9 +381,9 @@ impl DesktopService {
                 let Some(errata_list) = by_artifact.get(art) else {
                     continue;
                 };
-                let byte_range = span_body.pointer("/markdown/byte_range").and_then(|v| {
-                    Some((v.get("start")?.as_u64()?, v.get("end")?.as_u64()?))
-                });
+                let byte_range = span_body
+                    .pointer("/markdown/byte_range")
+                    .and_then(|v| Some((v.get("start")?.as_u64()?, v.get("end")?.as_u64()?)));
                 let span_blocks: HashSet<&str> = span_body
                     .get("marker_block_ids")
                     .and_then(Value::as_array)
@@ -578,7 +587,12 @@ mod tests {
             .revert_markdown_errata(&saved2.errata.errata_id)
             .unwrap();
         assert_eq!(reverted.errata.status, MarkdownErrataStatus::Reverted);
-        assert!(service.list_markdown_errata(&artifact_id).unwrap().is_empty());
+        assert!(
+            service
+                .list_markdown_errata(&artifact_id)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             service
                 .list_markdown_errata_history(&artifact_id, None)
