@@ -186,6 +186,8 @@ fn ink_snapshot_keeps_a_fixed_operation_prefix_after_later_editing() {
     fs::write(&artifact_path, b"corrupted snapshot").unwrap();
     let error = service.open_ink_snapshot(snapshot.snapshot_id).unwrap_err();
     assert!(error.contains("完整性校验未通过"));
+    drop(pool);
+    drop(catalog);
     directory.cleanup();
 }
 
@@ -1030,6 +1032,7 @@ async fn runs_discovery_from_managed_markdown_through_the_configured_profile() {
             "unit_discovery_v1"
         ]
     );
+    drop(store);
     directory.cleanup();
 }
 
