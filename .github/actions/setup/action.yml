@@ -1,0 +1,51 @@
+name: Set up Mathscape
+description: Install the pinned Rust toolchain, Node, cached dependencies and the frontend assets the desktop crate embeds.
+
+inputs:
+  rust-components:
+    description: Extra rustup components, comma separated.
+    default: ""
+  cache-key:
+    description: Extra key that separates this job's Rust cache from other jobs.
+    default: ""
+  build-frontend:
+    description: Build frontend/dist and frontend/dist-inkpad, which mathscape-desktop needs to compile.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Tauri system libraries
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+          libxdo-dev libssl-dev libdbus-1-dev pkg-config patchelf
+
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ env.RUST_TOOLCHAIN }}
+        components: ${{ inputs.rust-components }}
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ inputs.cache-key }}
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install frontend dependencies
+      shell: bash
+      working-directory: frontend
+      run: npm ci
+
+    - name: Build frontend assets
+      if: inputs.build-frontend == 'true'
+      shell: bash
+      working-directory: frontend
+      run: npm run build
