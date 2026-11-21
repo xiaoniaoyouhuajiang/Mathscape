@@ -284,10 +284,6 @@
   background: var(--ms-panel-raised); color: var(--ms-text); font-size: 12px;
 }
 .canonical-status-hint[hidden] { display: none !important; }
-.canonical-status-action {
-  margin-left: 6px; padding: 2px 8px; font-size: 12px; cursor: pointer; border-radius: 4px;
-  background: var(--ms-control); color: var(--ms-text); border: 1px solid var(--ms-control-border);
-}
 
 /* Snapshot ↔ 规范解析正文: the way on from one parse run's pages. */
 .reader-controls .reader-canonical-entry {
@@ -313,11 +309,23 @@
 /* 回到出发处: stays at the bottom of the reader while the located block is out of view. */
 .reader-return-point {
   position: sticky; bottom: 12px; z-index: 4; width: fit-content; max-width: calc(100% - 24px);
-  margin: 12px auto 0; display: flex; align-items: stretch;
+  margin: 12px auto 0; display: flex; align-items: stretch; flex: 0 0 auto;
   border: 1px solid color-mix(in srgb, var(--ms-star-gold) 55%, var(--ms-border)); border-radius: 999px;
   background: var(--ms-current-bg); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35); overflow: hidden;
 }
 .reader-return-point[hidden] { display: none !important; }
+.reader-return-point:not(.is-shown) { visibility: hidden; pointer-events: none; }
+.canonical-landing-note {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 8px 0 14px; padding: 9px 12px; border-radius: 6px; font-size: 13px;
+  border: 1px solid color-mix(in srgb, var(--ms-star-gold) 55%, var(--ms-border));
+  background: var(--ms-current-bg); color: var(--ms-text);
+}
+.canonical-landing-note button {
+  flex-shrink: 0; padding: 4px 10px; font-size: 12px; cursor: pointer; border-radius: 5px;
+  background: var(--ms-control); color: var(--ms-text); border: 1px solid var(--ms-control-border);
+}
+.canonical-landing-note button:hover { background: var(--ms-selected); }
 .reader-return-point button { background: transparent; border: none; color: var(--ms-text); cursor: pointer; font-size: 12px; }
 .reader-return-point button:hover { background: color-mix(in srgb, var(--ms-star-gold) 14%, transparent); }
 .reader-return-btn { padding: 7px 6px 7px 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

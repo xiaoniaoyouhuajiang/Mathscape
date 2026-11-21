@@ -4,7 +4,7 @@ import { markdownRenderer } from "./markdown";
 import { canonicalReaderProjection, gapLabel, pagesLabel, projectionSummary, segmentLabel, splitByPageMarkers, type CanonicalReaderSegment } from "./canonical";
 import { isCanonicalMarkdownId } from "./openable";
 import { focusMatchesBlock, pageIndexOfBlock, planCanonicalLanding, snapshotPageSpan, type CanonicalLanding } from "./canonical-landing";
-import { blockLabel, isInViewport, mountReturnPoint, pinToViewportTop, scrollParentOf, viewportTopOf } from "./reading-position";
+import { blockLabel, centredTop, isInViewport, mountReturnPoint, pinToViewportTop, scrollParentOf, viewportTopOf } from "./reading-position";
 import { markdownDocument, MarkdownSelection, type AnchoredMarkdown, type MarkdownBlock, type PatchReviewMode } from "./selection";
 import { ReaderInkLinks } from "./ink-links";
 import { CanonicalInkController, type CanonicalBlockItem } from "./canonical-ink";
@@ -270,6 +270,7 @@ export class ArtifactReader {
       }
     }
     this.close();
+    this.openCount += 1;
     this.state = "loading";
     eventBus.emit("reader-opened");
     const { focus, patch, conversionId } = options;
@@ -309,6 +310,8 @@ export class ArtifactReader {
           });
         }
         status.remove();
+        // The loading line sat above the document; removing it moved the landing.
+        this.settleLanding?.();
         this.state = "ready";
         this.lastOpen = { id, title, options: { ...options } };
         return true;
@@ -358,6 +361,10 @@ export class ArtifactReader {
     }
   }
 
+  /** Re-applies the landing position of the open 规范解析正文 after late layout. */
+  private settleLanding: (() => void) | undefined;
+  private openCount = 0;
+
   /** Snapshot to go back to when the stitched view cannot show the position. */
   private snapshotFallback: { id: string; title: string; options: ReaderOpenOptions } | undefined;
 
@@ -367,8 +374,17 @@ export class ArtifactReader {
     fallback: { id: string; title: string; options: ReaderOpenOptions },
   ): Promise<boolean> {
     this.snapshotFallback = fallback;
+    const attempt = this.openCount + 1;
     try {
-      return await this.open(canonical.id, canonical.title, { focus });
+      const opened = await this.open(canonical.id, canonical.title, { focus });
+      if (opened || this.openCount !== attempt || this.state !== "error") return opened;
+      // The stitched view could not be read (e.g. another segment's file is
+      // missing); the snapshot the reader asked for is still readable.
+      return await this.open(fallback.id, fallback.title, {
+        ...fallback.options,
+        preferCanonical: false,
+        notice: `规范解析正文暂时打不开（${this.error ?? "读取失败"}），已保留在解析快照中。`,
+      });
     } finally {
       if (this.snapshotFallback === fallback) this.snapshotFallback = undefined;
     }
@@ -804,7 +820,7 @@ export class ArtifactReader {
         const start = rangeItems[0].block.range.start;
         const end = rangeItems[rangeItems.length - 1].block.range.end;
         const blockIds = rangeItems.map((i) => i.block.id);
-        const returnFocus: ReaderFocus = { start, end, blockIds };
+        const returnFocus: ReaderFocus = { start, end, blockIds, artifactId: firstItem.artifactId };
         try {
           const backlink = await getSourceBacklink({
             artifact_id: firstItem.artifactId,
@@ -1046,6 +1062,7 @@ export class ArtifactReader {
       canonicalInk?.dispose();
       outlineHandle.dispose();
       pin?.dispose();
+      this.settleLanding = undefined;
       disposeReturnPoint?.();
       if (fallbackMenuListener) article.removeEventListener("contextmenu", fallbackMenuListener);
     };
@@ -1056,19 +1073,24 @@ export class ArtifactReader {
       if (landing.kind === "page" && focus.artifactId) {
         const snapshotId = focus.artifactId;
         const { pdfPageIndex: _page, viewportTop: _top, artifactId: _artifact, ...snapshotFocus } = focus;
-        setStatusHint(`这一块所在的 PDF 第 ${landing.pageIndex + 1} 页在规范解析正文中由另一个解析快照显示，已定位到该页开头。`);
+        // Said where the reader lands, not at the top of a long document.
+        const note = element("div");
+        note.className = "canonical-landing-note";
+        note.setAttribute("role", "status");
+        note.append(element("span", `这一块所在的 PDF 第 ${landing.pageIndex + 1} 页在规范解析正文中由另一个解析快照显示，已定位到该页开头。`));
         const openSnapshot = element("button", "在原快照中查看这一块");
         openSnapshot.type = "button";
-        openSnapshot.className = "canonical-status-action";
         openSnapshot.onclick = () => void this.open(snapshotId, `${title} · 解析快照`, { focus: snapshotFocus });
-        statusHint.append(" ", openSnapshot);
+        note.append(openSnapshot);
+        if (arrivedAt.classList.contains("canonical-segment")) arrivedAt.prepend(note);
+        else arrivedAt.after(note);
       }
-      if (focus.viewportTop !== undefined) {
-        pin = pinToViewportTop(landingTarget, focus.viewportTop, (target) => this.scrollerOf(target), this.host);
-        pin.apply();
-      } else {
-        arrivedAt.scrollIntoView(landing.kind === "block" ? { behavior: "smooth", block: "center" } : { block: "start" });
-      }
+      // A page start reads from the top; a block keeps the height it had, or is centred.
+      const top = landing.kind !== "block" ? 12 : focus.viewportTop ?? centredTop;
+      pin = pinToViewportTop(landingTarget, top, (target) => this.scrollerOf(target), this.host);
+      pin.apply();
+      pin.watch(article);
+      this.settleLanding = pin.apply;
       if (landing.kind !== "segment") {
         disposeReturnPoint = mountReturnPoint({
           container,

@@ -98,7 +98,7 @@ function setMarkdownSnapshot(id: string, doc: AnchoredMarkdown): void {
   files[id] = { media: "text/markdown", bytes: new TextEncoder().encode(doc.source) };
 }
 const backlinkRequests: unknown[] = [];
-const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash", markdownOnlyReason: null as string | null };
+const behavior = { pdfRangeFailure: false, selectionDelay: 0, discoveryDelay: 0, failSelection: false, admission: "review_before_publish", discoveryStatus: "completed", pendingPatchStatus: null as string | null, documentHash: "test-hash", markdownOnlyReason: null as string | null, canonicalProjectionError: null as string | null };
 const byteOffset = (text: string): number => new TextEncoder().encode(markdown.slice(0, markdown.indexOf(text))).length;
 function patchReview(status: string): unknown {
   const start = byteOffset("x^2");
@@ -141,6 +141,7 @@ function handle(command: string, payload: any): any {
     return structuredClone(unitMarkers.filter(m => wanted.has(m.artifact_id)));
   }
   if (command === "get_canonical_reader_projection") {
+    if (behavior.canonicalProjectionError) throw new Error(behavior.canonicalProjectionError);
     if (!canonicalProjection) throw new Error("规范解析正文未登记");
     return structuredClone(canonicalProjection);
   }

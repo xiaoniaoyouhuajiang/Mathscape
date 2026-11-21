@@ -72,7 +72,8 @@ async function setUp(page: Page, options: { resolve?: boolean } = {}): Promise<v
     });
     // In the app the reader panel is the scroll container.
     const host = document.querySelector<HTMLElement>("#reader")!;
-    host.style.cssText = "height: 620px; overflow: auto; position: relative;";
+    // The desktop webview (WebKit) has no scroll anchoring; do not rely on Chromium's.
+    host.style.cssText = "height: 620px; overflow: auto; position: relative; overflow-anchor: none;";
     h.reader.setCanonicalResolver((artifactId: string) =>
       resolve && (artifactId === "seg-a" || artifactId === "seg-b") ? { id: canonicalId, title } : undefined);
     (window as any).fixture = {
@@ -191,16 +192,17 @@ test("the boundary card lands on the PDF page when the stitched view shows it fr
   const card = page.locator(".reader-boundary-card.is-start");
   await expect(card).toBeVisible();
   // seg-b's first block (sb-1) is on PDF page 2, which the stitched view shows from seg-a.
-  const before = await top(page, "[data-source-block='sb-1']");
   await card.getByRole("button", { name: "继续向上阅读" }).click();
 
   await expect(page.locator(".canonical-reader")).toBeVisible();
   await expect(page.locator(".canonical-reader [data-source-block='sb-1']")).toHaveCount(0);
   await expect(page.locator(".canonical-reader .source-block-focus")).toHaveCount(0);
-  const hint = page.locator(".canonical-status-hint");
+  // The explanation sits at the landing, on screen, not at the top of the document.
+  const hint = page.locator(".canonical-landing-note");
   await expect(hint).toContainText("PDF 第 2 页在规范解析正文中由另一个解析快照显示");
+  await expect(hint).toBeInViewport({ ratio: 1 });
   const after = await top(page, ".canonical-reader .source-page-marker[data-pdf-page-index='1']");
-  expect(Math.abs(after - before)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after - 12)).toBeLessThanOrEqual(1);
   // Earlier pages are above now: the reader can keep scrolling up.
   expect(await page.locator("#reader").evaluate(host => host.scrollTop)).toBeGreaterThan(0);
 
@@ -219,4 +221,33 @@ test("a position the stitched view cannot show stays in the snapshot with a noti
   await expect(page.locator("[data-source-block='sb-1']")).toHaveClass(/source-block-focus/);
   await expect(page.locator(".canonical-status-hint")).toContainText("已保留在解析快照中");
   expect(await page.evaluate(() => (window as any).harness.reader.lastOpened()?.id)).toBe("seg-b");
+});
+
+test("a stitched view that cannot be read keeps the snapshot the reader asked for", async ({ page }) => {
+  await setUp(page);
+  await page.evaluate(() => { (window as any).harness.behavior.canonicalProjectionError = "缺少分段文件"; });
+  expect(await open(page, "seg-b", "定理 2", { focus: await focusOf(page, "sb-21"), preferCanonical: true })).toBe(true);
+  await expect(page.locator(".canonical-reader")).toHaveCount(0);
+  await expect(page.locator("[data-source-block='sb-21']")).toHaveClass(/source-block-focus/);
+  await expect(page.locator(".canonical-status-hint")).toContainText("规范解析正文暂时打不开（缺少分段文件）");
+});
+
+test("the return chip keeps its size when the reader pane is a flex column, as in side-by-side mode", async ({ page }) => {
+  await setUp(page);
+  await page.addStyleTag({ content: `
+    #reader { display: flex; flex-direction: column; }
+    #reader > .reader-main-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  ` });
+  expect(await open(page, "seg-b", "定理 4", { focus: await focusOf(page, "sb-20"), preferCanonical: true })).toBe(true);
+  await page.locator("#reader").evaluate(host => { host.scrollTop = 0; });
+  const chip = page.locator(".reader-return-point");
+  await expect(chip).toBeVisible();
+  expect((await chip.boundingBox())!.height).toBeGreaterThan(24);
+  // At the very end of the document the chip has its own room below the last line.
+  await page.locator("#reader").evaluate(host => { host.scrollTop = host.scrollHeight; });
+  const [chipTop, contentBottom] = await page.evaluate(() => [
+    document.querySelector(".reader-return-point")!.getBoundingClientRect().top,
+    document.querySelector(".md-reader-layout")!.getBoundingClientRect().bottom,
+  ]);
+  expect(chipTop).toBeGreaterThanOrEqual(contentBottom);
 });

@@ -28,27 +28,46 @@ export function isInViewport(element: HTMLElement, scroller: HTMLElement): boole
  */
 export function pinToViewportTop(
   find: () => HTMLElement | null,
-  top: number,
+  top: number | ((target: HTMLElement, scroller: HTMLElement) => number),
   scrollerOf: (target: HTMLElement) => HTMLElement,
   listenOn: HTMLElement,
-): { apply: () => void; dispose: () => void } {
+): { apply: () => void; watch: (content: HTMLElement) => void; dispose: () => void } {
   let released = false;
-  const release = () => { released = true; };
+  let observer: ResizeObserver | undefined;
   const events = ["wheel", "touchmove", "pointerdown", "keydown"] as const;
+  const release = () => {
+    released = true;
+    observer?.disconnect();
+    observer = undefined;
+  };
   events.forEach(name => listenOn.addEventListener(name, release, { capture: true, passive: true }));
+  const apply = () => {
+    if (released) return;
+    const target = find();
+    if (!target) return;
+    const scroller = scrollerOf(target);
+    const wanted = typeof top === "number" ? top : top(target, scroller);
+    scroller.scrollTop += viewportTopOf(target, scroller) - wanted;
+  };
   return {
-    apply: () => {
-      if (released) return;
-      const target = find();
-      if (!target) return;
-      const scroller = scrollerOf(target);
-      scroller.scrollTop += viewportTopOf(target, scroller) - top;
+    apply,
+    // WebKit has no scroll anchoring: content that grows above the target
+    // (images, markers) would push it down the screen without this.
+    watch: (content) => {
+      if (released || typeof ResizeObserver === "undefined") return;
+      observer ??= new ResizeObserver(apply);
+      observer.observe(content);
     },
     dispose: () => {
-      released = true;
+      release();
       events.forEach(name => listenOn.removeEventListener(name, release, { capture: true }));
     },
   };
+}
+
+/** Viewport offset that centres `target`, or keeps its top in view when it is taller than the viewport. */
+export function centredTop(target: HTMLElement, scroller: HTMLElement): number {
+  return Math.max(12, (scroller.clientHeight - target.getBoundingClientRect().height) / 2);
 }
 
 /**
@@ -66,7 +85,6 @@ export function mountReturnPoint(options: {
   const { container, listenOn, find, scrollerOf } = options;
   const chip = document.createElement("div");
   chip.className = "reader-return-point";
-  chip.hidden = true;
   const back = document.createElement("button");
   back.type = "button";
   back.className = "reader-return-btn";
@@ -87,7 +105,11 @@ export function mountReturnPoint(options: {
     frame = 0;
     if (dismissed) return;
     const target = find();
-    chip.hidden = !target || isInViewport(target, scrollerOf(target));
+    // Hidden by class, not removed from flow: its room at the end of the
+    // document stays reserved, so it never sits on top of the last lines.
+    const away = Boolean(target) && !isInViewport(target!, scrollerOf(target!));
+    chip.classList.toggle("is-shown", away);
+    chip.setAttribute("aria-hidden", String(!away));
   };
   const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
   listenOn.addEventListener("scroll", schedule, { capture: true, passive: true });
