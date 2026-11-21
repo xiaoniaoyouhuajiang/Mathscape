@@ -9,6 +9,9 @@ export const zhCN = {
   "theme.toggleTitle": "当前主题：{label}；点击切换",
   "theme.toggleAriaLabel": "切换主题，当前：{label}",
   "error.unknown": "发生了未知错误",
+  "review.label_lang_missing": "共享对象缺少中文或英文名称",
+  "review.possible_duplicate_name": "名称或别名与已有的同类对象相同，可能重复",
+  "review.duplicate_mathlib_decl": "mathlib 名称已被同类对象使用，可能重复",
 } satisfies Record<string, string>;
 
 export type MessageKey = keyof typeof zhCN;

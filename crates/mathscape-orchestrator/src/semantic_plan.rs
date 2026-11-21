@@ -923,6 +923,78 @@ pub fn review_items(
                             .into(),
                     );
                 }
+                let missing = missing_label_langs(p);
+                if !missing.is_empty() {
+                    item(
+                        "warn",
+                        "label_lang_missing",
+                        id,
+                        format!(
+                            "共享对象缺少{}名称；preferred_labels 需同时写 zh 和 en，不论材料用什么语言",
+                            missing.join("、")
+                        ),
+                    );
+                }
+                let kind = p["semantic_kind"].as_str().unwrap_or_default();
+                let same_kind = |other: &&MapEditObject| {
+                    other.object_id != id
+                        && other.kind == "SemanticEntity"
+                        && active(other)
+                        && other.payload["payload"]["semantic_kind"] == p["semantic_kind"]
+                };
+                if matches!(kind, "theory" | "concept") {
+                    let keys = name_keys(p);
+                    let clashes: Vec<&str> = final_map
+                        .values()
+                        .filter(same_kind)
+                        .filter(|other| {
+                            name_keys(&other.payload["payload"])
+                                .iter()
+                                .any(|k| keys.contains(k))
+                        })
+                        .map(|other| other.object_id.as_str())
+                        .collect();
+                    if !clashes.is_empty() {
+                        item(
+                            "warn",
+                            "possible_duplicate_name",
+                            id,
+                            format!(
+                                "名称或别名与已有的同类对象相同：{}；如果是同一个，请复用已有对象",
+                                clashes.join("、")
+                            ),
+                        );
+                    }
+                }
+                if matches!(kind, "concept" | "declaration")
+                    && let Some(decl) = p["mathlib_baseline"]["decl"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|d| !d.is_empty())
+                {
+                    let clashes: Vec<&str> = final_map
+                        .values()
+                        .filter(same_kind)
+                        .filter(|other| {
+                            other.payload["payload"]["mathlib_baseline"]["decl"]
+                                .as_str()
+                                .map(str::trim)
+                                == Some(decl)
+                        })
+                        .map(|other| other.object_id.as_str())
+                        .collect();
+                    if !clashes.is_empty() {
+                        item(
+                            "warn",
+                            "duplicate_mathlib_decl",
+                            id,
+                            format!(
+                                "mathlib 名称 {decl} 已被同类对象使用：{}；如果是同一个，请复用已有对象",
+                                clashes.join("、")
+                            ),
+                        );
+                    }
+                }
                 if p["semantic_kind"] == "theory" {
                     let aliases = p["aliases"].as_array().map_or(0, Vec::len);
                     if aliases == 0 {
@@ -992,6 +1064,93 @@ pub fn review_items(
         }
     }
     out
+}
+
+/// Languages every shared object names itself in (contract S2.2).
+const REQUIRED_LABEL_LANGS: [(&str, &str); 2] = [("zh", "中文"), ("en", "英文")];
+
+fn missing_label_langs(p: &Value) -> Vec<&'static str> {
+    let langs: BTreeSet<String> = p["preferred_labels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|l| l["label"].as_str().is_some_and(|s| !s.trim().is_empty()))
+        .filter_map(|l| l["lang"].as_str())
+        .map(|lang| {
+            lang.split(['-', '_'])
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        })
+        .collect();
+    REQUIRED_LABEL_LANGS
+        .iter()
+        .filter(|(lang, _)| !langs.contains(*lang))
+        .map(|(_, name)| *name)
+        .collect()
+}
+
+/// Preferred labels and aliases, folded so that width, case, spaces and
+/// punctuation do not tell two names apart.
+fn name_keys(p: &Value) -> BTreeSet<String> {
+    p["preferred_labels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|l| l["label"].as_str())
+        .chain(
+            p["aliases"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str),
+        )
+        .map(name_key)
+        .filter(|k| !k.is_empty())
+        .collect()
+}
+
+fn name_key(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            '\u{3000}' => ' ',
+            _ => c,
+        })
+        .flat_map(char::to_lowercase)
+        .filter(|c| {
+            !c.is_whitespace()
+                && !matches!(
+                    c,
+                    '-' | '_'
+                        | '·'
+                        | '・'
+                        | ','
+                        | '.'
+                        | '\''
+                        | '"'
+                        | '’'
+                        | '‘'
+                        | '“'
+                        | '”'
+                        | '('
+                        | ')'
+                        | ':'
+                        | ';'
+                        | '、'
+                        | '，'
+                        | '。'
+                        | '：'
+                        | '；'
+                        | '《'
+                        | '》'
+                        | '「'
+                        | '」'
+                        | '（'
+                        | '）'
+                )
+        })
+        .collect()
 }
 
 /// 一个待核对的 mathlib 名称：共享对象 id、当前 revision、名称。

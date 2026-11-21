@@ -2,11 +2,11 @@
 name: mathscape-worknet
 description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、对象卡、表示、证明上下文、失败见证）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
 metadata:
-  version: "0.7.2"
+  version: "0.7.3"
   tool_schema_version: "mathscape-mcp/18"
 ---
 
-# Mathscape 数学地图构建 skill v0.7.1
+# Mathscape 数学地图构建 skill v0.7.3
 
 这份 skill 给在 Mathscape 工作区中帮助用户搭建数学地图的 Agent 使用。它的任务很简单：从用户关心的原文、手稿或问题出发，逐步整理出可回溯的数学理解，并把仍然不确定的地方留下来。
 
@@ -248,6 +248,7 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
 
 写法要点：
 
+- **共享对象一律中英双名**：四种共享对象的 `preferred_labels` 都要同时写 `{ "lang": "zh", … }` 和 `{ "lang": "en", … }`，不管材料和用户用什么语言；英文名用标准术语，有 mathlib 名称时参照它。缺任一种是 `label_lang_missing`。名称或别名和已有的同类 theory / concept 撞上会得到 `possible_duplicate_name`，mathlib 名称和已有的同类 concept / declaration 撞上会得到 `duplicate_mathlib_decl`：先确认是不是同一个，是就复用已有对象。
 - **共享对象按 mathlib 的写法**，在 `conventions` 里注明约定（如 `sequence_index_origin`，F₀ = 0），可在 `mathlib_baseline` 里写对应的 mathlib 名称。`mathlib_baseline.status` 只能写 `unchecked`：`confirmed` / `not_found` 只由服务端在用户本机的 mathlib 里查过之后写入。不确定名字时先用 `mathlib.search` 查；查不到就 `decl: null` 并在 `note` 里说明。也可以填 `aliases` 记录中英文常见别称。
 - **关系**只有 11 种：`expresses`、`specializes`、`generalizes`、`instance_of`、`representation_of`、`logically_equivalent`、`definitionally_equivalent`、`exact_realization`、`notation_for`、`overlaps_with`、`incompatible_with`。**没有 `same_as`**（`same_as_forbidden`）。两边不完全一样时写 `overlaps_with` 或 `specializes`，并在 `lost_information` 里写清对不上的部分。
 - **参数对照与数列逐项对照分开写**：`parameter_map` 是“第几条恒等式 / 第几个参数对第几条”（如灯塔的第 n 条 ＝ 共享的第 n+1 条，`role: statement_parameter`）；`term_index_map` 是数列的项对项（`index_shift: 0` 表示 f_k = F_k，数列没有错开）。向用户解释时不要说“下标平移”“数列错开”。
@@ -273,7 +274,7 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
                "map_label": "特例：乙的第 n 条 ＝ 共享的第 n+1 条" } }
 ```
 
-语义层的阻塞码：`kind_not_supported`、`operation_not_supported`、`invalid_arg`、`invalid_relation`、`same_as_forbidden`、`invalid_reference_kind`、`missing_required_field`、`forbidden_trust_claim`、`forbidden_alignment_status`、`forbidden_debt_status`、`forbidden_baseline_status`、`identity_field_edit`、`revision_conflict`、`inactive_or_invalid_reference`，以及 4.1 的引用与依赖码。`relation_detail_missing`、`overlap_scope_missing`、`certificate_debt_suggested`、`dialect_scope_mismatch`、`duplicate_alignment`、`theory_name_too_specific`（warn）和 `uncontextualized`、`inferred_convention`、`mathlib_baseline_unchecked`、`multi_target_change_set`、`theory_aliases_missing`（info）是给用户看的审核项，不阻塞；用户可能在对话里引用它们（「反馈给 agent」），那时读回提案再用 `supersedes` 修订。
+语义层的阻塞码：`kind_not_supported`、`operation_not_supported`、`invalid_arg`、`invalid_relation`、`same_as_forbidden`、`invalid_reference_kind`、`missing_required_field`、`forbidden_trust_claim`、`forbidden_alignment_status`、`forbidden_debt_status`、`forbidden_baseline_status`、`identity_field_edit`、`revision_conflict`、`inactive_or_invalid_reference`，以及 4.1 的引用与依赖码。`relation_detail_missing`、`overlap_scope_missing`、`certificate_debt_suggested`、`dialect_scope_mismatch`、`duplicate_alignment`、`theory_name_too_specific`、`label_lang_missing`、`possible_duplicate_name`、`duplicate_mathlib_decl`（warn）和 `uncontextualized`、`inferred_convention`、`mathlib_baseline_unchecked`、`multi_target_change_set`、`theory_aliases_missing`（info）是给用户看的审核项，不阻塞；用户可能在对话里引用它们（「反馈给 agent」），那时读回提案再用 `supersedes` 修订。
 
 如果某阶段所需能力不可用，输出应包含：
 

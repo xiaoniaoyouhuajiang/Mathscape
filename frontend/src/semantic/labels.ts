@@ -4,6 +4,8 @@
  * 禁用词：平移、错开、滑动。
  */
 
+import { hasMessage, t } from "../i18n";
+
 const lookup = (table: Record<string, string>, fallback: string) => (value: string | null | undefined): string =>
   (value && table[value]) || fallback;
 
@@ -40,7 +42,7 @@ export const lostDirectionLabel = lookup({
 }, "");
 
 /** 审核项（不阻塞的 warn / info 诊断）的白话说明。 */
-export const reviewItemLabel = lookup({
+const legacyReviewItemLabel = lookup({
   relation_detail_missing: "特例 / 推广没写清参数对照或对不上的部分",
   overlap_scope_missing: "部分重合没写清哪里对不上",
   certificate_debt_suggested: "这种关系需要证明，建议补一笔账",
@@ -54,10 +56,16 @@ export const reviewItemLabel = lookup({
   theory_name_too_specific: "理论名称里带有具体算式或公式符号，建议改成专题名",
 }, "");
 
+export function reviewItemLabel(code: string | null | undefined): string {
+  const key = `review.${code ?? ""}`;
+  return hasMessage(key) ? t(key) : legacyReviewItemLabel(code);
+}
+
 export const SEMANTIC_REVIEW_CODES = new Set([
   "relation_detail_missing", "overlap_scope_missing", "certificate_debt_suggested", "dialect_scope_mismatch",
   "uncontextualized", "duplicate_alignment", "inferred_convention", "mathlib_baseline_unchecked",
   "multi_target_change_set", "theory_aliases_missing", "theory_name_too_specific",
+  "label_lang_missing", "possible_duplicate_name", "duplicate_mathlib_decl",
 ]);
 
 export const SEMANTIC_PROPOSAL_KINDS = new Set(["semantic_entity", "alignment", "debt", "dialect_scope"]);

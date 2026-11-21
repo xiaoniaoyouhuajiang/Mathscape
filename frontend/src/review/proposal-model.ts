@@ -6,7 +6,7 @@
  * decides acceptability — it only groups, selects and explains.
  */
 import type { AnchoredMarkdown } from "../reader/selection";
-import { alignmentPlainLabel, entityPlainLabel } from "../semantic/labels";
+import { alignmentPlainLabel, entityPlainLabel, reviewItemLabel } from "../semantic/labels";
 import { collectSemanticSpanRefs } from "../semantic/review-model";
 import { effectiveProposalPayload, unwrapFieldChange } from "../semantic/semantic-diff";
 import type { DiscoveryOutcome, SourceReviewAnchor, SourceReviewProjection, SourceReviewUnit } from "./types";
@@ -420,7 +420,7 @@ const DIAGNOSTIC_LABELS: Record<string, string> = {
 };
 
 export function diagnosticLabel(code: string | undefined): string {
-  return (code && DIAGNOSTIC_LABELS[code]) || code || "";
+  return (code && DIAGNOSTIC_LABELS[code]) || reviewItemLabel(code) || code || "";
 }
 
 /** One snapshot's slice of a proposal in the SourceReviewProjection shape. */

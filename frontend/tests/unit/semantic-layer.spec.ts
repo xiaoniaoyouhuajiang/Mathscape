@@ -4,7 +4,8 @@ import { feedbackQuote, sendFeedbackToComposer } from "../../src/semantic/feedba
 import { semanticReviewCards, proposalLevelReviewItems, reviewItemCode, refTitle } from "../../src/semantic/review-model";
 import { computeProposalMapScope, findProposalTargetForDomainObject } from "../../src/review/map-review-sync";
 import { computeSupersedesDiff, unwrapFieldChange } from "../../src/semantic/semantic-diff";
-import { titleOf } from "../../src/review/proposal-model";
+import { diagnosticLabel, titleOf } from "../../src/review/proposal-model";
+import { setLocale } from "../../src/i18n";
 import { filterOutlineUnits, formatMergedUnitDetail, materialSummary, mergeLearningUnits, studyProgressSummary } from "../../src/semantic/learning-view";
 import { recheckSummary } from "../../src/semantic/api";
 import { nodeTypeKey, NODE_TYPES } from "../../src/graph/taxonomy";
@@ -33,6 +34,19 @@ describe("semantic plain labels", () => {
     expect(reviewItemLabel("mathlib_baseline_unchecked")).toContain("mathlib");
     expect(reviewItemLabel("theory_name_too_specific")).toContain("专题名");
     expect(reviewItemLabel("theory_aliases_missing")).toContain("同义词");
+  });
+
+  it("label the bilingual-name and duplicate review items in the current locale", () => {
+    expect(reviewItemLabel("label_lang_missing")).toContain("英文名称");
+    expect(reviewItemLabel("possible_duplicate_name")).toContain("可能重复");
+    expect(diagnosticLabel("duplicate_mathlib_decl")).toContain("mathlib");
+    setLocale("en");
+    try {
+      expect(reviewItemLabel("label_lang_missing")).toContain("English name");
+      expect(diagnosticLabel("possible_duplicate_name")).toContain("duplicate");
+    } finally {
+      setLocale("zh-CN");
+    }
   });
 });
 
