@@ -112,7 +112,10 @@ export function mountReturnPoint(options: {
 
 /** Short plain-text label for a rendered block. */
 export function blockLabel(element: HTMLElement, limit = 18): string {
-  const text = (element.textContent ?? "").replace(/\s+/g, " ").trim();
+  const copy = element.cloneNode(true) as HTMLElement;
+  // KaTeX keeps a MathML twin of every formula; badges and pills are not block text.
+  copy.querySelectorAll(".katex-mathml, button, .ink-block-marker, .block-action-pill, .unit-map-badge-row").forEach(node => node.remove());
+  const text = (copy.textContent ?? "").replace(/\s+/g, " ").trim();
   const chars = [...text];
   return chars.length > limit ? chars.slice(0, limit).join("") + "…" : text || "定位块";
 }
