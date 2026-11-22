@@ -184,7 +184,7 @@ test("parsed pages arrive where the gap was, and what is on screen does not move
   await expect(parsed.locator(".canonical-segment-header")).toContainText("第 9–12 页");
   await expect(page.locator('.canonical-gap[data-pages="3-12"]')).toHaveCount(0);
   const rest = page.locator('.canonical-gap[data-pages="3-8"]');
-  await expect(rest.getByRole("button", { name: "解析第 5–8 页" })).toBeEnabled();
+  await expect(rest.getByRole("button", { name: "解析第 3–8 页" })).toBeEnabled();
   await expect(page.locator(".reader-controls").first()).toContainText("由 3 个解析快照按页序拼接");
   await expect(page.locator(".reader-controls").first()).toContainText("8 页尚未解析");
 
@@ -244,7 +244,7 @@ test("pages that continue the text above start where the gap card was", async ({
   expect(Math.abs(await top(page, parsed) - cardBefore)).toBeLessThanOrEqual(1);
   expect(Math.abs(await top(page, lastAbove) - aboveBefore)).toBeLessThanOrEqual(1);
   // The rest of the gap follows the new pages and can be parsed in turn.
-  await expect(page.locator('.canonical-gap[data-pages="7-12"]').getByRole("button", { name: "解析第 7–10 页" })).toBeEnabled();
+  await expect(page.locator('.canonical-gap[data-pages="7-12"]').getByRole("button", { name: "解析第 7–12 页" })).toBeEnabled();
 });
 
 test("a failed parse says so on the card, keeps the text, and can be retried or closed", async ({ page }) => {

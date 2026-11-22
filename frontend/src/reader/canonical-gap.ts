@@ -14,16 +14,24 @@ import { gapLabel, pagesLabel, type PageRange } from "./canonical";
  * parse per PDF and one Marker per workspace at a time.
  */
 export const GAP_PARSE_PAGES = 4;
+/** A gap this much longer than one step is still parsed whole. */
+const GAP_WHOLE_SLACK = 2;
 
 export type GapEnd = "whole" | "head" | "tail";
 export interface GapParseAction { end: GapEnd; pages: PageRange }
 
-/** The whole gap when it is small, otherwise the pages at each of its ends. */
+/**
+ * The whole gap when it is small, otherwise the pages at each of its ends.
+ * Whole reaches a little past one step so that an end never leaves one or two
+ * pages behind (a Marker start and a snapshot of their own), and the two ends
+ * never offer the same page.
+ */
 export function gapParseActions(gap: PageRange, chunk = GAP_PARSE_PAGES): GapParseAction[] {
-  if (gap.to - gap.from + 1 <= chunk) return [{ end: "whole", pages: gap }];
+  if (gap.to - gap.from + 1 <= chunk + GAP_WHOLE_SLACK) return [{ end: "whole", pages: gap }];
+  const head = { from: gap.from, to: gap.from + chunk - 1 };
   return [
-    { end: "head", pages: { from: gap.from, to: gap.from + chunk - 1 } },
-    { end: "tail", pages: { from: gap.to - chunk + 1, to: gap.to } },
+    { end: "head", pages: head },
+    { end: "tail", pages: { from: Math.max(gap.to - chunk + 1, head.to + 1), to: gap.to } },
   ];
 }
 

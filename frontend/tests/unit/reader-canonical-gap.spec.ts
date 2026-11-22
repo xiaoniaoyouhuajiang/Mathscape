@@ -6,9 +6,13 @@ const job = (from: number, to: number, extra: Partial<GapParseJob> = {}): GapPar
 const lease = (from: number, to: number, pdfId = "pdf"): ParseLease => ({ pdfId, pages: { from, to }, startedAt: 500 });
 
 describe("gapParseActions", () => {
-  it("offers a small gap whole", () => {
-    expect(gapParseActions({ from: 7, to: 7 })).toEqual([{ end: "whole", pages: { from: 7, to: 7 } }]);
-    expect(gapParseActions({ from: 3, to: 6 })).toEqual([{ end: "whole", pages: { from: 3, to: 6 } }]);
+  const pages = (from: number, to: number) => gapParseActions({ from, to }).map(action => `${action.end} ${action.pages.from}-${action.pages.to}`);
+
+  it("offers a small gap whole, up to two pages past one step", () => {
+    expect(pages(7, 7)).toEqual(["whole 7-7"]);
+    expect(pages(3, 6)).toEqual(["whole 3-6"]);
+    expect(pages(7, 11)).toEqual(["whole 7-11"]);
+    expect(pages(3, 8)).toEqual(["whole 3-8"]);
   });
 
   it("offers four pages at each end of a larger gap", () => {
@@ -16,8 +20,20 @@ describe("gapParseActions", () => {
       { end: "head", pages: { from: 21, to: 24 } },
       { end: "tail", pages: { from: 41, to: 44 } },
     ]);
-    // Five pages: the two ends overlap, and whichever is parsed leaves a one-page gap.
-    expect(gapParseActions({ from: 3, to: 7 }).map(action => action.pages)).toEqual([{ from: 3, to: 6 }, { from: 4, to: 7 }]);
+    expect(pages(1, 8)).toEqual(["head 1-4", "tail 5-8"]);
+  });
+
+  it("never offers the same page at both ends", () => {
+    expect(pages(1, 7)).toEqual(["head 1-4", "tail 5-7"]);
+  });
+
+  it("never leaves one or two pages behind", () => {
+    for (let length = 1; length <= 40; length += 1) {
+      for (const action of gapParseActions({ from: 1, to: length })) {
+        const left = length - (action.pages.to - action.pages.from + 1);
+        expect(left === 0 || left >= 3, `${length} pages, ${action.end}`).toBe(true);
+      }
+    }
   });
 });
 
