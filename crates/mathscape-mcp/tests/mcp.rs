@@ -2842,7 +2842,80 @@ fn semantic_layer_proposals_stage_with_review_items_and_never_touch_the_map() {
         found.contains(&"theory_aliases_missing".to_owned()),
         "{staged}"
     );
+    assert!(found.contains(&"label_lang_missing".to_owned()), "{staged}");
+    assert!(
+        !found.contains(&"possible_duplicate_name".to_owned()),
+        "{staged}"
+    );
+    assert!(
+        !found.contains(&"duplicate_mathlib_decl".to_owned()),
+        "{staged}"
+    );
     assert_eq!(map_object_count(&f.root), initial_objects);
+
+    let mut bilingual = semantic_base(&span);
+    bilingual[1]["payload"]["preferred_labels"] = json!([
+        { "lang": "zh", "label": "实数列" },
+        { "lang": "en", "label": "Real sequences" }
+    ]);
+    bilingual[2]["payload"]["preferred_labels"] = json!([
+        { "lang": "zh", "label": "单调收敛定理" },
+        { "lang": "en", "label": "Monotone convergence theorem" }
+    ]);
+    let bilingual_res = propose_semantic(&f, "semantic-bilingual", bilingual);
+    assert_eq!(bilingual_res["status"], "staged", "{bilingual_res}");
+    assert!(
+        !codes(&bilingual_res).contains(&"label_lang_missing".to_owned()),
+        "{bilingual_res}"
+    );
+
+    let mut regional = semantic_base(&span);
+    for i in [1, 2] {
+        regional[i]["payload"]["preferred_labels"] = json!([
+            { "lang": "zh-CN", "label": format!("名称{i}") },
+            { "lang": "en", "label": format!("Name {i}") }
+        ]);
+    }
+    let regional_res = propose_semantic(&f, "semantic-regional-lang", regional);
+    assert_eq!(regional_res["status"], "staged", "{regional_res}");
+    assert!(
+        codes(&regional_res).contains(&"label_lang_missing".to_owned()),
+        "{regional_res}"
+    );
+
+    let mut duplicates = semantic_base(&span);
+    duplicates.push(json!({
+        "local_ref": "e.theory2",
+        "kind": "semantic_entity",
+        "op": "create",
+        "payload": {
+            "semantic_kind": "theory",
+            "preferred_labels": [{ "lang": "en", "label": "Sequences" }],
+            "aliases": ["实 数 列"]
+        }
+    }));
+    duplicates.push(json!({
+        "local_ref": "e.mct2",
+        "kind": "semantic_entity",
+        "op": "create",
+        "payload": {
+            "semantic_kind": "concept",
+            "home_theory": "$new:e.theory",
+            "preferred_labels": [{ "lang": "en", "label": "Monotone limits" }],
+            "mathlib_baseline": { "decl": "tendsto_atTop_ciSup", "status": "unchecked" }
+        }
+    }));
+    let duplicate_res = propose_semantic(&f, "semantic-duplicates", duplicates);
+    assert_eq!(duplicate_res["status"], "staged", "{duplicate_res}");
+    let duplicate_codes = codes(&duplicate_res);
+    assert!(
+        duplicate_codes.contains(&"possible_duplicate_name".to_owned()),
+        "{duplicate_res}"
+    );
+    assert!(
+        duplicate_codes.contains(&"duplicate_mathlib_decl".to_owned()),
+        "{duplicate_res}"
+    );
 
     let mut formula_theory = semantic_base(&span);
     formula_theory[1]["payload"]["preferred_labels"] =
