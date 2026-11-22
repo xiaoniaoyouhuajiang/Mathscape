@@ -60,7 +60,9 @@ export function planCanonicalLanding(
   const own = focus.artifactId ? segments.filter(segment => segment.artifact_id === focus.artifactId) : segments;
   const wantsBlock = Boolean(focus.blockIds?.length) || focus.end > focus.start;
   if (!wantsBlock) {
-    return focus.artifactId && own.length ? { kind: "segment", artifactId: focus.artifactId } : { kind: "none" };
+    if (focus.artifactId) return own.length ? { kind: "segment", artifactId: focus.artifactId } : { kind: "none" };
+    // A place without a block (a gap card left for the PDF page): that page, parsed or not.
+    return pageIndex === undefined ? { kind: "none" } : { kind: "page", pageIndex };
   }
   const shown = own.some(segment => Boolean(segment.content_hash) && (segment.blocks ?? []).some(
     block => block.kind !== "page_marker" && focusMatchesBlock(focus, segment.artifact_id, block),

@@ -1,4 +1,5 @@
 mod backlink;
+mod canonical_parse;
 mod canonical_reader;
 mod change_set_anchors;
 mod change_sets;
@@ -36,6 +37,7 @@ mod skill_pack;
 pub use registration::RegistrationSourceContext;
 mod workspace_settings;
 pub use backlink::{SourceBacklink, SourceBacklinkRequest};
+pub use canonical_parse::{CanonicalParseLeases, ParseCanonicalPagesRequest};
 pub use canonical_reader::{CanonicalReaderPiece, CanonicalReaderProjection};
 pub use content::{ArtifactContentInfo, ContentContext, SourceNodeDetail};
 pub use discovery::{
@@ -336,6 +338,14 @@ impl DesktopService {
             .ok_or(DesktopServiceError::MarkerNotConfigured)?;
         let artifact_id = StableId::parse(request.artifact_id.clone())?;
         let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        // A reader's 「解析这几页」 or an agent's read holds a lease while its
+        // Marker runs; this parse would start a second one beside it.
+        if !store
+            .active_canonical_ensures(mathscape_store_sqlite::unix_millis_now())?
+            .is_empty()
+        {
+            return Err(DesktopServiceError::ParseAlreadyRunning);
+        }
         let catalog = store.read_catalog_snapshot()?;
         let source = catalog
             .artifacts()
@@ -1078,6 +1088,8 @@ pub fn run() {
             content::get_markdown_unit_markers,
             content::read_artifact_bytes,
             canonical_reader::get_canonical_reader_projection,
+            canonical_parse::parse_canonical_pages,
+            canonical_parse::get_canonical_parse_leases,
             change_sets::get_change_set_investigation,
             change_sets::list_pending_change_sets,
             change_sets::get_change_set_snapshot,

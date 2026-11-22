@@ -50,6 +50,26 @@ const richMapEdges = [
 ];
 const canonicalMarkdownId = "mathscape:canonical-markdown/v1/mathscape.marker.math-ocr.v1/marker-1/pdf-notes";
 // md-long is an earlier parse run (PDF pages 1–3); md-1 continues on page 4.
+// 「解析这几页」 (harness.canonicalGap): pages 5–6 are a gap until they are parsed.
+const canonicalGap = { requests: [] as unknown[], parsed: false, snapshotLoads: 0 };
+const gapSource = "## 续篇\n\n新解析出的第 5–6 页。\n";
+extraCommands.set("get_canonical_parse_leases", () => ({ now_ms: Date.now(), leases: [] }));
+extraCommands.set("parse_canonical_pages", (args) => {
+  canonicalGap.requests.push(args.request);
+  canonicalGap.parsed = true;
+  const pages = { from: 5, to: 6 };
+  return { status: "expanded", requested: pages, missing: [pages], marker_ranges: [pages], waited_ms: 1, message: "" };
+});
+const gapPieces = (): unknown[] => {
+  if (sessionStorage.getItem("harness.canonicalGap") !== "1") return [];
+  if (!canonicalGap.parsed) return [{ kind: "gap", pages: { from: 5, to: 6 } }];
+  return [{
+    kind: "segment", conversion_id: "c-new", artifact_id: "md-new",
+    snapshot_pages: { from: 5, to: 6 }, pages: { from: 5, to: 6 }, overlap: null, overlap_trimmed: false,
+    is_head: false, byte_start: 0, content_hash: "sha256:new",
+    blocks: [{ id: "nb1", kind: "heading", range: { start: 0, end: new TextEncoder().encode(gapSource).length } }], markdown: gapSource,
+  }];
+};
 extraCommands.set("get_canonical_reader_projection", () => ({
   canonical_id: canonicalMarkdownId, source_pdf_artifact_id: "pdf-notes", head_artifact_id: "md-1", total_pages: 4,
   coverage: { covered: [{ from: 1, to: 4 }], missing: [], head_covered: [{ from: 4, to: 4 }] },
@@ -66,9 +86,11 @@ extraCommands.set("get_canonical_reader_projection", () => ({
       is_head: true, byte_start: 0, content_hash: "sha256:test",
       blocks: [{ id: "b1", kind: "heading", range: { start: 0, end: mdBytes.length } }], markdown: mdSource,
     },
+    ...gapPieces(),
   ],
 }));
 extraCommands.set("get_desktop_snapshot", () => {
+  canonicalGap.snapshotLoads += 1;
   const custom = (window as unknown as { __CUSTOM_BUNDLE__?: { snapshot: unknown } }).__CUSTOM_BUNDLE__;
   if (custom?.snapshot) return structuredClone(custom.snapshot);
   const value = structuredClone(snapshot);
@@ -781,6 +803,7 @@ const appHarness = {
   windowEvents, requestWindowClose,
   sandboxCalls,
   sandboxRound,
+  canonicalGap,
   proposalReview,
   contentFailures, contentRequests, detailRequests, sourceDetailBehavior, searchBehavior, snapshots, snapshotLabelCalls,
   /** Cytoscape state of a node: selected flag and distance from the canvas centre. */
