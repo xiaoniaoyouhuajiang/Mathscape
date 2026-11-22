@@ -17,7 +17,7 @@ use mathscape_artifact::{ArtifactMetadata, ArtifactPool};
 use mathscape_domain::{
     ActorRef, InclusivePageRange, MediaType, RightsRecord, RightsStatus, StableId,
 };
-use mathscape_mcp::{EnsurePolicy, McpServer, McpWorkspace};
+use mathscape_mcp::{EnsurePolicy, EnsureStatus, McpServer, McpWorkspace, ensure_canonical_pages};
 use mathscape_store_sqlite::{
     CanonicalEnsureClaim, CanonicalEnsureClaimOutcome, CanonicalEnsureLimits,
     CanonicalEnsureOutcome, SqliteArtifactStore, unix_millis_now,
@@ -633,6 +633,145 @@ fn oversized_requests_and_the_rolling_budget_block_without_running_marker() {
     assert_eq!(h.marker_calls(), ["0-2"]);
     // Already covered pages are served even with the budget spent.
     assert_eq!(read(&server, &h.pdf, 2, 3)["status"], "ok");
+}
+
+/// The workspace a desktop reader's 「解析这几页」 runs against.
+fn reader_workspace(h: &Harness, policy: EnsurePolicy) -> McpWorkspace {
+    McpWorkspace::open(&h.root)
+        .unwrap()
+        .with_capability_runner(Box::new(FakeMarkerEnv {
+            executable: Some(h.bin.join("marker_single")),
+            inner: SystemCommandRunner::default(),
+        }))
+        .with_ensure_policy(policy)
+}
+
+fn canonical_of(h: &Harness, policy_version: &str) -> StableId {
+    h.store()
+        .list_canonical_markdown()
+        .unwrap()
+        .into_iter()
+        .find(|view| {
+            view.source_pdf_artifact_id.as_str() == h.pdf
+                && view.parser_policy_version == policy_version
+        })
+        .unwrap_or_else(|| panic!("no canonical view for {policy_version}"))
+        .canonical_id
+}
+
+fn pages(from: u32, to: u32) -> InclusivePageRange {
+    InclusivePageRange::new(from, to).unwrap()
+}
+
+#[test]
+fn reader_ensure_parses_only_what_its_view_lacks_and_refuses_another_marker_lineage() {
+    let h = harness();
+    let server = h.server(test_policy());
+    assert_eq!(read(&server, &h.pdf, 1, 2)["status"], "ok");
+    let old_view = canonical_of(&h, "marker-2.1.0");
+    let workspace = reader_workspace(&h, test_policy());
+
+    // A gap of the view: parsed, and only that gap.
+    let report = ensure_canonical_pages(&workspace, &old_view, pages(2, 4), "reader").unwrap();
+    assert_eq!(report.status, EnsureStatus::Expanded, "{}", report.message);
+    assert_eq!(report.marker_ranges, [pages(3, 4)]);
+    assert_eq!(h.marker_calls(), ["0-1", "2-3"]);
+    let covered = ensure_canonical_pages(&workspace, &old_view, pages(1, 4), "reader").unwrap();
+    assert_eq!(covered.status, EnsureStatus::Reused);
+    assert_eq!(h.marker_calls().len(), 2);
+
+    // Marker is upgraded: it now writes another lineage. Pages asked for the
+    // old view would never show up there, so nothing runs.
+    write_executable(&h.bin.join("python"), "#!/bin/sh\nprintf '2.2.0'\n");
+    let mismatch = ensure_canonical_pages(&workspace, &old_view, pages(5, 6), "reader").unwrap();
+    assert_eq!(
+        mismatch.status,
+        EnsureStatus::LineageMismatch,
+        "{}",
+        mismatch.message
+    );
+    assert!(
+        mismatch.message.contains("marker-2.2.0"),
+        "{}",
+        mismatch.message
+    );
+    assert_eq!(h.marker_calls().len(), 2);
+    assert!(h.no_live_lease());
+
+    // The new lineage gets pages 5–6 through a plain read. Pages 1–2 exist
+    // only in the old lineage: a plain read reuses them, but the reader of
+    // the new view has a gap there and gets it parsed.
+    assert_eq!(read(&server, &h.pdf, 5, 6)["status"], "ok");
+    let new_view = canonical_of(&h, "marker-2.2.0");
+    assert_ne!(new_view, old_view);
+    let before = h.marker_calls().len();
+    assert_eq!(read(&server, &h.pdf, 1, 2)["status"], "ok");
+    assert_eq!(h.marker_calls().len(), before);
+    let filled = ensure_canonical_pages(&workspace, &new_view, pages(1, 2), "reader").unwrap();
+    assert_eq!(filled.status, EnsureStatus::Expanded, "{}", filled.message);
+    assert_eq!(filled.marker_ranges, [pages(1, 2)]);
+    assert_eq!(h.marker_calls().last().map(String::as_str), Some("0-1"));
+    let shown = h
+        .store()
+        .list_canonical_markdown()
+        .unwrap()
+        .into_iter()
+        .find(|view| view.canonical_id == new_view)
+        .unwrap();
+    assert!(
+        shown
+            .segments
+            .iter()
+            .any(|segment| segment.pages == Some(pages(1, 2)))
+    );
+    assert!(h.no_live_lease());
+}
+
+#[test]
+fn reader_ensure_rejects_unknown_views_and_pages_outside_the_pdf() {
+    let h = harness();
+    let server = h.server(test_policy());
+    assert_eq!(read(&server, &h.pdf, 1, 2)["status"], "ok");
+    let view = canonical_of(&h, "marker-2.1.0");
+    let workspace = reader_workspace(&h, test_policy());
+    let unknown =
+        StableId::parse("mathscape:canonical-markdown/v1/p/x/mathscape:artifact/none").unwrap();
+    assert!(ensure_canonical_pages(&workspace, &unknown, pages(1, 2), "reader").is_err());
+    assert!(ensure_canonical_pages(&workspace, &view, pages(19, 21), "reader").is_err());
+    assert_eq!(h.marker_calls(), ["0-1"]);
+}
+
+#[test]
+fn the_desktop_policy_is_not_stopped_by_the_rolling_page_budget() {
+    let h = harness();
+    let agent = EnsurePolicy {
+        window_pages: 2,
+        ..test_policy()
+    };
+    let server = h.server(agent);
+    assert_eq!(read(&server, &h.pdf, 1, 2)["status"], "ok");
+    // The agent used the window.
+    assert_eq!(
+        read(&server, &h.pdf, 3, 4)["details"]["ensure"]["status"],
+        "blocked_budget"
+    );
+    let view = canonical_of(&h, "marker-2.1.0");
+    let desktop = EnsurePolicy::desktop();
+    assert_eq!(desktop.max_pages_per_request, 12);
+    assert_eq!(desktop.max_running, 1);
+    let workspace = reader_workspace(
+        &h,
+        EnsurePolicy {
+            window_pages: desktop.window_pages,
+            ..test_policy()
+        },
+    );
+    let report = ensure_canonical_pages(&workspace, &view, pages(3, 4), "reader").unwrap();
+    assert_eq!(report.status, EnsureStatus::Expanded, "{}", report.message);
+    // The per-request size still applies to a reader.
+    let too_big = ensure_canonical_pages(&workspace, &view, pages(5, 17), "reader").unwrap();
+    assert_eq!(too_big.status, EnsureStatus::BlockedBudget);
+    assert_eq!(h.marker_calls(), ["0-1", "2-3"]);
 }
 
 fn foreign_claim(pdf: &str, id: &str, from: u32, to: u32) -> CanonicalEnsureClaim {

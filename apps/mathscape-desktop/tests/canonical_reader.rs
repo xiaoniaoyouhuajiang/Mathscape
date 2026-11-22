@@ -277,3 +277,244 @@ fn canonical_reader_stitches_registered_segments_in_page_order() {
     drop(service);
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Like Marker with `--paginate_output`: one `{N}----` marker per page.
+#[cfg(unix)]
+const FAKE_MARKER: &str = r#"#!/bin/sh
+here="$(dirname "$0")"
+source_path="$1"
+output_root=''
+page_range=''
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --output_dir) output_root="$2"; shift 2 ;;
+        --page_range) page_range="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+echo "$page_range" >> "$here/calls.log"
+source_name="${source_path##*/}"
+source_stem="${source_name%.*}"
+mkdir -p "$output_root/$source_stem"
+out="$output_root/$source_stem/$source_stem.md"
+: > "$out"
+page="${page_range%-*}"
+while [ "$page" -le "${page_range#*-}" ]; do
+    printf '{%s}----------------\n\nparsed page %s\n\n' "$page" "$((page + 1))" >> "$out"
+    page=$((page + 1))
+done
+printf '{"page_stats":[{"page_id":0}]}\n' > "$output_root/$source_stem/${source_stem}_meta.json"
+"#;
+
+#[cfg(unix)]
+fn write_executable(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(path, body).unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+}
+
+#[cfg(unix)]
+fn shape(service: &DesktopService, canonical: &StableId) -> Vec<String> {
+    let wire = serde_json::to_value(
+        service
+            .canonical_reader_projection(canonical.as_str())
+            .unwrap(),
+    )
+    .unwrap();
+    wire["pieces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|piece| {
+            format!(
+                "{} {}-{}",
+                piece["kind"].as_str().unwrap(),
+                piece["pages"]["from"],
+                piece["pages"]["to"]
+            )
+        })
+        .collect()
+}
+
+/// 「解析这几页」: the reader asks for the last pages of a gap; only those
+/// are parsed, and they appear in the same view where the gap was.
+#[cfg(unix)]
+#[test]
+fn parsing_pages_of_a_gap_fills_the_same_view_in_place() {
+    use mathscape_desktop::{
+        DesktopServiceError, MarkerProfileChoice, ParseCanonicalPagesRequest, ParsePdfRequest,
+    };
+    use mathscape_domain::InclusivePageRange;
+    use mathscape_mcp::{EnsurePolicy, EnsureStatus};
+    use mathscape_store_sqlite::{
+        CanonicalEnsureClaim, CanonicalEnsureClaimOutcome, CanonicalEnsureLimits,
+        CanonicalEnsureOutcome, unix_millis_now,
+    };
+    use std::time::Duration;
+
+    let dir = directory();
+    let workspace = dir.join("workspace");
+    let mut pool = ArtifactPool::create(&workspace).unwrap();
+    let pdf = pool
+        .import_file(
+            write(&dir, "book.pdf", b"%PDF-1.7\nbook\n"),
+            ArtifactMetadata::new(
+                None,
+                MediaType::parse("application/pdf").unwrap(),
+                Some("book.pdf".into()),
+                Some(8),
+                RightsRecord::new(RightsStatus::NotAssessed, vec!["local_test".into()], None)
+                    .unwrap(),
+            ),
+            actor(),
+        )
+        .unwrap()
+        .stable_id()
+        .clone();
+    let first = import_markdown(&mut pool, &dir, "a.md", &marker_pages(0..=1));
+    record(
+        &mut pool,
+        "a",
+        'a',
+        (0, 1),
+        "2026-11-03T00:02:00+08:00",
+        &pdf,
+        &first,
+    );
+    drop(pool);
+    SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3"))
+        .unwrap()
+        .sync_canonical_markdown_from_catalog(
+            &Timestamp::parse("2026-11-03T01:00:00+08:00").unwrap(),
+        )
+        .unwrap();
+
+    let bin = dir.join("marker-runtime").join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    // Same Marker version as the registered snapshot: same lineage.
+    write_executable(&bin.join("python"), "#!/bin/sh\nprintf '2.0.0'\n");
+    write_executable(&bin.join("marker_single"), FAKE_MARKER);
+    let service = DesktopService::open_with_marker(&workspace, bin.join("marker_single")).unwrap();
+    let canonical =
+        CanonicalMarkdownKey::new(pdf.clone(), "mathscape.marker.math-ocr.v1", "marker-2.0.0")
+            .unwrap()
+            .canonical_id();
+    assert_eq!(shape(&service, &canonical), ["segment 1-2", "gap 3-8"]);
+
+    let policy = EnsurePolicy {
+        sync_timeout: Duration::from_secs(30),
+        marker_timeout: Duration::from_secs(20),
+        poll_interval: Duration::from_millis(50),
+        ..EnsurePolicy::desktop()
+    };
+    let report = service
+        .parse_canonical_pages_with(
+            &ParseCanonicalPagesRequest::new(canonical.as_str(), 5, 8),
+            policy,
+        )
+        .unwrap();
+    assert_eq!(report.status, EnsureStatus::Expanded, "{}", report.message);
+    assert_eq!(
+        shape(&service, &canonical),
+        ["segment 1-2", "gap 3-4", "segment 5-8"]
+    );
+    assert_eq!(
+        fs::read_to_string(bin.join("calls.log")).unwrap().trim(),
+        "4-7"
+    );
+    assert!(service.canonical_parse_leases().unwrap().leases.is_empty());
+
+    // Asking again for pages that are now shown runs nothing.
+    let again = service
+        .parse_canonical_pages_with(
+            &ParseCanonicalPagesRequest::new(canonical.as_str(), 5, 8),
+            policy,
+        )
+        .unwrap();
+    assert_eq!(again.status, EnsureStatus::Reused);
+    assert_eq!(
+        fs::read_to_string(bin.join("calls.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+
+    // A stable code leads the message, for the interface's own wording.
+    let refused = service
+        .parse_canonical_pages_with(
+            &ParseCanonicalPagesRequest::new(canonical.as_str(), 0, 2),
+            policy,
+        )
+        .unwrap_err();
+    assert!(
+        refused.starts_with("invalid_parse_page_range: "),
+        "{refused}"
+    );
+    assert!(
+        service
+            .parse_canonical_pages_with(
+                &ParseCanonicalPagesRequest::new(canonical.as_str(), 7, 9),
+                policy
+            )
+            .is_err()
+    );
+    // While a reader's or an agent's parse holds a lease, the inspector's
+    // 「解析选定页面」 does not start a second Marker beside it.
+    let mut store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+    let claimed = store
+        .claim_canonical_ensure(
+            &CanonicalEnsureClaim {
+                ensure_id: "agent-read".into(),
+                idempotency_key: "agent-read".into(),
+                source_pdf_artifact_id: pdf.clone(),
+                canonical_id: canonical.clone(),
+                parser_profile: "mathscape.marker.math-ocr.v1".into(),
+                parser_policy_version: "marker-2.0.0".into(),
+                pages: InclusivePageRange::new(3, 4).unwrap(),
+                owner: "agent".into(),
+            },
+            CanonicalEnsureLimits {
+                max_running: 1,
+                window_pages: u32::MAX,
+                window_ms: 60_000,
+                lease_ms: 60_000,
+            },
+            unix_millis_now(),
+        )
+        .unwrap();
+    assert_eq!(claimed, CanonicalEnsureClaimOutcome::Acquired);
+    let inspector = ParsePdfRequest::new(pdf.as_str(), 3, 4, MarkerProfileChoice::MathOcrV1);
+    assert!(matches!(
+        service.parse_pdf(&inspector),
+        Err(DesktopServiceError::ParseAlreadyRunning)
+    ));
+    assert_eq!(service.active_parse(), None);
+    let calls = || {
+        fs::read_to_string(bin.join("calls.log"))
+            .unwrap()
+            .lines()
+            .count()
+    };
+    assert_eq!(calls(), 1);
+    // The lease ends: the inspector's parse reaches Marker again.
+    store
+        .finish_canonical_ensure(
+            "agent-read",
+            CanonicalEnsureOutcome::Failed,
+            None,
+            None,
+            Some("test"),
+            unix_millis_now(),
+        )
+        .unwrap();
+    drop(store);
+    assert!(!matches!(
+        service.parse_pdf(&inspector),
+        Err(DesktopServiceError::ParseAlreadyRunning)
+    ));
+    assert_eq!(calls(), 2);
+    fs::remove_dir_all(dir).unwrap();
+}

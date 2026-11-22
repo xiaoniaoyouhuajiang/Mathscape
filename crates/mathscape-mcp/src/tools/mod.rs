@@ -24,7 +24,10 @@ use serde_json::{Map, Value, json};
 
 use crate::McpWorkspace;
 
-pub use ensure::{ENSURE_POLICY_VERSION, EnsurePolicy};
+pub use ensure::{
+    ENSURE_POLICY_VERSION, EnsurePolicy, EnsureReport, EnsureRun, EnsureStatus,
+    ensure_canonical_pages,
+};
 pub use graph::{
     DEFAULT_EDGE_TYPES, DEFAULT_MAX_EDGES, DEFAULT_MAX_NODES, MAX_DEPTH, MAX_EDGES, MAX_NODES,
     MAX_SEEDS, MAX_VISITED, RELATION_TYPES,

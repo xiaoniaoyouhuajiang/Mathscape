@@ -106,6 +106,22 @@ export class CanonicalInkController {
     this.decorate();
   }
 
+  /**
+   * The reader changes `items` in place inside `mutate` (a newly parsed
+   * segment is inserted): the selection stays on the same blocks.
+   */
+  reindex(mutate: () => void): void {
+    const held = [this.currentIdx, this.firstIdx, this.lastIdx, this.shiftAnchorIdx]
+      .map(idx => this.items[idx]?.domKey);
+    mutate();
+    this.indexByDomKey.clear();
+    this.items.forEach((item, idx) => this.indexByDomKey.set(item.domKey, idx));
+    [this.currentIdx, this.firstIdx, this.lastIdx, this.shiftAnchorIdx] = held
+      .map(key => (key === undefined ? -1 : this.indexByDomKey.get(key) ?? -1));
+    this.wrappers = undefined;
+    void this.reloadLinks();
+  }
+
   setUnitMarkers(markers: readonly MarkdownUnitMarker[]): void {
     this.unitMarkers = markers;
     this.decorate();
