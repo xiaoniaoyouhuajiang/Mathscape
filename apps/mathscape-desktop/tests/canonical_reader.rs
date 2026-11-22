@@ -343,8 +343,15 @@ fn shape(service: &DesktopService, canonical: &StableId) -> Vec<String> {
 #[cfg(unix)]
 #[test]
 fn parsing_pages_of_a_gap_fills_the_same_view_in_place() {
-    use mathscape_desktop::ParseCanonicalPagesRequest;
+    use mathscape_desktop::{
+        DesktopServiceError, MarkerProfileChoice, ParseCanonicalPagesRequest, ParsePdfRequest,
+    };
+    use mathscape_domain::InclusivePageRange;
     use mathscape_mcp::{EnsurePolicy, EnsureStatus};
+    use mathscape_store_sqlite::{
+        CanonicalEnsureClaim, CanonicalEnsureClaimOutcome, CanonicalEnsureLimits,
+        CanonicalEnsureOutcome, unix_millis_now,
+    };
     use std::time::Duration;
 
     let dir = directory();
@@ -451,5 +458,60 @@ fn parsing_pages_of_a_gap_fills_the_same_view_in_place() {
             )
             .is_err()
     );
+    // While a reader's or an agent's parse holds a lease, the inspector's
+    // 「解析选定页面」 does not start a second Marker beside it.
+    let mut store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+    let claimed = store
+        .claim_canonical_ensure(
+            &CanonicalEnsureClaim {
+                ensure_id: "agent-read".into(),
+                idempotency_key: "agent-read".into(),
+                source_pdf_artifact_id: pdf.clone(),
+                canonical_id: canonical.clone(),
+                parser_profile: "mathscape.marker.math-ocr.v1".into(),
+                parser_policy_version: "marker-2.0.0".into(),
+                pages: InclusivePageRange::new(3, 4).unwrap(),
+                owner: "agent".into(),
+            },
+            CanonicalEnsureLimits {
+                max_running: 1,
+                window_pages: u32::MAX,
+                window_ms: 60_000,
+                lease_ms: 60_000,
+            },
+            unix_millis_now(),
+        )
+        .unwrap();
+    assert_eq!(claimed, CanonicalEnsureClaimOutcome::Acquired);
+    let inspector = ParsePdfRequest::new(pdf.as_str(), 3, 4, MarkerProfileChoice::MathOcrV1);
+    assert!(matches!(
+        service.parse_pdf(&inspector),
+        Err(DesktopServiceError::ParseAlreadyRunning)
+    ));
+    assert_eq!(service.active_parse(), None);
+    let calls = || {
+        fs::read_to_string(bin.join("calls.log"))
+            .unwrap()
+            .lines()
+            .count()
+    };
+    assert_eq!(calls(), 1);
+    // The lease ends: the inspector's parse reaches Marker again.
+    store
+        .finish_canonical_ensure(
+            "agent-read",
+            CanonicalEnsureOutcome::Failed,
+            None,
+            None,
+            Some("test"),
+            unix_millis_now(),
+        )
+        .unwrap();
+    drop(store);
+    assert!(!matches!(
+        service.parse_pdf(&inspector),
+        Err(DesktopServiceError::ParseAlreadyRunning)
+    ));
+    assert_eq!(calls(), 2);
     fs::remove_dir_all(dir).unwrap();
 }

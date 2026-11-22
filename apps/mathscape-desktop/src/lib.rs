@@ -338,6 +338,14 @@ impl DesktopService {
             .ok_or(DesktopServiceError::MarkerNotConfigured)?;
         let artifact_id = StableId::parse(request.artifact_id.clone())?;
         let store = SqliteArtifactStore::open(&self.workspace_root.join("mathscape.sqlite3"))?;
+        // A reader's 「解析这几页」 or an agent's read holds a lease while its
+        // Marker runs; this parse would start a second one beside it.
+        if !store
+            .active_canonical_ensures(mathscape_store_sqlite::unix_millis_now())?
+            .is_empty()
+        {
+            return Err(DesktopServiceError::ParseAlreadyRunning);
+        }
         let catalog = store.read_catalog_snapshot()?;
         let source = catalog
             .artifacts()
