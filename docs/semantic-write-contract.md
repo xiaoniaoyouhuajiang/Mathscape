@@ -89,7 +89,7 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
   "semantic_kind": "concept | declaration | theory | problem_schema",
   "home_theory": "<semantic-entity id | $new:…> | null",   // 仅 theory 必须为 null；其余必填，且允许后续 edit 迁移
   "preferred_labels": [ { "lang": "zh", "label": "Cassini 恒等式" },     // 必须同时有 zh 和 en，与材料语言无关
-                        { "lang": "en", "label": "Cassini's identity" } ],
+                        { "lang": "en", "label": "Cassini's identity" } ],  // lang 只用 "zh" / "en"
   "aliases": ["Cassini's identity", "Simson identity"],      // 可选：中英文同义检索词（尤其推荐给 theory 填写）
   "plain_label": "精确说法：Cassini 恒等式（对一切 n ≥ 1）",  // 可选，Agent 补充；展示以前端模板为准（S9.1）
   "conventions": [                                           // 决定 a：约定注记
@@ -350,7 +350,7 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 | 理论对象未写 `aliases` 同义检索词 | 审核项（提醒补几个中英文别称便于后续检索复用） | `info: theory_aliases_missing` |
 | 理论名称带有 `=`、`$`、`\` 等具体公式符号 | 审核项（提醒理论应按一类专题命名，不要写具体式子） | `warn: theory_name_too_specific` |
 | 同一来源单元对同一共享对象有两条活动对齐线 | 审核项 | `warn: duplicate_alignment` |
-| 共享对象的 `preferred_labels` 缺少 `zh` 或 `en`（按语言主标签比较，`zh-CN` 算 `zh`） | 审核项（共享对象一律中英双名，不随材料语言） | `warn: label_lang_missing` |
+| 共享对象的 `preferred_labels` 缺少 `zh` 或 `en`（`lang` 只认这两个值，`zh-CN`、`en-US` 等不算） | 审核项（共享对象一律中英双名，不随材料语言） | `warn: label_lang_missing` |
 | theory / concept 的某个名称或别名，折叠全角、大小写、空格和标点后与另一个活动的同类对象相同 | 审核项（提醒可能重复，列出已有对象 id；是否同一个由用户判断） | `warn: possible_duplicate_name` |
 | concept / declaration 的 `mathlib_baseline.decl` 与另一个活动的同类对象相同 | 审核项（同上） | `warn: duplicate_mathlib_decl` |
 | 共享 declaration 未写 `sequence_index_origin` 之类约定，而文本涉及下标 | 不检测（服务端不解析数学） | — |

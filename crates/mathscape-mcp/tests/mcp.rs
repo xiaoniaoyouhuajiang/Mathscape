@@ -2855,7 +2855,7 @@ fn semantic_layer_proposals_stage_with_review_items_and_never_touch_the_map() {
 
     let mut bilingual = semantic_base(&span);
     bilingual[1]["payload"]["preferred_labels"] = json!([
-        { "lang": "zh-CN", "label": "实数列" },
+        { "lang": "zh", "label": "实数列" },
         { "lang": "en", "label": "Real sequences" }
     ]);
     bilingual[2]["payload"]["preferred_labels"] = json!([
@@ -2867,6 +2867,20 @@ fn semantic_layer_proposals_stage_with_review_items_and_never_touch_the_map() {
     assert!(
         !codes(&bilingual_res).contains(&"label_lang_missing".to_owned()),
         "{bilingual_res}"
+    );
+
+    let mut regional = semantic_base(&span);
+    for i in [1, 2] {
+        regional[i]["payload"]["preferred_labels"] = json!([
+            { "lang": "zh-CN", "label": format!("名称{i}") },
+            { "lang": "en", "label": format!("Name {i}") }
+        ]);
+    }
+    let regional_res = propose_semantic(&f, "semantic-regional-lang", regional);
+    assert_eq!(regional_res["status"], "staged", "{regional_res}");
+    assert!(
+        codes(&regional_res).contains(&"label_lang_missing".to_owned()),
+        "{regional_res}"
     );
 
     let mut duplicates = semantic_base(&span);

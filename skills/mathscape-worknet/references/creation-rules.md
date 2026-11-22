@@ -33,7 +33,7 @@
 - **什么时候创建**：不同来源单元确实指向同一可复用数学概念、精确说法或题型时，先查已有 `theory`（专题书架）与 `semantic_entity`，缺少时建立 `SemanticEntity`，再建立带关系类型、作用域、参数/项下标对照和证据的 `Alignment`；相似措辞本身不够。
 - **理论（`theory`）书架规则**：理论保持扁平（`home_theory: null`），尺度类似课本一章/一个专题（如「线性递推数列」），只回答“这几个概念和定理大概是哪一块儿的”。建前先 `workspace.search`（`kinds: ["theory"]`, `scope: "investigation"`）；新建时填好中英文 `aliases`，不用单个概念名或带 `=`/`$` 的具体算式起名。关于某类对象的定理跟该对象挂同一主书架；日后需重组时，可通过 `edit` 修改非 theory 对象的 `home_theory` 平滑迁移。
 - **前置条件**：来源单元已锚定；能区分 `expresses`、`specializes`、`overlaps_with` 等 11 种对齐关系和候选状态；不确定时保留 `retrieved_candidate` / `partially_aligned` / `disputed`，不覆盖已有实体。
-- **名称规则**：每个共享对象的 `preferred_labels` 都同时写 `zh` 和 `en`，与材料语言无关；`aliases` 写两种语言的常见叫法。
+- **名称规则**：每个共享对象的 `preferred_labels` 都同时写 `lang` 为 `zh` 和 `en` 的两个名称（不写 `zh-CN` 之类），与材料语言无关；`aliases` 写两种语言的常见叫法。
 - **关键字段**：`semantic_kind`（`concept | declaration | theory | problem_schema`）、`home_theory`、`preferred_labels`、`aliases`、`conventions`、`mathlib_baseline`（`status: "unchecked"`）；对齐线的 `source`、`target`、`relation`、`source_context`、`parameter_map`、`term_index_map`、`lost_information`、`evidence_spans`、`status`；禁止 `same_as`。
 - **常见错误**：把两本书的 `SourceSemanticUnit` 直接合并；把 `parameter_map`（第几条命题）说成数列错开；把 Alignment 当 T；自设 `accepted` 或 `trust`；用具体算式给理论起名。
 - **工具**：已确认 `propose_changes`（`kind: "semantic_entity" | "alignment"`，支持 `create` / `edit` / `retire`）、`workspace.search`、`graph.get`、`graph.neighborhood`（`edge_types: ["aligns", "in_theory"]`）。

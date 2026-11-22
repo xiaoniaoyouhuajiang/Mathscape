@@ -1070,22 +1070,16 @@ pub fn review_items(
 const REQUIRED_LABEL_LANGS: [(&str, &str); 2] = [("zh", "中文"), ("en", "英文")];
 
 fn missing_label_langs(p: &Value) -> Vec<&'static str> {
-    let langs: BTreeSet<String> = p["preferred_labels"]
+    let langs: BTreeSet<&str> = p["preferred_labels"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|l| l["label"].as_str().is_some_and(|s| !s.trim().is_empty()))
         .filter_map(|l| l["lang"].as_str())
-        .map(|lang| {
-            lang.split(['-', '_'])
-                .next()
-                .unwrap_or_default()
-                .to_ascii_lowercase()
-        })
         .collect();
     REQUIRED_LABEL_LANGS
         .iter()
-        .filter(|(lang, _)| !langs.contains(*lang))
+        .filter(|(lang, _)| !langs.contains(lang))
         .map(|(_, name)| *name)
         .collect()
 }
@@ -1110,47 +1104,38 @@ fn name_keys(p: &Value) -> BTreeSet<String> {
         .collect()
 }
 
+/// Same folding as workspace search (`mathscape-query` `search::normalize`):
+/// width, case, whitespace and punctuation are ignored; math marks such as
+/// `/`, `+`, `=` stay significant.
 fn name_key(name: &str) -> String {
     name.chars()
         .map(|c| match c {
-            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
             '\u{3000}' => ' ',
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
             _ => c,
         })
+        .filter(|&c| !name_char_ignorable(c))
         .flat_map(char::to_lowercase)
-        .filter(|c| {
-            !c.is_whitespace()
-                && !matches!(
-                    c,
-                    '-' | '_'
-                        | '·'
-                        | '・'
-                        | ','
-                        | '.'
-                        | '\''
-                        | '"'
-                        | '’'
-                        | '‘'
-                        | '“'
-                        | '”'
-                        | '('
-                        | ')'
-                        | ':'
-                        | ';'
-                        | '、'
-                        | '，'
-                        | '。'
-                        | '：'
-                        | '；'
-                        | '《'
-                        | '》'
-                        | '「'
-                        | '」'
-                        | '（'
-                        | '）'
-                )
-        })
         .collect()
+}
+
+fn name_char_ignorable(c: char) -> bool {
+    if c.is_whitespace() || c.is_control() {
+        return true;
+    }
+    if c.is_ascii() {
+        return c.is_ascii_punctuation() && !".^_+=<>*/'|".contains(c);
+    }
+    matches!(c,
+        '\u{00B7}'
+        | '\u{2010}'..='\u{2027}'
+        | '\u{2030}'..='\u{205E}'
+        | '\u{3001}'..='\u{3006}'
+        | '\u{3008}'..='\u{301F}'
+        | '\u{30FB}'
+        | '\u{FE10}'..='\u{FE6F}'
+        | '\u{FF61}'..='\u{FF65}'
+    )
 }
 
 /// 一个待核对的 mathlib 名称：共享对象 id、当前 revision、名称。
@@ -1222,4 +1207,33 @@ pub fn baseline_operations(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn name_key_folds_like_search_and_keeps_math_marks() {
+        assert_eq!(name_key("Cauchy–Schwarz"), name_key("cauchy-schwarz"));
+        assert_eq!(
+            name_key("Cauchy—Schwarz 不等式"),
+            name_key("ＣＡＵＣＨＹ　SCHWARZ不等式")
+        );
+        assert_eq!(name_key("《线性递推》"), name_key("线性递推"));
+        assert_ne!(name_key("ℤ/nℤ"), name_key("ℤnℤ"));
+        assert_ne!(name_key("a+b"), name_key("ab"));
+    }
+
+    #[test]
+    fn only_exact_zh_and_en_count_as_label_languages() {
+        let labels = |a: &str, b: &str| {
+            json!({ "preferred_labels": [
+                { "lang": a, "label": "x" }, { "lang": b, "label": "y" }
+            ] })
+        };
+        assert!(missing_label_langs(&labels("zh", "en")).is_empty());
+        assert_eq!(missing_label_langs(&labels("zh-CN", "en")), vec!["中文"]);
+        assert_eq!(missing_label_langs(&labels("zh", "en-US")), vec!["英文"]);
+    }
 }

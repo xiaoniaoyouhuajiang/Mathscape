@@ -248,7 +248,7 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
 
 写法要点：
 
-- **共享对象一律中英双名**：四种共享对象的 `preferred_labels` 都要同时写 `{ "lang": "zh", … }` 和 `{ "lang": "en", … }`，不管材料和用户用什么语言；英文名用标准术语，有 mathlib 名称时参照它。缺任一种是 `label_lang_missing`。名称或别名和已有的同类 theory / concept 撞上会得到 `possible_duplicate_name`，mathlib 名称和已有的同类 concept / declaration 撞上会得到 `duplicate_mathlib_decl`：先确认是不是同一个，是就复用已有对象。
+- **共享对象一律中英双名**：四种共享对象的 `preferred_labels` 都要同时写 `{ "lang": "zh", … }` 和 `{ "lang": "en", … }`（`lang` 只写 `zh` / `en`，不写 `zh-CN`），不管材料和用户用什么语言；英文名用标准术语，有 mathlib 名称时参照它。缺任一种是 `label_lang_missing`。名称或别名和已有的同类 theory / concept 撞上会得到 `possible_duplicate_name`，mathlib 名称和已有的同类 concept / declaration 撞上会得到 `duplicate_mathlib_decl`：先确认是不是同一个，是就复用已有对象。
 - **共享对象按 mathlib 的写法**，在 `conventions` 里注明约定（如 `sequence_index_origin`，F₀ = 0），可在 `mathlib_baseline` 里写对应的 mathlib 名称。`mathlib_baseline.status` 只能写 `unchecked`：`confirmed` / `not_found` 只由服务端在用户本机的 mathlib 里查过之后写入。不确定名字时先用 `mathlib.search` 查；查不到就 `decl: null` 并在 `note` 里说明。也可以填 `aliases` 记录中英文常见别称。
 - **关系**只有 11 种：`expresses`、`specializes`、`generalizes`、`instance_of`、`representation_of`、`logically_equivalent`、`definitionally_equivalent`、`exact_realization`、`notation_for`、`overlaps_with`、`incompatible_with`。**没有 `same_as`**（`same_as_forbidden`）。两边不完全一样时写 `overlaps_with` 或 `specializes`，并在 `lost_information` 里写清对不上的部分。
 - **参数对照与数列逐项对照分开写**：`parameter_map` 是“第几条恒等式 / 第几个参数对第几条”（如灯塔的第 n 条 ＝ 共享的第 n+1 条，`role: statement_parameter`）；`term_index_map` 是数列的项对项（`index_shift: 0` 表示 f_k = F_k，数列没有错开）。向用户解释时不要说“下标平移”“数列错开”。
