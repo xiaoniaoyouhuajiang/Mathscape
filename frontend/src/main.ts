@@ -886,12 +886,13 @@ sandboxDock.setCiteContext({
     })();
   },
   // Sync ensure 「解析中」: fresh summary of one node; re-render only on change.
+  // A summary is not a reason to close what is being read (its gap cards wait for these pages).
   probeSummary: async (nodeId) => {
     const snapshot = await invoke<DesktopSnapshot>("get_desktop_snapshot");
     const summaryOf = (from: DesktopSnapshot | undefined) =>
       from?.landscape_graph.nodes.find(node => node.id === nodeId)?.summary ?? null;
     const summary = summaryOf(snapshot);
-    if (summary !== summaryOf(currentSnapshot)) renderSnapshot(snapshot);
+    if (summary !== summaryOf(currentSnapshot)) renderSnapshot(snapshot, { preserveReader: true });
     return summary;
   },
   scenes: {

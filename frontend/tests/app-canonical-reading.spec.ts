@@ -87,3 +87,38 @@ test("pages parsed from a gap arrive in the open reader while the map refreshes"
   expect(await located.evaluate(block => (block as unknown as { kept?: boolean }).kept)).toBe(true);
 });
 
+
+// An agent's read of unparsed pages re-renders the map when the PDF's summary
+// turns to 「解析中」 and back; the document being read stays open through both.
+test("the map's 「解析中」 sync for an agent's read keeps the open reader", async ({ page }) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem("harness.sandbox", "1");
+    sessionStorage.setItem("harness.canonical", "1");
+  });
+  await page.setViewportSize({ width: 1400, height: 860 });
+  await page.goto("/tests/app.html");
+  await expect(page.locator("#graph")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => Object.keys(window.appHarness.labels()).length)).toBeGreaterThan(0);
+  await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+  const dock = page.getByRole("complementary", { name: "沙箱对话" });
+  await page.evaluate(() => { Object.assign(window.appHarness.sandboxRound, { act: "parsing", delayMs: 30, gapMs: 6500 }); });
+  await page.evaluate(() => window.appHarness.selectNode("r-cite-unit"));
+  await page.locator("#node-detail").getByRole("button", { name: "打开并定位原文" }).click();
+
+  const reader = page.locator("#reader");
+  const located = reader.locator(".canonical-reader [data-source-block='b1']");
+  await expect(located).toBeInViewport();
+  await located.evaluate(block => { (block as unknown as { kept: boolean }).kept = true; });
+
+  await dock.locator(".sandbox-dock-input").fill("读第 3–4 页");
+  await dock.getByRole("button", { name: "发送" }).click();
+  const parsing = dock.locator(".sandbox-step-title").filter({ hasText: "解析中" });
+  await expect(parsing).toHaveCount(1, { timeout: 6000 });
+  await expect(located).toBeInViewport();
+  // The read ends and the summary goes back: a second map render.
+  await expect(parsing).toHaveCount(0, { timeout: 8000 });
+  await expect(dock.locator(".sandbox-line.role-agent").last().locator(".sandbox-turn-status")).toHaveText("已完成", { timeout: 10000 });
+  await expect(reader.locator("h2").first()).toHaveText("notes.pdf · 规范解析正文");
+  await expect(located).toBeInViewport();
+  expect(await located.evaluate(block => (block as unknown as { kept?: boolean }).kept)).toBe(true);
+});
