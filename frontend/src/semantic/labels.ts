@@ -112,11 +112,23 @@ const displayLangOf = (tag: unknown): DisplayLang | null => {
   return primary === "zh" || primary === "en" ? primary : null;
 };
 
-/** `plain_label` has no language tag: Han reads as Chinese, a Latin word (3+ letters) without Han as English, notation such as `ℤ/nℤ` fits both. */
+/** Operator and function names that read as notation, not English words (same list as the backend). */
+const NOTATION_WORDS = new Set([
+  "arccos", "arcsin", "arctan", "arg", "aut", "cos", "cosh", "cot", "coth", "csc", "deg",
+  "det", "dim", "exp", "gal", "gcd", "hom", "inf", "ker", "lcm", "lim", "liminf", "limsup",
+  "log", "max", "min", "mod", "ord", "rank", "sec", "sgn", "sin", "sinh", "span", "spec",
+  "sup", "tan", "tanh", "var",
+]);
+
+/** A Latin word of 3+ letters that is neither a TeX command (`\lim`) nor an operator name. */
+const hasEnglishWord = (text: string): boolean =>
+  (text.replace(/\\[A-Za-z]*/g, " ").match(/[A-Za-z]+/g) ?? [])
+    .some(word => word.length >= 3 && !NOTATION_WORDS.has(word.toLowerCase()));
+
+/** `plain_label` has no language tag: Han reads as Chinese, an English word without Han as English, notation such as `ℤ/nℤ`, `gcd(a, b)` or `\lim a_n` fits both. */
 function plainLabelFits(text: string, lang: DisplayLang): boolean {
   const han = /\p{Script=Han}/u.test(text);
-  const latin = /[A-Za-z]{3}/.test(text);
-  return lang === "zh" ? han || !latin : !han;
+  return lang === "zh" ? han || !hasEnglishWord(text) : !han;
 }
 
 /**

@@ -361,6 +361,10 @@ describe("semantic taxonomy", () => {
     expect(semanticDisplayLabel(entity("精确说法：Cassini 恒等式"), "en")).toBe("Cassini identity");
     expect(semanticDisplayLabel(entity("Cassini's identity"), "zh")).toBe("Cassini 恒等式");
     expect(semanticDisplayLabel(entity("ℤ/nℤ"), "zh")).toBe("ℤ/nℤ");
+    for (const notation of ["gcd(a, b) = 1", "\\lim_{n} a_n", "det A", "sinh x", "rank A"]) {
+      expect(semanticDisplayLabel(entity(notation), "zh")).toBe(notation);
+    }
+    expect(semanticDisplayLabel(entity("Norm of a Ring element"), "zh")).toBe("Cassini 恒等式");
     expect(semanticDisplayLabel({ preferred_labels: [{ lang: "zh-CN", label: "中文名" }] }, "en")).toBe("中文名");
     try {
       setLocale("en");

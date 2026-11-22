@@ -249,6 +249,7 @@ pub fn overlay_search_corpus(corpus: &mut SearchCorpus, overlay: &InvestigationO
                     obj.object_id.clone(),
                     obj.lifecycle.clone(),
                     &obj.payload,
+                    mathscape_domain::DisplayLang::Zh,
                 );
                 if let Some(pos) = corpus
                     .semantic_entities

@@ -72,7 +72,7 @@ fn corpus_reads_only_source_unit_names_not_bodies() {
     drop(connection);
 
     let store = SqliteArtifactStore::open(&database).unwrap();
-    let corpus = store.read_search_corpus().unwrap();
+    let corpus = store.read_search_corpus(Default::default()).unwrap();
     assert!(corpus.notes.is_empty() && corpus.snapshots.is_empty() && corpus.artifacts.is_empty());
     assert_eq!(
         corpus.source_units,

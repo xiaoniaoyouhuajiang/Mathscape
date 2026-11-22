@@ -117,6 +117,8 @@ pub struct DesktopService {
     /// in-window sandbox, `None` on the mother workspace). Server-owned:
     /// the frontend never builds it.
     investigation_id: Option<String>,
+    /// UI language, stamped from [`DesktopState`] on each command.
+    display_lang: mathscape_domain::DisplayLang,
 }
 
 impl DesktopService {
@@ -172,6 +174,7 @@ impl DesktopService {
             active_discovery: Arc::new(Mutex::new(None)),
             ink_lan: Arc::new(ink_lan::InkLanRuntime::default()),
             investigation_id: None,
+            display_lang: Default::default(),
         })
     }
 
@@ -250,8 +253,10 @@ impl DesktopService {
                 })
             })
             .collect();
-        let landscape_projection =
-            LandscapeProjector.project(LandscapeProjectionInput::from_snapshot(&landscape))?;
+        let landscape_projection = LandscapeProjector.project(
+            LandscapeProjectionInput::from_snapshot(&landscape)
+                .with_display_lang(self.display_lang),
+        )?;
         let landscape_graph = IncidenceGraph::project(&landscape_projection);
 
         Ok(DesktopSnapshot {
@@ -508,6 +513,7 @@ mod task_tests {
             active_discovery: Arc::new(Mutex::new(None)),
             ink_lan: Arc::new(ink_lan::InkLanRuntime::default()),
             investigation_id: None,
+            display_lang: Default::default(),
         };
         let request = ParsePdfRequest::new("test:pdf", 2, 4, MarkerProfileChoice::MathOcrV1);
         let permit = service.begin_parse(&request).unwrap();
@@ -900,6 +906,8 @@ pub enum DesktopServiceError {
 struct DesktopState {
     slot: Arc<std::sync::RwLock<WorkspaceSlot>>,
     mother_root: PathBuf,
+    /// UI language (0 = zh, 1 = en), set by `set_display_locale`.
+    display_lang: Arc<std::sync::atomic::AtomicU8>,
 }
 
 struct WorkspaceSlot {
@@ -916,16 +924,27 @@ impl DesktopState {
                 sandbox: None,
             })),
             mother_root,
+            display_lang: Default::default(),
         }
     }
 
     /// Cheap clone of the currently bound service (all fields are `Arc`s).
     fn service(&self) -> DesktopService {
-        self.slot
+        let mut service = self
+            .slot
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .service
-            .clone()
+            .clone();
+        service.display_lang = self.display_lang();
+        service
+    }
+
+    fn display_lang(&self) -> mathscape_domain::DisplayLang {
+        match self.display_lang.load(std::sync::atomic::Ordering::Relaxed) {
+            1 => mathscape_domain::DisplayLang::En,
+            _ => mathscape_domain::DisplayLang::Zh,
+        }
     }
 
     fn in_window_sandbox(&self) -> Option<sandbox::InWindowSandbox> {
@@ -993,9 +1012,12 @@ impl DesktopState {
 
 /// The UI locale, so names the backend picks for shared objects match it.
 #[tauri::command]
-fn set_display_locale(locale: String) {
+fn set_display_locale(locale: String, state: State<'_, DesktopState>) {
     if let Some(lang) = mathscape_domain::DisplayLang::from_tag(&locale) {
-        mathscape_domain::set_display_lang(lang);
+        let value = u8::from(lang == mathscape_domain::DisplayLang::En);
+        state
+            .display_lang
+            .store(value, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

@@ -238,6 +238,7 @@ pub fn search_semantic_entity_row_from_payload(
     object_id: String,
     lifecycle: String,
     payload: &Value,
+    lang: mathscape_domain::DisplayLang,
 ) -> SearchSemanticEntityRow {
     let inner = payload.get("payload").unwrap_or(payload);
     let str_field = |key: &str| {
@@ -248,7 +249,6 @@ pub fn search_semantic_entity_row_from_payload(
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
     };
-    let lang = mathscape_domain::display_lang();
     // Display-language labels first, so search titles match map display.
     let preferred_labels = mathscape_domain::preferred_labels_for(inner, lang);
     let display_label = mathscape_domain::semantic_display_label(inner, lang);
@@ -287,6 +287,7 @@ pub fn search_semantic_entity_row_from_payload(
 
 fn semantic_entities(
     connection: &Connection,
+    lang: mathscape_domain::DisplayLang,
 ) -> Result<Vec<SearchSemanticEntityRow>, SqliteStoreError> {
     let mut statement = connection.prepare(
         "SELECT o.object_id, r.lifecycle, r.payload_json
@@ -307,7 +308,7 @@ fn semantic_entities(
         let (object_id, lifecycle, payload_json) = row?;
         let payload: Value = serde_json::from_str(&payload_json)?;
         result.push(search_semantic_entity_row_from_payload(
-            object_id, lifecycle, &payload,
+            object_id, lifecycle, &payload, lang,
         ));
     }
     Ok(result)
@@ -315,14 +316,17 @@ fn semantic_entities(
 
 impl SqliteArtifactStore {
     /// Every searchable row, read in one transaction (N3d).
-    pub fn read_search_corpus(&self) -> Result<SearchCorpus, SqliteStoreError> {
+    pub fn read_search_corpus(
+        &self,
+        lang: mathscape_domain::DisplayLang,
+    ) -> Result<SearchCorpus, SqliteStoreError> {
         let transaction = self.connection.unchecked_transaction()?;
         let corpus = SearchCorpus {
             notes: notes(&transaction)?,
             snapshots: snapshots(&transaction)?,
             artifacts: artifacts(&transaction)?,
             source_units: source_units(&transaction)?,
-            semantic_entities: semantic_entities(&transaction)?,
+            semantic_entities: semantic_entities(&transaction, lang)?,
             canonical_markdown: crate::canonical_markdown::list_canonical_markdown(&transaction)?,
         };
         transaction.commit()?;

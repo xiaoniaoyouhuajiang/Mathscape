@@ -13,7 +13,8 @@ pub fn object_title(o: &MapEditObject) -> Option<String> {
     let p = &o.payload["payload"];
     let semantic = match o.kind.as_str() {
         "SemanticEntity" => {
-            mathscape_domain::semantic_display_label(p, mathscape_domain::display_lang())
+            // Impact titles are backend prose like the prefixes below: Chinese.
+            mathscape_domain::semantic_display_label(p, mathscape_domain::DisplayLang::Zh)
         }
         "Alignment" => Some(
             p["map_label"]

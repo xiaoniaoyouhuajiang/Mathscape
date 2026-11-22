@@ -104,12 +104,14 @@ pub(super) fn call(workspace: &McpWorkspace, arguments: Value) -> Result<Value, 
     };
 
     let store = workspace.store()?;
-    let mut corpus = store.read_search_corpus().map_err(|error| {
-        ToolError::new(
-            ToolErrorCode::Internal,
-            format!("failed to read search corpus: {error}"),
-        )
-    })?;
+    let mut corpus = store
+        .read_search_corpus(mathscape_domain::DisplayLang::Zh)
+        .map_err(|error| {
+            ToolError::new(
+                ToolErrorCode::Internal,
+                format!("failed to read search corpus: {error}"),
+            )
+        })?;
     if let Some(investigation_id) = investigation.as_deref() {
         let overlay = investigation_overlay(&store, investigation_id).map_err(|error| {
             ToolError::new(

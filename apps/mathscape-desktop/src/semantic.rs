@@ -87,7 +87,7 @@ pub fn object_detail_with_scope(
         .map_edit_snapshot()
         .map_err(|error| error.to_string())?;
     let (snapshot, overlay) = merged_snapshot(&store, service.investigation_id(), include_staged)?;
-    let mut detail = semantic_object_detail(&snapshot, object_id)
+    let mut detail = semantic_object_detail(&snapshot, object_id, service.display_lang)
         .ok_or_else(|| format!("not_found：{object_id} 不是语义对象"))?;
     if let Some(overlay) = overlay
         && let Some(staged) = overlay
@@ -160,6 +160,7 @@ pub fn learning_with_scope(
         study_marks,
         staged_ids,
         includes_staged: include_staged && overlay.is_some(),
+        display_lang: service.display_lang,
     };
     Ok(learning_view_with_context(&snapshot, &ctx))
 }

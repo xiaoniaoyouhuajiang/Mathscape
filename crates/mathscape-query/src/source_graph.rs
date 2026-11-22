@@ -33,6 +33,7 @@ pub struct LandscapeProjectionInput<'a> {
     ink_snapshot_labels: Option<&'a BTreeMap<String, String>>,
     canonical_markdown: &'a [CanonicalMarkdownView],
     canonical_ensures: &'a [CanonicalEnsureLease],
+    display_lang: mathscape_domain::DisplayLang,
 }
 
 impl<'a> LandscapeProjectionInput<'a> {
@@ -43,6 +44,7 @@ impl<'a> LandscapeProjectionInput<'a> {
             ink_snapshot_labels: None,
             canonical_markdown: &[],
             canonical_ensures: &[],
+            display_lang: Default::default(),
         }
     }
 
@@ -63,6 +65,12 @@ impl<'a> LandscapeProjectionInput<'a> {
     /// material node and in ink evidence summaries.
     pub fn with_ink_snapshot_labels(mut self, labels: &'a BTreeMap<String, String>) -> Self {
         self.ink_snapshot_labels = Some(labels);
+        self
+    }
+
+    /// Language in which shared objects are named.
+    pub fn with_display_lang(mut self, lang: mathscape_domain::DisplayLang) -> Self {
+        self.display_lang = lang;
         self
     }
 
@@ -90,13 +98,14 @@ pub fn project_source_map(
     snapshot: &SourceMapSnapshot,
     lens: ProjectionLens,
 ) -> Result<GraphProjection, SourceGraphProjectionError> {
-    project_source_map_internal(snapshot, lens, false)
+    project_source_map_internal(snapshot, lens, false, Default::default())
 }
 
 fn project_source_map_internal(
     snapshot: &SourceMapSnapshot,
     lens: ProjectionLens,
     include_evidence: bool,
+    lang: mathscape_domain::DisplayLang,
 ) -> Result<GraphProjection, SourceGraphProjectionError> {
     if lens != ProjectionLens::Source {
         return Err(SourceGraphProjectionError::UnsupportedLens(lens));
@@ -306,7 +315,13 @@ fn project_source_map_internal(
             .lifecycle(object.lifecycle),
         );
     }
-    crate::semantic_graph::project_semantic_layer(&objects, &group_id, &mut nodes, &mut relations)?;
+    crate::semantic_graph::project_semantic_layer(
+        &objects,
+        &group_id,
+        &mut nodes,
+        &mut relations,
+        lang,
+    )?;
     let groups = if nodes.is_empty() {
         vec![]
     } else {
@@ -349,7 +364,12 @@ pub fn project_landscape(
                 .collect()
         })
         .unwrap_or_default();
-    let source = project_source_map_internal(input.source_map, ProjectionLens::Source, true)?;
+    let source = project_source_map_internal(
+        input.source_map,
+        ProjectionLens::Source,
+        true,
+        input.display_lang,
+    )?;
     let mut groups = material.groups().to_vec();
     groups.extend(source.groups().iter().map(|group| {
         // Avoid a group identity collision while preserving the layer boundary.

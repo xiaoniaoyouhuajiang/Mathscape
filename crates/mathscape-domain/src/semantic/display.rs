@@ -1,11 +1,10 @@
 //! Which of a shared object's names to show for the current display language.
 
-use std::sync::atomic::{AtomicU8, Ordering};
-
 use serde_json::Value;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DisplayLang {
+    #[default]
     Zh,
     En,
 }
@@ -23,6 +22,14 @@ impl DisplayLang {
         }
     }
 
+    /// Name shown for a shared object that has none.
+    pub fn fallback_entity_label(self) -> &'static str {
+        match self {
+            Self::Zh => "共享对象",
+            Self::En => "Shared object",
+        }
+    }
+
     fn other(self) -> Self {
         match self {
             Self::Zh => Self::En,
@@ -31,32 +38,45 @@ impl DisplayLang {
     }
 }
 
-static DISPLAY_LANG: AtomicU8 = AtomicU8::new(0);
-
-/// Set by the desktop shell from the UI locale; other hosts keep the default `Zh`.
-pub fn set_display_lang(lang: DisplayLang) {
-    DISPLAY_LANG.store(lang as u8, Ordering::Relaxed);
-}
-
-pub fn display_lang() -> DisplayLang {
-    match DISPLAY_LANG.load(Ordering::Relaxed) {
-        1 => DisplayLang::En,
-        _ => DisplayLang::Zh,
-    }
-}
+/// Operator and function names that read as notation, not English words.
+const NOTATION_WORDS: &[&str] = &[
+    "arccos", "arcsin", "arctan", "arg", "aut", "cos", "cosh", "cot", "coth", "csc", "deg", "det",
+    "dim", "exp", "gal", "gcd", "hom", "inf", "ker", "lcm", "lim", "liminf", "limsup", "log",
+    "max", "min", "mod", "ord", "rank", "sec", "sgn", "sin", "sinh", "span", "spec", "sup", "tan",
+    "tanh", "var",
+];
 
 /// `plain_label` carries no language tag: Han text reads as Chinese, a Latin
-/// word (3+ letters) without Han as English, and notation such as `ℤ/nℤ`
-/// fits either.
+/// word (3+ letters) without Han as English, and notation such as `ℤ/nℤ`,
+/// `gcd(a, b)` or `\lim a_n` fits either.
 fn plain_label_fits(text: &str, lang: DisplayLang) -> bool {
     let han = text.chars().any(is_han);
-    let latin = text
-        .split(|c: char| !c.is_ascii_alphabetic())
-        .any(|word| word.len() >= 3);
     match lang {
-        DisplayLang::Zh => han || !latin,
+        DisplayLang::Zh => han || !has_english_word(text),
         DisplayLang::En => !han,
     }
+}
+
+fn has_english_word(text: &str) -> bool {
+    let mut rest = text;
+    let mut words = Vec::new();
+    while let Some(c) = rest.chars().next() {
+        if c == '\\' {
+            // A TeX command such as `\lim` or `\mathbb` is notation.
+            rest = rest[1..].trim_start_matches(|c: char| c.is_ascii_alphabetic());
+        } else if c.is_ascii_alphabetic() {
+            let end = rest
+                .find(|c: char| !c.is_ascii_alphabetic())
+                .unwrap_or(rest.len());
+            words.push(&rest[..end]);
+            rest = &rest[end..];
+        } else {
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    words.into_iter().any(|word| {
+        word.len() >= 3 && !NOTATION_WORDS.contains(&word.to_ascii_lowercase().as_str())
+    })
 }
 
 fn is_han(c: char) -> bool {
@@ -171,11 +191,36 @@ mod tests {
             semantic_display_label(&p, DisplayLang::Zh).as_deref(),
             Some("F(n+1)F(n−1) − F(n)²")
         );
+        for notation in [
+            "gcd(a, b) = 1",
+            "\\lim_{n} a_n",
+            "det A",
+            "sinh x",
+            "rank A",
+        ] {
+            let p = entity(Some(notation));
+            assert_eq!(
+                semantic_display_label(&p, DisplayLang::Zh).as_deref(),
+                Some(notation)
+            );
+        }
+        let p = entity(Some("Norm of a Ring element"));
+        assert_eq!(
+            semantic_display_label(&p, DisplayLang::Zh).as_deref(),
+            Some("Cassini 恒等式")
+        );
         let p = entity(Some("ℤ/nℤ"));
         assert_eq!(
             semantic_display_label(&p, DisplayLang::Zh).as_deref(),
             Some("ℤ/nℤ")
         );
+    }
+
+    #[test]
+    fn unnamed_objects_get_a_fallback_in_the_display_language() {
+        assert_eq!(DisplayLang::Zh.fallback_entity_label(), "共享对象");
+        assert_eq!(DisplayLang::En.fallback_entity_label(), "Shared object");
+        assert_eq!(DisplayLang::default(), DisplayLang::Zh);
     }
 
     #[test]

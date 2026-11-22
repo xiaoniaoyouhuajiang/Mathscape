@@ -20,10 +20,10 @@ fn live(o: &MapEditObject) -> bool {
     crate::source_integrity::is_live(o)
 }
 
-/// 共享对象按当前显示语言取的名称（见 `semantic_display_label`）。
-pub fn entity_label(o: &MapEditObject) -> String {
-    mathscape_domain::semantic_display_label(payload(o), mathscape_domain::display_lang())
-        .unwrap_or_else(|| "共享对象".to_owned())
+/// 共享对象按显示语言取的名称（见 `semantic_display_label`）。
+pub fn entity_label(o: &MapEditObject, lang: mathscape_domain::DisplayLang) -> String {
+    mathscape_domain::semantic_display_label(payload(o), lang)
+        .unwrap_or_else(|| lang.fallback_entity_label().to_owned())
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -115,6 +115,8 @@ pub struct LearningViewContext {
     /// Staged object ids when `includes_staged` preview is enabled.
     pub staged_ids: BTreeSet<String>,
     pub includes_staged: bool,
+    /// Language in which shared objects are named.
+    pub display_lang: mathscape_domain::DisplayLang,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -361,7 +363,7 @@ pub fn learning_view_with_context(
             .or_default()
             .insert(target);
 
-        let ent_label = entity_label(entity);
+        let ent_label = entity_label(entity, ctx.display_lang);
         let rel = text(p, "relation").unwrap_or("").to_owned();
         let is_staged =
             ctx.staged_ids.contains(a.object_id.as_str()) || ctx.staged_ids.contains(target);
@@ -613,6 +615,7 @@ pub struct SemanticObjectDetail {
 pub fn semantic_object_detail(
     snapshot: &MapEditSnapshot,
     object_id: &str,
+    lang: mathscape_domain::DisplayLang,
 ) -> Option<SemanticObjectDetail> {
     let o = snapshot.objects.iter().find(|o| o.object_id == object_id)?;
     if !matches!(
@@ -644,7 +647,7 @@ pub fn semantic_object_detail(
         .map(|other| {
             (
                 other.object_id.clone(),
-                semantic_object_title_in(snapshot, other),
+                semantic_object_title_in(snapshot, other, lang),
             )
         })
         .collect();
@@ -660,11 +663,15 @@ pub fn semantic_object_detail(
     })
 }
 
-pub fn semantic_object_title(o: &MapEditObject) -> String {
-    title(o)
+pub fn semantic_object_title(o: &MapEditObject, lang: mathscape_domain::DisplayLang) -> String {
+    title(o, lang)
 }
 
-pub fn semantic_object_title_in(snapshot: &MapEditSnapshot, o: &MapEditObject) -> String {
+pub fn semantic_object_title_in(
+    snapshot: &MapEditSnapshot,
+    o: &MapEditObject,
+    lang: mathscape_domain::DisplayLang,
+) -> String {
     if o.kind == "Alignment" {
         let p = payload(o);
         let rel = relation_plain(text(p, "relation").unwrap_or(""));
@@ -674,20 +681,20 @@ pub fn semantic_object_title_in(snapshot: &MapEditSnapshot, o: &MapEditObject) -
                 .objects
                 .iter()
                 .find(|cand| cand.object_id == id)
-                .map(title)
+                .map(|cand| title(cand, lang))
         });
         let dst = text(p, "target").and_then(|id| {
             snapshot
                 .objects
                 .iter()
                 .find(|cand| cand.object_id == id)
-                .map(title)
+                .map(|cand| title(cand, lang))
         });
         if let (Some(src), Some(dst)) = (src, dst) {
             return format!("{src} —{label}→ {dst}");
         }
     }
-    title(o)
+    title(o, lang)
 }
 
 fn relation_plain(relation: &str) -> &'static str {
@@ -707,10 +714,10 @@ fn relation_plain(relation: &str) -> &'static str {
     }
 }
 
-fn title(o: &MapEditObject) -> String {
+fn title(o: &MapEditObject, lang: mathscape_domain::DisplayLang) -> String {
     let p = payload(o);
     match o.kind.as_str() {
-        "SemanticEntity" => entity_label(o),
+        "SemanticEntity" => entity_label(o, lang),
         "Alignment" => p
             .get("map_label")
             .and_then(Value::as_str)
