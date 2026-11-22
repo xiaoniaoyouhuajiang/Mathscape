@@ -73,6 +73,9 @@ export const zhCN = {
   "scene.locate.note.candidatesTruncated": "候选过多，仅列出部分结果；可加长引文或缩小范围。",
   "scene.locate.note.other": "工具返回了补充说明，详见技术详情。",
   "error.unknown": "发生了未知错误",
+  "review.label_lang_missing": "共享对象缺少中文或英文名称",
+  "review.possible_duplicate_name": "名称或别名与已有的同类对象相同，可能重复",
+  "review.duplicate_mathlib_decl": "mathlib 名称已被同类对象使用，可能重复",
 } satisfies Record<string, string>;
 
 export type MessageKey = keyof typeof zhCN;
