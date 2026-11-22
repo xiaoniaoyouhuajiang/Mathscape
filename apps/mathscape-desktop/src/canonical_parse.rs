@@ -96,10 +96,16 @@ impl DesktopService {
     ) -> Result<EnsureReport, String> {
         let canonical_id =
             StableId::parse(request.canonical_id.clone()).map_err(|e| e.to_string())?;
-        let pages = InclusivePageRange::new(request.first_page, request.last_page)
-            .map_err(|_| "页码范围无效：起始页不能小于 1，结束页不能小于起始页".to_owned())?;
+        let pages =
+            InclusivePageRange::new(request.first_page, request.last_page).map_err(|_| {
+                "invalid_parse_page_range: 页码范围无效：起始页不能小于 1，结束页不能小于起始页"
+                    .to_owned()
+            })?;
         if self.active_parse().is_some() {
-            return Err("检查器里的「解析选定页面」正在运行，请等它结束后再试".into());
+            return Err(
+                "parse_already_running: 检查器里的「解析选定页面」正在运行，请等它结束后再试"
+                    .into(),
+            );
         }
         let workspace = McpWorkspace::open(&self.workspace_root)
             .map_err(|e| e.to_string())?

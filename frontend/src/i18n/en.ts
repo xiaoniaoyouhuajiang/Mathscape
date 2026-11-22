@@ -71,6 +71,8 @@ export const en: Messages = {
   "scene.locate.note.candidatesTruncated": "Too many candidates; only some are listed. Use a longer quote or narrow the range.",
   "scene.locate.note.other": "The tool returned an additional note; see the technical details.",
   "error.unknown": "An unknown error occurred",
+  "error.invalid_parse_page_range": "Invalid page range: the first page must be at least 1 and the last page must not come before it",
+  "error.parse_already_running": "The inspector's “Parse selected pages” is running. Try again when it has finished.",
   "review.label_lang_missing": "Shared object is missing a Chinese or English name",
   "review.possible_duplicate_name": "Name or alias matches an existing object of the same kind; possible duplicate",
   "review.duplicate_mathlib_decl": "mathlib name is already used by an object of the same kind; possible duplicate",

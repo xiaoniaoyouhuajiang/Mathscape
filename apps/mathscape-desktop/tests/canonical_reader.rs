@@ -442,13 +442,16 @@ fn parsing_pages_of_a_gap_fills_the_same_view_in_place() {
         1
     );
 
+    // A stable code leads the message, for the interface's own wording.
+    let refused = service
+        .parse_canonical_pages_with(
+            &ParseCanonicalPagesRequest::new(canonical.as_str(), 0, 2),
+            policy,
+        )
+        .unwrap_err();
     assert!(
-        service
-            .parse_canonical_pages_with(
-                &ParseCanonicalPagesRequest::new(canonical.as_str(), 0, 2),
-                policy
-            )
-            .is_err()
+        refused.starts_with("invalid_parse_page_range: "),
+        "{refused}"
     );
     assert!(
         service

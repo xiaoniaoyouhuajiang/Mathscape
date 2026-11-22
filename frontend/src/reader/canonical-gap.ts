@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { eventBus } from "../core/events";
+import { errorMessage } from "../core/ipc";
 import { t } from "../i18n";
 import { gapLabel, pagesLabel, type PageRange } from "./canonical";
 
@@ -132,7 +133,7 @@ export function startGapParse(canonicalId: string, pdfId: string, pages: PageRan
         };
       }
     } catch (error) {
-      job.failure = { status: "error", timedOut: false, detail: error instanceof Error ? error.message : String(error) };
+      job.failure = { status: "error", timedOut: false, detail: errorMessage(error) };
     }
     // New snapshots are new map nodes; the reader stays open on its document.
     if (filled) eventBus.emit("source-map-changed", { reason: "canonical-pages-parsed", preserveReader: true });

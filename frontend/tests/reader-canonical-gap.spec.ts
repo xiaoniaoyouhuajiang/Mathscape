@@ -285,6 +285,15 @@ test("a failed parse says so on the card, keeps the text, and can be retried or 
   await big.getByRole("button", { name: "解析第 9–12 页" }).click();
   await expect(big.locator(".canonical-gap-error")).toHaveText("没有找到可用的 Marker，这几页没有解析。请确认本机已安装 Marker。");
   await expect(big.locator(".canonical-gap-hint")).toHaveCount(0);
+
+  // A refusal that carries a stable code is said in the interface's words, without the code.
+  await page.evaluate(() => {
+    (window as any).harness.gapParse.respond = () =>
+      Promise.reject("parse_already_running: backend wording");
+  });
+  await big.getByRole("button", { name: "重试" }).click();
+  await expect(big.locator(".canonical-gap-error"))
+    .toHaveText("没能开始解析第 9–12 页：检查器里的「解析选定页面」正在运行，请等它结束后再试");
 });
 
 test("pages an agent is parsing show as running and arrive without a click", async ({ page }) => {
