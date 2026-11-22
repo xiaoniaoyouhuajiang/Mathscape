@@ -1060,7 +1060,7 @@ fn search_matches_a_direct_search_registry_call() {
     let f = fixture();
     let corpus = SqliteArtifactStore::open(&f.root.join("mathscape.sqlite3"))
         .unwrap()
-        .read_search_corpus()
+        .read_search_corpus(Default::default())
         .unwrap();
     for (arguments, query) in [
         (

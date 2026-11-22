@@ -12,7 +12,7 @@ impl DesktopService {
         let store = SqliteArtifactStore::open(&self.workspace_root().join("mathscape.sqlite3"))
             .map_err(|error| format!("读取工作区失败：{error}"))?;
         let corpus = store
-            .read_search_corpus()
+            .read_search_corpus(self.display_lang)
             .map_err(|error| format!("读取搜索数据失败：{error}"))?;
         Ok(search(&SearchRegistry::with_defaults(), &corpus, query))
     }

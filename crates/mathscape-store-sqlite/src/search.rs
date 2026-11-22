@@ -79,6 +79,8 @@ pub struct SearchSemanticEntityRow {
     pub lifecycle: String,
     pub semantic_kind: Option<String>,
     pub plain_label: Option<String>,
+    /// Name to show for the current display language.
+    pub display_label: Option<String>,
     pub preferred_labels: Vec<String>,
     pub aliases: Vec<String>,
     pub mathlib_decl: Option<String>,
@@ -236,6 +238,7 @@ pub fn search_semantic_entity_row_from_payload(
     object_id: String,
     lifecycle: String,
     payload: &Value,
+    lang: mathscape_domain::DisplayLang,
 ) -> SearchSemanticEntityRow {
     let inner = payload.get("payload").unwrap_or(payload);
     let str_field = |key: &str| {
@@ -246,27 +249,9 @@ pub fn search_semantic_entity_row_from_payload(
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
     };
-    let mut preferred_labels = Vec::new();
-    if let Some(items) = inner.get("preferred_labels").and_then(Value::as_array) {
-        // Put Chinese preferred labels first so fallback titles match map display.
-        for only_zh in [true, false] {
-            for item in items {
-                let is_zh = item.get("lang").and_then(Value::as_str) == Some("zh");
-                if is_zh != only_zh {
-                    continue;
-                }
-                if let Some(label) = item
-                    .get("label")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|label| !label.is_empty())
-                    && !preferred_labels.iter().any(|existing| existing == label)
-                {
-                    preferred_labels.push(label.to_owned());
-                }
-            }
-        }
-    }
+    // Display-language labels first, so search titles match map display.
+    let preferred_labels = mathscape_domain::preferred_labels_for(inner, lang);
+    let display_label = mathscape_domain::semantic_display_label(inner, lang);
     let aliases = inner
         .get("aliases")
         .and_then(Value::as_array)
@@ -292,6 +277,7 @@ pub fn search_semantic_entity_row_from_payload(
         lifecycle,
         semantic_kind: str_field("semantic_kind"),
         plain_label: str_field("plain_label"),
+        display_label,
         preferred_labels,
         aliases,
         mathlib_decl,
@@ -301,6 +287,7 @@ pub fn search_semantic_entity_row_from_payload(
 
 fn semantic_entities(
     connection: &Connection,
+    lang: mathscape_domain::DisplayLang,
 ) -> Result<Vec<SearchSemanticEntityRow>, SqliteStoreError> {
     let mut statement = connection.prepare(
         "SELECT o.object_id, r.lifecycle, r.payload_json
@@ -321,7 +308,7 @@ fn semantic_entities(
         let (object_id, lifecycle, payload_json) = row?;
         let payload: Value = serde_json::from_str(&payload_json)?;
         result.push(search_semantic_entity_row_from_payload(
-            object_id, lifecycle, &payload,
+            object_id, lifecycle, &payload, lang,
         ));
     }
     Ok(result)
@@ -329,14 +316,17 @@ fn semantic_entities(
 
 impl SqliteArtifactStore {
     /// Every searchable row, read in one transaction (N3d).
-    pub fn read_search_corpus(&self) -> Result<SearchCorpus, SqliteStoreError> {
+    pub fn read_search_corpus(
+        &self,
+        lang: mathscape_domain::DisplayLang,
+    ) -> Result<SearchCorpus, SqliteStoreError> {
         let transaction = self.connection.unchecked_transaction()?;
         let corpus = SearchCorpus {
             notes: notes(&transaction)?,
             snapshots: snapshots(&transaction)?,
             artifacts: artifacts(&transaction)?,
             source_units: source_units(&transaction)?,
-            semantic_entities: semantic_entities(&transaction)?,
+            semantic_entities: semantic_entities(&transaction, lang)?,
             canonical_markdown: crate::canonical_markdown::list_canonical_markdown(&transaction)?,
         };
         transaction.commit()?;

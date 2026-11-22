@@ -73,6 +73,7 @@ export const zhCN = {
   "scene.locate.note.candidatesTruncated": "候选过多，仅列出部分结果；可加长引文或缩小范围。",
   "scene.locate.note.other": "工具返回了补充说明，详见技术详情。",
   "error.unknown": "发生了未知错误",
+  "semantic.entity_fallback": "共享对象",
   "error.invalid_parse_page_range": "页码范围无效：起始页不能小于 1，结束页不能小于起始页",
   "error.parse_already_running": "检查器里的「解析选定页面」正在运行，请等它结束后再试",
   "review.label_lang_missing": "共享对象缺少中文或英文名称",

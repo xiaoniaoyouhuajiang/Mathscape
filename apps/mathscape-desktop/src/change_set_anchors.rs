@@ -166,6 +166,7 @@ pub struct AnchorContext<'a> {
     staged: BTreeMap<String, Value>,
     conversions: BTreeMap<String, Option<String>>,
     pool: Option<ArtifactPool>,
+    lang: mathscape_domain::DisplayLang,
 }
 
 impl<'a> AnchorContext<'a> {
@@ -174,6 +175,7 @@ impl<'a> AnchorContext<'a> {
         store: &'a SqliteArtifactStore,
         head: &'a MapEditSnapshot,
         versions: &[PendingChangeSet],
+        lang: mathscape_domain::DisplayLang,
     ) -> Self {
         Self {
             root,
@@ -182,6 +184,7 @@ impl<'a> AnchorContext<'a> {
             staged: versions.iter().flat_map(compiled_spans).collect(),
             conversions: BTreeMap::new(),
             pool: ArtifactPool::open(root).ok(),
+            lang,
         }
     }
 
@@ -353,8 +356,9 @@ impl<'a> AnchorContext<'a> {
             .objects
             .iter()
             .find(|object| object.object_id == id)?;
-        let title =
-            mathscape_orchestrator::semantic_view::semantic_object_title_in(self.head, object);
+        let title = mathscape_orchestrator::semantic_view::semantic_object_title_in(
+            self.head, object, self.lang,
+        );
         Some(if title == object.object_id {
             object.kind.clone()
         } else {
@@ -404,6 +408,10 @@ impl<'a> AnchorContext<'a> {
             .unwrap_or(&object.payload)
             .clone();
         Some((kind, payload))
+    }
+
+    pub fn lang(&self) -> mathscape_domain::DisplayLang {
+        self.lang
     }
 
     pub fn head(&self) -> &MapEditSnapshot {
@@ -506,6 +514,7 @@ pub fn change_set_snapshot(
     root: &Path,
     investigation_id: &str,
     artifact_id: &str,
+    lang: mathscape_domain::DisplayLang,
 ) -> Result<ChangeSetSnapshot, String> {
     let store = SqliteArtifactStore::open(&root.join("mathscape.sqlite3"))
         .map_err(|error| error.to_string())?;
@@ -515,7 +524,7 @@ pub fn change_set_snapshot(
     let head = store
         .map_edit_snapshot()
         .map_err(|error| error.to_string())?;
-    let mut context = AnchorContext::new(root, &store, &head, &versions);
+    let mut context = AnchorContext::new(root, &store, &head, &versions, lang);
     let referenced = versions.iter().any(|item| {
         context
             .anchors(item)

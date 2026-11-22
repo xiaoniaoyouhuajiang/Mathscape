@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { alignmentPlainLabel, entityPlainLabel, reviewItemLabel } from "../../src/semantic/labels";
+import { alignmentPlainLabel, entityPlainLabel, reviewItemLabel, semanticDisplayLabel } from "../../src/semantic/labels";
 import { feedbackQuote, sendFeedbackToComposer } from "../../src/semantic/feedback";
 import { semanticReviewCards, proposalLevelReviewItems, reviewItemCode, refTitle } from "../../src/semantic/review-model";
 import { computeProposalMapScope, findProposalTargetForDomainObject } from "../../src/review/map-review-sync";
@@ -348,5 +348,31 @@ describe("semantic taxonomy", () => {
     expect(semanticLayerClass("Debt")).toBe(" debt-edge");
     expect(semanticLayerClass("Alignment")).toBe(" alignment-edge");
     expect(semanticLayerClass("SourceUnitRelation")).toBe("");
+  });
+
+  it("names shared objects in the UI language", () => {
+    const entity = (plain?: string) => ({
+      ...(plain ? { plain_label: plain } : {}),
+      preferred_labels: [{ lang: "en", label: "Cassini identity" }, { lang: "zh", label: "Cassini 恒等式" }],
+    });
+    expect(semanticDisplayLabel(entity(), "zh")).toBe("Cassini 恒等式");
+    expect(semanticDisplayLabel(entity(), "en")).toBe("Cassini identity");
+    expect(semanticDisplayLabel(entity("精确说法：Cassini 恒等式"), "zh")).toBe("精确说法：Cassini 恒等式");
+    expect(semanticDisplayLabel(entity("精确说法：Cassini 恒等式"), "en")).toBe("Cassini identity");
+    expect(semanticDisplayLabel(entity("Cassini's identity"), "zh")).toBe("Cassini 恒等式");
+    expect(semanticDisplayLabel(entity("ℤ/nℤ"), "zh")).toBe("ℤ/nℤ");
+    for (const notation of ["gcd(a, b) = 1", "\\lim_{n} a_n", "det A", "sinh x", "rank A"]) {
+      expect(semanticDisplayLabel(entity(notation), "zh")).toBe(notation);
+    }
+    expect(semanticDisplayLabel(entity("Norm of a Ring element"), "zh")).toBe("Cassini 恒等式");
+    expect(semanticDisplayLabel({ preferred_labels: [{ lang: "zh-CN", label: "中文名" }] }, "en")).toBe("中文名");
+    try {
+      setLocale("en");
+      expect(entityPlainLabel(entity())).toBe("Cassini identity");
+      expect(entityPlainLabel({})).toBe("Shared object");
+    } finally {
+      setLocale("zh-CN");
+    }
+    expect(entityPlainLabel(entity())).toBe("Cassini 恒等式");
   });
 });

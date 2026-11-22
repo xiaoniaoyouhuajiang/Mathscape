@@ -129,20 +129,9 @@ fn text<'a>(payload: &'a Value, key: &str) -> Option<&'a str> {
     payload.get(key).and_then(Value::as_str)
 }
 
-fn entity_label(payload: &Value) -> String {
-    text(payload, "plain_label")
-        .map(str::to_owned)
-        .or_else(|| {
-            let labels = payload.get("preferred_labels")?.as_array()?;
-            labels
-                .iter()
-                .find(|l| l.get("lang").and_then(Value::as_str) == Some("zh"))
-                .or_else(|| labels.first())
-                .and_then(|l| l.get("label"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| "共享对象".to_owned())
+fn entity_label(payload: &Value, lang: mathscape_domain::DisplayLang) -> String {
+    mathscape_domain::semantic_display_label(payload, lang)
+        .unwrap_or_else(|| lang.fallback_entity_label().to_owned())
 }
 
 fn shorten(value: &str, max: usize) -> String {
@@ -196,6 +185,7 @@ pub(crate) fn project_semantic_layer(
     group: &ProjectionGroupId,
     nodes: &mut Vec<ProjectionNode>,
     relations: &mut Vec<ProjectionRelation>,
+    lang: mathscape_domain::DisplayLang,
 ) -> Result<(), SourceGraphProjectionError> {
     let of_kind = |kind: EntityKind| {
         objects
@@ -210,7 +200,7 @@ pub(crate) fn project_semantic_layer(
                 object.stable_id.clone(),
                 object.kind,
                 ViewLayer::GlobalSemantic,
-                entity_label(payload),
+                entity_label(payload, lang),
             )?
             .group(group.clone())
             .summary(entity_summary(payload))?

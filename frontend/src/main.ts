@@ -1,4 +1,4 @@
-import { initializeLocale } from "./i18n";
+import { initializeLocale, LOCALE_CHANGED } from "./i18n";
 import { initializeTheme } from "./shell/theme-manager";
 import { initializeMapStyle } from "./shell/map-style";
 import { invoke } from "@tauri-apps/api/core";
@@ -56,7 +56,8 @@ import { StudyHudController } from "./semantic/study-hud";
 import { TutorialPlayer } from "./tutorial/player";
 import "./tutorial/tutorial.css";
 
-initializeLocale();
+// The first snapshot must be named in the saved language.
+const localeReady = initializeLocale();
 initializeTheme();
 initializeMapStyle();
 
@@ -979,6 +980,12 @@ const workspaceSearch = new WorkspaceSearchPanel({
   activate: (hit, action) => openSearchResult(hit, action),
 });
 installWorkspaceSearch(workspaceSearch);
+// Shared-object names come from the backend; re-read them in the new language.
+// Re-rendering the snapshot also refreshes the inspector and learning HUD.
+window.addEventListener(LOCALE_CHANGED, () => {
+  void loadSnapshot({ preserveReader: true });
+  workspaceSearch.refresh();
+});
 el.searchButton.addEventListener("click", () => workspaceSearch.open());
 
 // 语义层研读透镜（地图内双轨线性书脊 + 右轨共享语义伴星 + 节点悬浮简报卡）。
@@ -1085,5 +1092,5 @@ eventBus.on("open-tutorial", () => void tutorial.open());
 
 artifactController.startPolling(1000);
 
-void loadSnapshot();
+void localeReady.then(() => loadSnapshot());
 void llmSettings.loadSummary();

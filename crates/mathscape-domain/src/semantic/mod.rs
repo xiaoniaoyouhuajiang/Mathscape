@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod changes;
+mod display;
 pub use changes::*;
+pub use display::*;
 
 /// Schema version written in the header of every semantic map object.
 pub const SEMANTIC_SCHEMA_VERSION: &str = "mathscape-semantic-1";

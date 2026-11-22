@@ -376,7 +376,7 @@ fn view(
             Some((id, title))
         })
         .collect();
-    let target_object_title = resolve_target_object_title(item, &target_titles);
+    let target_object_title = resolve_target_object_title(item, &target_titles, anchors.lang());
     PendingChangeSetView {
         anchors: anchors.anchors(item),
         history,
@@ -462,7 +462,7 @@ fn resolve_local_refs(value: &Value, staged_ids: &serde_json::Map<String, Value>
     }
 }
 
-fn payload_short_title(payload: &Value) -> Option<String> {
+fn payload_short_title(payload: &Value, lang: mathscape_domain::DisplayLang) -> Option<String> {
     let str_at = |key: &str| {
         payload
             .get(key)
@@ -471,18 +471,7 @@ fn payload_short_title(payload: &Value) -> Option<String> {
             .map(str::to_owned)
     };
     str_at("display_title")
-        .or_else(|| str_at("plain_label"))
-        .or_else(|| {
-            let labels = payload.get("preferred_labels")?.as_array()?;
-            labels
-                .iter()
-                .find(|l| l.get("lang").and_then(Value::as_str) == Some("zh"))
-                .or_else(|| labels.first())?
-                .get("label")?
-                .as_str()
-                .filter(|s| !s.trim().is_empty())
-                .map(str::to_owned)
-        })
+        .or_else(|| mathscape_domain::semantic_display_label(payload, lang))
         .or_else(|| str_at("label"))
         .or_else(|| str_at("map_label"))
         .or_else(|| str_at("obligation"))
@@ -533,7 +522,8 @@ fn staged_title(
             anchors
                 .head_title(end_id)
                 .or_else(|| {
-                    staged_object(versions, end_id).and_then(|o| payload_short_title(&o.payload))
+                    staged_object(versions, end_id)
+                        .and_then(|o| payload_short_title(&o.payload, anchors.lang()))
                 })
                 .unwrap_or_else(|| end_id.to_owned())
         };
@@ -551,7 +541,7 @@ fn staged_title(
             end_title("target")
         ));
     }
-    payload_short_title(&base.payload)
+    payload_short_title(&base.payload, anchors.lang())
 }
 
 fn collect_retire_cascades(
@@ -651,6 +641,7 @@ fn collect_retire_cascades(
 fn resolve_target_object_title(
     item: &PendingChangeSet,
     target_titles: &BTreeMap<String, String>,
+    lang: mathscape_domain::DisplayLang,
 ) -> Option<String> {
     let proposal = &item.record.proposal;
     let objects = proposal
@@ -664,7 +655,7 @@ fn resolve_target_object_title(
             let local_ref = obj.get("local_ref")?.as_str()?;
             let op = obj.get("op").and_then(Value::as_str).unwrap_or("create");
             let title = if op == "create" {
-                payload_short_title(obj.get("payload")?)?
+                payload_short_title(obj.get("payload")?, lang)?
             } else {
                 let target_id = obj.get("target_id")?.as_str()?;
                 target_titles.get(target_id)?.clone()
@@ -730,7 +721,11 @@ fn resolve_target_object_title(
         .and_then(resolve_ref)
 }
 
-pub fn list_queue(root: &Path, investigation_id: &str) -> Result<ChangeSetQueue, String> {
+pub fn list_queue(
+    root: &Path,
+    investigation_id: &str,
+    lang: mathscape_domain::DisplayLang,
+) -> Result<ChangeSetQueue, String> {
     let store = open_store(root)?;
     let items = store
         .list_pending_change_sets(investigation_id)
@@ -741,7 +736,7 @@ pub fn list_queue(root: &Path, investigation_id: &str) -> Result<ChangeSetQueue,
     let head = store
         .map_edit_snapshot()
         .map_err(|error| error.to_string())?;
-    let mut anchors = AnchorContext::new(root, &store, &head, &versions);
+    let mut anchors = AnchorContext::new(root, &store, &head, &versions, lang);
     let items = items
         .iter()
         .map(|item| view(item, &versions, &mut anchors))
@@ -1013,7 +1008,8 @@ pub async fn list_pending_change_sets(
     sandbox: State<'_, SandboxState>,
 ) -> Result<ChangeSetQueue, String> {
     let root = workspace_for(&desktop, &sandbox, &investigation_id).await?;
-    blocking(move || list_queue(&root, &investigation_id)).await
+    let lang = desktop.display_lang();
+    blocking(move || list_queue(&root, &investigation_id, lang)).await
 }
 
 /// The Markdown snapshot a proposal of `investigation_id` anchors into,
@@ -1028,7 +1024,8 @@ pub async fn get_change_set_snapshot(
     sandbox: State<'_, SandboxState>,
 ) -> Result<ChangeSetSnapshot, String> {
     let root = workspace_for(&desktop, &sandbox, &investigation_id).await?;
-    blocking(move || change_set_snapshot(&root, &investigation_id, &artifact_id)).await
+    let lang = desktop.display_lang();
+    blocking(move || change_set_snapshot(&root, &investigation_id, &artifact_id, lang)).await
 }
 
 #[tauri::command]
@@ -1224,7 +1221,7 @@ mod tests {
             }),
         );
         assert_eq!(b["status"], "staged", "{b}");
-        let queue = list_queue(&fx.root, INV).unwrap();
+        let queue = list_queue(&fx.root, INV, Default::default()).unwrap();
         let view = queue
             .items
             .iter()
@@ -2320,7 +2317,7 @@ mod tests {
     fn pending_view_resolves_anchors_on_the_server() {
         let fx = fixture();
         let a = unit_proposal(&fx, "a", "A", "第一段内容。", Value::Null);
-        let queue = list_queue(&fx.root, INV).unwrap();
+        let queue = list_queue(&fx.root, INV, Default::default()).unwrap();
         let anchor = &queue.items[0].anchors[0];
         let (start, end) = range("第一段内容。");
         assert_eq!(anchor.span_ref, "s");
@@ -2347,7 +2344,7 @@ mod tests {
                 "proposed_objects": [unit("u", "B", Value::Null, json!([span_id]))]
             }),
         );
-        let queue = list_queue(&fx.root, INV).unwrap();
+        let queue = list_queue(&fx.root, INV, Default::default()).unwrap();
         let anchors = &queue.items[0].anchors;
         assert_eq!(anchors.len(), 1, "{anchors:?}");
         assert_eq!(anchors[0].origin, "head");
@@ -2355,10 +2352,11 @@ mod tests {
         assert_eq!(anchors[0].excerpt, "第一段内容。");
         assert!(anchors[0].verified);
         // The snapshot is served for review; an unrelated artifact is not.
-        let snapshot = change_set_snapshot(&fx.root, INV, &fx.md).unwrap();
+        let snapshot = change_set_snapshot(&fx.root, INV, &fx.md, Default::default()).unwrap();
         assert_eq!(snapshot.document.source, MD);
         assert_eq!(snapshot.conversion_id, None);
-        let other = change_set_snapshot(&fx.root, "sandbox:other", &fx.md).unwrap_err();
+        let other =
+            change_set_snapshot(&fx.root, "sandbox:other", &fx.md, Default::default()).unwrap_err();
         assert!(other.starts_with("snapshot_not_referenced"), "{other}");
     }
 
@@ -2417,11 +2415,13 @@ mod tests {
         let live = home.live_session(&session.sandbox_session_id).unwrap();
         let root = authorize_investigation(&investigation, None, Some(&live)).unwrap();
         assert_eq!(root, copy_root);
-        let snapshot = change_set_snapshot(&root, &investigation, &new_md).unwrap();
+        let snapshot =
+            change_set_snapshot(&root, &investigation, &new_md, Default::default()).unwrap();
         assert_eq!(snapshot.document.source, NEW);
         // Reading it from the mother workspace itself fails with the real
         // reason instead of silently showing nothing.
-        let error = change_set_snapshot(&fx.root, &investigation, &new_md).unwrap_err();
+        let error =
+            change_set_snapshot(&fx.root, &investigation, &new_md, Default::default()).unwrap_err();
         assert!(error.starts_with("snapshot_not_referenced"), "{error}");
     }
 
@@ -2495,9 +2495,12 @@ mod tests {
         assert_eq!(view.materials[0].artifact_id, fx.md);
         assert_eq!(view.materials[0].units[0].label, "新的");
         assert_eq!(view.materials[0].open_debts.len(), 1);
-        let detail =
-            mathscape_orchestrator::semantic_view::semantic_object_detail(&snapshot, &alignment_id)
-                .unwrap();
+        let detail = mathscape_orchestrator::semantic_view::semantic_object_detail(
+            &snapshot,
+            &alignment_id,
+            Default::default(),
+        )
+        .unwrap();
         assert_eq!(
             detail.titles.get(&entity_id).map(String::as_str),
             Some("单调收敛定理")
@@ -2708,7 +2711,7 @@ mod tests {
             }),
         );
         assert_eq!(retire["status"], "staged", "{retire}");
-        let retire_queue = list_queue(&fx.root, INV).unwrap();
+        let retire_queue = list_queue(&fx.root, INV, Default::default()).unwrap();
         let retire_view = &retire_queue.items[0];
         assert_eq!(
             retire_view.retire_cascades.get(&alignment_id),
@@ -2804,7 +2807,7 @@ mod tests {
             selections.push(sel(&result));
         }
         // 在接受前核对队列视图：跨提案引用的来源单元、理论、共享对象与账都能拿到中文标题。
-        let pending_queue = list_queue(&fx.root, INV).unwrap();
+        let pending_queue = list_queue(&fx.root, INV, Default::default()).unwrap();
         let cassini_view = pending_queue
             .items
             .iter()

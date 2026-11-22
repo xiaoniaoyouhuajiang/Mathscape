@@ -4,7 +4,7 @@
  * 禁用词：平移、错开、滑动。
  */
 
-import { hasMessage, t } from "../i18n";
+import { getLocale, hasMessage, t } from "../i18n";
 
 const lookup = (table: Record<string, string>, fallback: string) => (value: string | null | undefined): string =>
   (value && table[value]) || fallback;
@@ -105,10 +105,48 @@ export function alignmentPlainLabel(payload: Json): string {
   }
 }
 
-/** 共享对象的白话名。 */
-export function entityPlainLabel(payload: Json): string {
-  const plain = str(payload.plain_label);
-  if (plain) return plain;
+type DisplayLang = "zh" | "en";
+
+const displayLangOf = (tag: unknown): DisplayLang | null => {
+  const primary = typeof tag === "string" ? tag.split(/[-_]/)[0].toLowerCase() : "";
+  return primary === "zh" || primary === "en" ? primary : null;
+};
+
+/** Operator and function names that read as notation, not English words (same list as the backend). */
+const NOTATION_WORDS = new Set([
+  "arccos", "arcsin", "arctan", "arg", "aut", "cos", "cosh", "cot", "coth", "csc", "deg",
+  "det", "dim", "exp", "gal", "gcd", "hom", "inf", "ker", "lcm", "lim", "liminf", "limsup",
+  "log", "max", "min", "mod", "ord", "rank", "sec", "sgn", "sin", "sinh", "span", "spec",
+  "sup", "tan", "tanh", "var",
+]);
+
+/** A Latin word of 3+ letters that is neither a TeX command (`\lim`) nor an operator name. */
+const hasEnglishWord = (text: string): boolean =>
+  (text.replace(/\\[A-Za-z]*/g, " ").match(/[A-Za-z]+/g) ?? [])
+    .some(word => word.length >= 3 && !NOTATION_WORDS.has(word.toLowerCase()));
+
+/** `plain_label` has no language tag: Han reads as Chinese, an English word without Han as English, notation such as `ℤ/nℤ`, `gcd(a, b)` or `\lim a_n` fits both. */
+function plainLabelFits(text: string, lang: DisplayLang): boolean {
+  const han = /\p{Script=Han}/u.test(text);
+  return lang === "zh" ? han || !hasEnglishWord(text) : !han;
+}
+
+/**
+ * 共享对象按界面语言取的名称：同语言的 `plain_label`，否则该语言的 `preferred_labels`，
+ * 否则任何已有名称。与后端 `semantic_display_label` 规则一致。
+ */
+export function semanticDisplayLabel(payload: Json, lang: DisplayLang | null = displayLangOf(getLocale())): string | null {
+  const want = lang ?? "zh";
+  const nonEmpty = (value: unknown) => str(value)?.trim() || null;
+  const plain = nonEmpty(payload.plain_label);
+  if (plain && plainLabelFits(plain, want)) return plain;
   const labels = arr(payload.preferred_labels);
-  return str((labels.find(label => label.lang === "zh") ?? labels[0])?.label) ?? "共享对象";
+  const named = (pick: (tag: DisplayLang | null) => boolean) =>
+    nonEmpty(labels.find(label => pick(displayLangOf(label.lang)) && nonEmpty(label.label))?.label);
+  return named(tag => tag === want) ?? plain ?? named(tag => tag !== null) ?? named(() => true);
+}
+
+/** 共享对象的显示名。 */
+export function entityPlainLabel(payload: Json): string {
+  return semanticDisplayLabel(payload) ?? t("semantic.entity_fallback");
 }

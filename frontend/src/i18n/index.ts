@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { en } from "./en";
 import { zhCN, type MessageKey, type Messages } from "./zh-CN";
 
@@ -35,14 +36,20 @@ export function formatDateTime(value: Date | number, options?: Intl.DateTimeForm
   return new Date(value).toLocaleString(current, options);
 }
 
-function applyDocumentLang(): void {
+/** Resolves once the desktop backend, which also names shared objects, uses `current`. */
+async function applyDocumentLang(): Promise<void> {
   if (typeof document !== "undefined") document.documentElement.lang = current;
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    await invoke("set_display_locale", { locale: current }).catch(() => undefined);
+  }
 }
 
-export function setLocale(locale: Locale): void {
+/** `t()` switches at once; `LOCALE_CHANGED` fires after the backend has switched, so listeners can reload backend-named data. */
+export async function setLocale(locale: Locale): Promise<void> {
   current = locale;
-  applyDocumentLang();
   try { localStorage.setItem(LOCALE_STORAGE_KEY, locale); } catch { /* Restricted storage: keep this session usable. */ }
+  await applyDocumentLang();
+  if (current !== locale) return; // A later switch won; it announces itself.
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(LOCALE_CHANGED, { detail: { locale } }));
 }
 
@@ -50,10 +57,10 @@ export function setLocale(locale: Locale): void {
  * Restores the saved locale. The default stays zh-CN rather than following the
  * system language until the English dictionary covers the whole UI.
  */
-export function initializeLocale(): void {
+export function initializeLocale(): Promise<void> {
   try {
     const saved = localStorage.getItem(LOCALE_STORAGE_KEY);
     current = isLocale(saved) ? saved : DEFAULT_LOCALE;
   } catch { current = DEFAULT_LOCALE; }
-  applyDocumentLang();
+  return applyDocumentLang();
 }

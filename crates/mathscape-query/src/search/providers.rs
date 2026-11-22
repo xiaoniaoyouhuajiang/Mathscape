@@ -311,8 +311,9 @@ impl SearchProvider for SourceUnitProvider {
 }
 
 fn semantic_entity_title(row: &SearchSemanticEntityRow) -> String {
-    row.plain_label
+    row.display_label
         .clone()
+        .or_else(|| row.plain_label.clone())
         .or_else(|| row.preferred_labels.first().cloned())
         .unwrap_or_else(|| {
             semantic_kind_label(row.semantic_kind.as_deref().unwrap_or("")).to_owned()

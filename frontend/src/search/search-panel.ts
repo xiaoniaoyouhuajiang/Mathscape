@@ -79,6 +79,11 @@ export class WorkspaceSearchPanel {
     this.returnFocus = null;
   }
 
+  /** Re-runs the open query, e.g. after the display language changed. */
+  refresh(): void {
+    if (this.isOpen() && this.input.value.trim()) this.schedule(0);
+  }
+
   toggle(): void { if (this.isOpen()) this.close(); else this.open(); }
 
   private schedule(delay = this.options.debounceMs ?? 120): void {
