@@ -20,20 +20,9 @@ fn live(o: &MapEditObject) -> bool {
     crate::source_integrity::is_live(o)
 }
 
-/// 共享对象的白话名：`plain_label`，否则中文首选名，否则第一个首选名。
+/// 共享对象按当前显示语言取的名称（见 `semantic_display_label`）。
 pub fn entity_label(o: &MapEditObject) -> String {
-    let p = payload(o);
-    text(p, "plain_label")
-        .map(str::to_owned)
-        .or_else(|| {
-            let labels = p.get("preferred_labels")?.as_array()?;
-            labels
-                .iter()
-                .find(|l| text(l, "lang") == Some("zh"))
-                .or_else(|| labels.first())
-                .and_then(|l| text(l, "label"))
-                .map(str::to_owned)
-        })
+    mathscape_domain::semantic_display_label(payload(o), mathscape_domain::display_lang())
         .unwrap_or_else(|| "共享对象".to_owned())
 }
 

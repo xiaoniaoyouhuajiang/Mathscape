@@ -91,7 +91,7 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
   "preferred_labels": [ { "lang": "zh", "label": "Cassini 恒等式" },     // 必须同时有 zh 和 en，与材料语言无关
                         { "lang": "en", "label": "Cassini's identity" } ],  // lang 只用 "zh" / "en"
   "aliases": ["Cassini's identity", "Simson identity"],      // 可选：中英文同义检索词（尤其推荐给 theory 填写）
-  "plain_label": "精确说法：Cassini 恒等式（对一切 n ≥ 1）",  // 可选，Agent 补充；展示以前端模板为准（S9.1）
+  "plain_label": "精确说法：Cassini 恒等式（对一切 n ≥ 1）",  // 可选，Agent 补充；展示以前端模板为准（S9.1）。按界面语言取名：plain_label 只在它的语言（含汉字为中文，否则为英文）下使用，否则用该语言的 preferred_labels
   "conventions": [                                           // 决定 a：约定注记
     { "key": "sequence_index_origin", "subject": "F", "value": 0,
       "text": "F₀ = 0，F₁ = 1，从第 0 项起编（同 mathlib Nat.fib）", "basis": "mathlib" } ],

@@ -471,17 +471,8 @@ fn payload_short_title(payload: &Value) -> Option<String> {
             .map(str::to_owned)
     };
     str_at("display_title")
-        .or_else(|| str_at("plain_label"))
         .or_else(|| {
-            let labels = payload.get("preferred_labels")?.as_array()?;
-            labels
-                .iter()
-                .find(|l| l.get("lang").and_then(Value::as_str) == Some("zh"))
-                .or_else(|| labels.first())?
-                .get("label")?
-                .as_str()
-                .filter(|s| !s.trim().is_empty())
-                .map(str::to_owned)
+            mathscape_domain::semantic_display_label(payload, mathscape_domain::display_lang())
         })
         .or_else(|| str_at("label"))
         .or_else(|| str_at("map_label"))

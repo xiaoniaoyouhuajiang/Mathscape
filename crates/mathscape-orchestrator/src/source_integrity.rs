@@ -12,11 +12,9 @@ pub fn is_live(o: &MapEditObject) -> bool {
 pub fn object_title(o: &MapEditObject) -> Option<String> {
     let p = &o.payload["payload"];
     let semantic = match o.kind.as_str() {
-        "SemanticEntity" => p["plain_label"].as_str().map(str::to_owned).or_else(|| {
-            p["preferred_labels"][0]["label"]
-                .as_str()
-                .map(str::to_owned)
-        }),
+        "SemanticEntity" => {
+            mathscape_domain::semantic_display_label(p, mathscape_domain::display_lang())
+        }
         "Alignment" => Some(
             p["map_label"]
                 .as_str()

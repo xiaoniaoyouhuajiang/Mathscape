@@ -17,6 +17,7 @@
 import { shortStableId } from "../../core/stable-id";
 import { t } from "../../i18n";
 import { relationLabel, unitKindLabel } from "../../review/labels";
+import { semanticDisplayLabel } from "../../semantic/labels";
 import type { AgentEventLike } from "../format";
 import { MCP_STARTUP_TOOL } from "../steps";
 import {
@@ -638,9 +639,7 @@ function semanticVisualKind(kind: string, body: Json): ProposeVisualKind {
 function semanticLabel(kind: string, body: Json, local: string): string {
   if (kind === "debt") return str(body.obligation) ?? local;
   if (kind === "dialect_scope") return str(body.label) ?? local;
-  const labels = list(body.preferred_labels).filter(isObject);
-  const preferred = labels.find((label) => label.lang === "zh") ?? labels[0];
-  return str(body.plain_label) ?? str(preferred?.label) ?? unitKindLabel(str(body.semantic_kind) ?? "概念") ?? local;
+  return semanticDisplayLabel(body) ?? unitKindLabel(str(body.semantic_kind) ?? "概念") ?? local;
 }
 
 function semanticAnchors(body: Json, spans: Map<string, Json>): string[] {

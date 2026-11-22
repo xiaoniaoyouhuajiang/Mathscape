@@ -130,18 +130,7 @@ fn text<'a>(payload: &'a Value, key: &str) -> Option<&'a str> {
 }
 
 fn entity_label(payload: &Value) -> String {
-    text(payload, "plain_label")
-        .map(str::to_owned)
-        .or_else(|| {
-            let labels = payload.get("preferred_labels")?.as_array()?;
-            labels
-                .iter()
-                .find(|l| l.get("lang").and_then(Value::as_str) == Some("zh"))
-                .or_else(|| labels.first())
-                .and_then(|l| l.get("label"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
+    mathscape_domain::semantic_display_label(payload, mathscape_domain::display_lang())
         .unwrap_or_else(|| "共享对象".to_owned())
 }
 

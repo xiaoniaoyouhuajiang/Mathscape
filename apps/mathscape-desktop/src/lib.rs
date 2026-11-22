@@ -981,6 +981,14 @@ impl DesktopState {
     }
 }
 
+/// The UI locale, so names the backend picks for shared objects match it.
+#[tauri::command]
+fn set_display_locale(locale: String) {
+    if let Some(lang) = mathscape_domain::DisplayLang::from_tag(&locale) {
+        mathscape_domain::set_display_lang(lang);
+    }
+}
+
 #[tauri::command]
 async fn get_desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, String> {
     let service = state.service();
@@ -1092,6 +1100,7 @@ pub fn run() {
             llm_settings::test_llm_profile,
             workspace_settings::get_workspace_settings,
             workspace_settings::save_workspace_settings,
+            set_display_locale,
             loogle_host::get_loogle_resident_status,
             discovery::get_active_discovery,
             discovery::list_discovery_runs,

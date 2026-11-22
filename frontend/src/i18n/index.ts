@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { en } from "./en";
 import { zhCN, type MessageKey, type Messages } from "./zh-CN";
 
@@ -37,6 +38,10 @@ export function formatDateTime(value: Date | number, options?: Intl.DateTimeForm
 
 function applyDocumentLang(): void {
   if (typeof document !== "undefined") document.documentElement.lang = current;
+  // The desktop backend names shared objects in this language too.
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    invoke("set_display_locale", { locale: current }).catch(() => undefined);
+  }
 }
 
 export function setLocale(locale: Locale): void {

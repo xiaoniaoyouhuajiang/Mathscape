@@ -79,6 +79,8 @@ pub struct SearchSemanticEntityRow {
     pub lifecycle: String,
     pub semantic_kind: Option<String>,
     pub plain_label: Option<String>,
+    /// Name to show for the current display language.
+    pub display_label: Option<String>,
     pub preferred_labels: Vec<String>,
     pub aliases: Vec<String>,
     pub mathlib_decl: Option<String>,
@@ -246,27 +248,10 @@ pub fn search_semantic_entity_row_from_payload(
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
     };
-    let mut preferred_labels = Vec::new();
-    if let Some(items) = inner.get("preferred_labels").and_then(Value::as_array) {
-        // Put Chinese preferred labels first so fallback titles match map display.
-        for only_zh in [true, false] {
-            for item in items {
-                let is_zh = item.get("lang").and_then(Value::as_str) == Some("zh");
-                if is_zh != only_zh {
-                    continue;
-                }
-                if let Some(label) = item
-                    .get("label")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|label| !label.is_empty())
-                    && !preferred_labels.iter().any(|existing| existing == label)
-                {
-                    preferred_labels.push(label.to_owned());
-                }
-            }
-        }
-    }
+    let lang = mathscape_domain::display_lang();
+    // Display-language labels first, so search titles match map display.
+    let preferred_labels = mathscape_domain::preferred_labels_for(inner, lang);
+    let display_label = mathscape_domain::semantic_display_label(inner, lang);
     let aliases = inner
         .get("aliases")
         .and_then(Value::as_array)
@@ -292,6 +277,7 @@ pub fn search_semantic_entity_row_from_payload(
         lifecycle,
         semantic_kind: str_field("semantic_kind"),
         plain_label: str_field("plain_label"),
+        display_label,
         preferred_labels,
         aliases,
         mathlib_decl,
