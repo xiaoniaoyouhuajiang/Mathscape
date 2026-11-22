@@ -10,6 +10,7 @@ import { blockLabel, centredTop, isInViewport, mountReturnPoint, pinToViewportTo
 import { markdownDocument, MarkdownSelection, type AnchoredMarkdown, type MarkdownBlock, type PatchReviewMode } from "./selection";
 import { ReaderInkLinks } from "./ink-links";
 import { CanonicalInkController, type CanonicalBlockItem } from "./canonical-ink";
+import { bindReaderCopyShortcuts, copyTextToClipboard, fragmentToTexMarkdown } from "./markdown-copy";
 import { mountMarkdownOutline, type OutlineBlockDescriptor } from "./markdown-outline";
 import {
   buildBlockErrataLookup,
@@ -502,7 +503,7 @@ export class ArtifactReader {
     const paperStage = element("div");
     paperStage.className = "md-paper-stage";
     paperStage.append(article);
-    layout.append(outlineHandle.nav, paperStage);
+    layout.append(outlineHandle.rail, paperStage);
     container.append(controls, statusHint, layout);
 
     const openCanonicalPdfPage = (pageIndex: number, candidatePages?: number[], returnFocus?: ReaderFocus) => {
@@ -1029,6 +1030,7 @@ export class ArtifactReader {
     };
 
     let fallbackMenuListener: ((event: MouseEvent) => void) | undefined;
+    let offFallbackCopy: (() => void) | undefined;
     const mountInk = (): void => {
       canonicalInk = new CanonicalInkController(canonicalItems, article, {
         onStatusHint: setStatusHint,
@@ -1068,17 +1070,35 @@ export class ArtifactReader {
     if (canonicalItems.length > 0) {
       mountInk();
     } else {
+      offFallbackCopy = bindReaderCopyShortcuts({
+        article,
+        getSelectedBlocksCopy: () => null,
+        onCopied: () => setStatusHint(t("reader.copy.copiedSingle")),
+        onCopyFailed: () => setStatusHint(t("reader.copy.failed")),
+      });
       fallbackMenuListener = (event: MouseEvent): void => {
         const block = (event.target as Element).closest<HTMLElement>(".source-block:not(.source-page-marker)");
         if (!block || !article.contains(block)) return;
         const pageAttr = block.dataset.pdfPageIndex;
         const segArt = block.dataset.segmentArtifactId;
         const segLbl = block.dataset.segmentLabel ?? "";
-        if (pageAttr === undefined && !segArt) return;
         event.preventDefault();
         block.classList.add("is-ink-menu-target");
         const clearHighlight = () => block.classList.remove("is-ink-menu-target");
-        const items: Array<{ label: string; onSelect: () => void }> = [];
+        const items: Array<{ label: string; onSelect: () => void }> = [
+          {
+            label: t("reader.copy.menuSingle"),
+            onSelect: () => {
+              clearHighlight();
+              const frag = document.createDocumentFragment();
+              frag.append(block.cloneNode(true));
+              const text = fragmentToTexMarkdown(frag);
+              void copyTextToClipboard(text).then((ok) => {
+                setStatusHint(ok ? t("reader.copy.copiedSingle") : t("reader.copy.failed"));
+              });
+            },
+          },
+        ];
         if (pageAttr !== undefined) {
           const idx = Number(pageAttr);
           items.push({
@@ -1256,6 +1276,8 @@ export class ArtifactReader {
         if (canonicalItems.length > 0) {
           if (fallbackMenuListener) article.removeEventListener("contextmenu", fallbackMenuListener);
           fallbackMenuListener = undefined;
+          offFallbackCopy?.();
+          offFallbackCopy = undefined;
           mountInk();
         }
       }
@@ -1337,6 +1359,7 @@ export class ArtifactReader {
       this.settleLanding = undefined;
       disposeReturnPoint?.();
       if (fallbackMenuListener) article.removeEventListener("contextmenu", fallbackMenuListener);
+      offFallbackCopy?.();
       offGapParse();
       clearTimeout(pollTimer);
       clearInterval(elapsedTimer);
@@ -1441,7 +1464,7 @@ export class ArtifactReader {
     const paperStage = element("div");
     paperStage.className = "md-paper-stage";
     paperStage.append(article);
-    layout.append(outlineHandle.nav, paperStage);
+    layout.append(outlineHandle.rail, paperStage);
     container.append(controls, layout);
     if (notice) {
       const note = element("p");
@@ -1769,6 +1792,7 @@ export class ArtifactReader {
             enterCanonical(index >= 0 ? index : null);
           }
         : undefined,
+      () => activeErrata,
     );
     selection.setOnSelectionChange(() => inkLinks?.syncActionPill());
     selection.setOnEditErrata((range) => openErrataForRange(range));

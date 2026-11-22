@@ -7,7 +7,8 @@
  * - 支持同分段内单击 / `Shift + 单击` 连选块、块旁浮动操作胶囊（`✎ 手写此块/这 K 块`、`＋ 关联已有`、`↗ PDF 原页`）与右键菜单直建手稿。
  */
 import { eventBus } from "../core/events";
-import { showContextMenu } from "../graph/context-menu";
+import { hideContextMenu, isContextMenuOpen, showContextMenu } from "../graph/context-menu";
+import { t } from "../i18n";
 import {
   getInkMarkdownLinks,
   markdownPreviewLabel,
@@ -19,6 +20,12 @@ import {
   type InkMarkdownLinks,
 } from "../ink/links";
 import type { MarkdownUnitMarker } from "./content";
+import {
+  bindReaderCopyShortcuts,
+  copyTextToClipboard,
+  joinBlocksMarkdown,
+  pickVisibleActionAnchor,
+} from "./markdown-copy";
 import { matchUnitsToBlocks } from "./markdown-outline";
 import type { MarkdownBlock } from "./selection";
 
@@ -55,6 +62,11 @@ export class CanonicalInkController {
   private lastIdx = -1;
   private shiftAnchorIdx = -1;
   private selectedViaShift = false;
+  private scrollRaf = 0;
+  private copyFeedbackActive = false;
+  private lastPillRangeKey = "";
+  private copyFeedbackTimer: number | undefined;
+  private copyHintTimer: number | undefined;
   private readonly indexByDomKey: Map<string, number>;
   private readonly unsubscribe: () => void;
 
@@ -67,9 +79,24 @@ export class CanonicalInkController {
     this.article.addEventListener("click", this.onClick);
     this.article.addEventListener("keydown", this.onKey);
     this.article.addEventListener("contextmenu", this.onContextMenu);
+    document.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
+    const offCopy = bindReaderCopyShortcuts({
+      article: this.article,
+      isDisabled: () => this.disposed,
+      getSelectedBlocksCopy: () => {
+        const range = this.activeRange();
+        if (!range) return null;
+        const contentItems = this.contentItemsIn(range);
+        if (!contentItems.length) return null;
+        return { text: this.rangeText(contentItems), count: this.visibleContentItems(contentItems).length };
+      },
+      onCopied: (count) => this.notifyCopied(count),
+      onCopyFailed: () => this.callbacks.onStatusHint?.(t("reader.copy.failed")),
+    });
     const offLinks = eventBus.on("ink-links-changed", () => void this.reloadLinks());
     const offNotes = eventBus.on("ink-notes-changed", () => void this.reloadLinks());
     this.unsubscribe = () => {
+      offCopy();
       offLinks();
       offNotes();
     };
@@ -79,9 +106,13 @@ export class CanonicalInkController {
   dispose(): void {
     this.disposed = true;
     this.reloadVersion++;
+    if (this.scrollRaf) cancelAnimationFrame(this.scrollRaf);
+    if (this.copyFeedbackTimer) window.clearTimeout(this.copyFeedbackTimer);
+    if (this.copyHintTimer) window.clearTimeout(this.copyHintTimer);
     this.article.removeEventListener("click", this.onClick);
     this.article.removeEventListener("keydown", this.onKey);
     this.article.removeEventListener("contextmenu", this.onContextMenu);
+    document.removeEventListener("scroll", this.onScroll, { capture: true });
     this.unsubscribe();
   }
 
@@ -266,9 +297,68 @@ export class CanonicalInkController {
     };
   }
 
-  private rangeText(contentItems: readonly CanonicalBlockItem[]): string {
-    return contentItems.map((i) => i.text).join("\n\n");
+  private visibleContentItems(contentItems: readonly CanonicalBlockItem[]): CanonicalBlockItem[] {
+    const visible = contentItems.filter((item) => {
+      const w = this.wrapperFor(item.domKey);
+      return !w || !w.classList.contains("is-errata-merged-hidden");
+    });
+    return visible.length > 0 ? visible : [...contentItems];
   }
+
+  private rangeText(contentItems: readonly CanonicalBlockItem[]): string {
+    return joinBlocksMarkdown(this.visibleContentItems(contentItems).map((i) => i.text));
+  }
+
+  private notifyCopied(count: number): void {
+    this.copyFeedbackActive = true;
+    const btn = this.article.querySelector<HTMLButtonElement>(".block-pill-copy");
+    if (btn) btn.textContent = t("reader.copy.pillCopied");
+    if (this.copyFeedbackTimer) window.clearTimeout(this.copyFeedbackTimer);
+    this.copyFeedbackTimer = window.setTimeout(() => {
+      this.copyFeedbackActive = false;
+      const liveBtn = this.article.querySelector<HTMLButtonElement>(".block-pill-copy");
+      if (liveBtn) liveBtn.textContent = t("reader.copy.pill");
+    }, 1400);
+    const msg = count === 1 ? t("reader.copy.copiedSingle") : t("reader.copy.copiedMulti", { count });
+    this.callbacks.onStatusHint?.(msg);
+    if (this.copyHintTimer) window.clearTimeout(this.copyHintTimer);
+    this.copyHintTimer = window.setTimeout(() => {
+      if (!this.disposed) this.callbacks.onStatusHint?.(null);
+    }, 2400);
+  }
+
+  private copyContentItems(contentItems: readonly CanonicalBlockItem[]): void {
+    const text = this.rangeText(contentItems);
+    const count = this.visibleContentItems(contentItems).length;
+    void copyTextToClipboard(text).then((ok) => {
+      if (ok) this.notifyCopied(count);
+      else this.callbacks.onStatusHint?.(t("reader.copy.failed"));
+    });
+  }
+
+  private onScroll = (): void => {
+    if (this.disposed || this.firstIdx < 0 || this.lastIdx <= this.firstIdx) return;
+    if (this.scrollRaf) return;
+    this.scrollRaf = requestAnimationFrame(() => {
+      this.scrollRaf = 0;
+      if (this.disposed) return;
+      const pill = this.article.querySelector<HTMLElement>(".block-action-pill");
+      const range = this.activeRange();
+      if (!pill || !range) return;
+      const wrappers = this.visibleContentItems(this.contentItemsIn(range))
+        .map((i) => this.wrapperFor(i.domKey))
+        .filter((w): w is HTMLElement => Boolean(w));
+      const placement = pickVisibleActionAnchor(wrappers);
+      if (!placement) return;
+      const currentParent = pill.parentElement;
+      const wasBottom = pill.classList.contains("is-pill-bottom");
+      if (currentParent === placement.wrapper && wasBottom === placement.pinBottom) return;
+      currentParent?.classList.remove("has-action-pill");
+      pill.classList.toggle("is-pill-bottom", placement.pinBottom);
+      placement.wrapper.classList.add("has-action-pill");
+      placement.wrapper.append(pill);
+    });
+  };
 
   private highlightMenuTarget(range: { first: number; last: number } | null): void {
     const wanted = new Set<string>();
@@ -311,14 +401,28 @@ export class CanonicalInkController {
     this.article.querySelectorAll<HTMLElement>("[data-canonical-key].has-action-pill").forEach((el) => el.classList.remove("has-action-pill"));
 
     const range = this.activeRange();
-    if (!range) return;
+    if (!range) {
+      this.lastPillRangeKey = "";
+      this.copyFeedbackActive = false;
+      return;
+    }
+    const rangeKey = `${range.first}:${range.last}`;
+    if (rangeKey !== this.lastPillRangeKey) {
+      this.lastPillRangeKey = rangeKey;
+      this.copyFeedbackActive = false;
+    }
     const contentItems = this.contentItemsIn(range);
     if (!contentItems.length) return;
-    const anchorWrapper = this.wrapperFor(contentItems[0].domKey);
-    if (!anchorWrapper) return;
+    const visibleItems = this.visibleContentItems(contentItems);
+    const wrappers = visibleItems
+      .map((i) => this.wrapperFor(i.domKey))
+      .filter((w): w is HTMLElement => Boolean(w));
+    const placement = pickVisibleActionAnchor(wrappers);
+    if (!placement) return;
+    const anchorWrapper = placement.wrapper;
 
     const pill = document.createElement("div");
-    pill.className = "block-action-pill";
+    pill.className = placement.pinBottom ? "block-action-pill is-pill-bottom" : "block-action-pill";
     pill.setAttribute("role", "toolbar");
     pill.setAttribute("aria-label", "所选段落快捷操作");
     const stop = (e: Event) => e.stopPropagation();
@@ -328,6 +432,17 @@ export class CanonicalInkController {
     pill.addEventListener("keydown", stop);
 
     const count = contentItems.length;
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "block-pill-btn block-pill-copy";
+    copyBtn.textContent = this.copyFeedbackActive ? t("reader.copy.pillCopied") : t("reader.copy.pill");
+    copyBtn.title = t("reader.copy.pillTitle");
+    copyBtn.onclick = (e) => {
+      e.stopPropagation();
+      this.copyContentItems(contentItems);
+    };
+    pill.append(copyBtn);
+
     const writeBtn = document.createElement("button");
     writeBtn.type = "button";
     writeBtn.className = "block-pill-btn block-pill-primary";
@@ -446,10 +561,17 @@ export class CanonicalInkController {
     if (target && (target.closest(".errata-inline-editor, .errata-diff-popover") || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable)) {
       return;
     }
-    if (event.key === "Escape" && !event.defaultPrevented && (this.currentIdx >= 0 || this.firstIdx >= 0)) {
-      event.preventDefault();
-      this.clearSelection();
-      return;
+    if (event.key === "Escape" && !event.defaultPrevented) {
+      if (isContextMenuOpen()) {
+        event.preventDefault();
+        hideContextMenu();
+        return;
+      }
+      if (this.currentIdx >= 0 || this.firstIdx >= 0) {
+        event.preventDefault();
+        this.clearSelection();
+        return;
+      }
     }
     if ((event.key === "e" || event.key === "E") && !event.ctrlKey && !event.metaKey && !event.altKey && this.callbacks.onEditErrata) {
       const range = this.activeRange();
@@ -495,10 +617,20 @@ export class CanonicalInkController {
     const label = markdownPreviewLabel(this.rangeText(contentItems));
 
     const crossesMarker = Boolean(this.callbacks.hasPageMarkerBetween?.(first, contentItems[contentItems.length - 1]));
+    const visibleCount = this.visibleContentItems(contentItems).length;
     showContextMenu(
       x,
       y,
       [
+        {
+          label: visibleCount === 1
+            ? t("reader.copy.menuSingle")
+            : t("reader.copy.menuMulti", { count: visibleCount }),
+          onSelect: () => {
+            this.highlightMenuTarget(null);
+            this.copyContentItems(contentItems);
+          },
+        },
         ...(this.callbacks.onEditErrata
           ? [{
               label: contentItems.length === 1 ? "校对此块 OCR 正文…" : `合并校对这 ${contentItems.length} 块…`,

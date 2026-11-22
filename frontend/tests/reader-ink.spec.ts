@@ -40,7 +40,7 @@ test("N2 right-click menu targets the block under the cursor, or the selection w
   await openMarkdown(page);
   await page.getByLabel("原文块 3", { exact: true }).click({ button: "right" });
   const menu = page.locator(".graph-context-menu");
-  await expect(menu.getByRole("menuitem").or(menu.locator("button"))).toHaveText(["校对此块 OCR 正文…", "定位对应 PDF 原页", "新建关联手稿…", "关联到已有手稿…", "查看相关手稿（0）"]);
+  await expect(menu.getByRole("menuitem").or(menu.locator("button"))).toHaveText(["复制此块 Markdown", "校对此块 OCR 正文…", "定位对应 PDF 原页", "新建关联手稿…", "关联到已有手稿…", "查看相关手稿（0）"]);
   await expect(page.getByLabel("原文块 3", { exact: true })).toHaveClass(/is-ink-menu-target/);
   await menu.locator("button", { hasText: "新建关联手稿…" }).click();
   const popover = page.locator(".ink-create-popover");
