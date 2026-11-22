@@ -209,6 +209,9 @@ test("parsed pages arrive where the gap was, and what is on screen does not move
   const keys = await page.evaluate(() =>
     [...document.querySelectorAll<HTMLElement>("[data-canonical-key]")].map(block => block.dataset.canonicalKey));
   expect(new Set(keys).size).toBe(keys.length);
+  // The parse this reader started told the map once; its lease ending does not tell it again.
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => (window as any).harness.mapSyncs)).toHaveLength(1);
 });
 
 test("pages that continue the text above start where the gap card was", async ({ page }) => {
@@ -315,9 +318,15 @@ test("pages an agent is parsing show as running and arrive without a click", asy
     w.harness.gapParse.leases = [w.fixture.lease(15, 16, 0)];
   });
   await expect(page.locator('.canonical-segment[data-artifact-id="sg"]')).toBeVisible({ timeout: 8000 });
+  // The map learns of the agent's pages too, once, and without closing this document.
+  const mapSyncs = () => page.evaluate(() => (window as any).harness.mapSyncs);
+  expect(await mapSyncs()).toEqual([{ reason: "canonical-pages-parsed", preserveReader: true }]);
   await expect(page.locator('.canonical-gap[data-pages="3-4"]').getByRole("button", { name: "解析第 3–4 页" })).toBeDisabled();
   await expect(small).toHaveAttribute("data-state", "running");
   await expect(small.locator(".canonical-gap-status")).toContainText("正在解析第 15–16 页 · 已用时");
+  // Later polls that bring nothing new leave the map alone.
+  await page.waitForTimeout(3500);
+  expect(await mapSyncs()).toHaveLength(1);
 });
 
 test("the PDF page is one click from the gap, and the way back returns to the gap", async ({ page }) => {

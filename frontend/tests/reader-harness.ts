@@ -83,6 +83,8 @@ setInkContextCreator(async (target, choice, draft) => { ink.creates.push({ targe
 eventBus.on("open-ink-document", ({ documentId }) => { ink.opened.push(documentId); });
 const locatedObjects: string[] = [];
 eventBus.on("locate-domain-object", ({ objectId }) => { locatedObjects.push(objectId); });
+const mapSyncs: unknown[] = [];
+eventBus.on("source-map-changed", (detail) => { mapSyncs.push(detail ?? null); });
 const errataEvents: unknown[] = [];
 eventBus.on("markdown-errata-changed", (detail) => { errataEvents.push(detail); });
 const errataStore = {
@@ -457,5 +459,5 @@ window.addEventListener("mathscape:open-source", event => {
   });
 });
 Object.assign(window, {
-  harness: { ink, locatedObjects, errataStore, errataEvents, unitMarkers, setCanonicalProjection: (p: any) => { canonicalProjection = p; }, gapParse, setMarkdownSnapshot, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
+  harness: { ink, locatedObjects, mapSyncs, errataStore, errataEvents, unitMarkers, setCanonicalProjection: (p: any) => { canonicalProjection = p; }, gapParse, setMarkdownSnapshot, backlinkRequests, overlappingNotes, markdownPreviewLabel, ArtifactPdfTransport, reader, reads, resolveProductPath, readRange, selectionRequests, discoveryRequests, acceptanceRequests, dispositionRequests, prepareRecovery, setRestoreFailure:(value:boolean)=>restoreFailure=value,setRestoreLostResponse:(value:boolean)=>restoreLostResponse=value,patchDecisions, resumeRequests, behavior, discoveryOutcome, fragment, render: (source: string) => markdownRenderer().render(source) },
 });

@@ -1152,7 +1152,7 @@ export class ArtifactReader {
       const parses = new Set(live.filter(lease => lease.pdfId === pdfId).map(lease => `${lease.pages.from}-${lease.pages.to}`));
       const job = gapParseJob(id);
       // A parse of this book ended, whoever started it (an agent's read too): show its pages.
-      if ([...liveParses].some(pages => !parses.has(pages))) void refresh();
+      if ([...liveParses].some(pages => !parses.has(pages))) void refresh({ syncMap: true });
       liveParses = parses;
       renderGaps();
       // Slower while nothing runs: an agent's read may start a parse of this book at any time.
@@ -1285,12 +1285,19 @@ export class ArtifactReader {
       }
     };
     let refreshing: Promise<void> = Promise.resolve();
-    const refresh = (): Promise<void> => {
+    // `syncMap`: pages that arrived from a parse this reader did not start (it
+    // tells the map itself when it did) also change the map's summary of the book.
+    const refresh = (options: { syncMap?: boolean } = {}): Promise<void> => {
       refreshing = refreshing.then(async () => {
         if (generation !== this.generation) return;
         try {
           const next = await canonicalReaderProjection(id);
-          if (generation === this.generation) await applyProjection(next);
+          if (generation !== this.generation) return;
+          const before = new Set(shownPieces);
+          const arrived = options.syncMap
+            && next.pieces.some(piece => piece.kind === "segment" && !before.has(pieceKey(piece)));
+          if (arrived) eventBus.emit("source-map-changed", { reason: "canonical-pages-parsed", preserveReader: true });
+          await applyProjection(next);
         } catch { /* The view keeps what it shows; the next parse event tries again. */ }
       });
       return refreshing;
