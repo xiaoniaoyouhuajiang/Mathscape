@@ -18,6 +18,7 @@
 //! belong to [`FIRST_THREAD_ID`].
 
 use std::{
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     path::Path,
@@ -64,6 +65,9 @@ pub struct DialogueThread {
     /// `None` until the first turn ran on a persistent harness thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<HarnessThreadBinding>,
+    /// Latest binding for each backend; `harness` remains the last-used binding.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub harnesses: BTreeMap<String, HarnessThreadBinding>,
 }
 
 /// Which harness thread a dialogue thread is bound to, and what it was
@@ -109,6 +113,7 @@ pub(crate) fn effective_threads(record: &SessionRecord) -> DialogueThreads {
             thread_id: FIRST_THREAD_ID.to_owned(),
             created_at: record.created_at.clone(),
             harness: None,
+            harnesses: BTreeMap::new(),
         }]
     } else {
         record.dialogue_threads.clone()
@@ -293,6 +298,7 @@ impl SandboxHome {
             thread_id: format!("{THREAD_ID_PREFIX}{next}"),
             created_at: now_rfc3339(),
             harness: None,
+            harnesses: BTreeMap::new(),
         };
         record.active_thread_id = Some(thread.thread_id.clone());
         record.dialogue_threads = current.threads;
@@ -345,6 +351,18 @@ impl SandboxHome {
         else {
             return Err(SandboxError::Invalid(format!("未知对话：{thread_id}")));
         };
+        if let Some(previous) = &thread.harness {
+            thread
+                .harnesses
+                .insert(previous.backend.clone(), previous.clone());
+        }
+        if let Some(binding) = &binding {
+            thread
+                .harnesses
+                .insert(binding.backend.clone(), binding.clone());
+        } else {
+            thread.harnesses.clear();
+        }
         thread.harness = binding;
         record.dialogue_threads = current.threads;
         if record.active_thread_id.is_none() {

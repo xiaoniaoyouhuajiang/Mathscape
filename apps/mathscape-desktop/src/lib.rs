@@ -1104,6 +1104,7 @@ pub fn run() {
             app.manage(DesktopState::new(service));
             app.manage(sandbox_dialogue::SandboxDialogueState::from_environment(
                 resident_log::log_file(log_dir.as_deref()),
+                app.path().app_data_dir()?,
             ));
             let legacy_sandbox = sandbox::legacy_sandbox_root(app.handle());
             app.manage(sandbox::open_for_workspace(&mother, legacy_sandbox)?);
@@ -1240,6 +1241,7 @@ pub fn run() {
             sandbox::sandbox_return_to_mother,
             sandbox_dialogue::sandbox_agent_status,
             sandbox_dialogue::sandbox_set_model,
+            sandbox_dialogue::sandbox_set_backend,
             sandbox_dialogue::sandbox_set_effort,
             sandbox_dialogue::sandbox_session_dialogue,
             sandbox_dialogue::sandbox_new_dialogue_thread,

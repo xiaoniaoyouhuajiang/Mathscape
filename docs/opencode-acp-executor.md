@@ -1,8 +1,21 @@
 # OpenCode ACP 执行器
 
-`mathscape-agent::OpenCodeExecutor` 已实现 ACP stdio 适配；Desktop 选择器与 UI
-接线另做。默认程序是 `opencode acp`，使用用户已有的 OpenCode 登录/模型配置，
+`mathscape-agent::OpenCodeExecutor` 已实现 ACP stdio 适配；Desktop 对话面板可选择
+Codex 或 OpenCode。默认程序是 `opencode acp`，使用用户已有的 OpenCode 登录/模型配置，
 不索取或代理模型凭证。
+
+Desktop 在模型选择器旁提供执行器选择器，显示各自的本机探测结果；未安装或不可用的
+执行器不能选择。默认 Codex，选择保存在 Mathscape 应用数据目录的 `agent-backend`
+文件，不写 Codex 配置。`MATHSCAPE_AGENT_BACKEND=opencode` 可在开发时覆盖并固定选择；
+`MATHSCAPE_OPENCODE_PROGRAM` 覆盖 OpenCode 程序路径，`MATHSCAPE_CODEX_PROGRAM` 行为不变。
+两种执行器共享 MCP 程序路径与生命周期日志 sink，OpenCode 状态在应用数据目录的
+`opencode/` 下。模型选择按执行器保存；OpenCode 不提供推理强度选择。
+
+切换执行器只影响下一轮；进行中的事件、文本读取、取消仍由原执行器处理。
+每条对话保存各执行器的绑定，同时保留旧的 `harness` 字段作为最近使用的绑定，
+旧 Codex 记录无需迁移。切换后的第一轮走「上下文已降级」重建路径，从 transcript
+补充上下文，避免沿用缺少另一执行器轮次的旧线程；之后同执行器继续原生线程。
+关闭会话或应用时会关闭两个执行器。
 
 ## 会话与事件
 
@@ -53,7 +66,8 @@ prompt 结果提供 usage；空文本、无工具调用且 outputTokens=0 的 en
 
 配置仅由 `OPENCODE_CONFIG_CONTENT` 注入，不在 workspace 写配置。全局/工作区已有的
 自然语言 instructions 会累加，而非被替换；适配器指令存放在 state_dir 下。
-规则使用 ask 和精确 MCP 允许项，其他 `mathscape_*` 拒绝。
+所有 `mathscape_*` 配置为 ask，不注入逐工具 allow/deny；每次调用交由 Mathscape
+审批层按启用工具精确匹配，避免依赖 OpenCode 通配规则的匹配顺序。
 
 ## 检查
 
