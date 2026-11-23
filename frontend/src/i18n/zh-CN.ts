@@ -91,6 +91,12 @@ export const zhCN = {
   "review.label_lang_missing": "共享对象缺少中文或英文名称",
   "review.possible_duplicate_name": "名称或别名与已有的同类对象相同，可能重复",
   "review.duplicate_mathlib_decl": "mathlib 名称已被同类对象使用，可能重复",
+  "sandbox.thread.currentOption": "{label}（当前）",
+  "sandbox.thread.inactiveNote": "正在查看未激活的对话；切回后可继续向 Agent 发送消息。",
+  "sandbox.thread.inactiveBusyNote": "当前活跃对话正在运行本轮；结束后可切回此对话继续发送。",
+  "sandbox.thread.activate": "继续此对话",
+  "sandbox.thread.activateTitle": "将此对话设为当前活跃对话，续接其原有上下文继续提问",
+  "sandbox.thread.backToActive": "回到当前对话",
 } satisfies Record<string, string>;
 
 export type MessageKey = keyof typeof zhCN;

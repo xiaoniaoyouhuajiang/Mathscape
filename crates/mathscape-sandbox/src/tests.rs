@@ -585,6 +585,46 @@ fn new_thread_shares_copy_and_resets_only_history() {
 }
 
 #[test]
+fn activate_dialogue_thread_switches_back_and_reuses_trailing_unused_thread() {
+    let (_tmp, home, checkpoint) = setup();
+    let ckpt = home.register_checkpoint(&checkpoint, None).unwrap();
+    let id = home
+        .start_session(&ckpt.checkpoint_id)
+        .unwrap()
+        .sandbox_session_id;
+
+    home.append_transcript(&id, TranscriptRole::User, "d1 首问", None, None)
+        .unwrap();
+    let threads = home.start_dialogue_thread(&id).unwrap();
+    assert_eq!(threads.active_thread_id, "d2");
+
+    // d2 is still unused: switch back to d1 and verify new messages append to d1.
+    let switched = home.activate_dialogue_thread(&id, FIRST_THREAD_ID).unwrap();
+    assert_eq!(switched.active_thread_id, FIRST_THREAD_ID);
+    assert_eq!(switched.threads.len(), 2);
+    let follow_up = home
+        .append_transcript(&id, TranscriptRole::User, "d1 追问", None, None)
+        .unwrap();
+    assert_eq!(follow_up.thread(), FIRST_THREAD_ID);
+
+    // Asking for a new thread from d1 reuses the trailing unused d2 rather than stacking d3.
+    let reused = home.start_dialogue_thread(&id).unwrap();
+    assert_eq!(reused.active_thread_id, "d2");
+    assert_eq!(reused.threads.len(), 2);
+
+    // Once d2 has messages, switching back to d1 and starting a new thread opens d3.
+    home.append_transcript(&id, TranscriptRole::User, "d2 提问", None, None)
+        .unwrap();
+    home.activate_dialogue_thread(&id, FIRST_THREAD_ID).unwrap();
+    let opened = home.start_dialogue_thread(&id).unwrap();
+    assert_eq!(opened.active_thread_id, "d3");
+    assert_eq!(opened.threads.len(), 3);
+
+    // Unknown thread ids are rejected cleanly.
+    assert!(home.activate_dialogue_thread(&id, "d99").is_err());
+}
+
+#[test]
 fn legacy_session_without_threads_reads_as_first_thread() {
     let (_tmp, home, checkpoint) = setup();
     let ckpt = home.register_checkpoint(&checkpoint, None).unwrap();

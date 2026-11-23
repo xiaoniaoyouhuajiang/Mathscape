@@ -528,10 +528,7 @@ impl SandboxDialogueState {
                 let view = home.live_session(&session_id)?;
                 let threads = home.dialogue_threads(&session_id)?;
                 let thread = threads.active_thread_id.clone();
-                let later_thread = threads
-                    .threads
-                    .first()
-                    .is_some_and(|first| first.thread_id != thread);
+                let later_thread = threads.threads.len() > 1;
                 let dialogue_thread = threads
                     .threads
                     .iter()
@@ -909,7 +906,9 @@ impl SandboxDialogueState {
             skill: prepared.skill.as_ref(),
             rebuilt,
             later_thread: prepared.later_thread,
-            before: same_thread.and(prepared.before.as_ref()),
+            before: same_thread
+                .and(prepared.before.as_ref())
+                .or_else(|| rebuilt.then_some(prepared.before.as_ref()).flatten()),
             now: prepared.now.as_ref(),
         });
         let prompt_text = if rebuilt {
@@ -1031,6 +1030,32 @@ impl SandboxDialogueState {
         self.dialogue(home, session_id).await
     }
 
+    /// Switch the session's active dialogue thread back to an existing thread
+    /// (`d1`..`dN`). Refused while a round is streaming so two threads never
+    /// race on the same workspace copy.
+    async fn activate_thread(
+        &self,
+        home: &Arc<Mutex<SandboxHome>>,
+        session_id: String,
+        thread_id: String,
+    ) -> Result<SessionDialogue, String> {
+        {
+            let mut active = self.active();
+            if active.contains_key(&session_id) {
+                return Err("当前一轮还没结束，请等待或先取消再切换对话".into());
+            }
+            active.insert(session_id.clone(), None);
+        }
+        let sid = session_id.clone();
+        let switched = with_home(home, move |home| {
+            home.activate_dialogue_thread(&sid, &thread_id)
+        })
+        .await;
+        self.release(&session_id, None);
+        switched?;
+        self.dialogue(home, session_id).await
+    }
+
     async fn cancel(&self, session_id: &str) -> Result<bool, String> {
         match self.active_round(session_id) {
             None => Ok(false),
@@ -1088,6 +1113,19 @@ pub async fn sandbox_new_dialogue_thread(
 ) -> Result<SessionDialogue, String> {
     dialogue
         .new_thread(&sandbox.home(), sandbox_session_id)
+        .await
+}
+
+/// Switches the active dialogue thread to an existing thread on the same copy.
+#[tauri::command]
+pub async fn sandbox_activate_dialogue_thread(
+    sandbox: State<'_, SandboxState>,
+    dialogue: State<'_, SandboxDialogueState>,
+    sandbox_session_id: String,
+    thread_id: String,
+) -> Result<SessionDialogue, String> {
+    dialogue
+        .activate_thread(&sandbox.home(), sandbox_session_id, thread_id)
         .await
 }
 
@@ -1540,6 +1578,65 @@ mod tests {
                 .len(),
             2
         );
+        drop(home);
+
+        // Mutate workspace during d2 (create an ink note), then switch back to d1:
+        // d1 resumes its own Codex thread (`thr_fixture`) and sees the workspace diff!
+        {
+            let mut document: mathscape_domain::InkLabDocument =
+                serde_json::from_str(include_str!("../../../testdata/ink/p0/trace.json")).unwrap();
+            document.operations.clear();
+            DesktopService::open_with_credential_store(
+                &workspace,
+                Arc::new(mathscape_llm::MemoryCredentialResolver::default()),
+            )
+            .unwrap()
+            .create_ink_document(crate::ink::CreateInkDocumentRequest {
+                document,
+                session_id: "sess-d2".into(),
+                writer_id: "tablet".into(),
+                device: json!({}),
+                request_id: None,
+                title_mode: None,
+            })
+            .unwrap();
+        }
+        let switched = tauri::async_runtime::block_on(state.activate_thread(
+            &fx.home,
+            fx.session_id.clone(),
+            "d1".into(),
+        ))
+        .unwrap();
+        assert_eq!(switched.active_thread_id, "d1");
+
+        let (sink2, updates2) = channel_sink();
+        tauri::async_runtime::block_on(state.send(
+            Arc::clone(&fx.home),
+            fx.session_id.clone(),
+            "回到对话1继续追问".into(),
+            sink2,
+        ))
+        .unwrap();
+        wait_for(&updates2, finished);
+
+        let home = fx.home.lock().unwrap();
+        let d1 = home.read_thread_transcript(&fx.session_id, "d1").unwrap();
+        assert_eq!(d1.len(), 4, "{d1:?}");
+        assert_eq!(d1[2].text, "回到对话1继续追问");
+        assert_eq!(
+            home.read_thread_transcript(&fx.session_id, "d2")
+                .unwrap()
+                .len(),
+            2
+        );
+        let turns = logged(&fx, "codex-home", "turn/start");
+        let resumed_d1_turn = turns.last().unwrap();
+        assert_eq!(resumed_d1_turn["params"]["threadId"], "thr_fixture");
+        let d1_ctx = resumed_d1_turn["params"]["input"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(d1_ctx.contains("自上轮以来工作区变化"), "{d1_ctx}");
+        assert!(d1_ctx.contains("手稿数：0 → 1"), "{d1_ctx}");
     }
 
     #[test]
@@ -1569,6 +1666,12 @@ mod tests {
         let switch =
             tauri::async_runtime::block_on(state.new_thread(&fx.home, fx.session_id.clone()));
         assert!(switch.unwrap_err().contains("当前一轮还没结束"));
+        let reactivate = tauri::async_runtime::block_on(state.activate_thread(
+            &fx.home,
+            fx.session_id.clone(),
+            "d1".into(),
+        ));
+        assert!(reactivate.unwrap_err().contains("当前一轮还没结束"));
         assert!(tauri::async_runtime::block_on(state.cancel(&fx.session_id)).unwrap());
         wait_for(&updates, finished);
         assert!(!tauri::async_runtime::block_on(state.cancel(&fx.session_id)).unwrap());

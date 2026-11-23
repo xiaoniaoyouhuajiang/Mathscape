@@ -260,6 +260,18 @@ impl SandboxHome {
         if !active_has_messages {
             return Ok(current);
         }
+        if let Some(last) = current.threads.last()
+            && last.thread_id != current.active_thread_id
+            && last.harness.is_none()
+            && self
+                .read_thread_transcript(session_id, &last.thread_id)?
+                .is_empty()
+        {
+            record.active_thread_id = Some(last.thread_id.clone());
+            record.dialogue_threads = current.threads;
+            write_json_atomic(&self.session_dir(session_id).join(SESSION_FILE), &record)?;
+            return Ok(effective_threads(&record));
+        }
         if current.threads.len() >= MAX_THREADS {
             return Err(SandboxError::Invalid(format!(
                 "单个沙箱会话最多 {MAX_THREADS} 条对话"
@@ -285,6 +297,34 @@ impl SandboxHome {
         record.active_thread_id = Some(thread.thread_id.clone());
         record.dialogue_threads = current.threads;
         record.dialogue_threads.push(thread);
+        write_json_atomic(&self.session_dir(session_id).join(SESSION_FILE), &record)?;
+        Ok(effective_threads(&record))
+    }
+
+    /// Switch the session's active dialogue thread back to an existing thread
+    /// (`d1`..`dN`). Workspace bytes and every thread's transcript/harness
+    /// binding stay intact; only `active_thread_id` moves so subsequent rounds
+    /// continue on `thread_id`.
+    ///
+    /// Callers must refuse switching while a round is streaming.
+    pub fn activate_dialogue_thread(
+        &self,
+        session_id: &str,
+        thread_id: &str,
+    ) -> Result<DialogueThreads> {
+        let mut record = self.session(session_id)?;
+        let current = effective_threads(&record);
+        if !current.threads.iter().any(|t| t.thread_id == thread_id) {
+            return Err(SandboxError::Invalid(format!("未知对话：{thread_id}")));
+        }
+        if current.active_thread_id == thread_id
+            && !record.dialogue_threads.is_empty()
+            && record.active_thread_id.as_deref() == Some(thread_id)
+        {
+            return Ok(current);
+        }
+        record.dialogue_threads = current.threads;
+        record.active_thread_id = Some(thread_id.to_owned());
         write_json_atomic(&self.session_dir(session_id).join(SESSION_FILE), &record)?;
         Ok(effective_threads(&record))
     }

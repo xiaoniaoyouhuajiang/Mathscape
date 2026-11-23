@@ -37,6 +37,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { errorMessage } from "../core/ipc";
 import { eventBus } from "../core/events";
+import { t } from "../i18n";
 import {
   agentStatusLine,
   effortOptionLabel,
@@ -303,6 +304,8 @@ export class SandboxDialogueDock {
   private readonly newThreadButton: HTMLButtonElement;
   private readonly reviewButton: HTMLButtonElement;
   private readonly readonlyNote: HTMLElement;
+  private readonly readonlyNoteText: HTMLElement;
+  private readonly activateThreadButton: HTMLButtonElement;
   /** Element that gives the map pane room for the sidebar (`.shell`). */
   private readonly layoutHost: HTMLElement;
 
@@ -442,16 +445,27 @@ export class SandboxDialogueDock {
     this.sendButton = el("button", "sandbox-btn sandbox-btn-primary", "发送");
     this.sendButton.type = "submit";
     actions.append(el("span", "sandbox-actions-spacer"), this.cancelButton, this.sendButton);
-    this.readonlyNote = el("p", "sandbox-dock-readonly", "");
+    this.readonlyNote = el("div", "sandbox-dock-readonly", "");
     this.readonlyNote.hidden = true;
-    const backToActive = el("button", "sandbox-btn sandbox-btn-quiet", "回到当前对话");
+    this.readonlyNoteText = el("span", "sandbox-dock-readonly-text", t("sandbox.thread.inactiveNote"));
+    const readonlyActions = el("div", "sandbox-dock-readonly-actions");
+    this.activateThreadButton = el(
+      "button",
+      "sandbox-btn sandbox-btn-primary sandbox-dock-activate-thread",
+      t("sandbox.thread.activate"),
+    );
+    this.activateThreadButton.type = "button";
+    this.activateThreadButton.title = t("sandbox.thread.activateTitle");
+    this.activateThreadButton.onclick = () => void this.activateViewedThread();
+    const backToActive = el("button", "sandbox-btn sandbox-btn-quiet", t("sandbox.thread.backToActive"));
     backToActive.type = "button";
     backToActive.onclick = () => {
       this.viewThreadId = this.activeThreadId;
       this.renderAll();
       this.input.focus();
     };
-    this.readonlyNote.append(el("span", "", "这是只读的历史对话，不会再发给 Agent。"), backToActive);
+    readonlyActions.append(this.activateThreadButton, backToActive);
+    this.readonlyNote.append(this.readonlyNoteText, readonlyActions);
     composer.append(this.readonlyNote, this.input.element, actions);
     composer.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1225,6 +1239,34 @@ export class SandboxDialogueDock {
     }
   }
 
+  /** 「继续此对话」: reactivate an existing thread on the same isolated copy. */
+  private async activateViewedThread(): Promise<void> {
+    const sessionId = this.sessionId;
+    const targetThreadId = this.viewThreadId;
+    if (!sessionId || targetThreadId === this.activeThreadId || this.sending || this.activeRoundId || this.switchingThread) {
+      return;
+    }
+    this.switchingThread = true;
+    this.syncControls();
+    try {
+      const dialogue = await invoke<SessionDialogue>("sandbox_activate_dialogue_thread", {
+        sandboxSessionId: sessionId,
+        threadId: targetThreadId,
+      });
+      if (this.sessionId === sessionId) {
+        this.adopt(dialogue, true);
+      }
+    } catch (error) {
+      this.toast(errorMessage(error), "error");
+    } finally {
+      this.switchingThread = false;
+      this.renderAll();
+      if (this.viewThreadId === this.activeThreadId) {
+        this.input.focus();
+      }
+    }
+  }
+
   private async reviewChanges(): Promise<void> {
     if (!this.sessionId) return;
     try {
@@ -1253,7 +1295,7 @@ export class SandboxDialogueDock {
     const view = threadView(this.transcript, this.events, this.viewThreadId, this.activeThreadId, this.activeRoundId);
     const rows = dialogueRows(view.transcript, view.events, view.activeRoundId, undefined, this.parsingCalls);
     if (rows.length === 0) {
-      const continued = this.threads.length > 1 && this.viewThreadId === this.activeThreadId;
+      const continued = this.threads.length > 1 && this.viewThreadId !== FIRST_THREAD_ID;
       this.log.replaceChildren(
         el(
           "li",
@@ -1411,10 +1453,13 @@ export class SandboxDialogueDock {
     if (this.threadSelect.dataset.key !== key) {
       this.threadSelect.replaceChildren(
         ...threads.map((thread) => {
+          const label = threadLabel(thread.thread_id);
           const option = el(
             "option",
             "",
-            thread.thread_id === this.activeThreadId ? `${threadLabel(thread.thread_id)}（当前）` : `${threadLabel(thread.thread_id)}（只读）`,
+            thread.thread_id === this.activeThreadId
+              ? t("sandbox.thread.currentOption", { label })
+              : label,
           );
           option.value = thread.thread_id;
           if (thread.created_at) option.title = `开始于 ${thread.created_at}`;
@@ -1436,6 +1481,10 @@ export class SandboxDialogueDock {
     this.sendButton.textContent = running ? "进行中…" : "发送";
     this.cancelButton.hidden = !running;
     this.readonlyNote.hidden = !readonly;
+    this.readonlyNoteText.textContent = running
+      ? t("sandbox.thread.inactiveBusyNote")
+      : t("sandbox.thread.inactiveNote");
+    this.activateThreadButton.disabled = running || this.sending || this.switchingThread || !this.sessionId;
     this.input.element.hidden = readonly;
     this.renderThreadPicker();
     this.newThreadButton.disabled = running || this.sending || this.switchingThread || !this.sessionId;
