@@ -16,6 +16,13 @@ import {
   type InkMarkdownLinks,
 } from "../ink/links";
 import type { MarkdownUnitMarker } from "./content";
+import {
+  bindReaderCopyShortcuts,
+  copyTextToClipboard,
+  joinBlocksMarkdown,
+  pickVisibleActionAnchor,
+} from "./markdown-copy";
+import { buildBlockErrataLookup, type MarkdownBlockErrata } from "./markdown-errata";
 import { matchUnitsToBlocks } from "./markdown-outline";
 import type { AnchoredMarkdown, MarkdownSelection } from "./selection";
 
@@ -27,6 +34,10 @@ export class ReaderInkLinks {
   private unitMarkers: readonly MarkdownUnitMarker[] = [];
   private disposed = false;
   private version = 0;
+  private scrollRaf = 0;
+  private copyFeedbackActive = false;
+  private lastPillRangeKey = "";
+  private copyFeedbackTimer: number | undefined;
   private readonly unsubscribe: () => void;
 
   constructor(
@@ -40,14 +51,31 @@ export class ReaderInkLinks {
     private readonly coveredBlockIdsFor?: (blockId: string) => string[],
     /** Present when this snapshot belongs to a 「规范解析正文」 view. */
     private readonly onContinueInCanonical?: (range: { first: number; last: number }) => void,
+    private readonly getActiveErrata?: () => readonly MarkdownBlockErrata[],
   ) {
     this.unitMarkers = initialUnitMarkers;
     this.hint.className = "ink-patch-hint";
     this.hint.hidden = true;
     this.article.addEventListener("contextmenu", this.onContextMenu);
+    document.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
+    const offCopy = bindReaderCopyShortcuts({
+      article: this.article,
+      isDisabled: () => this.disposed || this.isRaw(),
+      getSelectedBlocksCopy: () => {
+        const sel = this.selection();
+        if (sel.isWholeSelection()) return null;
+        const range = sel.targetRange();
+        if (!range) return null;
+        const blocks = this.visibleContentBlocks(range);
+        if (!blocks.length) return null;
+        return { text: this.rangeText(range), count: blocks.length };
+      },
+      onCopied: (count) => this.notifyCopied(count),
+      onCopyFailed: () => this.selection().notifyFeedback(t("reader.copy.failed")),
+    });
     const offLinks = eventBus.on("ink-links-changed", () => void this.reload());
     const offNotes = eventBus.on("ink-notes-changed", () => void this.reload());
-    this.unsubscribe = () => { offLinks(); offNotes(); };
+    this.unsubscribe = () => { offCopy(); offLinks(); offNotes(); };
     void this.reload();
   }
 
@@ -85,7 +113,10 @@ export class ReaderInkLinks {
   dispose(): void {
     this.disposed = true;
     this.version++;
+    if (this.scrollRaf) cancelAnimationFrame(this.scrollRaf);
+    if (this.copyFeedbackTimer) window.clearTimeout(this.copyFeedbackTimer);
     this.article.removeEventListener("contextmenu", this.onContextMenu);
+    document.removeEventListener("scroll", this.onScroll, { capture: true });
     this.unsubscribe();
     this.hint.remove();
   }
@@ -161,15 +192,27 @@ export class ReaderInkLinks {
     const sel = this.selection();
     if (sel.isWholeSelection()) return;
     const range = sel.targetRange();
-    if (!range) return;
+    if (!range) {
+      this.lastPillRangeKey = "";
+      this.copyFeedbackActive = false;
+      return;
+    }
+    const rangeKey = `${range.first}:${range.last}`;
+    if (rangeKey !== this.lastPillRangeKey) {
+      this.lastPillRangeKey = rangeKey;
+      this.copyFeedbackActive = false;
+    }
     const contentBlocks = this.data.blocks.slice(range.first, range.last + 1).filter(b => b.kind !== "page_marker");
     if (!contentBlocks.length) return;
-    const anchorBlock = contentBlocks[0];
-    const wrapper = this.article.querySelector<HTMLElement>(`[data-source-block="${anchorBlock.id}"]`);
-    if (!wrapper) return;
+    const wrappers = this.visibleContentBlocks(range)
+      .map(b => this.article.querySelector<HTMLElement>(`[data-source-block="${b.id}"]`))
+      .filter((w): w is HTMLElement => Boolean(w));
+    const placement = pickVisibleActionAnchor(wrappers);
+    if (!placement) return;
+    const wrapper = placement.wrapper;
 
     const pill = document.createElement("div");
-    pill.className = "block-action-pill";
+    pill.className = placement.pinBottom ? "block-action-pill is-pill-bottom" : "block-action-pill";
     pill.setAttribute("role", "toolbar");
     pill.setAttribute("aria-label", "所选段落快捷操作");
     const stop = (event: Event) => event.stopPropagation();
@@ -179,6 +222,17 @@ export class ReaderInkLinks {
     pill.addEventListener("keydown", stop);
 
     const count = contentBlocks.length;
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "block-pill-btn block-pill-copy";
+    copyBtn.textContent = this.copyFeedbackActive ? t("reader.copy.pillCopied") : t("reader.copy.pill");
+    copyBtn.title = t("reader.copy.pillTitle");
+    copyBtn.onclick = (event) => {
+      event.stopPropagation();
+      this.copyRange(range);
+    };
+    pill.append(copyBtn);
+
     const writeBtn = document.createElement("button");
     writeBtn.type = "button";
     writeBtn.className = "block-pill-btn block-pill-primary";
@@ -257,12 +311,76 @@ export class ReaderInkLinks {
     });
   }
 
-  private rangeText(range: { first: number; last: number }): string {
-    const blocks = this.data.blocks.slice(range.first, range.last + 1).filter(block => block.kind !== "page_marker");
-    if (!blocks.length) return "";
-    const bytes = new TextEncoder().encode(this.data.source);
-    return new TextDecoder().decode(bytes.subarray(blocks[0].range.start, blocks[blocks.length - 1].range.end));
+  private visibleContentBlocks(range: { first: number; last: number }) {
+    const lookup = buildBlockErrataLookup(this.getActiveErrata?.() ?? []);
+    const all = this.data.blocks.slice(range.first, range.last + 1).filter(block => block.kind !== "page_marker");
+    const visible = all.filter(block => !lookup.hiddenSecondaryBlockIds.has(block.id));
+    return visible.length > 0 ? visible : all;
   }
+
+  private rangeText(range: { first: number; last: number }): string {
+    const blocks = this.visibleContentBlocks(range);
+    if (!blocks.length) return "";
+    const lookup = buildBlockErrataLookup(this.getActiveErrata?.() ?? []);
+    const bytes = new TextEncoder().encode(this.data.source);
+    const decoder = new TextDecoder();
+    const parts = blocks.map((block) => {
+      const errata = lookup.primaryByBlockId.get(block.id);
+      return errata ? errata.corrected_text : decoder.decode(bytes.subarray(block.range.start, block.range.end));
+    });
+    return joinBlocksMarkdown(parts);
+  }
+
+  private notifyCopied(count: number): void {
+    this.copyFeedbackActive = true;
+    if (this.copyFeedbackTimer) window.clearTimeout(this.copyFeedbackTimer);
+    this.copyFeedbackTimer = window.setTimeout(() => {
+      this.copyFeedbackActive = false;
+      const liveBtn = this.article.querySelector<HTMLButtonElement>(".block-pill-copy");
+      if (liveBtn) liveBtn.textContent = t("reader.copy.pill");
+    }, 1400);
+    const msg = count === 1 ? t("reader.copy.copiedSingle") : t("reader.copy.copiedMulti", { count });
+    this.selection().notifyFeedback(msg);
+    const btn = this.article.querySelector<HTMLButtonElement>(".block-pill-copy");
+    if (btn) btn.textContent = t("reader.copy.pillCopied");
+  }
+
+  private copyRange(range: { first: number; last: number }): void {
+    const count = this.visibleContentBlocks(range).length;
+    const text = this.rangeText(range);
+    void copyTextToClipboard(text).then((ok) => {
+      if (ok) this.notifyCopied(count);
+      else this.selection().notifyFeedback(t("reader.copy.failed"));
+    });
+  }
+
+  private onScroll = (): void => {
+    if (this.disposed || this.isRaw()) return;
+    const sel = this.selection();
+    if (sel.isWholeSelection()) return;
+    const range = sel.targetRange();
+    if (!range || range.last <= range.first) return;
+    if (this.scrollRaf) return;
+    this.scrollRaf = requestAnimationFrame(() => {
+      this.scrollRaf = 0;
+      if (this.disposed || this.isRaw()) return;
+      const pill = this.article.querySelector<HTMLElement>(".block-action-pill");
+      const currentRange = this.selection().targetRange();
+      if (!pill || !currentRange) return;
+      const wrappers = this.visibleContentBlocks(currentRange)
+        .map(b => this.article.querySelector<HTMLElement>(`[data-source-block="${b.id}"]`))
+        .filter((w): w is HTMLElement => Boolean(w));
+      const placement = pickVisibleActionAnchor(wrappers);
+      if (!placement) return;
+      const currentParent = pill.parentElement;
+      const wasBottom = pill.classList.contains("is-pill-bottom");
+      if (currentParent === placement.wrapper && wasBottom === placement.pinBottom) return;
+      currentParent?.classList.remove("has-action-pill");
+      pill.classList.toggle("is-pill-bottom", placement.pinBottom);
+      placement.wrapper.classList.add("has-action-pill");
+      placement.wrapper.append(pill);
+    });
+  };
 
   private target(range: { first: number; last: number }): InkLinkTargetRef {
     return {
@@ -309,7 +427,14 @@ export class ReaderInkLinks {
     this.highlight(range);
     const label = markdownPreviewLabel(this.rangeText(range));
     const rangeCrossesMarker = this.data.blocks.slice(range.first, range.last + 1).some(b => b.kind === "page_marker");
+    const visibleCount = this.visibleContentBlocks(range).length;
     showContextMenu(x, y, [
+      {
+        label: visibleCount === 1
+          ? t("reader.copy.menuSingle")
+          : t("reader.copy.menuMulti", { count: visibleCount }),
+        onSelect: () => { this.highlight(null); this.copyRange(range); },
+      },
       ...(this.onEditErrata
         ? [{
             label: range.first === range.last ? "校对此块 OCR 正文…" : "合并校对所选正文块…",

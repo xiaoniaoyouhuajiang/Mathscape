@@ -8,7 +8,9 @@
  */
 import { eventBus } from "../core/events";
 import { texToPlain } from "../graph/tex-plain";
+import { t } from "../i18n";
 import type { MarkdownUnitMarker } from "./content";
+import { isInViewport, scrollParentOf, viewportTopOf } from "./reading-position";
 
 export interface OutlineBlockDescriptor {
   id: string;
@@ -178,10 +180,20 @@ export function buildDocumentOutline(
 
 export interface MarkdownOutlineHandle {
   readonly toggleButton: HTMLButtonElement;
+  readonly rail: HTMLElement;
   readonly nav: HTMLElement;
   update(blocks: readonly OutlineBlockDescriptor[], units: readonly MarkdownUnitMarker[]): void;
   setHiddenForRaw(raw: boolean): void;
   dispose(): void;
+}
+
+function isOutlineShortcutBlocked(node: EventTarget | Element | null): boolean {
+  if (!(node instanceof Element)) return false;
+  if (node.closest(".errata-inline-editor, .errata-diff-popover, .markdown-patch-review, #sandbox-dock, dialog[open]")) {
+    return true;
+  }
+  const html = node as HTMLElement;
+  return html.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(html.tagName);
 }
 
 export function mountMarkdownOutline(
@@ -193,15 +205,29 @@ export function mountMarkdownOutline(
   toggleButton.textContent = "目录";
   toggleButton.title = "显示或隐藏章节大纲与已入图单元目录";
 
+  const rail = document.createElement("div");
+  rail.className = "md-outline-rail";
+
+  const reopenButton = document.createElement("button");
+  reopenButton.type = "button";
+  reopenButton.className = "md-outline-reopen";
+  reopenButton.textContent = t("reader.outline.reopen");
+  reopenButton.title = t("reader.outline.reopenTitle");
+  reopenButton.setAttribute("aria-label", t("reader.outline.reopenTitle"));
+  reopenButton.hidden = true;
+
   const nav = document.createElement("nav");
   nav.className = "md-outline";
   nav.setAttribute("aria-label", "文档大纲目录");
+
+  rail.append(reopenButton, nav);
 
   let userToggled = false;
   let visible = false;
   let rawMode = false;
   let currentEntries: DocumentOutlineEntry[] = [];
   let focusTimer: number | undefined;
+  let scrollFrame = 0;
 
   const readStoredPref = (): boolean | null => {
     try {
@@ -214,11 +240,75 @@ export function mountMarkdownOutline(
 
   const inSplit = () => Boolean(article.closest("#ink-split-reader"));
 
+  const syncActiveEntry = (centerInOutline = false): void => {
+    if (!visible || rawMode || !currentEntries.length || !article.isConnected) return;
+    const scroller = scrollParentOf(article, document.documentElement);
+    const scrollerRect = scroller.getBoundingClientRect();
+    if (scrollerRect.height <= 0) return;
+    const threshold = scrollerRect.top + Math.min(180, scrollerRect.height * 0.35);
+    let activeDomKey = currentEntries[0].domKey;
+    for (const entry of currentEntries) {
+      const el = resolveBlockElement(entry.domKey);
+      if (!el) continue;
+      if (el.getBoundingClientRect().top <= threshold) {
+        activeDomKey = entry.domKey;
+      } else {
+        break;
+      }
+    }
+    let activeRow: HTMLElement | null = null;
+    nav.querySelectorAll<HTMLElement>(".md-outline-item").forEach((row) => {
+      const isMatch = row.dataset.domKey === activeDomKey;
+      row.classList.toggle("is-active-outline-item", isMatch);
+      if (isMatch && !activeRow) activeRow = row;
+    });
+    const listEl = nav.querySelector<HTMLElement>(".md-outline-list");
+    if (centerInOutline && activeRow && listEl) {
+      const rowEl = activeRow as HTMLElement;
+      const top = rowEl.offsetTop;
+      const bottom = top + rowEl.offsetHeight;
+      if (top < listEl.scrollTop || bottom > listEl.scrollTop + listEl.clientHeight) {
+        listEl.scrollTop = Math.max(0, top - listEl.clientHeight / 3);
+      }
+    }
+  };
+
   const applyVisibility = (): void => {
     const effective = !rawMode && visible;
+    const canReopen = !rawMode && !visible && currentEntries.length > 0;
     nav.hidden = !effective;
+    reopenButton.hidden = !canReopen;
+    rail.hidden = !effective && !canReopen;
+    rail.classList.toggle("is-collapsed", !effective);
     toggleButton.hidden = rawMode;
     toggleButton.setAttribute("aria-pressed", String(effective));
+  };
+
+  const toggleOutline = (): void => {
+    const scroller = article.isConnected ? scrollParentOf(article, document.documentElement) : null;
+    let anchorBlock: HTMLElement | null = null;
+    let topBefore = 0;
+    if (scroller) {
+      for (const block of article.querySelectorAll<HTMLElement>(".source-block:not(.source-page-marker)")) {
+        if (isInViewport(block, scroller)) {
+          anchorBlock = block;
+          topBefore = viewportTopOf(block, scroller);
+          break;
+        }
+      }
+    }
+    userToggled = true;
+    visible = !visible;
+    try {
+      localStorage.setItem(OUTLINE_PREF_KEY, visible ? "1" : "0");
+    } catch {
+      /* Optional preference */
+    }
+    applyVisibility();
+    if (scroller && anchorBlock) {
+      scroller.scrollTop += viewportTopOf(anchorBlock, scroller) - topBefore;
+    }
+    if (visible) syncActiveEntry(true);
   };
 
   const syncDefaultVisibility = (): void => {
@@ -233,21 +323,31 @@ export function mountMarkdownOutline(
       visible = currentEntries.length >= 2 && stored !== false;
     }
     applyVisibility();
+    if (visible) syncActiveEntry(false);
   };
 
-  toggleButton.onclick = () => {
-    userToggled = true;
-    visible = !visible;
-    try {
-      localStorage.setItem(OUTLINE_PREF_KEY, visible ? "1" : "0");
-    } catch {
-      /* Optional preference */
-    }
-    applyVisibility();
-  };
+  toggleButton.onclick = toggleOutline;
+  reopenButton.onclick = toggleOutline;
 
   const onResize = () => syncDefaultVisibility();
+  const onScroll = () => {
+    if (!visible || rawMode || scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = 0;
+      syncActiveEntry(false);
+    });
+  };
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key !== "[") return;
+    if (rawMode || !article.isConnected || article.getClientRects().length === 0) return;
+    if (isOutlineShortcutBlocked(event.target) || isOutlineShortcutBlocked(document.activeElement)) return;
+    event.preventDefault();
+    toggleOutline();
+  };
   window.addEventListener("resize", onResize);
+  document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+  document.addEventListener("keydown", onKeyDown);
 
   const decorateUnitBadges = (matched: readonly MatchedUnit[]): void => {
     article.querySelectorAll(".unit-map-badge-row").forEach((el) => el.remove());
@@ -287,9 +387,23 @@ export function mountMarkdownOutline(
 
   const renderOutlineList = (): void => {
     nav.replaceChildren();
+    reopenButton.textContent = t("reader.outline.reopen");
+    reopenButton.title = t("reader.outline.reopenTitle");
+    reopenButton.setAttribute("aria-label", t("reader.outline.reopenTitle"));
+
     const header = document.createElement("div");
     header.className = "md-outline-header";
-    header.textContent = `目录与入图锚点（${currentEntries.length}）`;
+    const headerTitle = document.createElement("span");
+    headerTitle.className = "md-outline-header-title";
+    headerTitle.textContent = `目录与入图锚点（${currentEntries.length}）`;
+    const collapseBtn = document.createElement("button");
+    collapseBtn.type = "button";
+    collapseBtn.className = "md-outline-collapse";
+    collapseBtn.textContent = "«";
+    collapseBtn.title = t("reader.outline.collapseTitle");
+    collapseBtn.setAttribute("aria-label", t("reader.outline.collapse"));
+    collapseBtn.onclick = toggleOutline;
+    header.append(headerTitle, collapseBtn);
     nav.append(header);
 
     if (!currentEntries.length) {
@@ -305,6 +419,7 @@ export function mountMarkdownOutline(
     for (const entry of currentEntries) {
       const row = document.createElement("div");
       row.className = `md-outline-item md-outline-level-${entry.level}${entry.kind === "unit" ? " is-registered-unit" : ""}`;
+      row.dataset.domKey = entry.domKey;
 
       const jumpBtn = document.createElement("button");
       jumpBtn.type = "button";
@@ -341,6 +456,7 @@ export function mountMarkdownOutline(
 
   return {
     toggleButton,
+    rail,
     nav,
     update(blocks, units) {
       const headings = extractMarkdownHeadings(blocks);
@@ -360,8 +476,11 @@ export function mountMarkdownOutline(
     },
     dispose() {
       if (focusTimer) window.clearTimeout(focusTimer);
+      if (scrollFrame) cancelAnimationFrame(scrollFrame);
       window.removeEventListener("resize", onResize);
-      nav.remove();
+      document.removeEventListener("scroll", onScroll, { capture: true });
+      document.removeEventListener("keydown", onKeyDown);
+      rail.remove();
       toggleButton.remove();
     },
   };
