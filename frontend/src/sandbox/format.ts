@@ -1,5 +1,7 @@
 /** Pure display helpers for the sandbox panel (kept DOM-free for unit tests). */
 
+import { t } from "../i18n";
+
 export type SessionState = "active" | "exported" | "discarded";
 
 export const STATE_LABEL: Record<SessionState, string> = {
@@ -222,8 +224,8 @@ export function modelCatalogHint(models: AgentModelLike[], current: string, back
   if (models.length >= 2) return null;
   if (backend === "opencode") {
     return models.length === 0
-      ? "未读到 OpenCode 模型目录，请检查 OpenCode 配置。"
-      : `仅显示当前 OpenCode 模型 ${current || models[0].id}。`;
+      ? t("sandbox.model.opencodeEmpty")
+      : t("sandbox.model.opencodeCurrent", { model: current || models[0].id });
   }
   const where = "config.toml 的 model_catalog_json、~/.codex/models_cache.json 与 codex app-server model/list";
   if (models.length === 0) return `未读到 Codex 模型目录（${where}），也未设置默认模型。`;

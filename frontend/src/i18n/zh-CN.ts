@@ -97,6 +97,19 @@ export const zhCN = {
   "sandbox.thread.activate": "继续此对话",
   "sandbox.thread.activateTitle": "将此对话设为当前活跃对话，续接其原有上下文继续提问",
   "sandbox.thread.backToActive": "回到当前对话",
+  "sandbox.backend.detecting": "正在检测本机执行器…",
+  "sandbox.backend.label": "执行器",
+  "sandbox.backend.select": "选择执行器",
+  "sandbox.backend.nextRound": "切换从下一轮生效",
+  "sandbox.backend.warning": "OpenCode 的隔离弱于 Codex；可读取工作区和已授权目录，仅可写入 scratch（由 Mathscape 审批层检查）；shell 和网络工具已禁用；没有系统级沙箱。",
+  "sandbox.backend.unavailable": "（未安装或不可用）",
+  "sandbox.backend.programUnavailable": "{program} 未安装或不可用",
+  "sandbox.backend.changed": "已切换执行器，从下一轮生效",
+  "sandbox.backend.changeFailed": "切换执行器失败：{error}",
+  "sandbox.model.select": "选择模型",
+  "sandbox.model.defaultEffort": "（执行器默认）",
+  "sandbox.model.opencodeEmpty": "未读到 OpenCode 模型目录，请检查 OpenCode 配置。",
+  "sandbox.model.opencodeCurrent": "仅显示当前 OpenCode 模型 {model}。",
 } satisfies Record<string, string>;
 
 export type MessageKey = keyof typeof zhCN;

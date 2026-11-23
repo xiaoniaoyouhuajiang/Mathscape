@@ -358,23 +358,23 @@ export class SandboxDialogueDock {
     const header = el("header", "sandbox-dock-header");
     const heading = el("div", "sandbox-dock-heading");
     this.title = el("strong", "", "沙箱对话");
-    this.status = el("span", "sandbox-dock-status", "正在检测本机执行器…");
+    this.status = el("span", "sandbox-dock-status", t("sandbox.backend.detecting"));
     const backendRow = el("label", "sandbox-dock-model");
-    backendRow.append(el("span", "sandbox-dock-model-label", "执行器"));
+    backendRow.append(el("span", "sandbox-dock-model-label", t("sandbox.backend.label")));
     this.backendSelect = el("select", "sandbox-dock-backend-select");
-    this.backendSelect.setAttribute("aria-label", "选择执行器");
-    this.backendSelect.title = "切换从下一轮生效";
+    this.backendSelect.setAttribute("aria-label", t("sandbox.backend.select"));
+    this.backendSelect.title = t("sandbox.backend.nextRound");
     this.backendSelect.disabled = true;
     this.backendSelect.onchange = () => void this.onBackendChange();
     backendRow.append(this.backendSelect);
     this.backendWarning = el("p", "sandbox-dock-backend-warning",
-      "OpenCode 的隔离弱于 Codex；可读取工作区和已授权目录，仅可写入 scratch（由 Mathscape 审批层检查）；shell 和网络工具已禁用；没有系统级沙箱。");
+      t("sandbox.backend.warning"));
     this.backendWarning.hidden = true;
     this.modelRow = el("label", "sandbox-dock-model");
     this.modelRow.hidden = true;
     this.modelRow.append(el("span", "sandbox-dock-model-label", "模型"));
     this.modelSelect = el("select", "sandbox-dock-model-select");
-    this.modelSelect.setAttribute("aria-label", "选择模型");
+    this.modelSelect.setAttribute("aria-label", t("sandbox.model.select"));
     this.modelSelect.disabled = true;
     this.modelSelect.onchange = () => void this.onModelChange();
     this.modelRow.append(this.modelSelect);
@@ -885,10 +885,10 @@ export class SandboxDialogueDock {
       const option = document.createElement("option");
       option.value = backend.backend;
       const name = backend.backend === "opencode" ? "OpenCode" : "Codex";
-      option.textContent = `${name}${backend.available ? "" : "（未安装或不可用）"}`;
+      option.textContent = `${name}${backend.available ? "" : t("sandbox.backend.unavailable")}`;
       option.disabled = !backend.available;
       option.title = backend.probes.filter((probe) => probe.state !== "available")
-        .map((probe) => probe.install_hint ?? `${backend.program} 未安装或不可用`).join("；");
+        .map((probe) => probe.install_hint ?? t("sandbox.backend.programUnavailable", { program: backend.program })).join("; ");
       this.backendSelect.append(option);
     }
     this.backendSelect.value = status.backend;
@@ -954,7 +954,7 @@ export class SandboxDialogueDock {
     if (!current) {
       const placeholder = document.createElement("option");
       placeholder.value = "";
-      placeholder.textContent = "（执行器默认）";
+      placeholder.textContent = t("sandbox.model.defaultEffort");
       this.effortSelect.append(placeholder);
     }
     for (const effort of options) {
@@ -994,9 +994,9 @@ export class SandboxDialogueDock {
     try {
       const status = await invoke<AgentStatusLike>("sandbox_set_backend", { backend });
       this.applyAgentStatus(status);
-      this.toast("已切换执行器，从下一轮生效", "success");
+      this.toast(t("sandbox.backend.changed"), "success");
     } catch (error) {
-      this.toast(`切换执行器失败：${errorMessage(error)}`, "error");
+      this.toast(t("sandbox.backend.changeFailed", { error: errorMessage(error) }), "error");
       await this.refreshStatus();
     }
   }
