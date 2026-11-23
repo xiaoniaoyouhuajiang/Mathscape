@@ -171,6 +171,9 @@ export interface AgentModelLike {
 export interface AgentStatusLike {
   backend: string;
   codexProgram: string;
+  program?: string;
+  backends?: { backend: string; program: string; available: boolean; probes: AgentStatusLike["probes"] }[];
+  backendSelection?: boolean;
   tools: string[];
   available: boolean;
   probes: { capability: string; state: string; found_version?: string | null; install_hint?: string | null }[];
@@ -188,19 +191,20 @@ export interface AgentStatusLike {
   effortSelection?: boolean;
 }
 
-/** One line for the dock header: Codex version (+ model when no picker), tool count. */
+/** One line for the dock header: harness version, optional model, tool count. */
 export function agentStatusLine(status: AgentStatusLike): string {
-  const probe = status.probes.find((item) => item.capability === "codex");
+  const name = status.backend === "opencode" ? "OpenCode" : "Codex";
+  const probe = status.probes.find((item) => item.capability === status.backend);
   const tools = `${status.tools.length} 个 Mathscape 工具`;
   if (status.available) {
     const version = probe?.found_version ? ` ${probe.found_version}` : "";
     // When the dock shows a model <select>, keep the status line free of the id.
     const model =
       status.modelSelection || !status.model?.trim() ? "" : ` · ${status.model.trim()}`;
-    return `本机 Codex${version}${model} · ${tools}`;
+    return `本机 ${name}${version}${model} · ${tools}`;
   }
   const hint = probe?.install_hint ? `（${probe.install_hint}）` : "";
-  return `未检测到可用的本机 Codex：${status.codexProgram}${hint}`;
+  return `未检测到可用的本机 ${name}：${status.program ?? status.codexProgram}${hint}`;
 }
 
 /** Label for a model option: display name when distinct, else id. */
@@ -214,8 +218,13 @@ export function modelOptionLabel(model: AgentModelLike): string {
  * Explanation shown under the model picker when Codex exposed no alternatives,
  * so the picker never looks like a dead dropdown. `null` when there is a choice.
  */
-export function modelCatalogHint(models: AgentModelLike[], current: string): string | null {
+export function modelCatalogHint(models: AgentModelLike[], current: string, backend = "codex"): string | null {
   if (models.length >= 2) return null;
+  if (backend === "opencode") {
+    return models.length === 0
+      ? "未读到 OpenCode 模型目录，请检查 OpenCode 配置。"
+      : `仅显示当前 OpenCode 模型 ${current || models[0].id}。`;
+  }
   const where = "config.toml 的 model_catalog_json、~/.codex/models_cache.json 与 codex app-server model/list";
   if (models.length === 0) return `未读到 Codex 模型目录（${where}），也未设置默认模型。`;
   const only = current || models[0].id;

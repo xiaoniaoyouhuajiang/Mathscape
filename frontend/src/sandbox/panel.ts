@@ -115,7 +115,7 @@ export class SandboxPanelController {
     heading.append(
       el("span", "settings-eyebrow", "SANDBOX · S1"),
       el("h2", "", "沙箱"),
-      el("p", "", "从检查点完整复制出一个隔离工作区，可在本窗口打开并与本机 Codex 对话；丢弃即物理删除，检查点永不被修改。"),
+      el("p", "", "从检查点完整复制出一个隔离工作区，可在本窗口打开并选择本机执行器对话；丢弃即物理删除，检查点永不被修改。"),
     );
     const close = el("button", "settings-close", "×");
     close.type = "button";

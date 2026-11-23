@@ -12,6 +12,54 @@ test.describe("S1 sandbox shell", () => {
     await expect(page.locator(".shell")).not.toHaveClass(/is-sandbox/);
   });
 
+  test("harness selector switches to OpenCode and explains approval-layer isolation", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    const selector = dock.getByRole("combobox", { name: "选择执行器" });
+    await expect(selector).toHaveValue("codex");
+    const warning = dock.locator(".sandbox-dock-backend-warning");
+    await expect(warning).toBeHidden();
+    await selector.selectOption("opencode");
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText("隔离弱于 Codex");
+    await expect(warning).toContainText("可读取工作区和已授权目录");
+    await expect(warning).toContainText("仅可写入 scratch（由 Mathscape 审批层检查）");
+    await expect(warning).toContainText("shell 和网络工具已禁用");
+    await expect(warning).toContainText("没有系统级沙箱");
+    await expect(dock.locator(".sandbox-dock-status")).toContainText("本机 OpenCode 1.19.6");
+    await expect(dock.locator(".sandbox-dock-effort-select")).toBeHidden();
+    await dock.locator(".sandbox-dock-model-select").selectOption("gpt-alt");
+    await expect(dock.locator(".sandbox-dock-model-select")).toHaveValue("gpt-alt");
+    await expect(selector).toHaveValue("opencode");
+    await page.screenshot({ path: "../.test-runs/opencode-dialogue.png" });
+    await selector.selectOption("codex");
+    await expect(warning).toBeHidden();
+    await expect(dock.locator(".sandbox-dock-status")).toContainText("本机 Codex");
+  });
+
+  test("unavailable harness is labelled and cannot be selected", async ({ page }) => {
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.waitForFunction(() => Boolean(window.appHarness));
+    await page.evaluate(() => {
+      const backend = window.appHarness.harnessBackends.find((item) => item.backend === "opencode")!;
+      backend.available = false;
+      backend.probes[0].state = "missing";
+    });
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const selector = page.getByRole("combobox", { name: "选择执行器" });
+    await expect(selector).toHaveValue("codex");
+    const option = selector.locator('option[value="opencode"]');
+    await expect(option).toHaveJSProperty("disabled", true);
+    await expect(option).toHaveText("OpenCode（未安装或不可用）");
+    await selector.press("ArrowDown");
+    await expect(selector).toHaveValue("codex");
+  });
+
   test("entering asks first; declining keeps the mother workspace", async ({ page }) => {
     await page.locator("#sandbox-button").click();
     const messages: string[] = [];
