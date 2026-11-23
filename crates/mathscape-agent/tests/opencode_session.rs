@@ -247,13 +247,27 @@ fn lazy_resident_sessions_round_file_context_and_injected_config() {
         "list",
         "bash",
         "external_directory",
+        "mathscape_*",
     ] {
         assert_eq!(config["permission"][name], "ask");
     }
-    for name in ["webfetch", "websearch", "mathscape_*"] {
+    for name in ["webfetch", "websearch"] {
         assert_eq!(config["permission"][name], "deny");
     }
-    assert_eq!(config["permission"]["mathscape_ink_page_image"], "allow");
+    assert!(
+        config["permission"]
+            .get("mathscape_ink_page_image")
+            .is_none()
+    );
+    assert_eq!(
+        config["permission"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|key| key.starts_with("mathscape_"))
+            .collect::<Vec<_>>(),
+        vec!["mathscape_*"]
+    );
     assert!(
         config["permission"]
             .get("mathscape_artifact_stage")

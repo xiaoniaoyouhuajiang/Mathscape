@@ -4,7 +4,6 @@ use std::time::Duration;
 use mathscape_resident::ProcessSpec;
 use serde_json::{Value, json};
 
-use super::approval::tool_names;
 use crate::{SessionSpec, codex::approval::enabled_tools};
 
 #[derive(Clone, Debug)]
@@ -72,18 +71,12 @@ pub(crate) fn process(
         "list",
         "bash",
         "external_directory",
+        "mathscape_*",
     ] {
         permissions.insert(name.into(), json!("ask"));
     }
-    for name in ["webfetch", "websearch", "mathscape_*"] {
+    for name in ["webfetch", "websearch"] {
         permissions.insert(name.into(), json!("deny"));
-    }
-    let names = tool_names(&spec.tools_allow);
-    for tool in enabled_tools(&spec.tools_allow) {
-        let title = format!("mathscape_{}", tool.replace('.', "_"));
-        if names.contains_key(&title) {
-            permissions.insert(title, json!("allow"));
-        }
     }
     // ACP instructions add to the user's own configuration; they do not replace it.
     let mut content = json!({"permission":permissions,"instructions":[instructions]});
