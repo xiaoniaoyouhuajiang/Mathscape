@@ -129,7 +129,7 @@ test.describe("S1 sandbox shell", () => {
     await expect(dock.locator(".sandbox-line.role-agent .sandbox-turn-status")).toHaveText("已完成");
 
     await dock.getByRole("button", { name: "新对话" }).click();
-    await expect(threadSelect.locator("option")).toHaveText(["对话 1（只读）", "对话 2（当前）"]);
+    await expect(threadSelect.locator("option")).toHaveText(["对话 1", "对话 2（当前）"]);
     await expect(threadSelect).toHaveValue("d2");
     await expect(dock.locator(".sandbox-line")).toHaveCount(0);
     await expect(dock.locator(".sandbox-empty")).toContainText("沙箱副本里的状态都还在");
@@ -139,18 +139,38 @@ test.describe("S1 sandbox shell", () => {
     await expect(dock.locator(".sandbox-line.role-agent .sandbox-turn-status")).toHaveText("已完成");
     await expect(dock.locator(".sandbox-line.role-user")).toHaveText([/新问题/]);
 
-    // Old thread: read-only history, no composer.
+    // Inactive thread preview: offers both "继续此对话" and "回到当前对话".
     await threadSelect.selectOption("d1");
     await expect(dock.locator(".sandbox-line.role-user")).toHaveText([/调试旧功能/]);
     await expect(dock.locator(".sandbox-dock-readonly")).toBeVisible();
+    await expect(dock.getByRole("button", { name: "继续此对话" })).toBeEnabled();
     await expect(dock.getByRole("button", { name: "发送" })).toBeDisabled();
     await dock.getByRole("button", { name: "回到当前对话" }).click();
     await expect(threadSelect).toHaveValue("d2");
     await expect(dock.locator(".sandbox-dock-readonly")).toBeHidden();
     await expect(dock.getByRole("button", { name: "发送" })).toBeEnabled();
 
+    // Reactivate earlier thread d1 and continue chatting on d1 without mixing into d2.
+    await threadSelect.selectOption("d1");
+    await dock.getByRole("button", { name: "继续此对话" }).click();
+    await expect(threadSelect.locator("option")).toHaveText(["对话 1（当前）", "对话 2"]);
+    await expect(threadSelect).toHaveValue("d1");
+    await expect(dock.locator(".sandbox-dock-readonly")).toBeHidden();
+    await expect(dock.getByRole("button", { name: "发送" })).toBeEnabled();
+
+    await dock.locator(".sandbox-dock-input").fill("回到对话1追问");
+    await dock.getByRole("button", { name: "发送" }).click();
+    await expect(dock.locator(".sandbox-line.role-agent .sandbox-turn-status").last()).toHaveText("已完成");
+    await expect(dock.locator(".sandbox-line.role-user")).toHaveText([/调试旧功能/, /回到对话1追问/]);
+
+    // Switching view back to d2 shows d2's isolated messages and is now inactive until switched.
+    await threadSelect.selectOption("d2");
+    await expect(dock.locator(".sandbox-line.role-user")).toHaveText([/新问题/]);
+    await expect(dock.locator(".sandbox-dock-readonly")).toBeVisible();
+
     const commands = await page.evaluate(() => window.appHarness.sandboxCalls.map((c) => c.command));
     expect(commands.filter((c) => c === "new_thread")).toHaveLength(1);
+    expect(commands.filter((c) => c === "activate_thread")).toHaveLength(1);
   });
 
   test("sidebar width and dock mode persist across reloads; floating still drags", async ({ page }) => {

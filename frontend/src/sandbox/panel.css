@@ -1220,10 +1220,24 @@ button.sandbox-cite:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.6rem;
   margin: 0 0 0.4rem;
   font-size: 0.8rem;
   color: var(--ms-text-muted);
+}
+
+.sandbox-dock-readonly-text {
+  flex: 1 1 11rem;
+  min-width: 0;
+}
+
+.sandbox-dock-readonly-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .sandbox-dock-readonly[hidden] {

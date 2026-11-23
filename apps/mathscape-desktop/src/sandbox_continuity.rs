@@ -233,6 +233,11 @@ pub(crate) fn context_notes(inputs: &NoteInputs<'_>) -> Vec<ContextNote> {
             if inputs.later_thread {
                 notes.push(note("mathscape.later_thread", LATER_THREAD_NOTE.to_owned()));
             }
+        } else if let (Some(before), Some(now)) = (inputs.before, inputs.now) {
+            notes.push(note(
+                "mathscape.workspace_delta",
+                describe_delta(before, now),
+            ));
         }
         if let Some(skill) = inputs.skill {
             notes.push(note("mathscape.skill", skill.first_turn_note()));
@@ -356,6 +361,19 @@ mod tests {
             ["mathscape.workspace_moved", "mathscape.workspace_delta"]
         );
         assert!(resumed[0].text.contains("/tmp/ws-old"));
+
+        let rebuilt = context_notes(&NoteInputs {
+            continuity: ThreadContinuity::Started,
+            previous: None,
+            workspace: ws,
+            skill: None,
+            rebuilt: true,
+            later_thread: true,
+            before: Some(&empty),
+            now: Some(&empty),
+        });
+        let rebuilt_keys: Vec<_> = rebuilt.iter().map(|note| note.key.as_str()).collect();
+        assert_eq!(rebuilt_keys, ["mathscape.workspace_delta"]);
     }
 
     #[test]

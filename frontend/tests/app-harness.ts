@@ -586,10 +586,24 @@ extraCommands.set("sandbox_new_dialogue_thread", (args) => {
   sandboxCalls.push({ command: "new_thread", args });
   const used = transcript.some((entry) => entry.thread_id === dialogueThreads.active && entry.role === "user");
   if (used) {
-    const id = `d${dialogueThreads.threads.length + 1}`;
-    dialogueThreads.threads.push({ thread_id: id, created_at: new Date().toISOString() });
-    dialogueThreads.active = id;
+    const last = dialogueThreads.threads.at(-1);
+    if (last && last.thread_id !== dialogueThreads.active && !transcript.some((entry) => entry.thread_id === last.thread_id)) {
+      dialogueThreads.active = last.thread_id;
+    } else {
+      const id = `d${dialogueThreads.threads.length + 1}`;
+      dialogueThreads.threads.push({ thread_id: id, created_at: new Date().toISOString() });
+      dialogueThreads.active = id;
+    }
   }
+  return sessionDialogue(args);
+});
+extraCommands.set("sandbox_activate_dialogue_thread", (args) => {
+  sandboxCalls.push({ command: "activate_thread", args });
+  const target = String(args.threadId);
+  if (!dialogueThreads.threads.some((t) => t.thread_id === target)) {
+    throw new Error(`未知对话：${target}`);
+  }
+  dialogueThreads.active = target;
   return sessionDialogue(args);
 });
 extraCommands.set("sandbox_send_message", (args) => {
