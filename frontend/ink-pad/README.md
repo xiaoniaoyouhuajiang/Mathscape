@@ -78,4 +78,4 @@ Rust 用真实 TLS 验证未知 CA 拒绝、受信任证书链、配对/授权�
 
 静态资源由 Vite 构建至 `dist-inkpad/`，随后由 Rust build script 嵌入；修改平板页面后需重编 Rust。测试端口 1453，测试数据在忽略目录 `.test-runs/ink-lan-browser/`，不会操作开发 Workspace。
 
-当前限额为单条持久消息 16 MiB、单份传输文档和本机待同步队列各 64 MiB；超限保留原内容并提示恢复导出，不静默截断。协议与实现参见 [P3 提案](../../proposals/handwriting-input-infrastructure-v1.md)、[LAN 服务](../../apps/mathscape-desktop/src/ink_lan.rs) 和 [IndexedDB 存储](../src/ink/pad-store.ts)。
+当前限额为单条持久消息 16 MiB、单份传输文档和本机待同步队列各 64 MiB；超限保留原内容并提示恢复导出，不静默截断。协议与实现参见 [P3 提案](../../docs/proposals/handwriting-input-infrastructure-v1.md)、[LAN 服务](../../apps/mathscape-desktop/src/ink_lan.rs) 和 [IndexedDB 存储](../src/ink/pad-store.ts)。

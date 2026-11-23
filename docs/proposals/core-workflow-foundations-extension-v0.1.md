@@ -18,7 +18,7 @@ Mathscape 的两个软件期望是：围绕长期问题形成学习路线，以�
 4. 单用户首版只运行一轮 Agent 调查，知识提交串行化；探索期间允许人工编辑，提交时校验版本和结构条件，不引入多 Agent 并发写图与自动冲突合并。
 5. 第一轮只实现能支撑验收场景的对象种类和工具；名字出现在 EMIR 枚举中，不代表已经需要完整实现。
 
-参考：[软件期望与现状](../docs/architecture.md)、[专家讨论原稿](core-workflow-design.md)、[EMIR](../../docs/rdtx/emir-source-semantics-alignment.md)、[R/D/T/X](../../docs/rdtx/rdtx-map-construction-spec.md)、[手写提案](handwriting-input-infrastructure-v1.md)。专家讨论作为输入材料保留，本文负责提出 Mathscape 自身的候选决策。
+参考：[软件期望与现状](../architecture.md)、[核心工作流设计笔记](core-workflow-design.md)、EMIR 与 R/D/T/X 设计规范（未入库；概览见[数据模型](../data-model.md)）、[手写提案](handwriting-input-infrastructure-v1.md)。本文负责提出 Mathscape 自身的候选决策。
 
 ## 2. 现有基础与真正缺口
 

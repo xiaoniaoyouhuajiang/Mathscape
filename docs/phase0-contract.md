@@ -2,7 +2,7 @@
 
 > 读者：Mob（实现）· 日期：2026-10-27（Asia/Shanghai）
 > 依据：user↔Mob 对齐结论（2026-10-27）；字段级 schema 以 `mathscape-tools-mcp-draft.md`（下称 **MCP 草案**）为准，本文不重复粘贴。
-> 外部参考：**MCP 草案**与**调研**（`mathscape-core-workflow-调研.md`）目前位于仓库外的研究目录（`/workspace/research/`），尚未入库；本文引用其章节号（如「MCP 草案 §2.2」「调研 §4.6」）。相关仓库内文档：[humanize-agent 提案](../proposals/humanize-agent.md)、[core-workflow 设计](../proposals/core-workflow-design.md)、[架构](architecture.md)。
+> 外部参考：**MCP 草案**与**调研**（`mathscape-core-workflow-调研.md`）目前位于仓库外的研究目录（`/workspace/research/`），尚未入库；本文引用其章节号（如「MCP 草案 §2.2」「调研 §4.6」）。相关仓库内文档：[核心工作流与 Humanize 设计](proposals/core-workflow-design.md)、[架构](architecture.md)。
 > 版本：`agent_events v0` + `mcp_envelope v0`。Rust 实现见 `crates/mathscape-agent`（DTO、`AgentExecutor` 桩、`FakeBackend`、CapabilityProbe、JSONL 与配对校验）；安装脚本见 `scripts/install/`。
 > 定位：**薄 Phase0**。本文是实现清单，不是评审提案。标 **[锁定]** 的条目已对齐，可直接编码；标 **[待定]** 的不阻塞 Phase0/Phase1。
 

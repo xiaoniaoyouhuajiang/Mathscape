@@ -14,7 +14,7 @@ Ink v0 的完成条件是这个闭环可靠成立。模型分析和数学语义�
 
 ## 2. 设计依据与现有边界
 
-工程事实以[架构](../docs/architecture.md)、[数据模型](../docs/data-model.md)、[存储与集成](../docs/storage-and-integrations.md)和当前代码为准；数学来源与晋升边界参考 [EMIR](../../docs/rdtx/emir-source-semantics-alignment.md)。[手写输入调研](handwriting-input-mode.md)提供生态与交互候选，不作为实现完成度或设备能力的保证。
+工程事实以[架构](../architecture.md)、[数据模型](../data-model.md)、[存储与集成](../storage-and-integrations.md)和当前代码为准；数学来源与晋升边界参考 EMIR 设计规范（未入库）。手写输入调研（未入库）提供生态与交互候选，不作为实现完成度或设备能力的保证。
 
 已有能力可复用：
 
@@ -439,7 +439,7 @@ P0.1 以真实 Tab S8+ 样本收敛性能阈值，至少记录：输入事件到
 
 ### P0 设备实验与契约 fixture
 
-P0 软件闭环为：电脑启动独立 Ink Lab → 平板扫码打开浏览器画板 → 本地即时书写与渲染 → 手动导出一个自包含 Ink JSON → 重新导入重现内容与编辑历史。另提供“保存到电脑”，把完整文件放到实验目录。启动和使用说明见 [Ink Lab](../frontend/ink-lab/README.md)。
+P0 软件闭环为：电脑启动独立 Ink Lab → 平板扫码打开浏览器画板 → 本地即时书写与渲染 → 手动导出一个自包含 Ink JSON → 重新导入重现内容与编辑历史。另提供“保存到电脑”，把完整文件放到实验目录。启动和使用说明见 [Ink Lab](../../frontend/ink-lab/README.md)。
 
 P0 的 LAN 服务是独立 Node HTTP harness，仅提供打包画板与实验文件接收；正式 Axum 服务、配对租约、自动保存、断线续传及 Workspace 登记仍属于 P1–P3。手动 JSON 导出不是 P2 的受管不可变快照，浏览器刷新前也不承诺自动恢复未导出内容。
 
@@ -503,7 +503,7 @@ P2 来源闭环已落地：
 
 在真实 Tab S8+ 完成首个验收场景，并解决受保护传输、客户端持久化与 Web API 能力差异。桌面本地入口与远程入口对相同操作 fixture 生成相同的数学书写内容与选择结果；仅在采集和会话元数据也相同时要求快照字节一致，真实设备的来源元数据不得为追求相同哈希而被删除。
 
-P3 软件实现已落地，使用说明见 [InkPad](../frontend/ink-pad/README.md)。正式入口是 Mathscape 手稿页的“平板书写”，无需再启动 P0 的 Node 接收后台。
+P3 软件实现已落地，使用说明见 [InkPad](../../frontend/ink-pad/README.md)。正式入口是 Mathscape 手稿页的“平板书写”，无需再启动 P0 的 Node 接收后台。
 
 1. **受限 HTTPS 服务**：Rust Axum/axum-server 在用户启用后监听局域网 IPv4，默认端口 1443；只提供已打包的 `/pad/` 静态资源、配对 API、WSS 和无材料的健康检查。API 检查 Host/Origin，网络不暴露 Tauri IPC、文件路径、通用导入或地图编辑能力。客户端只获授权手稿的内容。
 2. **设备信任**：Workspace 首次启用生成专用本地 CA，根证书和私钥保存在 `ink-lan/trust/`，目录/私钥使用 0700/0600 权限；服务启动时为当前局域网地址签发叶证书。电脑 UI 只导出公开 `.crt`，用户自行在平板安装并信任。根证书随 Workspace 保留，重启不自动更换，也不静默修改设备信任库。UI 的 SHA-256 指的是导出证书文件的字节摘要。

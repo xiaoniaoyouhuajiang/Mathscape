@@ -417,9 +417,9 @@ API 最小集合：list_discovery_registrations、plan_discovery_registration_re
 
 ## 实现与回归入口
 
-- 契约与共享引用检查：[Domain](../crates/mathscape-domain/src/registration.rs)、[引用完整性](../crates/mathscape-orchestrator/src/source_integrity.rs)。
-- 规划与原子写入：[纯规划](../crates/mathscape-orchestrator/src/registration.rs)、[Store](../crates/mathscape-store-sqlite/src/registration.rs)、[迁移 11](../migrations/0011_registration_reversal.sql)。
-- 桌面与审核：[命令](../apps/mathscape-desktop/src/registration.rs)、[登记审核工作区](../frontend/src/discovery/registration-workspace.ts)。
-- 回归：[固定点与引用](../crates/mathscape-orchestrator/tests/registration_reversal.rs)、[真实事务与旧库升级](../crates/mathscape-orchestrator/tests/registration_transactions.rs)、[Desktop 流程](../apps/mathscape-desktop/tests/service.rs)、[浏览器交互](../frontend/tests/registration.spec.ts)。
+- 契约与共享引用检查：[Domain](../../crates/mathscape-domain/src/registration.rs)、[引用完整性](../../crates/mathscape-orchestrator/src/source_integrity.rs)。
+- 规划与原子写入：[纯规划](../../crates/mathscape-orchestrator/src/registration.rs)、[Store](../../crates/mathscape-store-sqlite/src/registration.rs)、[迁移 11](../../migrations/0011_registration_reversal.sql)。
+- 桌面与审核：[命令](../../apps/mathscape-desktop/src/registration.rs)、[登记审核工作区](../../frontend/src/discovery/registration-workspace.ts)。
+- 回归：[固定点与引用](../../crates/mathscape-orchestrator/tests/registration_reversal.rs)、[真实事务与旧库升级](../../crates/mathscape-orchestrator/tests/registration_transactions.rs)、[Desktop 流程](../../apps/mathscape-desktop/tests/service.rs)、[浏览器交互](../../frontend/tests/registration.spec.ts)。
 
 发现记录按实际登记显示撤回入口；重新发现按钮打开原 Markdown 选区，用户仍需明确启动新 run。活动地图默认隐藏退役对象，“显示退役对象”仅显示当前 tombstone；原始 revision 从登记快照查看。预览或提交失败不会删除发现检查点或材料文件。
