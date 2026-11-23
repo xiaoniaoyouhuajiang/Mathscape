@@ -1,7 +1,7 @@
 # Mathscape Phase2 契约：写路径（`user.ask` / `propose_changes` / `get_change_set` / 接受 / 回滚）
 
 > 读者：Mob（实现）· 起草：2026-10-30（Asia/Shanghai）· 状态：**契约草案，用户决策已锁定（2026-10-30），待用户审阅本文后合并**
-> 依据：[Phase0 契约](phase0-contract.md)（下称 **Phase0**）、[Phase1c 图契约](phase1c-graph-contract.md)（**1c**）、[Phase1d 手稿契约](phase1d-ink-snapshot-contract.md)（**1d**）、[Foundations 扩展草案 v0.1](../proposals/core-workflow-foundations-extension-v0.1.md)（**FX**）、[登记撤回提案 v1](../proposals/discovery-registration-reversal-v1.md)（**REV**）、MCP 工具面草案 `/workspace/research/mathscape-tools-mcp-draft.md`（**MCP 草案**，仓库外，见 Phase0 头注）。
+> 依据：[Phase0 契约](phase0-contract.md)（下称 **Phase0**）、[Phase1c 图契约](phase1c-graph-contract.md)（**1c**）、[Phase1d 手稿契约](phase1d-ink-snapshot-contract.md)（**1d**）、[Foundations 扩展草案 v0.1](proposals/core-workflow-foundations-extension-v0.1.md)（**FX**）、[登记撤回提案 v1](proposals/discovery-registration-reversal-v1.md)（**REV**）、MCP 工具面草案 `/workspace/research/mathscape-tools-mcp-draft.md`（**MCP 草案**，仓库外，见 Phase0 头注）。
 > 版本：本文引入 `mcp_envelope v1` 与 `agent_events v1`（增量见 §4.5、§4.1.4）；Phase1 已有 10 个只读工具的语义与描述除 `scope` 一句外不变。Lean 工具契约另见 [`lean-tool-contract.md`](lean-tool-contract.md)。
 > 标签：**[锁定]** = 用户 2026-10-30 决策或由其直接推出；**[锁定·2026-11-09 用户改定]** = PR-B 讨论中用户改定的锁定项，原口径以「原口径」保留对照（汇总见 §2.1）；**[本文提议]** = 起草时为闭合契约补的细节，现有草案未写，实现 PR 可在不违背 [锁定] 的前提下微调（汇总见 §11）；**[待核]** = 真正未定（§10）。
 > P2-2 来源层暂存切片已在 `mathscape-mcp` / `mathscape-store-sqlite` 实现；PR-B 已接入 SourceSpan、调查级投影、Desktop 接受 / 丢弃 / 批量审核命令和沙箱提案白名单。`user.ask` 与已接受对象撤回仍是后续切片。
@@ -529,7 +529,7 @@ Agent 面只有 `propose_changes`（写暂存）、`user.ask`（写 PendingQuest
 
 ### 5.6 审核面板复用 [本文提议]
 
-单个 change_set 的详情与批量界面的展开项复用内容发现审核工作区（`proposals/discovery-review-workspace-v1.md`，`frontend/src/review/`），不另写：
+单个 change_set 的详情与批量界面的展开项复用[内容发现审核工作区](proposals/discovery-review-workspace-v1.md)（`frontend/src/review/`），不另写：
 - 复用 `DiscoveryReviewWorkspace`（`workspace.ts`）的布局与交互、`anchor-fragment.ts`（`ReviewAnchor`、`checkAnchor`、`renderAnchorFragment`，按字节范围高亮、不做文本重搜）、`ReviewGraph`（`review-graph.ts`，独立 Cytoscape 容器，不并入主图）、`labels.ts`。
 - 新增**「提案」数据源**：服务端把 change_set version 投影成 `SourceReviewProjection` 形状（新版本号如 `mathscape-change-set-review-projection-1`）：`units` ← `source_unit` 项（`acceptance` 取 `staged|blocked`），`anchors` ← 其 span 的 Markdown 定位，`relations` / `structure_relations` ← 关系与父子，`diagnostics` ← 诊断，新增 `debts` 与 `impact` 字段。工作区按数据源切换。
 - 按钮换成「接受」「丢弃」（批量界面里为勾选），去掉内容发现的逐单元勾选——change_set 不做部分接受。增加 Debt 栏与影响预览栏。

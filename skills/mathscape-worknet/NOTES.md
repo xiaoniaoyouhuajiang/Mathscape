@@ -12,7 +12,7 @@
 - 加入 `reference-index.md`，为 EMIR、RDTX、Phase2、T04/T08/T12/T18 和小黄完整报告提供逻辑 id、路径和版本说明；
 - 将 `rdtx_try.md` 及 T04/T08/T12/T18 的对象卡、工作网副本纳入 `references/`，skill 单独分发时仍能解析这些案例；
 - 加入 `runtime-capabilities.md`，明确已实现、只有契约和假定工具，不允许调用不存在的语义 API；
-- 收紧 workspace 引用：必须由宿主提供 `workspace_root`，`docs/` 与 `proposals/` 按索引和层级解释，缺失或版本不明时显式标记 unavailable；
+- 收紧 workspace 引用：必须由宿主提供 `workspace_root`，`docs/` 与其中的 `docs/proposals/` 按索引和层级解释，缺失或版本不明时显式标记 unavailable；
 - 加入 `run-state-template.md`，让 Agent 可以在中断后恢复工作，并区分 pending、blocked、partial、待核和不可判定；
 - `reader-primer.md` 改为第一次接触也能读的白话入门，并用 T04/T08/T12/T18 解释 R/D/T/X；
 - 保留 `creation-rules.md` 和 `checks-i1-i7.md` 作为详细规则，不把它们写成已经实现的接口。

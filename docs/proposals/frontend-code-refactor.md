@@ -1,9 +1,8 @@
 # RFC: 前端架构稳定化整改方案 (Frontend Stabilization RFC)
 
 - **状态**: Approved (整改阶段)
-- **目标分支/模块**: `frontend/`
-- **负责人**: 前端工程团队
-- **关联文档**: [architecture.md](../docs/architecture.md)
+- **范围**: `frontend/`
+- **关联文档**: [架构](../architecture.md)
 
 ---
 

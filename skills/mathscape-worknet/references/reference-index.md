@@ -7,11 +7,11 @@
 优先顺序如下：
 
 1. 当前 skill 包的 `references/`；
-2. 宿主显式提供的 `workspace_root` 下、索引列出的 `docs/`、`proposals/` 路径；
+2. 宿主显式提供的 `workspace_root` 下、索引列出的 `docs/`（含 `docs/proposals/`）路径；
 3. 可选的后端阅读包根目录（例如 `mathscape-backend-reading-pack/`）；
 4. 其他路径只有在用户明确提供并且可读时才使用。
 
-`workspace_root` 是本轮运行参数，不是 Agent 自己猜出的当前目录。`docs/` 主要提供当前契约和实现事实；`proposals/` 只提供设计背景，除非明确标记为已锁定契约，否则不能用来证明某项能力已经存在。
+`workspace_root` 是本轮运行参数，不是 Agent 自己猜出的当前目录。`docs/` 中提案目录之外的文档主要提供当前契约和实现事实；`docs/proposals/` 只提供设计背景，除非明确标记为已锁定契约，否则不能用来证明某项能力已经存在。
 
 如果某个路径不存在、版本无法核对或不在允许的根目录内，记录 `reference_unavailable`，不要把缺失材料当成“工作区没有该内容”。
 

@@ -341,6 +341,6 @@ Agent 不得：
 
 规范和案例的逻辑编号、路径和版本见 `references/reference-index.md`。小黄的完整实践报告副本是 `references/rdtx_try.md`；它可以帮助理解 T04、T08、T12、T18 的具体例子，但案例正文和论文链接不能替代逐边证据。
 
-`reference-index.md` 中的 workspace 路径不是隐含的全局文件系统访问。宿主必须显式提供 `workspace_root`；Agent 只能在该根目录下读取索引列出的 `docs/` 或 `proposals/` 路径。`docs/` 是当前工程契约和实现事实的候选来源，`proposals/` 是设计背景，不能覆盖运行时工具能力。根目录未提供、文件不存在或版本无法核对时，记录 `reference_unavailable`，不要凭名称或旧记忆补内容。
+`reference-index.md` 中的 workspace 路径不是隐含的全局文件系统访问。宿主必须显式提供 `workspace_root`；Agent 只能在该根目录下读取索引列出的 `docs/` 或 `docs/proposals/` 路径。`docs/` 中提案目录之外的文档是当前工程契约和实现事实的候选来源，`docs/proposals/` 是设计背景，不能覆盖运行时工具能力。根目录未提供、文件不存在或版本无法核对时，记录 `reference_unavailable`，不要凭名称或旧记忆补内容。
 
 当前 skill 的详细创建规则见 `references/creation-rules.md`，I1–I7 检查动作见 `references/checks-i1-i7.md`。它们是工作规则，不表示语义工具已经实现。

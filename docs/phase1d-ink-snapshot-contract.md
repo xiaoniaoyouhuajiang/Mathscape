@@ -1,7 +1,7 @@
 # Mathscape Phase1d 契约：手稿可读证据（`ink.page_image`）+ 手稿最小图接线
 
 > 读者：Mob（实现）· 起草：2026-10-28（Asia/Shanghai）· 状态：**§9 六项决策已由用户于 2026-10-28 锁定**；1d-a（图接线）随 Phase1d-a PR 落地，1d-b（渲染工具）另开 PR
-> 依据：[Phase0 契约](phase0-contract.md)（`mcp_envelope v0`，下称 **Phase0**）、[Phase1c 图契约](phase1c-graph-contract.md)（下称 **1c**）、[手稿笔记整合提案](../proposals/ink-notebook-integration-v1.md)；缺口来源 `/workspace/bench/phase1c-tool-reeval-report.md` §2.4（note / snapshot 均 `content_ref: null`、`ink_out_of_scope`、邻域 0 边）。
+> 依据：[Phase0 契约](phase0-contract.md)（`mcp_envelope v0`，下称 **Phase0**）、[Phase1c 图契约](phase1c-graph-contract.md)（下称 **1c**）、[手稿笔记整合提案](proposals/ink-notebook-integration-v1.md)；缺口来源 `/workspace/bench/phase1c-tool-reeval-report.md` §2.4（note / snapshot 均 `content_ref: null`、`ink_out_of_scope`、邻域 0 边）。
 > 版本：沿用 `mcp_envelope v0`，**不新增** `status` 值、**不新增**错误码（`invalid_arg | forbidden | internal`）。标 **[提议]** 为本草案推荐、待用户锁定的条款；标 **[待核]** 为必须由用户拍板的决策点（汇总见 §9）。本文不把任何 [提议] 冒充为已锁定。
 
 ---

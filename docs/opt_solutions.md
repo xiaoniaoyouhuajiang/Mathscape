@@ -58,7 +58,7 @@
 **方案**：将 `group` 节点默认设为不可见（`display: none` 或 `opacity: 0` + `events: no`），同时把其子节点从 compound 归属中剥离——在 `toCytoscapeElements` 中，对 `element_kind === "group"` 的节点跳过输出 `parent` 字段（或直接过滤掉 group 节点）。
 
 **变更文件**：
-- [`cytoscape.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/cytoscape.ts) — 在 `toCytoscapeElements` 中过滤 `group` 节点，或将其样式设为 `visibility: hidden` + `display: none`
+- [`cytoscape.ts`](../frontend/src/graph/cytoscape.ts) — 在 `toCytoscapeElements` 中过滤 `group` 节点，或将其样式设为 `visibility: hidden` + `display: none`
 
 **风险**：无 Rust 变更；如果后续有意使用 compound 来表示真实的来源区域，需要回溯。
 
@@ -82,9 +82,9 @@
 在 UI 控制栏中添加 "渲染模式" 切换（图标按钮或 toggle），持久化到 localStorage。
 
 **变更文件**：
-- [`cytoscape.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/cytoscape.ts) — `toCytoscapeElements` 接受 `options` 参数，实现语义边转换逻辑
-- [`projection.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/projection.ts) — 无需改动（数据结构不变）
-- [`main.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/main.ts) — 添加渲染模式切换 UI 和状态
+- [`cytoscape.ts`](../frontend/src/graph/cytoscape.ts) — `toCytoscapeElements` 接受 `options` 参数，实现语义边转换逻辑
+- [`projection.ts`](../frontend/src/graph/projection.ts) — 无需改动（数据结构不变）
+- [`main.ts`](../frontend/src/main.ts) — 添加渲染模式切换 UI 和状态
 
 **风险**：语义边模式下点击边时 Inspector 需要能显示关系详情，需要把关系节点的 `domain_id` / `label` 挂在边的 `data` 上。
 
@@ -109,9 +109,9 @@
 4. 默认预设：**来源内容**（仅 `SourceSemanticUnit` + `SourceArtifact`），不默认展示全量景观图（避免"毛线团"）。
 
 **变更文件**：
-- [`main.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/main.ts) — 视图切换逻辑重构；`visibleNodeKinds` + `filterGraph`
-- [`styles.css`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/styles.css) — 过滤面板样式
-- [`cytoscape.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/cytoscape.ts) — 渲染前过滤
+- [`main.ts`](../frontend/src/main.ts) — 视图切换逻辑重构；`visibleNodeKinds` + `filterGraph`
+- [`styles.css`](../frontend/src/styles.css) — 过滤面板样式
+- [`cytoscape.ts`](../frontend/src/graph/cytoscape.ts) — 渲染前过滤
 
 **落地结果与遗留约束**（Task 4 必须知道）：
 
@@ -144,9 +144,9 @@
 
 **变更文件**：
 - `frontend/src/graph/taxonomy.ts` — 新建：类型键推导、中文名、图例形状与配色
-- [`cytoscape.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/cytoscape.ts) — 写入 `nodeType`；样式表由 taxonomy 生成
-- [`main.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/main.ts) — 图例渲染；Inspector 与过滤文案统一
-- [`styles.css`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/styles.css) — 图例浮层与形状化图例点样式；清理 Task 3 遗留的死样式
+- [`cytoscape.ts`](../frontend/src/graph/cytoscape.ts) — 写入 `nodeType`；样式表由 taxonomy 生成
+- [`main.ts`](../frontend/src/main.ts) — 图例渲染；Inspector 与过滤文案统一
+- [`styles.css`](../frontend/src/styles.css) — 图例浮层与形状化图例点样式；清理 Task 3 遗留的死样式
 
 **验收**：导入一份 PDF 并解析后，PDF 节点与 Markdown 节点在形状/颜色上可区分；图例条目数量随过滤条件变化；图例、Inspector、checkbox 对同一类型使用同一个中文名。
 
@@ -204,7 +204,7 @@
 - `crates/mathscape-graph/src/incidence.rs` — `IncidenceNode` 输出 `relation_kind`
 - `crates/mathscape-query/src/artifact_graph.rs` — 转换关系标记为 `conversion`
 - `crates/mathscape-query/src/source_graph.rs` — 合成关系标记为 `located_in` / `contains_span`；领域关系从 payload 解析；景观图重建时透传
-- [`projection.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/projection.ts) — `IncidenceNode` 增加 `relation_kind`
+- [`projection.ts`](../frontend/src/graph/projection.ts) — `IncidenceNode` 增加 `relation_kind`
 
 **schema 版本**：纯增量字段，前端只做 `GRAPH_PROJECTION_SCHEMA_VERSION` 相等校验且前后端同包发布，无需 bump 到 v2。
 
@@ -328,9 +328,9 @@
 **变更文件**：
 - `frontend/src/graph/focus.ts` — 新建：聚焦遍历与路径收缩
 - `frontend/src/graph/context-menu.ts` — 新建：通用画布右键菜单
-- [`main.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/main.ts) — 聚焦状态、入口、空状态、图合并、一次性交互绑定
-- [`cytoscape.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/cytoscape.ts) — 收缩虚拟边样式；`syncCytoscapeGraph` 增量同步；`applyFocusScope` 范围淡化
-- [`styles.css`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/styles.css) — 聚焦状态条、深度控件、右键菜单样式
+- [`main.ts`](../frontend/src/main.ts) — 聚焦状态、入口、空状态、图合并、一次性交互绑定
+- [`cytoscape.ts`](../frontend/src/graph/cytoscape.ts) — 收缩虚拟边样式；`syncCytoscapeGraph` 增量同步；`applyFocusScope` 范围淡化
+- [`styles.css`](../frontend/src/styles.css) — 聚焦状态条、深度控件、右键菜单样式
 
 ---
 
@@ -358,8 +358,8 @@
 - 节点数超过阈值时自动降级到聚合视图（仅显示 PDF 级别）——等真有多来源、默认预设已拖不动再做
 
 **变更文件**：
-- [`cytoscape.ts`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/src/graph/cytoscape.ts) — 替换 layout；添加节点数阈值检查
-- [`package.json`](file:///Users/wangjiajie/software/lean4_exp/mathscape/frontend/package.json) — 若引入布局库需评估体积
+- [`cytoscape.ts`](../frontend/src/graph/cytoscape.ts) — 替换 layout；添加节点数阈值检查
+- [`package.json`](../frontend/package.json) — 若引入布局库需评估体积
 
 ---
 
