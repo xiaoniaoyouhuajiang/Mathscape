@@ -12,6 +12,10 @@ workspace = true
 name = "mathscape-codex-fixture"
 path = "src/bin/codex_fixture.rs"
 
+[[bin]]
+name = "mathscape-acp-fixture"
+path = "src/bin/acp_fixture.rs"
+
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 futures.workspace = true
