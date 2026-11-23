@@ -10,6 +10,7 @@ import {
 import { ReviewGraph, type ReviewGraphExternal } from "./review-graph";
 import type { DiscoveryAcceptanceOutcome, DiscoveryOutcome, DiscoveryRun, ReviewRunMeta, SourceReviewProjection } from "./types";
 import { eventBus } from "../core/events";
+import { t } from "../i18n";
 import { shortStableId } from "../core/stable-id";
 import "./review.css";
 import { openSourceRegistrationReview } from "../discovery/registration-workspace";
@@ -47,7 +48,10 @@ interface WUnit {
   facts: { kind: string; text: string; anchor: ReviewAnchor }[];
 }
 interface WReference { id: string; owner: string; text: string; status: string; candidates: string[]; reason: string; anchor: ReviewAnchor }
-interface WRelation { id: string; source: string; target: string; relation: string; bases: string[]; evidence: ReviewAnchor[] }
+interface WRelation { id: string; source: string; target: string; relation: string; bases: string[]; evidence: ReviewAnchor[]; change?: "edit" | "retire" }
+/** Graph edge label of a relation a proposal edits or retires. */
+const changedRelationLabel = (change: string | undefined, label: string): string =>
+  change === "retire" ? t("review.relation.retireEdge", { label }) : change === "edit" ? t("review.relation.editEdge", { label }) : label;
 interface WIssue { id: string; owner: string | null; kind: string; stages: string; observation: string; occurrences: number; evidence: ReviewAnchor[] }
 interface WDiagnostic { id: string; severity: string; code: string; path: string; message: string; related: string[] }
 interface Model {
@@ -110,6 +114,7 @@ function buildModel(outcome: DiscoveryOutcome): Model {
     relations = review.relations.map(relation => ({
       id: relation.relation_ref, source: relation.source, target: relation.target, relation: relation.relation,
       bases: relation.bases, evidence: relation.evidence.map(anchor => reviewAnchor(anchor)),
+      ...(relation.change ? { change: relation.change } : {}),
     }));
     structure = review.structure_relations.map(({ parent, child }) => ({ parent, child }));
     diagnostics = review.diagnostics.map(item => ({
@@ -133,6 +138,7 @@ function buildModel(outcome: DiscoveryOutcome): Model {
     relations = view.relations.map((relation, index) => ({
       id: `relation-${index}`, source: relation.source, target: relation.target, relation: relation.relation,
       bases: relation.bases, evidence: relation.evidence.map(anchor => reviewAnchor(anchor, "relation_evidence")),
+      ...(relation.change ? { change: relation.change } : {}),
     }));
     structure = view.units.filter(unit => unit.parent).map(unit => ({ parent: unit.parent!, child: unit.unit_ref }));
     diagnostics = view.diagnostics.map((item, index) => ({
@@ -940,7 +946,7 @@ export class DiscoveryReviewWorkspace {
       return;
     }
     for (const relation of this.model!.relations) {
-      const item = el("article", "review-item review-relation");
+      const item = el("article", `review-item review-relation${relation.change === "retire" ? " is-retired" : ""}`);
       const tags = [...new Set([this.relationEndTag(relation.source), this.relationEndTag(relation.target)].filter((tag): tag is string => tag !== null))];
       item.classList.toggle("is-cross", tags.some(tag => tag.startsWith("跨快照")));
       item.append(
@@ -1033,7 +1039,7 @@ export class DiscoveryReviewWorkspace {
       container,
       model.units.map(unit => ({ ref: unit.ref, label: unit.title, state: this.graphState(unit) })),
       model.structure,
-      model.relations.map(relation => ({ id: relation.id, source: relation.source, target: relation.target, label: relationLabel(relation.relation) })),
+      model.relations.map(relation => ({ id: relation.id, source: relation.source, target: relation.target, label: changedRelationLabel(relation.change, relationLabel(relation.relation)) })),
       {
         unit: (ref, hover) => {
           const unit = model.unitByRef.get(ref);
@@ -1565,16 +1571,21 @@ export class DiscoveryReviewWorkspace {
       if (relation.crossSnapshot) tags.push(`跨快照 · 快照 ${relation.source.group! + 1} → ${relation.target.group! + 1}`);
       else if (relation.source.group !== null && proposal.groupCount > 1) tags.push(`快照 ${relation.source.group + 1}`);
       if (relation.source.origin === "existing" || relation.target.origin === "existing") tags.push("连接已有对象");
-      if (relation.op !== "create") tags.push(relation.op === "edit" ? "修改" : relation.op);
+      if (relation.op !== "create") tags.push(relation.op === "edit" ? "修改" : relation.op === "retire" ? "退役" : relation.op);
       return tags;
     };
     for (const relation of overview.relationList) {
-      const row = el("li", `review-proposal-relation${relation.crossSnapshot ? " is-cross" : ""}`);
+      const row = el("li", `review-proposal-relation${relation.crossSnapshot ? " is-cross" : ""}${relation.op === "retire" ? " is-retired" : ""}`);
       const end = (endpoint: OverviewRelation["source"]) => el("span", `review-relation-end origin-${endpoint.origin}`, endpoint.title || "（未命名）");
       const line = el("span", "review-relation-line");
       const relLabel = relation.label ?? relationLabel(relation.relation);
       line.append(end(relation.source), el("span", "review-relation-kind", ` —${relLabel}→ `), end(relation.target));
       row.append(line, ...where(relation).map(tag => el("span", `review-relation-tag${tag.startsWith("跨快照") ? " is-cross-tag" : ""}`, tag)));
+      if (relation.before) {
+        const before = el("span", "review-relation-before");
+        before.append(t("review.relation.before"), end(relation.before.source), el("span", "review-relation-kind", ` —${relationLabel(relation.before.relation)}→ `), end(relation.before.target));
+        row.append(before);
+      }
       const group = relation.source.group ?? relation.target.group;
       if (group !== null && group !== proposal.groupIndex) {
         row.append(button(`到快照 ${group + 1}`, () => void proposal.controller.open(keyOf(item), group), "review-relation-jump"));
@@ -1604,7 +1615,7 @@ export class DiscoveryReviewWorkspace {
       container,
       overview.unitList.map(unit => ({ ref: unit.ref, label: proposal.groupCount > 1 ? `${unit.title}（快照 ${unit.group + 1}）` : unit.title, state })),
       [],
-      overview.relationList.map(relation => ({ id: relation.ref, source: relation.source.ref, target: relation.target.ref, label: relation.label ?? relationLabel(relation.relation), cross: relation.crossSnapshot })),
+      overview.relationList.map(relation => ({ id: relation.ref, source: relation.source.ref, target: relation.target.ref, label: changedRelationLabel(relation.op, relation.label ?? relationLabel(relation.relation)), cross: relation.crossSnapshot })),
       {
         unit: (ref, hover) => {
           const group = overview.groupOf(ref);

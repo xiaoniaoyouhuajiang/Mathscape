@@ -387,6 +387,31 @@ impl<'a> AnchorContext<'a> {
             .objects
             .iter()
             .find(|object| object.object_id == id)?;
+        let inner = object.payload.get("payload").unwrap_or(&object.payload);
+        if object.kind == "SourceUnitRelation" {
+            // A relation keeps its ends as endpoints, not in its payload; the
+            // review needs them in the shape a proposal writes.
+            let ends = |role: &str| {
+                let mut ends: Vec<_> = object
+                    .endpoints
+                    .iter()
+                    .filter(|end| end.role().as_str() == role)
+                    .collect();
+                ends.sort_by_key(|end| end.ordinal());
+                ends.into_iter()
+                    .map(|end| end.entity().to_string())
+                    .collect::<Vec<_>>()
+            };
+            return Some((
+                "source_relation".to_owned(),
+                serde_json::json!({
+                    "relation": inner.get("relation"),
+                    "source": ends("source").first(),
+                    "target": ends("target").first(),
+                    "evidence_spans": ends("evidence"),
+                }),
+            ));
+        }
         let kind = match object
             .payload
             .get("payload_kind")
@@ -402,12 +427,7 @@ impl<'a> AnchorContext<'a> {
             other => other,
         }
         .to_owned();
-        let payload = object
-            .payload
-            .get("payload")
-            .unwrap_or(&object.payload)
-            .clone();
-        Some((kind, payload))
+        Some((kind, inner.clone()))
     }
 
     pub fn lang(&self) -> mathscape_domain::DisplayLang {

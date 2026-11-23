@@ -351,11 +351,11 @@ fn view(
             base_objects.insert(id.clone(), staged);
         }
     }
-    // Ensure endpoints of any referenced Alignment (e.g. when retiring/editing an alignment)
-    // also have their titles resolved.
+    // Ensure endpoints of any referenced Alignment or source relation (e.g. when
+    // retiring/editing one) also have their titles resolved.
     let mut extra_ids = Vec::new();
     for base in base_objects.values() {
-        if base.kind == "alignment" {
+        if matches!(base.kind.as_str(), "alignment" | "source_relation") {
             for end in ["source", "target"] {
                 if let Some(end_id) = base.payload.get(end).and_then(Value::as_str)
                     && !ids.iter().any(|existing| existing == end_id)
@@ -491,12 +491,34 @@ fn staged_object(versions: &[PendingChangeSet], id: &str) -> Option<BaseObjectVi
         let (local_ref, _) = staged_ids
             .iter()
             .find(|(_, staged)| staged.as_str() == Some(id))?;
+        let named =
+            |item: &&Value| item.get("local_ref").and_then(Value::as_str) == Some(local_ref);
+        if let Some(relation) = record
+            .proposal
+            .get("proposed_relations")
+            .and_then(Value::as_array)
+            .and_then(|relations| relations.iter().find(named))
+        {
+            if relation.get("op").and_then(Value::as_str) != Some("create") {
+                return None;
+            }
+            let payload = serde_json::json!({
+                "relation": relation.get("relation"),
+                "source": relation.get("source"),
+                "target": relation.get("target"),
+                "evidence_spans": relation.get("evidence_spans"),
+            });
+            return Some(BaseObjectView {
+                kind: "source_relation".to_owned(),
+                payload: resolve_local_refs(&payload, staged_ids),
+            });
+        }
         let object = record
             .proposal
             .get("proposed_objects")?
             .as_array()?
             .iter()
-            .find(|object| object.get("local_ref").and_then(Value::as_str) == Some(local_ref))?;
+            .find(named)?;
         let op = object.get("op").and_then(Value::as_str).unwrap_or("create");
         if op != "create" {
             return None;
@@ -1231,6 +1253,95 @@ mod tests {
             view.target_titles.get(&a_unit).map(String::as_str),
             Some("定理 A")
         );
+    }
+
+    #[test]
+    fn source_relation_edit_and_retire_show_the_stored_ends_and_retire_is_accepted() {
+        let fx = fixture();
+        let created = propose(
+            &fx,
+            json!({
+                "request_id": "ab", "rationale": "登记两个定理和它们的关系",
+                "proposed_objects": [
+                    span(&fx, "sa", "第一段内容。", "inline"),
+                    span(&fx, "sb", "第二段内容。", "inline"),
+                    unit("a", "定理 A", Value::Null, json!(["$new:sa"])),
+                    unit("b", "定理 B", Value::Null, json!(["$new:sb"]))
+                ],
+                "proposed_relations": [{
+                    "local_ref": "r", "kind": "source_relation", "op": "create",
+                    "relation": "explains", "source": "$new:a", "target": "$new:b",
+                    "evidence_spans": ["$new:sb"]
+                }]
+            }),
+        );
+        assert_eq!(created["status"], "staged", "{created}");
+        let (a, b, relation) = (
+            staged_id(&created, "a"),
+            staged_id(&created, "b"),
+            staged_id(&created, "r"),
+        );
+        // Still staged: a later version of the investigation can name it.
+        let versions = open_store(&fx.root)
+            .unwrap()
+            .list_change_set_versions(INV)
+            .unwrap();
+        let staged_view = staged_object(&versions, &relation).unwrap();
+        assert_eq!(staged_view.kind, "source_relation");
+        assert_eq!(staged_view.payload["source"], a);
+        accept(&fx, vec![sel(&created)]).unwrap();
+        let revision = open_store(&fx.root)
+            .unwrap()
+            .map_edit_snapshot()
+            .unwrap()
+            .objects
+            .into_iter()
+            .find(|object| object.object_id == relation)
+            .unwrap()
+            .revision;
+
+        let retire = propose(
+            &fx,
+            json!({
+                "request_id": "retire", "rationale": "这条关系连错了",
+                "proposed_objects": [{
+                    "local_ref": "drop", "kind": "source_relation", "op": "retire",
+                    "target_id": relation, "expected_revision": revision
+                }]
+            }),
+        );
+        assert_eq!(retire["status"], "staged", "{retire}");
+        let queue = list_queue(&fx.root, INV, Default::default()).unwrap();
+        let view = queue
+            .items
+            .iter()
+            .find(|item| item.change_set_id == retire["change_set_id"].as_str().unwrap())
+            .unwrap();
+        let base = &view.base_objects[&relation];
+        assert_eq!(base.kind, "source_relation");
+        assert_eq!(
+            base.payload,
+            json!({ "relation": "explains", "source": a, "target": b,
+                    "evidence_spans": [staged_id(&created, "sb")] })
+        );
+        assert_eq!(view.target_titles[&a], "定理 A");
+        assert_eq!(view.target_titles[&b], "定理 B");
+
+        accept(&fx, vec![sel(&retire)]).unwrap();
+        let lifecycle = |id: &str| {
+            open_store(&fx.root)
+                .unwrap()
+                .map_edit_snapshot()
+                .unwrap()
+                .objects
+                .into_iter()
+                .find(|object| object.object_id == id)
+                .unwrap()
+                .lifecycle
+        };
+        assert_eq!(lifecycle(&relation), "deprecated");
+        assert_eq!(lifecycle(&a), "active");
+        assert_eq!(lifecycle(&b), "active");
     }
 
     fn sel(value: &Value) -> ChangeSetSelection {

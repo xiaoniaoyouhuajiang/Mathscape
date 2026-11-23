@@ -18,7 +18,7 @@
 3. [锁定·2026-11-13 用户定 c] 第一条 PR 提前做**最小 DialectScope**，只含第一期必需的字段，让“灯塔从第 1 项起编”这类约定能被机器读到。
 4. [已确认] DomainPayload 包裹 SourcePayload（实现：untagged 包裹，存储形状不变，见 S2.1）；SemanticEntity 只开 concept / declaration / theory / problem_schema；Declaration 扩展；Alignment 是有修订的实体，不设 `same_as`；复用 TrustRecord；id 不透明，由 `(change_set_id, local_ref)` 派生；接受 ≠ 提升可信度或对齐状态；R/D/T/X 只作派生视图。
 5. [已确认] **只有确定性检查阻塞**；数学判断只生成 Debt 或审核项。
-6. [锁定·S13-1] **语义层对象允许 Agent 提议 retire**（选项 B），仍只是提案，须用户接受；来源层 retire 仍禁止 Agent 提议。Debt 的 `paid` / `waived` 只能由用户设置，Agent 最多写 `claimed_paid`。
+6. [锁定·S13-1] **语义层对象允许 Agent 提议 retire**（选项 B），仍只是提案，须用户接受；来源层只放开**书内关系**（`source_relation`）的 retire（2026-11-23 用户改定，见 S4.4），来源单元和原文证据的 retire 仍禁止 Agent 提议。Debt 的 `paid` / `waived` 只能由用户设置，Agent 最多写 `claimed_paid`。
 7. [锁定·S13-3] `TrustRecord.alignment` 只由对齐状态按固定映射派生，任何写入口都不能直接写它。
 8. [锁定·S13-8] mathlib 参照基线三态：`unchecked`（Agent 可写）/ `confirmed`（只由服务端在本机 Lean profile 的 mathlib 源码或 Loogle 中查到该名字后写入，并记录 mathlib 版本）/ `not_found`（服务端查过、没有）。没有 profile 时保持 `unchecked`。提供重新核对入口（后端函数 + Desktop 按钮 + CLI 命令）。
 9. [锁定·S13-7] 学习视图标签「别的材料里见过」由对齐线自动计算；另有「新的」「新约定」和未还清账目汇总。另已接入用户本地研读进度，独立于地图与对齐推导标签（S9.1）。
@@ -279,7 +279,8 @@ pub type DomainEntity = EntityEnvelope<DomainPayload>;
 | `dialect_scope` / `create` | ✅ | `CreateDialectScope` |
 | `dialect_scope` / `edit` | ✅（不得改 `anchor_unit`） | `EditDialectScope` |
 | 语义对象 / `retire` | ✅（S4.4，选项 B） | `RetireObject`（现有，放宽到语义层） |
-| 来源对象 / `retire` | ❌ | `operation_not_supported`（同 P2） |
+| `source_relation` / `retire` | ✅（S4.4，2026-11-23 用户改定） | `RetireObject`（写在 `proposed_relations` 或 `proposed_objects` 都收，存为前者） |
+| `source_unit`、`source_span` / `retire` | ❌ | `operation_not_supported`（同 P2）；把来源单元的 id 当作关系退役 → `invalid_reference_kind` |
 | 用户专用：确认对齐、Debt 已还清 / 豁免 | Desktop 按钮 | `SetAlignmentReview`、`SetDebtSettlement`（MCP 无法编译） |
 | 服务端专用：mathlib 基线核对结果 | 核对入口 | `RecordMathlibBaseline`（MCP 无法编译） |
 | 其余 `semantic_kind`（proof、method_pattern、mathematical_object） | ❌ | `kind_not_supported` |
@@ -298,6 +299,12 @@ edit 一个**已接受**对象会产生新 revision；旧 revision 仍可解析�
 ### S4.4 retire [锁定·S13-1：选项 B]
 
 P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 2026-11-13 改定：**语义层**对象（共享对象、对齐线、Debt、约定卡）允许 Agent 提议 `retire`；来源层仍然禁止。
+
+**2026-11-23 用户改定**：来源层放开**书内关系**（`source_relation`）的 `retire`。起因是 Agent 连错的书内关系只能 edit、不能撤，修不干净。来源单元（`source_unit`，退役会连带退役相连关系，留到第二步）和原文证据（`source_span`）仍然不能由 Agent 提议退役。
+
+- 书内关系的写法：`{ "local_ref": "…", "kind": "source_relation", "op": "retire", "target_id": "<关系 id>", "expected_revision": "<rev>" }`，只带这两个字段。放在 `proposed_relations` 或 `proposed_objects` 都接受（两处形状相同），服务端统一存到 `proposed_relations`。
+- 书内关系的 create / edit 仍只能放 `proposed_relations`；放进 `proposed_objects` 报 `wrong_slot`，报错里写明该放哪。
+- 退役一条书内关系没有连带对象：两端的来源单元和证据 span 不动。
 
 - 写法：`{ "local_ref": "…", "kind": "<语义 kind>", "op": "retire", "target_id": "<已接受对象 id>", "expected_revision": "<rev>" }`。
 - 它仍然只是提案，须用户接受；接受前地图不变。
@@ -469,6 +476,7 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 |---|---|---|---|
 | P2 §4.2.1 示例，`source_unit` 的 payload | `"unit_kind": "theorem"` | `"kind": "statement"` | `crates/mathscape-domain/src/map_edit.rs` `SourceUnitDraft.kind: DiscoveryUnitKind`；`discovery_proposal.rs` 的 `DiscoveryUnitKind` 没有 `theorem`，定理和命题用 `statement`；P2 §4.2.3 正文已说明字段名是 `kind`（2026-11-10），但示例未同步 |
 | P2 §4.2.3 表 | “任意 `retire` ❌” | “来源层 `retire` ❌”，语义层见 S4.4 | 用户 2026-11-13 决定（S13.1 第 1 条） |
+| P2 §4.2.3 表 | “来源层 `retire` ❌” | “`source_relation` / `retire` ✅；`source_unit`、`source_span` 的 `retire` ❌” | 用户 2026-11-23 决定（S4.4） |
 
 ---
 
@@ -478,7 +486,7 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 
 | # | 事项 | 决定 |
 |---|---|---|
-| 1 | retire | 选项 B：语义层允许 Agent 提议 retire（S4.4）；Debt `paid` / `waived` 只能用户设，Agent 最多 `claimed_paid` |
+| 1 | retire | 选项 B：语义层允许 Agent 提议 retire（S4.4）；Debt `paid` / `waived` 只能用户设，Agent 最多 `claimed_paid`。2026-11-23 用户追加：来源层的书内关系也可提议 retire，来源单元和原文证据不变 |
 | 2 | Debt 还清的确认权 | `claimed_paid → paid` 只能用户确认；还清证据第一期只能引用对象 |
 | 3 | 两套对齐状态 | 采纳固定映射；`TrustRecord.alignment` 不可直接写 |
 | 4 | statement 回链 span | 是措辞来源证据，不是归属 |

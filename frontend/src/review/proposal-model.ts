@@ -9,6 +9,8 @@ import type { AnchoredMarkdown } from "../reader/selection";
 import { alignmentPlainLabel, entityPlainLabel, reviewItemLabel } from "../semantic/labels";
 import { collectSemanticSpanRefs } from "../semantic/review-model";
 import { effectiveProposalPayload, unwrapFieldChange } from "../semantic/semantic-diff";
+import { t } from "../i18n";
+import { relationLabel } from "./labels";
 import type { DiscoveryOutcome, SourceReviewAnchor, SourceReviewProjection, SourceReviewUnit } from "./types";
 
 export interface ChangeSetSelection {
@@ -91,6 +93,7 @@ export interface ProposedRelation {
   target?: string | null;
   evidence_spans?: string[];
   target_id?: string | null;
+  changes?: Record<string, unknown> | null;
 }
 
 export interface PendingChangeSet {
@@ -436,6 +439,52 @@ export type ProposalReviewProjection = Pick<SourceReviewProjection, "units" | "s
 
 const newRef = (value: unknown): string | null => typeof value === "string" ? value.replace(/^\$new:/, "") : null;
 
+export interface SourceRelationShape {
+  source: string;
+  target: string;
+  relation: string;
+}
+
+/**
+ * Ends and name of a `source_relation` item. `shape` is what a create or edit
+ * leaves on the map, or the relation a retire removes; `before` is what an
+ * edit replaces, when the ends or the name change. An edit or retire reads
+ * the existing relation from `baseObjects`; its item only carries the id.
+ */
+export function sourceRelationShape(
+  relation: ProposedRelation,
+  baseObjects?: Record<string, BaseObjectView>,
+): { shape: SourceRelationShape; before: SourceRelationShape | null; evidenceRefs: string[] } {
+  const refs = (value: unknown) => (Array.isArray(value) ? value : []).map(newRef).filter((ref): ref is string => ref !== null);
+  if (relation.op === "create") {
+    return {
+      shape: { source: newRef(relation.source) ?? "", target: newRef(relation.target) ?? "", relation: relation.relation ?? "" },
+      before: null,
+      evidenceRefs: refs(relation.evidence_spans),
+    };
+  }
+  const stored = relation.target_id ? baseObjects?.[relation.target_id] : undefined;
+  const base = stored?.kind === "source_relation" ? stored.payload : {};
+  const existing: SourceRelationShape = {
+    source: newRef(base.source) ?? "",
+    target: newRef(base.target) ?? "",
+    relation: typeof base.relation === "string" ? base.relation : "unknown_relation",
+  };
+  if (relation.op !== "edit") return { shape: existing, before: null, evidenceRefs: refs(base.evidence_spans) };
+  const changes = relation.changes ?? {};
+  const shape: SourceRelationShape = {
+    source: newRef(changes.source) ?? existing.source,
+    target: newRef(changes.target) ?? existing.target,
+    relation: typeof changes.relation === "string" ? changes.relation : existing.relation,
+  };
+  const changed = shape.source !== existing.source || shape.target !== existing.target || shape.relation !== existing.relation;
+  return {
+    shape,
+    before: changed ? existing : null,
+    evidenceRefs: refs(Array.isArray(changes.evidence_spans) ? changes.evidence_spans : base.evidence_spans),
+  };
+}
+
 /** Span refs of a unit: `source_spans` of a create payload, or the set value of an edit. */
 function spanRefs(fields: Record<string, unknown>): string[] {
   const raw = fields.source_spans;
@@ -694,22 +743,37 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
   }
 
   const sampleFor = (artifact: string | null) => artifact === null ? null : (item.anchors ?? []).find(anchor => anchor.artifact === artifact) ?? null;
+  const unitTitles = new Map<string, string>();
+  for (const group of groups.values()) for (const unit of group.units) unitTitles.set(unit.unit_ref, unit.display_title ?? unit.unit_ref);
+  const endTitle = (ref: string) => unitTitles.get(ref) ?? item.targetTitles?.[ref] ?? ref;
   for (const relation of relations) {
-    const source = newRef(relation.source) ?? relation.target_id ?? "";
-    const target = newRef(relation.target) ?? "";
-    const evidence = (relation.evidence_spans ?? []).map(newRef).flatMap(ref => (ref && anchors.get(ref)) || []);
+    const { shape, before, evidenceRefs } = sourceRelationShape(relation, item.baseObjects);
+    const { source, target } = shape;
+    const evidence = evidenceRefs.flatMap(ref => anchors.get(ref) ?? []);
     // Home: the source unit's snapshot, else the target unit's, else the evidence's.
     const artifact = unitGroup.has(source) ? unitGroup.get(source)! : unitGroup.has(target) ? unitGroup.get(target)! : evidence[0]?.artifact ?? null;
-    const homes = [groupFor(sampleFor(artifact))];
+    // An edit or retire of an existing relation has no snapshot of its own:
+    // list it with the first real snapshot rather than a phantom empty one.
+    const first = artifact === null && relation.op !== "create" ? groups.values().next().value : undefined;
+    const homes = [first ?? groupFor(sampleFor(artifact))];
+    const change = relation.op === "edit" || relation.op === "retire" ? relation.op : undefined;
+    const bases = change === "retire"
+      ? [t("review.relation.retired")]
+      : change === "edit"
+        ? [before
+          ? t("review.relation.editedFrom", { source: endTitle(before.source), relation: relationLabel(before.relation), target: endTitle(before.target) })
+          : t("review.relation.evidenceEdited")]
+        : [];
     // A cross-snapshot relation is also listed in the target unit's snapshot.
     if (unitGroup.has(source) && unitGroup.has(target) && unitGroup.get(target) !== artifact) homes.push(groupFor(sampleFor(unitGroup.get(target)!)));
     for (const group of homes) {
       group.relations.push({
         relation_ref: relation.local_ref,
         source, target,
-        relation: relation.relation ?? relation.op,
+        relation: shape.relation,
         evidence: evidence.filter(anchor => anchor.artifact === group.source.artifact_id).map(anchor => reviewAnchorOf(anchor, "relation_evidence")),
-        bases: [], origins: [],
+        bases, origins: [],
+        ...(change ? { change } : {}),
       });
     }
   }
@@ -805,6 +869,8 @@ export interface OverviewRelation {
   label?: string;
   source: OverviewEndpoint;
   target: OverviewEndpoint;
+  /** What an edit replaces, when it changes the ends or the relation name. */
+  before?: { relation: string; source: OverviewEndpoint; target: OverviewEndpoint };
   /** Both ends are new units in different snapshot groups. */
   crossSnapshot: boolean;
 }
@@ -866,11 +932,11 @@ export function proposalOverview(item: PendingChangeSet, groups: ProposalReviewP
   const endpoint = (ref: string): OverviewEndpoint => ({ ref, title: title(ref), origin: unitGroup.has(ref) ? "new" : "existing", group: groupOf(ref) });
   const relationList: OverviewRelation[] = [
     ...relations.map(relation => {
-      const sourceRef = newRef(relation.source) ?? relation.target_id ?? "";
-      const targetRef = newRef(relation.target) ?? "";
-      const source = endpoint(sourceRef), target = endpoint(targetRef);
+      const { shape, before } = sourceRelationShape(relation, item.baseObjects);
+      const source = endpoint(shape.source), target = endpoint(shape.target);
       return {
-        ref: relation.local_ref, relation: relation.relation ?? relation.op, op: relation.op, source, target,
+        ref: relation.local_ref, relation: shape.relation, op: relation.op, source, target,
+        ...(before ? { before: { relation: before.relation, source: endpoint(before.source), target: endpoint(before.target) } } : {}),
         crossSnapshot: source.group !== null && target.group !== null && source.group !== target.group,
       };
     }),
@@ -974,7 +1040,8 @@ export function proposalDiscoveryOutcome(item: PendingChangeSet, group: Proposal
       references: [],
       relations: group.relations.map(relation => ({
         source: relation.source, target: relation.target, relation: relation.relation,
-        evidence: relation.evidence.map(anchorView), bases: [], origins: [],
+        evidence: relation.evidence.map(anchorView), bases: relation.bases, origins: [],
+        ...(relation.change ? { change: relation.change } : {}),
       })),
       issues: [],
       pending_tasks: [],

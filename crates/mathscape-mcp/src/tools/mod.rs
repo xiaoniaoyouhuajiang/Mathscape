@@ -84,7 +84,10 @@ pub const LIST_CHANGE_SETS: &str = "list_change_sets";
 /// `/18`: `graph.neighborhood` adds typed-hop `preset` (`heuristic` default
 /// when `edge_types` is omitted, plus `structural`, `semantic_only`, `raw`)
 /// and projects `uses_entity`, `of_concept`, and `paid_by` relations.
-pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/18";
+/// `/19`: `propose_changes` accepts `retire` of a `source_relation` (in
+/// either array) and reports a misplaced relation create / edit as
+/// `wrong_slot`.
+pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/19";
 
 /// sha256 of the serialized [`tool_definitions`] with object keys sorted (so
 /// the value does not depend on serde_json's `preserve_order` feature), for
@@ -302,8 +305,8 @@ mod schema_version_tests {
     /// tool name, description or schema changes the fingerprint: bump
     /// `TOOL_SCHEMA_VERSION` (and the skill frontmatter) and re-pin.
     const PINNED: (&str, &str) = (
-        "mathscape-mcp/18",
-        "d885dcdc7f136206553c446f0b96685caa29bbbabcf3369b054117b10da56f72",
+        "mathscape-mcp/19",
+        "45f072cae36ef7593d8f4ca822364db44fd0589d5ec64b3a2c9aca27c4b77edc",
     );
 
     #[test]

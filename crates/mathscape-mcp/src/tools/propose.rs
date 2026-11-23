@@ -193,7 +193,7 @@ impl Diagnostic {
 pub(super) fn definition() -> Value {
     json!({
         "name": PROPOSE_CHANGES,
-        "description": "Validate and persist a Phase2 proposal. It supports immutable source_span creation, source_unit/source_relation create/edit, and the semantic layer (docs/semantic-write-contract.md): semantic_entity (concept, declaration, theory, problem_schema), alignment, debt and dialect_scope create/edit, plus retire of semantic objects (op retire with target_id and expected_revision). Theories are flat topic shelves (search existing/staged ones with workspace.search kinds=[\"theory\"] before creating one; give aliases and topic-level names without concrete formulas; home_theory on non-theory entities can be edited later to reorganize). It returns staged or blocked and never changes the accepted map; accepting later only writes to the map and never raises trust. Semantic payloads reference new items as $new:<local_ref>. Never set trust; alignment status at most partially_aligned / disputed / incompatible (reviewed and accepted are user actions; there is no same_as); debt status at most claimed_paid (with paid_by); mathlib_baseline.status always unchecked (confirmed / not_found are written by the server re-check). Set target_object to the one shared object (or section unit) the change set is about. Only deterministic checks block; warn / info diagnostics are review items for the user. A source_span payload is {artifact_id, md_byte_range, granularity, quote}: quote is the full text of that range, the range is at most 4096 bytes (span_too_long; split a chapter by problem or paragraph), and material.locate returns a range that passes the quote check. Use granularity page when material.locate returned a page (page_granularity_available true); inline records no page, so never claim a page number for an inline span. To revise an earlier proposal of this investigation, pass the supersedes object from list_change_sets; without it a new change set is created. Problems of existing workspace objects this proposal does not touch are warn head_integrity and never block. Requires a bound round token.",
+        "description": "Validate and persist a Phase2 proposal. It supports immutable source_span creation, source_unit/source_relation create/edit, source_relation retire (the only source-layer retire: op retire with target_id and expected_revision, in proposed_relations or proposed_objects; source_relation create/edit only go in proposed_relations), and the semantic layer (docs/semantic-write-contract.md): semantic_entity (concept, declaration, theory, problem_schema), alignment, debt and dialect_scope create/edit, plus retire of semantic objects (op retire with target_id and expected_revision). Theories are flat topic shelves (search existing/staged ones with workspace.search kinds=[\"theory\"] before creating one; give aliases and topic-level names without concrete formulas; home_theory on non-theory entities can be edited later to reorganize). It returns staged or blocked and never changes the accepted map; accepting later only writes to the map and never raises trust. Semantic payloads reference new items as $new:<local_ref>. Never set trust; alignment status at most partially_aligned / disputed / incompatible (reviewed and accepted are user actions; there is no same_as); debt status at most claimed_paid (with paid_by); mathlib_baseline.status always unchecked (confirmed / not_found are written by the server re-check). Set target_object to the one shared object (or section unit) the change set is about. Only deterministic checks block; warn / info diagnostics are review items for the user. A source_span payload is {artifact_id, md_byte_range, granularity, quote}: quote is the full text of that range, the range is at most 4096 bytes (span_too_long; split a chapter by problem or paragraph), and material.locate returns a range that passes the quote check. Use granularity page when material.locate returned a page (page_granularity_available true); inline records no page, so never claim a page number for an inline span. To revise an earlier proposal of this investigation, pass the supersedes object from list_change_sets; without it a new change set is created. Problems of existing workspace objects this proposal does not touch are warn head_integrity and never block. Requires a bound round token.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -279,7 +279,8 @@ pub(super) fn get_annotations() -> Value {
 }
 
 pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Value, ToolError> {
-    let args: ProposeArgs = super::parse_args(arguments)?;
+    let mut args: ProposeArgs = super::parse_args(arguments)?;
+    normalize_relation_retires(&mut args);
     let round = required_round(workspace)?;
     validate_basic_args(&args)?;
     let proposal_fingerprint = proposal_fingerprint(&args)?;
@@ -320,6 +321,7 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
     {
         diagnostics.extend(semantic::precheck(object, &snapshot));
     }
+    diagnostics.extend(relation_retire_target_diagnostics(&args, &snapshot));
     let (dependencies, dependency_diagnostics) = resolve_staged_dependencies(
         &versions,
         &snapshot,
@@ -866,6 +868,24 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
             }
             continue;
         }
+        if object.kind == "source_relation" {
+            // A well-formed retire was moved to `proposed_relations` by
+            // `normalize_relation_retires`; what is left is misplaced.
+            result.push(if object.op == "retire" {
+                Diagnostic::error(
+                    "invalid_arg",
+                    "retire takes only target_id and expected_revision",
+                    Some(&object.local_ref),
+                )
+            } else {
+                Diagnostic::error(
+                    "wrong_slot",
+                    "source_relation create / edit belongs in proposed_relations (top-level relation, source, target, evidence_spans; edit uses changes), not proposed_objects; only op retire is accepted in either array",
+                    Some(&object.local_ref),
+                )
+            });
+            continue;
+        }
         if !matches!(object.kind.as_str(), "source_unit" | "source_span") {
             result.push(Diagnostic {
                 level: Level::Error,
@@ -880,7 +900,7 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
             result.push(Diagnostic {
                 level: Level::Error,
                 code: "operation_not_supported".to_owned(),
-                message: "source items support create and edit; retiring source objects is a Desktop action".to_owned(),
+                message: "source_unit supports create and edit, source_span only create; retiring them is a Desktop action (only source_relation can be retired by a proposal)".to_owned(),
                 local_ref: Some(object.local_ref.clone()),
                 target_id: None,
             });
@@ -935,11 +955,11 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                 target_id: None,
             });
         }
-        if !matches!(relation.op.as_str(), "create" | "edit") {
+        if !matches!(relation.op.as_str(), "create" | "edit" | "retire") {
             result.push(Diagnostic {
                 level: Level::Error,
                 code: "operation_not_supported".to_owned(),
-                message: "Phase2-0 only supports create and edit".to_owned(),
+                message: "source_relation supports create, edit and retire".to_owned(),
                 local_ref: Some(relation.local_ref.clone()),
                 target_id: None,
             });
@@ -957,16 +977,30 @@ fn compile_diagnostics(args: &ProposeArgs, ids: &BTreeMap<String, String>) -> Ve
                 target_id: None,
             });
         }
-        if relation.op == "edit"
+        if matches!(relation.op.as_str(), "edit" | "retire")
             && (relation.target_id.is_none() || relation.expected_revision.is_none())
         {
             result.push(Diagnostic {
                 level: Level::Error,
                 code: "missing_revision_guard".to_owned(),
-                message: "relation edit requires target_id and expected_revision".to_owned(),
+                message: "relation edit / retire requires target_id and expected_revision"
+                    .to_owned(),
                 local_ref: Some(relation.local_ref.clone()),
                 target_id: None,
             });
+        }
+        if relation.op == "retire"
+            && (relation.relation.is_some()
+                || relation.source.is_some()
+                || relation.target.is_some()
+                || !relation.evidence_spans.is_empty()
+                || relation.changes.is_some())
+        {
+            result.push(Diagnostic::error(
+                "invalid_arg",
+                "retire takes only target_id and expected_revision",
+                Some(&relation.local_ref),
+            ));
         }
     }
     for (local_ref, id) in ids {
@@ -1623,6 +1657,66 @@ fn validate_span_draft(draft: &SourceSpanDraft) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+/// A `source_relation` retire has the same shape in both arrays, so one
+/// written in `proposed_objects` is moved to `proposed_relations`; the stored
+/// proposal then has a single shape. Create / edit differ per array and stay
+/// where they were written (`wrong_slot`).
+fn normalize_relation_retires(args: &mut ProposeArgs) {
+    let movable = |object: &ProposedObject| {
+        object.kind == "source_relation"
+            && object.op == "retire"
+            && object.payload.is_none()
+            && object.changes.is_none()
+            && object.evidence.is_empty()
+    };
+    let (moved, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut args.proposed_objects)
+        .into_iter()
+        .partition(movable);
+    args.proposed_objects = kept;
+    args.proposed_relations
+        .extend(moved.into_iter().map(|object| ProposedRelation {
+            local_ref: object.local_ref,
+            kind: object.kind,
+            op: object.op,
+            relation: None,
+            source: None,
+            target: None,
+            evidence_spans: Vec::new(),
+            target_id: object.target_id,
+            expected_revision: object.expected_revision,
+            changes: None,
+            debts: object.debts,
+        }));
+}
+
+/// Only source relations can be retired through `proposed_relations`: the
+/// planner's `retire_object` also retires source units and spans, which stay
+/// a Desktop action.
+fn relation_retire_target_diagnostics(
+    args: &ProposeArgs,
+    snapshot: &MapEditSnapshot,
+) -> Vec<Diagnostic> {
+    args.proposed_relations
+        .iter()
+        .filter(|relation| relation.op == "retire")
+        .filter_map(|relation| {
+            let target = relation.target_id.as_deref()?;
+            let kind = match snapshot.objects.iter().find(|o| o.object_id == target) {
+                Some(current) if current.kind == "SourceUnitRelation" => return None,
+                Some(current) => current.kind.as_str(),
+                // Staged by another change set: relation ids are generated.
+                None if target.starts_with("mathscape:source-relation/") => return None,
+                None => "non-relation id",
+            };
+            Some(Diagnostic::error(
+                "invalid_reference_kind",
+                format!("target_id is a {kind}, not a source_relation; only source relations can be retired by a proposal"),
+                Some(&relation.local_ref),
+            ))
+        })
+        .collect()
+}
+
 fn is_retired(lifecycle: &str) -> bool {
     matches!(lifecycle, "deprecated" | "superseded" | "rejected")
 }
@@ -1799,6 +1893,13 @@ fn compile_operations(
                     changes,
                 });
             }
+            "retire" => operations.push(UserChangeOperation::RetireObject {
+                object_id,
+                expected_revision: relation
+                    .expected_revision
+                    .clone()
+                    .ok_or("missing expected_revision")?,
+            }),
             _ => return Err(format!("unsupported source_relation op {}", relation.op)),
         }
     }
@@ -1917,11 +2018,11 @@ fn allocate_ids(
         }
     }
     for relation in &args.proposed_relations {
-        let id = if relation.op == "edit" {
+        let id = if matches!(relation.op.as_str(), "edit" | "retire") {
             relation.target_id.clone().ok_or_else(|| {
                 ToolError::new(
                     ToolErrorCode::InvalidArg,
-                    "relation edit requires target_id",
+                    "relation edit / retire requires target_id",
                 )
             })?
         } else {
@@ -2124,10 +2225,9 @@ fn resolve_staged_dependencies(
     for value in proposal_reference_values(args) {
         let created_here = args.proposed_objects.iter().any(|o| {
             !matches!(o.op.as_str(), "edit" | "retire") && ids.get(&o.local_ref) == Some(&value)
-        }) || args
-            .proposed_relations
-            .iter()
-            .any(|r| r.op != "edit" && ids.get(&r.local_ref) == Some(&value));
+        }) || args.proposed_relations.iter().any(|r| {
+            !matches!(r.op.as_str(), "edit" | "retire") && ids.get(&r.local_ref) == Some(&value)
+        });
         if created_here || in_head.contains(value.as_str()) {
             continue;
         }

@@ -225,6 +225,40 @@ describe("proposal overview across snapshots", () => {
     expect(groups[1].relations[0].evidence[0].block_ids).toEqual(["block:sc"]);
   });
 
+  it("shows an edited or retired source relation by its stored ends, not by its own id", () => {
+    const proposal = item("R");
+    const [exercise, theorem, schema] = ["mathscape:source-unit/ex8", "mathscape:source-unit/thm4", "mathscape:source-unit/thm9"];
+    const stored = (target: string) => ({ kind: "source_relation", payload: { relation: "applies_method", source: exercise, target, evidence_spans: [] } });
+    proposal.proposal.proposed_relations = [
+      { local_ref: "fix", kind: "source_relation", op: "edit", target_id: "mathscape:source-relation/a", changes: { target: schema, relation: "cites" } },
+      { local_ref: "drop", kind: "source_relation", op: "retire", target_id: "mathscape:source-relation/b" },
+    ];
+    proposal.baseObjects = { "mathscape:source-relation/a": stored(theorem), "mathscape:source-relation/b": stored(theorem) };
+    proposal.targetTitles = { [exercise]: "习题 8", [theorem]: "定理 4", [schema]: "定理 9" };
+
+    const overview = proposalOverview(proposal);
+    expect(overview.relationList.map(r => [r.op, r.source.title, r.relation, r.target.title])).toEqual([
+      ["edit", "习题 8", "cites", "定理 9"],
+      ["retire", "习题 8", "applies_method", "定理 4"],
+    ]);
+    const before = overview.relationList[0].before!;
+    expect([before.source.title, before.relation, before.target.title]).toEqual(["习题 8", "applies_method", "定理 4"]);
+    expect(overview.relationList[1].before).toBeUndefined();
+
+    const groups = proposalReviewProjection(proposal);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].relations.map(r => [r.change, r.source, r.relation, r.target, r.bases])).toEqual([
+      ["edit", exercise, "cites", schema, ["修改，原为「习题 8 —应用方法→ 定理 4」"]],
+      ["retire", exercise, "applies_method", theorem, ["退役这条关系"]],
+    ]);
+    // An edit that only swaps evidence keeps the ends and has no "before".
+    proposal.proposal.proposed_relations = [
+      { local_ref: "ev", kind: "source_relation", op: "edit", target_id: "mathscape:source-relation/a", changes: { evidence_spans: [] } },
+    ];
+    const evidenceOnly = proposalOverview(proposal).relationList[0];
+    expect([evidenceOnly.source.title, evidenceOnly.relation, evidenceOnly.target.title, evidenceOnly.before]).toEqual(["习题 8", "applies_method", "定理 4", undefined]);
+  });
+
   it("defaults to the snapshot with the most units and relations", () => {
     const proposal = multiSnapshotProposal();
     proposal.proposal.proposed_relations = proposal.proposal.proposed_relations!.slice(3);

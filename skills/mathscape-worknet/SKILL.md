@@ -2,11 +2,11 @@
 name: mathscape-worknet
 description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、对象卡、表示、证明上下文、失败见证）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
 metadata:
-  version: "0.7.3"
-  tool_schema_version: "mathscape-mcp/18"
+  version: "0.7.4"
+  tool_schema_version: "mathscape-mcp/19"
 ---
 
-# Mathscape 数学地图构建 skill v0.7.3
+# Mathscape 数学地图构建 skill v0.7.4
 
 这份 skill 给在 Mathscape 工作区中帮助用户搭建数学地图的 Agent 使用。它的任务很简单：从用户关心的原文、手稿或问题出发，逐步整理出可回溯的数学理解，并把仍然不确定的地方留下来。
 
@@ -193,7 +193,9 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
 ```
 
 - 单元 `kind`：`section`、`definition`、`statement`、`proof`、`problem`、`hint`、`solution`、`example`、`remark`、`method`、`notation`、`narrative`；`completeness`：`complete`、`left_truncated`、`right_truncated`、`internally_missing`、`uncertain`。关系 `relation`：`proves`、`solves`、`hints`、`explains`、`cites`、`applies_method`。
-- 修改已有对象用 `op: "edit"`，带 `target_id`、`expected_revision` 和 `changes`；来源对象不能提议退役（语义层对象可以，见 4.2）。
+- 修改已有对象用 `op: "edit"`，带 `target_id`、`expected_revision` 和 `changes`。
+- **连错的书内关系可以提议退役**：`{ "local_ref": "x", "kind": "source_relation", "op": "retire", "target_id": "<关系 id>", "expected_revision": "<rev>" }`，只带这两个字段，放 `proposed_relations`（放 `proposed_objects` 也收）。关系连错了就退役它再建对的，不要只用 edit 把几条错关系改指同一个目标。来源单元和原文证据仍不能提议退役，需要时告诉用户在 Desktop 里处理（语义层对象的退役见 4.2）。
+- 书内关系的 create / edit 只放 `proposed_relations`；放进 `proposed_objects` 会报 `wrong_slot`。
 - 顺序随意：服务端在最终图上统一校验，子单元写在父单元前面也可以。
 
 **引用规则**：
@@ -221,6 +223,7 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
 | `invalid_locator` | 本提案里的原文证据缺少物理定位（没有 Markdown 范围、页或手稿选区）；`target_id` 指出是哪个对象 |
 | `span_inactive` | 同一范围的 span 已被用户退役；不要自动重建，告诉用户 |
 | `unused_span` | 新建的 span 没被引用 |
+| `wrong_slot` | 书内关系的 create / edit 写进了 `proposed_objects`；挪到 `proposed_relations`，字段是顶层的 `relation` / `source` / `target` / `evidence_spans`（edit 用 `changes`） |
 | `dangling_new_ref` / `dangling_staged_ref` | `$new:` 没定义，或引用的暂存对象不在本调查的 staged 提案里 |
 | `invalid_local_ref` | `local_ref` 不合规 |
 | `change_set_dependency_cycle` | 提案之间互相依赖 |
