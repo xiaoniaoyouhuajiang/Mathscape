@@ -4,23 +4,32 @@ use serde::{Deserialize, Serialize};
 
 /// Harness behind an [`crate::AgentExecutor`] (contract §5).
 ///
-/// Serialized as snake_case (`codex`, `claude_code`, `hmz`, `custom`).
+/// Wire names: `codex`, `opencode`, `claude_code`, `hmz`, `custom`.
 /// `Hmz` is an optional adapter and never required by a default flow.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentBackend {
     Codex,
+    #[serde(rename = "opencode")]
+    OpenCode,
     ClaudeCode,
     Hmz,
     Custom,
 }
 
 impl AgentBackend {
-    pub const ALL: [Self; 4] = [Self::Codex, Self::ClaudeCode, Self::Hmz, Self::Custom];
+    pub const ALL: [Self; 5] = [
+        Self::Codex,
+        Self::OpenCode,
+        Self::ClaudeCode,
+        Self::Hmz,
+        Self::Custom,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Codex => "codex",
+            Self::OpenCode => "opencode",
             Self::ClaudeCode => "claude_code",
             Self::Hmz => "hmz",
             Self::Custom => "custom",
@@ -31,6 +40,7 @@ impl AgentBackend {
     pub const fn required_capability(self) -> Option<crate::Capability> {
         match self {
             Self::Codex => Some(crate::Capability::Codex),
+            Self::OpenCode => Some(crate::Capability::OpenCode),
             Self::ClaudeCode => Some(crate::Capability::ClaudeCode),
             Self::Hmz => Some(crate::Capability::Hmz),
             Self::Custom => None,
