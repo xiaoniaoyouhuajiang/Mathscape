@@ -68,6 +68,20 @@ MCP 覆盖 typed-hop 语义遍历和校对 read / grep / locate / propose 往返
 
 默认测试不需要 API key、真实 Marker 模型或私人教材。LLM 使用 scripted backend 或本地 HTTP/SSE 模拟器；真实材料效果、遗漏率、数学质量和费用必须独立评估，工程测试通过不能替代这些实验。
 
+## CI 与发布
+
+| Workflow | 触发 | Job 与时限 |
+| --- | --- | --- |
+| [CI](../.github/workflows/ci.yml) | PR、push `main`、手动 | `changes` 5 分钟；Rust（fmt / clippy / test）20 分钟；Frontend（typecheck / unit / build）10 分钟；Playwright chromium、webkit 各 15 分钟 |
+| [Cross-platform](../.github/workflows/cross-platform.yml) | push `main`、手动、带 `ci:full` 的 PR、`v*` tag | macOS / Windows `cargo test` 30 分钟；tauri 安装包 60 分钟；发布 Release 10 分钟 |
+| [Dependency audit](../.github/workflows/audit.yml) | 每周一 09:00（北京时间）、手动 | `cargo audit`、`npm audit` 各 10 分钟 |
+
+PR 上按改动跳过 job（跳过仍报告检查结果，不阻塞必需检查）：没有 Rust 相关改动时跳过 Rust，InkPad 源码及其共用的前端构建依赖仍算 Rust 相关；只有改到 `frontend/`、`fixtures/`、`testdata/ink/`、`apps/mathscape-desktop/icons/` 或 `ci.yml` 时才跑 Frontend 和 Playwright。push `main` 和手动运行总是跑全部 job。
+
+Linux 测试由 CI 承担，Cross-platform 只在 macOS 和 Windows 上跑 `cargo test`：push `main`、手动运行和 `ci:full` PR 时执行，不再有夜间定时运行，tag 上也不执行。安装包（Linux `.deb`、macOS `.dmg`、Windows NSIS `*-setup.exe`）只在 `ci:full` PR 和 `v*` tag 上构建；PR 上的安装包作为 workflow artifact 保留 7 天，push `main` 不再打包。
+
+发布：维护者选一个 CI 与 Cross-platform 都已通过的 `main` 提交，打语义化版本 tag 并推送（`git tag -a v0.2.0 -m "Mathscape 0.2.0" <commit>`，`git push origin v0.2.0`）。tag 构建只打包、不重跑测试；三个安装包都成功后，`release` job 用 tag 创建 GitHub Release，附上安装包并按已合并 PR 生成说明，可随后在网页上修改。安装包版本取自 tag（去掉 `v`），`Cargo.toml` 与 `tauri.conf.json` 中的 `version` 不会被改写，需要一致时先用 PR 升版本再打 tag。任一安装包失败则不创建 Release：修复后重跑失败的 job，或删除 tag 后重新打在修复后的提交上。英文步骤见 [CONTRIBUTING](../CONTRIBUTING.md#releases)。
+
 ## Fixture 与协议演进
 
 小型可分发固定材料放 [testdata](../testdata/)，保留来源摘要。大型语料由 `MATHSCAPE_CORPUS_ROOT` 定位，默认测试不能依赖它。本地 Markdown 锚点回归可用 `MATHSCAPE_MARKDOWN_FIXTURE` 与对应 ignored test。`mathscape-fixture` crate 尚是占位，不能假设已有通用导入器。

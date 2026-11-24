@@ -71,7 +71,7 @@ The first **EMIR semantic workflow** also supports proposals and human acceptanc
 
 ### Run the desktop app
 
-From the repository root, in a POSIX shell:
+Tagged versions publish Linux `.deb`, macOS `.dmg`, and Windows installers on the [Releases page](https://github.com/xiaoniaoyouhuajiang/Mathscape/releases). To run from source, from the repository root, in a POSIX shell:
 
 ```sh
 npm --prefix frontend install
