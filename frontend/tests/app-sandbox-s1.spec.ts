@@ -678,7 +678,10 @@ test.describe("S1 sandbox shell", () => {
     await input.click();
     await expect(menu).toHaveCount(0);
     // Canonical-id map nodes (2) + active 32-hex live ink notes (2) are offered.
-    await page.keyboard.type("看看 @");
+    // Commit the CJK prefix like an IME; zero-delay repeated WebKit insertText
+    // commands can leave the caret between the identical characters.
+    await page.keyboard.insertText("看看 ");
+    await page.keyboard.type("@");
     await expect(menu).toBeVisible();
     await expect(options).toHaveCount(4);
     await expect(input).toHaveAttribute("aria-expanded", "true");
