@@ -69,7 +69,7 @@ Mathscape 是面向数学学习者和研究者的**本地优先桌面工具**，
 
 ### 启动桌面应用
 
-在仓库根目录的 POSIX shell 中运行：
+带版本 tag 的发布会在 [Releases 页面](https://github.com/xiaoniaoyouhuajiang/Mathscape/releases)提供 Linux `.deb`、macOS `.dmg` 和 Windows 安装包。从源码运行时，在仓库根目录的 POSIX shell 中运行：
 
 ```sh
 npm --prefix frontend install
