@@ -138,6 +138,14 @@ test("both theme controls stay in sync, persist, and repaint without moving the 
   page.on("pageerror", error => errors.push(error.message));
   await page.goto("/tests/app.html");
   await expect(page.locator("#service-state")).toContainText("本地内核已连接");
+  // The initial wrapped legend changes canvas height. Finish that first
+  // resize before setting a deliberate pan and checking theme-only repaint.
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    const cy = (document.querySelector("#graph") as unknown as { _cyreg: { cy: { resize(): void } } })._cyreg.cy;
+    cy.resize();
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  });
   const before = await page.evaluate(() => {
     const id = Object.keys(window.appHarness.labels())[0];
     window.appHarness.selectNode(id);
