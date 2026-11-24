@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { WorkflowStatus } from "./types";
 
 const lookup = (table: Record<string, string>) => (value: string): string => table[value] ?? value;
@@ -27,13 +28,17 @@ export const referenceStatusLabel = lookup({
   unresolved: "未解析", candidate: "存在候选", resolved_local: "已解析到本地单元", ambiguous: "存在歧义",
 });
 
-export const relationLabel = lookup({
+const knownRelationLabel = lookup({
   proves: "证明", solves: "解答", hints: "提示", explains: "解释", cites: "引用", applies_method: "应用方法",
   expresses: "说的就是它", specializes: "是特例", generalizes: "是推广", instance_of: "是实例",
   representation_of: "换一种表示", logically_equivalent: "逻辑等价", definitionally_equivalent: "定义等价",
   exact_realization: "精确实现", notation_for: "是记号", overlaps_with: "部分重合", incompatible_with: "对不上",
   in_theory: "属于理论", debt_on: "挂账", scope_of: "约定适用于", uses_entity: "引用对象",
 });
+
+/** `unknown_relation`: a proposal edits or retires a relation the review cannot read. */
+export const relationLabel = (value: string): string =>
+  value === "unknown_relation" ? t("review.relation.unknown") : knownRelationLabel(value);
 
 export const issueKindLabel = lookup({
   left_truncated: "左侧截断", right_truncated: "右侧截断", internally_missing: "内部缺失",

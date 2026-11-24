@@ -922,6 +922,203 @@ fn phase2_source_proposals_stage_and_read_back_without_changing_the_map() {
     assert_eq!(map_object_count(&f.root), initial_objects);
 }
 
+/// Seeds two accepted source units and one `applies_method` relation between
+/// them; returns (unit a, unit a revision, relation, relation revision).
+fn seed_source_relation(root: &Path, span: &str) -> (String, String, String, String) {
+    let connection = rusqlite::Connection::open(root.join("mathscape.sqlite3")).unwrap();
+    let insert = |id: &str, shape: &str, kind: &str, revision: &str, payload: Value| {
+        connection
+            .execute(
+                "INSERT INTO map_objects(object_id, object_shape, entity_kind, current_revision)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![id, shape, kind, revision],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO map_object_revisions
+                 (object_id, revision_id, schema_version, lifecycle, created_at, created_by, generation_run, payload_json)
+                 VALUES (?1, ?2, 'mathscape-source-1', 'active', '2026-11-09T00:00:00Z', 'test', NULL, ?3)",
+                rusqlite::params![id, revision, payload.to_string()],
+            )
+            .unwrap();
+    };
+    let trust = json!({
+        "provenance": "exact", "parse": "reviewed", "segmentation": "checked",
+        "typing": "unchecked", "proof": "none", "alignment": "unmatched",
+        "curation": "accepted", "confidence": 0.95, "evidence": [], "reviewers": ["test"]
+    });
+    let unit = |title: &str| {
+        json!({
+            "payload_kind": "semantic_unit",
+            "payload": {
+                "edition_binding": {"status": "unresolved"},
+                "kind": "statement", "display_title": title, "source_title": null,
+                "source_labels": [], "parent_unit": null, "source_spans": [span],
+                "dialect_binding": {"status": "uncontextualized"},
+                "resulting_dialect_scope": null, "surface_content_artifact": null,
+                "local_references": [], "completeness": "complete",
+                "facts_pending": false, "trust": trust
+            }
+        })
+    };
+    let (a, b) = (
+        "mathscape:source-unit/retire-a",
+        "mathscape:source-unit/retire-b",
+    );
+    let relation = "mathscape:source-relation/retire-ab";
+    let revision = |n: u8| format!("sha256:{}", n.to_string().repeat(64));
+    insert(
+        a,
+        "entity",
+        "SourceSemanticUnit",
+        &revision(1),
+        unit("习题 8"),
+    );
+    insert(
+        b,
+        "entity",
+        "SourceSemanticUnit",
+        &revision(2),
+        unit("定理 4"),
+    );
+    insert(
+        relation,
+        "relation",
+        "SourceUnitRelation",
+        &revision(3),
+        json!({ "payload_kind": "unit_relation", "payload": { "relation": "applies_method", "trust": trust } }),
+    );
+    for (role, ordinal_key, ordinal, entity) in [
+        ("source", -1, None, a),
+        ("target", -1, None, b),
+        ("evidence", 0, Some(0), span),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO map_relation_endpoints
+                 (relation_id, revision_id, role, ordinal_key, ordinal, entity_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![relation, revision(3), role, ordinal_key, ordinal, entity],
+            )
+            .unwrap();
+    }
+    (a.to_owned(), revision(1), relation.to_owned(), revision(3))
+}
+
+#[test]
+fn source_relation_retire_stages_from_either_array_and_stays_relation_only() {
+    let f = fixture();
+    let span = seed_source_span(&f.root, &f.markdown);
+    let (unit, unit_revision, relation, relation_revision) = seed_source_relation(&f.root, &span);
+    let initial_objects = map_object_count(&f.root);
+    let retire = |kind: &str, target: &str, revision: &str| {
+        json!({ "local_ref": "r", "kind": kind, "op": "retire",
+                "target_id": target, "expected_revision": revision })
+    };
+    let propose = |request_id: &str, objects: Vec<Value>, relations: Vec<Value>| {
+        let (result, is_error) = call(
+            &f.server,
+            "propose_changes",
+            json!({ "request_id": request_id, "rationale": "退役连错的书内关系",
+                    "proposed_objects": objects, "proposed_relations": relations }),
+        );
+        assert!(!is_error, "{result}");
+        result
+    };
+
+    let staged = propose(
+        "retire-in-relations",
+        vec![],
+        vec![retire("source_relation", &relation, &relation_revision)],
+    );
+    assert_eq!(staged["status"], "staged", "{staged}");
+    assert_eq!(
+        staged["compiled_operations"][0]["operation"],
+        "retire_object"
+    );
+    assert_eq!(staged["compiled_operations"][0]["object_id"], relation);
+
+    // The same retire written in proposed_objects is stored in proposed_relations.
+    let moved = propose(
+        "retire-in-objects",
+        vec![retire("source_relation", &relation, &relation_revision)],
+        vec![],
+    );
+    assert_eq!(moved["status"], "staged", "{moved}");
+    let (read_back, _) = call(
+        &f.server,
+        "get_change_set",
+        json!({ "change_set_id": moved["change_set_id"] }),
+    );
+    assert_eq!(read_back["proposal"]["proposed_objects"], json!([]));
+    assert_eq!(
+        read_back["proposal"]["proposed_relations"][0]["op"],
+        "retire"
+    );
+    assert_eq!(
+        read_back["proposal"]["proposed_relations"][0]["target_id"],
+        relation
+    );
+
+    let blocked = |result: Value, code: &str| {
+        assert_eq!(result["status"], "blocked", "{result}");
+        assert!(
+            diagnostic_codes(&result).contains(&code.to_owned()),
+            "{result}"
+        );
+    };
+    // Create / edit of a relation in proposed_objects names the right array.
+    let misplaced = propose(
+        "create-in-objects",
+        vec![json!({ "local_ref": "r", "kind": "source_relation", "op": "create", "payload": {} })],
+        vec![],
+    );
+    assert!(
+        misplaced["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("proposed_relations")
+    );
+    blocked(misplaced, "wrong_slot");
+    // Source units stay a Desktop retire, also when disguised as a relation.
+    blocked(
+        propose(
+            "retire-unit",
+            vec![retire("source_unit", &unit, &unit_revision)],
+            vec![],
+        ),
+        "operation_not_supported",
+    );
+    blocked(
+        propose(
+            "retire-unit-as-relation",
+            vec![],
+            vec![retire("source_relation", &unit, &unit_revision)],
+        ),
+        "invalid_reference_kind",
+    );
+    blocked(
+        propose(
+            "retire-with-body",
+            vec![],
+            vec![
+                json!({ "local_ref": "r", "kind": "source_relation", "op": "retire",
+                         "target_id": relation, "expected_revision": relation_revision,
+                         "relation": "cites" }),
+            ],
+        ),
+        "invalid_arg",
+    );
+    let stale = propose(
+        "retire-stale",
+        vec![],
+        vec![retire("source_relation", &relation, &unit_revision)],
+    );
+    assert_eq!(stale["status"], "blocked", "{stale}");
+    assert_eq!(map_object_count(&f.root), initial_objects);
+}
+
 #[test]
 fn phase2_source_span_proposals_validate_ranges_and_use_content_identity() {
     let f = fixture();

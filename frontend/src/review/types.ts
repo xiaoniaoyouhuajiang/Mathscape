@@ -47,6 +47,8 @@ export interface DiscoveryRelationView {
   evidence: DiscoveryAnchorView[];
   bases: string[];
   origins: string[];
+  /** Set by a proposal that edits or retires an existing relation. */
+  change?: "edit" | "retire";
 }
 
 export interface DiscoveryIssueView {
@@ -153,7 +155,8 @@ export interface SourceReviewProjection {
   units: SourceReviewUnit[];
   references: { reference_ref: string; owner: string; text: string; anchor: SourceReviewAnchor; status: string; candidates: string[]; reason: string; origins: string[] }[];
   structure_relations: { relation_ref: string; parent: string; child: string }[];
-  relations: { relation_ref: string; source: string; target: string; relation: string; evidence: SourceReviewAnchor[]; bases: string[]; origins: string[] }[];
+  /** `change`: a proposal edits or retires an existing relation instead of creating one. */
+  relations: { relation_ref: string; source: string; target: string; relation: string; evidence: SourceReviewAnchor[]; bases: string[]; origins: string[]; change?: "edit" | "retire" }[];
   diagnostics: { diagnostic_ref: string; severity: string; stage: string; code: string; path: string; message: string; checked: boolean; related_units: string[] }[];
   pending_tasks: { task_ref: string; owner: string | null; reason: string | null }[];
   acceptance: { state: string; selected_units: string[]; required_units: string[]; missing_targets: string[]; blockers: string[]; allowed_scopes: unknown[] };

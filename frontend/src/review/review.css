@@ -166,6 +166,8 @@
 .review-proposal-relation { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid var(--ms-border); border-radius: 6px; background: var(--ms-panel-raised); font-size: 12px; }
 .review-proposal-relation.is-cross, .review-relation.is-cross { border-color: var(--ms-control-border); }
 .review-relation-end.origin-existing { color: var(--ms-text-muted); font-style: italic; }
+.review-proposal-relation.is-retired .review-relation-line, .review-relation.is-retired > strong { text-decoration: line-through; color: var(--ms-text-muted); }
+.review-relation-before { flex-basis: 100%; color: var(--ms-text-muted); }
 .review-relation-kind { color: var(--ms-text-secondary); }
 .review-relation-tag { border: 1px solid var(--ms-control-border); border-radius: 999px; padding: 0 7px; font-size: 11px; color: var(--ms-text-secondary); }
 .review-relation-tag.is-cross-tag { border-color: var(--ms-control-border); color: var(--ms-text); }

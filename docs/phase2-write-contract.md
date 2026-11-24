@@ -283,7 +283,9 @@ Phase0 §3 规定新增事件类型须改文档并 +1 版本。Phase2 新增 **�
 | `source_unit` / `edit` | ✅ | `EditSourceUnit`（`expected_revision` 必填） |
 | `source_relation` / `create` | ✅ | `CreateSourceRelation` |
 | `source_relation` / `edit` | ✅ | `EditSourceRelation` |
-| 来源层 `retire` | ❌ Agent 不可提议退役 | 退役只走 Desktop 手工编辑或 §6.2；语义层对象的 retire 见 `docs/semantic-write-contract.md` §S4.4（2026-11-13 用户改定） |
+| `source_relation` / `retire` | ✅（2026-11-23 用户改定） | `RetireObject`（`target_id` + `expected_revision`；写在 `proposed_relations` 或 `proposed_objects` 都收）。见 `docs/semantic-write-contract.md` §S4.4 |
+| `source_unit`、`source_span` 的 `retire` | ❌ Agent 不可提议退役 | 退役只走 Desktop 手工编辑或 §6.2；语义层对象的 retire 见 `docs/semantic-write-contract.md` §S4.4（2026-11-13 用户改定） |
+| `source_relation` 的 create / edit 写进 `proposed_objects` | ❌ `wrong_slot` | 书内关系的 create / edit 只放 `proposed_relations`（字段形状不同）；只有 retire 两处都收 |
 | `semantic_entity` / `alignment` / `debt` / `dialect_scope` 的 create/edit/retire | ✅ 语义层扩展 | 对应语义 `UserChangeOperation`；用户审核 / 结账与服务端基线核对另有专用操作，见 [语义写契约](semantic-write-contract.md) §S4 |
 | `FormalArtifact` / 解释 / 证明对象 | ❌ | 尚未接通完整证明 / Lean 编排 |
 | `source_span` / `create` | ✅ [锁定·2026-11-09 用户改定；原口径 ❌，见 §10 待核 1] | 新增 `UserChangeOperation::CreateSourceSpan`（§4.2.5） |
