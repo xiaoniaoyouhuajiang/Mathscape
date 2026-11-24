@@ -761,13 +761,26 @@ export class GraphController {
       bindMapLabelDensity(this.graphCore, () => !this.studyActive);
       const core = this.graphCore;
       let resizeFrame: number | null = null;
+      let size = { width: core.width(), height: core.height() };
       // Cytoscape also resizes itself for native window/container changes;
-      // those do not go through GraphController.resize(). Wait for layout.
+      // those do not go through GraphController.resize(). Fit the live scope
+      // after dock/toolbar resizing, without moving pinned organic nodes.
       core.on("resize", () => {
-        if (!this.studyActive || resizeFrame !== null) return;
+        if (resizeFrame !== null) return;
         resizeFrame = requestAnimationFrame(() => {
           resizeFrame = null;
-          if (!core.destroyed() && this.studyActive) this.choreographer.refit(core);
+          if (core.destroyed()) return;
+          const next = { width: core.width(), height: core.height() };
+          const changed = next.width !== size.width || next.height !== size.height;
+          size = next;
+          // Shell updates also dispatch resize with identical dimensions;
+          // those must preserve the user's deliberate pan/zoom.
+          if (!changed || next.width <= 0 || next.height <= 0) return;
+          if (this.studyActive) this.choreographer.refit(core, true);
+          else {
+            this.choreographer.finishNow();
+            this.fitInFocusElements();
+          }
         });
       });
       core.one("destroy", () => { if (resizeFrame !== null) cancelAnimationFrame(resizeFrame); });

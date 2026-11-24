@@ -105,7 +105,7 @@
 
 /* 地图内化「研读透镜」：顶部材料/信号悬浮栏 + 约定账单抽屉 + 节点悬浮简报卡 */
 .study-hud {
-  position: absolute; top: 72px; left: 14px; right: 14px; z-index: 2;
+  position: absolute; top: calc(var(--canvas-toolbar-height, 66px) + 6px); left: 14px; right: 14px; z-index: 2;
   background: var(--ms-panel-raised); backdrop-filter: blur(10px);
   border: 1px solid var(--ms-control-border); border-radius: 10px; padding: 6px 11px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
@@ -130,12 +130,17 @@
 .study-signal-pill.is-active { border-color: var(--ms-accent); background: var(--ms-accent-bg); color: var(--ms-accent); font-weight: 600; }
 .study-drawer-toggle.is-active { border-color: var(--ms-accent); background: var(--ms-selected); color: var(--ms-accent); }
 .study-hud-right { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Keep the reading HUD to two compact rows beside a sandbox sidebar. */
+@container (max-width: 650px) {
+  .study-material-select { max-width: 220px; }
+  .study-signal-pills, .study-hud-right { display: contents; }
+}
 .study-staged-check { font-size: 11px; color: var(--ms-text-secondary); display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
 .study-exit-btn { border-color: var(--ms-control-border); background: var(--ms-panel-raised); color: var(--ms-text); }
 .study-exit-btn:hover { background: var(--ms-selected); }
 
 .study-hud-drawer {
-  position: absolute; top: 124px; left: 16px; right: 16px; max-height: 240px; overflow: auto; z-index: 2;
+  position: absolute; top: calc(var(--canvas-toolbar-height, 66px) + 58px); left: 16px; right: 16px; max-height: 240px; overflow: auto; z-index: 2;
   background: var(--ms-panel-raised); backdrop-filter: blur(10px);
   border: 1px solid var(--ms-control-border); border-radius: 10px; padding: 10px 14px;
   display: grid; gap: 10px; box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);

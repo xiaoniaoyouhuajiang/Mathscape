@@ -841,7 +841,7 @@ function graphStyles(): StylesheetJson {
     {
       selector: "node.spine-header-node, node.spine-unit-node, node.spine-scope-node, node.orbit-semantic-node, node.orbit-outer-node",
       style: {
-        "font-size": (node: NodeSingular) => 13 * mapLabelScale(node),
+        "font-size": (node: NodeSingular) => Number(node.data("studyFontSize") ?? 13) * mapLabelScale(node),
         "text-max-width": (node: NodeSingular) => `${Number(node.data("studyLabelWidth") ?? 180) * mapLabelScale(node)}px`,
         "line-height": 1.3,
         "text-valign": "center",
@@ -850,6 +850,14 @@ function graphStyles(): StylesheetJson {
         "text-margin-y": (node: NodeSingular) => mapLabelOffset(node).y / node.cy().zoom(),
         "text-background-opacity": 1,
         "text-background-padding": "3px",
+      },
+    },
+    {
+      selector: "node.is-compact-study",
+      style: {
+        width: 12,
+        height: 12,
+        "text-margin-x": (node: NodeSingular) => -6 * mapLabelScale(node) + mapLabelOffset(node).x / node.cy().zoom(),
       },
     },
     {

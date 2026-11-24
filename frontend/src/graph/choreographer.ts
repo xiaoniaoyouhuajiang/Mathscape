@@ -73,9 +73,19 @@ export class GraphChoreographer {
   private savedOrganicViewport: ViewportState | null = null;
   private posture: MapPostureSpec | null = null;
 
-  refit(core: Core): void {
+  private settleStudy(core: Core): void {
+    const posture = this.posture;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!core.destroyed() && this.posture === posture && !this.isAnimating()) this.refit(core, false, false);
+    }));
+  }
+
+  refit(core: Core, resized = false, settle = true): void {
     if (!this.posture || this.posture.id === "organic") return;
     this.finishNow();
+    // A pre-study camera belongs to the old canvas size. After a dock/window
+    // resize, returning to organic must fit the current canvas instead.
+    if (resized) this.savedOrganicViewport = null;
     this.layoutSpine(core, this.posture);
     core.batch(() => core.nodes().forEach(node => {
       const position = this.posture?.positions.get(node.id());
@@ -83,6 +93,7 @@ export class GraphChoreographer {
     }));
     const viewport = this.resolveCameraViewport(core, { kind: "target", camera: this.posture.camera, positions: this.posture.positions });
     if (viewport) core.viewport(viewport);
+    if (settle) this.settleStudy(core);
   }
 
   private studyViewport(core: Core) {
@@ -99,20 +110,52 @@ export class GraphChoreographer {
     const viewport = this.studyViewport(core);
     const width = Math.max(300, viewport.x2 - viewport.x1), height = Math.max(120, viewport.y2 - viewport.y1);
     const nodes = core.nodes().filter(node => posture.inScopeNodeIds?.has(node.id()) === true && node.data("elementKind") !== "junction") as NodeCollection;
-    nodes.forEach(node => { node.data("studyLabelWidth", Math.max(64, width / 3 - 42)); });
-    // Set the reading width before measuring wrapped lines; normalise away the
-    // previous camera's label compensation so repeated entry never shrinks it.
-    refreshLabels(core, nodes as unknown as LabelSet);
-    const labels: StudyLaneLabel[] = nodes.map(node => {
+    const compact = width < 600;
+    nodes.toggleClass("is-compact-study", compact);
+    nodes.forEach(node => { node.data("studyFontSize", width < 480 ? 12 : 13); });
+    const laneOf = (node: NodeSingular): 0 | 1 | 2 => node.hasClass("orbit-outer-node") ? 2 : node.hasClass("orbit-semantic-node") ? 1 : 0;
+    const rows = nodes.map(node => {
       const p = posture.positions.get(node.id()) ?? node.position();
-      const lane = node.hasClass("orbit-outer-node") ? 2 : node.hasClass("orbit-semantic-node") ? 1 : 0;
       const order = node.hasClass("spine-header-node") ? -2e6 : node.hasClass("spine-scope-node") ? -1e6 + p.y : p.y;
       const savedIndent = node.scratch("studyIndent") as { posture: string; value: number } | undefined;
       const indent = savedIndent?.posture === posture.id ? savedIndent.value : node.hasClass("spine-unit-node") ? Math.max(0, p.x) / 66 * 6 : 0;
       node.scratch("studyIndent", { posture: posture.id, value: indent });
-      return { id: node.id(), lane, order, height: Math.max(24, labelBox(node as unknown as LabelEle).h / mapLabelScale(node) + 6), indent };
+      return { node, id: node.id(), lane: laneOf(node), order, indent };
     });
-    for (const [id, position] of layoutStudyLanes(labels, width, height)) posture.positions.set(id, position);
+    const measure = (columns: readonly number[]) => {
+      nodes.forEach(node => { node.data("studyLabelWidth", Math.max(64, columns[laneOf(node)] - (compact ? 30 : 42))); });
+      // Measure safe wrapping at the actual reading width, independent of the
+      // previous camera's font compensation. Never shrink study text to fit.
+      refreshLabels(core, nodes as unknown as LabelSet);
+      let horizontalOverflow = 0;
+      const labels: StudyLaneLabel[] = rows.map(row => {
+        const box = labelBox(row.node as unknown as LabelEle), scale = mapLabelScale(row.node);
+        horizontalOverflow = Math.max(horizontalOverflow, box.w / scale - (columns[row.lane] - 20));
+        return { ...row, height: Math.max(24, box.h / scale + 6) };
+      });
+      const heights = [0, 1, 2].map(lane => {
+        const items = labels.filter(row => row.lane === lane);
+        return items.reduce((sum, row) => sum + row.height, 0) + Math.max(0, items.length - 1) * 14;
+      });
+      const score = Math.max(0, ...heights.map(h => h - height)) + Math.max(0, horizontalOverflow) * 4;
+      return { labels, score };
+    };
+    let columns = [width / 3, width / 3, width / 3];
+    let best = measure(columns);
+    // A dock-narrowed outline has many more rows than either orbit. Borrow
+    // spare orbit width before allowing a caption to continue below the page.
+    if (best.score > 0) {
+      for (const ratios of [[0.4, 0.27, 0.33], [0.44, 0.25, 0.31], [0.48, 0.23, 0.29], [0.4, 0.2, 0.4], [0.42, 0.2, 0.38], [0.45, 0.2, 0.35], [0.5, 0.23, 0.27], [0.52, 0.23, 0.25], [0.36, 0.24, 0.4], [0.33, 0.24, 0.43], [0.3, 0.24, 0.46], [0.27, 0.23, 0.5]]) {
+        const candidate = ratios.map(ratio => ratio * width), measured = measure(candidate);
+        if (measured.score < best.score) { columns = candidate; best = measured; }
+        if (best.score === 0) break;
+      }
+      best = measure(columns);
+    }
+    // Each measured row already includes 6px of caption padding; an 8px
+    // compact row gap still leaves 14px between the actual captions.
+    const minGap = best.score > 0 ? 8 : 14;
+    for (const [id, position] of layoutStudyLanes(best.labels, width, height, { columns, minGap, compact })) posture.positions.set(id, position);
     core.nodes().filter(node => node.data("elementKind") === "junction").forEach(node => {
       const ends = node.connectedEdges().connectedNodes().not(node).toArray();
       const points = ends.map(end => posture.positions.get(end.id())).filter((p): p is MapPoint => p !== undefined);
@@ -185,7 +228,7 @@ export class GraphChoreographer {
 
     // 1. Apply semantic posture classes & spine Bezier arc attributes
     core.batch(() => {
-      core.nodes().removeClass(ALL_STUDY_NODE_CLASS_STR);
+      core.nodes().removeClass(`${ALL_STUDY_NODE_CLASS_STR} is-compact-study`);
       core.edges().removeClass(ALL_STUDY_EDGE_CLASS_STR);
 
       for (const [nodeId, clsList] of posture.nodeClasses) {
@@ -331,6 +374,7 @@ export class GraphChoreographer {
           });
         }
       });
+      if (t >= 1 && !isOrganic) this.settleStudy(core);
     };
 
     if (!allowAnim || (moves.length === 0 && !toVp)) {

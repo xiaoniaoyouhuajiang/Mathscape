@@ -35,7 +35,8 @@ export function mountDetailResizer(grid: HTMLElement, panel: HTMLElement): HTMLE
   handle.tabIndex = 0;
   panel.prepend(handle);
   const leftColumn = () => grid.firstElementChild as HTMLElement | null;
-  const left = () => leftColumn()?.getBoundingClientRect().width ?? 0;
+  // A compact source drawer paints over the map; only its 48px rail is a grid track.
+  const left = () => grid.classList.contains("sources-compact") ? 48 : leftColumn()?.getBoundingClientRect().width ?? 0;
   /** Width the grid may use: its outer container, not the (possibly overflowing) tracks. */
   const room = () => {
     const own = grid.getBoundingClientRect().width;

@@ -22,9 +22,56 @@ env:
   NODE_VERSION: "24"
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          predicate-quantifier: every
+          filters: |
+            rust:
+              - '**'
+              - '!docs/**'
+              - '!issues/**'
+              - '!*.md'
+              - '!LICENSE'
+              - '!NOTICE'
+              - '!.github/ISSUE_TEMPLATE/**'
+              - '!.github/pull_request_template.md'
+              - '!.github/CODEOWNERS'
+              # InkPad imports src/ink and the shared Markdown renderer.
+              - '!frontend/src/!(ink|reader){,/**}'
+              - '!frontend/src/reader/!(markdown.ts){,/**}'
+              - '!frontend/tests/**'
+              - '!frontend/ink-lab/**'
+              - '!frontend/scripts/**'
+              - '!frontend/*.md'
+              - '!frontend/index.html'
+              - '!frontend/i18n-baseline.json'
+              - '!frontend/playwright*.config.ts'
+              - '!frontend/vite.config.ts'
+              - '!frontend/vite.ink.config.ts'
+              - '!frontend/vitest.config.ts'
+            frontend:
+              # A single alternation keeps the Rust filter's "every" quantifier.
+              - '{frontend/**,fixtures/**,testdata/ink/**,apps/mathscape-desktop/icons/**,.github/workflows/ci.yml}'
+
   rust:
     name: Rust (fmt, clippy, test)
+    needs: changes
+    # Skip the job, not the workflow, so the required check still reports a result.
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -36,7 +83,10 @@ jobs:
 
   frontend:
     name: Frontend (typecheck, unit, build)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: frontend
@@ -52,17 +102,19 @@ jobs:
       - run: npm run test:unit
       - run: npm run build
 
-  playwright:
-    name: Playwright (${{ matrix.browser }})
+  # Keep both required check names even when the jobs are skipped before matrix expansion.
+  playwright-chromium:
+    name: Playwright (chromium)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        browser: [chromium, webkit]
-    defaults:
+    timeout-minutes: 15
+    env:
+      PLAYWRIGHT_BROWSER: chromium
+    defaults: &playwright-defaults
       run:
         working-directory: frontend
-    steps:
+    steps: &playwright-steps
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -70,16 +122,27 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - run: npx playwright install --with-deps ${{ matrix.browser }}
-      - run: npx playwright test --browser=${{ matrix.browser }}
+      - run: npx playwright install --with-deps "$PLAYWRIGHT_BROWSER"
+      - run: npx playwright test --browser="$PLAYWRIGHT_BROWSER"
       - name: InkLab server and browser tests
-        if: matrix.browser == 'chromium'
+        if: env.PLAYWRIGHT_BROWSER == 'chromium'
         run: |
           npm run test:ink-server
           npm run test:ink-browser
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-${{ matrix.browser }}
+          name: playwright-${{ env.PLAYWRIGHT_BROWSER }}
           path: .test-runs/
           retention-days: 7
+
+  playwright-webkit:
+    name: Playwright (webkit)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PLAYWRIGHT_BROWSER: webkit
+    defaults: *playwright-defaults
+    steps: *playwright-steps

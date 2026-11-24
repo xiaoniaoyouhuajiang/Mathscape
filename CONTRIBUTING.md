@@ -8,6 +8,8 @@ Open an issue to discuss substantial changes before implementing them. In your p
 
 Run the checks relevant to your change. The [CI workflow](.github/workflows/ci.yml) runs Rust formatting, Clippy, and workspace tests; frontend type checks, unit tests, and builds; and Playwright browser tests.
 
+On pull requests, the Rust job is skipped when no Rust-relevant files change. InkPad sources and shared frontend build dependencies still trigger it because the desktop crate embeds the built InkPad assets. The Rust job always runs on pushes to `main` and manual CI runs.
+
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings

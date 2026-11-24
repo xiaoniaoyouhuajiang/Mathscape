@@ -595,7 +595,40 @@ function actStep(act: Exclude<SandboxAct, "">): { tool: string; args: Record<str
     }
   }
 }
-const sessionDialogue = (args: Record<string, unknown>) => ({ sandboxSessionId: String(args.sandboxSessionId), transcript: structuredClone(transcript), events: structuredClone(sandboxEvents), activeRoundId: null, threads: structuredClone(dialogueThreads.threads), activeThreadId: dialogueThreads.active });
+interface HarnessPendingQuestion {
+  questionId: string;
+  roundId: string;
+  threadId: string;
+  question: string;
+  options?: string[];
+  inkRequested: boolean;
+  state: string;
+  createdAt: string;
+}
+const pendingQuestions: HarnessPendingQuestion[] = [];
+const inkSnapshots = [
+  {
+    snapshotId: "mathscape:ink-snapshot/snap_demo_01",
+    documentId: "ink-doc-1",
+    documentTitle: "手稿 A",
+    label: "第一步恒等变形",
+    createdAt: "2026-11-23T10:00:00Z",
+  },
+];
+const activePendingQuestions = () => structuredClone(pendingQuestions.filter((q) => q.state === "pending"));
+const activeInkSnapshots = () =>
+  pendingQuestions.some((q) => q.state === "pending" && q.inkRequested) ? structuredClone(inkSnapshots) : [];
+
+const sessionDialogue = (args: Record<string, unknown>) => ({
+  sandboxSessionId: String(args.sandboxSessionId),
+  transcript: structuredClone(transcript),
+  events: structuredClone(sandboxEvents),
+  activeRoundId: null,
+  threads: structuredClone(dialogueThreads.threads),
+  activeThreadId: dialogueThreads.active,
+  pendingQuestions: activePendingQuestions(),
+  inkSnapshots: activeInkSnapshots(),
+});
 extraCommands.set("sandbox_session_dialogue", sessionDialogue);
 extraCommands.set("sandbox_new_dialogue_thread", (args) => {
   sandboxCalls.push({ command: "new_thread", args });
@@ -626,6 +659,11 @@ extraCommands.set("sandbox_send_message", (args) => {
   const id = String(args.sandboxSessionId);
   const rid = `r${++dialogueThreads.rounds}`;
   const thread = dialogueThreads.active;
+  for (const q of pendingQuestions) {
+    if (q.state === "pending" && q.threadId === thread) {
+      q.state = "answered";
+    }
+  }
   const userEntry = { ts: new Date().toISOString(), role: "user", text: String(args.text), round_id: rid, thread_id: thread };
   transcript.push(userEntry);
   // Stream the round after the command resolves, as the Rust pump does.
@@ -659,13 +697,41 @@ extraCommands.set("sandbox_send_message", (args) => {
     const end = Math.max(0, ...timeline.map((item) => item.at)) + 120;
     for (const item of timeline) setTimeout(item.run, item.at);
     setTimeout(() => {
+      for (const step of script) {
+        if (step.tool === "user.ask" && step.args && typeof step.args === "object") {
+          const a = step.args as Record<string, unknown>;
+          const qid = `mathscape:question/q_${rid}_${step.id}`;
+          pendingQuestions.push({
+            questionId: qid,
+            roundId: rid,
+            threadId: thread,
+            question: String(a.question ?? ""),
+            options: Array.isArray(a.options) ? a.options.map(String) : undefined,
+            inkRequested: Boolean(a.ink_requested),
+            state: "pending",
+            createdAt: new Date().toISOString(),
+          });
+        }
+      }
       event(seq++, "turn_end", { outcome: "completed" });
       const reply = { ts: new Date().toISOString(), role: "agent", text: "完成。", round_id: rid, outcome: "completed", thread_id: thread };
       transcript.push(reply);
       emitDialogue({ kind: "transcript", sandbox_session_id: id, entry: reply });
+      emitDialogue({
+        kind: "pending_questions",
+        sandbox_session_id: id,
+        pending_questions: activePendingQuestions(),
+        ink_snapshots: activeInkSnapshots(),
+      });
       emitDialogue({ kind: "round_finished", sandbox_session_id: id, round_id: rid });
     }, end);
-    return { roundId: rid, userEntry };
+    return {
+      roundId: rid,
+      userEntry,
+      activeThreadId: thread,
+      pendingQuestions: activePendingQuestions(),
+      inkSnapshots: activeInkSnapshots(),
+    };
   }
   setTimeout(() => {
     const tools = ["workspace.search", "material.read", "material.grep", "pdf.outline", "graph.get", "graph.neighborhood", "ink.page_image", "pdf.page_image"];
@@ -706,9 +772,77 @@ extraCommands.set("sandbox_send_message", (args) => {
     const reply = { ts: new Date().toISOString(), role: "agent", text, round_id: rid, outcome: "completed", thread_id: thread };
     transcript.push(reply);
     emitDialogue({ kind: "transcript", sandbox_session_id: id, entry: reply });
+    emitDialogue({
+      kind: "pending_questions",
+      sandbox_session_id: id,
+      pending_questions: activePendingQuestions(),
+      ink_snapshots: activeInkSnapshots(),
+    });
     emitDialogue({ kind: "round_finished", sandbox_session_id: id, round_id: rid });
   }, sandboxRound.delayMs + gap);
-  return { roundId: rid, userEntry };
+  return {
+    roundId: rid,
+    userEntry,
+    activeThreadId: thread,
+    pendingQuestions: activePendingQuestions(),
+    inkSnapshots: activeInkSnapshots(),
+  };
+});
+extraCommands.set("sandbox_answer_question", (args) => {
+  sandboxCalls.push({ command: "answer_question", args });
+  const id = String(args.sandboxSessionId);
+  const qid = String(args.questionId);
+  const target = pendingQuestions.find((q) => q.questionId === qid && q.state === "pending");
+  if (!target) throw new Error(`未找到待答问题 ${qid}`);
+  target.state = "answered";
+  dialogueThreads.active = target.threadId;
+  const rid = `r${++dialogueThreads.rounds}`;
+  const lines: string[] = [];
+  if (args.selectedOption) lines.push(`【确认：${String(args.selectedOption)}】`);
+  if (args.text) lines.push(String(args.text));
+  if (args.inkSnapshotRef) lines.push(`（演算快照：${String(args.inkSnapshotRef)}）`);
+  const userEntry = {
+    ts: new Date().toISOString(),
+    role: "user",
+    text: lines.join("\n"),
+    round_id: rid,
+    thread_id: target.threadId,
+  };
+  transcript.push(userEntry);
+  setTimeout(() => {
+    const reply = {
+      ts: new Date().toISOString(),
+      role: "agent",
+      text: "已根据你的确认继续整理提案。",
+      round_id: rid,
+      outcome: "completed",
+      thread_id: target.threadId,
+    };
+    transcript.push(reply);
+    emitDialogue({ kind: "transcript", sandbox_session_id: id, entry: reply });
+    emitDialogue({
+      kind: "pending_questions",
+      sandbox_session_id: id,
+      pending_questions: activePendingQuestions(),
+      ink_snapshots: activeInkSnapshots(),
+    });
+    emitDialogue({ kind: "round_finished", sandbox_session_id: id, round_id: rid });
+  }, 40);
+  return {
+    roundId: rid,
+    userEntry,
+    activeThreadId: target.threadId,
+    pendingQuestions: activePendingQuestions(),
+    inkSnapshots: activeInkSnapshots(),
+  };
+});
+extraCommands.set("sandbox_dismiss_question", (args) => {
+  sandboxCalls.push({ command: "dismiss_question", args });
+  const qid = String(args.questionId);
+  const target = pendingQuestions.find((q) => q.questionId === qid && q.state === "pending");
+  if (!target) throw new Error(`未找到待答问题 ${qid}`);
+  target.state = "cancelled";
+  return sessionDialogue(args);
 });
 extraCommands.set("sandbox_cancel_round", () => false);
 

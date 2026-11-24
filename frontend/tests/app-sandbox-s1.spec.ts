@@ -221,6 +221,66 @@ test.describe("S1 sandbox shell", () => {
     expect(commands.filter((c) => c === "activate_thread")).toHaveLength(1);
   });
 
+  test("default desktop keeps the dock, reader and wrapped controls in separate space", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 820 });
+    await page.evaluate(() => localStorage.setItem("mathscape.theme", "parchment"));
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    const grid = page.locator(".workspace-grid");
+    const canvas = page.locator(".canvas-panel");
+    await expect(grid).toHaveClass(/sources-compact/);
+    await expect(grid).toHaveClass(/sources-collapsed/);
+    const main = (await canvas.boundingBox())!;
+    expect(main.width).toBeGreaterThanOrEqual(500);
+    const side = (await dock.boundingBox())!;
+    const inspector = (await page.locator(".detail-panel").boundingBox())!;
+    expect(main.x + main.width).toBeLessThanOrEqual(inspector.x + 1);
+    expect(inspector.x + inspector.width).toBeLessThanOrEqual(side.x + 1);
+    const toolbar = (await page.locator(".canvas-toolbar").boundingBox())!;
+    expect(toolbar.height).toBeLessThan(150);
+    for (const button of await page.locator(".preset-button").all()) {
+      const box = (await button.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(toolbar.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(toolbar.x + toolbar.width);
+      expect(box.y + box.height).toBeLessThanOrEqual(toolbar.y + toolbar.height);
+    }
+    const headerFits = await page.locator(".topbar").evaluate((header) => {
+      const boxes = Array.from(header.children).map((child) => child.getBoundingClientRect());
+      return boxes.every((box, index) => !index || box.left >= boxes[index - 1].right - 1);
+    });
+    expect(headerFits).toBe(true);
+    await page.locator(".view-menu-button").click();
+    await expect(page.locator("#learning-view-button")).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    // The temporary source drawer remains usable without narrowing the content
+    // or overwriting the normal directory preference.
+    const sourceToggle = page.locator("#toggle-sources");
+    await sourceToggle.click();
+    await expect(sourceToggle).toHaveAttribute("aria-expanded", "true");
+    expect((await canvas.boundingBox())!.width).toBe(main.width);
+    expect(await page.evaluate(() => localStorage.getItem("mathscape:sources-collapsed"))).toBeNull();
+    await page.keyboard.press("Escape");
+    await expect(sourceToggle).toHaveAttribute("aria-expanded", "false");
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("mathscape:open-source", {
+      detail: { artifactId: "md-1", conversionId: "c1", title: "正确表述.md" },
+    })));
+    const reader = page.locator("#reader");
+    await expect(reader).toBeVisible();
+    const paper = (await reader.boundingBox())!;
+    expect((await page.locator(".canvas-toolbar").boundingBox())!.height).toBeLessThan(150);
+    expect(paper.width).toBeGreaterThanOrEqual(500);
+    expect(paper.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height - 1);
+    expect(paper.x + paper.width).toBeLessThanOrEqual(side.x);
+
+    await dock.getByRole("button", { name: "关闭对话", exact: true }).click();
+    await expect(grid).not.toHaveClass(/sources-compact/);
+    await expect(sourceToggle).toHaveAttribute("aria-expanded", "true");
+  });
+
   test("sidebar width and dock mode persist across reloads; floating still drags", async ({ page }) => {
     await page.locator("#sandbox-button").click();
     page.once("dialog", (dialog) => void dialog.accept());
@@ -666,7 +726,10 @@ test.describe("S1 sandbox shell", () => {
     await input.click();
     await expect(menu).toHaveCount(0);
     // Canonical-id map nodes (2) + active 32-hex live ink notes (2) are offered.
-    await page.keyboard.type("看看 @");
+    // Commit the CJK prefix like an IME; zero-delay repeated WebKit insertText
+    // commands can leave the caret between the identical characters.
+    await page.keyboard.insertText("看看 ");
+    await page.keyboard.type("@");
     await expect(menu).toBeVisible();
     await expect(options).toHaveCount(4);
     await expect(input).toHaveAttribute("aria-expanded", "true");
@@ -1025,5 +1088,80 @@ test.describe("S1 sandbox shell", () => {
     await expect(win.locator("img")).toHaveCount(0);
   });
 
-});
+  test("user.ask Question Card: renders options + ink snapshot + note, submits structured answer, and supports dismiss", async ({ page }) => {
+    const dock = await sandboxDock(page, {
+      delayMs: 20,
+      gapMs: 60,
+      script: [
+        {
+          id: "ask-1",
+          tool: "user.ask",
+          args: {
+            question: "习题 8 提到的 **定理 4** 指哪一章？是否附上你的演算草稿？",
+            options: ["第一章 · 母函数定理 4", "第二章 · 计数定理 4"],
+            ink_requested: true,
+          },
+          callAt: 10,
+          resultAt: 30,
+          result: {
+            structuredContent: {
+              status: "ok",
+              question_id: "mathscape:question/q_r1_ask-1",
+              state: "pending",
+              next: "end_turn",
+            },
+          },
+        },
+      ],
+    });
 
+    await dock.locator(".sandbox-dock-input").fill("帮我整理习题 8");
+    await dock.getByRole("button", { name: "发送" }).click();
+
+    const card = dock.locator(".sandbox-question-card");
+    await expect(card).toBeVisible();
+    await expect(card.locator(".sandbox-question-badge")).toHaveText("待你确认");
+    await expect(card.locator(".sandbox-question-body")).toContainText("定理 4");
+
+    // Pick first option, select ink snapshot, add note, and submit answer.
+    const firstOpt = card.getByRole("radio").filter({ hasText: "第一章 · 母函数定理 4" });
+    await firstOpt.click();
+    await expect(firstOpt).toHaveAttribute("aria-checked", "true");
+
+    const inkSelect = card.locator(".sandbox-question-ink-select");
+    await expect(inkSelect).toBeVisible();
+    await inkSelect.selectOption("mathscape:ink-snapshot/snap_demo_01");
+
+    await card.locator(".sandbox-question-note").fill("以第一章有限数列母函数为准");
+    await card.getByRole("button", { name: "发送回答" }).click();
+
+    await expect(card).toHaveCount(0);
+    await expect(dock.locator(".sandbox-dock-log")).toContainText("【确认：第一章 · 母函数定理 4】");
+    await expect(dock.locator(".sandbox-dock-log")).toContainText("已根据你的确认继续整理提案。");
+
+    const answerCalls = await page.evaluate(() =>
+      window.appHarness.sandboxCalls.filter((c) => c.command === "answer_question").map((c) => c.args),
+    );
+    expect(answerCalls).toEqual([
+      {
+        sandboxSessionId: "sbx_demo",
+        questionId: "mathscape:question/q_r1_ask-1",
+        selectedOption: "第一章 · 母函数定理 4",
+        text: "以第一章有限数列母函数为准",
+        inkSnapshotRef: "mathscape:ink-snapshot/snap_demo_01",
+      },
+    ]);
+
+    // Trigger a second question and verify "跳过" dismisses it without sending a turn.
+    await dock.locator(".sandbox-dock-input").fill("顺便看看第 9 题");
+    await dock.getByRole("button", { name: "发送" }).click();
+    await expect(card).toBeVisible();
+    await card.getByRole("button", { name: "跳过" }).click();
+    await expect(card).toHaveCount(0);
+    const dismissCalls = await page.evaluate(() =>
+      window.appHarness.sandboxCalls.filter((c) => c.command === "dismiss_question").map((c) => c.args),
+    );
+    expect(dismissCalls).toHaveLength(1);
+  });
+
+});
