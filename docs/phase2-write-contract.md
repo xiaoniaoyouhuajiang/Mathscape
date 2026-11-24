@@ -167,7 +167,9 @@ propose ──► staged ──accept──► accepted ──withdraw──► 
 - Phase2 起写类工具（`user.ask`、`propose_changes`）**必须**校验 `--round` token：未绑定调查、generation 已失效（取消 / 暂停 / 进入 `awaiting_user` 后）→ 调用错误 `forbidden`（Phase0 §2.2 的 `invalid_arg|forbidden|internal`；FX §8.4.2「迟到结果隔离」）。只读工具继续不校验（Phase0 §2.1）。
 - `tools/list` 追加顺序 [本文提议]：在现有 7 个工具之后依次追加 `user.ask`、`propose_changes`、`get_change_set`；已有描述不变，仅 `workspace.search` / `graph.get` / `graph.neighborhood` 中 `scope` 一句随 §4.4 更新（Phase0 §2.1「描述文本固定」——这是一次有版本号的变更）。
 
-### 4.1 `user.ask` [锁定语义]
+### 4.1 `user.ask` [锁定语义；2026-11-24 已实现 MCP 通道]
+
+> **实现状态（2026-11-24，`mathscape-mcp/20` + SQLite schema 27）**：已落地 `pending_questions` 持久化表（`migrations/0027_pending_questions.sql`）、非阻塞 MCP 工具 `user.ask`、同轮二次 `user.ask` / `propose_changes` 互斥拦截（`forbidden`, `details.reason = "awaiting_user"`），以及 Desktop 沙箱「待你确认」提问卡片（`sandbox_answer_question` / `sandbox_dismiss_question` + 普通发送自动结算 + `<mathscape_turn_context>` `mathscape.user_answer` 注入）。统一采用跨 harness 可移植的 MCP `user.ask` 通道（`origin = "mcp_user_ask"`），不挂起 Codex 内部 `requestUserInput` RPC。
 
 #### 4.1.1 PendingQuestion
 

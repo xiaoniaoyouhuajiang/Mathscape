@@ -2,6 +2,7 @@
 //! part of the contract (§2.1): fixed, independent of the task, so harness
 //! prompt caches stay stable. Change them only together with the contract.
 
+mod ask;
 mod canonical;
 mod ensure;
 mod errata;
@@ -24,6 +25,7 @@ use serde_json::{Map, Value, json};
 
 use crate::McpWorkspace;
 
+pub use ask::{MAX_OPTION_CHARS, MAX_OPTIONS, MAX_QUESTION_CHARS, MIN_OPTIONS};
 pub use ensure::{
     ENSURE_POLICY_VERSION, EnsurePolicy, EnsureReport, EnsureRun, EnsureStatus,
     ensure_canonical_pages,
@@ -60,6 +62,7 @@ pub const PROPOSE_CHANGES: &str = "propose_changes";
 pub const GET_CHANGE_SET: &str = "get_change_set";
 pub const MATERIAL_LOCATE: &str = "material.locate";
 pub const LIST_CHANGE_SETS: &str = "list_change_sets";
+pub const USER_ASK: &str = "user.ask";
 
 /// Version of the `tools/list` table (names, descriptions, input schemas)
 /// that the bundled `mathscape-worknet` skill is written against; the skill
@@ -87,7 +90,10 @@ pub const LIST_CHANGE_SETS: &str = "list_change_sets";
 /// `/19`: `propose_changes` accepts `retire` of a `source_relation` (in
 /// either array) and reports a misplaced relation create / edit as
 /// `wrong_slot`.
-pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/19";
+/// `/20`: new non-blocking `user.ask` (16 tools) for structured user
+/// clarification (`pending_questions` + `next: "end_turn"` + same-round
+/// `awaiting_user` guard on `propose_changes`).
+pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/20";
 
 /// sha256 of the serialized [`tool_definitions`] with object keys sorted (so
 /// the value does not depend on serde_json's `preserve_order` feature), for
@@ -119,7 +125,7 @@ pub fn tool_table_fingerprint() -> String {
 }
 
 /// Stable `tools/list` order. New tools are appended; existing entries stay put.
-pub const TOOL_NAMES: [&str; 15] = [
+pub const TOOL_NAMES: [&str; 16] = [
     WORKSPACE_SEARCH,
     MATERIAL_READ,
     MATERIAL_GREP,
@@ -135,6 +141,7 @@ pub const TOOL_NAMES: [&str; 15] = [
     GET_CHANGE_SET,
     MATERIAL_LOCATE,
     LIST_CHANGE_SETS,
+    USER_ASK,
 ];
 
 /// MCP `annotations` for the read-only tools.
@@ -177,6 +184,7 @@ fn with_annotations(mut definition: Value) -> Value {
         Some(ARTIFACT_STAGE) => artifact_stage_annotations(),
         Some(PROPOSE_CHANGES) => propose::propose_annotations(),
         Some(GET_CHANGE_SET) | Some(LIST_CHANGE_SETS) => propose::get_annotations(),
+        Some(USER_ASK) => ask::annotations(),
         _ => read_only_annotations(),
     };
     if let Some(object) = definition.as_object_mut() {
@@ -203,6 +211,7 @@ pub fn tool_definitions() -> Vec<Value> {
         propose::get_definition(),
         locate::definition(),
         propose::list_definition(),
+        ask::definition(),
     ]
     .into_iter()
     .map(with_annotations)
@@ -252,6 +261,7 @@ pub fn call(
         GET_CHANGE_SET => structured(propose::get(workspace, arguments)),
         MATERIAL_LOCATE => structured(locate::call(workspace, arguments)),
         LIST_CHANGE_SETS => structured(propose::list(workspace, arguments)),
+        USER_ASK => structured(ask::call(workspace, arguments)),
         _ => None,
     }
 }
@@ -305,8 +315,8 @@ mod schema_version_tests {
     /// tool name, description or schema changes the fingerprint: bump
     /// `TOOL_SCHEMA_VERSION` (and the skill frontmatter) and re-pin.
     const PINNED: (&str, &str) = (
-        "mathscape-mcp/19",
-        "45f072cae36ef7593d8f4ca822364db44fd0589d5ec64b3a2c9aca27c4b77edc",
+        "mathscape-mcp/20",
+        "6d535acf1299b5be506b04f2557d85736842cfcccacf9355e0c23bdc7a6509d9",
     );
 
     #[test]

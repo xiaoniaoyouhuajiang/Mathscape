@@ -2,11 +2,11 @@
 name: mathscape-worknet
 description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、对象卡、表示、证明上下文、失败见证）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
 metadata:
-  version: "0.7.4"
-  tool_schema_version: "mathscape-mcp/19"
+  version: "0.7.5"
+  tool_schema_version: "mathscape-mcp/20"
 ---
 
-# Mathscape 数学地图构建 skill v0.7.4
+# Mathscape 数学地图构建 skill v0.7.5
 
 这份 skill 给在 Mathscape 工作区中帮助用户搭建数学地图的 Agent 使用。它的任务很简单：从用户关心的原文、手稿或问题出发，逐步整理出可回溯的数学理解，并把仍然不确定的地方留下来。
 
@@ -39,7 +39,7 @@ D 不是跨表示的万能边，T 不是改名，X 不能隐藏需要证明的�
 3. 查看本轮实际挂载的 mathscape 工具（harness 工具列表中可见的那些；MCP 协议层的 `tools/list` 是协议方法，不是可调用工具），按 `references/runtime-capabilities.md` 标记工具是 `implemented`、`contract_only` 还是 `unavailable`；
 4. 建立一个 `worknet_run`，先写临时目标、来源范围和下一步；模板在 `references/run-state-template.md`；
 5. 先查工作区已有内容，再决定是否需要创建来源单元；
-6. 如果用户目标、来源范围、符号含义或分支无法确定，使用 `user.ask`；没有该工具时把问题写进 `blocked_reasons`，不要猜。
+6. 如果用户目标、来源范围、符号含义、章节指代或升格粒度无法确定，调用 `user.ask` 请用户拍板并立即结束本轮（见 §4.3）；没有该工具时把问题写进 `blocked_reasons`，**绝不要跨章节猜测**。
 
 “先声明目标”指先写一个暂时的目标和范围，不表示还没读原文就可以编造完整对象卡。对象卡应在 S1 读取来源后形成。演示时 S1 和 S2 可以放进同一个提案，但不能省略其中任何一个检查。
 
@@ -148,7 +148,7 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
 
 只在本轮工具列表里有 `propose_changes` 时使用。它只产生 `staged` 或 `blocked` 的提案，从不改正式地图；`staged` 的对象会以「未审批」样式出现在用户地图上，用户之后在 Desktop 统一接受或丢弃。接受只表示写入地图，不代表数学上已验证，也不会提升 Trust。
 
-一次提案 = 一个 change set，用户整批接受或丢弃，不会只接受其中几项。`request_id` 用于幂等：同一 `request_id` 重发同样内容得到原结果，内容不同会报错。
+一次提案 = 一个 change set，用户整批接受或丢弃，不会只接受其中几项。`request_id` 用于幂等：同一 `request_id` 重发同样内容得到原结果，内容不同会报错。`rationale` 首句必须带上显式建图动机标签（如 `【来源锚定】`、`【跨书对齐】`、`【题型提炼】`、`【概念/定理升格】`、`【纠错重连】`、`【补账/销账】`，详见 §4.3），让用户在审核面板一眼看清本次变更的立意。
 
 **来源片段 `source_span`**：只给定位，服务端补齐身份、hash、块和页。
 
@@ -278,6 +278,55 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
 ```
 
 语义层的阻塞码：`kind_not_supported`、`operation_not_supported`、`invalid_arg`、`invalid_relation`、`same_as_forbidden`、`invalid_reference_kind`、`missing_required_field`、`forbidden_trust_claim`、`forbidden_alignment_status`、`forbidden_debt_status`、`forbidden_baseline_status`、`identity_field_edit`、`revision_conflict`、`inactive_or_invalid_reference`，以及 4.1 的引用与依赖码。`relation_detail_missing`、`overlap_scope_missing`、`certificate_debt_suggested`、`dialect_scope_mismatch`、`duplicate_alignment`、`theory_name_too_specific`、`label_lang_missing`、`possible_duplicate_name`、`duplicate_mathlib_decl`（warn）和 `uncontextualized`、`inferred_convention`、`mathlib_baseline_unchecked`、`multi_target_change_set`、`theory_aliases_missing`（info）是给用户看的审核项，不阻塞；用户可能在对话里引用它们（「反馈给 agent」），那时读回提案再用 `supersedes` 修订。
+
+### 4.3 建图动机判别、三层升格准则与 `user.ask` 追问规范（`mathscape-mcp/20`）
+
+在动手调 `propose_changes` 之前，先按下面三层判别树确定**为什么建、建在哪一层**，杜绝“为单道练习硬造共享实体”与“跨章节瞎猜硬连关系”两类污染：
+
+1. **第一层：留在来源层（`source_unit` + `source_relation`）**
+   - 当只是登记单本书内的章节、定义、定理、证明、例题或单道常规习题，或者某道题只是直接引用/应用本书某个已明确的定理或方法单元（`cites` / `applies_method` / `solves` / `proves`），且没有跨书对照或通用题型复用需求时，**只建来源单元与来源关系**。
+   - **禁止**为每一道普通练习单独造一个一次性的 `problem_schema` 或 `declaration` 充数。
+2. **第二层：升格到语义层（`semantic_entity` + `alignment`）**
+   - 满足以下明确建图动机之一时才升格（建前必须先 `workspace.search` 查已有 `theory` 与 `semantic_entity`，能复用绝不重造）：
+     - **跨书 / 跨手稿对齐**：两份材料（或教材与手写演算）表达同一概念、定理或恒等式，需要对齐记号约定、下标起点或参数对应；
+     - **可复用题型提炼（`problem_schema`）**：至少能覆盖两道及以上具体题目，或用户明确要求把一类反复出现的解题套路（如“有限数列母函数消元求组合和”“特征根法解常系数线性递推”）抽成方法骨架；
+     - **形式化基线或精确契约锚定（`concept` / `declaration`）**：需要挂接 mathlib 声明、拆清易混量词与边界条件，或作为多条对齐线与挂账的公共锚点。
+3. **第三层：挂账或停下追问（`debt` / `user.ask`）**
+   - 原文省略了隐含前提、但数学指向清晰无歧义 → 正常建边并挂 `debt` 记录所缺假设；
+   - 原文**指代不明或范围存疑** → **宁停勿猜**，先查上下文邻域，仍不能唯一确定时立即调用 `user.ask` 请用户确认。
+
+**`propose_changes.rationale` 首句动机标签（必填）**：
+
+每次提交提案时，`rationale` 第一句必须以下列标签之一开头，简明交代立意：
+- `【来源锚定】`：登记原文片段、书内单元与书内结构关系；
+- `【跨书对齐】`：连接不同材料/手稿中的同一数学对象并注明参数或记号映射；
+- `【题型提炼】`：提炼跨题复用的 `problem_schema` 并将具体题目对齐上去；
+- `【概念/定理升格】`：建立共享 `concept` / `declaration` / `theory` 或补充 mathlib 基线；
+- `【纠错重连】`：退役错误书内关系、错误对齐、错题型或错账，并重连到正确目标；
+- `【补账/销账】`：补充隐含假设 `debt` 或提交 `claimed_paid` 偿还证据。
+
+**`user.ask` 四类高价值触发场景与非阻塞回合纪律**：
+
+只在工具列表包含 `user.ask`、且属于下列用读工具无法自行消解的场景时调用（能靠 `workspace.search` / `graph.get` / `graph.neighborhood` / `material.read` / `material.locate` 查清的事实，绝不打扰用户）：
+
+1. **指代或章节歧义**：如原文只写“由定理 4 / 前述方法”，而全书存在多个同名编号候选（如第一章母函数定理 vs 后面章节计数定理）；
+2. **升格粒度选择**：用户说“整理这道题”，既可只连书内 `applies_method`，也可升格为独立 `problem_schema`——给出 2–3 个清晰互斥选项请用户拍板；
+3. **超范围清理确认**：核查邻域时发现用户未点名的相邻旧对象或旧关系也连错了，拟顺手退役或改写前先请用户确认范围；
+4. **缺页或手稿符号难辨**：`material.read` 配合 `pdf.page_image` / `ink.page_image` 仍无法看清关键上下标，或需要用户附上某份手稿演算快照（此时传 `ink_requested: true`）。
+
+```json
+{
+  "question": "习题 8 提到的「母函数方法」当前可按两种粒度入图，你希望采用哪一种？",
+  "options": [
+    "仅建立书内应用关系（连向第一章已有的有限数列母函数）",
+    "提炼为独立共享题型（problem_schema）再对齐本题"
+  ],
+  "ink_requested": false
+}
+```
+
+- **非阻塞立即收尾（`next: "end_turn"`）**：`user.ask` 落库后立即返回 `{ "status": "ok", "question_id": "…", "state": "pending", "next": "end_turn" }`。收到后**立刻结束本轮回复**（简短提示用户在下方确认卡片中选择或补充说明）；同一轮内再次调用不同内容的 `user.ask` 或继续调用 `propose_changes` 都会被服务端以 `forbidden`（`awaiting_user`）拒绝。
+- **读取下一轮回答**：用户在沙箱卡片点击发送（或直接在输入框回复）后，下一轮 `<mathscape_turn_context>` 会附带 `mathscape.user_answer` JSON（含 `question_id`、`selected_option`、`answer_text`、`ink_snapshot_ref`）；若附了 `ink_snapshot_ref`，可用 `ink.page_image { node_id: "<ink_snapshot_ref>", page_index: 0 }` 读取手稿页图。
 
 如果某阶段所需能力不可用，输出应包含：
 

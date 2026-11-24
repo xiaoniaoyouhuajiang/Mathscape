@@ -43,13 +43,14 @@ use std::{
 use futures::StreamExt;
 use mathscape_agent::{
     AgentBackend, AgentEffort, AgentExecutor, AgentModel, CapabilityProbe, CodexConfig,
-    CodexExecutor, EventPayload, HarnessContext, LoadThread, OpenCodeConfig, OpenCodeExecutor,
-    Prompt, RoundId, SessionSpec, ThreadBinding, ThreadContinuity, TurnOutcome,
+    CodexExecutor, ContextNote, EventPayload, HarnessContext, LoadThread, OpenCodeConfig,
+    OpenCodeExecutor, Prompt, RoundId, SessionSpec, ThreadBinding, ThreadContinuity, TurnOutcome,
 };
 use mathscape_sandbox::{
     DialogueThread, HarnessThreadBinding, MAX_MESSAGE_CHARS, SandboxError, SandboxHome,
     TranscriptEntry, TranscriptRole, build_dialogue_prompt,
 };
+use mathscape_store_sqlite::{PendingQuestionAnswer, PendingQuestionRecord};
 use mathscape_tool_lean::{LEAN_PROFILE_ROOT_ENV, discover_profile_root};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -104,6 +105,31 @@ struct StatusSnapshot {
     effort_selection: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQuestionView {
+    pub question_id: String,
+    pub round_id: String,
+    pub thread_id: String,
+    pub question: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+    pub ink_requested: bool,
+    pub state: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxInkSnapshotChoice {
+    pub snapshot_id: String,
+    pub document_id: String,
+    pub document_title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DialogueUpdate {
@@ -116,6 +142,12 @@ pub enum DialogueUpdate {
     Transcript {
         sandbox_session_id: String,
         entry: TranscriptEntry,
+    },
+    /// Updated `user.ask` pending question list (emitted when questions change or a round ends).
+    PendingQuestions {
+        sandbox_session_id: String,
+        pending_questions: Vec<PendingQuestionView>,
+        ink_snapshots: Vec<SandboxInkSnapshotChoice>,
     },
     /// The round's event pump stopped; the session accepts a new message.
     RoundFinished {
@@ -175,6 +207,10 @@ pub struct SessionDialogue {
     pub events: Vec<Value>,
     /// Round currently streaming for this session, if any.
     pub active_round_id: Option<String>,
+    /// Open `state = 'pending'` clarification questions for this session.
+    pub pending_questions: Vec<PendingQuestionView>,
+    /// Candidate ink snapshots from the session copy when a pending question sets `ink_requested`.
+    pub ink_snapshots: Vec<SandboxInkSnapshotChoice>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -182,6 +218,9 @@ pub struct SessionDialogue {
 pub struct SendOutcome {
     pub round_id: String,
     pub user_entry: TranscriptEntry,
+    pub active_thread_id: String,
+    pub pending_questions: Vec<PendingQuestionView>,
+    pub ink_snapshots: Vec<SandboxInkSnapshotChoice>,
 }
 
 #[derive(Clone)]
@@ -221,6 +260,21 @@ struct Prepared {
     skill: Option<SkillPack>,
     before: Option<WorkspaceDigest>,
     now: Option<WorkspaceDigest>,
+    extra_notes: Vec<ContextNote>,
+    pending_questions: Vec<PendingQuestionView>,
+    ink_snapshots: Vec<SandboxInkSnapshotChoice>,
+}
+
+enum Submission {
+    FreeMessage {
+        text: String,
+    },
+    QuestionAnswer {
+        question_id: String,
+        text: Option<String>,
+        selected_option: Option<String>,
+        ink_snapshot_ref: Option<String>,
+    },
 }
 
 /// Mathscape MCP tools mounted in sandbox rounds. Proposal writes are safe
@@ -337,15 +391,158 @@ where
     T: Send + 'static,
     F: FnOnce(&SandboxHome) -> Result<T, SandboxError> + Send + 'static,
 {
+    with_home_str(home, move |home| {
+        work(home).map_err(|error| error.to_string())
+    })
+    .await
+}
+
+async fn with_home_str<T, F>(home: &Arc<Mutex<SandboxHome>>, work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&SandboxHome) -> Result<T, String> + Send + 'static,
+{
     let home = Arc::clone(home);
     tauri::async_runtime::spawn_blocking(move || {
         let home = home
             .lock()
             .map_err(|_| "沙箱状态锁已损坏，请重启应用".to_owned())?;
-        work(&home).map_err(|error| error.to_string())
+        work(&home)
     })
     .await
     .map_err(|error| format!("sandbox dialogue worker failed: {error}"))?
+}
+
+fn open_or_upgrade_session_store(
+    workspace: &Path,
+) -> Result<Option<mathscape_store_sqlite::SqliteArtifactStore>, String> {
+    let db = workspace.join("mathscape.sqlite3");
+    if !db.is_file() {
+        return Ok(None);
+    }
+    mathscape_store_sqlite::SqliteArtifactStore::prepare(&db)
+        .map(Some)
+        .map_err(|error| format!("升级沙箱副本数据库失败：{error}"))
+}
+
+fn resolve_question_thread_id(
+    transcript: &[TranscriptEntry],
+    active_thread_id: &str,
+    round_id: &str,
+) -> String {
+    transcript
+        .iter()
+        .rev()
+        .find(|entry| entry.round_id.as_deref() == Some(round_id))
+        .map(|entry| entry.thread().to_owned())
+        .unwrap_or_else(|| active_thread_id.to_owned())
+}
+
+fn collect_session_questions_and_ink(
+    store: Option<&mathscape_store_sqlite::SqliteArtifactStore>,
+    session_id: &str,
+    transcript: &[TranscriptEntry],
+    active_thread_id: &str,
+) -> (Vec<PendingQuestionView>, Vec<SandboxInkSnapshotChoice>) {
+    let Some(store) = store else {
+        return (Vec::new(), Vec::new());
+    };
+    let investigation_id = mathscape_mcp::investigation::sandbox_investigation_id(session_id);
+    let pending_questions: Vec<PendingQuestionView> = store
+        .list_pending_questions(&investigation_id, true)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|q| PendingQuestionView {
+            question_id: q.question_id,
+            thread_id: resolve_question_thread_id(transcript, active_thread_id, &q.round_id),
+            round_id: q.round_id,
+            question: q.question,
+            options: q.options,
+            ink_requested: q.ink_requested,
+            state: q.state,
+            created_at: q.created_at,
+        })
+        .collect();
+    let mut ink_snapshots = Vec::new();
+    if pending_questions.iter().any(|q| q.ink_requested)
+        && let Ok(docs) = store.list_ink_documents()
+    {
+        for doc in docs.into_iter().filter(|doc| doc.snapshot_count > 0) {
+            if let Ok(snaps) = store.list_ink_snapshots(&doc.document_id) {
+                for snap in snaps {
+                    ink_snapshots.push(SandboxInkSnapshotChoice {
+                        snapshot_id: snap.snapshot_id,
+                        document_id: doc.document_id.clone(),
+                        document_title: doc.title.clone(),
+                        label: snap.label,
+                        created_at: snap.created_at,
+                    });
+                }
+            }
+        }
+        ink_snapshots.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    }
+    (pending_questions, ink_snapshots)
+}
+
+fn read_session_questions_and_ink(
+    home: &SandboxHome,
+    session_id: &str,
+    transcript: &[TranscriptEntry],
+    active_thread_id: &str,
+) -> (Vec<PendingQuestionView>, Vec<SandboxInkSnapshotChoice>) {
+    let workspace = home
+        .live_session(session_id)
+        .ok()
+        .and_then(|view| view.workspace_root)
+        .unwrap_or_else(|| home.session_workspace(session_id));
+    let store = open_or_upgrade_session_store(&workspace)
+        .map_err(|error| eprintln!("mathscape: {error}"))
+        .ok()
+        .flatten();
+    collect_session_questions_and_ink(store.as_ref(), session_id, transcript, active_thread_id)
+}
+
+fn trim_non_empty(value: Option<String>) -> Option<String> {
+    value.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+}
+
+fn format_answer_user_bubble(
+    selected_option: Option<&str>,
+    note_text: Option<&str>,
+    ink_snapshot_ref: Option<&str>,
+) -> String {
+    let mut lines = Vec::new();
+    if let Some(opt) = selected_option {
+        lines.push(format!("【确认：{opt}】"));
+    }
+    if let Some(note) = note_text {
+        lines.push(note.to_owned());
+    }
+    if let Some(snap) = ink_snapshot_ref {
+        lines.push(format!("（演算快照：{snap}）"));
+    }
+    lines.join("\n")
+}
+
+fn format_answer_context_note(
+    record: &PendingQuestionRecord,
+    answer: &PendingQuestionAnswer,
+) -> ContextNote {
+    ContextNote {
+        key: "mathscape.user_answer".to_owned(),
+        text: format!(
+            "用户已回答你上一轮的 `user.ask` 追问：\n{}",
+            serde_json::to_string_pretty(&json!({
+                "question_id": record.question_id,
+                "question": record.question,
+                "selected_option": answer.selected_option,
+                "answer_text": answer.text,
+                "ink_snapshot_ref": answer.ink_snapshot_ref,
+            }))
+            .unwrap_or_default()
+        ),
+    }
 }
 
 impl SandboxDialogueState {
@@ -655,13 +852,22 @@ impl SandboxDialogueState {
             .map(|r| r.as_str().to_owned());
         with_home(home, move |home| {
             let threads = home.dialogue_threads(&session_id)?;
+            let transcript = home.read_transcript(&session_id)?;
+            let (pending_questions, ink_snapshots) = read_session_questions_and_ink(
+                home,
+                &session_id,
+                &transcript,
+                &threads.active_thread_id,
+            );
             Ok(SessionDialogue {
-                transcript: home.read_transcript(&session_id)?,
+                transcript,
                 threads: threads.threads,
                 active_thread_id: threads.active_thread_id,
                 events: home.read_events(&session_id)?,
                 sandbox_session_id: session_id,
                 active_round_id,
+                pending_questions,
+                ink_snapshots,
             })
         })
         .await
@@ -674,14 +880,123 @@ impl SandboxDialogueState {
         text: String,
         sink: Sink,
     ) -> Result<SendOutcome, String> {
+        self.send_turn(home, session_id, Submission::FreeMessage { text }, sink)
+            .await
+    }
+
+    async fn answer_question(
+        &self,
+        home: Arc<Mutex<SandboxHome>>,
+        session_id: String,
+        question_id: String,
+        text: Option<String>,
+        selected_option: Option<String>,
+        ink_snapshot_ref: Option<String>,
+        sink: Sink,
+    ) -> Result<SendOutcome, String> {
+        self.send_turn(
+            home,
+            session_id,
+            Submission::QuestionAnswer {
+                question_id,
+                text,
+                selected_option,
+                ink_snapshot_ref,
+            },
+            sink,
+        )
+        .await
+    }
+
+    async fn dismiss_question(
+        &self,
+        home: &Arc<Mutex<SandboxHome>>,
+        session_id: String,
+        question_id: String,
+    ) -> Result<SessionDialogue, String> {
+        let question_id = question_id.trim().to_owned();
+        if question_id.is_empty() {
+            return Err("question_id 不能为空".into());
+        }
+        {
+            let mut active = self.active();
+            if active.contains_key(&session_id) {
+                return Err("上一轮还没结束，请等待或先取消".into());
+            }
+            active.insert(session_id.clone(), None);
+        }
+        let sid = session_id.clone();
+        let cancelled = with_home_str(home, move |home| {
+            let view = home.live_session(&sid).map_err(|e| e.to_string())?;
+            let workspace = view
+                .workspace_root
+                .unwrap_or_else(|| home.session_workspace(&sid));
+            let mut store = open_or_upgrade_session_store(&workspace)?
+                .ok_or_else(|| "沙箱会话副本不可用，无法忽略问题".to_owned())?;
+            let investigation_id = mathscape_mcp::investigation::sandbox_investigation_id(&sid);
+            store
+                .cancel_pending_question(
+                    &investigation_id,
+                    &question_id,
+                    &mathscape_sandbox::now_rfc3339(),
+                )
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+        .await;
+        self.release(&session_id, None);
+        cancelled?;
+        self.dialogue(home, session_id).await
+    }
+
+    async fn send_turn(
+        &self,
+        home: Arc<Mutex<SandboxHome>>,
+        session_id: String,
+        submission: Submission,
+        sink: Sink,
+    ) -> Result<SendOutcome, String> {
         let backend = self.backend();
-        let text = text.trim().to_owned();
-        if text.is_empty() {
-            return Err("消息为空".into());
-        }
-        if text.chars().count() > MAX_MESSAGE_CHARS {
-            return Err(format!("消息过长（上限 {MAX_MESSAGE_CHARS} 字符）"));
-        }
+        let normalized = match submission {
+            Submission::FreeMessage { text } => {
+                let text = text.trim().to_owned();
+                if text.is_empty() {
+                    return Err("消息为空".into());
+                }
+                if text.chars().count() > MAX_MESSAGE_CHARS {
+                    return Err(format!("消息过长（上限 {MAX_MESSAGE_CHARS} 字符）"));
+                }
+                Submission::FreeMessage { text }
+            }
+            Submission::QuestionAnswer {
+                question_id,
+                text,
+                selected_option,
+                ink_snapshot_ref,
+            } => {
+                let question_id = question_id.trim().to_owned();
+                if question_id.is_empty() {
+                    return Err("question_id 不能为空".into());
+                }
+                let text = trim_non_empty(text);
+                let selected_option = trim_non_empty(selected_option);
+                let ink_snapshot_ref = trim_non_empty(ink_snapshot_ref);
+                if let Some(ref note) = text
+                    && note.chars().count() > MAX_MESSAGE_CHARS
+                {
+                    return Err(format!("补充说明过长（上限 {MAX_MESSAGE_CHARS} 字符）"));
+                }
+                if text.is_none() && selected_option.is_none() && ink_snapshot_ref.is_none() {
+                    return Err("请至少选择一项、附上演算快照或输入补充说明".into());
+                }
+                Submission::QuestionAnswer {
+                    question_id,
+                    text,
+                    selected_option,
+                    ink_snapshot_ref,
+                }
+            }
+        };
         {
             let mut active = self.active();
             if active.contains_key(&session_id) {
@@ -692,42 +1007,158 @@ impl SandboxDialogueState {
 
         let tools = sandbox_tool_allowlist();
         let prepared = {
-            let (session_id, text, tools) = (session_id.clone(), text.clone(), tools.clone());
-            with_home(&home, move |home| {
-                let view = home.live_session(&session_id)?;
-                let threads = home.dialogue_threads(&session_id)?;
-                let thread = threads.active_thread_id.clone();
+            let (session_id, tools) = (session_id.clone(), tools.clone());
+            with_home_str(&home, move |home| {
+                let view = home.live_session(&session_id).map_err(|e| e.to_string())?;
+                let workspace = view
+                    .workspace_root
+                    .unwrap_or_else(|| home.session_workspace(&session_id));
+                // One sandbox session = one investigation; the thread is metadata.
+                let investigation_id =
+                    mathscape_mcp::investigation::sandbox_investigation_id(&session_id);
+                let mut store = open_or_upgrade_session_store(&workspace)?;
+                let mut threads = home
+                    .dialogue_threads(&session_id)
+                    .map_err(|e| e.to_string())?;
+                let full_transcript = home
+                    .read_transcript(&session_id)
+                    .map_err(|e| e.to_string())?;
+                let mut extra_notes = Vec::new();
+
+                let (thread, user_text) = match normalized {
+                    Submission::FreeMessage { text } => {
+                        let thread = threads.active_thread_id.clone();
+                        if let Some(store_mut) = store.as_mut() {
+                            let open_for_thread: Vec<PendingQuestionRecord> = store_mut
+                                .list_pending_questions(&investigation_id, true)
+                                .map_err(|e| e.to_string())?
+                                .into_iter()
+                                .filter(|q| {
+                                    resolve_question_thread_id(
+                                        &full_transcript,
+                                        &thread,
+                                        &q.round_id,
+                                    ) == thread
+                                })
+                                .collect();
+                            for open_q in open_for_thread {
+                                let answer = PendingQuestionAnswer {
+                                    text: text.clone(),
+                                    selected_option: None,
+                                    ink_snapshot_ref: None,
+                                    answered_by: "mathscape-desktop-user".to_owned(),
+                                    answered_at: mathscape_sandbox::now_rfc3339(),
+                                };
+                                let settled = store_mut
+                                    .answer_pending_question(
+                                        &investigation_id,
+                                        &open_q.question_id,
+                                        &answer,
+                                    )
+                                    .map_err(|e| e.to_string())?;
+                                extra_notes.push(format_answer_context_note(&settled, &answer));
+                            }
+                        }
+                        (thread, text)
+                    }
+                    Submission::QuestionAnswer {
+                        question_id,
+                        text,
+                        selected_option,
+                        ink_snapshot_ref,
+                    } => {
+                        let store_mut = store
+                            .as_mut()
+                            .ok_or_else(|| "沙箱会话副本不可用，无法回答问题".to_owned())?;
+                        let target_q = store_mut
+                            .list_pending_questions(&investigation_id, false)
+                            .map_err(|e| e.to_string())?
+                            .into_iter()
+                            .find(|q| q.question_id == question_id)
+                            .ok_or_else(|| format!("未找到待答问题 {question_id}"))?;
+                        if target_q.state != "pending" {
+                            return Err(format!("该问题已处理（当前状态：{}）", target_q.state));
+                        }
+                        let q_thread = resolve_question_thread_id(
+                            &full_transcript,
+                            &threads.active_thread_id,
+                            &target_q.round_id,
+                        );
+                        if q_thread != threads.active_thread_id {
+                            threads = home
+                                .activate_dialogue_thread(&session_id, &q_thread)
+                                .map_err(|e| e.to_string())?;
+                        }
+                        if let Some(ref snap_id) = ink_snapshot_ref
+                            && store_mut
+                                .open_ink_snapshot(snap_id)
+                                .map_err(|e| e.to_string())?
+                                .is_none()
+                        {
+                            return Err(format!("未找到演算快照 {snap_id}"));
+                        }
+                        let answer = PendingQuestionAnswer {
+                            text: text.clone().unwrap_or_default(),
+                            selected_option: selected_option.clone(),
+                            ink_snapshot_ref: ink_snapshot_ref.clone(),
+                            answered_by: "mathscape-desktop-user".to_owned(),
+                            answered_at: mathscape_sandbox::now_rfc3339(),
+                        };
+                        let settled = store_mut
+                            .answer_pending_question(&investigation_id, &question_id, &answer)
+                            .map_err(|e| e.to_string())?;
+                        extra_notes.push(format_answer_context_note(&settled, &answer));
+                        let bubble = format_answer_user_bubble(
+                            selected_option.as_deref(),
+                            text.as_deref(),
+                            ink_snapshot_ref.as_deref(),
+                        );
+                        (q_thread, bubble)
+                    }
+                };
+
                 let later_thread = threads.threads.len() > 1;
                 let dialogue_thread = threads
                     .threads
                     .iter()
                     .find(|candidate| candidate.thread_id == thread)
                     .cloned();
-                let history = home.read_thread_transcript(&session_id, &thread)?;
-                let user_entry = home.append_thread_transcript(
+                let history = home
+                    .read_thread_transcript(&session_id, &thread)
+                    .map_err(|e| e.to_string())?;
+                let user_entry = home
+                    .append_thread_transcript(
+                        &session_id,
+                        &thread,
+                        TranscriptRole::User,
+                        &user_text,
+                        None,
+                        None,
+                    )
+                    .map_err(|e| e.to_string())?;
+                let (pending_questions, ink_snapshots) = collect_session_questions_and_ink(
+                    store.as_ref(),
                     &session_id,
+                    &full_transcript,
                     &thread,
-                    TranscriptRole::User,
-                    &text,
-                    None,
-                    None,
-                )?;
-                home.record_backend(&session_id, backend.as_str(), &tools)?;
+                );
+                drop(store);
+
+                home.record_backend(&session_id, backend.as_str(), &tools)
+                    .map_err(|e| e.to_string())?;
                 let checkpoint_root = home.checkpoint(&view.checkpoint_id).ok().map(|c| c.root);
-                let scratch = home.ensure_session_scratch(&session_id)?;
-                // One sandbox session = one investigation; the thread is metadata.
-                let investigation_id =
-                    mathscape_mcp::investigation::sandbox_investigation_id(&session_id);
+                let scratch = home
+                    .ensure_session_scratch(&session_id)
+                    .map_err(|e| e.to_string())?;
                 let (harness, harness_record) = round_harness_for_investigation(
                     checkpoint_root.as_deref(),
                     scratch,
                     &tools,
                     Some(&investigation_id),
                 );
-                let workspace = view
-                    .workspace_root
-                    .unwrap_or_else(|| home.session_workspace(&session_id));
-                let state_dir = home.ensure_harness_state_dir(&session_id, backend.as_str())?;
+                let state_dir = home
+                    .ensure_harness_state_dir(&session_id, backend.as_str())
+                    .map_err(|e| e.to_string())?;
                 let before = load_digest(&state_dir, &thread);
                 let now = digest_workspace(&workspace, &investigation_id)
                     .map_err(|error| eprintln!("mathscape: workspace digest failed: {error}"))
@@ -747,6 +1178,9 @@ impl SandboxDialogueState {
                     state_dir,
                     before,
                     now,
+                    extra_notes,
+                    pending_questions,
+                    ink_snapshots,
                 })
             })
             .await
@@ -759,9 +1193,17 @@ impl SandboxDialogueState {
             }
         };
         let user_entry = prepared.user_entry.clone();
+        let prompt_user_text = user_entry.text.clone();
         let thread = prepared.thread.clone();
         let workspace = prepared.workspace.clone();
+        let pending_questions = prepared.pending_questions.clone();
+        let ink_snapshots = prepared.ink_snapshots.clone();
         let mut harness_record = prepared.harness_record.clone();
+        sink(DialogueUpdate::PendingQuestions {
+            sandbox_session_id: session_id.clone(),
+            pending_questions: pending_questions.clone(),
+            ink_snapshots: ink_snapshots.clone(),
+        });
         sink(DialogueUpdate::Transcript {
             sandbox_session_id: session_id.clone(),
             entry: user_entry.clone(),
@@ -771,7 +1213,14 @@ impl SandboxDialogueState {
         self.close_other_harness_sessions(Some(&session_id)).await;
         let executor = self.executor(backend);
         let started = self
-            .start_turn(&home, &session_id, &text, tools, prepared, &sink)
+            .start_turn(
+                &home,
+                &session_id,
+                &prompt_user_text,
+                tools,
+                prepared,
+                &sink,
+            )
             .await
             .and_then(|(round, binding, continuity)| {
                 let stream = executor.events(&round).map_err(|error| error.to_string())?;
@@ -865,8 +1314,9 @@ impl SandboxDialogueState {
         let this = self.clone();
         let pump_round = round.clone();
         let pump_session = session_id.clone();
-        let pump_thread = thread;
+        let pump_thread = thread.clone();
         let pump_binding = binding;
+        let pump_workspace = workspace;
         tauri::async_runtime::spawn(async move {
             let (session_id, round) = (pump_session, pump_round);
             let mut recording = true;
@@ -945,6 +1395,43 @@ impl SandboxDialogueState {
             if recording {
                 this.persist_thread_state(&home, &session_id, &pump_thread, &pump_binding)
                     .await;
+                let (sid, rid, ws) = (
+                    session_id.clone(),
+                    round.as_str().to_owned(),
+                    pump_workspace,
+                );
+                if let Ok((pending_questions, ink_snapshots)) = with_home(&home, move |home| {
+                    if outcome == "cancelled"
+                        && let Ok(Some(mut store)) = open_or_upgrade_session_store(&ws)
+                    {
+                        let inv = mathscape_mcp::investigation::sandbox_investigation_id(&sid);
+                        if let Ok(open_qs) = store.list_pending_questions(&inv, true) {
+                            for q in open_qs.into_iter().filter(|q| q.round_id == rid) {
+                                let _ = store.cancel_pending_question(
+                                    &inv,
+                                    &q.question_id,
+                                    &mathscape_sandbox::now_rfc3339(),
+                                );
+                            }
+                        }
+                    }
+                    let threads = home.dialogue_threads(&sid)?;
+                    let transcript = home.read_transcript(&sid)?;
+                    Ok(read_session_questions_and_ink(
+                        home,
+                        &sid,
+                        &transcript,
+                        &threads.active_thread_id,
+                    ))
+                })
+                .await
+                {
+                    sink(DialogueUpdate::PendingQuestions {
+                        sandbox_session_id: session_id.clone(),
+                        pending_questions,
+                        ink_snapshots,
+                    });
+                }
             }
             this.release(&session_id, Some(&round));
             sink(DialogueUpdate::RoundFinished {
@@ -956,6 +1443,9 @@ impl SandboxDialogueState {
         Ok(SendOutcome {
             round_id: round.as_str().to_owned(),
             user_entry,
+            active_thread_id: thread,
+            pending_questions,
+            ink_snapshots,
         })
     }
 
@@ -1083,7 +1573,7 @@ impl SandboxDialogueState {
         let same_thread = previous
             .as_ref()
             .filter(|previous| previous.thread_id == bound.thread_id);
-        let notes = context_notes(&NoteInputs {
+        let mut notes = context_notes(&NoteInputs {
             continuity: bound.continuity,
             previous: same_thread,
             workspace: &prepared.workspace,
@@ -1095,6 +1585,7 @@ impl SandboxDialogueState {
                 .or_else(|| rebuilt.then_some(prepared.before.as_ref()).flatten()),
             now: prepared.now.as_ref(),
         });
+        notes.extend(prepared.extra_notes);
         let prompt_text = if rebuilt {
             build_dialogue_prompt(&prepared.history, text, prepared.later_thread)
         } else {
@@ -1337,6 +1828,50 @@ pub async fn sandbox_send_message(
     });
     dialogue
         .send(sandbox.home(), sandbox_session_id, text, sink)
+        .await
+}
+
+/// Answers an open `user.ask` pending question on the session copy and starts
+/// the next Agent turn with structured `<mathscape_turn_context>` delivery.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn sandbox_answer_question(
+    app: AppHandle,
+    sandbox: State<'_, SandboxState>,
+    dialogue: State<'_, SandboxDialogueState>,
+    sandbox_session_id: String,
+    question_id: String,
+    text: Option<String>,
+    selected_option: Option<String>,
+    ink_snapshot_ref: Option<String>,
+) -> Result<SendOutcome, String> {
+    let sink: Sink = Arc::new(move |update| {
+        let _ = app.emit(DIALOGUE_EVENT, update);
+    });
+    dialogue
+        .answer_question(
+            sandbox.home(),
+            sandbox_session_id,
+            question_id,
+            text,
+            selected_option,
+            ink_snapshot_ref,
+            sink,
+        )
+        .await
+}
+
+/// Cancels (`state = 'cancelled'`) an open `user.ask` pending question without
+/// starting a new turn.
+#[tauri::command]
+pub async fn sandbox_dismiss_question(
+    sandbox: State<'_, SandboxState>,
+    dialogue: State<'_, SandboxDialogueState>,
+    sandbox_session_id: String,
+    question_id: String,
+) -> Result<SessionDialogue, String> {
+    dialogue
+        .dismiss_question(&sandbox.home(), sandbox_session_id, question_id)
         .await
 }
 
@@ -1917,7 +2452,7 @@ mod tests {
         let record = home.session(&fx.session_id).unwrap();
         assert_eq!(record.backend, "codex");
         assert_eq!(record.tool_allowlist, sandbox_tool_allowlist());
-        assert_eq!(record.tool_allowlist.len(), 14);
+        assert_eq!(record.tool_allowlist.len(), 15);
         let export = home.export_session(&fx.session_id, None, None).unwrap();
         assert!(export.export_dir.join(EVENTS_FILE).is_file());
         drop(home);
@@ -2369,6 +2904,133 @@ mod tests {
         let last = transcript.last().unwrap();
         assert_eq!(last.text, "再问", "second turn continues the new thread");
         drop(home);
+        state.close_all();
+    }
+
+    #[test]
+    fn user_ask_answer_dismiss_and_auto_settle_deliver_turn_context() {
+        use mathscape_store_sqlite::{CreatePendingQuestionInput, SqliteArtifactStore};
+
+        let fx = fixture("user-ask");
+        let state = dialogue(&fx, &["app-server"]);
+        let (first_sent, _) = send_and_wait(&state, &fx, "帮我整理习题 8");
+
+        let workspace = fx.home.lock().unwrap().session_workspace(&fx.session_id);
+        let inv = mathscape_mcp::investigation::sandbox_investigation_id(&fx.session_id);
+        {
+            let mut store =
+                SqliteArtifactStore::prepare(&workspace.join("mathscape.sqlite3")).unwrap();
+            store
+                .create_pending_question(&CreatePendingQuestionInput {
+                    question_id: "mathscape:question/q-d1".into(),
+                    investigation_id: inv.clone(),
+                    round_id: first_sent.round_id.clone(),
+                    origin: "mcp_user_ask".into(),
+                    harness_ref: None,
+                    question: "定理 4 指哪一章？".into(),
+                    options: Some(vec!["第一章 · 定理 4".into(), "第二章 · 定理 4".into()]),
+                    ink_requested: false,
+                    created_at: "2026-11-24T00:00:00Z".into(),
+                })
+                .unwrap();
+        }
+
+        let snap = tauri::async_runtime::block_on(state.dialogue(&fx.home, fx.session_id.clone()))
+            .unwrap();
+        assert_eq!(snap.pending_questions.len(), 1);
+        assert_eq!(snap.pending_questions[0].thread_id, "d1");
+
+        // 1. Structured answer via `answer_question` settles the row, appends clean user bubble,
+        //    and injects `mathscape.user_answer` into `<mathscape_turn_context>`.
+        let (sink, updates) = channel_sink();
+        let answered_out = tauri::async_runtime::block_on(state.answer_question(
+            Arc::clone(&fx.home),
+            fx.session_id.clone(),
+            "mathscape:question/q-d1".into(),
+            Some("按第一章母函数一节处理".into()),
+            Some("第一章 · 定理 4".into()),
+            None,
+            sink,
+        ))
+        .unwrap();
+        let _ = wait_for(&updates, finished);
+        assert!(answered_out.pending_questions.is_empty());
+        assert!(
+            answered_out
+                .user_entry
+                .text
+                .contains("【确认：第一章 · 定理 4】")
+        );
+        assert!(
+            answered_out
+                .user_entry
+                .text
+                .contains("按第一章母函数一节处理")
+        );
+
+        let turns = logged(&fx, "codex-home", "turn/start");
+        let last_turn = turns.last().expect("answer turn/start").to_string();
+        assert!(last_turn.contains("mathscape:question/q-d1"), "{last_turn}");
+        assert!(last_turn.contains("第一章 · 定理 4"), "{last_turn}");
+        assert!(last_turn.contains("按第一章母函数一节处理"), "{last_turn}");
+
+        // 2. Plain `send` on the active thread auto-settles an open pending question,
+        //    and `dismiss_question` cancels another round's pending question.
+        {
+            let mut store =
+                SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+            store
+                .create_pending_question(&CreatePendingQuestionInput {
+                    question_id: "mathscape:question/q-auto".into(),
+                    investigation_id: inv.clone(),
+                    round_id: answered_out.round_id.clone(),
+                    origin: "mcp_user_ask".into(),
+                    harness_ref: None,
+                    question: "是否升格独立题型？".into(),
+                    options: None,
+                    ink_requested: false,
+                    created_at: "2026-11-24T00:01:00Z".into(),
+                })
+                .unwrap();
+        }
+        let (auto_sent, _) = send_and_wait(&state, &fx, "不用升格，保持来源层即可");
+        assert!(auto_sent.pending_questions.is_empty());
+        {
+            let mut store =
+                SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+            let all = store.list_pending_questions(&inv, false).unwrap();
+            assert_eq!(all.len(), 2);
+            assert!(all.iter().all(|q| q.state == "answered"));
+            store
+                .create_pending_question(&CreatePendingQuestionInput {
+                    question_id: "mathscape:question/q-dismiss".into(),
+                    investigation_id: inv.clone(),
+                    round_id: auto_sent.round_id.clone(),
+                    origin: "mcp_user_ask".into(),
+                    harness_ref: None,
+                    question: "顺便检查第 9 题吗？".into(),
+                    options: None,
+                    ink_requested: false,
+                    created_at: "2026-11-24T00:02:00Z".into(),
+                })
+                .unwrap();
+        }
+        let after_dismiss = tauri::async_runtime::block_on(state.dismiss_question(
+            &fx.home,
+            fx.session_id.clone(),
+            "mathscape:question/q-dismiss".into(),
+        ))
+        .unwrap();
+        assert!(after_dismiss.pending_questions.is_empty());
+        let store = SqliteArtifactStore::open(&workspace.join("mathscape.sqlite3")).unwrap();
+        let dismissed = store
+            .list_pending_questions(&inv, false)
+            .unwrap()
+            .into_iter()
+            .find(|q| q.question_id == "mathscape:question/q-dismiss")
+            .unwrap();
+        assert_eq!(dismissed.state, "cancelled");
+        drop(store);
         state.close_all();
     }
 }

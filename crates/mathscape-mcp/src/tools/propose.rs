@@ -287,6 +287,13 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
     let request_fingerprint = request_fingerprint(&args)?;
     let mut store = workspace.store()?;
     let investigation_id = bind_investigation(workspace, &mut store, &round)?;
+    if store.round_has_pending_question(&round).map_err(internal)? {
+        return Err(ToolError::new(
+            ToolErrorCode::Forbidden,
+            "cannot call propose_changes in the same round after user.ask; end the turn and wait for the user's answer",
+        )
+        .with_details(json!({ "reason": "awaiting_user" })));
+    }
 
     if let Some(existing) = store
         .proposed_change_by_request(&investigation_id, &args.request_id)
@@ -500,7 +507,7 @@ pub(super) fn propose(workspace: &McpWorkspace, arguments: Value) -> Result<Valu
 /// * only the adapter's value → bind it (first writer wins);
 /// * only a registered binding → use it;
 /// * neither (direct CLI) → the round is its own investigation.
-fn bind_investigation(
+pub(super) fn bind_investigation(
     workspace: &McpWorkspace,
     store: &mut SqliteArtifactStore,
     round: &str,
@@ -768,13 +775,20 @@ struct GetArgs {
 }
 
 fn required_round(workspace: &McpWorkspace) -> Result<String, ToolError> {
+    required_round_for(workspace, PROPOSE_CHANGES)
+}
+
+pub(super) fn required_round_for(
+    workspace: &McpWorkspace,
+    tool_name: &str,
+) -> Result<String, ToolError> {
     workspace
         .round()
         .filter(|round| !round.trim().is_empty())
         .ok_or_else(|| {
             ToolError::new(
                 ToolErrorCode::Forbidden,
-                "propose_changes requires a bound round token",
+                format!("{tool_name} requires a bound round token"),
             )
             .with_details(json!({ "reason": "round_not_bound" }))
         })
