@@ -22,8 +22,49 @@ env:
   NODE_VERSION: "24"
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          predicate-quantifier: every
+          filters: |
+            rust:
+              - '**'
+              - '!docs/**'
+              - '!issues/**'
+              - '!*.md'
+              - '!LICENSE'
+              - '!NOTICE'
+              - '!.github/ISSUE_TEMPLATE/**'
+              - '!.github/pull_request_template.md'
+              - '!.github/CODEOWNERS'
+              # InkPad imports src/ink and the shared Markdown renderer.
+              - '!frontend/src/!(ink|reader){,/**}'
+              - '!frontend/src/reader/!(markdown.ts){,/**}'
+              - '!frontend/tests/**'
+              - '!frontend/ink-lab/**'
+              - '!frontend/scripts/**'
+              - '!frontend/*.md'
+              - '!frontend/index.html'
+              - '!frontend/i18n-baseline.json'
+              - '!frontend/playwright*.config.ts'
+              - '!frontend/vite.config.ts'
+              - '!frontend/vite.ink.config.ts'
+              - '!frontend/vitest.config.ts'
+
   rust:
     name: Rust (fmt, clippy, test)
+    needs: changes
+    # Skip the job, not the workflow, so the required check still reports a result.
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
