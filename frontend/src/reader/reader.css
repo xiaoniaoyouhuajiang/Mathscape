@@ -1,6 +1,6 @@
 @import "../theme.css";
 
-.reader-panel { position: absolute; inset: 66px 0 0; overflow: auto; background: var(--ms-panel); color: var(--ms-text); padding: 18px; z-index: 3; }
+.reader-panel { position: absolute; inset: var(--canvas-toolbar-height, 66px) 0 0; overflow: auto; background: var(--ms-panel); color: var(--ms-text); padding: 18px; z-index: 3; }
 .reader-panel[hidden] { display: none; }
 .reader-panel h2 { font-size: 17px; overflow-wrap: anywhere; margin: 0 0 14px; }
 .reader-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; }

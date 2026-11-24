@@ -20,10 +20,10 @@ describe("sandbox dock layout", () => {
   });
 
   it("clamps the sidebar so the map keeps its minimum width", () => {
-    expect(maxSidebarWidth(1400)).toBe(620);
+    expect(maxSidebarWidth(1400)).toBe(560);
     expect(maxSidebarWidth(1920)).toBe(900);
-    expect(maxSidebarWidth(1200)).toBe(420);
-    expect(clampSidebarWidth(2000, 1200)).toBe(420);
+    expect(maxSidebarWidth(1200)).toBe(360);
+    expect(clampSidebarWidth(2000, 1200)).toBe(360);
     expect(clampSidebarWidth(10, 1400)).toBe(MIN_SIDEBAR_WIDTH);
     expect(clampSidebarWidth(Number.NaN, 1400)).toBe(DEFAULT_SIDEBAR_WIDTH);
   });

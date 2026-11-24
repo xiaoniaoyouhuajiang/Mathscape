@@ -76,6 +76,7 @@ export class AppShell {
     mountThemeToggle(requiredElement<HTMLButtonElement>("#theme-toggle-button", root));
     this.initSidebarToggle();
     this.initViewMenu();
+    this.initCanvasToolbar();
     const detailPanel = this.elements.workspaceGrid.querySelector<HTMLElement>(".detail-panel");
     if (detailPanel) mountDetailResizer(this.elements.workspaceGrid, detailPanel);
   }
@@ -370,33 +371,74 @@ export class AppShell {
 
   private initSidebarToggle(): void {
     const { sourceToggle, workspaceGrid } = this.elements;
-    const setSourcesCollapsed = (collapsed: boolean) => {
+    const shell = workspaceGrid.closest<HTMLElement>(".shell")!;
+    const sourcePanel = workspaceGrid.querySelector<HTMLElement>(".source-panel")!;
+    let preferredCollapsed = false;
+    let compact = false;
+    let drawerOpen = false;
+    try {
+      preferredCollapsed = localStorage.getItem("mathscape:sources-collapsed") === "true";
+    } catch { /* Optional presentation preference. */ }
+
+    const update = () => {
+      // Only keep the full directory if the map still has ~560px beside it.
+      // This is temporary: closing the dock restores the user's directory preference.
+      const nextCompact = shell.classList.contains("has-sandbox-sidebar") && workspaceGrid.clientWidth < 1100;
+      if (nextCompact !== compact) drawerOpen = false;
+      compact = nextCompact;
+      const collapsed = compact ? !drawerOpen : preferredCollapsed;
+      const changed = workspaceGrid.classList.contains("sources-collapsed") !== collapsed
+        || workspaceGrid.classList.contains("sources-compact") !== compact;
+      workspaceGrid.classList.toggle("sources-compact", compact);
       workspaceGrid.classList.toggle("sources-collapsed", collapsed);
       sourceToggle.textContent = collapsed ? "›" : "‹";
       sourceToggle.setAttribute("aria-expanded", String(!collapsed));
       sourceToggle.setAttribute("aria-label", collapsed ? "展开来源目录" : "折叠来源目录");
-      window.dispatchEvent(new Event("resize"));
+      if (changed) window.dispatchEvent(new Event("resize"));
     };
-
-    try {
-      setSourcesCollapsed(localStorage.getItem("mathscape:sources-collapsed") === "true");
-    } catch {
-      /* Optional presentation preference. */
-    }
-
+    update();
     sourceToggle.onclick = () => {
-      const collapsed = !workspaceGrid.classList.contains("sources-collapsed");
-      setSourcesCollapsed(collapsed);
-      try {
-        localStorage.setItem("mathscape:sources-collapsed", String(collapsed));
-      } catch {
-        /* Storage may be unavailable. */
+      if (compact) {
+        drawerOpen = !drawerOpen;
+      } else {
+        preferredCollapsed = !preferredCollapsed;
+        try {
+          localStorage.setItem("mathscape:sources-collapsed", String(preferredCollapsed));
+        } catch { /* Storage may be unavailable. */ }
       }
+      update();
     };
+    shell.addEventListener("click", (event) => {
+      if (!drawerOpen || sourcePanel.contains(event.target as Node)) return;
+      drawerOpen = false;
+      update();
+    });
+    shell.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !drawerOpen) return;
+      drawerOpen = false;
+      update();
+      sourceToggle.focus();
+    });
+    window.addEventListener("resize", update);
+    new ResizeObserver(update).observe(workspaceGrid);
 
     this.elements.copyWorkspaceIdButton.addEventListener("click", () => {
       void this.copyIdentifier(this.elements.workspaceId.textContent ?? "");
     });
+  }
+
+  /** Reader/review overlays follow the toolbar when its controls wrap. */
+  private initCanvasToolbar(): void {
+    const panel = this.elements.workspaceGrid.querySelector<HTMLElement>(".canvas-panel")!;
+    const toolbar = panel.querySelector<HTMLElement>(".canvas-toolbar")!;
+    let height = 0;
+    new ResizeObserver(() => {
+      const next = Math.ceil(toolbar.getBoundingClientRect().height);
+      if (next === height) return;
+      height = next;
+      panel.style.setProperty("--canvas-toolbar-height", `${height}px`);
+      window.dispatchEvent(new Event("resize"));
+    }).observe(toolbar);
   }
 
   showToast(message: string, kind: "success" | "error"): void {

@@ -638,12 +638,39 @@
 
 .shell.has-sandbox-sidebar .workspace-grid {
   margin-right: var(--sandbox-sidebar-width, 420px);
-  /* Let the map column give way (≥240px) so the grid never runs under the sidebar. */
-  grid-template-columns: 260px minmax(240px, 1fr) var(--detail-width, 280px);
+  grid-template-columns: 260px minmax(360px, 1fr) var(--detail-width, 280px);
 }
 
-.shell.has-sandbox-sidebar .workspace-grid.sources-collapsed {
-  grid-template-columns: 48px minmax(240px, 1fr) var(--detail-width, 280px);
+.shell.has-sandbox-sidebar .workspace-grid.sources-collapsed,
+.shell.has-sandbox-sidebar .workspace-grid.sources-compact {
+  grid-template-columns: 48px minmax(360px, 1fr) var(--detail-width, 280px);
+}
+
+/* Keep the compact directory reachable without taking width from the reader. */
+.workspace-grid.sources-compact:not(.sources-collapsed) .source-panel {
+  position: relative;
+  z-index: 6;
+  width: 260px;
+  box-shadow: 12px 0 28px rgb(0 0 0 / 12%);
+}
+
+/* At desktop widths the sandbox banner also needs room in the top bar. */
+@media (min-width: 1181px) and (max-width: 1520px) {
+  .topbar:has(.sandbox-banner) .tagline { display: none; }
+  .topbar:has(.sandbox-banner) .view-menu-button { display: inline-flex; align-items: center; gap: 4px; }
+  .topbar:has(.sandbox-banner) .view-switch { display: none; }
+  .topbar:has(.sandbox-banner) .topbar-center.is-open .view-switch {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    z-index: 40;
+    transform: translateX(-50%);
+    display: grid;
+    min-width: 140px;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  }
+  .topbar:has(.sandbox-banner) .topbar-center.is-open .view-switch-button { text-align: left; margin-left: 0; }
+  .topbar:has(.sandbox-banner):has(.topbar-center.is-open) { position: relative; z-index: 30; }
 }
 
 /* A narrower map pane must not squeeze the map title into a vertical column. */

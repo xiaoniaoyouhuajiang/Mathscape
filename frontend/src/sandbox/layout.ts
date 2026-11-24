@@ -13,11 +13,11 @@ export const DEFAULT_SIDEBAR_WIDTH = 420;
 export const MIN_SIDEBAR_WIDTH = 300;
 export const MAX_SIDEBAR_WIDTH = 900;
 /**
- * Map pane (sources 260 + map ≥240 + inspector 280, see the
- * `.has-sandbox-sidebar .workspace-grid` override in panel.css) keeps at
- * least this much width, so the sidebar never overlaps the grid.
+ * Compact workspace: source rail 48 + map/reader ≥512 + inspector 280.
+ * The source directory becomes a temporary drawer instead of squeezing
+ * the main content when a conversation is docked beside it.
  */
-export const MIN_MAP_WIDTH = 780;
+export const MIN_MAP_WIDTH = 840;
 /** Below this viewport width a sidebar would starve the map; render floating. */
 export const SIDEBAR_MIN_VIEWPORT = MIN_SIDEBAR_WIDTH + MIN_MAP_WIDTH;
 
