@@ -209,7 +209,6 @@ export class GraphController {
 
   resize(): void {
     this.graphCore?.resize();
-    if (this.graphCore && this.studyActive) this.choreographer.refit(this.graphCore);
   }
 
   defaultFocusDepthFor(node: IncidenceNode | undefined): FocusDepth {
@@ -755,6 +754,18 @@ export class GraphController {
       );
       this.bindGraphInteractions(this.graphCore);
       bindMapLabelDensity(this.graphCore, () => !this.studyActive);
+      const core = this.graphCore;
+      let resizeFrame: number | null = null;
+      // Cytoscape also resizes itself for native window/container changes;
+      // those do not go through GraphController.resize(). Wait for layout.
+      core.on("resize", () => {
+        if (!this.studyActive || resizeFrame !== null) return;
+        resizeFrame = requestAnimationFrame(() => {
+          resizeFrame = null;
+          if (!core.destroyed() && this.studyActive) this.choreographer.refit(core);
+        });
+      });
+      core.one("destroy", () => { if (resizeFrame !== null) cancelAnimationFrame(resizeFrame); });
     } else {
       syncCytoscapeGraph(this.graphCore, this.displayedGraph, this.renderMode, {
         positions: posture.positions,

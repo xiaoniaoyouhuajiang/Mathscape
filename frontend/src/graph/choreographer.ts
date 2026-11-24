@@ -18,9 +18,9 @@ import { INK_NOTE_NODE_CLASS } from "./ink-overlay";
 import type { MapPoint } from "./layout";
 import { ease, lerp, satelliteShift } from "./scene-clump";
 import type { CameraTarget, MapPostureSpec } from "./study-posture";
-import { fitStudyViewport, layoutStudyLanes, type FramedLabel, type StudyLaneLabel } from "./study-viewport";
+import { layoutStudyLanes, type StudyLaneLabel } from "./study-viewport";
 import { labelBox, refreshLabels, type LabelEle, type LabelSet } from "./label-hover";
-import { mapLabelOffset, mapLabelScale } from "./label-density";
+import { mapLabelScale } from "./label-density";
 
 export const POSTURE_MORPH_MS = 420;
 export const INCREMENTAL_BLOOM_MS = 220;
@@ -395,30 +395,8 @@ export class GraphChoreographer {
     if (camera.kind === "preserve") return null;
 
     if (camera.kind === "framing_box") {
-      if (this.posture?.id.startsWith("study:material:")) {
-        const viewport = this.studyViewport(core);
-        return { zoom: 1, pan: { x: viewport.x1, y: viewport.y1 } };
-      }
-      const pad = 20;
-      const hudEl = core.container()?.parentElement?.querySelector<HTMLElement>("#study-hud");
-      const container = core.container();
-      const top = hudEl && !hudEl.hidden && container
-        ? Math.max(pad, hudEl.getBoundingClientRect().bottom - container.getBoundingClientRect().top + pad)
-        : pad;
-      const labels: FramedLabel[] = [];
-      core.nodes().forEach(node => {
-        if (node.hasClass("is-out-of-focus") || node.data("elementKind") === "junction") return;
-        const p = positions.get(node.id()) ?? node.position();
-        const current = node.position(), bb = labelBox(node as unknown as LabelEle), z = core.zoom();
-        const offset = mapLabelOffset(node);
-        labels.push({ ...p,
-          left: Math.max(0, (current.x - bb.x1) * z + offset.x),
-          right: Math.max(0, (bb.x2 - current.x) * z - offset.x),
-          top: Math.max(0, (current.y - bb.y1) * z + offset.y),
-          bottom: Math.max(0, (bb.y2 - current.y) * z - offset.y),
-        });
-      });
-      return fitStudyViewport(camera.box, labels, { x1: pad, x2: w - pad, y1: top, y2: h - pad }, camera.maxZoom);
+      const viewport = this.studyViewport(core);
+      return { zoom: 1, pan: { x: viewport.x1, y: viewport.y1 } };
     }
 
     // `fit_elements`: compute target bounding box from `positions`

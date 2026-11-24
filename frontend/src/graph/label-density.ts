@@ -112,7 +112,7 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
         const protectedLabel = node.selected() || node.hasClass(LABEL_HOVER) || node.hasClass("is-selected-primary") || node.hasClass("is-focus-root");
         // Provenance belongs to close inspection, not the overview's title layer.
         // Keep every glyph/hit target; hover and selection still reveal its name.
-        if (organic && !protectedLabel && zoom < 1.2 && priority(node) < 40) return;
+        if (!protectedLabel && zoom < 1.2 && priority(node) < 40) return;
         const box = labelBox(node as unknown as LabelEle);
         if (box.w <= 0 || box.h <= 0) return;
         const offset = mapLabelOffset(node);
@@ -124,7 +124,7 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
         const p = node.renderedPosition(), hw = node.renderedOuterWidth() / 2, hh = node.renderedOuterHeight() / 2;
         const at = (x: number, y: number): LabelBox => ({ x1: x, x2: x + base.w, y1: y, y2: y + base.h, w: base.w, h: base.h });
         const alternatives = [at(p.x - base.w / 2, p.y - hh - 12 - base.h), at(p.x - hw - 12 - base.w, p.y - base.h / 2), at(p.x + hw + 12, p.y - base.h / 2)];
-        // An inward slot keeps right-orbit debt captions inside the canvas.
+        // Keep captions near the canvas edge in an inward slot.
         alternatives.push(at(Math.max(viewport.x1, Math.min(base.x1, viewport.x2 - base.w)), Math.max(viewport.y1, Math.min(base.y1, viewport.y2 - base.h))));
         // Keep a readable identity for every constellation. A short annotation
         // leader ties perimeter captions to their actual glyph (not a new edge).
@@ -147,7 +147,7 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
           protected: protectedLabel,
         });
       });
-      const placements = placeMapLabels(labels, bodies, edges, organic ? 12 : 6, viewport);
+      const placements = placeMapLabels(labels, bodies, edges, 12, viewport);
       let shifted = core.collection();
       core.batch(() => { nodes.forEach(node => {
         const placed = placements.get(node.id()), base = baseBoxes.get(node.id());

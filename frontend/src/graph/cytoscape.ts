@@ -445,6 +445,9 @@ function graphStyles(): StylesheetJson {
       style: {
         label: "data(label)",
         "text-wrap": "wrap",
+        // CJK theorem/debt titles often have no spaces; wrapping only at
+        // whitespace can silently exceed the reading column's max width.
+        "text-overflow-wrap": "anywhere",
         "text-max-width": (node: NodeSingular) => `${150 * mapLabelScale(node)}px`,
         "text-events": "yes",
         "font-size": "11px",
