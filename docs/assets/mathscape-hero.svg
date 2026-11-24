@@ -12,7 +12,7 @@
     </radialGradient>
     <linearGradient id="thread" x2="1" y2="0">
       <stop stop-color="#b5791f"/>
-      <stop offset="1" stop-color="#26538d"/>
+      <stop offset="1" stop-color="#a9cce6"/>
     </linearGradient>
     <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
       <path d="M64 0H0V64" fill="none" stroke="#26538d" stroke-opacity=".045"/>
@@ -65,37 +65,43 @@
   <path d="M80 637h48" stroke="#b5791f" stroke-width="2"/>
   <text x="145" y="644" fill="#354356" font-size="18">Local-first · Source-linked · Human-reviewed</text>
 
+  <!-- Editorial contrast: paper outside, a deep-blue mathematical atlas inside. -->
+  <rect x="918" y="130" width="650" height="544" rx="26" fill="#112139"/>
+  <rect x="918" y="130" width="650" height="544" rx="26" fill="url(#grid)" stroke="#26538d" stroke-opacity=".16"/>
+  <g>
   <!-- An illustrative mathematical constellation, not fabricated product UI. -->
-  <g fill="none" stroke="#26538d" stroke-width="2">
+  <g fill="none" stroke="#a9cce6" stroke-width="2">
     <path d="M1020 327L1197 233 1390 360 1290 532 1110 575 1020 327" opacity=".65"/>
     <path d="M1020 327L1290 532M1197 233l-87 342M1197 233l93 299M1110 575l280-215" opacity=".22"/>
     <path d="M940 473C1055 473 1088 378 1197 233" stroke="url(#thread)" stroke-width="3"/>
   </g>
-  <path d="M984 343Q1095 395 1178 510Q1248 576 1362 489Q1438 394 1364 332Q1270 237 1136 269Q1023 265 984 343Z" fill="#26538d" fill-opacity=".035" stroke="#26538d" stroke-opacity=".17" stroke-dasharray="5 9"/>
+  <path d="M984 343Q1095 395 1178 510Q1248 576 1362 489Q1438 394 1364 332Q1270 237 1136 269Q1023 265 984 343Z" fill="#a9cce6" fill-opacity=".035" stroke="#a9cce6" stroke-opacity=".17" stroke-dasharray="5 9"/>
 
   <g>
-    <circle cx="1197" cy="233" r="33" fill="#26538d" fill-opacity=".08"/>
-    <circle cx="1197" cy="233" r="18" fill="#f7f5ef" stroke="#26538d" stroke-width="2"/>
-    <circle cx="1197" cy="233" r="5" fill="#26538d"/>
-    <text x="1197" y="177" text-anchor="middle" fill="#26538d" font-size="14" letter-spacing="2">DEFINITION</text>
-    <text class="serif" x="1197" y="204" text-anchor="middle" fill="#1a2433" font-size="23">Inner product</text>
+    <circle cx="1197" cy="233" r="33" fill="#a9cce6" fill-opacity=".08"/>
+    <circle cx="1197" cy="233" r="18" fill="#142940" stroke="#a9cce6" stroke-width="2"/>
+    <circle cx="1197" cy="233" r="5" fill="#a9cce6"/>
+    <text x="1197" y="177" text-anchor="middle" fill="#a9cce6" font-size="14" letter-spacing="2">DEFINITION</text>
+    <text class="serif" x="1197" y="204" text-anchor="middle" fill="#f5f1e8" font-size="23">Inner product</text>
 
-    <circle cx="1390" cy="360" r="24" fill="#b5791f" fill-opacity=".1"/>
-    <circle cx="1390" cy="360" r="10" fill="#b5791f"/>
-    <text x="1430" y="344" fill="#b5791f" font-size="13" letter-spacing="1.6">THEOREM</text>
-    <text class="serif" x="1430" y="372" fill="#1a2433" font-size="22">Cauchy–</text>
-    <text class="serif" x="1430" y="400" fill="#1a2433" font-size="22">Schwarz</text>
+    <circle cx="1390" cy="360" r="24" fill="#dfbd79" fill-opacity=".1"/>
+    <circle cx="1390" cy="360" r="10" fill="#dfbd79"/>
+    <text x="1430" y="344" fill="#dfbd79" font-size="13" letter-spacing="1.6">THEOREM</text>
+    <text class="serif" x="1430" y="372" fill="#f5f1e8" font-size="22">Cauchy–</text>
+    <text class="serif" x="1430" y="400" fill="#f5f1e8" font-size="22">Schwarz</text>
 
-    <circle cx="1290" cy="532" r="32" fill="#26538d" fill-opacity=".08"/>
-    <circle cx="1290" cy="532" r="16" fill="#f7f5ef" stroke="#26538d" stroke-width="2"/>
-    <circle cx="1290" cy="532" r="4" fill="#26538d"/>
-    <text x="1322" y="549" fill="#26538d" font-size="14" letter-spacing="2">PROOF</text>
-    <text class="serif" x="1322" y="579" fill="#1a2433" font-size="23">The missing step</text>
+    <circle cx="1290" cy="532" r="32" fill="#a9cce6" fill-opacity=".08"/>
+    <circle cx="1290" cy="532" r="16" fill="#142940" stroke="#a9cce6" stroke-width="2"/>
+    <circle cx="1290" cy="532" r="4" fill="#a9cce6"/>
+    <text x="1322" y="549" fill="#a9cce6" font-size="14" letter-spacing="2">PROOF</text>
+    <text class="serif" x="1322" y="579" fill="#f5f1e8" font-size="23">The missing step</text>
 
-    <circle cx="1110" cy="575" r="7" fill="#26538d"/>
-    <text x="1104" y="615" text-anchor="middle" fill="#556275" font-size="18">Your notes</text>
-    <circle cx="1020" cy="327" r="7" fill="#26538d"/>
-    <text x="991" y="309" text-anchor="end" fill="#556275" font-size="18">Vector space</text>
+    <circle cx="1110" cy="575" r="7" fill="#a9cce6"/>
+    <text x="1104" y="615" text-anchor="middle" fill="#b7c8d6" font-size="18">Your notes</text>
+    <circle cx="1020" cy="327" r="7" fill="#a9cce6"/>
+    <text x="1044" y="333" fill="#b7c8d6" font-size="18">Vector space</text>
+  </g>
+
   </g>
 
   <!-- Source card uses real, elementary mathematics as illustrative content. -->

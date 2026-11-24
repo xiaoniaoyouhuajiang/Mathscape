@@ -50,6 +50,13 @@ Mathscape is a desktop tool for turning mathematical sources into a **traceable 
 3. **Review and register** candidates with their source evidence.
 4. **Explore** the resulting graph and return to the material behind it.
 
+### Inside the workspace
+
+<p align="center">
+  <img src="docs/assets/workspace-parchment.png" alt="Native Mathscape desktop in Warm Parchment: a source directory, a populated Fibonacci relationship graph, and the node inspector." width="100%">
+  <br><em>Native desktop capture · Warm Parchment theme · two-book Fibonacci sample data.</em>
+</p>
+
 The first **EMIR semantic workflow** also supports proposals and human acceptance for shared objects, alignments, debts, and a minimal dialect scope, with map and study views. Acceptance **does not increase trust**.
 
 **Not yet end to end:** full proof workflows, R/D/T/X construction, and Lean orchestration. See [architecture and current capabilities](docs/architecture.md) for the implementation boundary.

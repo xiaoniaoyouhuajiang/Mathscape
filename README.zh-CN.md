@@ -48,6 +48,13 @@ Mathscape 是面向数学学习者和研究者的**本地优先桌面工具**，
 3. **审核与登记**：对照来源依据审阅候选，再决定是否登记。
 4. **探索与回看**：浏览关联图，返回关系背后的原始材料。
 
+### 看看实际工作区
+
+<p align="center">
+  <img src="docs/assets/workspace-parchment.png" alt="Mathscape 暖宣手稿主题的真实桌面截图：左侧来源目录、中间已填充的 Fibonacci 关联图、右侧节点详情。" width="100%">
+  <br><em>真实桌面截图 · 暖宣手稿主题 · 双教材 Fibonacci 示例数据。</em>
+</p>
+
 首条 **EMIR 语义工作流**还支持共享对象、对齐线、Debt 与最小 DialectScope 的提案、人工接受，以及地图 / 学习视图。接受**不会提升可信状态**。
 
 **尚未端到端实现**：完整证明工作流、R/D/T/X 构建和 Lean 编排。实现边界详见[架构与当前能力](docs/architecture.md)。
