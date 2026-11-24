@@ -1,6 +1,10 @@
 # Mathscape promotional artwork
 
-The README hero fuses the existing [app icon's constellation](../../apps/mathscape-desktop/icons/icon.svg) with the app's **Warm Parchment** palette: a warm-paper canvas (`#f7f5ef`), Prussian ink blue (`#26538d`), and antique amber (`#b5791f`). A deep-blue atlas panel adds promotional contrast rather than reproducing the entire UI in one color. The paper, ink, and amber colors come from [the app's theme tokens](../../frontend/src/theme.css); the product screenshot uses the owner's preferred Warm Parchment desktop theme. A highlighted thread links a source to its relationships. The hero is a **concept illustration, not a product screenshot**. Do not use it to imply that complete proof workflows or automated verification are implemented.
+The hero gives **Mathscape** a literal visual identity: an open mathematical atlas becomes a folded-paper mountain landscape, and a golden **M-shaped route** echoes the existing [app icon's constellation](../../apps/mathscape-desktop/icons/icon.svg). Faceted elevation contours suggest the geometry of the landscape. It is an original editorial composition, not a UI mockup or a generic labelled-node graph.
+
+The promotional art uses a deep-blue night atlas, warm paper, and a gold summit beacon for a recognizable silhouette at thumbnail sizes. The separate product screenshot uses the owner's preferred **Warm Parchment** [desktop theme](../../frontend/src/theme.css). Cover art and actual-use imagery have different visual jobs; they need not share one background color.
+
+The hero is a **concept illustration, not a product screenshot**. Do not use it to imply that complete proof workflows or automated verification are implemented.
 
 | Asset | Use |
 | --- | --- |
@@ -26,4 +30,4 @@ frontend/node_modules/.bin/playwright screenshot \
   docs/assets/mathscape-hero.png
 ```
 
-For the Chinese export, use `mathscape-hero.zh-CN.svg` as input and `mathscape-hero.zh-CN.png` as output. Keep both language variants and their PNG exports in sync. Preview at a typical README width as well as full size; maintain the source card, graph labels, and experimental / illustration context when adapting the composition.
+For the Chinese export, use `mathscape-hero.zh-CN.svg` as input and `mathscape-hero.zh-CN.png` as output. Keep both language variants and their PNG exports in sync. Preview at a typical README width as well as full size; preserve the book-to-landscape silhouette, golden M-shaped route, and experimental / illustration context when adapting the composition.

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/mathscape-hero.png" alt="Mathscape — Give your mathematics a landscape. A conceptual illustration connects a mathematical source to a constellation of definitions, theorems, and proofs." width="100%">
+  <img src="docs/assets/mathscape-hero.png" alt="Mathscape — Mathematics, in perspective. Concept artwork: an open mathematical atlas becomes paper mountains, connected by a golden M-shaped constellation." width="100%">
 </p>
 
 <h1 align="center">Mathscape</h1>

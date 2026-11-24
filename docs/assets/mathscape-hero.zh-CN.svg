@@ -1,25 +1,32 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
-  <title id="title">Mathscape · 数学景观 — 让散落的数学，连成可探索的知识景观。</title>
-  <desc id="description">概念插画，非应用截图。高亮的数学来源连接到由定义、定理与证明组成的星图。本地优先、来源可溯、人工审核。</desc>
+  <title id="title">Mathscape · 数学景观 — 让数学，长成一片景观。</title>
+  <desc id="description">原创概念插画，非应用截图：一本展开的数学图册长成折纸山峦，金色的 M 形星路从书页通向山顶，呼应 Mathscape 的星图图标。本地优先、来源可溯、人工审核。</desc>
   <defs>
-    <linearGradient id="background" x2="1" y2="1">
-      <stop stop-color="#f7f5ef"/>
-      <stop offset="1" stop-color="#efece3"/>
+    <linearGradient id="night" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#0b1427"/><stop offset=".6" stop-color="#142a43"/><stop offset="1" stop-color="#0c1c32"/>
     </linearGradient>
-    <radialGradient id="nebula">
-      <stop stop-color="#cdbb8c" stop-opacity=".19"/>
-      <stop offset="1" stop-color="#cdbb8c" stop-opacity="0"/>
+    <radialGradient id="atmosphere">
+      <stop stop-color="#588398" stop-opacity=".26"/><stop offset="1" stop-color="#588398" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="thread" x2="1" y2="0">
-      <stop stop-color="#b5791f"/>
-      <stop offset="1" stop-color="#a9cce6"/>
+    <linearGradient id="leftPage" x2=".9" y2="1">
+      <stop stop-color="#faf6ea"/><stop offset="1" stop-color="#dcd5bf"/>
     </linearGradient>
-    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
-      <path d="M64 0H0V64" fill="none" stroke="#26538d" stroke-opacity=".045"/>
-    </pattern>
-    <filter id="shadow" x="-30%" y="-30%" width="180%" height="180%">
-      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#706451" flood-opacity=".16"/>
+    <linearGradient id="rightPage" x2="1" y2=".5">
+      <stop stop-color="#c4c8be"/><stop offset=".15" stop-color="#f5efdf"/><stop offset="1" stop-color="#e4dcc8"/>
+    </linearGradient>
+    <linearGradient id="ridge" x2="1" y2="0">
+      <stop stop-color="#b98235"/><stop offset=".5" stop-color="#ecd49a"/><stop offset="1" stop-color="#e5ba61"/>
+    </linearGradient>
+    <radialGradient id="beacon">
+      <stop stop-color="#f4d997" stop-opacity=".35"/><stop offset="1" stop-color="#f4d997" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="20"/></filter>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#030a14" flood-opacity=".4"/>
     </filter>
+    <pattern id="dots" width="48" height="48" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#bbd1e2" opacity=".12"/>
+    </pattern>
     <style>
       text { font-family: 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; }
       .serif { font-family: 'Noto Serif CJK SC', 'DejaVu Serif', serif; }
@@ -27,107 +34,92 @@
     </style>
   </defs>
 
-  <path fill="url(#background)" d="M0 0h1600v900H0z"/>
-  <path fill="url(#grid)" d="M0 0h1600v900H0z"/>
-  <ellipse cx="1215" cy="405" rx="640" ry="580" fill="url(#nebula)"/>
-  <g fill="none" stroke="#b5791f" stroke-opacity=".09">
-    <ellipse cx="1265" cy="410" rx="380" ry="310" transform="rotate(-24 1265 410)"/>
-    <ellipse cx="1265" cy="410" rx="300" ry="405" transform="rotate(-24 1265 410)"/>
-    <path d="M870 60l540 640M825 580l715-310"/>
-  </g>
-  <g fill="#26538d" opacity=".22">
-    <circle cx="742" cy="142" r="2"/><circle cx="1060" cy="91" r="2"/>
-    <circle cx="1450" cy="180" r="2"/><circle cx="1520" cy="548" r="2"/>
-    <circle cx="795" cy="681" r="2"/><circle cx="1384" cy="697" r="2"/>
-    <circle cx="651" cy="555" r="1.5"/><circle cx="1200" cy="664" r="1.5"/>
+  <path d="M0 0h1600v900H0z" fill="url(#night)"/>
+  <ellipse cx="925" cy="545" rx="790" ry="440" fill="url(#atmosphere)"/>
+  <path d="M0 300h1600v510H0z" fill="url(#dots)"/>
+
+  <!-- Cartographic arcs, not a generic network of labelled UI nodes. -->
+  <g fill="none" stroke="#adc5d5" stroke-width="1" opacity=".09">
+    <ellipse cx="840" cy="655" rx="665" ry="167" transform="rotate(-8 840 655)"/>
+    <ellipse cx="840" cy="655" rx="735" ry="211" transform="rotate(-8 840 655)"/>
+    <ellipse cx="840" cy="655" rx="815" ry="260" transform="rotate(-8 840 655)"/>
+    <path d="M140 692l1390-196M925 315L745 820"/>
   </g>
 
-  <!-- The existing app icon's constellation, redrawn as a small wordmark. -->
-  <g transform="translate(76 65)" fill="none" stroke="#26538d" stroke-width="2">
+  <g transform="translate(78 55)" fill="none" stroke="#d5e2ed" stroke-width="2">
     <path d="M2 32L13 5l12 18 12 4L50 3l13 19 10 14"/>
-    <g fill="#26538d" stroke="none">
-      <circle cx="2" cy="32" r="3.5"/><circle cx="13" cy="5" r="3.5"/>
-      <circle cx="25" cy="23" r="3.5"/><circle cx="37" cy="27" r="3.5"/>
-      <circle cx="50" cy="3" r="3.5"/><circle cx="63" cy="22" r="3.5"/>
-      <circle cx="73" cy="36" r="3.5"/>
+    <g fill="#f2d69b" stroke="none">
+      <circle cx="2" cy="32" r="3"/><circle cx="13" cy="5" r="3"/>
+      <circle cx="25" cy="23" r="3"/><circle cx="37" cy="27" r="3"/>
+      <circle cx="50" cy="3" r="4"/><circle cx="63" cy="22" r="3"/>
+      <circle cx="73" cy="36" r="3"/>
     </g>
   </g>
-  <text x="170" y="99" fill="#1a2433" font-size="35" font-weight="600" letter-spacing="-.8">Mathscape</text>
-  <text x="1520" y="92" text-anchor="end" fill="#556275" font-size="15" letter-spacing="2.5">属于你的数学工作空间</text>
+  <text x="174" y="87" fill="#f6f0e3" font-size="34" font-weight="600" letter-spacing="-.8">Mathscape</text>
+  <text x="1520" y="80" text-anchor="end" fill="#b1c7d5" font-size="14" letter-spacing="3">从一页数学，到一片景观</text>
 
-  <!-- Editorial headline: intentionally separate from the concept map. -->
-  <text x="80" y="218" fill="#b5791f" font-size="16" letter-spacing="3">阅读 · 连接 · 理解</text>
-  <text class="serif" x="76" y="310" fill="#1a2433" font-size="68" letter-spacing="-2.8">让散落的数学，</text>
-  <text class="serif" x="76" y="398" fill="#1a2433" font-size="68" letter-spacing="-2.8">连成可探索的</text>
-  <text class="serif" x="76" y="486" fill="#26538d" font-size="68" letter-spacing="-2.8">知识景观。</text>
-  <text x="80" y="553" fill="#556275" font-size="23">从数学材料出发，</text>
-  <text x="80" y="589" fill="#556275" font-size="23">连接一张可以追溯的知识地图。</text>
-  <path d="M80 637h48" stroke="#b5791f" stroke-width="2"/>
-  <text x="145" y="644" fill="#354356" font-size="18">本地优先 · 来源可溯 · 人工审核</text>
+  <text class="serif" x="800" y="204" text-anchor="middle" fill="#f6f0e3" font-size="77" letter-spacing="-2.7">让数学，长成一片景观。</text>
+  <text x="800" y="258" text-anchor="middle" fill="#b7cbd9" font-size="23">以材料为起点，让每一次理解，都找到自己的位置。</text>
 
-  <!-- Editorial contrast: paper outside, a deep-blue mathematical atlas inside. -->
-  <rect x="918" y="130" width="650" height="544" rx="26" fill="#112139"/>
-  <rect x="918" y="130" width="650" height="544" rx="26" fill="url(#grid)" stroke="#26538d" stroke-opacity=".16"/>
+  <!-- An open book is the ground, not a floating source card. -->
+  <ellipse cx="831" cy="781" rx="526" ry="38" fill="#030a14" opacity=".55" filter="url(#blur)"/>
+  <g filter="url(#softShadow)">
+    <path d="M245 651L322 434Q584 463 800 535Q1046 436 1330 424L1407 643Q1084 722 800 812Q552 747 245 672Z" fill="#647987"/>
+    <path d="M255 638Q536 711 800 789Q1084 706 1395 621L1399 638Q1098 726 800 804Q526 725 251 655Z" fill="#b6b3a6"/>
+    <path d="M255 638Q536 711 800 789Q1084 706 1395 621M253 645Q532 718 800 796Q1091 716 1397 630" fill="none" stroke="#f1e9d6" stroke-width="2"/>
+    <path d="M800 782Q535 702 255 638L330 424Q590 453 800 523Z" fill="url(#leftPage)"/>
+    <path d="M800 782Q1080 706 1392 620L1325 415Q1050 435 800 523Z" fill="url(#rightPage)"/>
+    <path d="M800 523Q780 659 800 782" fill="none" stroke="#9b9c8f" stroke-width="3" opacity=".65"/>
+    <path d="M330 424Q590 453 800 523Q1050 435 1325 415" fill="none" stroke="#fff9e9" stroke-width="2"/>
+  </g>
+
+  <!-- Quiet source-page typography becomes part of the terrain. -->
+  <g stroke="#6c7a7b" stroke-width="2" opacity=".3">
+    <path d="M351 470l164 39M344 486l145 35M337 502l122 30M303 596l112 30M298 612l86 23"/>
+    <path d="M1216 468l91-17M1230 484l84-16M1245 500l74-14M1257 563l79-20M1263 580l78-20"/>
+  </g>
+
+  <!-- Two paper peaks form the M in Mathscape's constellation. -->
   <g>
-  <!-- An illustrative mathematical constellation, not fabricated product UI. -->
-  <g fill="none" stroke="#a9cce6" stroke-width="2">
-    <path d="M1020 327L1197 233 1390 360 1290 532 1110 575 1020 327" opacity=".65"/>
-    <path d="M1020 327L1290 532M1197 233l-87 342M1197 233l93 299M1110 575l280-215" opacity=".22"/>
-    <path d="M940 473C1055 473 1088 378 1197 233" stroke="url(#thread)" stroke-width="3"/>
-  </g>
-  <path d="M984 343Q1095 395 1178 510Q1248 576 1362 489Q1438 394 1364 332Q1270 237 1136 269Q1023 265 984 343Z" fill="#a9cce6" fill-opacity=".035" stroke="#a9cce6" stroke-opacity=".17" stroke-dasharray="5 9"/>
-
-  <g>
-    <circle cx="1197" cy="233" r="33" fill="#a9cce6" fill-opacity=".08"/>
-    <circle cx="1197" cy="233" r="18" fill="#142940" stroke="#a9cce6" stroke-width="2"/>
-    <circle cx="1197" cy="233" r="5" fill="#a9cce6"/>
-    <text x="1197" y="177" text-anchor="middle" fill="#a9cce6" font-size="14" letter-spacing="2">定义</text>
-    <text class="serif" x="1197" y="204" text-anchor="middle" fill="#f5f1e8" font-size="23">内积</text>
-
-    <circle cx="1390" cy="360" r="24" fill="#dfbd79" fill-opacity=".1"/>
-    <circle cx="1390" cy="360" r="10" fill="#dfbd79"/>
-    <text x="1430" y="344" fill="#dfbd79" font-size="13" letter-spacing="1.6">定理</text>
-    <text class="serif" x="1430" y="372" fill="#f5f1e8" font-size="22">柯西–施瓦茨</text>
-    <text class="serif" x="1430" y="400" fill="#f5f1e8" font-size="22">不等式</text>
-
-    <circle cx="1290" cy="532" r="32" fill="#a9cce6" fill-opacity=".08"/>
-    <circle cx="1290" cy="532" r="16" fill="#142940" stroke="#a9cce6" stroke-width="2"/>
-    <circle cx="1290" cy="532" r="4" fill="#a9cce6"/>
-    <text x="1322" y="549" fill="#a9cce6" font-size="14" letter-spacing="2">证明</text>
-    <text class="serif" x="1322" y="579" fill="#f5f1e8" font-size="23">缺失的一步</text>
-
-    <circle cx="1110" cy="575" r="7" fill="#a9cce6"/>
-    <text x="1104" y="615" text-anchor="middle" fill="#b7c8d6" font-size="18">你的笔记</text>
-    <circle cx="1020" cy="327" r="7" fill="#a9cce6"/>
-    <text x="1044" y="333" fill="#b7c8d6" font-size="18">向量空间</text>
+    <path d="M425 650L700 415 850 610 740 716Z" fill="#b8c4c9"/>
+    <path d="M425 650L700 415 680 622 740 716Z" fill="#e5ddc8"/>
+    <path d="M700 415L850 610 680 622Z" fill="#f8f1dc"/>
+    <path d="M680 622L850 610 740 716Z" fill="#91a8b5"/>
+    <path d="M820 704L1035 350 1250 615 1070 711Z" fill="#9eafb8"/>
+    <path d="M820 704L1035 350 1060 577 1070 711Z" fill="#eee5cf"/>
+    <path d="M1035 350L1250 615 1060 577Z" fill="#fbf3df"/>
+    <path d="M1060 577L1250 615 1070 711Z" fill="#b8c6cc"/>
   </g>
 
+  <!-- Faceted elevation contours make this a mathematical landscape. -->
+  <g fill="none" stroke="#536e7c" stroke-width="1.2" opacity=".36">
+    <path d="M659 450L697 446 723 444M631 474L695 467 738 464M604 497L693 488 753 483M576 521L691 509 768 503M549 544L689 529 783 522M521 568L687 550 798 542M494 591L685 571 813 561M466 615L683 591 828 581M439 638L681 612 843 600"/>
+    <path d="M1003 403L1039 384 1067 390M981 439L1041 407 1089 416M960 474L1044 429 1110 443M938 510L1046 452 1132 469M917 545L1049 475 1153 496M895 580L1051 497 1175 522M874 616L1054 520 1196 549M852 651L1056 543 1218 575M831 687L1059 565 1239 602"/>
+    <path d="M680 622L740 716M1060 577L1070 711" opacity=".5"/>
   </g>
 
-  <!-- Source card uses real, elementary mathematics as illustrative content. -->
-  <g transform="translate(740 390) rotate(-6 145 128)">
-    <rect width="290" height="256" rx="10" fill="#faf9f5" stroke="#dad5c8" filter="url(#shadow)"/>
-    <path d="M26 41h22" stroke="#b5791f" stroke-width="2"/>
-    <text x="59" y="46" fill="#556275" font-size="12" letter-spacing="2">数学材料（示意）</text>
-    <text class="serif" x="26" y="87" fill="#1a2433" font-size="22">内积空间 · 材料片段</text>
-    <path d="M26 110h235M26 125h193" stroke="#1a2433" stroke-opacity=".18" stroke-width="3"/>
-    <rect x="19" y="145" width="252" height="44" rx="3" fill="#eee0bb"/>
-    <text class="serif" x="145" y="174" text-anchor="middle" fill="#1a2433" font-size="21">|⟨u, v⟩|² ≤ ⟨u, u⟩⟨v, v⟩</text>
-    <path d="M26 211h172M26 226h215" stroke="#1a2433" stroke-opacity=".18" stroke-width="3"/>
+  <!-- The signature M-shaped route emerges from the source pages. -->
+  <path d="M425 650L700 415 850 610 1035 350 1250 615" fill="none" stroke="#142a43" stroke-width="7" stroke-linejoin="round" opacity=".5"/>
+  <path d="M425 650L700 415 850 610 1035 350 1250 615" fill="none" stroke="url(#ridge)" stroke-width="3.5" stroke-linejoin="round"/>
+  <g fill="#f7e7bd" stroke="#a17835" stroke-width="2">
+    <circle cx="425" cy="650" r="7"/><circle cx="700" cy="415" r="8"/>
+    <circle cx="850" cy="610" r="7"/><circle cx="1250" cy="615" r="7"/>
   </g>
-  <text x="1520" y="700" text-anchor="end" fill="#556275" font-size="13" letter-spacing="1.2">概念插画 · 非应用截图</text>
+  <circle cx="1035" cy="350" r="67" fill="url(#beacon)"/>
+  <path d="M1035 323L1041 343 1061 350 1041 356 1035 377 1029 356 1009 350 1029 343Z" fill="#f4d58c"/>
+  <circle cx="1035" cy="350" r="4" fill="#fff9df"/>
 
-  <path d="M80 748h1440" stroke="#26538d" stroke-opacity=".18"/>
-  <g font-size="20" fill="#354356">
-    <text class="mono" x="80" y="805" fill="#b5791f" font-size="15">01</text>
-    <text x="118" y="806">导入数学材料</text>
-    <text class="mono" x="452" y="805" fill="#b5791f" font-size="15">02</text>
-    <text x="490" y="806">追溯来源依据</text>
-    <text class="mono" x="860" y="805" fill="#b5791f" font-size="15">03</text>
-    <text x="898" y="806">审核候选提案</text>
-    <text class="mono" x="1230" y="805" fill="#b5791f" font-size="15">04</text>
-    <text x="1268" y="806">探索知识地图</text>
+  <!-- A few distant connections imply a larger atlas beyond the page. -->
+  <g fill="none" stroke="#a9c6d9" stroke-width="1.3" opacity=".4">
+    <path d="M1035 350L1228 324 1374 397M700 415L532 364 388 405" stroke-dasharray="3 7"/>
   </g>
-  <text x="80" y="857" fill="#556275" font-size="14" letter-spacing="1">开源 · 实验阶段</text>
-  <text class="mono" x="1520" y="857" text-anchor="end" fill="#556275" font-size="14">github.com/xiaoniaoyouhuajiang/Mathscape</text>
+  <g fill="#bfd3df">
+    <circle cx="1228" cy="324" r="3"/><circle cx="1374" cy="397" r="3"/>
+    <circle cx="532" cy="364" r="3"/><circle cx="388" cy="405" r="3"/>
+  </g>
+
+  <text x="1520" y="816" text-anchor="end" fill="#91acbe" font-size="11" letter-spacing="1.1">概念插画 · 非应用截图</text>
+  <path d="M80 842h1440" stroke="#b7cbd9" stroke-opacity=".2"/>
+  <text x="80" y="878" fill="#d8e3e9" font-size="16" letter-spacing=".3">本地优先 · 来源可溯 · 人工审核</text>
+  <text class="mono" x="1520" y="878" text-anchor="end" fill="#91acbe" font-size="13">开源 / 实验阶段</text>
 </svg>

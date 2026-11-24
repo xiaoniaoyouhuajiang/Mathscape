@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/mathscape-hero.zh-CN.png" alt="Mathscape 数学景观：将数学材料连接成可追溯的定义、定理与证明关系网。此图为概念插画，非应用截图。" width="100%">
+  <img src="docs/assets/mathscape-hero.zh-CN.png" alt="Mathscape 数学景观：展开的数学图册长成折纸山峦，金色 M 形星路从书页通向山顶。此图为概念插画，非应用截图。" width="100%">
 </p>
 
 <h1 align="center">Mathscape · 数学景观</h1>
