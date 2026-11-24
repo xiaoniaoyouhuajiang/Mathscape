@@ -173,6 +173,66 @@ test.describe("S1 sandbox shell", () => {
     expect(commands.filter((c) => c === "activate_thread")).toHaveLength(1);
   });
 
+  test("default desktop keeps the dock, reader and wrapped controls in separate space", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 820 });
+    await page.evaluate(() => localStorage.setItem("mathscape.theme", "parchment"));
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    const grid = page.locator(".workspace-grid");
+    const canvas = page.locator(".canvas-panel");
+    await expect(grid).toHaveClass(/sources-compact/);
+    await expect(grid).toHaveClass(/sources-collapsed/);
+    const main = (await canvas.boundingBox())!;
+    expect(main.width).toBeGreaterThanOrEqual(500);
+    const side = (await dock.boundingBox())!;
+    const inspector = (await page.locator(".detail-panel").boundingBox())!;
+    expect(main.x + main.width).toBeLessThanOrEqual(inspector.x + 1);
+    expect(inspector.x + inspector.width).toBeLessThanOrEqual(side.x + 1);
+    const toolbar = (await page.locator(".canvas-toolbar").boundingBox())!;
+    expect(toolbar.height).toBeLessThan(150);
+    for (const button of await page.locator(".preset-button").all()) {
+      const box = (await button.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(toolbar.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(toolbar.x + toolbar.width);
+      expect(box.y + box.height).toBeLessThanOrEqual(toolbar.y + toolbar.height);
+    }
+    const headerFits = await page.locator(".topbar").evaluate((header) => {
+      const boxes = Array.from(header.children).map((child) => child.getBoundingClientRect());
+      return boxes.every((box, index) => !index || box.left >= boxes[index - 1].right - 1);
+    });
+    expect(headerFits).toBe(true);
+    await page.locator(".view-menu-button").click();
+    await expect(page.locator("#learning-view-button")).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    // The temporary source drawer remains usable without narrowing the content
+    // or overwriting the normal directory preference.
+    const sourceToggle = page.locator("#toggle-sources");
+    await sourceToggle.click();
+    await expect(sourceToggle).toHaveAttribute("aria-expanded", "true");
+    expect((await canvas.boundingBox())!.width).toBe(main.width);
+    expect(await page.evaluate(() => localStorage.getItem("mathscape:sources-collapsed"))).toBeNull();
+    await page.keyboard.press("Escape");
+    await expect(sourceToggle).toHaveAttribute("aria-expanded", "false");
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("mathscape:open-source", {
+      detail: { artifactId: "md-1", conversionId: "c1", title: "正确表述.md" },
+    })));
+    const reader = page.locator("#reader");
+    await expect(reader).toBeVisible();
+    const paper = (await reader.boundingBox())!;
+    expect((await page.locator(".canvas-toolbar").boundingBox())!.height).toBeLessThan(150);
+    expect(paper.width).toBeGreaterThanOrEqual(500);
+    expect(paper.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height - 1);
+    expect(paper.x + paper.width).toBeLessThanOrEqual(side.x);
+
+    await dock.getByRole("button", { name: "关闭对话", exact: true }).click();
+    await expect(grid).not.toHaveClass(/sources-compact/);
+    await expect(sourceToggle).toHaveAttribute("aria-expanded", "true");
+  });
+
   test("sidebar width and dock mode persist across reloads; floating still drags", async ({ page }) => {
     await page.locator("#sandbox-button").click();
     page.once("dialog", (dialog) => void dialog.accept());
@@ -978,4 +1038,3 @@ test.describe("S1 sandbox shell", () => {
   });
 
 });
-

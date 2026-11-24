@@ -16,9 +16,9 @@
   --review-ok: var(--ms-success);
 }
 
-.review-workspace { position: absolute; inset: 66px 0 0; z-index: 4; display: flex; flex-direction: column; background: var(--review-bg); color: var(--review-text); }
+.review-workspace { position: absolute; inset: var(--canvas-toolbar-height, 66px) 0 0; z-index: 4; display: flex; flex-direction: column; background: var(--review-bg); color: var(--review-text); }
 .review-workspace.is-map-linked {
-  inset: 66px 0 0 auto;
+  inset: var(--canvas-toolbar-height, 66px) 0 0 auto;
   width: min(860px, 56vw);
   border-left: 1px solid var(--review-border-strong);
   box-shadow: -12px 0 36px rgba(0, 0, 0, 0.55);
@@ -132,7 +132,7 @@
 .review-raw-source { max-height: 280px; overflow: auto; white-space: pre-wrap; padding: 8px; background: var(--ms-panel-deep); font-size: 12px; user-select: text; }
 .review-raw-source mark { background: var(--ms-panel-raised); color: var(--ms-text-muted); }
 
-.review-return-chip { position: absolute; top: 74px; right: 14px; z-index: 5; display: flex; gap: 2px; }
+.review-return-chip { position: absolute; top: calc(var(--canvas-toolbar-height, 66px) + 8px); right: 14px; z-index: 5; display: flex; gap: 2px; }
 .review-return-chip[hidden] { display: none; }
 .review-return-chip button { border: 1px solid var(--ms-control-border); background: var(--ms-control); color: var(--ms-text); padding: 5px 10px; cursor: pointer; font-size: 12px; }
 .review-return-open { border-radius: 6px 0 0 6px; }

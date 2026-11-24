@@ -325,7 +325,7 @@ code {
   position: relative;
   display: grid;
   /* A stable footer keeps changing legend contents from moving the map. */
-  grid-template-rows: 66px minmax(0, 1fr) 64px;
+  grid-template-rows: max-content minmax(0, 1fr) 64px;
   background-color: var(--ms-canvas);
   background-image:
     radial-gradient(circle at 50% 45%, var(--ms-map-nebula), transparent 58%),
@@ -336,16 +336,21 @@ code {
 .canvas-toolbar {
   z-index: 2;
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-width: 0;
+  min-height: 66px;
   align-items: center;
+  align-content: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: 10px 20px;
   border-bottom: 1px solid var(--ms-border);
   background: var(--ms-panel);
 }
 
 .focus-bar {
   position: absolute;
-  top: 78px;
+  top: calc(var(--canvas-toolbar-height, 66px) + 12px);
   left: 16px;
   z-index: 2;
   display: flex;
@@ -596,13 +601,13 @@ code {
 .detail-error { color: var(--ms-error); font-size: 12px; }
 .graph-evidence-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--ms-text-secondary); font-size: 11px; }
 .graph-evidence-toggle input { accent-color: var(--ms-accent); }
-.graph-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.preset-group { display: flex; gap: 4px; }
-.preset-button { background: var(--ms-control); color: var(--ms-text); border: 1px solid var(--ms-control-border); border-radius: 5px; padding: 5px 10px; font-size: 11px; cursor: pointer; }
+.graph-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1 1 300px; min-width: 0; max-width: 100%; }
+.preset-group { display: flex; flex-wrap: wrap; gap: 4px; }
+.preset-button { background: var(--ms-control); color: var(--ms-text); border: 1px solid var(--ms-control-border); border-radius: 5px; padding: 5px 10px; font-size: 11px; cursor: pointer; white-space: nowrap; }
 .preset-button.is-active { border-color: var(--ms-accent); background: var(--ms-selected); color: var(--ms-text); }
 .graph-relayout-button { background: var(--ms-control); color: var(--ms-text); border: 1px solid var(--ms-control-border); border-radius: 5px; padding: 4px 9px; font-size: 11px; cursor: pointer; }
 .graph-relayout-button:hover { border-color: var(--ms-accent); color: var(--ms-text); }
-.filter-group { display: flex; align-items: center; gap: 8px; }
+.filter-group { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .filter-divider { color: var(--ms-text-muted); font-size: 14px; user-select: none; }
 .source-preview { max-height: 260px; overflow: auto; padding: 10px; border: 1px solid var(--ms-border); border-radius: 6px; color: #25303c; background: #f7f8fa; }
 .source-preview p:first-child { margin-top: 0; }
@@ -1315,7 +1320,7 @@ button.is-tablet-online::before {
 /* Sandbox Map Scene Player (graph/scene-player.ts): Announce HUD + lock. */
 .scene-hud {
   position: absolute;
-  top: 78px;
+  top: calc(var(--canvas-toolbar-height, 66px) + 12px);
   right: 16px;
   z-index: 3;
   display: grid;
