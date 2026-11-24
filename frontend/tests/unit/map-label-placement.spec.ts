@@ -19,4 +19,11 @@ describe("label placement without moving graph objects", () => {
     expect(crossesLabel(box(0, 0), { a: { x: -10, y: 25 }, b: { x: 80, y: 25 } })).toBe(false);
     expect(crossesLabel(box(0, 0), { a: { x: 80, y: 0 }, b: { x: 100, y: 10 } })).toBe(false);
   });
+  it("rejects a clipped default caption in favor of its inward slot", () => {
+    const viewport = { x1: 0, y1: 30, x2: 200, y2: 150, w: 200, h: 120 };
+    const item: MapLabel = { id: "debt", priority: 100, box: box(180, 70), alternatives: [box(130, 70)] };
+    expect(placeMapLabels([item], [], [], 4, viewport).get("debt")).toEqual(box(130, 70));
+    item.box = box(20, 10);
+    expect(placeMapLabels([item], [], [], 4, viewport).get("debt")).toEqual(box(130, 70));
+  });
 });

@@ -27,18 +27,20 @@ export function crossesLabel(box: LabelBox, { a, b }: LabelSegment): boolean {
 }
 
 /** Place titles, never graph objects. Prefer open space over connector strokes. */
-export function placeMapLabels(labels: readonly MapLabel[], bodies: readonly LabelBox[] = [], edges: readonly LabelSegment[] = [], gap = 4): Map<string, LabelBox> {
+export function placeMapLabels(labels: readonly MapLabel[], bodies: readonly LabelBox[] = [], edges: readonly LabelSegment[] = [], gap = 4, viewport?: LabelBox): Map<string, LabelBox> {
   const occupied: LabelBox[] = [];
   const placed = new Map<string, LabelBox>();
   const sorted = [...labels].sort((a, b) => Number(!!b.protected) - Number(!!a.protected) || b.priority - a.priority || a.id.localeCompare(b.id));
   for (const item of sorted) {
     const candidates = [item.box, ...(item.alternatives ?? [])].filter(box => {
+      if (viewport && (box.x1 < viewport.x1 || box.y1 < viewport.y1 || box.x2 > viewport.x2 || box.y2 > viewport.y2)) return false;
       const room = padded(box, gap);
       return !occupied.some(other => boxesOverlap(other, room)) && !bodies.some(body => boxesOverlap(body, room));
     });
     // A label is never allowed to cover a glyph just to preserve the default
     // below-node anchor. Hover/selection remain readable even in a packed area.
-    const chosen = candidates.find(box => !edges.some(edge => crossesLabel(padded(box, 2), edge))) ?? candidates[0] ?? (item.protected ? item.box : undefined);
+    const fallback = !viewport ? item.box : item.alternatives?.find(box => box.x1 >= viewport.x1 && box.y1 >= viewport.y1 && box.x2 <= viewport.x2 && box.y2 <= viewport.y2);
+    const chosen = candidates.find(box => !edges.some(edge => crossesLabel(padded(box, 2), edge))) ?? candidates[0] ?? (item.protected ? fallback : undefined);
     if (!chosen) continue;
     placed.set(item.id, chosen);
     occupied.push(padded(chosen, gap));

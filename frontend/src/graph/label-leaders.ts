@@ -1,7 +1,6 @@
 import type { Core } from "cytoscape";
 import { labelBox, type LabelEle } from "./label-hover";
 import { mapLabelOffset } from "./label-density";
-import { getMapStyle } from "../shell/map-style";
 
 /** Annotation leaders identify displaced captions; never add graph objects. */
 export function bindLabelLeaders(core: Core): void {
@@ -22,7 +21,6 @@ export function bindLabelLeaders(core: Core): void {
   container.prepend(layer);
   const draw = () => {
     if (core.destroyed()) return;
-    if (getMapStyle() !== "constellation") { path.setAttribute("d", ""); return; }
     const z = core.zoom(), pan = core.pan();
     const segments: string[] = [];
     core.nodes(':visible').forEach(node => {

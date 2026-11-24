@@ -209,6 +209,7 @@ export class GraphController {
 
   resize(): void {
     this.graphCore?.resize();
+    if (this.graphCore && this.studyActive) this.choreographer.refit(this.graphCore);
   }
 
   defaultFocusDepthFor(node: IncidenceNode | undefined): FocusDepth {
@@ -462,7 +463,7 @@ export class GraphController {
           this.visibleNodeKinds = new Set(PRESET_NODE_KINDS[preset]);
           this.syncCheckboxesToFilter();
           this.persistFilter();
-          this.renderCurrentGraph();
+          this.renderCurrentGraph(undefined, { fit: true });
         }
       };
     });
@@ -731,7 +732,9 @@ export class GraphController {
       node.hasClass(SELECTED_PRIMARY_CLASS) ||
       node.hasClass(FOCUS_ROOT_CLASS) ||
       node.hasClass("spine-unit-node") ||
+      node.hasClass("spine-scope-node") ||
       node.hasClass("orbit-semantic-node") ||
+      node.hasClass("orbit-outer-node") ||
       node.hasClass("spine-header-node");
 
     if (this.graphCore !== null) {
@@ -773,25 +776,28 @@ export class GraphController {
     this.inkOverlayResult = applyInkOverlay(this.graphCore, this.inkOverlay, this.showInkNotes);
     applyErrataReviewOverlay(this.graphCore, this.errataReviewOverlay);
     this.applyEffectiveFocusAndSelection();
-    this.choreographer.applyPosture(
-      this.graphCore,
-      posture,
-      priorPositions,
-      priorElementIds,
-      { forceSnap: options?.forceRelayout },
-    );
-
     // Sync full/compact labels across posture transitions (Study Spine shows full chapter/theorem titles)
     let changedLabels = this.graphCore.collection();
     this.graphCore.nodes().forEach((node) => {
       if (node.data("elementKind") === "junction" || node.hasClass(INK_NOTE_NODE_CLASS)) return;
-      if (syncNodeLabel(node, node.hasClass(LABEL_HOVER) || isFullLabelNode(node))) {
+      const full = node.hasClass(LABEL_HOVER) || node.hasClass(SELECTED_PRIMARY_CLASS) || node.hasClass(FOCUS_ROOT_CLASS) ||
+        (posture.nodeClasses.get(node.id()) ?? []).some(cls =>
+          cls === "spine-unit-node" || cls === "spine-scope-node" || cls === "orbit-semantic-node" || cls === "orbit-outer-node" || cls === "spine-header-node");
+      if (syncNodeLabel(node, full)) {
         changedLabels = changedLabels.union(node);
       }
     });
     if (changedLabels.nonempty()) {
       refreshLabels(this.graphCore, changedLabels as unknown as LabelSet);
     }
+
+    this.choreographer.applyPosture(
+      this.graphCore,
+      posture,
+      priorPositions,
+      priorElementIds,
+      { forceSnap: options?.forceRelayout, resetViewport: options?.fit },
+    );
 
     this.renderInkToggle();
     this.renderLegend(this.graphCore);

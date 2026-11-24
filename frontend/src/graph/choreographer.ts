@@ -12,12 +12,15 @@
  *    newly mounted elements bloom in smoothly at their exact deterministic
  *    slot coordinates without flashing the rest of the canvas.
  */
-import type { Core, NodeSingular } from "cytoscape";
+import type { Core, NodeCollection, NodeSingular } from "cytoscape";
 import { reducedMotion } from "../core/motion";
 import { INK_NOTE_NODE_CLASS } from "./ink-overlay";
 import type { MapPoint } from "./layout";
 import { ease, lerp, satelliteShift } from "./scene-clump";
 import type { CameraTarget, MapPostureSpec } from "./study-posture";
+import { fitStudyViewport, layoutStudyLanes, type FramedLabel, type StudyLaneLabel } from "./study-viewport";
+import { labelBox, refreshLabels, type LabelEle, type LabelSet } from "./label-hover";
+import { mapLabelOffset, mapLabelScale } from "./label-density";
 
 export const POSTURE_MORPH_MS = 420;
 export const INCREMENTAL_BLOOM_MS = 220;
@@ -25,6 +28,7 @@ export const INCREMENTAL_BLOOM_MS = 220;
 export const STUDY_POSTURE_NODE_CLASSES = [
   "spine-header-node",
   "spine-unit-node",
+  "spine-scope-node",
   "orbit-semantic-node",
   "orbit-outer-node",
   "study-status-mastered",
@@ -67,6 +71,57 @@ export class GraphChoreographer {
   private bloomTimer: number | null = null;
   /** Saved organic camera viewport before entering Study Posture so Local -> Global restores smoothly. */
   private savedOrganicViewport: ViewportState | null = null;
+  private posture: MapPostureSpec | null = null;
+
+  refit(core: Core): void {
+    if (!this.posture || this.posture.id === "organic") return;
+    this.finishNow();
+    this.layoutSpine(core, this.posture);
+    core.batch(() => core.nodes().forEach(node => {
+      const position = this.posture?.positions.get(node.id());
+      if (position && !node.hasClass(INK_NOTE_NODE_CLASS)) node.position(position);
+    }));
+    const viewport = this.resolveCameraViewport(core, { kind: "target", camera: this.posture.camera, positions: this.posture.positions });
+    if (viewport) core.viewport(viewport);
+  }
+
+  private studyViewport(core: Core) {
+    const pad = 20, container = core.container();
+    const hud = container?.parentElement?.querySelector<HTMLElement>("#study-hud");
+    const top = hud && !hud.hidden && container
+      ? Math.max(pad, hud.getBoundingClientRect().bottom - container.getBoundingClientRect().top + pad)
+      : pad;
+    return { x1: pad, x2: core.width() - pad, y1: top, y2: core.height() - pad };
+  }
+
+  private layoutSpine(core: Core, posture: MapPostureSpec): void {
+    if (!posture.id.startsWith("study:material:")) return;
+    const viewport = this.studyViewport(core);
+    const width = Math.max(300, viewport.x2 - viewport.x1), height = Math.max(120, viewport.y2 - viewport.y1);
+    const nodes = core.nodes().filter(node => posture.inScopeNodeIds?.has(node.id()) === true && node.data("elementKind") !== "junction") as NodeCollection;
+    nodes.forEach(node => { node.data("studyLabelWidth", Math.max(64, width / 3 - 42)); });
+    // Set the reading width before measuring wrapped lines; normalise away the
+    // previous camera's label compensation so repeated entry never shrinks it.
+    refreshLabels(core, nodes as unknown as LabelSet);
+    const labels: StudyLaneLabel[] = nodes.map(node => {
+      const p = posture.positions.get(node.id()) ?? node.position();
+      const lane = node.hasClass("orbit-outer-node") ? 2 : node.hasClass("orbit-semantic-node") ? 1 : 0;
+      const order = node.hasClass("spine-header-node") ? -2e6 : node.hasClass("spine-scope-node") ? -1e6 + p.y : p.y;
+      const savedIndent = node.scratch("studyIndent") as { posture: string; value: number } | undefined;
+      const indent = savedIndent?.posture === posture.id ? savedIndent.value : node.hasClass("spine-unit-node") ? Math.max(0, p.x) / 66 * 6 : 0;
+      node.scratch("studyIndent", { posture: posture.id, value: indent });
+      return { id: node.id(), lane, order, height: Math.max(24, labelBox(node as unknown as LabelEle).h / mapLabelScale(node) + 6), indent };
+    });
+    for (const [id, position] of layoutStudyLanes(labels, width, height)) posture.positions.set(id, position);
+    core.nodes().filter(node => node.data("elementKind") === "junction").forEach(node => {
+      const ends = node.connectedEdges().connectedNodes().not(node).toArray();
+      const points = ends.map(end => posture.positions.get(end.id())).filter((p): p is MapPoint => p !== undefined);
+      if (points.length) posture.positions.set(node.id(), { x: points.reduce((sum, p) => sum + p.x, 0) / points.length, y: points.reduce((sum, p) => sum + p.y, 0) / points.length });
+    });
+    // This is a readable page, not a thumbnail of the entire document. Longer
+    // outlines continue below it and remain reachable by normal panning.
+    posture.camera = { kind: "framing_box", box: { x1: 0, y1: 0, x2: width, y2: height }, maxZoom: 1 };
+  }
 
   getPostureId(): string {
     return this.lastPostureId;
@@ -111,9 +166,11 @@ export class GraphChoreographer {
     posture: MapPostureSpec,
     priorPositions: ReadonlyMap<string, MapPoint>,
     priorElementIds: ReadonlySet<string>,
-    options: { animate?: boolean; forceSnap?: boolean } = {},
+    options: { animate?: boolean; forceSnap?: boolean; resetViewport?: boolean } = {},
   ): void {
     this.finishNow();
+
+    this.posture = posture;
 
     const wasOrganic = this.lastPostureId === "organic";
     const isOrganic = posture.id === "organic";
@@ -166,6 +223,8 @@ export class GraphChoreographer {
       });
     });
 
+    this.layoutSpine(core, posture);
+
     const allowAnim =
       options.animate !== false &&
       !options.forceSnap &&
@@ -176,7 +235,7 @@ export class GraphChoreographer {
     // 2. If staying in the same posture (e.g. checkbox toggle, signal toggle, study mark update),
     //    keep camera untouched so the user's scroll position never jumps, bloom newly added elements,
     //    and gently nudge any orbit nodes whose relaxed slot shifted.
-    if (!postureChanged) {
+    if (!postureChanged && !options.forceSnap) {
       if (!isOrganic) {
         core.batch(() => {
           core.nodes().forEach((node) => {
@@ -246,7 +305,7 @@ export class GraphChoreographer {
     };
     const toVp = this.resolveCameraViewport(
       core,
-      isOrganic && this.savedOrganicViewport
+      isOrganic && this.savedOrganicViewport && !options.resetViewport
         ? { kind: "saved", vp: this.savedOrganicViewport }
         : { kind: "target", camera: posture.camera, positions: posture.positions },
     );
@@ -336,24 +395,30 @@ export class GraphChoreographer {
     if (camera.kind === "preserve") return null;
 
     if (camera.kind === "framing_box") {
-      const pad = camera.padding ?? 40;
-      const bw = Math.max(120, camera.box.x2 - camera.box.x1);
-      const bh = Math.max(120, camera.box.y2 - camera.box.y1);
-      const availW = Math.max(120, w - pad * 2);
-      const availH = Math.max(120, h - pad * 2);
-      const rawZoom = Math.min(availW / bw, availH / bh);
-      const zoom = Math.min(
-        camera.maxZoom ?? 1.05,
-        Math.max(camera.minZoom ?? 0.75, rawZoom),
-      );
-      const cx = (camera.box.x1 + camera.box.x2) / 2;
-      // Measure actual `#study-hud` height dynamically so the spine header always breathes cleanly below it
+      if (this.posture?.id.startsWith("study:material:")) {
+        const viewport = this.studyViewport(core);
+        return { zoom: 1, pan: { x: viewport.x1, y: viewport.y1 } };
+      }
+      const pad = 20;
       const hudEl = core.container()?.parentElement?.querySelector<HTMLElement>("#study-hud");
-      const hudHeight = hudEl && !hudEl.hidden ? hudEl.offsetHeight : 44;
-      const topScreenOffset = Math.max(96, hudHeight + 48);
-      const panX = w / 2 - cx * zoom;
-      const panY = topScreenOffset - camera.box.y1 * zoom;
-      return { zoom, pan: { x: panX, y: panY } };
+      const container = core.container();
+      const top = hudEl && !hudEl.hidden && container
+        ? Math.max(pad, hudEl.getBoundingClientRect().bottom - container.getBoundingClientRect().top + pad)
+        : pad;
+      const labels: FramedLabel[] = [];
+      core.nodes().forEach(node => {
+        if (node.hasClass("is-out-of-focus") || node.data("elementKind") === "junction") return;
+        const p = positions.get(node.id()) ?? node.position();
+        const current = node.position(), bb = labelBox(node as unknown as LabelEle), z = core.zoom();
+        const offset = mapLabelOffset(node);
+        labels.push({ ...p,
+          left: Math.max(0, (current.x - bb.x1) * z + offset.x),
+          right: Math.max(0, (bb.x2 - current.x) * z - offset.x),
+          top: Math.max(0, (current.y - bb.y1) * z + offset.y),
+          bottom: Math.max(0, (bb.y2 - current.y) * z - offset.y),
+        });
+      });
+      return fitStudyViewport(camera.box, labels, { x1: pad, x2: w - pad, y1: top, y2: h - pad }, camera.maxZoom);
     }
 
     // `fit_elements`: compute target bounding box from `positions`

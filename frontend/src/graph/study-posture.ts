@@ -561,6 +561,7 @@ export function buildStudySpinePosture(
   );
   for (const [scopeId, y] of scopeOrbit) {
     positions.set(scopeId, { x: DIALECT_MARGIN_X, y });
+    nodeClasses.set(scopeId, ["spine-scope-node"]);
   }
 
   // Place primary SemanticEntities on Right Orbit (`SEMANTIC_ORBIT_X`)
