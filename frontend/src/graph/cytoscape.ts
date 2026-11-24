@@ -32,6 +32,9 @@ import {
   type LabelSet,
 } from "./label-hover";
 import { graphLabelText, texToPlain } from "./tex-plain";
+import { wrapGraphLabel } from "./label-wrap";
+
+const wrappedLabel = (ele: { data(name: string): unknown }): string => wrapGraphLabel(String(ele.data("label") ?? ""));
 
 export type RenderMode = "semantic" | "hyperedge";
 
@@ -443,11 +446,9 @@ function graphStyles(): StylesheetJson {
     {
       selector: "node",
       style: {
-        label: "data(label)",
+        label: wrappedLabel,
         "text-wrap": "wrap",
-        // CJK theorem/debt titles often have no spaces; wrapping only at
-        // whitespace can silently exceed the reading column's max width.
-        "text-overflow-wrap": "anywhere",
+        "text-overflow-wrap": "whitespace",
         "text-max-width": (node: NodeSingular) => `${150 * mapLabelScale(node)}px`,
         "text-events": "yes",
         "font-size": "11px",
@@ -544,7 +545,7 @@ function graphStyles(): StylesheetJson {
     {
       selector: "edge.semantic-edge",
       style: {
-        label: "data(label)",
+        label: wrappedLabel,
         "line-color": t.edge,
         "target-arrow-color": t.edge,
         color: t.text,
@@ -553,7 +554,7 @@ function graphStyles(): StylesheetJson {
     {
       selector: "edge.evidence-edge",
       style: {
-        label: "data(label)",
+        label: wrappedLabel,
         width: constellation ? 0.8 : 1.2,
         opacity: constellation ? 0.07 : 1,
         "line-style": "dashed",
@@ -614,7 +615,7 @@ function graphStyles(): StylesheetJson {
     {
       selector: "edge.contracted-edge",
       style: {
-        label: "data(label)",
+        label: wrappedLabel,
         width: 1.6,
         "line-style": "dotted",
         "line-color": t.edge,
@@ -774,7 +775,7 @@ function graphStyles(): StylesheetJson {
     {
       selector: "edge.scene-ghost-edge",
       style: {
-        label: "data(label)",
+        label: wrappedLabel,
         width: 1.6,
         "line-style": "dashed",
         "line-color": t.candidate,
