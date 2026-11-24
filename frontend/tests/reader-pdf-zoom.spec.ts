@@ -162,12 +162,14 @@ test("continuous scroll default, single-page toggle, keyboard PageDown/PageUp, T
   });
 
   // 1. Opens in continuous scroll mode at target page 2 with golden backlink pulse + TextLayer phrase highlight
-  await expect(page.getByRole("button", { name: "连续滚动" })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByLabel("PDF 页码")).toHaveValue("2");
+  // The pulse is checked first: it lasts 2.6 s from the moment the landing page has rendered.
   const slot2Shell = page.locator(".pdf-page-slot[data-page-number='2'] .pdf-page-shell");
   await expect(slot2Shell).toHaveClass(/is-backlink-target/);
+  await expect(page.getByRole("button", { name: "连续滚动" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("PDF 页码")).toHaveValue("2");
   await expect(slot2Shell.locator(".textLayer")).toContainText("Proof by Induction Step");
   await expect(slot2Shell.locator(".textLayer .pdf-backlink-text-hit").first()).toBeVisible();
+  await expect(slot2Shell).not.toHaveClass(/is-backlink-target/);
 
   // 2. Keyboard PageUp / PageDown navigates cleanly
   await page.keyboard.press("PageUp");

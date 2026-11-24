@@ -686,13 +686,26 @@ export async function mountPdfViewer(
     await syncVirtualWindow(++renderVersion);
   };
 
-  const pulseLandingPage = (targetNum: number): void => {
+  const clearLandingPulse = (): void => {
     if (backlinkPulseTimer) clearTimeout(backlinkPulseTimer);
+    backlinkPulseTimer = undefined;
     for (const slot of slots) slot.shellEl.classList.remove("is-backlink-target");
-    const landingShell = slots[targetNum - 1]?.shellEl;
-    if (landingShell) {
-      landingShell.classList.add("is-backlink-target");
-      backlinkPulseTimer = setTimeout(() => landingShell.classList.remove("is-backlink-target"), 2600);
+  };
+
+  // The highlight goes on at once, but its 2.6 s only start counting once the landing
+  // page has rendered, so a slow render cannot use the highlight up before it is seen.
+  const showLandingPage = async (targetNum: number, pulse: boolean): Promise<void> => {
+    if (pulse) {
+      clearLandingPulse();
+      slots[targetNum - 1]?.shellEl.classList.add("is-backlink-target");
+    }
+    try {
+      await show(targetNum);
+    } finally {
+      if (pulse) {
+        if (backlinkPulseTimer) clearTimeout(backlinkPulseTimer);
+        backlinkPulseTimer = setTimeout(clearLandingPulse, 2600);
+      }
     }
   };
 
@@ -842,11 +855,7 @@ export async function mountPdfViewer(
     cleanups.push(() => observer.disconnect());
   }
 
-  if (backlinkLandingPage !== null) {
-    pulseLandingPage(backlinkLandingPage);
-  }
-
-  await show(pageNumber);
+  await showLandingPage(pageNumber, backlinkLandingPage !== null);
   if (transport.stopped || isStale()) {
     fullDispose();
     return null;
@@ -895,8 +904,7 @@ export async function mountPdfViewer(
       backlinkTextScrolled = false;
       renderCandidateChips(jumpOpts.candidatePages);
       setBacklinkNote(jumpOpts.backlinkNote);
-      if (jumpOpts.pulse !== false) pulseLandingPage(targetNum);
-      await show(targetNum);
+      await showLandingPage(targetNum, jumpOpts.pulse !== false);
       refreshAllHighlights();
     },
     dispose: fullDispose,
