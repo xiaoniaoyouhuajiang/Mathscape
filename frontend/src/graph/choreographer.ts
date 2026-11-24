@@ -350,7 +350,16 @@ export class GraphChoreographer {
       core,
       isOrganic && this.savedOrganicViewport && !options.resetViewport
         ? { kind: "saved", vp: this.savedOrganicViewport }
-        : { kind: "target", camera: posture.camera, positions: posture.positions },
+        : {
+            kind: "target",
+            // A resized study canvas invalidates the saved organic camera.
+            // Organic normally preserves the viewport; that must not preserve
+            // the study page's 1:1 framing when returning to the source map.
+            camera: isOrganic && !wasOrganic && !this.savedOrganicViewport
+              ? { kind: "fit_elements", padding: 56, elementIds: posture.inScopeNodeIds ?? undefined }
+              : posture.camera,
+            positions: posture.positions,
+          },
     );
     if (isOrganic) {
       this.savedOrganicViewport = null;

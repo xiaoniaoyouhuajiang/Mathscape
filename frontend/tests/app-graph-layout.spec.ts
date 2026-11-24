@@ -66,11 +66,11 @@ test.describe("Landscape map layout stability & auxiliary noise filtering", () =
     const expectNodesInside = async () => {
       await expect.poll(() => page.evaluate(() => {
         const cy = (document.querySelector("#graph") as unknown as { _cyreg: { cy: Core } })._cyreg.cy;
-        return cy.nodes().every(node => {
+        return cy.nodes().map(node => {
           const box = node.renderedBoundingBox({ includeLabels: false, includeOverlays: false });
-          return box.x1 >= 0 && box.y1 >= 0 && box.x2 <= cy.width() && box.y2 <= cy.height();
-        });
-      })).toBe(true);
+          return { label: node.data("label"), box, width: cy.width(), height: cy.height() };
+        }).filter(({ box, width, height }) => box.x1 < 0 || box.y1 < 0 || box.x2 > width || box.y2 > height);
+      })).toEqual([]);
     };
 
     await page.evaluate(() => window.appHarness.zoomTo(2));
@@ -91,8 +91,18 @@ test.describe("Landscape map layout stability & auxiliary noise filtering", () =
     await page.locator('.preset-button[data-preset="study"]').click();
     await expect(page.locator("#study-hud")).toBeVisible();
     await page.locator(".study-material-select").selectOption("md-1");
+    const studyColumnX = await page.evaluate(() => {
+      const cy = (document.querySelector("#graph") as unknown as { _cyreg: { cy: Core } })._cyreg.cy;
+      return cy.nodes(".spine-header-node").first().position().x;
+    });
     await dock.locator('button[title="收起为浮动入口"]').click();
     await expect.poll(async () => (await page.locator("#graph").boundingBox())!.width).toBe(width);
+    // Wait for the study resize itself, not just the DOM's new width. Otherwise
+    // a later organic resize can mask a stale page-camera restore on exit.
+    await expect.poll(() => page.evaluate(() => {
+      const cy = (document.querySelector("#graph") as unknown as { _cyreg: { cy: Core } })._cyreg.cy;
+      return cy.nodes(".spine-header-node").first().position().x;
+    })).not.toBe(studyColumnX);
     await page.getByRole("button", { name: "退出研读" }).click();
     await expect(page.locator("#study-hud")).toBeHidden();
     await expectNodesInside();
