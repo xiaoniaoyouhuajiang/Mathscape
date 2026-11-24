@@ -647,7 +647,12 @@ export class GraphController {
 
     const landscape = activityGraph(snapshot.landscape_graph, this.showRetired);
     const rect = this.elements.graphContainer.getBoundingClientRect();
-    const viewport = { width: rect.width, height: rect.height };
+    // Seed organic geometry from the stable panel, not the changing legend
+    // row. Otherwise the first render (empty legend) and 整理布局 (wrapped
+    // legend) produce different coordinates. Camera fitting still uses the
+    // actual canvas, and study lanes use its live, legend-excluding bounds.
+    const panel = this.elements.graphContainer.parentElement?.getBoundingClientRect();
+    const viewport = { width: rect.width, height: panel ? Math.max(rect.height, panel.bottom - rect.top) : rect.height };
     this.basePositions = resolveIncrementalPositions(
       landscape,
       options?.forceRelayout ? new Map() : this.basePositions,
