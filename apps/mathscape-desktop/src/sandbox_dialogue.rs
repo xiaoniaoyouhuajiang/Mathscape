@@ -1,7 +1,7 @@
 //! S1 dialogue shell over a sandbox session (docs/sandbox-flow.md §4.2, §5 S1).
 //!
-//! One user message = one `agent_events v0` round on the local Codex
-//! app-server ([`CodexExecutor`]), with the ten read-only Mathscape MCP
+//! One user message = one `agent_events v0` round on the selected local
+//! executor ([`CodexExecutor`] or [`OpenCodeExecutor`]), with Mathscape MCP
 //! tools mounted against the session's *isolated copy* (never the checkpoint,
 //! never the mother workspace). Workflow is "diluted" to chat: there is no
 //! planner and no propose/accept; Mathscape MCP tools stay read-only (T2).
@@ -9,7 +9,9 @@
 //! The harness itself runs under a per-session permission profile
 //! ([`round_harness`]): it may read the workspace copy, the versioned skill
 //! pack and the managed Lean profile, and write only the session's
-//! `scratch/` (drafts). Network stays off. Each round's harness context
+//! `scratch/` (drafts). OpenCode uses approval-layer checks, not OS enforcement;
+//! its isolation is weaker than Codex's, and shell/network tools are disabled.
+//! Each round's harness context
 //! (skill version + hash, grants, Lean profile root) is appended to the
 //! session's `harness.jsonl`.
 //!
@@ -41,8 +43,8 @@ use std::{
 use futures::StreamExt;
 use mathscape_agent::{
     AgentBackend, AgentEffort, AgentExecutor, AgentModel, CapabilityProbe, CodexConfig,
-    CodexExecutor, EventPayload, HarnessContext, LoadThread, Prompt, RoundId, SessionSpec,
-    ThreadBinding, ThreadContinuity, TurnOutcome,
+    CodexExecutor, EventPayload, HarnessContext, LoadThread, OpenCodeConfig, OpenCodeExecutor,
+    Prompt, RoundId, SessionSpec, ThreadBinding, ThreadContinuity, TurnOutcome,
 };
 use mathscape_sandbox::{
     DialogueThread, HarnessThreadBinding, MAX_MESSAGE_CHARS, SandboxError, SandboxHome,
@@ -70,13 +72,29 @@ pub(crate) const CODEX_PROGRAM_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_CODEX_PRO
 pub(crate) const MCP_PROGRAM_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_MCP_PROGRAM";
 /// Tauri event carrying [`DialogueUpdate`]s.
 pub(crate) const DIALOGUE_EVENT: &str = "sandbox://dialogue";
-/// Backend label written into `session.json` / export manifests.
-const BACKEND_LABEL: &str = "codex";
+const OPENCODE_PROGRAM_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_OPENCODE_PROGRAM";
+const BACKEND_ENVIRONMENT_VARIABLE: &str = "MATHSCAPE_AGENT_BACKEND";
+
+fn parse_backend(value: &str) -> Result<AgentBackend, String> {
+    match value.trim() {
+        "codex" => Ok(AgentBackend::Codex),
+        "opencode" => Ok(AgentBackend::OpenCode),
+        _ => Err(format!("不支持的执行器：{value}")),
+    }
+}
+
+fn backend_name(backend: AgentBackend) -> &'static str {
+    match backend {
+        AgentBackend::OpenCode => "OpenCode",
+        _ => "Codex",
+    }
+}
 
 /// Live update for the dialogue view.
 /// Blocking-side result of [`SandboxDialogueState::status`].
 #[derive(Default)]
 struct StatusSnapshot {
+    backends: Vec<BackendStatus>,
     probes: Vec<CapabilityProbe>,
     model: Option<String>,
     models: Vec<AgentModel>,
@@ -113,6 +131,9 @@ type Sink = Arc<dyn Fn(DialogueUpdate) + Send + Sync>;
 pub struct AgentStatus {
     pub backend: &'static str,
     pub codex_program: PathBuf,
+    pub program: PathBuf,
+    pub backends: Vec<BackendStatus>,
+    pub backend_selection: bool,
     pub mcp_program: PathBuf,
     pub tools: Vec<String>,
     pub probes: Vec<CapabilityProbe>,
@@ -121,15 +142,24 @@ pub struct AgentStatus {
     pub model: Option<String>,
     /// Selectable models from the adapter (`list_models`). Empty when unsupported.
     pub models: Vec<AgentModel>,
-    /// True when the adapter implements model selection (Codex).
+    /// True when the selected adapter implements model selection.
     pub model_selection: bool,
     /// Reasoning effort the next round will use (`AgentExecutor::current_effort`).
     pub effort: Option<String>,
     /// Efforts the current model advertises (`list_efforts(None)`). Empty when
     /// the catalog says nothing for this model.
     pub efforts: Vec<AgentEffort>,
-    /// True when the adapter implements effort selection (Codex).
+    /// True when the selected adapter implements effort selection.
     pub effort_selection: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendStatus {
+    pub backend: &'static str,
+    pub program: PathBuf,
+    pub available: bool,
+    pub probes: Vec<CapabilityProbe>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -161,6 +191,12 @@ pub(crate) struct SandboxDialogueState {
 
 struct Inner {
     executor: Arc<dyn AgentExecutor>,
+    opencode: Arc<dyn AgentExecutor>,
+    opencode_program: PathBuf,
+    selected: Mutex<AgentBackend>,
+    backend_override: Option<AgentBackend>,
+    backend_file: PathBuf,
+    round_backends: Mutex<HashMap<RoundId, AgentBackend>>,
     codex_program: PathBuf,
     mcp_program: PathBuf,
     /// One round at a time per session. `None` = reserved, round starting.
@@ -171,6 +207,7 @@ struct Inner {
 
 /// Everything `send` gathers under the sandbox lock before talking to Codex.
 struct Prepared {
+    backend: AgentBackend,
     workspace: PathBuf,
     user_entry: TranscriptEntry,
     thread: String,
@@ -314,7 +351,7 @@ where
 impl SandboxDialogueState {
     /// `resident_log`: where app-server lifecycle events go
     /// (`resident-processes.jsonl`, shared with the resident Loogle).
-    pub(crate) fn from_environment(resident_log: Option<PathBuf>) -> Self {
+    pub(crate) fn from_environment(resident_log: Option<PathBuf>, state_dir: PathBuf) -> Self {
         let config = CodexConfig {
             program: env_path(CODEX_PROGRAM_ENVIRONMENT_VARIABLE)
                 .unwrap_or_else(|| PathBuf::from("codex")),
@@ -322,19 +359,115 @@ impl SandboxDialogueState {
                 .unwrap_or_else(default_mcp_program),
             ..CodexConfig::default()
         };
-        Self::with_config_and_sink(config, crate::resident_log::jsonl_sink(resident_log))
+        let opencode = OpenCodeConfig {
+            program: env_path(OPENCODE_PROGRAM_ENVIRONMENT_VARIABLE)
+                .unwrap_or_else(|| PathBuf::from("opencode")),
+            mcp_program: config.mcp_program.clone(),
+            state_dir: state_dir.join("opencode"),
+            ..OpenCodeConfig::default()
+        };
+        Self::with_configs(
+            config,
+            opencode,
+            state_dir.join("agent-backend"),
+            env::var(BACKEND_ENVIRONMENT_VARIABLE)
+                .ok()
+                .and_then(|value| parse_backend(&value).ok()),
+            crate::resident_log::jsonl_sink(resident_log),
+        )
     }
 
+    #[cfg(test)]
     fn with_config_and_sink(config: CodexConfig, sink: mathscape_resident::EventSink) -> Self {
+        let root = config.home.as_ref().unwrap().parent().unwrap();
+        let opencode = OpenCodeConfig {
+            mcp_program: config.mcp_program.clone(),
+            state_dir: root.join("opencode"),
+            ..OpenCodeConfig::default()
+        };
+        let backend_file = root.join("agent-backend");
+        Self::with_configs(config, opencode, backend_file, None, sink)
+    }
+
+    fn with_configs(
+        config: CodexConfig,
+        opencode: OpenCodeConfig,
+        backend_file: PathBuf,
+        backend_override: Option<AgentBackend>,
+        sink: mathscape_resident::EventSink,
+    ) -> Self {
+        let selected = std::fs::read_to_string(&backend_file)
+            .ok()
+            .and_then(|value| parse_backend(&value).ok())
+            .unwrap_or(AgentBackend::Codex);
         Self {
             inner: Arc::new(Inner {
                 codex_program: config.program.clone(),
                 mcp_program: config.mcp_program.clone(),
+                opencode_program: opencode.program.clone(),
+                opencode: Arc::new(
+                    OpenCodeExecutor::new(opencode).with_event_sink(Arc::clone(&sink)),
+                ),
                 executor: Arc::new(CodexExecutor::new(config).with_event_sink(sink)),
+                selected: Mutex::new(selected),
+                backend_override,
+                backend_file,
+                round_backends: Mutex::new(HashMap::new()),
                 active: Mutex::new(HashMap::new()),
                 opened: Mutex::new(HashSet::new()),
             }),
         }
+    }
+
+    fn backend(&self) -> AgentBackend {
+        self.inner
+            .backend_override
+            .unwrap_or_else(|| *self.inner.selected.lock().unwrap())
+    }
+
+    fn executor(&self, backend: AgentBackend) -> Arc<dyn AgentExecutor> {
+        Arc::clone(if backend == AgentBackend::OpenCode {
+            &self.inner.opencode
+        } else {
+            &self.inner.executor
+        })
+    }
+
+    fn round_executor(&self, round: &RoundId) -> Option<Arc<dyn AgentExecutor>> {
+        let backend = self
+            .inner
+            .round_backends
+            .lock()
+            .unwrap()
+            .get(round)
+            .copied();
+        backend.map(|backend| self.executor(backend))
+    }
+
+    async fn set_backend(&self, value: String) -> Result<AgentStatus, String> {
+        let backend = parse_backend(&value)?;
+        if self.inner.backend_override.is_some() {
+            return Err("执行器已由 MATHSCAPE_AGENT_BACKEND 固定".into());
+        }
+        let executor = self.executor(backend);
+        let probes = tauri::async_runtime::spawn_blocking(move || executor.probe())
+            .await
+            .map_err(|error| error.to_string())?;
+        if probes.is_empty() || !probes.iter().all(CapabilityProbe::is_available) {
+            return Err(format!("{} 未安装或不可用", backend_name(backend)));
+        }
+        {
+            let mut selected = self.inner.selected.lock().unwrap();
+            let path = &self.inner.backend_file;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let temporary = path.with_extension("tmp");
+            std::fs::write(&temporary, backend.as_str()).map_err(|e| e.to_string())?;
+            std::fs::rename(&temporary, path).map_err(|e| e.to_string())?;
+            *selected = backend;
+        }
+        Ok(self.status().await)
     }
 
     fn active(&self) -> std::sync::MutexGuard<'_, HashMap<String, Option<RoundId>>> {
@@ -355,6 +488,9 @@ impl SandboxDialogueState {
             .is_some_and(|slot| slot.as_ref() == round)
         {
             active.remove(session_id);
+            if let Some(round) = round {
+                self.inner.round_backends.lock().unwrap().remove(round);
+            }
         }
     }
 
@@ -369,6 +505,7 @@ impl SandboxDialogueState {
     pub(crate) async fn close_harness_session(&self, session_id: &str) {
         self.opened().remove(session_id);
         let _ = self.inner.executor.close_session(session_id).await;
+        let _ = self.inner.opencode.close_session(session_id).await;
     }
 
     /// Stop the app-servers of every idle session except `keep` (session
@@ -390,37 +527,60 @@ impl SandboxDialogueState {
     pub(crate) fn close_all(&self) {
         self.opened().clear();
         self.inner.executor.close_all();
+        self.inner.opencode.close_all();
     }
 
     /// Best-effort cancel of the session's running round (used by discard).
     pub(crate) async fn cancel_session_round(&self, session_id: &str) {
-        if let Some(round) = self.active_round(session_id) {
-            let _ = self.inner.executor.cancel(&round).await;
+        if let Some(round) = self.active_round(session_id)
+            && let Some(executor) = self.round_executor(&round)
+        {
+            let _ = executor.cancel(&round).await;
         }
     }
 
     async fn status(&self) -> AgentStatus {
-        let executor = Arc::clone(&self.inner.executor);
+        let backend = self.backend();
+        let executor = self.executor(backend);
+        let peers = [
+            (
+                AgentBackend::Codex,
+                self.inner.codex_program.clone(),
+                self.executor(AgentBackend::Codex),
+            ),
+            (
+                AgentBackend::OpenCode,
+                self.inner.opencode_program.clone(),
+                self.executor(AgentBackend::OpenCode),
+            ),
+        ];
         let snapshot = tauri::async_runtime::spawn_blocking(move || {
-            let probes = executor.probe();
+            let backends: Vec<_> = peers
+                .into_iter()
+                .map(|(backend, program, executor)| {
+                    let probes = executor.probe();
+                    BackendStatus {
+                        backend: backend.as_str(),
+                        program,
+                        available: !probes.is_empty()
+                            && probes.iter().all(CapabilityProbe::is_available),
+                        probes,
+                    }
+                })
+                .collect();
+            let selected = backends
+                .iter()
+                .find(|item| item.backend == backend.as_str())
+                .unwrap();
+            let probes = selected.probes.clone();
             let model = executor.current_model();
-            let (models, model_selection) = match executor.list_models() {
-                Ok(models) => (models, true),
-                Err(_) => (Vec::new(), false),
+            let (models, model_selection) = match selected.available.then(|| executor.list_models())
+            {
+                Some(Ok(models)) => (models, true),
+                _ => (Vec::new(), false),
             };
             let effort = executor.current_effort();
-            // Efforts come from the selected model's catalog entry. Reuse the
-            // catalog fetched above instead of asking the adapter again (which
-            // may spawn an app-server when the cache is missing).
-            let efforts = if model_selection {
-                Ok(model
-                    .as_deref()
-                    .and_then(|id| models.iter().find(|m| m.id == id))
-                    .map(|m| m.reasoning_efforts.clone())
-                    .unwrap_or_default())
-            } else {
-                executor.list_efforts(None)
-            };
+            let efforts = executor.list_efforts(None);
             // Selectable only when the adapter supports it and the model
             // advertises at least one level (otherwise nothing to validate).
             let (efforts, effort_selection) = match efforts {
@@ -431,6 +591,7 @@ impl SandboxDialogueState {
                 Err(_) => (Vec::new(), false),
             };
             StatusSnapshot {
+                backends,
                 probes,
                 model,
                 models,
@@ -444,7 +605,14 @@ impl SandboxDialogueState {
         .unwrap_or_default();
         let probes = snapshot.probes;
         AgentStatus {
-            backend: BACKEND_LABEL,
+            backend: backend.as_str(),
+            program: if backend == AgentBackend::OpenCode {
+                self.inner.opencode_program.clone()
+            } else {
+                self.inner.codex_program.clone()
+            },
+            backends: snapshot.backends,
+            backend_selection: self.inner.backend_override.is_none(),
             codex_program: self.inner.codex_program.clone(),
             mcp_program: self.inner.mcp_program.clone(),
             tools: sandbox_tool_allowlist(),
@@ -460,7 +628,7 @@ impl SandboxDialogueState {
     }
 
     async fn set_effort(&self, effort: String) -> Result<AgentStatus, String> {
-        let executor = Arc::clone(&self.inner.executor);
+        let executor = self.executor(self.backend());
         tauri::async_runtime::spawn_blocking(move || executor.set_effort(&effort))
             .await
             .map_err(|error| format!("set_effort worker failed: {error}"))?
@@ -469,7 +637,7 @@ impl SandboxDialogueState {
     }
 
     async fn set_model(&self, id: String) -> Result<AgentStatus, String> {
-        let executor = Arc::clone(&self.inner.executor);
+        let executor = self.executor(self.backend());
         tauri::async_runtime::spawn_blocking(move || executor.set_model(&id))
             .await
             .map_err(|error| format!("set_model worker failed: {error}"))?
@@ -506,6 +674,7 @@ impl SandboxDialogueState {
         text: String,
         sink: Sink,
     ) -> Result<SendOutcome, String> {
+        let backend = self.backend();
         let text = text.trim().to_owned();
         if text.is_empty() {
             return Err("消息为空".into());
@@ -543,7 +712,7 @@ impl SandboxDialogueState {
                     None,
                     None,
                 )?;
-                home.record_backend(&session_id, BACKEND_LABEL, &tools)?;
+                home.record_backend(&session_id, backend.as_str(), &tools)?;
                 let checkpoint_root = home.checkpoint(&view.checkpoint_id).ok().map(|c| c.root);
                 let scratch = home.ensure_session_scratch(&session_id)?;
                 // One sandbox session = one investigation; the thread is metadata.
@@ -558,12 +727,13 @@ impl SandboxDialogueState {
                 let workspace = view
                     .workspace_root
                     .unwrap_or_else(|| home.session_workspace(&session_id));
-                let state_dir = home.ensure_harness_state_dir(&session_id, BACKEND_LABEL)?;
+                let state_dir = home.ensure_harness_state_dir(&session_id, backend.as_str())?;
                 let before = load_digest(&state_dir, &thread);
                 let now = digest_workspace(&workspace, &investigation_id)
                     .map_err(|error| eprintln!("mathscape: workspace digest failed: {error}"))
                     .ok();
                 Ok(Prepared {
+                    backend,
                     round_file: home.current_round_path(&session_id),
                     skill: locate_skills_root().and_then(|root| load_worknet_skill(&root).ok()),
                     workspace,
@@ -599,7 +769,7 @@ impl SandboxDialogueState {
 
         // Session switch: idle app-servers of other sessions are stopped.
         self.close_other_harness_sessions(Some(&session_id)).await;
-        let executor = Arc::clone(&self.inner.executor);
+        let executor = self.executor(backend);
         let started = self
             .start_turn(&home, &session_id, &text, tools, prepared, &sink)
             .await
@@ -611,7 +781,7 @@ impl SandboxDialogueState {
             Ok(started) => started,
             Err(error) => {
                 self.release(&session_id, None);
-                let message = format!("未能启动本机 Codex：{error}");
+                let message = format!("未能启动本机 {}：{error}", backend_name(backend));
                 let note = message.clone();
                 let (sid, tid) = (session_id.clone(), thread.clone());
                 if let Ok(entry) = with_home(&home, move |home| {
@@ -634,9 +804,14 @@ impl SandboxDialogueState {
                 return Err(message);
             }
         };
+        self.inner
+            .round_backends
+            .lock()
+            .unwrap()
+            .insert(round.clone(), backend);
         let round_workspace = workspace.clone();
         harness_record["harness_thread"] = json!({
-            "backend": BACKEND_LABEL,
+            "backend": backend.as_str(),
             "thread_id": binding.thread_id,
             "continuity": continuity,
         });
@@ -716,8 +891,7 @@ impl SandboxDialogueState {
                         closing = Some(match end.outcome {
                             TurnOutcome::Completed => (
                                 TranscriptRole::Agent,
-                                this.inner
-                                    .executor
+                                executor
                                     .final_text(&round)
                                     .filter(|text| !text.trim().is_empty())
                                     .unwrap_or_else(|| "（本轮没有可见回复文本）".into()),
@@ -796,7 +970,8 @@ impl SandboxDialogueState {
         prepared: Prepared,
         sink: &Sink,
     ) -> Result<(RoundId, HarnessThreadBinding, ThreadContinuity), String> {
-        let executor = Arc::clone(&self.inner.executor);
+        let backend = prepared.backend;
+        let executor = self.executor(backend);
         // Skill or tool schema changed since the thread's last turn: restart
         // the app-server (and its MCP) so the new tools are listed; the
         // thread is resumed by id below and told what changed.
@@ -814,7 +989,7 @@ impl SandboxDialogueState {
         }
         executor
             .open_session(SessionSpec {
-                backend: AgentBackend::Codex,
+                backend,
                 session_key: session_id.to_owned(),
                 workspace: prepared.workspace.clone(),
                 tools_allow: tools,
@@ -830,13 +1005,18 @@ impl SandboxDialogueState {
             .dialogue_thread
             .as_ref()
             .and_then(|thread| thread.harness.clone())
-            .filter(|binding| binding.backend == BACKEND_LABEL);
+            .filter(|binding| binding.backend == backend.as_str());
         // A dialogue that already has replies but no harness thread predates
         // persistent threads.
         let earlier_replies = prepared
             .history
             .iter()
             .any(|entry| entry.role == TranscriptRole::Agent);
+        let switched = prepared
+            .dialogue_thread
+            .as_ref()
+            .and_then(|thread| thread.harness.as_ref())
+            .is_some_and(|binding| binding.backend != backend.as_str());
         let (bound, degraded): (ThreadBinding, Option<String>) = match &previous {
             Some(previous) => {
                 let state_copy = previous
@@ -859,7 +1039,10 @@ impl SandboxDialogueState {
                             .new_thread(session_id)
                             .await
                             .map_err(|error| error.to_string())?,
-                        Some(format!("Codex 无法续接原线程（{error}）")),
+                        Some(format!(
+                            "{} 无法续接原线程（{error}）",
+                            backend_name(backend)
+                        )),
                     ),
                 }
             }
@@ -869,7 +1052,8 @@ impl SandboxDialogueState {
                     .await
                     .map_err(|error| error.to_string())?,
                 // A dialogue from before harness threads were persisted.
-                earlier_replies.then(|| "这条对话来自旧版本，没有可续接的 Codex 线程".to_owned()),
+                (switched || earlier_replies)
+                    .then(|| format!("已切换执行器或没有可续接的 {} 线程", backend_name(backend))),
             ),
         };
         let rebuilt = bound.continuity == ThreadContinuity::Started && degraded.is_some();
@@ -917,7 +1101,7 @@ impl SandboxDialogueState {
             text.to_owned()
         };
         let binding = HarnessThreadBinding {
-            backend: BACKEND_LABEL.to_owned(),
+            backend: backend.as_str().to_owned(),
             thread_id: bound.thread_id.clone(),
             rollout_file: same_thread.and_then(|previous| previous.rollout_file.clone()),
             workspace: prepared.workspace.clone(),
@@ -969,7 +1153,8 @@ impl SandboxDialogueState {
         thread: &str,
         binding: &HarnessThreadBinding,
     ) {
-        let executor = Arc::clone(&self.inner.executor);
+        let executor =
+            self.executor(parse_backend(&binding.backend).unwrap_or(AgentBackend::Codex));
         let (sid, harness_thread) = (session_id.to_owned(), binding.thread_id.clone());
         let rollout = tauri::async_runtime::spawn_blocking(move || {
             executor.thread_state_path(&sid, &harness_thread)
@@ -979,7 +1164,7 @@ impl SandboxDialogueState {
         .flatten();
         let (sid, tid, mut binding) = (session_id.to_owned(), thread.to_owned(), binding.clone());
         let result = with_home(home, move |home| {
-            let state_dir = home.ensure_harness_state_dir(&sid, BACKEND_LABEL)?;
+            let state_dir = home.ensure_harness_state_dir(&sid, &binding.backend)?;
             if let Some(rollout) = rollout {
                 match keep_rollout_copy(&rollout, &state_dir) {
                     Ok(name) => binding.rollout_file = Some(name),
@@ -1059,13 +1244,14 @@ impl SandboxDialogueState {
     async fn cancel(&self, session_id: &str) -> Result<bool, String> {
         match self.active_round(session_id) {
             None => Ok(false),
-            Some(round) => self
-                .inner
-                .executor
-                .cancel(&round)
-                .await
-                .map(|()| true)
-                .map_err(|error| error.to_string()),
+            Some(round) => match self.round_executor(&round) {
+                Some(executor) => executor
+                    .cancel(&round)
+                    .await
+                    .map(|()| true)
+                    .map_err(|error| error.to_string()),
+                None => Ok(false),
+            },
         }
     }
 }
@@ -1077,7 +1263,15 @@ pub async fn sandbox_agent_status(
     Ok(dialogue.status().await)
 }
 
-/// Persist a Codex reasoning effort for subsequent sandbox rounds.
+#[tauri::command]
+pub async fn sandbox_set_backend(
+    dialogue: State<'_, SandboxDialogueState>,
+    backend: String,
+) -> Result<AgentStatus, String> {
+    dialogue.set_backend(backend).await
+}
+
+/// Persist the selected executor's reasoning effort for subsequent rounds.
 #[tauri::command]
 pub async fn sandbox_set_effort(
     dialogue: State<'_, SandboxDialogueState>,
@@ -1086,7 +1280,7 @@ pub async fn sandbox_set_effort(
     dialogue.set_effort(effort).await
 }
 
-/// Persist a Codex model selection for subsequent sandbox rounds.
+/// Persist the selected executor's model selection for subsequent rounds.
 #[tauri::command]
 pub async fn sandbox_set_model(
     dialogue: State<'_, SandboxDialogueState>,
@@ -1284,6 +1478,225 @@ mod tests {
 
     fn dialogue(fx: &Fixture, args: &[&str]) -> SandboxDialogueState {
         dialogue_in(fx, "codex-home", args)
+    }
+
+    fn acp_program() -> PathBuf {
+        static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+        FIXTURE
+            .get_or_init(|| {
+                let output = Command::new(env!("CARGO"))
+                    .current_dir(env!("CARGO_MANIFEST_DIR"))
+                    .args([
+                        "build",
+                        "-p",
+                        "mathscape-agent",
+                        "--bin",
+                        "mathscape-acp-fixture",
+                        "--message-format=json-render-diagnostics",
+                    ])
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                    .find_map(|message| {
+                        (message["target"]["name"] == "mathscape-acp-fixture")
+                            .then(|| message["executable"].as_str().map(PathBuf::from))
+                            .flatten()
+                    })
+                    .unwrap()
+            })
+            .clone()
+    }
+
+    fn dual_dialogue(
+        fx: &Fixture,
+        mode: &str,
+        backend_override: Option<AgentBackend>,
+    ) -> SandboxDialogueState {
+        let home = fx.root.join("codex-home");
+        std::fs::create_dir_all(&home).unwrap();
+        SandboxDialogueState::with_configs(
+            CodexConfig {
+                program: fixture_program(),
+                home: Some(home),
+                args: vec![
+                    "--log".into(),
+                    fx.root.join("codex-home.log").display().to_string(),
+                ],
+                ..CodexConfig::default()
+            },
+            OpenCodeConfig {
+                program: acp_program(),
+                args: vec![
+                    "--mode".into(),
+                    mode.into(),
+                    "--log".into(),
+                    fx.root.join("acp.log").display().to_string(),
+                ],
+                state_dir: fx.root.join("opencode"),
+                ..OpenCodeConfig::default()
+            },
+            fx.root.join("agent-backend"),
+            backend_override,
+            mathscape_resident::null_sink(),
+        )
+    }
+
+    #[test]
+    fn opencode_status_selection_and_round_are_backend_aware() {
+        let fx = fixture("opencode");
+        let state = dual_dialogue(&fx, "normal", None);
+        let status = tauri::async_runtime::block_on(state.status());
+        assert_eq!(status.backend, "codex");
+        assert_eq!(
+            status
+                .backends
+                .iter()
+                .map(|b| b.backend)
+                .collect::<Vec<_>>(),
+            ["codex", "opencode"]
+        );
+        assert!(status.backends.iter().all(|b| b.available));
+        assert!(tauri::async_runtime::block_on(state.set_backend("unknown".into())).is_err());
+        let status = tauri::async_runtime::block_on(state.set_backend("opencode".into())).unwrap();
+        assert_eq!(status.program, acp_program());
+        assert!(!status.effort_selection);
+        assert_eq!(status.models.len(), 2);
+        tauri::async_runtime::block_on(state.set_model("fixture/b".into())).unwrap();
+        assert_eq!(
+            tauri::async_runtime::block_on(state.status())
+                .model
+                .as_deref(),
+            Some("fixture/b")
+        );
+        let (_, seen) = send_and_wait(&state, &fx, "hello OpenCode");
+        assert!(
+            seen.iter()
+                .filter_map(|update| match update {
+                    DialogueUpdate::AgentEvent { event, .. } => Some(event),
+                    _ => None,
+                })
+                .all(|event| event["backend"] == "opencode")
+        );
+        let home = fx.home.lock().unwrap();
+        assert!(
+            home.read_transcript(&fx.session_id)
+                .unwrap()
+                .iter()
+                .any(|line| line.text == "fixture reply")
+        );
+        assert_eq!(home.session(&fx.session_id).unwrap().backend, "opencode");
+        assert!(
+            home.ensure_harness_state_dir(&fx.session_id, "opencode")
+                .unwrap()
+                .is_dir()
+        );
+        drop(home);
+        assert_eq!(
+            std::fs::read_to_string(fx.root.join("agent-backend")).unwrap(),
+            "opencode"
+        );
+        let restored = dual_dialogue(&fx, "normal", None);
+        assert_eq!(restored.backend(), AgentBackend::OpenCode);
+        state.close_all();
+        restored.close_all();
+    }
+
+    #[test]
+    fn switching_harness_rebuilds_transcript_and_preserves_backend_bindings() {
+        let fx = fixture("switch-backend");
+        let state = dual_dialogue(&fx, "normal", None);
+        send_and_wait(&state, &fx, "codex context");
+        tauri::async_runtime::block_on(state.set_backend("opencode".into())).unwrap();
+        send_and_wait(&state, &fx, "opencode question");
+        {
+            let home = fx.home.lock().unwrap();
+            let thread = &home.dialogue_threads(&fx.session_id).unwrap().threads[0];
+            assert_eq!(thread.harness.as_ref().unwrap().backend, "opencode");
+            assert_eq!(thread.harnesses.len(), 2);
+            assert!(
+                home.read_transcript(&fx.session_id)
+                    .unwrap()
+                    .iter()
+                    .any(|line| line.text.contains("上下文已降级"))
+            );
+        }
+        let calls = logged(&fx, "acp", "session/prompt");
+        assert!(
+            calls[0]["params"]["prompt"]
+                .to_string()
+                .contains("codex context")
+        );
+        tauri::async_runtime::block_on(state.set_backend("codex".into())).unwrap();
+        send_and_wait(&state, &fx, "back to codex");
+        let calls = logged(&fx, "codex-home", "turn/start");
+        assert!(calls.last().unwrap().to_string().contains("fixture reply"));
+        let home = fx.home.lock().unwrap();
+        let thread = &home.dialogue_threads(&fx.session_id).unwrap().threads[0];
+        assert_eq!(thread.harness.as_ref().unwrap().backend, "codex");
+        assert_eq!(thread.harnesses.len(), 2);
+        drop(home);
+        state.close_all();
+    }
+
+    #[test]
+    fn cancel_after_backend_switch_reaches_original_executor() {
+        let fx = fixture("switch-cancel");
+        let state = dual_dialogue(&fx, "hold", None);
+        tauri::async_runtime::block_on(state.set_backend("opencode".into())).unwrap();
+        let (sink, updates) = channel_sink();
+        tauri::async_runtime::block_on(state.send(
+            Arc::clone(&fx.home),
+            fx.session_id.clone(),
+            "wait".into(),
+            sink,
+        ))
+        .unwrap();
+        tauri::async_runtime::block_on(state.set_backend("codex".into())).unwrap();
+        assert!(tauri::async_runtime::block_on(state.cancel(&fx.session_id)).unwrap());
+        let seen = wait_for(&updates, finished);
+        assert!(seen.iter().any(|update| matches!(update, DialogueUpdate::AgentEvent { event, .. } if event["type"] == "turn_end" && event["payload"]["outcome"] == "cancelled")));
+        assert_eq!(logged(&fx, "acp", "session/cancel").len(), 1);
+        tauri::async_runtime::block_on(state.close_harness_session(&fx.session_id));
+        assert!(state.opened().is_empty());
+        state.close_all();
+    }
+
+    #[test]
+    fn unavailable_backend_and_environment_override_cannot_be_selected_around() {
+        let fx = fixture("backend-override");
+        let state = dual_dialogue(&fx, "normal", Some(AgentBackend::OpenCode));
+        let status = tauri::async_runtime::block_on(state.status());
+        assert_eq!(status.backend, "opencode");
+        assert!(!status.backend_selection);
+        assert!(tauri::async_runtime::block_on(state.set_backend("codex".into())).is_err());
+        let unavailable = SandboxDialogueState::with_configs(
+            CodexConfig {
+                program: fixture_program(),
+                ..CodexConfig::default()
+            },
+            OpenCodeConfig {
+                program: fx.root.join("not-installed"),
+                ..OpenCodeConfig::default()
+            },
+            fx.root.join("missing-choice"),
+            None,
+            mathscape_resident::null_sink(),
+        );
+        let status = tauri::async_runtime::block_on(unavailable.status());
+        assert!(!status.backends[1].available);
+        assert!(
+            tauri::async_runtime::block_on(unavailable.set_backend("opencode".into())).is_err()
+        );
+        assert!(!fx.root.join("missing-choice").exists());
+        state.close_all();
+        unavailable.close_all();
     }
 
     /// Inbound requests the fixture logged with `method`.

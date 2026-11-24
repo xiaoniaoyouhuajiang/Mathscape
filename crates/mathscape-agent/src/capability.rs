@@ -20,15 +20,18 @@ pub enum Capability {
     Marker,
     Lean,
     Codex,
+    #[serde(rename = "opencode")]
+    OpenCode,
     ClaudeCode,
     Hmz,
 }
 
 impl Capability {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Marker,
         Self::Lean,
         Self::Codex,
+        Self::OpenCode,
         Self::ClaudeCode,
         Self::Hmz,
     ];
@@ -38,6 +41,7 @@ impl Capability {
             Self::Marker => "marker",
             Self::Lean => "lean",
             Self::Codex => "codex",
+            Self::OpenCode => "opencode",
             Self::ClaudeCode => "claude_code",
             Self::Hmz => "hmz",
         }
@@ -174,6 +178,7 @@ pub fn probe_capability(runner: &dyn CommandRunner, capability: Capability) -> C
                 .and_then(|lean| version_of(runner, &lean, &["--version"]))
         }),
         Capability::Codex => probe_version_command(runner, "codex", &["--version"]),
+        Capability::OpenCode => probe_version_command(runner, "opencode", &["--version"]),
         Capability::ClaudeCode => probe_version_command(runner, "claude", &["--version"]),
         Capability::Hmz => probe_version_command(runner, "hmz", &["--version"]),
     };
@@ -418,7 +423,7 @@ mod tests {
     #[test]
     fn nothing_installed_is_all_missing() {
         let probes = probe_all(&FakeRunner::default());
-        assert_eq!(probes.len(), 5);
+        assert_eq!(probes.len(), Capability::ALL.len());
         assert!(probes.iter().all(|p| p.state == CapabilityState::Missing));
         assert_eq!(
             serde_json::to_value(&probes[0]).unwrap(),
@@ -431,6 +436,7 @@ mod tests {
     fn version_commands() {
         let runner = FakeRunner::default()
             .ok("codex", "codex-cli 0.46.0\n")
+            .ok("opencode", "1.19.6\n")
             .ok("claude", "1.0.88 (Claude Code)\n")
             .ok(
                 "lean",
@@ -439,6 +445,13 @@ mod tests {
         let codex = probe_capability(&runner, Capability::Codex);
         assert_eq!(codex.state, CapabilityState::Available);
         assert_eq!(codex.found_version.as_deref(), Some("0.46.0"));
+        let opencode = probe_capability(&runner, Capability::OpenCode);
+        assert_eq!(opencode.state, CapabilityState::Available);
+        assert_eq!(opencode.found_version.as_deref(), Some("1.19.6"));
+        assert_eq!(
+            serde_json::to_value(Capability::OpenCode).unwrap(),
+            "opencode"
+        );
         let claude = probe_capability(&runner, Capability::ClaudeCode);
         assert_eq!(claude.found_version.as_deref(), Some("1.0.88"));
         let lean = probe_capability(&runner, Capability::Lean);

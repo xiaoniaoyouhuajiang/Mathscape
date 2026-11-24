@@ -773,7 +773,23 @@ fn harness_binding_round_trips_through_session_json() {
     assert_eq!(threads.threads[0].harness.as_ref(), Some(&binding));
     assert_eq!(
         home.dialogue_threads(&id).unwrap().threads[0].harness,
-        Some(binding)
+        Some(binding.clone())
+    );
+    let mut opencode = binding.clone();
+    opencode.backend = "opencode".into();
+    opencode.thread_id = "ses_acp".into();
+    let threads = home
+        .set_thread_harness(&id, FIRST_THREAD_ID, Some(opencode.clone()))
+        .unwrap();
+    assert_eq!(threads.threads[0].harness.as_ref(), Some(&opencode));
+    assert_eq!(threads.threads[0].harnesses.get("codex"), Some(&binding));
+    assert_eq!(
+        threads.threads[0].harnesses.get("opencode"),
+        Some(&opencode)
+    );
+    assert_eq!(
+        home.dialogue_threads(&id).unwrap().threads[0].harnesses,
+        threads.threads[0].harnesses
     );
     assert!(home.set_thread_harness(&id, "d9", None).is_err());
     let dir = home.ensure_harness_state_dir(&id, "codex").unwrap();

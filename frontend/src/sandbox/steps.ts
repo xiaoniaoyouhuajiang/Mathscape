@@ -286,7 +286,7 @@ function mcpDetail(mcp: McpRaw): string {
   if (status) lines.push(`状态：${status}`);
   const tools = stringList(mcp.tools);
   if (tools) lines.push(`已连接工具：${tools.length ? tools.join("、") : "无"}`);
-  else lines.push("已连接工具：未知（Codex 未返回工具清单）");
+  else lines.push("已连接工具：未知（执行器未返回工具清单）");
   const missing = stringList(mcp.missing) ?? [];
   if (missing.length) lines.push(`缺少：${missing.join("、")}`);
   const error = str(mcp.error);

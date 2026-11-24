@@ -4,9 +4,11 @@
 //! freezes *how things talk*: MCP envelope DTOs, the `AgentExecutor` event
 //! stream, backend identity, and external capability probing. It contains no
 //! business orchestration. [`CodexExecutor`] is the Phase1b local Codex
-//! app-server adapter (BYO vendor login). Claude Code and optional hmz still
+//! app-server adapter (BYO vendor login). [`OpenCodeExecutor`] implements ACP
+//! with approval-layer path checks (isolation weaker than Codex). Claude Code and optional hmz still
 //! have no adapter; hmz is not required for any default path.
 
+mod acp;
 mod backend;
 mod capability;
 mod codex;
@@ -16,6 +18,7 @@ mod executor;
 mod fake;
 mod id;
 mod jsonl;
+mod opencode;
 mod validate;
 
 pub use backend::AgentBackend;
@@ -42,4 +45,5 @@ pub use executor::{
 pub use fake::{FakeBackend, scripted_round};
 pub use id::{CallId, IdError, RoundId, TurnId};
 pub use jsonl::{JsonlError, from_jsonl_line, read_jsonl, to_jsonl_line, write_jsonl};
+pub use opencode::{OpenCodeConfig, OpenCodeExecutor, serve_acp_fixture};
 pub use validate::{ValidationIssue, validate_round};

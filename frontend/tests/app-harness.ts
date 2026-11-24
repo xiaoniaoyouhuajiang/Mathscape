@@ -470,6 +470,11 @@ extraCommands.set("sandbox_overview", () => ({
 extraCommands.set("sandbox_enter_session", (args) => { sandboxCalls.push({ command: "enter", args }); sessionStorage.setItem("harness.sandbox", "1"); return workspaceStatus(); });
 extraCommands.set("sandbox_return_to_mother", (args) => { sandboxCalls.push({ command: "return", args }); sessionStorage.removeItem("harness.sandbox"); return workspaceStatus(); });
 let harnessModel = "gpt-test";
+let harnessBackend = "codex";
+const harnessBackends = [
+  { backend: "codex", program: "codex", available: true, probes: [{ capability: "codex", state: "available", found_version: "0.124.0", install_hint: null }] },
+  { backend: "opencode", program: "opencode", available: true, probes: [{ capability: "opencode", state: "available", found_version: "1.19.6", install_hint: null }] },
+];
 // Placeholder catalog in the real models_cache.json shape (levels + default).
 const levels = (...ids: string[]) => ids.map((id) => ({ id, description: `harness ${id}` }));
 const harnessModels: { id: string; displayName: string; reasoningEfforts?: { id: string; description: string }[]; defaultReasoningEffort?: string }[] = [
@@ -482,21 +487,31 @@ const agentStatus = () => {
   const entry = harnessEntry();
   const efforts = entry?.reasoningEfforts ?? [];
   return {
-    backend: "codex",
+    backend: harnessBackend,
+    program: harnessBackend,
+    backends: harnessBackends,
+    backendSelection: true,
     codexProgram: "codex",
     mcpProgram: "mathscape",
     tools: ["1", "2", "3", "4", "5", "6", "7", "8"],
-    probes: [{ capability: "codex", state: "available", found_version: "0.124.0", required: null, install_hint: null }],
-    available: true,
+    probes: harnessBackends.find((item) => item.backend === harnessBackend)!.probes,
+    available: harnessBackends.find((item) => item.backend === harnessBackend)!.available,
     model: harnessModel,
     models: harnessModels,
     modelSelection: true,
     effort: harnessEffort,
-    efforts,
-    effortSelection: efforts.length > 0,
+    efforts: harnessBackend === "opencode" ? [] : efforts,
+    effortSelection: harnessBackend !== "opencode" && efforts.length > 0,
   };
 };
 extraCommands.set("sandbox_agent_status", () => agentStatus());
+extraCommands.set("sandbox_set_backend", (args) => {
+  const backend = harnessBackends.find((item) => item.backend === args.backend);
+  if (!backend?.available) throw new Error("执行器未安装或不可用");
+  harnessBackend = backend.backend;
+  sandboxCalls.push({ command: "set_backend", args });
+  return agentStatus();
+});
 extraCommands.set("sandbox_set_model", (args) => {
   const id = String(args.modelId ?? "").trim();
   if (!id) throw new Error("model id required");
@@ -616,8 +631,9 @@ extraCommands.set("sandbox_send_message", (args) => {
   // Stream the round after the command resolves, as the Rust pump does.
   // The tool call lands first so the dialogue can show an in-progress card
   // before the answer.
+  const roundBackend = harnessBackend;
   const event = (seq: number, type: string, payload: Record<string, unknown>) => {
-    const value = { round_id: rid, turn_id: "t1", seq, ts: "2026-10-31T09:01:00+08:00", backend: "codex", type, payload };
+    const value = { round_id: rid, turn_id: "t1", seq, ts: "2026-10-31T09:01:00+08:00", backend: roundBackend, type, payload };
     sandboxEvents.push(value);
     emitDialogue({ kind: "agent_event", sandbox_session_id: id, event: value });
   };
@@ -816,6 +832,7 @@ const appHarness = {
   documents: { a: a.document_id, b: b.document_id }, notes, links, behavior, storedDocuments: documents, noteCalls, unexpected,
   windowEvents, requestWindowClose,
   sandboxCalls,
+  harnessBackends,
   sandboxRound,
   canonicalGap,
   proposalReview,

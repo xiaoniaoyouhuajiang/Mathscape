@@ -502,6 +502,7 @@
   flex: 0 0 auto;
 }
 
+.sandbox-dock-backend-select,
 .sandbox-dock-model-select,
 .sandbox-dock-thread-select,
 .sandbox-dock-effort-select {
@@ -517,7 +518,8 @@
   color: inherit;
 }
 
-.sandbox-dock-model-hint {
+.sandbox-dock-model-hint,
+.sandbox-dock-backend-warning {
   display: block;
   margin-top: 0.25rem;
   font-size: 0.72rem;
@@ -525,7 +527,8 @@
   color: var(--warning, var(--ms-text-muted));
 }
 
-.sandbox-dock-model-hint[hidden] {
+.sandbox-dock-model-hint[hidden],
+.sandbox-dock-backend-warning[hidden] {
   display: none;
 }
 

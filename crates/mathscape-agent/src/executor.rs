@@ -4,6 +4,7 @@
 //! [`UnimplementedExecutor`] placeholder. [`crate::CodexExecutor`] is the
 //! Phase1b Codex app-server adapter. Claude Code, optional hmz, and Custom
 //! flows on `mathscape-orchestrator` still use [`UnimplementedExecutor`].
+//! [`crate::OpenCodeExecutor`] implements OpenCode via ACP.
 //! Each adapter owns session management, registering `mathscape mcp` with the
 //! harness, mapping native events to `agent_events v0`, cancellation and
 //! `round_id` injection. hmz is never required.

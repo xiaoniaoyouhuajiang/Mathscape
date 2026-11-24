@@ -122,6 +122,14 @@ describe("S1 agent status line", () => {
     expect(modelOptionLabel({ id: "gpt-a", displayName: "gpt-a" })).toBe("gpt-a");
     expect(modelOptionLabel({ id: "gpt-a" })).toBe("gpt-a");
   });
+  it("uses the selected OpenCode program and probe, not Codex", () => {
+    const status = { ...base, backend: "opencode", program: "/custom/opencode", available: true,
+      probes: [{ capability: "opencode", state: "available", found_version: "1.19.6" }] };
+    expect(agentStatusLine(status)).toBe("本机 OpenCode 1.19.6 · 8 个 Mathscape 工具");
+    expect(agentStatusLine({ ...status, available: false })).toContain("本机 OpenCode：/custom/opencode");
+    expect(modelCatalogHint([], "", "opencode")).toContain("OpenCode 模型目录");
+    expect(modelCatalogHint([{ id: "a" }], "a", "opencode")).not.toContain("codex");
+  });
 });
 
 describe("modelCatalogHint", () => {

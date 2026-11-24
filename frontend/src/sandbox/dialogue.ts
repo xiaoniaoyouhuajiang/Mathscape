@@ -1,6 +1,6 @@
 /**
  * S1 dialogue shell (docs/sandbox-flow.md §4.2, §5 S1): a plain chat over one
- * sandbox session, backed by the local Codex with the 7 Mathscape MCP tools,
+ * sandbox session, backed by the selected local harness with Mathscape MCP tools,
  * plus a per-turn process timeline (collapsible cards before the answer).
  *
  * A2 (A-PR2): the same shell renders in one of two dock modes. `sidebar`
@@ -10,7 +10,7 @@
  * mode, sidebar width, and floating size/position are all remembered. When
  * collapsed it becomes a draggable float handle that reopens in the last
  * mode. A window too narrow for a sidebar renders floating. The status
- * line shows Codex availability; when the adapter supports selection a
+ * line shows harness availability; when the adapter supports selection a
  * model <select> and a reasoning-effort <select> (levels from the selected
  * model's catalog entry) let the user pick before the next round. Both are
  * disabled while a round runs.
@@ -285,6 +285,8 @@ export class SandboxDialogueDock {
   private readonly root: HTMLElement;
   private readonly title: HTMLElement;
   private readonly status: HTMLElement;
+  private readonly backendSelect: HTMLSelectElement;
+  private readonly backendWarning: HTMLElement;
   private readonly modelRow: HTMLElement;
   private readonly modelSelect: HTMLSelectElement;
   private readonly modelHint: HTMLElement;
@@ -356,12 +358,23 @@ export class SandboxDialogueDock {
     const header = el("header", "sandbox-dock-header");
     const heading = el("div", "sandbox-dock-heading");
     this.title = el("strong", "", "沙箱对话");
-    this.status = el("span", "sandbox-dock-status", "正在检测本机 Codex…");
+    this.status = el("span", "sandbox-dock-status", t("sandbox.backend.detecting"));
+    const backendRow = el("label", "sandbox-dock-model");
+    backendRow.append(el("span", "sandbox-dock-model-label", t("sandbox.backend.label")));
+    this.backendSelect = el("select", "sandbox-dock-backend-select");
+    this.backendSelect.setAttribute("aria-label", t("sandbox.backend.select"));
+    this.backendSelect.title = t("sandbox.backend.nextRound");
+    this.backendSelect.disabled = true;
+    this.backendSelect.onchange = () => void this.onBackendChange();
+    backendRow.append(this.backendSelect);
+    this.backendWarning = el("p", "sandbox-dock-backend-warning",
+      t("sandbox.backend.warning"));
+    this.backendWarning.hidden = true;
     this.modelRow = el("label", "sandbox-dock-model");
     this.modelRow.hidden = true;
     this.modelRow.append(el("span", "sandbox-dock-model-label", "模型"));
     this.modelSelect = el("select", "sandbox-dock-model-select");
-    this.modelSelect.setAttribute("aria-label", "选择 Codex 模型");
+    this.modelSelect.setAttribute("aria-label", t("sandbox.model.select"));
     this.modelSelect.disabled = true;
     this.modelSelect.onchange = () => void this.onModelChange();
     this.modelRow.append(this.modelSelect);
@@ -396,7 +409,7 @@ export class SandboxDialogueDock {
     this.reviewButton.onclick = () => void this.reviewChanges();
     this.threadRow.append(threadLabel, this.newThreadButton, this.reviewButton);
     const pickers = el("div", "sandbox-dock-pickers");
-    pickers.append(this.modelRow, this.effortRow);
+    pickers.append(backendRow, this.modelRow, this.effortRow);
     this.modelHint = el("span", "sandbox-dock-model-hint");
     this.modelHint.hidden = true;
     heading.append(
@@ -406,6 +419,7 @@ export class SandboxDialogueDock {
       this.threadRow,
       pickers,
       this.modelHint,
+      this.backendWarning,
     );
     this.collapseButton = el("button", "sandbox-dock-icon", "–");
     this.collapseButton.type = "button";
@@ -865,6 +879,21 @@ export class SandboxDialogueDock {
   }
 
   private applyAgentStatus(status: AgentStatusLike): void {
+    const backends = status.backends ?? [{ backend: status.backend, available: status.available, program: status.program ?? status.codexProgram, probes: status.probes }];
+    this.backendSelect.replaceChildren();
+    for (const backend of backends) {
+      const option = document.createElement("option");
+      option.value = backend.backend;
+      const name = backend.backend === "opencode" ? "OpenCode" : "Codex";
+      option.textContent = `${name}${backend.available ? "" : t("sandbox.backend.unavailable")}`;
+      option.disabled = !backend.available;
+      option.title = backend.probes.filter((probe) => probe.state !== "available")
+        .map((probe) => probe.install_hint ?? t("sandbox.backend.programUnavailable", { program: backend.program })).join("; ");
+      this.backendSelect.append(option);
+    }
+    this.backendSelect.value = status.backend;
+    this.backendSelect.disabled = status.backendSelection === false;
+    this.backendWarning.hidden = status.backend !== "opencode";
     this.status.textContent = agentStatusLine(status);
     this.status.classList.toggle("is-unavailable", !status.available);
     this.currentEffort = status.effort?.trim() || null;
@@ -882,7 +911,7 @@ export class SandboxDialogueDock {
       models.unshift({ id: current });
     }
     this.modelSelect.replaceChildren();
-    const hint = modelCatalogHint(models, current);
+    const hint = modelCatalogHint(models, current, status.backend);
     this.modelHint.textContent = hint ?? "";
     this.modelHint.hidden = hint === null;
     if (models.length === 0) {
@@ -925,7 +954,7 @@ export class SandboxDialogueDock {
     if (!current) {
       const placeholder = document.createElement("option");
       placeholder.value = "";
-      placeholder.textContent = "（Codex 默认）";
+      placeholder.textContent = t("sandbox.model.defaultEffort");
       this.effortSelect.append(placeholder);
     }
     for (const effort of options) {
@@ -953,6 +982,21 @@ export class SandboxDialogueDock {
       this.toast(`已切换推理强度：${effort}`, "success");
     } catch (error) {
       this.toast(`切换推理强度失败：${errorMessage(error)}`, "error");
+      await this.refreshStatus();
+    }
+  }
+
+  private async onBackendChange(): Promise<void> {
+    const backend = this.backendSelect.value;
+    this.backendSelect.disabled = true;
+    this.modelSelect.disabled = true;
+    this.effortSelect.disabled = true;
+    try {
+      const status = await invoke<AgentStatusLike>("sandbox_set_backend", { backend });
+      this.applyAgentStatus(status);
+      this.toast(t("sandbox.backend.changed"), "success");
+    } catch (error) {
+      this.toast(t("sandbox.backend.changeFailed", { error: errorMessage(error) }), "error");
       await this.refreshStatus();
     }
   }

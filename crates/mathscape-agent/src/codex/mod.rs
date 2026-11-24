@@ -59,13 +59,13 @@
 //! - Confirm dotted `thread/start` `config` overrides against the installed
 //!   Codex version (`load_for_cwd` uses `mcp_servers.<name>.command`).
 
-mod approval;
+pub(crate) mod approval;
 mod fixture;
 mod host;
 mod map;
 mod model;
 mod rollout;
-mod session;
+pub(crate) mod session;
 
 pub use fixture::{
     CodexFixtureMcp, CodexFixtureMode, CodexFixtureOptions, serve_codex_app_server_fixture,
