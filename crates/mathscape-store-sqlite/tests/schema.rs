@@ -146,7 +146,17 @@ fn creates_and_reopens_the_versioned_artifact_schema() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 26);
+    assert_eq!(version, 27);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 27",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "pending_questions_v1"
+    );
     assert_eq!(
         connection
             .query_row(
@@ -392,7 +402,7 @@ fn refuses_to_downgrade_an_unknown_future_schema() {
         SqliteArtifactStore::prepare(&database),
         Err(SqliteStoreError::UnsupportedSchemaVersion {
             actual: 99,
-            supported: 26
+            supported: 27
         })
     ));
     cleanup(&directory);
@@ -413,7 +423,17 @@ fn upgrades_an_existing_artifact_pool_database_through_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 26);
+    assert_eq!(version, 27);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 27",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "pending_questions_v1"
+    );
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 2",
@@ -452,7 +472,17 @@ fn upgrades_an_llm_profile_database_to_workspace_settings() {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 26);
+    assert_eq!(version, 27);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 27",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "pending_questions_v1"
+    );
     let migration = connection
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 3",
@@ -489,7 +519,7 @@ fn upgrades_workspace_settings_database_to_discovery_runs() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        26
+        27
     );
     assert_eq!(
         connection
@@ -543,7 +573,7 @@ fn repairs_a_v5_discovery_schema_missing_result_fingerprint() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        26
+        27
     );
     let has_result_fingerprint = connection
         .prepare("PRAGMA table_info(discovery_runs)")
@@ -1129,7 +1159,7 @@ fn upgrading_to_v10_preserves_discovery_runs_and_their_children() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        26
+        27
     );
     let violations = connection
         .prepare("PRAGMA foreign_key_check")
@@ -1366,4 +1396,128 @@ fn markdown_errata_sidecar_upserts_supersedes_reverts_and_tracks_unit_reviews() 
         2
     );
     assert_eq!(store.map_edit_snapshot().unwrap().base_commit, None);
+}
+
+#[test]
+fn pending_questions_migrates_from_v26_and_enforces_round_and_answer_invariants() {
+    use mathscape_store_sqlite::{CreatePendingQuestionInput, PendingQuestionAnswer};
+
+    let directory = test_directory("pending-questions-v27");
+    let database = directory.join("catalog.sqlite3");
+    drop(SqliteArtifactStore::prepare(&database).unwrap());
+
+    // Simulate a schema-26 catalog (e.g. an existing sandbox copy before 0027)
+    // and ensure `prepare` upgrades it cleanly to schema 27.
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE pending_questions;
+             DELETE FROM schema_migrations WHERE version = 27;
+             PRAGMA user_version = 26;",
+        )
+        .unwrap();
+    drop(connection);
+    assert!(matches!(
+        SqliteArtifactStore::open(&database),
+        Err(SqliteStoreError::UnsupportedSchemaVersion {
+            actual: 26,
+            supported: 27
+        })
+    ));
+
+    let mut store = SqliteArtifactStore::prepare(&database).unwrap();
+    let inv = "sandbox:session-1";
+    let input = CreatePendingQuestionInput {
+        question_id: "mathscape:question/q1".into(),
+        investigation_id: inv.into(),
+        round_id: "round-1".into(),
+        origin: "mcp_user_ask".into(),
+        harness_ref: None,
+        question: "这里的“定理 4”指的是第一章还是第二章？".into(),
+        options: Some(vec!["第一章 · 定理 4".into(), "第二章 · 定理 4".into()]),
+        ink_requested: true,
+        created_at: "unix:1700000100".into(),
+    };
+    let created = store.create_pending_question(&input).unwrap();
+    assert_eq!(created.state, "pending");
+    assert!(created.ink_requested);
+    assert!(store.round_has_pending_question("round-1").unwrap());
+    assert!(!store.round_has_pending_question("round-2").unwrap());
+
+    // Exact replay is idempotent.
+    let replayed = store.create_pending_question(&input).unwrap();
+    assert_eq!(replayed, created);
+
+    // A second distinct question in the same round is rejected (`awaiting_user`).
+    let second_same_round = CreatePendingQuestionInput {
+        question_id: "mathscape:question/q2".into(),
+        question: "另一个问题".into(),
+        ..input.clone()
+    };
+    let err = store
+        .create_pending_question(&second_same_round)
+        .unwrap_err();
+    assert!(
+        matches!(&err, SqliteStoreError::PendingQuestionConflict(msg) if msg.starts_with("awaiting_user:")),
+        "unexpected error: {err:?}"
+    );
+
+    // Invalid selected_option is rejected.
+    let bad_answer = PendingQuestionAnswer {
+        text: String::new(),
+        selected_option: Some("第三章 · 定理 4".into()),
+        ink_snapshot_ref: None,
+        answered_by: "reviewer".into(),
+        answered_at: "unix:1700000105".into(),
+    };
+    assert!(matches!(
+        store.answer_pending_question(inv, "mathscape:question/q1", &bad_answer),
+        Err(SqliteStoreError::PendingQuestionConflict(msg)) if msg.starts_with("invalid_selected_option:")
+    ));
+
+    // Answering transitions state -> answered and records payload; round_has_pending_question
+    // remains true for round-1 (historically asked in round-1) while pending_only listing drops to 0.
+    let good_answer = PendingQuestionAnswer {
+        text: "以第一章母函数一节为准".into(),
+        selected_option: Some("第一章 · 定理 4".into()),
+        ink_snapshot_ref: Some("snap-01".into()),
+        answered_by: "reviewer".into(),
+        answered_at: "unix:1700000106".into(),
+    };
+    let answered = store
+        .answer_pending_question(inv, "mathscape:question/q1", &good_answer)
+        .unwrap();
+    assert_eq!(answered.state, "answered");
+    assert_eq!(answered.answer, Some(good_answer.clone()));
+    assert!(store.list_pending_questions(inv, true).unwrap().is_empty());
+    assert_eq!(store.list_pending_questions(inv, false).unwrap().len(), 1);
+    assert!(matches!(
+        store.answer_pending_question(inv, "mathscape:question/q1", &good_answer),
+        Err(SqliteStoreError::PendingQuestionConflict(msg)) if msg.starts_with("question_not_pending:")
+    ));
+
+    // A new round can create and cancel its own question.
+    let q_round2 = store
+        .create_pending_question(&CreatePendingQuestionInput {
+            question_id: "mathscape:question/q-r2".into(),
+            investigation_id: inv.into(),
+            round_id: "round-2".into(),
+            origin: "mcp_user_ask".into(),
+            harness_ref: None,
+            question: "是否需要升格独立题型？".into(),
+            options: None,
+            ink_requested: false,
+            created_at: "unix:1700000110".into(),
+        })
+        .unwrap();
+    assert_eq!(q_round2.state, "pending");
+    let cancelled = store
+        .cancel_pending_question(inv, "mathscape:question/q-r2", "unix:1700000112")
+        .unwrap();
+    assert_eq!(cancelled.state, "cancelled");
+    assert!(store.list_pending_questions(inv, true).unwrap().is_empty());
+    assert_eq!(store.list_pending_questions(inv, false).unwrap().len(), 2);
+
+    drop(store);
+    cleanup(&directory);
 }

@@ -117,6 +117,20 @@ export const zhCN = {
   "sandbox.model.defaultEffort": "（执行器默认）",
   "sandbox.model.opencodeEmpty": "未读到 OpenCode 模型目录，请检查 OpenCode 配置。",
   "sandbox.model.opencodeCurrent": "仅显示当前 OpenCode 模型 {model}。",
+  "sandbox.ask.stepTitle": "向用户确认",
+  "sandbox.ask.stepTitleWithQuestion": "向用户确认 · {question}",
+  "sandbox.ask.badge": "待你确认",
+  "sandbox.ask.dismiss": "跳过",
+  "sandbox.ask.dismissTitle": "忽略此追问，不立即发送新消息",
+  "sandbox.ask.optionsLabel": "选择一项",
+  "sandbox.ask.inkLabel": "附上演算快照",
+  "sandbox.ask.inkNone": "（不附手稿快照）",
+  "sandbox.ask.inkEmptyHint": "当前沙箱副本尚无已保存的手稿快照；你仍可直接文字说明。",
+  "sandbox.ask.notePlaceholder": "补充说明（可选；也可直接在下方输入框回复）",
+  "sandbox.ask.answerPlaceholder": "输入你的回答…",
+  "sandbox.ask.submit": "发送回答",
+  "sandbox.ask.submitAndActivate": "继续此对话并回答",
+  "sandbox.ask.emptyError": "请先选择一项、附上演算快照或填写回答说明",
 } satisfies Record<string, string>;
 
 export type MessageKey = keyof typeof zhCN;

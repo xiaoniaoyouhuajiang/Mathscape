@@ -122,6 +122,31 @@ interface DialogueThread {
   created_at: string;
 }
 
+export interface PendingQuestionView {
+  questionId: string;
+  roundId: string;
+  threadId: string;
+  question: string;
+  options?: string[];
+  inkRequested: boolean;
+  state: string;
+  createdAt: string;
+}
+
+export interface SandboxInkSnapshotChoice {
+  snapshotId: string;
+  documentId: string;
+  documentTitle: string;
+  label?: string;
+  createdAt: string;
+}
+
+interface QuestionDraft {
+  selectedOption: string | null;
+  note: string;
+  inkSnapshotRef: string;
+}
+
 interface SessionDialogue {
   sandboxSessionId: string;
   /** Every thread's lines; the dock filters by the viewed thread. */
@@ -130,16 +155,27 @@ interface SessionDialogue {
   activeThreadId: string;
   events: AgentEventLike[];
   activeRoundId: string | null;
+  pendingQuestions?: PendingQuestionView[];
+  inkSnapshots?: SandboxInkSnapshotChoice[];
 }
 
 interface SendOutcome {
   roundId: string;
   userEntry: TranscriptEntry;
+  activeThreadId?: string;
+  pendingQuestions?: PendingQuestionView[];
+  inkSnapshots?: SandboxInkSnapshotChoice[];
 }
 
 type DialogueUpdate =
   | { kind: "agent_event"; sandbox_session_id: string; event: AgentEventLike }
   | { kind: "transcript"; sandbox_session_id: string; entry: TranscriptEntry }
+  | {
+      kind: "pending_questions";
+      sandbox_session_id: string;
+      pending_questions: PendingQuestionView[];
+      ink_snapshots: SandboxInkSnapshotChoice[];
+    }
   | { kind: "round_finished"; sandbox_session_id: string; round_id: string };
 
 type Toast = (message: string, kind: "success" | "error") => void;
@@ -305,6 +341,7 @@ export class SandboxDialogueDock {
   private readonly threadSelect: HTMLSelectElement;
   private readonly newThreadButton: HTMLButtonElement;
   private readonly reviewButton: HTMLButtonElement;
+  private readonly questionDeck: HTMLElement;
   private readonly readonlyNote: HTMLElement;
   private readonly readonlyNoteText: HTMLElement;
   private readonly activateThreadButton: HTMLButtonElement;
@@ -320,6 +357,9 @@ export class SandboxDialogueDock {
   private activeThreadId: string = FIRST_THREAD_ID;
   /** Thread on screen; anything but the active one is read-only history. */
   private viewThreadId: string = FIRST_THREAD_ID;
+  private pendingQuestions: PendingQuestionView[] = [];
+  private inkSnapshots: SandboxInkSnapshotChoice[] = [];
+  private readonly questionDrafts = new Map<string, QuestionDraft>();
   private switchingThread = false;
   private sending = false;
   private unlisten: Promise<UnlistenFn> | null = null;
@@ -459,6 +499,9 @@ export class SandboxDialogueDock {
     this.sendButton = el("button", "sandbox-btn sandbox-btn-primary", "发送");
     this.sendButton.type = "submit";
     actions.append(el("span", "sandbox-actions-spacer"), this.cancelButton, this.sendButton);
+    this.questionDeck = el("div", "sandbox-question-deck");
+    this.questionDeck.hidden = true;
+    this.questionDeck.addEventListener("click", (event) => this.onLogClick(event));
     this.readonlyNote = el("div", "sandbox-dock-readonly", "");
     this.readonlyNote.hidden = true;
     this.readonlyNoteText = el("span", "sandbox-dock-readonly-text", t("sandbox.thread.inactiveNote"));
@@ -480,7 +523,7 @@ export class SandboxDialogueDock {
     };
     readonlyActions.append(this.activateThreadButton, backToActive);
     this.readonlyNote.append(this.readonlyNoteText, readonlyActions);
-    composer.append(this.readonlyNote, this.input.element, actions);
+    composer.append(this.questionDeck, this.readonlyNote, this.input.element, actions);
     composer.addEventListener("submit", (event) => {
       event.preventDefault();
       void this.send();
@@ -589,6 +632,9 @@ export class SandboxDialogueDock {
       this.threads = [];
       this.activeThreadId = FIRST_THREAD_ID;
       this.viewThreadId = FIRST_THREAD_ID;
+      this.pendingQuestions = [];
+      this.inkSnapshots = [];
+      this.questionDrafts.clear();
     }
     this.title.textContent = `沙箱对话 · ${sessionId}`;
     this.floatHandle.textContent = "对话";
@@ -1198,6 +1244,11 @@ export class SandboxDialogueDock {
           this.renderLog();
         }
         break;
+      case "pending_questions":
+        this.pendingQuestions = update.pending_questions ?? [];
+        this.inkSnapshots = update.ink_snapshots ?? [];
+        this.renderQuestionDeck();
+        break;
       case "round_finished":
         if (this.activeRoundId === update.round_id) this.activeRoundId = null;
         this.cite?.scenes?.idle?.();
@@ -1206,6 +1257,7 @@ export class SandboxDialogueDock {
         this.input.refresh();
         // Replay buttons unlock once the round is over.
         this.renderLog(false);
+        this.renderQuestionDeck();
         break;
     }
   }
@@ -1226,6 +1278,9 @@ export class SandboxDialogueDock {
       const outcome = await invoke<SendOutcome>("sandbox_send_message", { sandboxSessionId: sessionId, text });
       if (this.sessionId === sessionId) {
         this.activeRoundId = outcome.roundId;
+        if (outcome.activeThreadId) this.activeThreadId = outcome.activeThreadId;
+        if (outcome.pendingQuestions) this.pendingQuestions = outcome.pendingQuestions;
+        if (outcome.inkSnapshots) this.inkSnapshots = outcome.inkSnapshots;
         if (!this.transcript.some((entry) => sameEntry(entry, outcome.userEntry))) {
           this.transcript.push(outcome.userEntry);
         }
@@ -1248,6 +1303,91 @@ export class SandboxDialogueDock {
     }
   }
 
+  private getQuestionDraft(questionId: string): QuestionDraft {
+    let draft = this.questionDrafts.get(questionId);
+    if (!draft) {
+      draft = { selectedOption: null, note: "", inkSnapshotRef: "" };
+      this.questionDrafts.set(questionId, draft);
+    }
+    return draft;
+  }
+
+  private async answerQuestion(question: PendingQuestionView, noteInput?: HTMLInputElement): Promise<void> {
+    const sessionId = this.sessionId;
+    if (!sessionId || this.sending || this.activeRoundId || this.switchingThread) return;
+    const draft = this.getQuestionDraft(question.questionId);
+    let noteText = draft.note.trim();
+    let usedComposerFallback = false;
+    if (!noteText && this.viewThreadId === this.activeThreadId) {
+      const composerText = this.input.value.trim();
+      if (composerText) {
+        noteText = composerText;
+        usedComposerFallback = true;
+      }
+    }
+    if (!draft.selectedOption && !noteText && !draft.inkSnapshotRef) {
+      this.toast(t("sandbox.ask.emptyError"), "error");
+      noteInput?.focus();
+      return;
+    }
+    if (noteText.length > COMPOSER_MAX_LENGTH) {
+      this.toast(`消息过长（${noteText.length} / ${COMPOSER_MAX_LENGTH} 字符）`, "error");
+      return;
+    }
+    this.sending = true;
+    this.syncControls();
+    try {
+      const outcome = await invoke<SendOutcome>("sandbox_answer_question", {
+        sandboxSessionId: sessionId,
+        questionId: question.questionId,
+        text: noteText || null,
+        selectedOption: draft.selectedOption,
+        inkSnapshotRef: draft.inkSnapshotRef || null,
+      });
+      if (this.sessionId === sessionId) {
+        this.activeRoundId = outcome.roundId;
+        if (outcome.activeThreadId) {
+          this.activeThreadId = outcome.activeThreadId;
+          this.viewThreadId = outcome.activeThreadId;
+        }
+        this.pendingQuestions = outcome.pendingQuestions ?? [];
+        this.inkSnapshots = outcome.inkSnapshots ?? [];
+        this.questionDrafts.delete(question.questionId);
+        if (!this.transcript.some((entry) => sameEntry(entry, outcome.userEntry))) {
+          this.transcript.push(outcome.userEntry);
+        }
+        if (usedComposerFallback) this.input.clear();
+      }
+    } catch (error) {
+      this.toast(errorMessage(error), "error");
+    } finally {
+      this.sending = false;
+      this.renderAll();
+    }
+  }
+
+  private async dismissQuestion(questionId: string): Promise<void> {
+    const sessionId = this.sessionId;
+    if (!sessionId || this.sending || this.activeRoundId || this.switchingThread) return;
+    this.sending = true;
+    this.syncControls();
+    try {
+      const dialogue = await invoke<SessionDialogue>("sandbox_dismiss_question", {
+        sandboxSessionId: sessionId,
+        questionId,
+      });
+      if (this.sessionId === sessionId) {
+        this.questionDrafts.delete(questionId);
+        this.adopt(dialogue, false);
+      }
+    } catch (error) {
+      this.toast(errorMessage(error), "error");
+    } finally {
+      this.sending = false;
+      this.renderAll();
+    }
+  }
+
   /** Take a backend snapshot; `follow` jumps the view to the active thread. */
   private adopt(dialogue: SessionDialogue, follow: boolean): void {
     const viewingActive = this.viewThreadId === this.activeThreadId;
@@ -1256,6 +1396,8 @@ export class SandboxDialogueDock {
     this.activeRoundId = dialogue.activeRoundId;
     this.threads = dialogue.threads ?? [];
     this.activeThreadId = dialogue.activeThreadId ?? FIRST_THREAD_ID;
+    this.pendingQuestions = dialogue.pendingQuestions ?? [];
+    this.inkSnapshots = dialogue.inkSnapshots ?? [];
     const known = this.threads.some((thread) => thread.thread_id === this.viewThreadId);
     if (follow || viewingActive || !known) this.viewThreadId = this.activeThreadId;
   }
@@ -1331,7 +1473,148 @@ export class SandboxDialogueDock {
 
   private renderAll(): void {
     this.renderLog();
+    this.renderQuestionDeck();
     this.syncControls();
+  }
+
+  private renderQuestionDeck(): void {
+    const visible = this.pendingQuestions.filter(
+      (q) => q.state === "pending" && (q.threadId || FIRST_THREAD_ID) === this.viewThreadId,
+    );
+    if (visible.length === 0) {
+      this.questionDeck.hidden = true;
+      this.questionDeck.replaceChildren();
+      return;
+    }
+    const busy = this.activeRoundId !== null || this.sending || this.switchingThread || !this.sessionId;
+    const readonly = this.viewThreadId !== this.activeThreadId;
+    const resolverFor = this.resolvers();
+    this.questionDeck.hidden = false;
+    this.questionDeck.replaceChildren(
+      ...visible.map((q) => {
+        const draft = this.getQuestionDraft(q.questionId);
+        const resolve = resolverFor(q.roundId);
+        const card = el("section", "sandbox-question-card");
+        card.dataset.questionId = q.questionId;
+
+        const head = el("div", "sandbox-question-head");
+        head.append(el("span", "sandbox-question-badge", t("sandbox.ask.badge")));
+        const dismissBtn = el(
+          "button",
+          "sandbox-btn sandbox-btn-quiet sandbox-question-dismiss",
+          t("sandbox.ask.dismiss"),
+        );
+        dismissBtn.type = "button";
+        dismissBtn.title = t("sandbox.ask.dismissTitle");
+        dismissBtn.disabled = busy;
+        dismissBtn.onclick = () => void this.dismissQuestion(q.questionId);
+        head.append(dismissBtn);
+        card.append(head);
+
+        const body = el("div", "sandbox-question-body sandbox-line-text markdown-body");
+        body.innerHTML = renderBubbleHtml(q.question, resolve);
+        card.append(body);
+
+        if (q.options && q.options.length > 0) {
+          const group = el("div", "sandbox-question-options");
+          group.setAttribute("role", "radiogroup");
+          group.setAttribute("aria-label", t("sandbox.ask.optionsLabel"));
+          for (const opt of q.options) {
+            const row = el(
+              "div",
+              `sandbox-question-option${draft.selectedOption === opt ? " is-selected" : ""}${busy ? " is-disabled" : ""}`,
+            );
+            row.setAttribute("role", "radio");
+            row.setAttribute("aria-checked", draft.selectedOption === opt ? "true" : "false");
+            row.tabIndex = busy ? -1 : 0;
+            row.dataset.optionValue = opt;
+            const dot = el("span", "sandbox-question-radio");
+            const textSpan = el("span", "sandbox-question-option-text markdown-body");
+            textSpan.innerHTML = renderBubbleHtml(opt, resolve);
+            row.append(dot, textSpan);
+            const toggleOption = () => {
+              if (busy) return;
+              draft.selectedOption = draft.selectedOption === opt ? null : opt;
+              this.renderQuestionDeck();
+            };
+            row.addEventListener("click", (event) => {
+              const target = event.target instanceof Element ? event.target : null;
+              if (target?.closest("[data-cite-node]")) return;
+              toggleOption();
+            });
+            row.addEventListener("keydown", (event) => {
+              if (event.key === " " || event.key === "Enter") {
+                event.preventDefault();
+                toggleOption();
+              }
+            });
+            group.append(row);
+          }
+          card.append(group);
+        }
+
+        if (q.inkRequested) {
+          const inkRow = el("div", "sandbox-question-ink");
+          inkRow.append(el("span", "sandbox-question-field-label", t("sandbox.ask.inkLabel")));
+          if (this.inkSnapshots.length > 0) {
+            const select = el("select", "sandbox-question-ink-select");
+            select.disabled = busy;
+            const noneOpt = el("option", "", t("sandbox.ask.inkNone"));
+            noneOpt.value = "";
+            select.append(noneOpt);
+            for (const snap of this.inkSnapshots) {
+              const shortId = snap.snapshotId.slice(-8);
+              const label = snap.label
+                ? `${snap.documentTitle} · ${snap.label} (${shortId})`
+                : `${snap.documentTitle} (${shortId})`;
+              const option = el("option", "", label);
+              option.value = snap.snapshotId;
+              select.append(option);
+            }
+            select.value = draft.inkSnapshotRef;
+            select.onchange = () => {
+              draft.inkSnapshotRef = select.value;
+            };
+            inkRow.append(select);
+          } else {
+            inkRow.append(el("span", "sandbox-question-ink-empty", t("sandbox.ask.inkEmptyHint")));
+          }
+          card.append(inkRow);
+        }
+
+        const replyRow = el("div", "sandbox-question-reply-row");
+        const noteInput = el("input", "sandbox-question-note");
+        noteInput.type = "text";
+        noteInput.value = draft.note;
+        noteInput.disabled = busy;
+        noteInput.placeholder =
+          q.options && q.options.length > 0
+            ? t("sandbox.ask.notePlaceholder")
+            : t("sandbox.ask.answerPlaceholder");
+        noteInput.addEventListener("input", () => {
+          draft.note = noteInput.value;
+        });
+        noteInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" && !event.isComposing) {
+            event.preventDefault();
+            event.stopPropagation();
+            void this.answerQuestion(q, noteInput);
+          }
+        });
+        const submitBtn = el(
+          "button",
+          "sandbox-btn sandbox-btn-primary sandbox-question-submit",
+          readonly ? t("sandbox.ask.submitAndActivate") : t("sandbox.ask.submit"),
+        );
+        submitBtn.type = "button";
+        submitBtn.disabled = busy;
+        submitBtn.onclick = () => void this.answerQuestion(q, noteInput);
+        replyRow.append(noteInput, submitBtn);
+        card.append(replyRow);
+
+        return card;
+      }),
+    );
   }
 
   private renderLog(stick = true): void {
@@ -1541,6 +1824,12 @@ export class SandboxDialogueDock {
     }
     if (!this.effortRow.hidden) {
       this.effortSelect.disabled = running || this.sending || this.effortSelect.options.length < 2;
+    }
+    const busy = running || this.sending || this.switchingThread || !this.sessionId;
+    for (const control of this.questionDeck.querySelectorAll<
+      HTMLButtonElement | HTMLInputElement | HTMLSelectElement
+    >("button, input, select")) {
+      control.disabled = busy;
     }
   }
 }

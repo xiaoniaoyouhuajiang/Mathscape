@@ -1247,6 +1247,8 @@ pub fn run() {
             sandbox_dialogue::sandbox_new_dialogue_thread,
             sandbox_dialogue::sandbox_activate_dialogue_thread,
             sandbox_dialogue::sandbox_send_message,
+            sandbox_dialogue::sandbox_answer_question,
+            sandbox_dialogue::sandbox_dismiss_question,
             sandbox_dialogue::sandbox_cancel_round
         ])
         .build(tauri::generate_context!())

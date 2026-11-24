@@ -6,14 +6,14 @@
 
 ## 通用前置
 
-先用 `workspace.search`（查理论与共享对象时可带 `kinds: ["theory"]` / `["semantic_entity"]` 和 `scope: "investigation"`）、`graph.get`、必要时 `graph.neighborhood` 和 `material.read` 找到来源与邻域，避免重复建同名对象。所有对象带来源证据、revision、scope 和 rationale。没有 locator 就不能声称已核对原文。`proves` 是来源中的证明关系，不是内核证书。
+先用 `workspace.search`（查理论与共享对象时可带 `kinds: ["theory"]` / `["semantic_entity"]` 和 `scope: "investigation"`）、`graph.get`、必要时 `graph.neighborhood` 和 `material.read` 找到来源与邻域，避免重复建同名对象。所有对象带来源证据、revision、scope 和 rationale（`propose_changes.rationale` 首句必须以 `【来源锚定】`、`【跨书对齐】`、`【题型提炼】`、`【概念/定理升格】`、`【纠错重连】` 或 `【补账/销账】` 开头）。没有 locator 就不能声称已核对原文。遇到跨章节同名编号指代歧义、升格粒度不明或超范围旧边清理时，先调用 `user.ask` 请用户确认并结束本轮，严禁猜测硬连。`proves` 是来源中的证明关系，不是内核证书。
 
 ## 来源层
 
 ### 来源单元与来源关系
 
 - **什么时候创建**：发现一个能独立解释、引用和回链的定义、定理、证明步骤、方法或问题时创建 `source_unit`；只有来源本身表达了“由……得到/包含/位于”等关系时创建 `source_relation`；缺少原文片段锚点时先用 `material.locate` 取精确范围并创建 `source_span`。
-- **前置条件**：已有 Artifact/Span 或可靠 `content_ref`；先查同一材料和 revision。来源对象支持 `create` 与 `edit`（`source_span` 不可变，只支持 `create`；来源对象不支持 Agent 提议 `retire`）。
+- **前置条件**：已有 Artifact/Span 或可靠 `content_ref`；先查同一材料和 revision。来源对象支持 `create` 与 `edit`；`source_relation` 额外支持 `retire`（放 `proposed_relations` 或 `proposed_objects` 均可），`source_span`（不可变，仅 `create`）与 `source_unit` 不支持 Agent 提议 `retire`。
 - **关键字段**：kind、标题/来源标签、source_spans、父单元、关系类型、端点和证据片段；摘要不能替代正文回链。
 - **常见错误**：把整章当单元或单个超长 span；把解析修正当原文；把相似文字直接合成一个共享实体；无锚点凭记忆建 span。
 - **工具**：已确认 `workspace.search`、`graph.get`、`graph.neighborhood`、`material.read`、`material.locate`、`propose_changes`。
@@ -30,7 +30,7 @@
 
 ### SemanticEntity（含 Theory）与 Alignment
 
-- **什么时候创建**：不同来源单元确实指向同一可复用数学概念、精确说法或题型时，先查已有 `theory`（专题书架）与 `semantic_entity`，缺少时建立 `SemanticEntity`，再建立带关系类型、作用域、参数/项下标对照和证据的 `Alignment`；相似措辞本身不够。
+- **什么时候创建**：满足三层升格判别（SKILL.md §4.3）——存在跨教材/手稿对齐、覆盖两题以上或用户指定的通用题型提炼（`problem_schema`），或需要锚定共享概念/精确声明与 mathlib 基线时，先查已有 `theory`（专题书架）与 `semantic_entity`，缺少时建立 `SemanticEntity`，再建立带关系类型、作用域、参数/项下标对照和证据的 `Alignment`；单本书内普通单题直接引用某定理时留在来源层（`source_unit` + `source_relation`），不要为单道常规练习硬造一次性 `problem_schema`；相似措辞本身也不足以合并。
 - **理论（`theory`）书架规则**：理论保持扁平（`home_theory: null`），尺度类似课本一章/一个专题（如「线性递推数列」），只回答“这几个概念和定理大概是哪一块儿的”。建前先 `workspace.search`（`kinds: ["theory"]`, `scope: "investigation"`）；新建时填好中英文 `aliases`，不用单个概念名或带 `=`/`$` 的具体算式起名。关于某类对象的定理跟该对象挂同一主书架；日后需重组时，可通过 `edit` 修改非 theory 对象的 `home_theory` 平滑迁移。
 - **前置条件**：来源单元已锚定；能区分 `expresses`、`specializes`、`overlaps_with` 等 11 种对齐关系和候选状态；不确定时保留 `retrieved_candidate` / `partially_aligned` / `disputed`，不覆盖已有实体。
 - **名称规则**：每个共享对象的 `preferred_labels` 都同时写 `lang` 为 `zh` 和 `en` 的两个名称（不写 `zh-CN` 之类），与材料语言无关；`aliases` 写两种语言的常见叫法。

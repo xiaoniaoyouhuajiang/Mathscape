@@ -251,4 +251,17 @@ describe("parsing (sync ensure)", () => {
     const done = buildTurnProcess([...events, event(2, "tool_result", { call_id: "c1", status: "ok", duration_ms: 9000 })], { running: true, parsing });
     expect(done.steps[0].title).toBe("material.read");
   });
+
+  it("formats user.ask step titles with clipped question text", () => {
+    const view = buildTurnProcess([
+      event(0, "turn_start", { input_ref: "x" }),
+      event(1, "tool_call", {
+        call_id: "ask-1",
+        tool: "mcp__mathscape__user_ask",
+        raw: { arguments: { question: "这里的定理 4 是指第一章母函数一节还是第二章计数问题？" } },
+      }),
+      event(2, "tool_result", { call_id: "ask-1", status: "ok", duration_ms: 8 }),
+    ]);
+    expect(view.steps[0].title).toContain("向用户确认 · 这里的定理 4 是指第一章母函数一节");
+  });
 });

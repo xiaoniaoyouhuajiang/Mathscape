@@ -17,6 +17,7 @@ pub(crate) fn tool_names(allow: &[String]) -> HashMap<String, String> {
                 "propose_changes",
                 "get_change_set",
                 "list_change_sets",
+                "user.ask",
             ]
             .iter(),
         )

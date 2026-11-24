@@ -17,6 +17,7 @@
  * `material.read` waiting on Marker): while running their title gets
  * ` · 解析中`, and so does the 「正在调用 …」 header.
  */
+import { t } from "../i18n";
 import type { AgentEventLike } from "./format";
 
 export type StepKind =
@@ -170,9 +171,47 @@ function kindFor(tool: string, rawType: string): StepKind {
   return "tool";
 }
 
-function titleFor(tool: string, args: string, rawType: string): string {
+function isUserAskTool(tool: string): boolean {
+  return (
+    tool === "user.ask" ||
+    tool === "mathscape_user_ask" ||
+    tool.endsWith(".user.ask") ||
+    tool.endsWith("/user.ask") ||
+    tool.endsWith("__user_ask") ||
+    tool.endsWith("__user.ask")
+  );
+}
+
+function extractAskQuestion(payload: Record<string, unknown>, argsSummary: string): string {
+  const raw = payload.raw;
+  if (raw && typeof raw === "object") {
+    const rawArgs = (raw as Record<string, unknown>).arguments;
+    if (rawArgs && typeof rawArgs === "object") {
+      const q = str((rawArgs as Record<string, unknown>).question);
+      if (q) return q;
+    } else if (typeof rawArgs === "string") {
+      try {
+        const parsed = JSON.parse(rawArgs) as Record<string, unknown>;
+        const q = str(parsed?.question);
+        if (q) return q;
+      } catch {
+        /* ignore malformed raw arguments */
+      }
+    }
+  }
+  const match = /(?:^|\s)question=(.+?)(?:\s+[a-z_]+=|$)/.exec(argsSummary);
+  return match ? match[1].trim() : "";
+}
+
+function titleFor(tool: string, args: string, rawType: string, payload?: Record<string, unknown>): string {
   if (rawType === "commandExecution" || tool === "shell") return args || "shell";
   if (rawType === "fileChange" || tool === "file_change") return args || "文件变更";
+  if (isUserAskTool(tool)) {
+    const q = extractAskQuestion(payload ?? {}, args).replace(/\s+/g, " ").trim();
+    return q
+      ? t("sandbox.ask.stepTitleWithQuestion", { question: clip(q, 34) })
+      : t("sandbox.ask.stepTitle");
+  }
   return tool || "工具";
 }
 
@@ -446,7 +485,7 @@ export function buildTurnProcess(
       upsert(steps, {
         id,
         kind: kindFor(tool, rawType),
-        title: titleFor(tool, args, rawType),
+        title: titleFor(tool, args, rawType, payload),
         status: keep,
         rawInput: inputText(payload) || args,
         startedAt: event.ts,

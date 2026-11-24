@@ -530,7 +530,8 @@ fn tools_list_order_and_text_are_fixed() {
             "propose_changes",
             "get_change_set",
             "material.locate",
-            "list_change_sets"
+            "list_change_sets",
+            "user.ask"
         ]
     );
     for tool in tools {
@@ -550,7 +551,7 @@ fn tools_list_order_and_text_are_fixed() {
             );
         } else if matches!(
             tool["name"].as_str(),
-            Some("artifact.stage") | Some("propose_changes")
+            Some("artifact.stage") | Some("propose_changes") | Some("user.ask")
         ) {
             assert_eq!(
                 tool["annotations"],
@@ -3400,4 +3401,98 @@ fn emir_fixture_change_sets_all_stage_in_order() {
     assert!(kinds.contains(&"semantic_entity"), "{hood}");
     assert!(kinds.contains(&"source_unit"), "{hood}");
     assert!(kinds.contains(&"debt"), "{hood}");
+}
+
+#[test]
+fn user_ask_persists_pending_question_and_blocks_same_round_propose_changes() {
+    let body = "{7}----------------\n\n习题 8 求证组合恒等式。\n";
+    let (_dir, root, _pdf, markdown) = canonical_book(10, 7, 7, body);
+
+    // 1. Unbound round is rejected with round_not_bound.
+    let unbound = book_server(&root, None);
+    let (err, is_error) = call(&unbound, "user.ask", json!({ "question": "指哪一章？" }));
+    assert!(is_error, "{err}");
+    assert_eq!(err["error"]["code"], "forbidden");
+    assert_eq!(err["error"]["details"]["reason"], "round_not_bound");
+
+    // 2. Argument validation rejects empty question, 1 option, and duplicate options.
+    let round1 = book_server(&root, Some("round-ask-1"));
+    for bad in [
+        json!({ "question": "   " }),
+        json!({ "question": "选哪个？", "options": ["仅一项"] }),
+        json!({ "question": "选哪个？", "options": ["第一章", "第一章"] }),
+    ] {
+        let (bad_res, bad_err) = call(&round1, "user.ask", bad.clone());
+        assert!(bad_err, "expected error for {bad}: {bad_res}");
+        assert_eq!(bad_res["error"]["code"], "invalid_arg");
+    }
+
+    // 3. Valid user.ask persists a pending row and returns end_turn immediately.
+    let ask_args = json!({
+        "question": "习题 8 提到的“母函数方法”是否要升格为独立题型，还是直接连向已有定理？",
+        "options": [
+            "升格为独立题型（problem_schema）",
+            "仅建立来源层应用关系（source_relation）"
+        ],
+        "ink_requested": true
+    });
+    let (asked, is_error) = call(&round1, "user.ask", ask_args.clone());
+    assert!(!is_error, "{asked}");
+    assert_eq!(asked["status"], "ok");
+    assert_eq!(asked["state"], "pending");
+    assert_eq!(asked["next"], "end_turn");
+    let question_id = asked["question_id"].as_str().unwrap().to_owned();
+    assert!(question_id.starts_with("mathscape:question/"));
+
+    // Exact replay in the same round is idempotent.
+    let (replayed, is_error) = call(&round1, "user.ask", ask_args);
+    assert!(!is_error, "{replayed}");
+    assert_eq!(replayed, asked);
+
+    // 4. A second distinct user.ask in the same round is forbidden (`awaiting_user`).
+    let (second_ask, is_error) = call(
+        &round1,
+        "user.ask",
+        json!({ "question": "顺便确认一下第三题？" }),
+    );
+    assert!(is_error, "{second_ask}");
+    assert_eq!(second_ask["error"]["code"], "forbidden");
+    assert_eq!(second_ask["error"]["details"]["reason"], "awaiting_user");
+
+    // 5. Calling propose_changes in the same round after user.ask is forbidden (`awaiting_user`).
+    let (found, _) = call(
+        &round1,
+        "material.locate",
+        json!({ "artifact_id": markdown, "quote": "习题 8 求证组合恒等式。" }),
+    );
+    let proposal = json!({
+        "request_id": "req-after-ask",
+        "rationale": "【题型提炼】登记习题 8",
+        "proposed_objects": [
+            { "local_ref": "s", "kind": "source_span", "op": "create", "payload": {
+                "artifact_id": markdown, "md_byte_range": found["md_byte_range"],
+                "granularity": "page", "quote": "习题 8 求证组合恒等式。" }},
+            { "local_ref": "u", "kind": "source_unit", "op": "create", "payload": {
+                "kind": "problem", "display_title": "习题 8", "parent": null,
+                "source_spans": ["$new:s"], "completeness": "complete" }}
+        ]
+    });
+    let (blocked_prop, is_error) = call(&round1, "propose_changes", proposal.clone());
+    assert!(is_error, "{blocked_prop}");
+    assert_eq!(blocked_prop["error"]["code"], "forbidden");
+    assert_eq!(blocked_prop["error"]["details"]["reason"], "awaiting_user");
+
+    // Verify the row is persisted in SQLite under `sandbox:book`.
+    let store = SqliteArtifactStore::open(&root.join("mathscape.sqlite3")).unwrap();
+    let pending = store.list_pending_questions("sandbox:book", true).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].question_id, question_id);
+    assert!(pending[0].ink_requested);
+    drop(store);
+
+    // 6. Once the next round starts (`round-ask-2`), propose_changes succeeds cleanly.
+    let round2 = book_server(&root, Some("round-ask-2"));
+    let (staged, is_error) = call(&round2, "propose_changes", proposal);
+    assert!(!is_error, "{staged}");
+    assert_eq!(staged["status"], "staged", "{staged}");
 }

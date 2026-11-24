@@ -18,6 +18,7 @@ mod map_edit;
 mod markdown_errata;
 mod markdown_patch;
 mod proposals;
+mod questions;
 mod read;
 mod registration;
 mod run_disposition;
@@ -87,6 +88,7 @@ pub use proposals::{
     ChangeSetAcceptance, ChangeSetDecision, ChangeSetDependency, ChangeSetSelectionRef,
     DiscardOutcome, PendingChangeSet,
 };
+pub use questions::{CreatePendingQuestionInput, PendingQuestionAnswer, PendingQuestionRecord};
 pub use read::{ArtifactCatalogRecord, ArtifactCatalogSnapshot};
 pub use search::{
     SearchArtifactRow, SearchCorpus, SearchNoteRow, SearchSemanticEntityRow, SearchSnapshotRow,
@@ -124,7 +126,9 @@ const PHASE2_PR_B_MIGRATION: &str = include_str!("../../../migrations/0024_phase
 const STUDY_MARKS_MIGRATION: &str = include_str!("../../../migrations/0025_study_marks.sql");
 const MARKDOWN_ERRATA_MIGRATION: &str =
     include_str!("../../../migrations/0026_markdown_errata.sql");
-const SUPPORTED_SCHEMA_VERSION: i64 = 26;
+const PENDING_QUESTIONS_MIGRATION: &str =
+    include_str!("../../../migrations/0027_pending_questions.sql");
+const SUPPORTED_SCHEMA_VERSION: i64 = 27;
 
 #[derive(Debug, Error)]
 pub enum SqliteStoreError {
@@ -162,6 +166,8 @@ pub enum SqliteStoreError {
     /// `dependency_not_accepted`, `proposal_stale`, ...).
     #[error("{0}")]
     ChangeSetConflict(String),
+    #[error("{0}")]
+    PendingQuestionConflict(String),
     #[error("ink document was not found: {0}")]
     InkDocumentNotFound(String),
     #[error("ink session was not found: {0}")]
@@ -448,6 +454,7 @@ impl SqliteArtifactStore {
         validate_proposed_change_schema(&connection)?;
         study_marks::validate_schema(&connection)?;
         markdown_errata::validate_schema(&connection)?;
+        questions::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -547,6 +554,53 @@ impl SqliteArtifactStore {
         unit_id: Option<&str>,
     ) -> Result<Vec<ErrataUnitReviewRecord>, SqliteStoreError> {
         markdown_errata::list_errata_unit_reviews(&self.connection, unit_id)
+    }
+
+    pub fn create_pending_question(
+        &mut self,
+        input: &CreatePendingQuestionInput,
+    ) -> Result<PendingQuestionRecord, SqliteStoreError> {
+        questions::create_pending_question(&mut self.connection, input)
+    }
+
+    pub fn round_has_pending_question(&self, round_id: &str) -> Result<bool, SqliteStoreError> {
+        questions::round_has_pending_question(&self.connection, round_id)
+    }
+
+    pub fn list_pending_questions(
+        &self,
+        investigation_id: &str,
+        pending_only: bool,
+    ) -> Result<Vec<PendingQuestionRecord>, SqliteStoreError> {
+        questions::list_pending_questions(&self.connection, investigation_id, pending_only)
+    }
+
+    pub fn answer_pending_question(
+        &mut self,
+        investigation_id: &str,
+        question_id: &str,
+        answer: &PendingQuestionAnswer,
+    ) -> Result<PendingQuestionRecord, SqliteStoreError> {
+        questions::answer_pending_question(
+            &mut self.connection,
+            investigation_id,
+            question_id,
+            answer,
+        )
+    }
+
+    pub fn cancel_pending_question(
+        &mut self,
+        investigation_id: &str,
+        question_id: &str,
+        updated_at: &str,
+    ) -> Result<PendingQuestionRecord, SqliteStoreError> {
+        questions::cancel_pending_question(
+            &mut self.connection,
+            investigation_id,
+            question_id,
+            updated_at,
+        )
     }
 
     pub fn create_ink_document(
@@ -1025,6 +1079,20 @@ impl SqliteArtifactStore {
                 connection.pragma_update(None, "user_version", 26)?;
             }
         }
+        if version < 27 {
+            let applied: Option<String> = connection
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = 27",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if applied.is_none() {
+                connection.execute_batch(PENDING_QUESTIONS_MIGRATION)?;
+            } else {
+                connection.pragma_update(None, "user_version", 27)?;
+            }
+        }
         validate_registration_schema(&connection)?;
         connection.prepare("SELECT request_id, request_json, plan_fingerprint, commit_id, receipt_json FROM map_change_requests LIMIT 0")?;
         connection.prepare("SELECT commit_id, object_id, previous_revision, current_revision, action, reason FROM map_edit_operations LIMIT 0")?;
@@ -1043,6 +1111,7 @@ impl SqliteArtifactStore {
         validate_proposed_change_schema(&connection)?;
         study_marks::validate_schema(&connection)?;
         markdown_errata::validate_schema(&connection)?;
+        questions::validate_schema(&connection)?;
         Ok(Self { connection })
     }
 
