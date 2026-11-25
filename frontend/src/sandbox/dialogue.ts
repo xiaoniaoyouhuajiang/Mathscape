@@ -94,6 +94,7 @@ import "../review/change-sets.css";
 export const DIALOGUE_EVENT = "sandbox://dialogue";
 export const DIALOGUE_SIZE_KEY = "mathscape:sandbox-dialogue-size";
 export const DIALOGUE_POS_KEY = "mathscape:sandbox-dialogue-pos";
+export const DIALOGUE_FLOAT_POS_KEY = "mathscape:sandbox-float-pos";
 export const DIALOGUE_MODE_KEY = "mathscape:sandbox-dialogue-mode";
 export const DIALOGUE_SIDEBAR_WIDTH_KEY = "mathscape:sandbox-dialogue-sidebar-width";
 /** Set on `.shell` while the sidebar is showing; layout CSS reads the width var. */
@@ -261,9 +262,9 @@ function saveSize(size: SizePref): void {
   }
 }
 
-function loadPos(): PosPref | null {
+function loadPos(key = DIALOGUE_POS_KEY): PosPref | null {
   try {
-    const raw = localStorage.getItem(DIALOGUE_POS_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PosPref>;
     const left = Number(parsed.left);
@@ -275,9 +276,9 @@ function loadPos(): PosPref | null {
   }
 }
 
-function savePos(pos: PosPref): void {
+function savePos(pos: PosPref, key = DIALOGUE_POS_KEY): void {
   try {
-    localStorage.setItem(DIALOGUE_POS_KEY, JSON.stringify(pos));
+    localStorage.setItem(key, JSON.stringify(pos));
   } catch {
     /* Optional preference. */
   }
@@ -350,6 +351,8 @@ export class SandboxDialogueDock {
   private readonly layoutHost: HTMLElement;
 
   private sessionId: string | null = null;
+  private pinnedSessionId: string | null = null;
+  private fallbackOpen: (() => void) | null = null;
   private transcript: TranscriptEntry[] = [];
   private events: AgentEventLike[] = [];
   private activeRoundId: string | null = null;
@@ -369,7 +372,8 @@ export class SandboxDialogueDock {
   /** Step cards the user has expanded, keyed by round + step id. */
   private readonly stepOpen = new Set<string>();
   private size = loadSize();
-  private pos: PosPref = loadPos() ?? defaultPos(this.size);
+  private pos: PosPref = loadPos(DIALOGUE_POS_KEY) ?? defaultPos(this.size);
+  private floatPos: PosPref | null = loadPos(DIALOGUE_FLOAT_POS_KEY);
   private mode: DockMode = parseDockMode(readPref(DIALOGUE_MODE_KEY));
   private sidebarWidth = parseSidebarWidth(readPref(DIALOGUE_SIDEBAR_WIDTH_KEY), window.innerWidth);
   /** Last sidebar footprint pushed to the shell; avoids resize feedback loops. */
@@ -552,7 +556,7 @@ export class SandboxDialogueDock {
     this.floatHandle = el("button", "sandbox-dock-float", "");
     this.floatHandle.append(createPiMascotSvg());
     this.floatHandle.type = "button";
-    this.floatHandle.hidden = true;
+    this.floatHandle.hidden = false;
     this.floatHandle.title = "展开沙箱对话（可拖动）";
     this.floatHandle.setAttribute("aria-label", "展开沙箱对话");
     this.floatHandle.addEventListener("click", (event) => {
@@ -563,12 +567,47 @@ export class SandboxDialogueDock {
       }
       this.expandFromFloat();
     });
-    this.bindDrag(this.floatHandle, () => ({ width: HANDLE_SIZE, height: HANDLE_SIZE }), true);
+    this.bindFloatDrag(this.floatHandle);
 
     host.append(this.root, this.floatHandle);
     this.applyGeometry();
     this.syncControls();
+    requestAnimationFrame(() => this.applyGeometry());
+    const canvasPanel = this.layoutHost.querySelector<HTMLElement>(".canvas-panel");
+    if (canvasPanel && typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(() => {
+        if (this.floatPos === null) this.applyGeometry();
+      }).observe(canvasPanel);
+    }
     window.addEventListener("resize", () => this.clampIntoViewport());
+  }
+
+  /** Fallback action when clicking Xiao-Pi in the mother workspace before selecting a session. */
+  setFallbackOpen(handler: () => void): void {
+    this.fallbackOpen = handler;
+  }
+
+  /** Bind the window's active sandbox session on startup so Xiao-Pi opens its dialogue directly. */
+  bindWindowSession(sessionId: string | null): void {
+    this.pinnedSessionId = sessionId;
+    if (!sessionId) return;
+    if (!this.sessionId) {
+      this.sessionId = sessionId;
+      this.title.textContent = `沙箱对话 · ${sessionId}`;
+      this.ensureListening();
+      void invoke<SessionDialogue>("sandbox_session_dialogue", { sandboxSessionId: sessionId })
+        .then((dialogue) => {
+          if (this.sessionId === sessionId && this.root.hidden) {
+            this.adopt(dialogue, false);
+            this.syncControls();
+          }
+        })
+        .catch(() => {
+          /* Non-fatal idle status prefetch. */
+        });
+    }
+    this.syncControls();
+    this.applyGeometry();
   }
 
   /** The persisted preference (what the user picked last). */
@@ -655,34 +694,64 @@ export class SandboxDialogueDock {
 
   close(): void {
     this.root.hidden = true;
-    this.floatHandle.hidden = true;
+    this.floatHandle.hidden = false;
+    if (!this.pinnedSessionId) {
+      this.sessionId = null;
+    }
+    this.syncControls();
     this.applyGeometry();
   }
 
   /** Close if showing `sessionId` (e.g. after it was discarded). */
   forget(sessionId: string): void {
     if (this.sessionId === sessionId) {
-      this.close();
-      this.sessionId = null;
+      this.sessionId = this.pinnedSessionId === sessionId ? null : this.pinnedSessionId;
+      this.root.hidden = true;
+      this.floatHandle.hidden = false;
+      this.syncControls();
+      this.applyGeometry();
     }
   }
 
   private collapseToFloat(): void {
-    if (!this.sessionId) {
-      this.close();
-      return;
-    }
     this.root.hidden = true;
     this.floatHandle.hidden = false;
     this.applyGeometry();
   }
 
   private expandFromFloat(): void {
-    if (!this.sessionId) {
-      this.close();
+    const targetSession = this.sessionId ?? this.pinnedSessionId;
+    if (!targetSession) {
+      this.fallbackOpen?.();
       return;
     }
-    void this.open(this.sessionId);
+    void this.open(targetSession);
+  }
+
+  private defaultFloatPos(): PosPref {
+    const canvas = this.layoutHost.querySelector<HTMLElement>(".canvas-panel");
+    const legend = this.layoutHost.querySelector<HTMLElement>("#graph-legend");
+    const rect = canvas?.getBoundingClientRect();
+    if (rect && rect.width > HANDLE_SIZE + 32 && rect.height > HANDLE_SIZE + 32) {
+      const legendRect = legend && legend.offsetParent !== null ? legend.getBoundingClientRect() : null;
+      const bottomLimit = legendRect && legendRect.width > 0 && legendRect.height > 0
+        ? Math.min(rect.bottom - 18, legendRect.top - 14)
+        : rect.bottom - 24;
+      return this.clampPos(
+        { left: rect.right - HANDLE_SIZE - 22, top: bottomLimit - HANDLE_SIZE },
+        { width: HANDLE_SIZE, height: HANDLE_SIZE },
+      );
+    }
+    return this.clampPos(
+      { left: window.innerWidth - 300 - HANDLE_SIZE - 22, top: window.innerHeight - HANDLE_SIZE - 72 },
+      { width: HANDLE_SIZE, height: HANDLE_SIZE },
+    );
+  }
+
+  private currentFloatPos(): PosPref {
+    return this.floatPos !== null
+      ? this.clampPos(this.floatPos, { width: HANDLE_SIZE, height: HANDLE_SIZE })
+      : this.defaultFloatPos();
   }
 
   private applyGeometry(): void {
@@ -690,9 +759,7 @@ export class SandboxDialogueDock {
       width: clamp(this.size.width, MIN_WIDTH, maxWidth()),
       height: clamp(this.size.height, MIN_HEIGHT, maxHeight()),
     };
-    this.pos = this.clampPos(this.pos, this.root.hidden && !this.floatHandle.hidden
-      ? { width: HANDLE_SIZE, height: HANDLE_SIZE }
-      : this.size);
+    this.pos = this.clampPos(this.pos, this.size);
     const sidebar = this.effectiveMode() === "sidebar";
     this.root.classList.toggle("is-sidebar", sidebar);
     this.root.classList.toggle("is-floating", !sidebar);
@@ -719,8 +786,9 @@ export class SandboxDialogueDock {
       this.root.style.right = "auto";
       this.root.style.bottom = "auto";
     }
-    this.floatHandle.style.left = `${this.pos.left}px`;
-    this.floatHandle.style.top = `${this.pos.top}px`;
+    const handlePos = this.currentFloatPos();
+    this.floatHandle.style.left = `${handlePos.left}px`;
+    this.floatHandle.style.top = `${handlePos.top}px`;
     this.floatHandle.style.right = "auto";
     this.floatHandle.style.bottom = "auto";
     this.syncShellLayout(sidebar && !this.root.hidden);
@@ -857,6 +925,51 @@ export class SandboxDialogueDock {
       target.classList.remove("is-dragging");
       savePos(this.pos);
       if (markClickSuppress && moved) target.dataset.dragged = "1";
+    };
+    target.addEventListener("pointerup", finish);
+    target.addEventListener("pointercancel", finish);
+  }
+
+  private bindFloatDrag(target: HTMLElement): void {
+    let dragging: number | undefined;
+    let startX = 0;
+    let startY = 0;
+    let origin: PosPref = { left: 0, top: 0 };
+    let moved = false;
+    target.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      dragging = event.pointerId;
+      moved = false;
+      startX = event.clientX;
+      startY = event.clientY;
+      origin = this.currentFloatPos();
+      try {
+        target.setPointerCapture(event.pointerId);
+      } catch {
+        /* Synthetic pointers. */
+      }
+      target.classList.add("is-dragging");
+    });
+    target.addEventListener("pointermove", (event) => {
+      if (event.pointerId !== dragging) return;
+      const dx = event.clientX - startX;
+      const dy = event.clientY - startY;
+      if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+      this.floatPos = this.clampPos(
+        { left: origin.left + dx, top: origin.top + dy },
+        { width: HANDLE_SIZE, height: HANDLE_SIZE },
+      );
+      this.applyGeometry();
+    });
+    const finish = (event: PointerEvent) => {
+      if (event.pointerId !== dragging) return;
+      dragging = undefined;
+      target.classList.remove("is-dragging");
+      if (moved && this.floatPos) {
+        savePos(this.floatPos, DIALOGUE_FLOAT_POS_KEY);
+        target.dataset.dragged = "1";
+      }
     };
     target.addEventListener("pointerup", finish);
     target.addEventListener("pointercancel", finish);

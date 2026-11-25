@@ -1,8 +1,9 @@
-import { THEMES, THEME_CHANGED, getTheme, setTheme, isTheme, themeLabel } from "../shell/theme-manager";
-import { MAP_STYLES, MAP_STYLE_CHANGED, getMapStyle, setMapStyle, isMapStyle } from "../shell/map-style";
+import { THEME_CHANGED, getTheme, setTheme } from "../shell/theme-manager";
+import { MAP_STYLE_CHANGED, getMapStyle, setMapStyle } from "../shell/map-style";
 import { invoke } from "@tauri-apps/api/core";
 import { eventBus } from "../core/events";
 import { motionPreference, setMotionPreference, type MotionPreference } from "../core/motion";
+import { createMapStylePickerCards, createThemePickerCards } from "./display-cards";
 
 import "./settings.css";
 import {
@@ -125,14 +126,16 @@ export class LlmSettingsController {
               </div>
               <span class="settings-scope">本机</span>
             </div>
-            <label class="settings-field">显示主题
-              <select name="theme" aria-label="显示主题">${(Object.keys(THEMES) as (keyof typeof THEMES)[]).map(value => `<option value="${value}">${themeLabel(value)}</option>`).join("")}</select>
+            <div class="settings-field display-picker-field">
+              <span id="settings-theme-heading">显示主题</span>
+              <div class="theme-picker-mount"></div>
               <small>立即生效，自动记住本机的选择。</small>
-            </label>
-            <label class="settings-field">地图风格
-              <select name="map-style" aria-label="地图风格">${Object.entries(MAP_STYLES).map(([value, label]) => `<option value="${value}">${label}${value === "constellation" ? "（默认）" : ""}</option>`).join("")}</select>
-              <small>星座：轻量星核与疏排标签；原版：较大节点、标签常显。独立于显示主题，立即生效并自动记住。</small>
-            </label>
+            </div>
+            <div class="settings-field display-picker-field">
+              <span id="settings-mapstyle-heading">地图风格</span>
+              <div class="mapstyle-picker-mount"></div>
+              <small>独立于显示主题，立即生效并自动记住。</small>
+            </div>
             <label class="settings-field">
               <span>减少动效</span>
               <select name="reduce-motion">
@@ -262,15 +265,18 @@ export class LlmSettingsController {
       </div>
     `;
     this.overlay = required<HTMLElement>(host, ".settings-overlay");
-    const theme = required<HTMLSelectElement>(host, "select[name=theme]");
-    const syncTheme = () => { theme.value = getTheme(); };
+    const themePicker = createThemePickerCards((next) => setTheme(next));
+    themePicker.element.setAttribute("aria-labelledby", "settings-theme-heading");
+    required<HTMLElement>(host, ".theme-picker-mount").replaceWith(themePicker.element);
+    const syncTheme = () => themePicker.sync(getTheme());
     syncTheme();
-    theme.onchange = () => { if (isTheme(theme.value)) setTheme(theme.value); };
     window.addEventListener(THEME_CHANGED, syncTheme);
-    const mapStyle = required<HTMLSelectElement>(host, "select[name=map-style]");
-    const syncMapStyle = () => { mapStyle.value = getMapStyle(); };
+
+    const mapStylePicker = createMapStylePickerCards((next) => setMapStyle(next));
+    mapStylePicker.element.setAttribute("aria-labelledby", "settings-mapstyle-heading");
+    required<HTMLElement>(host, ".mapstyle-picker-mount").replaceWith(mapStylePicker.element);
+    const syncMapStyle = () => mapStylePicker.sync(getMapStyle());
     syncMapStyle();
-    mapStyle.onchange = () => { if (isMapStyle(mapStyle.value)) setMapStyle(mapStyle.value); };
     window.addEventListener(MAP_STYLE_CHANGED, syncMapStyle);
     this.form = required<HTMLFormElement>(host, ".llm-settings-form");
     this.workspaceForm = required<HTMLFormElement>(host, ".workspace-settings-form");

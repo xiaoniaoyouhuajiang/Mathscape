@@ -483,10 +483,14 @@ const llmSettings = new LlmSettingsController(
 
 const sandboxToast = (msg: string, kind: "success" | "error") => shell.showToast(msg, kind);
 const sandboxDock = new SandboxDialogueDock(el.sandboxHost, sandboxToast);
-new SandboxPanelController(el.sandboxHost, el.sandboxButton, sandboxToast, sandboxDock);
+const sandboxPanel = new SandboxPanelController(el.sandboxHost, el.sandboxButton, sandboxToast, sandboxDock);
+sandboxDock.setFallbackOpen(() => void sandboxPanel.open());
 let sandboxWindowSessionId: string | null = null;
 void mountSandboxChrome(el.shell, { toast: sandboxToast, openDialogue: (id) => void sandboxDock.open(id) })
-  .then(status => { sandboxWindowSessionId = status?.sandbox?.sandboxSessionId ?? null; });
+  .then(status => {
+    sandboxWindowSessionId = status?.sandbox?.sandboxSessionId ?? null;
+    sandboxDock.bindWindowSession(sandboxWindowSessionId);
+  });
 
 const discoveryLedger = new DiscoveryLedgerController(
   el.discoveryRunsList,

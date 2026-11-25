@@ -780,6 +780,17 @@
   display: none;
 }
 
+body:has(#ink-workspace:not([hidden])) .sandbox-dock-float,
+body:has(#review-workspace:not([hidden])) .sandbox-dock-float,
+body:has(.settings-overlay:not([hidden])) .sandbox-dock-float,
+body:has(.tutorial-overlay:not([hidden])) .sandbox-dock-float {
+  display: none;
+}
+
+.pi-mascot-svg--pinned .pi-bot-variant {
+  display: inline !important;
+}
+
 .sandbox-dock-float.is-dragging {
   cursor: grabbing;
 }

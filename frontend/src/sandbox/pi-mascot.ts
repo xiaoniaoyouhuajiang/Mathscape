@@ -262,15 +262,16 @@ const VARIANTS: readonly ThemeVariantPalette[] = [
   },
 ];
 
-export function createPiMascotSvg(): SVGSVGElement {
+export function createPiMascotSvg(pinnedTheme?: "obsidian" | "parchment" | "slate"): SVGSVGElement {
   const uid = ++instanceSeq;
   const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("class", "pi-mascot-svg");
+  svg.setAttribute("class", pinnedTheme ? `pi-mascot-svg pi-mascot-svg--pinned pi-mascot-svg--${pinnedTheme}` : "pi-mascot-svg");
   svg.setAttribute("viewBox", "0 0 64 64");
   svg.setAttribute("width", "56");
   svg.setAttribute("height", "56");
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("focusable", "false");
-  svg.innerHTML = VARIANTS.map((v) => buildVariantGroup(uid, v)).join("");
+  const selected = pinnedTheme ? VARIANTS.filter((v) => v.key === pinnedTheme) : VARIANTS;
+  svg.innerHTML = selected.map((v) => buildVariantGroup(uid, v)).join("");
   return svg;
 }
