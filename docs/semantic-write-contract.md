@@ -515,3 +515,146 @@ P2 §4.2.3 锁定“任意 `retire` ❌ Agent 不可提议退役”。用户 202
 
 1. **约定卡与来源单元的绑定**：第一期用 `anchor_subtree` 派生，不写 `SourceSemanticUnit.dialect_binding`；什么时候回写？
 2. **`formally_related` 开放的时间**（与 Lean 工具契约联动）。
+
+---
+
+## S14. 阶段二扩展：S2 完整（多分支 / 守卫 / 排除）与 S3 前半（局部符号表 / 表示核 R / 表示绑定） [2026-11-25 实现]
+
+本节在不改变阶段一既有对象二进制/JSON 向后兼容性的前提下，补齐 S2 完整内聚结构与 S3 前半表示层对象。SQLite 表结构保持 `schema v27` 不变（复用 `EntityKind::RepresentationCore` 与 `EntityKind::RepresentationBinding`），MCP 工具协议升至 `mathscape-mcp/21`。
+
+### S14.1 S2 内聚多分支、守卫与排除边界（`SemanticEntity` 扩展）
+
+不在主地图画布上拆出细碎的守卫或分支节点；`declaration` 与 `problem_schema` 通过可选数组内聚表达分段承诺（缺省均为空，旧单分支对象无需改动）：
+
+```jsonc
+{
+  "declaration": {
+    "declaration_kind": "theorem",
+    "concept": "<concept id> | null",
+    "binders": [ { "name": "N", "type": "ℕ", "role": "universal" }, { "name": "x", "type": "ℝ", "role": "universal" } ],
+    "assumptions": [ { "text": "$N \\ge 1$" } ],
+    "statement": { "text": "有限几何和 $S_N(x) = \\sum_{k=0}^{N-1} x^k$ 在 $x \\neq 1$ 与 $x = 1$ 下分段给出。" }, // branches 非空时可省略
+    "guards": [
+      { "guard_id": "regular_x_ne_1", "label": "常规情形",
+        "predicate": { "text": "$x \\neq 1$", "evidence_spans": ["<span id>"] } },
+      { "guard_id": "degenerate_x_eq_1", "label": "退化边界",
+        "predicate": { "text": "$x = 1$" } }
+    ],
+    "guard_partition": {
+      "status": "partition | disjoint_partial | overlapping | unspecified",
+      "note": "实数域上 x ≠ 1 与 x = 1 互斥且完备"
+    },
+    "branches": [
+      { "branch_id": "fraction_form", "label": "分式闭合式",
+        "guards": ["regular_x_ne_1"], "is_degenerate": false,
+        "binders": [], "assumptions": [],
+        "conclusion": { "text": "$\\sum_{k=0}^{N-1} x^k = \\frac{1 - x^N}{1 - x}$" },
+        "evidence_spans": ["<span id>"] },
+      { "branch_id": "constant_sum", "label": "常数退化值",
+        "guards": ["degenerate_x_eq_1"], "is_degenerate": true,
+        "conclusion": { "text": "$\\sum_{k=0}^{N-1} 1^k = N$" } }
+    ],
+    "exclusions": [
+      { "case": { "text": "在 $x = 1$ 处直接代入分式 $\\frac{1 - x^N}{1 - x}$" },
+        "kind": "undefined | diverges | out_of_scope | counterexample",
+        "reason": "分母 1 - x 为零，分式本身无定义，须改走退化分支 constant_sum",
+        "evidence_spans": ["<span id>"] }
+    ],
+    "uses_entities": []
+  }
+}
+```
+
+- `problem_schema` 具有同构的 `guards`、`guard_partition`、`branches`（字段为 `constraints` + 必填 `task`）与 `exclusions`。
+- **主干式兼容**：非 `definition` 的 `declaration` 当 `branches` 非空时，顶层 `statement` 允许省略；`problem_schema` 当 `branches` 非空时，顶层 `task` 允许省略。
+- **身份 vs 可改**：`guards`、`guard_partition`、`branches` 属于数学承诺身份（不可在 `edit` 中篡改）；`exclusions` 可在 `SemanticEntityChanges` 中增补。
+- **分支对齐（`Alignment.target_branches`）**：
+  - `Alignment` 新增可选 `target_branches: ["<branch_id>", ...]`（支持 `edit` 修改）。
+  - 阻塞校验：`target_branches` 非空时，`target` 必须含 `branches` 且每个 `branch_id` 均存在、不重复（否则 `invalid_branch_ref`）。
+  - 审核提醒：当 `target` 含 `>= 2` 个分支，且对齐关系为 `expresses | logically_equivalent | exact_realization`，同时 `target_branches` 与 `lost_information` 均为空时，产出 `warn: branch_coverage_unspecified`。
+
+### S14.2 `DialectScope.local_symbols`（局部符号表）
+
+在 `DialectScope` 内新增可选 `local_symbols` 数组（`conventions` 仍至少 1 条，`local_symbols` 可通过 `EditDialectScope` 更新）：
+
+```jsonc
+{
+  "local_symbols": [
+    { "symbol": "A(x)", "role": "sequence | series | polynomial | function | operator | variable | index | constant",
+      "meaning": "数列 (a_n)_{n≥0} 的普通母函数",
+      "domain": { "text": "$R[[x]]$" },
+      "evidence_spans": ["<span id>"] }
+  ]
+}
+```
+
+- 同一 `DialectScope` 内 `symbol` 非空且不得重复（重复报 `duplicate_local_symbol`）。
+
+### S14.3 `RepresentationCore`（表示核 R）
+
+- `kind = "representation_core"`，稳定 id 前缀：`mathscape:representation-core/<64-hex>`（`EntityKind::RepresentationCore`）。
+- 用于表达跨教材共享的数学表示透镜（如数列表示 `ℕ → R`、形式幂级数表示 `R[[X]]`），是后续跨表示运输 `T` 的标准端点。
+
+```jsonc
+{
+  "home_theory": "<theory id>",
+  "preferred_labels": [
+    { "lang": "zh", "label": "形式幂级数表示核" },
+    { "lang": "en", "label": "Formal power series representation" }
+  ],
+  "aliases": ["FPS representation", "R[[X]] 表示"],
+  "plain_label": "形式幂级数表示 R[[X]]",
+  "carrier": { "text": "交换环 $R$ 上的形式幂级数环 $R[[X]]$", "note": "Lean: PowerSeries R" },
+  "represented_object": "<concept/declaration id> | null",
+  "binders": [ { "name": "R", "type": "CommRing", "role": "parameter" } ],
+  "operations": [
+    { "name": "coeff",
+      "signature": { "text": "$[X^n] F(X)$：提取第 $n$ 次项系数", "note": "PowerSeries.coeff R n" },
+      "note": "把形式幂级数还原到第 n 项系数" }
+  ],
+  "invariants_and_domain": [
+    { "text": "两个形式幂级数相等当且仅当对一切 $n \\in \\mathbb{N}$ 第 $n$ 次项系数相等，不要求实/复变数收敛。" }
+  ],
+  "conventions": [],
+  "mathlib_baseline": { "decl": "PowerSeries", "status": "unchecked", "note": "Mathlib.RingTheory.PowerSeries.Basic" },
+  "uses_entities": [],
+  "description": "把无穷数列编码为形式未定元 X 的幂级数以使用代数乘法与逆元。"
+}
+```
+
+- **检索与地图投影**：`workspace.search` 新增 `kinds: ["representation_core"]`（组名「表示核」）；主地图投影为 `GlobalSemantic` 层「表示核」六边形节点，并合成 `in_theory`、`of_concept`（若写了 `represented_object`）与 `uses_entity` 边。
+- **退役保护**：仍有活动 `RepresentationBinding` 指向该 `RepresentationCore` 时不得单独退役；仍有活动 `RepresentationCore` 归属某 `theory` 时不得退役该 `theory`。
+
+### S14.4 `RepresentationBinding`（表示绑定边）
+
+- `kind = "representation_binding"`，稳定 id 前缀：`mathscape:representation-binding/<64-hex>`（`EntityKind::RepresentationBinding`）。
+- 连接一张 `DialectScope` 与一个 `RepresentationCore`（地图关系 `binds_representation`：`约定卡 ──绑定为──► 表示核`）。单张 `DialectScope` 可同时绑定多个 `RepresentationCore`（如同时绑定数列表示核与形式幂级数表示核）。
+
+```jsonc
+{
+  "dialect_scope": "<dialect-scope id>",
+  "representation": "<representation-core id>",
+  "symbol_map": [
+    { "local_symbol": "g(t)",
+      "target_expr": { "text": "$F(X) = \\sum_{m \\ge 1} b_m X^m \\in \\mathbb{R}[[X]]$（常数项 $F_0 = 0$）" },
+      "role": "series",
+      "note": "把实变数 t 提升为形式未定元 X，首项从 1 起算故第 0 次项置 0" }
+  ],
+  "index_and_domain_adaptations": [
+    { "text": "灯塔从 $m = 1$ 起算，映射到共享形式幂级数时约定 $[X^0] F(X) = 0$，对 $m \\ge 1$ 有 $[X^m] F(X) = b_m$。" }
+  ],
+  "lost_information": [
+    { "short": "原书要求 (-r, r) 内绝对收敛",
+      "claim": "灯塔将 g(t) 定义为收敛区间 (-r, r) 上的实解析函数，而形式幂级数表示核不携带收敛半径信息",
+      "direction": "source_has_target_lacks" }
+  ],
+  "evidence_spans": ["<span id>"],
+  "status": "retrieved_candidate | context_checked | partially_aligned | ambiguous | disputed | incompatible",
+  "map_label": "绑定为形式幂级数（含收敛域剥离）",
+  "plain_note": "把实收敛幂级数当作形式幂级数使用时，代值求值需另挂收敛性账目。"
+}
+```
+
+- **身份 vs 可改**：`dialect_scope` 与 `representation` 为身份字段（不可 `edit`）；其余字段支持 `EditRepresentationBinding`。已接受对象支持用户专用 `SetRepresentationBindingReview`（与 `SetAlignmentReview` 对称）。
+- **挂账扩展**：`Debt.attached_to` 与 `Debt.paid_by[].ref` 支持指向 `RepresentationCore` 与 `RepresentationBinding`；当目标退役时挂接的未结 `Debt` 自动转 `obsolete`。
+- **双书黄金夹具**：`fixtures/emir/generating-functions-two-books/` 完整覆盖 S14.1–S14.4 全部结构与端到端测试。

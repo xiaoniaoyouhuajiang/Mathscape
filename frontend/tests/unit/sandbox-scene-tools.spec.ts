@@ -110,19 +110,51 @@ describe("propose_changes", () => {
     expect(resolvedAct.relations.find((relation) => relation.relationKind === "debt_on")?.target).toEqual({ local: "d" });
   });
 
+  it("compiles Stage 2 representation_core and representation_binding scenes and resolves debt_on through bindings", () => {
+    const argumentsValue = {
+      request_id: "stage2-scene-test",
+      rationale: "建立形式幂级数表示核与绑定",
+      proposed_objects: [
+        { local_ref: "rep", kind: "representation_core", op: "create", payload: { home_theory: "mathscape:semantic-entity/theory", represented_object: "mathscape:semantic-entity/concept", preferred_labels: [{ lang: "zh", label: "形式幂级数表示核" }], carrier: { text: "R[[X]]" } } },
+        { local_ref: "rb", kind: "representation_binding", op: "create", payload: { dialect_scope: "mathscape:dialect-scope/scope", representation: "$new:rep", symbol_map: [{ local_symbol: "g(t)", target_expr: { text: "F(X)" } }] } },
+        { local_ref: "debt_rb", kind: "debt", op: "create", payload: { attached_to: "$new:rb", obligation: "验证收敛区间" } },
+      ],
+    };
+    const staged = {
+      rep: "mathscape:representation-core/fps",
+      rb: "mathscape:representation-binding/yi-fps",
+      debt_rb: "mathscape:debt/radius",
+    };
+    const call = { type: "tool_call", payload: { call_id: "s2-scene", tool: "propose_changes", raw: { tool: "propose_changes", arguments: argumentsValue } } } as unknown as AgentEventLike;
+    const result = { type: "tool_result", payload: { call_id: "s2-scene", status: "ok", raw: { tool: "propose_changes", result: { structuredContent: { status: "staged", staged_ids: staged } } } } } as unknown as AgentEventLike;
+    const draft = compileToolScene(call, result);
+    expect(draft).not.toBeNull();
+    const act = draft!.act as ProposeAct;
+    expect(act.counts).toEqual({ units: 0, relations: 0, spans: 0, semantic: 3 });
+    expect(act.items.map((item) => item.visualKind)).toEqual(["representation_core", "debt"]);
+    expect(act.relations.map((r) => r.relationKind)).toEqual(
+      expect.arrayContaining(["in_theory", "uses_entity", "binds_representation", "debt_on"]),
+    );
+    expect(act.relations.find((r) => r.relationKind === "debt_on")?.target).toEqual({ local: "rep" });
+  });
+
   it("assigns distinct visual classes to semantic proposal items and edges", () => {
     const item = (visualKind: string) => ({ kind: "semantic", visualKind }) as Parameters<typeof proposeGhostClass>[0];
     expect(proposeGhostClass(item("theory"))).toContain("scene-ghost-theory");
     expect(proposeGhostClass(item("concept"))).toContain("scene-ghost-concept");
     expect(proposeGhostClass(item("declaration"))).toContain("scene-ghost-declaration");
     expect(proposeGhostClass(item("problem_schema"))).toContain("scene-ghost-problem-schema");
+    expect(proposeGhostClass(item("representation_core"))).toContain("scene-ghost-representation-core");
     expect(proposeGhostClass(item("debt"))).toContain("scene-ghost-debt");
     expect(proposeGhostClass(item("dialect_scope"))).toContain("scene-ghost-dialect-scope");
     expect(proposeItemMarkClass(item("theory"))).toContain("scene-propose-theory-hit");
     expect(proposeItemMarkClass(item("problem_schema"))).toContain("scene-propose-problem-schema-hit");
+    expect(proposeItemMarkClass(item("representation_core"))).toContain("scene-propose-representation-core-hit");
     expect(proposeItemMarkClass(item("dialect_scope"))).toContain("scene-propose-dialect-scope-hit");
     const relation = (relationKind: string) => ({ relation: relationKind, relationKind, localRef: relationKind, label: relationKind, source: { local: "a" }, target: { local: "b" }, blocked: [] }) as Parameters<typeof proposeRelationGhostClass>[0];
     expect(proposeRelationMarkClass(relation("alignment"))).toBe("scene-propose-alignment-edge");
+    expect(proposeRelationMarkClass(relation("binds_representation"))).toBe("scene-propose-alignment-edge");
+    expect(proposeRelationMarkClass(relation("uses_entity"))).toBe("scene-propose-uses-edge");
     expect(proposeRelationGhostClass(relation("debt_on"))).toContain("scene-ghost-debt-edge");
     expect(proposeRelationGhostClass(relation("scope_of"))).toContain("scene-ghost-scope-edge");
   });

@@ -232,6 +232,8 @@ pub(crate) fn write_patch(
                 | "Alignment"
                 | "Debt"
                 | "DialectScope"
+                | "RepresentationCore"
+                | "RepresentationBinding"
         ) {
             return Err(invalid("unsupported edit kind"));
         }

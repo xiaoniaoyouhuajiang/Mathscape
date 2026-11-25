@@ -122,6 +122,8 @@ fn project_source_map_internal(
                 | EntityKind::Alignment
                 | EntityKind::Debt
                 | EntityKind::DialectScope
+                | EntityKind::RepresentationCore
+                | EntityKind::RepresentationBinding
         ) {
             objects.insert(object.stable_id.clone(), object);
         }

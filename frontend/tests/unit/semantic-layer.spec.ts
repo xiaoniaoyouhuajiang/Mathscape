@@ -1,17 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
-import { alignmentPlainLabel, entityPlainLabel, reviewItemLabel, semanticDisplayLabel } from "../../src/semantic/labels";
+import {
+  alignmentPlainLabel,
+  entityPlainLabel,
+  representationBindingPlainLabel,
+  reviewItemLabel,
+  semanticDisplayLabel,
+  semanticObjectNoun,
+} from "../../src/semantic/labels";
 import { feedbackQuote, sendFeedbackToComposer } from "../../src/semantic/feedback";
 import { semanticReviewCards, proposalLevelReviewItems, reviewItemCode, refTitle } from "../../src/semantic/review-model";
 import { computeProposalMapScope, findProposalTargetForDomainObject } from "../../src/review/map-review-sync";
-import { computeSupersedesDiff, unwrapFieldChange } from "../../src/semantic/semantic-diff";
+import { computePayloadRevisionDiff, computeSupersedesDiff, unwrapFieldChange } from "../../src/semantic/semantic-diff";
 import { diagnosticLabel, titleOf } from "../../src/review/proposal-model";
 import { setLocale } from "../../src/i18n";
 import { filterOutlineUnits, formatMergedUnitDetail, materialSummary, mergeLearningUnits, studyProgressSummary } from "../../src/semantic/learning-view";
 import { recheckSummary } from "../../src/semantic/api";
 import { nodeTypeKey, NODE_TYPES } from "../../src/graph/taxonomy";
 import { semanticLayerClass } from "../../src/graph/cytoscape";
+import { SEMANTIC_NODE_KINDS, SEMANTIC_RELATION_KINDS } from "../../src/graph/graph-controller";
+import { focusSubgraph } from "../../src/graph/focus";
+import { buildStudySpinePosture } from "../../src/graph/study-posture";
 import { eventBus } from "../../src/core/events";
-import type { IncidenceNode } from "../../src/graph/projection";
+import type { IncidenceGraph, IncidenceNode } from "../../src/graph/projection";
 import type { PendingChangeSet } from "../../src/review/proposal-model";
 
 const BANNED = ["平移", "错开", "滑动"];
@@ -341,13 +351,202 @@ describe("semantic taxonomy", () => {
   it("maps semantic kinds to their own visuals", () => {
     expect(nodeTypeKey(node("SemanticEntity", "entity", "概念 · mathlib：Nat.fib（未核对）"))).toBe("shared_entity");
     expect(nodeTypeKey(node("SemanticEntity", "entity", "理论"))).toBe("shared_theory");
+    expect(nodeTypeKey(node("RepresentationCore"))).toBe("representation_core");
+    expect(nodeTypeKey(node("RepresentationBinding", "relation"))).toBe("representation_binding");
     expect(nodeTypeKey(node("Debt"))).toBe("debt");
     expect(nodeTypeKey(node("DialectScope"))).toBe("dialect_scope");
     expect(nodeTypeKey(node("Alignment", "relation"))).toBe("alignment_relation");
+    expect(NODE_TYPES.representation_core.shape).toBe("hexagon");
     expect(NODE_TYPES.debt.borderStyle).toBe("dashed");
     expect(semanticLayerClass("Debt")).toBe(" debt-edge");
     expect(semanticLayerClass("Alignment")).toBe(" alignment-edge");
+    expect(semanticLayerClass("RepresentationBinding")).toBe(" alignment-edge");
+    expect(semanticLayerClass("RepresentationCore")).toBe(" semantic-link-edge");
     expect(semanticLayerClass("SourceUnitRelation")).toBe("");
+    expect(SEMANTIC_NODE_KINDS.has("RepresentationCore")).toBe(true);
+    expect(SEMANTIC_RELATION_KINDS.has("RepresentationCore")).toBe(true);
+    expect(SEMANTIC_RELATION_KINDS.has("RepresentationBinding")).toBe(true);
+  });
+
+  it("covers Stage 2 S2 branches/guards/exclusions and S3 representation core/binding cards, diffs, focus, and study posture", () => {
+    expect(semanticObjectNoun("RepresentationCore")).toBe("表示核");
+    expect(semanticObjectNoun("RepresentationBinding")).toBe("表示绑定");
+    expect(representationBindingPlainLabel({
+      symbol_map: [{ local_symbol: "A(x)", target_expr: { text: "F ∈ R[[X]]" } }],
+      lost_information: [{ short: "剥离收敛半径" }],
+    })).toBe("绑定为（差异：剥离收敛半径）");
+    expect(representationBindingPlainLabel({
+      symbol_map: [{ local_symbol: "A(x)", target_expr: { text: "F ∈ R[[X]]" } }],
+    })).toBe("绑定为");
+    expect(reviewItemLabel("branch_coverage_unspecified")).toContain("分支");
+    expect(reviewItemLabel("duplicate_representation_binding")).toContain("已有另一条");
+    expect(diagnosticLabel("invalid_guard_ref")).toContain("守卫");
+    expect(diagnosticLabel("invalid_branch_ref")).toContain("分支");
+    expect(diagnosticLabel("duplicate_local_symbol")).toContain("符号");
+    setLocale("en");
+    try {
+      expect(semanticObjectNoun("RepresentationCore")).toBe("Representation core");
+      expect(semanticObjectNoun("RepresentationBinding")).toBe("Representation binding");
+      expect(reviewItemLabel("branch_coverage_unspecified")).toContain("branch");
+      expect(diagnosticLabel("invalid_guard_ref")).toContain("guard");
+    } finally {
+      setLocale("zh-CN");
+    }
+
+    const stage2Proposal: PendingChangeSet = {
+      changeSetId: "mathscape:change-set/stage2",
+      version: 1,
+      state: "staged",
+      investigationId: "inv",
+      roundId: "r-s2",
+      proposedBy: "agent:codex",
+      createdAt: "",
+      proposalFingerprint: "fp-s2",
+      baseCommit: null,
+      dependencies: [],
+      targetTitles: {
+        "mathscape:source-unit/yi-prop": "灯塔 · 命题 1.3.2",
+        "mathscape:semantic-entity/theory": "母函数与形式幂级数",
+        "mathscape:dialect-scope/ds-yi": "《灯塔》§1.3 约定",
+      },
+      proposal: {
+        proposed_objects: [
+          {
+            local_ref: "e.geom_fin",
+            kind: "semantic_entity",
+            op: "create",
+            payload: {
+              semantic_kind: "declaration",
+              home_theory: "mathscape:semantic-entity/theory",
+              plain_label: "有限几何级数求和",
+              preferred_labels: [{ lang: "zh", label: "有限几何级数求和" }],
+              declaration: {
+                declaration_kind: "theorem",
+                guards: [
+                  { guard_id: "g_ne_1", predicate: { text: "x ≠ 1" } },
+                  { guard_id: "g_eq_1", predicate: { text: "x = 1" } },
+                ],
+                branches: [
+                  { branch_id: "regular_x_ne_1", guards: ["g_ne_1"], conclusion: { text: "(1 - x^{N+1})/(1 - x)" } },
+                  { branch_id: "degenerate_x_eq_1", guards: ["g_eq_1"], is_degenerate: true, conclusion: { text: "N + 1" } },
+                ],
+                exclusions: [{ condition: { text: "x = 1 时不能代入分式" }, reason: { text: "分母 1 - x = 0" } }],
+              },
+            },
+          },
+          {
+            local_ref: "a.yi.geom_fin",
+            kind: "alignment",
+            op: "create",
+            payload: {
+              source: "mathscape:source-unit/yi-prop",
+              target: "$new:e.geom_fin",
+              relation: "specializes",
+              target_branches: ["regular_x_ne_1"],
+              status: "context_checked",
+            },
+          },
+          {
+            local_ref: "r.fps",
+            kind: "representation_core",
+            op: "create",
+            payload: {
+              home_theory: "mathscape:semantic-entity/theory",
+              plain_label: "形式幂级数表示核 R[[X]]",
+              preferred_labels: [{ lang: "zh", label: "形式幂级数表示核" }],
+              carrier: { text: "R[[X]]" },
+              operations: [{ name: "coeff", signature: { text: "[X^n] F(X)" } }],
+              mathlib_baseline: { decl: "PowerSeries", status: "unchecked" },
+            },
+          },
+          {
+            local_ref: "rb.yi.fps",
+            kind: "representation_binding",
+            op: "create",
+            payload: {
+              dialect_scope: "mathscape:dialect-scope/ds-yi",
+              representation: "$new:r.fps",
+              symbol_map: [{ local_symbol: "g(t)", target_expr: { text: "F(X) ∈ ℝ[[X]]" } }],
+              status: "partially_aligned",
+            },
+          },
+        ],
+      },
+      result: {
+        staged_ids: {
+          "e.geom_fin": "mathscape:semantic-entity/geom",
+          "a.yi.geom_fin": "mathscape:alignment/yi-geom",
+          "r.fps": "mathscape:representation-core/fps",
+          "rb.yi.fps": "mathscape:representation-binding/yi-fps",
+        },
+      },
+    };
+
+    const cards = semanticReviewCards(stage2Proposal);
+    expect(cards.map((c) => c.noun)).toEqual(["共享对象", "对齐线", "表示核", "表示绑定"]);
+    expect(cards[0].lines.some((l) => l.includes("regular_x_ne_1") && l.includes("degenerate_x_eq_1"))).toBe(true);
+    expect(cards[1].lines.some((l) => l.includes("regular_x_ne_1"))).toBe(true);
+    expect(cards[2].lines.some((l) => l.includes("R[[X]]"))).toBe(true);
+    expect(cards[2].lines).toContain("mathlib：PowerSeries（未核对）");
+    expect(cards[3].title).toContain("《灯塔》§1.3 约定");
+    expect(cards[3].lines.some((l) => l.includes("g(t)"))).toBe(true);
+
+    const diffs = computePayloadRevisionDiff(
+      "RepresentationBinding",
+      { dialect_scope: "s1", representation: "r1", status: "retrieved_candidate", symbol_map: [{ local_symbol: "g(t)", target_expr: { text: "old" } }] },
+      { dialect_scope: "s1", representation: "r1", status: "context_checked", symbol_map: [{ local_symbol: "g(t)", target_expr: { text: "new" } }] },
+      (id) => id ?? "—",
+    );
+    expect(diffs.length).toBeGreaterThanOrEqual(2);
+
+    // 2-hop heuristic focus bridges across two books' sections via DialectScope -> RepresentationCore <- DialectScope!
+    const crossBookGraph: IncidenceGraph = {
+      schema_version: "mathscape.graph-projection.v1",
+      lens: "landscape",
+      nodes: [
+        { id: "secA", element_kind: "entity", domain_id: "uA", domain_kind: "SourceSemanticUnit", relation_kind: null, layer: "source", label: "§2.1", summary: "节", lifecycle: "active", parent: null, boundary: false },
+        { id: "secB", element_kind: "entity", domain_id: "uB", domain_kind: "SourceSemanticUnit", relation_kind: null, layer: "source", label: "§1.3", summary: "节", lifecycle: "active", parent: null, boundary: false },
+        { id: "dsA", element_kind: "entity", domain_id: "dA", domain_kind: "DialectScope", relation_kind: null, layer: "global_semantic", label: "星港约定", summary: "约定卡", lifecycle: "active", parent: null, boundary: false },
+        { id: "dsB", element_kind: "entity", domain_id: "dB", domain_kind: "DialectScope", relation_kind: null, layer: "global_semantic", label: "灯塔约定", summary: "约定卡", lifecycle: "active", parent: null, boundary: false },
+        { id: "rep", element_kind: "entity", domain_id: "rFps", domain_kind: "RepresentationCore", relation_kind: null, layer: "global_semantic", label: "R[[X]]", summary: "表示核", lifecycle: "active", parent: null, boundary: false },
+        { id: "rel:scA", element_kind: "relation", domain_id: "dA", domain_kind: "DialectScope", relation_kind: "scope_of", layer: "global_semantic", label: "适用于", summary: null, lifecycle: "active", parent: null, boundary: false },
+        { id: "rel:scB", element_kind: "relation", domain_id: "dB", domain_kind: "DialectScope", relation_kind: "scope_of", layer: "global_semantic", label: "适用于", summary: null, lifecycle: "active", parent: null, boundary: false },
+        { id: "rel:rbA", element_kind: "relation", domain_id: "rbA", domain_kind: "RepresentationBinding", relation_kind: "binds_representation", layer: "alignment", label: "绑定为", summary: null, lifecycle: "active", parent: null, boundary: false },
+        { id: "rel:rbB", element_kind: "relation", domain_id: "rbB", domain_kind: "RepresentationBinding", relation_kind: "binds_representation", layer: "alignment", label: "绑定为", summary: null, lifecycle: "active", parent: null, boundary: false },
+      ],
+      edges: [
+        { id: "e1", source: "dsA", target: "rel:scA", relation_id: "dA", role: "scope", ordinal: 0, direction: "into_relation", directed: true },
+        { id: "e2", source: "rel:scA", target: "secA", relation_id: "dA", role: "anchor", ordinal: 1, direction: "out_of_relation", directed: true },
+        { id: "e3", source: "dsB", target: "rel:scB", relation_id: "dB", role: "scope", ordinal: 0, direction: "into_relation", directed: true },
+        { id: "e4", source: "rel:scB", target: "secB", relation_id: "dB", role: "anchor", ordinal: 1, direction: "out_of_relation", directed: true },
+        { id: "e5", source: "dsA", target: "rel:rbA", relation_id: "rbA", role: "dialect_scope", ordinal: 0, direction: "into_relation", directed: true },
+        { id: "e6", source: "rel:rbA", target: "rep", relation_id: "rbA", role: "representation", ordinal: 1, direction: "out_of_relation", directed: true },
+        { id: "e7", source: "dsB", target: "rel:rbB", relation_id: "rbB", role: "dialect_scope", ordinal: 0, direction: "into_relation", directed: true },
+        { id: "e8", source: "rel:rbB", target: "rep", relation_id: "rbB", role: "representation", ordinal: 1, direction: "out_of_relation", directed: true },
+      ],
+    };
+    const focused = focusSubgraph(crossBookGraph, "secA", { depth: 2, lens: "heuristic", isEntityVisible: () => true });
+    const focusedIds = new Set(focused.graph.nodes.map((n) => n.id));
+    expect(focusedIds.has("rep")).toBe(true);
+    expect(focusedIds.has("dsB")).toBe(true);
+    expect(focusedIds.has("secB")).toBe(true);
+
+    // Study posture places RepresentationCore on the left representation orbit (-460) beside DialectScope (-230)
+    const posture = buildStudySpinePosture(
+      crossBookGraph,
+      new Map(),
+      {
+        artifact_id: "artA",
+        units: [],
+        outline_units: [{ unit_id: "uA", unit_title: "§2.1", unit_kind: "section", study_status: "studying", category: "fresh", targets: [] }],
+        new_conventions: [],
+        open_debts: [],
+      },
+      "all",
+    );
+    expect(posture.inScopeNodeIds?.has("dsA")).toBe(true);
+    expect(posture.inScopeNodeIds?.has("rep")).toBe(true);
+    expect(posture.positions.get("rep")?.x).toBe(-460);
   });
 
   it("names shared objects in the UI language", () => {

@@ -171,7 +171,7 @@ const FIT_PADDING = 64;
 const FIT_MAX_ZOOM = 1.6;
 /** Nodes that hang off entities and follow them when they move. */
 const SATELLITE_SELECTOR = '[elementKind = "junction"], .ink-note-node';
-const MARK_CLASSES = "scene-propose-hit scene-propose-edge scene-propose-semantic-hit scene-propose-theory-hit scene-propose-concept-hit scene-propose-declaration-hit scene-propose-problem-schema-hit scene-propose-debt-hit scene-propose-dialect-scope-hit scene-propose-alignment-edge scene-propose-theory-edge scene-propose-uses-edge scene-propose-debt-edge scene-propose-scope-edge scene-blocked scene-blocked-flash scene-retired";
+const MARK_CLASSES = "scene-propose-hit scene-propose-edge scene-propose-semantic-hit scene-propose-theory-hit scene-propose-concept-hit scene-propose-declaration-hit scene-propose-problem-schema-hit scene-propose-representation-core-hit scene-propose-debt-hit scene-propose-dialect-scope-hit scene-propose-alignment-edge scene-propose-theory-edge scene-propose-uses-edge scene-propose-debt-edge scene-propose-scope-edge scene-blocked scene-blocked-flash scene-retired";
 const SCENE_CLASSES = `sandbox-echo-seed sandbox-echo-hit sandbox-echo-fade sandbox-echo-edge scene-parsing ${MARK_CLASSES}`;
 const GHOST_SELECTOR = ".scene-ghost, .scene-ghost-edge";
 const GHOST_SIZE = 34;
@@ -200,7 +200,9 @@ export function proposeGhostClass(item: ProposeItem): string {
 
 export function proposeRelationMarkClass(relation: ProposeRelation): string {
   switch (relation.relationKind) {
-    case "alignment": return "scene-propose-alignment-edge";
+    case "alignment":
+    case "binds_representation":
+      return "scene-propose-alignment-edge";
     case "in_theory": return "scene-propose-theory-edge";
     case "uses_entity": return "scene-propose-uses-edge";
     case "debt_on": return "scene-propose-debt-edge";

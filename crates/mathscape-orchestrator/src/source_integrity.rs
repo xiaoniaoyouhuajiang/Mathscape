@@ -12,7 +12,7 @@ pub fn is_live(o: &MapEditObject) -> bool {
 pub fn object_title(o: &MapEditObject) -> Option<String> {
     let p = &o.payload["payload"];
     let semantic = match o.kind.as_str() {
-        "SemanticEntity" => {
+        "SemanticEntity" | "RepresentationCore" => {
             // Impact titles are backend prose like the prefixes below: Chinese.
             mathscape_domain::semantic_display_label(p, mathscape_domain::DisplayLang::Zh)
         }
@@ -21,6 +21,12 @@ pub fn object_title(o: &MapEditObject) -> Option<String> {
                 .as_str()
                 .map(|label| format!("对齐线：{label}"))
                 .unwrap_or_else(|| "对齐线".into()),
+        ),
+        "RepresentationBinding" => Some(
+            p["map_label"]
+                .as_str()
+                .map(|label| format!("表示绑定：{label}"))
+                .unwrap_or_else(|| "表示绑定".into()),
         ),
         "Debt" => p["obligation"]
             .as_str()

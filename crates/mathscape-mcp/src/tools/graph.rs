@@ -37,9 +37,9 @@ use super::{GRAPH_GET, GRAPH_NEIGHBORHOOD, diagnostic, parse_args};
 use crate::McpWorkspace;
 use crate::investigation::{InvestigationMarks, investigation_landscape};
 
-const GET_DESCRIPTION: &str = "Resolve one id from the material & semantic landscape graph (artifacts, source units, source spans, ink snapshots, notes, plus semantic_entity, alignment, debt and dialect_scope) without expanding neighbors. Accepts any workspace.search hit id as-is (a snapshot_id is canonicalized to its snapshot artifact id; use canonical_id afterwards) and any graph id (source-span, source-relation, semantic-entity, alignment, debt, dialect-scope, projection-relation, conversion run). Returns kind (artifact|source_span|source_unit|semantic_entity|debt|dialect_scope|snapshot|note|relation|unsupported), entity_kind, label, lifecycle, parent_artifact_id, content_ref, semantic payload details (`semantic` for semantic_entity/debt/dialect_scope/alignment), plus edge_summary counts per relation and direction. No source body text: when content_ref is not null, call material.read with content_ref.artifact_id and content_ref.locator unchanged (md_byte_range, or pdf_pages 1-based). Notes, snapshots and ink spans get content_ref.type=ink_page (tool ink.page_image, node_id, page_id, stroke_ids for spans): pass content_ref.node_id and page_id to ink.page_image. content_ref is null with a content_unavailable diagnostic for units without located spans (no_span_locator; do not guess byte ranges), semantic objects (semantic_node), unsupported media, and relations. A missing id is status not_found with node null; an existing id of an unsupported kind is status ok with kind unsupported. Read-only.";
+const GET_DESCRIPTION: &str = "Resolve one id from the material & semantic landscape graph (artifacts, source units, source spans, ink snapshots, notes, plus semantic_entity, representation_core, alignment, representation_binding, debt and dialect_scope) without expanding neighbors. Accepts any workspace.search hit id as-is (a snapshot_id is canonicalized to its snapshot artifact id; use canonical_id afterwards) and any graph id (source-span, source-relation, semantic-entity, representation-core, alignment, representation-binding, debt, dialect-scope, projection-relation, conversion run). Returns kind (artifact|source_span|source_unit|semantic_entity|representation_core|debt|dialect_scope|snapshot|note|relation|unsupported), entity_kind, label, lifecycle, parent_artifact_id, content_ref, semantic payload details (`semantic` for semantic_entity/representation_core/debt/dialect_scope/alignment/representation_binding), plus edge_summary counts per relation and direction. No source body text: when content_ref is not null, call material.read with content_ref.artifact_id and content_ref.locator unchanged (md_byte_range, or pdf_pages 1-based). Notes, snapshots and ink spans get content_ref.type=ink_page (tool ink.page_image, node_id, page_id, stroke_ids for spans): pass content_ref.node_id and page_id to ink.page_image. content_ref is null with a content_unavailable diagnostic for units without located spans (no_span_locator; do not guess byte ranges), semantic objects (semantic_node), unsupported media, and relations. A missing id is status not_found with node null; an existing id of an unsupported kind is status ok with kind unsupported. Read-only.";
 
-const NEIGHBORHOOD_DESCRIPTION: &str = "Bounded typed-hop exploration from one node_id or 1-8 seed_ids over the material & semantic landscape graph (synthetic bridges: contains_span unit->span, has_part parent->child, located_in span->artifact, conversion pdf->markdown, has_snapshot note->ink snapshot, in_theory entity->theory, debt_on debt->holder, scope_of dialect_scope->anchor_unit, uses_entity entity->used, of_concept declaration->concept, paid_by debt->payer, note_link note->linked target; plus aligns unit->semantic_entity and source relations). `preset` selects the typed-hop lens when `edge_types` is omitted: `heuristic` (default: 0-cost provenance & context attachment for conventions/debts, 1-cost intra-source reasoning and cross-book semantic bridges, and hub-sink boundary on non-seed Theory shelves and foreign Artifacts so depth=2 crosses shared objects to other books/lemmas without hub explosion), `structural` (single-source hierarchy & reasoning only), `semantic_only` (shared semantic web only), or `raw` (legacy 1-relation-1-hop structural five [conversion, located_in, contains_span, has_part, has_snapshot]). Passing explicit `edge_types` without `preset` runs `raw` over those exact relation types; [] walks no edges. `depth` defaults to 1 (max 3; 0 = seeds only). `direction` defaults to both (out: from->to; in: to->from). `node_kinds` filters returned nodes only; traversal is not cut. `max_nodes` defaults to 40 (max 100), `max_edges` to 80 (max 200); over a cap returns status truncated, shallower layers first, never a dangling edge. Retired and trashed objects are hidden unless include_trashed; include_virtual must be false. Nodes carry depth, via_edge, parent_artifact_id and content_ref for material.read, never body text. Any missing seed makes the whole result not_found. Read-only.";
+const NEIGHBORHOOD_DESCRIPTION: &str = "Bounded typed-hop exploration from one node_id or 1-8 seed_ids over the material & semantic landscape graph (synthetic bridges: contains_span unit->span, has_part parent->child, located_in span->artifact, conversion pdf->markdown, has_snapshot note->ink snapshot, in_theory entity/rep_core->theory, debt_on debt->holder, scope_of dialect_scope->anchor_unit, uses_entity entity/rep_core->used, of_concept declaration/rep_core->concept, paid_by debt->payer, note_link note->linked target; plus aligns unit->semantic_entity, binds_representation dialect_scope->representation_core, and source relations). `preset` selects the typed-hop lens when `edge_types` is omitted: `heuristic` (default: 0-cost provenance & context attachment for conventions/debts, 1-cost intra-source reasoning and cross-book semantic/representation bridges, and hub-sink boundary on non-seed Theory shelves and foreign Artifacts so depth=2 crosses shared objects or representation cores to other books/lemmas without hub explosion), `structural` (single-source hierarchy & reasoning only), `semantic_only` (shared semantic & representation web only), or `raw` (legacy 1-relation-1-hop structural five [conversion, located_in, contains_span, has_part, has_snapshot]). Passing explicit `edge_types` without `preset` runs `raw` over those exact relation types; [] walks no edges. `depth` defaults to 1 (max 3; 0 = seeds only). `direction` defaults to both (out: from->to; in: to->from). `node_kinds` filters returned nodes only; traversal is not cut. `max_nodes` defaults to 40 (max 100), `max_edges` to 80 (max 200); over a cap returns status truncated, shallower layers first, never a dangling edge. Retired and trashed objects are hidden unless include_trashed; include_virtual must be false. Nodes carry depth, via_edge, parent_artifact_id and content_ref for material.read, never body text. Any missing seed makes the whole result not_found. Read-only.";
 
 const SNAPSHOT_MEDIA_TYPE: &str = "application/vnd.mathscape.ink-snapshot+json";
 const SYNTHETIC_PREFIX: &str = "mathscape:projection-relation/";
@@ -60,7 +60,7 @@ const ARTIFACT_HEAD_BYTES: u64 = 32 * 1024;
 const MAX_DANGLING_LISTED: usize = 20;
 
 /// Closed relation enum (contract §7 + semantic extensions), in contract order.
-pub const RELATION_TYPES: [&str; 21] = [
+pub const RELATION_TYPES: [&str; 22] = [
     "conversion",
     "located_in",
     "contains_span",
@@ -76,6 +76,7 @@ pub const RELATION_TYPES: [&str; 21] = [
     "applies_method",
     "cites",
     "aligns",
+    "binds_representation",
     "in_theory",
     "debt_on",
     "scope_of",
@@ -107,8 +108,9 @@ const STRUCTURAL_EDGE_TYPES: [&str; 15] = [
     "cites",
     "scope_of",
 ];
-const SEMANTIC_ONLY_EDGE_TYPES: [&str; 7] = [
+const SEMANTIC_ONLY_EDGE_TYPES: [&str; 8] = [
     "aligns",
+    "binds_representation",
     "in_theory",
     "debt_on",
     "uses_entity",
@@ -121,11 +123,12 @@ const PRESETS: [&str; 4] = ["heuristic", "structural", "semantic_only", "raw"];
 const INK_PAGE_TOOL: &str = "ink.page_image";
 /// Most stroke ids carried by one `ink_page` content ref.
 const MAX_CONTENT_STROKE_IDS: usize = 50;
-const NODE_KINDS: [&str; 8] = [
+const NODE_KINDS: [&str; 9] = [
     "artifact",
     "source_span",
     "source_unit",
     "semantic_entity",
+    "representation_core",
     "debt",
     "dialect_scope",
     "snapshot",
@@ -586,12 +589,13 @@ fn load(workspace: &McpWorkspace, investigation: Option<&str>) -> Result<Graph, 
         .map(|object| (object.stable_id.to_string(), object.clone()))
         .collect::<HashMap<_, _>>();
     let mut relation_revisions = HashMap::new();
-    for object in landscape
-        .sources()
-        .objects
-        .iter()
-        .filter(|o| o.relation || o.kind == EntityKind::Alignment)
-    {
+    for object in landscape.sources().objects.iter().filter(|o| {
+        o.relation
+            || matches!(
+                o.kind,
+                EntityKind::Alignment | EntityKind::RepresentationBinding
+            )
+    }) {
         relation_revisions.insert(object.stable_id.to_string(), object.revision_id.to_string());
     }
     for conversion in landscape.artifacts().conversions() {
@@ -788,6 +792,7 @@ impl Graph {
             EntityKind::SourceSpan => "source_span",
             EntityKind::SourceSemanticUnit => "source_unit",
             EntityKind::SemanticEntity => "semantic_entity",
+            EntityKind::RepresentationCore => "representation_core",
             EntityKind::Debt => "debt",
             EntityKind::DialectScope => "dialect_scope",
             _ => "unsupported",
@@ -1124,7 +1129,7 @@ impl Graph {
                             Err(r) => reason = Some(r),
                         }
                     }
-                    "semantic_entity" | "debt" | "dialect_scope" => {
+                    "semantic_entity" | "representation_core" | "debt" | "dialect_scope" => {
                         node.insert("lifecycle".into(), json!(projected.lifecycle_status()));
                         if let Some(object) = self.objects.get(canonical) {
                             let inner = inner_payload(&object.payload);
@@ -1177,8 +1182,10 @@ impl Graph {
                     json!(canonical.starts_with(SYNTHETIC_PREFIX)),
                 );
                 node.insert("endpoints".into(), self.endpoints_json(index));
-                if relation.kind() == EntityKind::Alignment
-                    && let Some(object) = self.objects.get(canonical)
+                if matches!(
+                    relation.kind(),
+                    EntityKind::Alignment | EntityKind::RepresentationBinding
+                ) && let Some(object) = self.objects.get(canonical)
                 {
                     node.insert("semantic".into(), inner_payload(&object.payload).clone());
                 }
@@ -1209,6 +1216,37 @@ impl Graph {
                         endpoints.push(json!({
                             "node_id": target,
                             "role": "target",
+                            "side": "to",
+                            "ordinal": Value::Null,
+                        }));
+                    }
+                    node.insert("endpoints".into(), Value::Array(endpoints));
+                    node.insert("semantic".into(), payload.clone());
+                    reason = Some("relation_node");
+                } else if object.kind == EntityKind::RepresentationBinding {
+                    let label = mathscape_query::semantic_graph::representation_binding_plain_label(
+                        payload,
+                    );
+                    node.insert("kind".into(), json!("relation"));
+                    node.insert("entity_kind".into(), json!(object.kind));
+                    node.insert("label".into(), json!(label));
+                    node.insert("lifecycle".into(), json!(object.lifecycle));
+                    node.insert("revision".into(), json!(object.revision_id.to_string()));
+                    node.insert("relation".into(), json!("binds_representation"));
+                    node.insert("synthetic".into(), json!(false));
+                    let mut endpoints = Vec::new();
+                    if let Some(scope) = str_at(payload, "/dialect_scope") {
+                        endpoints.push(json!({
+                            "node_id": scope,
+                            "role": "dialect_scope",
+                            "side": "from",
+                            "ordinal": Value::Null,
+                        }));
+                    }
+                    if let Some(rep) = str_at(payload, "/representation") {
+                        endpoints.push(json!({
+                            "node_id": rep,
+                            "role": "representation",
                             "side": "to",
                             "ordinal": Value::Null,
                         }));
@@ -1864,7 +1902,14 @@ fn evaluate_typed_hop(
         },
         NodeMode::SectionContext => match rel_kind {
             // Attach conventions anchored to this parent section (`scope --scope_of--> section`)
-            "scope_of" if backward => Some((0, NodeMode::Sink)),
+            "scope_of" if backward => Some((
+                0,
+                if preset == Preset::Heuristic {
+                    NodeMode::Full
+                } else {
+                    NodeMode::Sink
+                },
+            )),
             // Walk further up parent sections (`grandparent --has_part--> section`) to inherit conventions
             "has_part" if backward => Some((0, NodeMode::SectionContext)),
             // Attach provenance of the section
@@ -1939,9 +1984,18 @@ fn evaluate_typed_hop(
                     // scope --scope_of--> anchor_unit
                     "scope_of" => {
                         if backward {
-                            Some((0, NodeMode::Sink))
+                            Some((
+                                0,
+                                if preset == Preset::Heuristic {
+                                    NodeMode::Full
+                                } else {
+                                    NodeMode::Sink
+                                },
+                            ))
                         } else if current_is_seed {
                             Some((1, NodeMode::Full))
+                        } else if preset == Preset::Heuristic && forward {
+                            Some((0, NodeMode::SectionContext))
                         } else {
                             None
                         }

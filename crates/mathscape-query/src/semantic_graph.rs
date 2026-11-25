@@ -21,6 +21,7 @@ pub fn semantic_kind_label(kind: &str) -> &'static str {
         "declaration" => "精确说法",
         "theory" => "理论",
         "problem_schema" => "题型",
+        "representation_core" => "表示核",
         _ => "共享对象",
     }
 }
@@ -145,6 +146,20 @@ fn shorten(value: &str, max: usize) -> String {
 fn entity_summary(payload: &Value) -> String {
     let kind = semantic_kind_label(text(payload, "semantic_kind").unwrap_or(""));
     let mut parts = vec![kind.to_owned()];
+    let branches = ["/declaration/branches", "/problem_schema/branches"]
+        .iter()
+        .find_map(|ptr| payload.pointer(ptr).and_then(Value::as_array))
+        .map_or(0, Vec::len);
+    if branches > 0 {
+        parts.push(format!("{branches} 个分支"));
+    }
+    let exclusions = ["/declaration/exclusions", "/problem_schema/exclusions"]
+        .iter()
+        .find_map(|ptr| payload.pointer(ptr).and_then(Value::as_array))
+        .map_or(0, Vec::len);
+    if exclusions > 0 {
+        parts.push(format!("{exclusions} 处排除边界"));
+    }
     if let Some(baseline) = payload.get("mathlib_baseline") {
         let status = baseline_status_label(text(baseline, "status").unwrap_or(""));
         match text(baseline, "decl") {
@@ -160,6 +175,52 @@ fn entity_summary(payload: &Value) -> String {
         parts.push(format!("{conventions} 条约定"));
     }
     parts.join(" · ")
+}
+
+fn representation_core_summary(payload: &Value) -> String {
+    let mut parts = vec!["表示核".to_owned()];
+    if let Some(carrier) = payload
+        .pointer("/carrier/text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        parts.push(format!("承载：{}", shorten(carrier, 28)));
+    }
+    let ops = payload
+        .get("operations")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    if ops > 0 {
+        parts.push(format!("{ops} 个算子"));
+    }
+    if let Some(baseline) = payload.get("mathlib_baseline") {
+        let status = baseline_status_label(text(baseline, "status").unwrap_or(""));
+        if let Some(decl) = text(baseline, "decl") {
+            parts.push(format!("mathlib：{decl}（{status}）"));
+        }
+    }
+    parts.join(" · ")
+}
+
+/// 表示绑定的白话标签（契约 S14.4）。
+pub fn representation_binding_plain_label(payload: &Value) -> String {
+    if let Some(label) = text(payload, "map_label")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return label.to_owned();
+    }
+    let lost_first = payload
+        .get("lost_information")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|item| text(item, "short"))
+        .filter(|s| !s.trim().is_empty());
+    match lost_first {
+        Some(lost) => format!("绑定为（差异：{lost}）"),
+        None => "绑定为".to_owned(),
+    }
 }
 
 fn id_at(payload: &Value, key: &str) -> Option<StableId> {
@@ -207,6 +268,20 @@ pub(crate) fn project_semantic_layer(
             .lifecycle(object.lifecycle),
         );
     }
+    for object in of_kind(EntityKind::RepresentationCore) {
+        let payload = object_payload(object);
+        nodes.push(
+            ProjectionNode::new(
+                object.stable_id.clone(),
+                object.kind,
+                ViewLayer::GlobalSemantic,
+                entity_label(payload, lang),
+            )?
+            .group(group.clone())
+            .summary(representation_core_summary(payload))?
+            .lifecycle(object.lifecycle),
+        );
+    }
     for object in of_kind(EntityKind::DialectScope) {
         let payload = object_payload(object);
         let conventions: Vec<&str> = payload
@@ -214,6 +289,14 @@ pub(crate) fn project_semantic_layer(
             .and_then(Value::as_array)
             .map(|items| items.iter().filter_map(|c| text(c, "text")).collect())
             .unwrap_or_default();
+        let symbols = payload
+            .get("local_symbols")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        let mut summary = format!("约定卡 · {}", conventions.join("；"));
+        if symbols > 0 {
+            summary.push_str(&format!(" · {symbols} 个局部符号"));
+        }
         nodes.push(
             ProjectionNode::new(
                 object.stable_id.clone(),
@@ -222,7 +305,7 @@ pub(crate) fn project_semantic_layer(
                 text(payload, "label").unwrap_or("约定卡"),
             )?
             .group(group.clone())
-            .summary(format!("约定卡 · {}", conventions.join("；")))?
+            .summary(summary)?
             .lifecycle(object.lifecycle),
         );
     }
@@ -274,6 +357,14 @@ pub(crate) fn project_semantic_layer(
             "对齐线 · {relation} · {}",
             alignment_status_label(text(payload, "status").unwrap_or(""))
         );
+        let target_branches: Vec<&str> = payload
+            .get("target_branches")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if !target_branches.is_empty() {
+            summary.push_str(&format!(" · 覆盖分支：{}", target_branches.join("、")));
+        }
         if !lost.is_empty() {
             summary.push_str(&format!(" · 对不上的部分：{}", lost.join("；")));
         }
@@ -302,6 +393,53 @@ pub(crate) fn project_semantic_layer(
                 ],
             )?
             .relation_kind(ProjectionRelationKind::Aligns)
+            .summary(summary)?
+            .group(group.clone())
+            .lifecycle(object.lifecycle),
+        );
+    }
+    for object in of_kind(EntityKind::RepresentationBinding) {
+        let payload = object_payload(object);
+        let (Some(scope), Some(rep)) = (
+            id_at(payload, "dialect_scope"),
+            id_at(payload, "representation"),
+        ) else {
+            continue;
+        };
+        let label = representation_binding_plain_label(payload);
+        alignment_target.insert(object.stable_id.clone(), (rep.clone(), label.clone()));
+        if !node_ids.contains(&scope) || !node_ids.contains(&rep) {
+            continue;
+        }
+        let symbols: Vec<&str> = payload
+            .get("symbol_map")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|e| text(e, "local_symbol"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut summary = format!(
+            "表示绑定 · {}",
+            alignment_status_label(text(payload, "status").unwrap_or(""))
+        );
+        if !symbols.is_empty() {
+            summary.push_str(&format!(" · 符号：{}", symbols.join("、")));
+        }
+        relations.push(
+            ProjectionRelation::new(
+                object.stable_id.clone(),
+                object.kind,
+                ViewLayer::Alignment,
+                label,
+                vec![
+                    endpoint(scope, "dialect_scope", IncidenceDirection::IntoRelation)?,
+                    endpoint(rep, "representation", IncidenceDirection::OutOfRelation)?,
+                ],
+            )?
+            .relation_kind(ProjectionRelationKind::BindsRepresentation)
             .summary(summary)?
             .group(group.clone())
             .lifecycle(object.lifecycle),
@@ -397,6 +535,61 @@ pub(crate) fn project_semantic_layer(
                     object.lifecycle,
                 )?;
             }
+        }
+    }
+    for object in of_kind(EntityKind::RepresentationCore) {
+        let payload = object_payload(object);
+        if let Some(theory) = id_at(payload, "home_theory") {
+            synthetic(
+                "in-theory",
+                EntityKind::RepresentationCore,
+                ProjectionRelationKind::InTheory,
+                "属于理论",
+                "表示核所在的理论".to_owned(),
+                (&object.stable_id, "member"),
+                (&theory, "theory"),
+                object.lifecycle,
+            )?;
+        }
+        if let Some(concept) = id_at(payload, "represented_object")
+            && concept != object.stable_id
+        {
+            synthetic(
+                "of-concept",
+                EntityKind::RepresentationCore,
+                ProjectionRelationKind::OfConcept,
+                "编码对象",
+                "该表示核所编码的数学对象".to_owned(),
+                (&object.stable_id, "representation"),
+                (&concept, "concept"),
+                object.lifecycle,
+            )?;
+        }
+        let mut seen_used = BTreeSet::new();
+        for used in payload
+            .get("uses_entities")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(|value| StableId::parse(value).ok())
+        {
+            if Some(&used) == id_at(payload, "represented_object").as_ref()
+                || used == object.stable_id
+                || !seen_used.insert(used.clone())
+            {
+                continue;
+            }
+            synthetic(
+                "uses-entity",
+                EntityKind::RepresentationCore,
+                ProjectionRelationKind::UsesEntity,
+                "引用对象",
+                "该表示核引用的其他共享对象".to_owned(),
+                (&object.stable_id, "user"),
+                (&used, "used"),
+                object.lifecycle,
+            )?;
         }
     }
     for object in of_kind(EntityKind::DialectScope) {

@@ -392,7 +392,7 @@ const COMPILERS: Record<SceneToolName, Compiler> = {
     const supersedes = supersedesOf(args, payload);
     const blocks = proposalBlocks(payload);
     const units = list(args.proposed_objects).filter((item) => isObject(item) && item.kind === "source_unit").length;
-    const semanticArgs = list(args.proposed_objects).filter((item) => isObject(item) && typeof item.kind === "string" && ["semantic_entity", "alignment", "debt", "dialect_scope"].includes(item.kind)).length;
+    const semanticArgs = list(args.proposed_objects).filter((item) => isObject(item) && typeof item.kind === "string" && ["semantic_entity", "alignment", "representation_core", "representation_binding", "debt", "dialect_scope"].includes(item.kind)).length;
     const relations = list(args.proposed_relations).length;
     const stagedTail = semantic > 0 && counts.units === 0 && counts.relations === 0 && counts.spans === 0
       ? `语义项 ${semantic}`
@@ -515,7 +515,9 @@ const SEMANTIC_ENTITY_PREFIX = "mathscape:semantic-entity/";
 const DEBT_PREFIX = "mathscape:debt/";
 const DIALECT_SCOPE_PREFIX = "mathscape:dialect-scope/";
 const ALIGNMENT_PREFIX = "mathscape:alignment/";
-const STAGED_NODE_PREFIXES = [UNIT_PREFIX, SEMANTIC_ENTITY_PREFIX, DEBT_PREFIX, DIALECT_SCOPE_PREFIX];
+const REPRESENTATION_CORE_PREFIX = "mathscape:representation-core/";
+const REPRESENTATION_BINDING_PREFIX = "mathscape:representation-binding/";
+const STAGED_NODE_PREFIXES = [UNIT_PREFIX, SEMANTIC_ENTITY_PREFIX, REPRESENTATION_CORE_PREFIX, DEBT_PREFIX, DIALECT_SCOPE_PREFIX];
 const RELATION_PREFIX = "mathscape:source-relation/";
 const SPAN_PREFIX = "mathscape:source-span/";
 const MODE_LABEL = { resident: "常驻", oneshot: "一次性" } as const;
@@ -527,7 +529,14 @@ const clip = (text: string, max: number): string => ([...text].length > max ? `$
 const shortChangeSet = (id: string | undefined): string | undefined =>
   id ? `change-set/${shortStableId(id.replace(/^mathscape:change-set\//, ""), { max: 12, head: 8, tail: 0 })}` : undefined;
 
-const semanticPrefixes = [SEMANTIC_ENTITY_PREFIX, ALIGNMENT_PREFIX, DEBT_PREFIX, DIALECT_SCOPE_PREFIX];
+const semanticPrefixes = [
+  SEMANTIC_ENTITY_PREFIX,
+  ALIGNMENT_PREFIX,
+  REPRESENTATION_CORE_PREFIX,
+  REPRESENTATION_BINDING_PREFIX,
+  DEBT_PREFIX,
+  DIALECT_SCOPE_PREFIX,
+];
 
 export function stagedCounts(staged: unknown): ProposeAct["counts"] {
   const values = isObject(staged) ? Object.values(staged).map(str) : [];
@@ -631,6 +640,7 @@ function collectKeyStrings(value: unknown, key: string, out: string[] = []): str
 function semanticVisualKind(kind: string, body: Json): ProposeVisualKind {
   if (kind === "debt") return "debt";
   if (kind === "dialect_scope") return "dialect_scope";
+  if (kind === "representation_core") return "representation_core";
   const semanticKind = str(body.semantic_kind);
   if (semanticKind === "theory" || semanticKind === "concept" || semanticKind === "declaration" || semanticKind === "problem_schema") return semanticKind;
   return "concept";
@@ -720,7 +730,7 @@ function proposeAct(args: Json, payload: Json | undefined, status: SceneStatus, 
 
   for (const item of objects) {
     const local = str(item.local_ref);
-    if (!local || !["semantic_entity", "debt", "dialect_scope"].includes(String(item.kind))) continue;
+    if (!local || !["semantic_entity", "representation_core", "debt", "dialect_scope"].includes(String(item.kind))) continue;
     const body = semanticBody(item);
     const anchors = new Set(semanticAnchors(body, spans));
     const target = str(item.target_id);
@@ -745,9 +755,10 @@ function proposeAct(args: Json, payload: Json | undefined, status: SceneStatus, 
   const relations: ProposeRelation[] = [];
   const alignmentTargets = new Map<string, ProposeEnd>();
   for (const item of objects) {
-    if (item.kind !== "alignment") continue;
+    if (item.kind !== "alignment" && item.kind !== "representation_binding") continue;
     const local = str(item.local_ref);
-    const target = proposeEnd(semanticBody(item).target);
+    const body = semanticBody(item);
+    const target = proposeEnd(item.kind === "representation_binding" ? body.representation : body.target);
     if (local && target) alignmentTargets.set(local, target);
   }
 
@@ -771,12 +782,18 @@ function proposeAct(args: Json, payload: Json | undefined, status: SceneStatus, 
 
   for (const item of objects) {
     const local = str(item.local_ref);
-    if (!local || !["semantic_entity", "alignment", "debt", "dialect_scope"].includes(String(item.kind))) continue;
+    if (!local || !["semantic_entity", "representation_core", "alignment", "representation_binding", "debt", "dialect_scope"].includes(String(item.kind))) continue;
     const body = semanticBody(item);
     const self = proposalSelf(local, item);
     const stagedId = stagedOf(local);
     if (item.kind === "alignment") {
       addSemanticRelation(relations, item, local, "alignment", str(body.relation) ?? "expresses", proposeEnd(body.source), proposeEnd(body.target), stagedId, blocksOf);
+    } else if (item.kind === "representation_binding") {
+      addSemanticRelation(relations, item, local, "binds_representation", "binds_representation", proposeEnd(body.dialect_scope), proposeEnd(body.representation), stagedId, blocksOf);
+    } else if (item.kind === "representation_core") {
+      addSemanticRelation(relations, item, `${local}:in_theory`, "in_theory", "in_theory", self, proposeEnd(body.home_theory), undefined, blocksOf);
+      const uses = [body.represented_object, ...ids(body.uses_entities)];
+      uses.forEach((target, index) => addSemanticRelation(relations, item, `${local}:uses_entity:${index}`, "uses_entity", "uses_entity", self, proposeEnd(target), undefined, blocksOf));
     } else if (item.kind === "semantic_entity") {
       addSemanticRelation(relations, item, `${local}:in_theory`, "in_theory", "in_theory", self, proposeEnd(body.home_theory), undefined, blocksOf);
       const declaration = isObject(body.declaration) ? body.declaration : undefined;

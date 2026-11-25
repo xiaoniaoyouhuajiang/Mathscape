@@ -14,7 +14,7 @@ use super::{WORKSPACE_SEARCH, diagnostic, parse_args, to_object};
 use crate::McpWorkspace;
 use crate::investigation::{investigation_overlay, overlay_search_corpus};
 
-const DESCRIPTION: &str = "Search the Mathscape workspace (notes, source units, theories, shared objects, materials, snapshots) with the same unified matcher as the desktop search box. Returns hits grouped by kind; highlights are UTF-16 [start,end) offsets into each hit title. Material hits that belong to a canonical markdown view include canonical_id, coverage and partial. Use kinds=[\"theory\"] (often with scope=\"investigation\") to find existing or staged theories before proposing a new one. Read-only; this tool never runs Marker.";
+const DESCRIPTION: &str = "Search the Mathscape workspace (notes, source units, theories, shared objects, representation cores, materials, snapshots) with the same unified matcher as the desktop search box. Returns hits grouped by kind; highlights are UTF-16 [start,end) offsets into each hit title. Material hits that belong to a canonical markdown view include canonical_id, coverage and partial. Use kinds=[\"theory\"] or kinds=[\"representation_core\"] (often with scope=\"investigation\") to find existing or staged theories and representation cores before proposing a new one. Read-only; this tool never runs Marker.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,14 +43,14 @@ pub(super) fn definition() -> Value {
                 },
                 "kinds": {
                     "type": "array",
-                    "items": { "type": "string", "enum": ["note", "source_unit", "theory", "semantic_entity", "material", "snapshot"] },
+                    "items": { "type": "string", "enum": ["note", "source_unit", "theory", "semantic_entity", "representation_core", "material", "snapshot"] },
                     "description": "Restrict to these kinds; empty or omitted means all.",
                 },
                 "scope": {
                     "type": "string",
                     "enum": ["accepted", "investigation"],
                     "default": "accepted",
-                    "description": "accepted searches the formal map; investigation also includes active staged source units, theories and shared objects of the current investigation.",
+                    "description": "accepted searches the formal map; investigation also includes active staged source units, theories, shared objects and representation cores of the current investigation.",
                 },
                 "include_trashed": {
                     "type": "boolean",

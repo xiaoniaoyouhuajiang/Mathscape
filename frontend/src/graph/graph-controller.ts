@@ -60,10 +60,17 @@ export const PRESET_NODE_KINDS: Record<PresetName, ReadonlySet<string>> = {
 };
 
 /** 「共享对象」开关同时控制语义层的约定卡、一笔账和它们的连线。 */
-export const SEMANTIC_NODE_KINDS: ReadonlySet<string> = new Set(["SemanticEntity", "DialectScope", "Debt"]);
+export const SEMANTIC_NODE_KINDS: ReadonlySet<string> = new Set([
+  "SemanticEntity",
+  "RepresentationCore",
+  "DialectScope",
+  "Debt",
+]);
 export const SEMANTIC_RELATION_KINDS: ReadonlySet<string> = new Set([
   "Alignment",
+  "RepresentationBinding",
   "SemanticEntity",
+  "RepresentationCore",
   "Debt",
   "DialectScope",
 ]);
@@ -374,13 +381,14 @@ export class GraphController {
 
   canFocus(node: IncidenceNode): boolean {
     if (node.element_kind === "relation") {
-      return node.domain_kind === "Alignment";
+      return node.domain_kind === "Alignment" || node.domain_kind === "RepresentationBinding";
     }
     return (
       node.element_kind === "entity" &&
       (node.domain_kind === "SourceArtifact" ||
         node.domain_kind === "SourceSemanticUnit" ||
         node.domain_kind === "SemanticEntity" ||
+        node.domain_kind === "RepresentationCore" ||
         node.domain_kind === "DialectScope" ||
         node.domain_kind === "Debt")
     );

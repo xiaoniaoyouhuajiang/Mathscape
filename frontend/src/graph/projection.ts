@@ -40,6 +40,7 @@ export type RelationKind =
   | "applies_method"
   | "cites"
   | "aligns"
+  | "binds_representation"
   | "in_theory"
   | "debt_on"
   | "scope_of"
@@ -78,6 +79,7 @@ export function relationHopClass(kind: RelationKind | null): HopClass {
     case "cites":
       return "source_reasoning";
     case "aligns":
+    case "binds_representation":
     case "uses_entity":
     case "of_concept":
     case "paid_by":

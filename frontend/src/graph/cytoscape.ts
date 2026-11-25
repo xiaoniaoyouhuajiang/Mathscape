@@ -383,10 +383,12 @@ function contractionClass(domainKind: string | null): string {
 export function semanticLayerClass(domainKind: string | null): string {
   switch (domainKind) {
     case "Alignment":
+    case "RepresentationBinding":
       return " alignment-edge";
     case "Debt":
       return " debt-edge";
     case "SemanticEntity":
+    case "RepresentationCore":
     case "DialectScope":
       return " semantic-link-edge";
     default:

@@ -25,6 +25,8 @@ pub struct SearchCorpus {
     pub source_units: Vec<SearchSourceUnitRow>,
     #[serde(default)]
     pub semantic_entities: Vec<SearchSemanticEntityRow>,
+    #[serde(default)]
+    pub representation_cores: Vec<SearchSemanticEntityRow>,
     /// Registered canonical markdown lineages (the same rows the map folds),
     /// so the material provider collapses folded snapshots into one hit.
     #[serde(default)]
@@ -285,18 +287,20 @@ pub fn search_semantic_entity_row_from_payload(
     }
 }
 
-fn semantic_entities(
+fn semantic_rows_by_kind(
     connection: &Connection,
+    entity_kind: &str,
+    default_semantic_kind: Option<&str>,
     lang: mathscape_domain::DisplayLang,
 ) -> Result<Vec<SearchSemanticEntityRow>, SqliteStoreError> {
     let mut statement = connection.prepare(
         "SELECT o.object_id, r.lifecycle, r.payload_json
          FROM map_objects o
          JOIN map_object_revisions r ON r.object_id=o.object_id AND r.revision_id=o.current_revision
-         WHERE o.entity_kind='SemanticEntity' AND o.object_shape='entity'
+         WHERE o.entity_kind=?1 AND o.object_shape='entity'
          ORDER BY o.object_id",
     )?;
-    let rows = statement.query_map([], |row| {
+    let rows = statement.query_map([entity_kind], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -307,9 +311,14 @@ fn semantic_entities(
     for row in rows {
         let (object_id, lifecycle, payload_json) = row?;
         let payload: Value = serde_json::from_str(&payload_json)?;
-        result.push(search_semantic_entity_row_from_payload(
-            object_id, lifecycle, &payload, lang,
-        ));
+        let mut entry =
+            search_semantic_entity_row_from_payload(object_id, lifecycle, &payload, lang);
+        if entry.semantic_kind.is_none()
+            && let Some(kind) = default_semantic_kind
+        {
+            entry.semantic_kind = Some(kind.to_owned());
+        }
+        result.push(entry);
     }
     Ok(result)
 }
@@ -326,7 +335,13 @@ impl SqliteArtifactStore {
             snapshots: snapshots(&transaction)?,
             artifacts: artifacts(&transaction)?,
             source_units: source_units(&transaction)?,
-            semantic_entities: semantic_entities(&transaction, lang)?,
+            semantic_entities: semantic_rows_by_kind(&transaction, "SemanticEntity", None, lang)?,
+            representation_cores: semantic_rows_by_kind(
+                &transaction,
+                "RepresentationCore",
+                Some("representation_core"),
+                lang,
+            )?,
             canonical_markdown: crate::canonical_markdown::list_canonical_markdown(&transaction)?,
         };
         transaction.commit()?;

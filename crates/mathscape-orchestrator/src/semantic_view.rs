@@ -484,6 +484,21 @@ pub fn learning_view_with_context(
             continue;
         };
         let scope_label = text(p, "label").unwrap_or("约定卡").to_owned();
+        let holders = material_holders.entry(material.as_str()).or_default();
+        holders.insert(scope.object_id.as_str());
+        for binding in snapshot
+            .objects
+            .iter()
+            .filter(|o| o.kind == "RepresentationBinding" && live(o))
+        {
+            let bp = payload(binding);
+            if text(bp, "dialect_scope") == Some(scope.object_id.as_str()) {
+                holders.insert(binding.object_id.as_str());
+                if let Some(rep) = text(bp, "representation") {
+                    holders.insert(rep);
+                }
+            }
+        }
         let entry = by_material
             .entry(material.as_str())
             .or_insert_with(|| make_material(material));
@@ -620,7 +635,12 @@ pub fn semantic_object_detail(
     let o = snapshot.objects.iter().find(|o| o.object_id == object_id)?;
     if !matches!(
         o.kind.as_str(),
-        "SemanticEntity" | "Alignment" | "Debt" | "DialectScope"
+        "SemanticEntity"
+            | "Alignment"
+            | "Debt"
+            | "DialectScope"
+            | "RepresentationCore"
+            | "RepresentationBinding"
     ) {
         return None;
     }
@@ -694,6 +714,27 @@ pub fn semantic_object_title_in(
             return format!("{src} —{label}→ {dst}");
         }
     }
+    if o.kind == "RepresentationBinding" {
+        let p = payload(o);
+        let label = text(p, "map_label").unwrap_or("绑定为");
+        let src = text(p, "dialect_scope").and_then(|id| {
+            snapshot
+                .objects
+                .iter()
+                .find(|cand| cand.object_id == id)
+                .map(|cand| title(cand, lang))
+        });
+        let dst = text(p, "representation").and_then(|id| {
+            snapshot
+                .objects
+                .iter()
+                .find(|cand| cand.object_id == id)
+                .map(|cand| title(cand, lang))
+        });
+        if let (Some(src), Some(dst)) = (src, dst) {
+            return format!("{src} —{label}→ {dst}");
+        }
+    }
     title(o, lang)
 }
 
@@ -717,13 +758,14 @@ fn relation_plain(relation: &str) -> &'static str {
 fn title(o: &MapEditObject, lang: mathscape_domain::DisplayLang) -> String {
     let p = payload(o);
     match o.kind.as_str() {
-        "SemanticEntity" => entity_label(o, lang),
+        "SemanticEntity" | "RepresentationCore" => entity_label(o, lang),
         "Alignment" => p
             .get("map_label")
             .and_then(Value::as_str)
             .or_else(|| p.get("relation").and_then(Value::as_str))
             .unwrap_or("对齐线")
             .to_owned(),
+        "RepresentationBinding" => text(p, "map_label").unwrap_or("表示绑定").to_owned(),
         "DialectScope" => text(p, "label").unwrap_or("约定卡").to_owned(),
         "Debt" => text(p, "obligation").unwrap_or("一笔账").to_owned(),
         "SourceSpan" => text(p, "quote")

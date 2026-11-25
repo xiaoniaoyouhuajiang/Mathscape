@@ -261,6 +261,26 @@ pub fn overlay_search_corpus(corpus: &mut SearchCorpus, overlay: &InvestigationO
                     corpus.semantic_entities.push(row);
                 }
             }
+            "RepresentationCore" => {
+                let mut row = search_semantic_entity_row_from_payload(
+                    obj.object_id.clone(),
+                    obj.lifecycle.clone(),
+                    &obj.payload,
+                    mathscape_domain::DisplayLang::Zh,
+                );
+                if row.semantic_kind.is_none() {
+                    row.semantic_kind = Some("representation_core".into());
+                }
+                if let Some(pos) = corpus
+                    .representation_cores
+                    .iter()
+                    .position(|existing| existing.object_id == obj.object_id)
+                {
+                    corpus.representation_cores[pos] = row;
+                } else {
+                    corpus.representation_cores.push(row);
+                }
+            }
             _ => {}
         }
     }

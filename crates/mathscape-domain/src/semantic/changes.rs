@@ -25,6 +25,8 @@ pub struct SemanticEntityChanges {
     pub description: FieldChange<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uses_entities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclusions: Option<Vec<ExclusionSpec>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -36,6 +38,8 @@ pub struct AlignmentChanges {
     pub source_context: Option<SourceContext>,
     #[serde(default, skip_serializing_if = "FieldChange::is_keep")]
     pub target_context: FieldChange<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_branches: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameter_map: Option<Vec<ParameterMapEntry>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,6 +81,58 @@ pub struct DialectScopeChanges {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conventions: Option<Vec<Convention>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_symbols: Option<Vec<LocalSymbolEntry>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RepresentationCoreChanges {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_theory: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_labels: Option<Vec<PreferredLabel>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aliases: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "FieldChange::is_keep")]
+    pub plain_label: FieldChange<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carrier: Option<StructuredText>,
+    #[serde(default, skip_serializing_if = "FieldChange::is_keep")]
+    pub represented_object: FieldChange<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binders: Option<Vec<Binder>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operations: Option<Vec<RepresentationOperation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invariants_and_domain: Option<Vec<StructuredText>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conventions: Option<Vec<Convention>>,
+    #[serde(default, skip_serializing_if = "FieldChange::is_keep")]
+    pub mathlib_baseline: FieldChange<MathlibBaseline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uses_entities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "FieldChange::is_keep")]
+    pub description: FieldChange<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RepresentationBindingChanges {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol_map: Option<Vec<SymbolBindingEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_and_domain_adaptations: Option<Vec<StructuredText>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost_information: Option<Vec<LostInformation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_spans: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<AlignmentReviewStatus>,
+    #[serde(default, skip_serializing_if = "FieldChange::is_keep")]
+    pub map_label: FieldChange<String>,
+    #[serde(default, skip_serializing_if = "FieldChange::is_keep")]
+    pub plain_note: FieldChange<String>,
 }
 
 /// Result of one server-side mathlib lookup (decision S13-8). Only the

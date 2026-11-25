@@ -104,6 +104,7 @@ const MAX_INDENT_DEPTH = 4;
 const ROW_STEP_Y = 74;
 const SECTION_EXTRA_GAP_Y = 20;
 const DIALECT_MARGIN_X = -230;
+const REPRESENTATION_ORBIT_X = -460;
 const SEMANTIC_ORBIT_X = 480;
 const OUTER_ORBIT_X = 740;
 
@@ -320,6 +321,7 @@ export function buildStudyOverviewPosture(
     if (
       node.domain_kind === "SourceSemanticUnit" ||
       node.domain_kind === "SemanticEntity" ||
+      node.domain_kind === "RepresentationCore" ||
       node.domain_kind === "DialectScope" ||
       node.domain_kind === "Debt"
     ) {
@@ -561,6 +563,34 @@ export function buildStudySpinePosture(
   );
   for (const [scopeId, y] of scopeOrbit) {
     positions.set(scopeId, { x: DIALECT_MARGIN_X, y });
+  }
+
+  // Place RepresentationCores bound to in-scope DialectScopes on left representation orbit
+  const repSamples = new Map<string, number[]>();
+  for (const rel of relations) {
+    if (rel.node.relation_kind !== "binds_representation") continue;
+    const scopeEndpoint = rel.all.find((id) => scopeOrbit.has(id));
+    const repEndpoint = rel.all.find((id) => entitiesById.get(id)?.domain_kind === "RepresentationCore");
+    if (scopeEndpoint && repEndpoint) {
+      inScopeNodeIds.add(repEndpoint);
+      inScopeRelationIds.add(rel.node.id);
+      inScopeRelationIds.add(rel.relKey);
+      const scopeY = positions.get(scopeEndpoint)?.y ?? TOP_Y;
+      const list = repSamples.get(repEndpoint) ?? [];
+      list.push(scopeY);
+      repSamples.set(repEndpoint, list);
+    }
+  }
+  const repOrbit = relaxVerticalOrbit(
+    [...repSamples.entries()].map(([id, ys]) => ({
+      id,
+      idealY: ys.reduce((a, b) => a + b, 0) / ys.length,
+    })),
+    92,
+  );
+  for (const [repId, y] of repOrbit) {
+    positions.set(repId, { x: REPRESENTATION_ORBIT_X, y });
+    nodeClasses.set(repId, ["orbit-semantic-node"]);
   }
 
   // Place primary SemanticEntities on Right Orbit (`SEMANTIC_ORBIT_X`)
@@ -897,6 +927,7 @@ export function buildStudyNodeBriefing(
   // Fallback briefing for SemanticEntity / Debt / DialectScope nodes
   if (
     node.domain_kind === "SemanticEntity" ||
+    node.domain_kind === "RepresentationCore" ||
     node.domain_kind === "Debt" ||
     node.domain_kind === "DialectScope"
   ) {

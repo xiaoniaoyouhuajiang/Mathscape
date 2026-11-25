@@ -70,6 +70,8 @@ pub enum ProjectionRelationKind {
     OfConcept,
     /// Semantic layer: a debt discharged (or claimed paid) by an object.
     PaidBy,
+    /// Semantic layer: a dialect scope bound to a shared representation core.
+    BindsRepresentation,
     #[default]
     Unknown,
 }
@@ -127,9 +129,11 @@ impl ProjectionRelationKind {
             | Self::Explains
             | Self::AppliesMethod
             | Self::Cites => HopClass::SourceReasoning,
-            Self::Aligns | Self::UsesEntity | Self::OfConcept | Self::PaidBy => {
-                HopClass::SemanticBridge
-            }
+            Self::Aligns
+            | Self::UsesEntity
+            | Self::OfConcept
+            | Self::PaidBy
+            | Self::BindsRepresentation => HopClass::SemanticBridge,
             Self::InTheory => HopClass::ContainerHub,
             Self::Unknown => HopClass::Forbidden,
         }

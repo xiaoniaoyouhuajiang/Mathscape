@@ -931,6 +931,8 @@ pub fn get_edit_context(snapshot: &MapEditSnapshot, id: &str) -> Result<EditCont
                     | "Alignment"
                     | "Debt"
                     | "DialectScope"
+                    | "RepresentationCore"
+                    | "RepresentationBinding"
             ),
     })
 }

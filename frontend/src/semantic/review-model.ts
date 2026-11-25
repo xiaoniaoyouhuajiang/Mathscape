@@ -3,6 +3,7 @@
  * 变成白话卡片，并挑出不阻塞的审核项。纯函数，便于单测；不显示 JSON。
  */
 import { texToPlain, truncatePlain } from "../graph/tex-plain";
+import { t } from "../i18n";
 import type { PendingChangeSet, ProposalDiagnostic, ProposedObject } from "../review/proposal-model";
 import {
   alignmentPlainLabel,
@@ -12,6 +13,7 @@ import {
   entityPlainLabel,
   failureModeLabel,
   lostDirectionLabel,
+  representationBindingPlainLabel,
   reviewItemLabel,
   SEMANTIC_PROPOSAL_KINDS,
   SEMANTIC_REVIEW_CODES,
@@ -86,7 +88,8 @@ export function refTitle(item: PendingChangeSet, ref: string | null): string {
   const object = (item.proposal.proposed_objects ?? []).find((candidate) => candidate.local_ref === local);
   if (object) {
     const body = bodyOf(item, object);
-    if (object.kind === "semantic_entity") return cleanPlain(entityPlainLabel(body), 60);
+    if (object.kind === "semantic_entity" || object.kind === "representation_core") return cleanPlain(entityPlainLabel(body), 60);
+    if (object.kind === "representation_binding") return cleanPlain(representationBindingPlainLabel(body), 60);
     const named = str(body.display_title) ?? str(body.label) ?? str(body.obligation);
     return named ? cleanPlain(named, 60) : local;
   }
@@ -114,11 +117,21 @@ function lineFor(item: PendingChangeSet, object: ProposedObject, body: Json): { 
           if (stmt && str(stmt.text)) {
             lines.push(`${declarationKindLabel(str(decl.declaration_kind))}：${cleanPlain(str(stmt.text)!, 72)}`);
           }
+          const branches = arr(decl.branches);
+          if (branches.length > 0) {
+            lines.push(`${t("semantic.s2.branchCount", { count: branches.length })}: ${branches.map((b) => str(b.label) ?? str(b.branch_id) ?? "").filter(Boolean).join(" / ")}`);
+          }
+          const exclusions = arr(decl.exclusions);
+          if (exclusions.length > 0) {
+            lines.push(t("semantic.s2.exclusionCount", { count: exclusions.length }));
+          }
         }
         const schema = body.problem_schema as Json | undefined;
         if (schema) {
           const task = schema.task as Json | undefined;
           if (task && str(task.text)) lines.push(`任务：${cleanPlain(str(task.text)!, 72)}`);
+          const branches = arr(schema.branches);
+          if (branches.length > 0) lines.push(t("semantic.s2.branchCount", { count: branches.length }));
         }
         if (!decl && !schema && str(body.description)) {
           lines.push(`说明：${cleanPlain(str(body.description)!, 72)}`);
@@ -146,6 +159,12 @@ function lineFor(item: PendingChangeSet, object: ProposedObject, body: Json): { 
       if (object.op === "create") {
         if (body.status) {
           lines.push(`状态：${alignmentStatusLabel(str(body.status))}（只是候选，你在审核页确认后才算审阅）`);
+        }
+        const targetBranches = Array.isArray(body.target_branches)
+          ? body.target_branches.map(str).filter((v): v is string => !!v)
+          : [];
+        if (targetBranches.length > 0) {
+          lines.push(`${t("semantic.s2.targetBranches")}: ${targetBranches.join(", ")}`);
         }
         for (const entry of arr(body.parameter_map)) {
           if (str(entry.map)) lines.push(`参数对照：${cleanPlain(str(entry.map)!, 72)}`);
@@ -179,10 +198,55 @@ function lineFor(item: PendingChangeSet, object: ProposedObject, body: Json): { 
       const rawTitle = str(body.obligation) ?? refTitle(item, object.target_id ?? null);
       return { title: cleanPlain(rawTitle, 64), lines };
     }
+    case "representation_core": {
+      if (object.op === "create") {
+        if (body.home_theory) lines.push(`${t("semantic.common.homeTheory")}：${refTitle(item, str(body.home_theory))}`);
+        const carrier = body.carrier as Json | undefined;
+        if (carrier && str(carrier.text)) {
+          lines.push(`${t("semantic.s3.carrier")}: ${cleanPlain(str(carrier.text)!, 72)}`);
+        }
+        const ops = arr(body.operations);
+        if (ops.length > 0) {
+          lines.push(`${t("semantic.s3.operationsHeading")}: ${ops.map((op) => str(op.name) ?? "").filter(Boolean).join(", ")}`);
+        }
+        const baseline = body.mathlib_baseline as Json | null | undefined;
+        if (baseline && str(baseline.decl)) {
+          lines.push(t("semantic.common.mathlibFmt", { decl: str(baseline.decl)!, status: baselineStatusLabel(str(baseline.status)) }));
+        } else if (baseline) {
+          lines.push(t("semantic.common.baselineNone"));
+        }
+      }
+      const title =
+        object.op === "create"
+          ? cleanPlain(entityPlainLabel(body), 64)
+          : refTitle(item, object.target_id ?? null);
+      return { title, lines };
+    }
+    case "representation_binding": {
+      const plain = cleanPlain(representationBindingPlainLabel(body), 64);
+      if (object.op === "create") {
+        if (body.status) lines.push(alignmentStatusLabel(str(body.status)));
+        for (const entry of arr(body.symbol_map)) {
+          const dst = entry.target_expr as Json | undefined;
+          if (str(entry.local_symbol) && dst && str(dst.text)) {
+            lines.push(`${str(entry.local_symbol)} -> ${cleanPlain(str(dst.text)!, 56)}`);
+          }
+        }
+      }
+      const title =
+        object.op === "create"
+          ? `${refTitle(item, str(body.dialect_scope))} —${plain}→ ${refTitle(item, str(body.representation))}`
+          : refTitle(item, object.target_id ?? null);
+      return { title, lines };
+    }
     default: {
       if (object.op === "create") {
         for (const convention of arr(body.conventions)) {
           if (str(convention.text)) lines.push(cleanPlain(str(convention.text)!, 72));
+        }
+        const symbols = arr(body.local_symbols);
+        if (symbols.length > 0) {
+          lines.push(`${t("semantic.s3.localSymbolsHeading")}: ${symbols.map((s) => str(s.symbol) ?? "").filter(Boolean).join(", ")}`);
         }
         if (body.anchor_unit) lines.push(`适用于：${refTitle(item, str(body.anchor_unit))} 及其下的内容`);
       }
