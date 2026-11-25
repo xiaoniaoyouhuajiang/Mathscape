@@ -10,5 +10,7 @@
 .mathscape-dev/
 .test-runs/
 /apps/mathscape-desktop/gen/
+__pycache__/
+*.py[cod]
 
 /frontend/dist-inkpad/
