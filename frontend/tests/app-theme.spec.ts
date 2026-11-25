@@ -151,8 +151,12 @@ test("both theme controls stay in sync, persist, and repaint without moving the 
   expect(after.paint.nodes.map(n => [n.id, n.shape, n.border, n.position])).toEqual(before.paint.nodes.map(n => [n.id, n.shape, n.border, n.position]));
   expect(after.paint.nodes[0].color).not.toBe(before.paint.nodes[0].color);
   await page.locator("#llm-settings-button").click();
-  await expect(page.getByRole("combobox", { name: "显示主题" })).toHaveValue("parchment");
-  await page.getByRole("combobox", { name: "显示主题" }).selectOption("slate");
+  const themeGroup = page.getByRole("radiogroup", { name: "显示主题" });
+  await expect(themeGroup.locator(".display-choice-card--theme")).toHaveCount(3);
+  await expect(themeGroup.locator(".pi-mascot-svg--pinned")).toHaveCount(3);
+  await expect(themeGroup.locator('input[name="theme"][value="parchment"]')).toBeChecked();
+  await expect(themeGroup.locator('[data-theme-choice="parchment"]')).toHaveClass(/is-selected/);
+  await themeGroup.locator('[data-theme-choice="slate"]').click();
   expect(await page.evaluate(() => localStorage.getItem("mathscape.theme"))).toBe("slate");
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "slate");

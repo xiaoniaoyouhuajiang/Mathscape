@@ -37,6 +37,11 @@ async function paint(page: Page) {
   });
 }
 
+const mapStyleRadio = (page: Page, value: string) => page.locator(`input[name="map-style"][value="${value}"]`);
+const themeRadio = (page: Page, value: string) => page.locator(`input[name="theme"][value="${value}"]`);
+const pickMapStyle = (page: Page, value: string) => page.locator(`[data-map-style-choice="${value}"]`).click();
+const pickTheme = (page: Page, value: string) => page.locator(`[data-theme-choice="${value}"]`).click();
+
 for (const theme of ["obsidian", "parchment", "slate"]) {
   test(`${theme}: original and constellation switch in place, persist, and stay independent of theme`, async ({ page }) => {
     await page.addInitScript(theme => {
@@ -50,8 +55,8 @@ for (const theme of ["obsidian", "parchment", "slate"]) {
     expect(initial.evidence).toBe(0.07);
     expect(initial.halo).toContain("data:image/svg");
     await page.locator("#llm-settings-button").click();
-    await expect(page.getByLabel("地图风格")).toHaveValue("constellation");
-    await page.getByLabel("地图风格").selectOption("classic");
+    await expect(mapStyleRadio(page, "constellation")).toBeChecked();
+    await pickMapStyle(page, "classic");
     await expect.poll(async () => (await paint(page)).hidden).toBe(0);
     const classic = await paint(page);
     expect(classic.width).toBe(22);
@@ -61,32 +66,32 @@ for (const theme of ["obsidian", "parchment", "slate"]) {
     expect(classic.pose).toEqual(initial.pose);
     await expect(page.locator(".map-label-leaders path")).toHaveAttribute("d", "");
     const nextTheme = theme === "obsidian" ? "parchment" : "obsidian";
-    await page.getByLabel("显示主题").selectOption(nextTheme);
-    await expect(page.getByLabel("地图风格")).toHaveValue("classic");
+    await pickTheme(page, nextTheme);
+    await expect(mapStyleRadio(page, "classic")).toBeChecked();
     expect((await paint(page)).width).toBe(22);
     expect((await paint(page)).pose).toEqual(initial.pose);
     await page.getByRole("button", { name: "关闭", exact: true }).click();
     await page.evaluate(() => window.appHarness.selectNode("article"));
     const selectedPose = (await paint(page)).pose;
     await page.locator("#llm-settings-button").click();
-    await page.getByLabel("地图风格").selectOption("constellation");
+    await pickMapStyle(page, "constellation");
     await expect.poll(async () => (await paint(page)).hidden).toBeGreaterThan(0);
     const restored = await paint(page);
     expect(restored.selected).toBe(true);
     expect(restored.pose).toEqual(selectedPose);
     expect(restored.width).toBe(13);
     expect(restored.evidence).toBe(1);
-    await page.getByLabel("地图风格").selectOption("classic");
+    await pickMapStyle(page, "classic");
     await page.reload();
     await expect(page.locator("#service-state")).toContainText("本地内核已连接");
-    await expect(page.getByLabel("地图风格")).toHaveValue("classic");
-    await expect(page.getByLabel("显示主题")).toHaveValue(nextTheme);
+    await expect(mapStyleRadio(page, "classic")).toBeChecked();
+    await expect(themeRadio(page, nextTheme)).toBeChecked();
     const other = await page.context().newPage();
     await other.goto("/tests/app.html");
-    await expect(other.getByLabel("地图风格")).toHaveValue("classic");
+    await expect(mapStyleRadio(other, "classic")).toBeChecked();
     await page.locator("#llm-settings-button").click();
-    await page.getByLabel("地图风格").selectOption("constellation");
-    await expect(other.getByLabel("地图风格")).toHaveValue("constellation");
+    await pickMapStyle(page, "constellation");
+    await expect(mapStyleRadio(other, "constellation")).toBeChecked();
     await other.close();
   });
 }
@@ -98,9 +103,9 @@ test("invalid saved style falls back, and unavailable storage does not prevent s
   });
   await syntheticMap(page);
   await page.locator("#llm-settings-button").click();
-  await expect(page.getByLabel("地图风格")).toHaveValue("constellation");
-  await page.getByLabel("地图风格").selectOption("classic");
+  await expect(mapStyleRadio(page, "constellation")).toBeChecked();
+  await pickMapStyle(page, "classic");
   await expect.poll(async () => (await paint(page)).width).toBe(22);
-  await page.getByLabel("地图风格").selectOption("constellation");
+  await pickMapStyle(page, "constellation");
   await expect.poll(async () => (await paint(page)).width).toBe(13);
 });

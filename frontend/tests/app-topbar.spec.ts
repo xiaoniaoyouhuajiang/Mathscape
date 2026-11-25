@@ -1,6 +1,6 @@
 /**
- * 顶栏布局：学习视图 / 手写 / 沙箱是一组分段按钮，窄窗口收进「视图」下拉；
- * 设置、帮助是图标按钮；导入 PDF 在最右。任何宽度下按钮文字都不换行。
+ * 顶栏布局：无居中「视图」下拉组；搜索、手写、沙箱及主题 / 设置 / 帮助图标按钮与
+ * 「导入 PDF」统一归于右端，导入 PDF 在最右。任何宽度下按钮文字都不换行。
  */
 import { expect, test, type Page } from "@playwright/test";
 
@@ -9,7 +9,6 @@ async function buttonLineCounts(page: Page) {
   return page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".topbar button")]
     .filter((button) => button.offsetParent !== null && button.getBoundingClientRect().width > 0)
     .map((button) => {
-      // 每个文字节点各自的行数（图标和文字的基线不同，不能混在一起数）。
       const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
       let lines = 0;
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -28,7 +27,7 @@ async function buttonLineCounts(page: Page) {
 async function topbarFitsOneRow(page: Page) {
   return page.evaluate(() => {
     const bar = document.querySelector<HTMLElement>(".topbar")!.getBoundingClientRect();
-    return [...document.querySelectorAll<HTMLElement>(".topbar > *, .topbar-actions > *, .view-switch > *")]
+    return [...document.querySelectorAll<HTMLElement>(".topbar > *, .topbar-actions > *")]
       .filter((node) => node.offsetParent !== null && getComputedStyle(node).position !== "absolute")
       .every((node) => {
         const rect = node.getBoundingClientRect();
@@ -43,49 +42,40 @@ test.describe("top bar", () => {
       await page.setViewportSize({ width, height: 860 });
       await page.goto("/tests/app.html");
       await expect(page.locator("#import-pdf")).toBeVisible();
+      await expect(page.locator("#view-menu-button")).toHaveCount(0);
+      await expect(page.locator(".topbar-center")).toHaveCount(0);
+      await expect(page.locator(".topbar-actions #ink-button")).toBeVisible();
+      await expect(page.locator(".topbar-actions #sandbox-button")).toBeVisible();
       const counts = await buttonLineCounts(page);
       expect(counts.length).toBeGreaterThan(3);
       for (const item of counts) expect(item.lines, `${item.id} @${width}`).toBeLessThanOrEqual(1);
       expect(await topbarFitsOneRow(page)).toBe(true);
-      // 导入 PDF 是最右边的按钮。
+      // 导入 PDF 是最右边的按钮，且搜索 / 手写 / 沙箱按序位于右端区域。
       const rights = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".topbar-actions > *")]
-        .filter((node) => node.offsetParent !== null).map((node) => ({ id: node.id, right: node.getBoundingClientRect().right })));
+        .filter((node) => node.offsetParent !== null).map((node) => ({ id: node.id, left: node.getBoundingClientRect().left, right: node.getBoundingClientRect().right })));
       expect(rights.at(-1)?.id).toBe("import-pdf");
+      const searchLeft = rights.find((r) => r.id === "workspace-search-button")!.left;
+      const inkLeft = rights.find((r) => r.id === "ink-button")!.left;
+      const sandboxLeft = rights.find((r) => r.id === "sandbox-button")!.left;
+      expect(searchLeft).toBeGreaterThan(width * 0.42);
+      expect(inkLeft).toBeGreaterThan(searchLeft);
+      expect(sandboxLeft).toBeGreaterThan(inkLeft);
     });
   }
 
-  test("wide: segmented view switch; settings and help are icon buttons with tooltips", async ({ page }) => {
+  test("right-aligned controls: search, ink, sandbox, icon buttons, and import PDF without center view dropdown", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 860 });
     await page.goto("/tests/app.html");
-    const group = page.getByRole("group", { name: "视图" });
-    await expect(group).toBeVisible();
-    await expect(group.getByRole("button")).toHaveText(["学习视图", "手写", "沙箱"]);
-    await expect(page.locator("#view-menu-button")).toBeHidden();
+    await expect(page.locator("#view-menu-button")).toHaveCount(0);
+    await expect(page.locator("#ink-button")).toHaveText("手写");
+    await expect(page.locator("#sandbox-button")).toHaveText("沙箱");
     await expect(page.getByRole("button", { name: "设置" })).toHaveAttribute("title", "设置");
     await expect(page.getByRole("button", { name: "帮助" })).toHaveAttribute("title", "帮助");
     await expect(page.locator("#workspace-search-button svg")).toBeVisible();
     await expect(page.locator("#workspace-search-button")).toContainText("搜索");
   });
 
-  test("narrow: the view switch collapses into a 视图 dropdown", async ({ page }) => {
-    await page.setViewportSize({ width: 1024, height: 760 });
-    await page.goto("/tests/app.html");
-    const menu = page.locator("#view-menu-button");
-    await expect(menu).toBeVisible();
-    await expect(page.locator("#ink-button")).toBeHidden();
-    await menu.click();
-    await expect(menu).toHaveAttribute("aria-expanded", "true");
-    await expect(page.locator("#ink-button")).toBeVisible();
-    await expect(page.locator("#learning-view-button")).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(page.locator("#ink-button")).toBeHidden();
-    await menu.click();
-    await page.locator("#ink-button").click();
-    await expect(menu).toHaveAttribute("aria-expanded", "false");
-    await expect(page.locator("#ink-button")).toBeHidden();
-  });
-
-  test("sandbox banner shows a short copy id, full text on hover", async ({ page }) => {
+  test("sandbox banner hugs the left brand block while ink and sandbox stay right-aligned", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 860 });
     await page.goto("/tests/app.html");
     await page.locator("#sandbox-button").click();
@@ -94,6 +84,15 @@ test.describe("top bar", () => {
     const text = page.locator(".topbar .sandbox-banner-text");
     await expect(text).toContainText("sbx_demo");
     await expect(text).toHaveAttribute("title", /sbx_demo · 改动只写入隔离副本，检查点 .+ 不受影响/);
+    await expect(page.locator("#view-menu-button")).toHaveCount(0);
+    await expect(page.locator(".topbar-actions #ink-button")).toBeVisible();
+    await expect(page.locator(".topbar-actions #sandbox-button")).toBeVisible();
+    const gap = await page.evaluate(() => {
+      const banner = document.querySelector<HTMLElement>(".topbar .sandbox-banner")!.getBoundingClientRect();
+      const actions = document.querySelector<HTMLElement>(".topbar .topbar-actions")!.getBoundingClientRect();
+      return actions.left - banner.right;
+    });
+    expect(gap).toBeGreaterThan(24);
     for (const item of await buttonLineCounts(page)) expect(item.lines, item.id).toBeLessThanOrEqual(1);
     expect(await topbarFitsOneRow(page)).toBe(true);
   });

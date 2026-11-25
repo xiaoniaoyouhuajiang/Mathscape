@@ -117,6 +117,16 @@ test.describe("S1 sandbox shell", () => {
     await expect(dock).toBeHidden();
     const floatHandle = page.getByRole("button", { name: "展开沙箱对话" });
     await expect(floatHandle).toBeVisible();
+    await expect(floatHandle.locator("svg.pi-mascot-svg")).toBeVisible();
+    await expect(floatHandle.locator(".pi-bot-variant--obsidian")).toBeVisible();
+    await expect(floatHandle.locator(".pi-bot-variant--parchment")).toBeHidden();
+    await page.locator("#theme-toggle-button").click();
+    await expect(floatHandle.locator(".pi-bot-variant--parchment")).toBeVisible();
+    await expect(floatHandle.locator(".pi-bot-variant--obsidian")).toBeHidden();
+    await page.locator("#theme-toggle-button").click();
+    await expect(floatHandle.locator(".pi-bot-variant--slate")).toBeVisible();
+    await page.locator("#theme-toggle-button").click();
+    await expect(floatHandle.locator(".pi-bot-variant--obsidian")).toBeVisible();
     await floatHandle.click();
     await expect(dock).toBeVisible();
     await expect(dock).toHaveClass(/is-sidebar/);
@@ -252,9 +262,8 @@ test.describe("S1 sandbox shell", () => {
       return boxes.every((box, index) => !index || box.left >= boxes[index - 1].right - 1);
     });
     expect(headerFits).toBe(true);
-    await page.locator(".view-menu-button").click();
-    await expect(page.locator("#learning-view-button")).toBeVisible();
-    await page.keyboard.press("Escape");
+    await expect(page.locator(".topbar-actions #ink-button")).toBeVisible();
+    await expect(page.locator('.preset-button[data-preset="study"]')).toBeVisible();
 
     // The temporary source drawer remains usable without narrowing the content
     // or overwriting the normal directory preference.
@@ -337,6 +346,73 @@ test.describe("S1 sandbox shell", () => {
     await expect(dock).toHaveClass(/is-floating/);
     await expect(page.locator(".shell")).not.toHaveClass(/has-sandbox-sidebar/);
     expect(await page.evaluate(() => localStorage.getItem("mathscape:sandbox-dialogue-mode"))).toBe("floating");
+  });
+
+  test("Xiao-Pi float handle is visible on startup at map bottom-right and remembers dragged coordinates across expand/collapse", async ({ page }) => {
+    const floatHandle = page.getByRole("button", { name: "展开沙箱对话" });
+    await expect(floatHandle).toBeVisible();
+
+    const dockedBottomRight = async () =>
+      page.evaluate(() => {
+        const canvas = document.querySelector<HTMLElement>(".canvas-panel")!.getBoundingClientRect();
+        const handle = document.querySelector<HTMLElement>(".sandbox-dock-float")!.getBoundingClientRect();
+        return (
+          handle.left + handle.width <= canvas.right &&
+          handle.left > canvas.right - 140 &&
+          handle.top > canvas.top + canvas.height * 0.6 &&
+          handle.top + handle.height <= canvas.bottom
+        );
+      });
+
+    // Startup at 1400×860 and subsequent viewport shrink to 1360×860 both keep Xiao-Pi anchored inside .canvas-panel bottom-right
+    await expect.poll(dockedBottomRight).toBe(true);
+    await page.setViewportSize({ width: 1360, height: 860 });
+    await expect.poll(dockedBottomRight).toBe(true);
+
+    // Enter sandbox: Xiao-Pi is immediately visible without clicking topbar [对话] first
+    await page.locator("#sandbox-button").click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
+    await expect(floatHandle).toBeVisible();
+    await expect.poll(dockedBottomRight).toBe(true);
+
+    // Drag Xiao-Pi to a custom spot and verify expanding + collapsing preserves that exact coordinate.
+    // Read CSS left/top rather than boundingBox() after mouseup because :hover applies transform: translateY(-2px) scale(1.04).
+    const readFloatPos = () =>
+      page.evaluate(() => {
+        const el = document.querySelector<HTMLElement>(".sandbox-dock-float")!;
+        const cs = getComputedStyle(el);
+        return { left: Math.round(parseFloat(cs.left)), top: Math.round(parseFloat(cs.top)) };
+      });
+
+    const originPos = await readFloatPos();
+    const hb = (await floatHandle.boundingBox())!;
+    const startX = Math.round(hb.x + hb.width / 2);
+    const startY = Math.round(hb.y + hb.height / 2);
+    const dx = -240;
+    const dy = -180;
+    const targetPos = { left: originPos.left + dx, top: originPos.top + dy };
+
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX + dx, startY + dy, { steps: 5 });
+    await page.mouse.up();
+
+    await expect.poll(readFloatPos).toEqual(targetPos);
+
+    // Click Xiao-Pi to open dialogue, then collapse back to float: coordinate must NOT reset!
+    await floatHandle.click();
+    const dock = page.getByRole("complementary", { name: "沙箱对话" });
+    await expect(dock).toBeVisible();
+    await expect(floatHandle).toBeHidden();
+    await dock.locator('button[title="收起为浮动入口"]').click();
+    await expect(floatHandle).toBeVisible();
+    await expect.poll(readFloatPos).toEqual(targetPos);
+
+    // Reload: coordinate stays persisted
+    await page.reload();
+    await expect(floatHandle).toBeVisible();
+    await expect.poll(readFloatPos).toEqual(targetPos);
   });
 
   test("a narrow window renders the sidebar preference as floating", async ({ page }) => {
