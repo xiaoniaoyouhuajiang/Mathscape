@@ -51,8 +51,8 @@ export interface MathscapeEventMap {
   "insert-agent-feedback": { text: string; accept: () => void };
   /** 打开学习视图（只读）。 */
   "open-learning-view": void;
-  /** 打开只读教程「两本书讲的是不是同一个东西」。 */
-  "open-tutorial": void;
+  /** 打开只读教程（默认第 1 集，也可指定 ep2）。 */
+  "open-tutorial": { episode?: "ep1" | "ep2" } | void;
   /** 从地图 / Inspector 跳转到指定提案审核（默认打开地图联动分屏模式）。 */
   "open-proposal-for-object": { changeSetId?: string | null; objectId?: string | null; mapLinked?: boolean };
   /** 从阅读器内已入图单元徽章跳转到主地图对应领域节点。 */

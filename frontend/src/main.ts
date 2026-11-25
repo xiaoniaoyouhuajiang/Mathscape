@@ -1087,9 +1087,13 @@ document.addEventListener("click", (event) => {
 });
 el.tutorialMenuItem.addEventListener("click", () => {
   setHelpMenu(false);
-  void tutorial.open();
+  void tutorial.open("ep1");
 });
-eventBus.on("open-tutorial", () => void tutorial.open());
+el.tutorialEp2MenuItem.addEventListener("click", () => {
+  setHelpMenu(false);
+  void tutorial.open("ep2");
+});
+eventBus.on("open-tutorial", (payload) => void tutorial.open(payload?.episode ?? "ep1"));
 
 artifactController.startPolling(1000);
 

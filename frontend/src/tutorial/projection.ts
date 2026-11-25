@@ -9,6 +9,8 @@ import type { LearningView } from "../semantic/api";
 
 export const TUTORIAL_PROJECTION_SCHEMA = "mathscape.tutorial-projection.v1";
 
+export type TutorialEpisodeId = "ep1" | "ep2";
+
 export interface TutorialObject {
   id: string;
   kind: string | null;
@@ -31,14 +33,21 @@ export interface TutorialProjection {
   revisions?: Array<Record<string, unknown>>;
 }
 
-/** 按需加载（单独分包，打开教程时才读）。 */
-export async function loadTutorialProjection(): Promise<TutorialProjection> {
-  const module = await import("../../../fixtures/emir/fibonacci-two-books/tutorial-projection.json");
+/** 按需加载指定剧集的只读投影（单独分包，打开对应教程时才读）。 */
+export async function loadEpisodeProjection(episode: TutorialEpisodeId): Promise<TutorialProjection> {
+  const module = episode === "ep2"
+    ? await import("../../../fixtures/emir/generating-functions-two-books/tutorial-projection.json")
+    : await import("../../../fixtures/emir/fibonacci-two-books/tutorial-projection.json");
   const projection = (module.default ?? module) as unknown as TutorialProjection;
   if (projection.schema !== TUTORIAL_PROJECTION_SCHEMA) {
     throw new Error(`unsupported tutorial projection: ${projection.schema}`);
   }
   return projection;
+}
+
+/** 默认加载第 1 集投影（保持现有调用兼容）。 */
+export async function loadTutorialProjection(): Promise<TutorialProjection> {
+  return loadEpisodeProjection("ep1");
 }
 
 const DROPPED_KINDS = new Set(["SourceSpan"]);

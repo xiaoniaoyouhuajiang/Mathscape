@@ -1,7 +1,11 @@
 .tutorial-overlay { position: fixed; inset: 0; z-index: 60; display: grid; grid-template-rows: auto 1fr auto auto; background: linear-gradient(180deg, var(--ms-panel-deep), var(--ms-panel-raised)); color: var(--ms-text); }
 .tutorial-overlay[hidden] { display: none; }
-.tutorial-header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid rgba(158, 182, 255, 0.2); }
+.tutorial-header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid rgba(158, 182, 255, 0.2); }
 .tutorial-title { font-size: 15px; }
+.tutorial-episodes { display: inline-flex; gap: 4px; padding: 2px; border-radius: 999px; background: var(--ms-panel-deep); border: 1px solid rgba(158, 182, 255, 0.25); }
+.tutorial-episode-btn { padding: 3px 10px; border-radius: 999px; border: 0; background: transparent; color: var(--ms-text-secondary); font-size: 12px; cursor: pointer; }
+.tutorial-episode-btn.is-active { background: var(--ms-accent-bg); color: var(--ms-text); font-weight: 600; }
+.tutorial-episode-btn:hover:not(.is-active) { color: var(--ms-text); }
 .tutorial-provenance, .tutorial-counter { font-size: 12px; color: var(--ms-text-secondary); }
 .tutorial-close { margin-left: auto; }
 .tutorial-stage { position: relative; display: grid; grid-template-columns: 1fr minmax(280px, 380px); min-height: 0; }
@@ -84,3 +88,32 @@ html.reduce-motion .tutorial-overlay * { transition: none !important; animation:
   background: var(--ms-accent-bg);
 }
 .tutorial-learning-note { font-size: 11px; color: var(--ms-text-secondary); }
+.legend-dot.is-hexagon { clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%); border-radius: 0; }
+.tutorial-extra-heading { margin: 2px 0 0; font-size: 12px; color: var(--ms-text-secondary); font-weight: 600; }
+.tutorial-symbols { gap: 8px; }
+.tutorial-symbol-scope { display: grid; gap: 4px; padding: 8px; border-radius: 8px; border: 1px solid rgba(158, 182, 255, 0.28); background: var(--ms-panel-deep); }
+.tutorial-symbol-scope-title { font-size: 12px; }
+.tutorial-symbol-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.tutorial-symbol-table th, .tutorial-symbol-table td { padding: 3px 5px; border-bottom: 1px solid rgba(158, 182, 255, 0.16); text-align: left; vertical-align: top; }
+.tutorial-symbol-table th { color: var(--ms-text-secondary); font-weight: 600; }
+.tutorial-symbol-table td.is-symbol, .tutorial-symbol-table td.is-role { white-space: nowrap; }
+.tutorial-bindings { gap: 8px; }
+.tutorial-binding-core, .tutorial-binding-card { padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(183, 148, 244, 0.38); background: var(--ms-panel-deep); display: grid; gap: 4px; font-size: 12px; }
+.tutorial-binding-carrier, .tutorial-binding-meta, .tutorial-binding-debt { margin: 0; line-height: 1.55; }
+.tutorial-binding-ops, .tutorial-binding-mappings { margin: 0; padding-left: 16px; display: grid; gap: 3px; }
+.tutorial-binding-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.tutorial-binding-meta.is-lost { color: var(--ms-warning); }
+.tutorial-binding-debt { padding: 4px 6px; border-radius: 6px; border: 1px dashed var(--ms-warning); color: var(--ms-warning); }
+.tutorial-branches { gap: 8px; }
+.tutorial-partition-banner { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border-radius: 8px; background: var(--ms-panel-deep); border: 1px solid rgba(158, 182, 255, 0.28); font-size: 12px; }
+.tutorial-branch-list, .tutorial-exclusion-list, .tutorial-branch-evals { display: grid; gap: 6px; }
+.tutorial-branch-card { padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(158, 182, 255, 0.32); background: var(--ms-panel-deep); display: grid; gap: 4px; }
+.tutorial-branch-card.is-degenerate { border-color: rgba(255, 216, 154, 0.72); }
+.tutorial-branch-head, .tutorial-exclusion-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.tutorial-branch-badge, .tutorial-exclusion-badge { padding: 1px 6px; border-radius: 999px; font-size: 11px; border: 1px solid rgba(158, 182, 255, 0.35); }
+.tutorial-branch-badge.is-degenerate, .tutorial-exclusion-badge { border-color: var(--ms-warning); color: var(--ms-warning); }
+.tutorial-branch-guard { margin-left: auto; font-size: 12px; }
+.tutorial-branch-conclusion { font-size: 13px; }
+.tutorial-exclusion-card { padding: 7px 9px; border-radius: 8px; border: 1px dashed var(--ms-warning); background: var(--ms-panel-deep); display: grid; gap: 3px; font-size: 12px; }
+.tutorial-eval-row { padding: 6px 8px; border-radius: 6px; background: var(--ms-panel-deep); display: grid; gap: 2px; font-size: 12px; }
+.tutorial-stage-preview { margin-top: 4px; padding-top: 6px; border-top: 1px dashed rgba(158, 182, 255, 0.28); }

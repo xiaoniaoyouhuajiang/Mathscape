@@ -83,9 +83,67 @@ export interface LearningPanel {
   conventions: Array<{ text: string; focus: string[] }>;
   summary: string;
   summaryFocus: string[];
+  footerNote?: string;
 }
 
-export type ShotExtra = MaterialsPanel | SequenceTable | NumberingTable | RevisionPanel | AcceptPanel | LearningPanel;
+/** 第 2 集镜 3：约定卡里的局部符号表对照。 */
+export interface SymbolTablePanel {
+  kind: "symbols";
+  scopes: Array<{
+    scopeLocal: string;
+    title: string;
+    conventions: string[];
+    rows: Array<{ symbol: string; role: string; domain: string; meaning: string }>;
+  }>;
+}
+
+/** 第 2 集镜 4/5：表示核与两条表示绑定对照。 */
+export interface BindingComparePanel {
+  kind: "bindings";
+  coreTitle: string;
+  carrier: string;
+  operations: string[];
+  items: Array<{
+    bindingLocal: string;
+    book: string;
+    mapLabel: string;
+    mappings: Array<{ symbol: string; targetExpr: string; note: string }>;
+    adaptations: string[];
+    lost: string[];
+    debt?: string;
+  }>;
+}
+
+/** 第 2 集镜 6/9：内聚多分支、守卫划分与显式排除边界面板。 */
+export interface BranchesPanel {
+  kind: "branches";
+  partitionNote?: string;
+  branches: Array<{
+    branchId: string;
+    label: string;
+    guardPredicate: string;
+    guardLabel: string;
+    conclusion: string;
+    isDegenerate: boolean;
+  }>;
+  exclusions: Array<{
+    kindLabel: string;
+    caseText: string;
+    reason: string;
+  }>;
+  evaluations?: Array<{ label: string; formula: string; note: string }>;
+}
+
+export type ShotExtra =
+  | MaterialsPanel
+  | SequenceTable
+  | NumberingTable
+  | RevisionPanel
+  | AcceptPanel
+  | LearningPanel
+  | SymbolTablePanel
+  | BindingComparePanel
+  | BranchesPanel;
 
 export interface TutorialShot {
   id: string;
@@ -170,7 +228,7 @@ const RELATION_MEANING: Record<string, string> = {
 };
 
 /** 说明页里的对齐关系类型：类型代码 + 地图上的白话 + 一句解释。 */
-const relationNote = (relation: string): TypeNote => ({
+export const relationNote = (relation: string): TypeNote => ({
   name: `对齐关系「${relationPlain(relation)}」`, code: relation,
   plain: RELATION_MEANING[relation] ?? relationPlain(relation),
 });
@@ -513,6 +571,33 @@ export function shotText(shot: TutorialShot): string[] {
   if (extra?.kind === "accept") out.push(extra.banner, extra.badge, extra.button, ...extra.axes);
   if (extra?.kind === "learning") {
     out.push(extra.summary, ...extra.conventions.map((c) => c.text), ...extra.units.flatMap((u) => [u.title, u.label, u.detail, u.note ?? ""]));
+    if (extra.footerNote) out.push(extra.footerNote);
+  }
+  if (extra?.kind === "symbols") {
+    out.push(...extra.scopes.flatMap((s) => [s.title, ...s.conventions, ...s.rows.flatMap((r) => [r.symbol, r.role, r.domain, r.meaning])]));
+  }
+  if (extra?.kind === "bindings") {
+    out.push(
+      extra.coreTitle,
+      extra.carrier,
+      ...extra.operations,
+      ...extra.items.flatMap((i) => [
+        i.book,
+        i.mapLabel,
+        ...i.mappings.flatMap((m) => [m.symbol, m.targetExpr, m.note]),
+        ...i.adaptations,
+        ...i.lost,
+        ...(i.debt ? [i.debt] : []),
+      ]),
+    );
+  }
+  if (extra?.kind === "branches") {
+    if (extra.partitionNote) out.push(extra.partitionNote);
+    out.push(
+      ...extra.branches.flatMap((b) => [b.label, b.guardPredicate, b.guardLabel, b.conclusion]),
+      ...extra.exclusions.flatMap((e) => [e.kindLabel, e.caseText, e.reason]),
+      ...(extra.evaluations ?? []).flatMap((ev) => [ev.label, ev.formula, ev.note]),
+    );
   }
   return out;
 }
