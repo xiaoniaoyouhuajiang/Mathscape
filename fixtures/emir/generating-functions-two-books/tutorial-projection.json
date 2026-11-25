@@ -1,0 +1,3733 @@
+{
+  "artifacts": {
+    "jia": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+    "yi": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768"
+  },
+  "fixture_version": "0.1",
+  "graph": {
+    "edges": [
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444:source:single",
+        "ordinal": null,
+        "relation_id": "mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444",
+        "role": "source",
+        "source": "entity:mathscape:source-unit/1596f79d047873cc0ba56b3b27ca823824ca5f49acf6cc09d3f4f617bab7ed5d",
+        "target": "relation:mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444:target:single",
+        "ordinal": null,
+        "relation_id": "mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444",
+        "role": "target",
+        "source": "relation:mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444",
+        "target": "entity:mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913:source:single",
+        "ordinal": null,
+        "relation_id": "mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913",
+        "role": "source",
+        "source": "entity:mathscape:source-unit/6c81a05b87e1ca0a9e310a28dd244d43ca2a4e800549292e718fa15da10e7afd",
+        "target": "relation:mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913:target:single",
+        "ordinal": null,
+        "relation_id": "mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913",
+        "role": "target",
+        "source": "relation:mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913",
+        "target": "entity:mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823:source:single",
+        "ordinal": null,
+        "relation_id": "mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823",
+        "role": "source",
+        "source": "entity:mathscape:source-unit/6656c9b7a63b44e04ce329318c7106d481a478eae5aa73c047ecf4a995da5623",
+        "target": "relation:mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823:target:single",
+        "ordinal": null,
+        "relation_id": "mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823",
+        "role": "target",
+        "source": "relation:mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823",
+        "target": "entity:mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a:source:single",
+        "ordinal": null,
+        "relation_id": "mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a",
+        "role": "source",
+        "source": "entity:mathscape:source-unit/ce804392ddd7f29983c28cb7797a6afc769b893451ed000c54f7a94c92f50eb6",
+        "target": "relation:mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a:target:single",
+        "ordinal": null,
+        "relation_id": "mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a",
+        "role": "target",
+        "source": "relation:mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a",
+        "target": "entity:mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/060be02a25da3b97025dfbe5787a8334adbc94b289ef786c8f260c1870cd5919:span:0",
+        "ordinal": 0,
+        "relation_id": "mathscape:projection-relation/contains-span/060be02a25da3b97025dfbe5787a8334adbc94b289ef786c8f260c1870cd5919",
+        "role": "span",
+        "source": "relation:mathscape:projection-relation/contains-span/060be02a25da3b97025dfbe5787a8334adbc94b289ef786c8f260c1870cd5919",
+        "target": "entity:mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/060be02a25da3b97025dfbe5787a8334adbc94b289ef786c8f260c1870cd5919:unit:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/contains-span/060be02a25da3b97025dfbe5787a8334adbc94b289ef786c8f260c1870cd5919",
+        "role": "unit",
+        "source": "entity:mathscape:source-unit/6c81a05b87e1ca0a9e310a28dd244d43ca2a4e800549292e718fa15da10e7afd",
+        "target": "relation:mathscape:projection-relation/contains-span/060be02a25da3b97025dfbe5787a8334adbc94b289ef786c8f260c1870cd5919"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/6fd47b2c4c816e4413863fc8163dc2ed632f1a8f3f4b4f975ffd1d11021a776e:span:0",
+        "ordinal": 0,
+        "relation_id": "mathscape:projection-relation/contains-span/6fd47b2c4c816e4413863fc8163dc2ed632f1a8f3f4b4f975ffd1d11021a776e",
+        "role": "span",
+        "source": "relation:mathscape:projection-relation/contains-span/6fd47b2c4c816e4413863fc8163dc2ed632f1a8f3f4b4f975ffd1d11021a776e",
+        "target": "entity:mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/6fd47b2c4c816e4413863fc8163dc2ed632f1a8f3f4b4f975ffd1d11021a776e:unit:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/contains-span/6fd47b2c4c816e4413863fc8163dc2ed632f1a8f3f4b4f975ffd1d11021a776e",
+        "role": "unit",
+        "source": "entity:mathscape:source-unit/ea4353677ffeb25d60ccbc96b37526cb6c114cd3c4e646aa7b5ac13e9de63b66",
+        "target": "relation:mathscape:projection-relation/contains-span/6fd47b2c4c816e4413863fc8163dc2ed632f1a8f3f4b4f975ffd1d11021a776e"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/7b04e250fe7c8f4553dfc3cdba4b828aa86c9b63306cb6aec395b673afd40154:span:0",
+        "ordinal": 0,
+        "relation_id": "mathscape:projection-relation/contains-span/7b04e250fe7c8f4553dfc3cdba4b828aa86c9b63306cb6aec395b673afd40154",
+        "role": "span",
+        "source": "relation:mathscape:projection-relation/contains-span/7b04e250fe7c8f4553dfc3cdba4b828aa86c9b63306cb6aec395b673afd40154",
+        "target": "entity:mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/7b04e250fe7c8f4553dfc3cdba4b828aa86c9b63306cb6aec395b673afd40154:unit:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/contains-span/7b04e250fe7c8f4553dfc3cdba4b828aa86c9b63306cb6aec395b673afd40154",
+        "role": "unit",
+        "source": "entity:mathscape:source-unit/6656c9b7a63b44e04ce329318c7106d481a478eae5aa73c047ecf4a995da5623",
+        "target": "relation:mathscape:projection-relation/contains-span/7b04e250fe7c8f4553dfc3cdba4b828aa86c9b63306cb6aec395b673afd40154"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/8dc390594f40e3c51637ad533918a1e9bc078c6606f07138a59b268f3baba117:span:0",
+        "ordinal": 0,
+        "relation_id": "mathscape:projection-relation/contains-span/8dc390594f40e3c51637ad533918a1e9bc078c6606f07138a59b268f3baba117",
+        "role": "span",
+        "source": "relation:mathscape:projection-relation/contains-span/8dc390594f40e3c51637ad533918a1e9bc078c6606f07138a59b268f3baba117",
+        "target": "entity:mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/8dc390594f40e3c51637ad533918a1e9bc078c6606f07138a59b268f3baba117:unit:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/contains-span/8dc390594f40e3c51637ad533918a1e9bc078c6606f07138a59b268f3baba117",
+        "role": "unit",
+        "source": "entity:mathscape:source-unit/1596f79d047873cc0ba56b3b27ca823824ca5f49acf6cc09d3f4f617bab7ed5d",
+        "target": "relation:mathscape:projection-relation/contains-span/8dc390594f40e3c51637ad533918a1e9bc078c6606f07138a59b268f3baba117"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/baf513dbaa6ea0798288706cf0f0b62911955f4d767a3cad3869a5cd2fc95161:span:0",
+        "ordinal": 0,
+        "relation_id": "mathscape:projection-relation/contains-span/baf513dbaa6ea0798288706cf0f0b62911955f4d767a3cad3869a5cd2fc95161",
+        "role": "span",
+        "source": "relation:mathscape:projection-relation/contains-span/baf513dbaa6ea0798288706cf0f0b62911955f4d767a3cad3869a5cd2fc95161",
+        "target": "entity:mathscape:source-span/f3f77faf93f3d3f38ee8eeaa4940d3cf241ad89610df29179dcc385da87fc668"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/baf513dbaa6ea0798288706cf0f0b62911955f4d767a3cad3869a5cd2fc95161:unit:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/contains-span/baf513dbaa6ea0798288706cf0f0b62911955f4d767a3cad3869a5cd2fc95161",
+        "role": "unit",
+        "source": "entity:mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+        "target": "relation:mathscape:projection-relation/contains-span/baf513dbaa6ea0798288706cf0f0b62911955f4d767a3cad3869a5cd2fc95161"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/c32a899ac73ca3dd3380fcffa47d95bf579bfb59f949095330d29fe4567ce25b:span:0",
+        "ordinal": 0,
+        "relation_id": "mathscape:projection-relation/contains-span/c32a899ac73ca3dd3380fcffa47d95bf579bfb59f949095330d29fe4567ce25b",
+        "role": "span",
+        "source": "relation:mathscape:projection-relation/contains-span/c32a899ac73ca3dd3380fcffa47d95bf579bfb59f949095330d29fe4567ce25b",
+        "target": "entity:mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/c32a899ac73ca3dd3380fcffa47d95bf579bfb59f949095330d29fe4567ce25b:unit:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/contains-span/c32a899ac73ca3dd3380fcffa47d95bf579bfb59f949095330d29fe4567ce25b",
+        "role": "unit",
+        "source": "entity:mathscape:source-unit/ce804392ddd7f29983c28cb7797a6afc769b893451ed000c54f7a94c92f50eb6",
+        "target": "relation:mathscape:projection-relation/contains-span/c32a899ac73ca3dd3380fcffa47d95bf579bfb59f949095330d29fe4567ce25b"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/c6652df8f7116bd85ab15f367db1f88c8403c2e2c81263b033ea185f51dfd9f8:span:0",
+        "ordinal": 0,
+        "relation_id": "mathscape:projection-relation/contains-span/c6652df8f7116bd85ab15f367db1f88c8403c2e2c81263b033ea185f51dfd9f8",
+        "role": "span",
+        "source": "relation:mathscape:projection-relation/contains-span/c6652df8f7116bd85ab15f367db1f88c8403c2e2c81263b033ea185f51dfd9f8",
+        "target": "entity:mathscape:source-span/b697392fd4cc6658fc8d293adeb92a179c32aaa294e3b16145f7c642f72a03a1"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/c6652df8f7116bd85ab15f367db1f88c8403c2e2c81263b033ea185f51dfd9f8:unit:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/contains-span/c6652df8f7116bd85ab15f367db1f88c8403c2e2c81263b033ea185f51dfd9f8",
+        "role": "unit",
+        "source": "entity:mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+        "target": "relation:mathscape:projection-relation/contains-span/c6652df8f7116bd85ab15f367db1f88c8403c2e2c81263b033ea185f51dfd9f8"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/ee2eb31ee5ed7eccc7dcc1237b02f39572bc858c7d7138d2b173795322ce6cdb:span:0",
+        "ordinal": 0,
+        "relation_id": "mathscape:projection-relation/contains-span/ee2eb31ee5ed7eccc7dcc1237b02f39572bc858c7d7138d2b173795322ce6cdb",
+        "role": "span",
+        "source": "relation:mathscape:projection-relation/contains-span/ee2eb31ee5ed7eccc7dcc1237b02f39572bc858c7d7138d2b173795322ce6cdb",
+        "target": "entity:mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/contains-span/ee2eb31ee5ed7eccc7dcc1237b02f39572bc858c7d7138d2b173795322ce6cdb:unit:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/contains-span/ee2eb31ee5ed7eccc7dcc1237b02f39572bc858c7d7138d2b173795322ce6cdb",
+        "role": "unit",
+        "source": "entity:mathscape:source-unit/528e8bcbd11e97f6f9158baf0fb228a4b6c3a5ccf79a08e311ad76bd1799b5cd",
+        "target": "relation:mathscape:projection-relation/contains-span/ee2eb31ee5ed7eccc7dcc1237b02f39572bc858c7d7138d2b173795322ce6cdb"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/debt-on/4ea60b663f2928f89f2fad538c6bc606cb52a3c283d1196703573c2c4a1407f2:debt:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/debt-on/4ea60b663f2928f89f2fad538c6bc606cb52a3c283d1196703573c2c4a1407f2",
+        "role": "debt",
+        "source": "entity:mathscape:debt/46478c6f937dfaf31128105ad670f143d5c194d4d08dc32b8d553723f58b2de2",
+        "target": "relation:mathscape:projection-relation/debt-on/4ea60b663f2928f89f2fad538c6bc606cb52a3c283d1196703573c2c4a1407f2"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/debt-on/4ea60b663f2928f89f2fad538c6bc606cb52a3c283d1196703573c2c4a1407f2:holder:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/debt-on/4ea60b663f2928f89f2fad538c6bc606cb52a3c283d1196703573c2c4a1407f2",
+        "role": "holder",
+        "source": "relation:mathscape:projection-relation/debt-on/4ea60b663f2928f89f2fad538c6bc606cb52a3c283d1196703573c2c4a1407f2",
+        "target": "entity:mathscape:representation-core/421ca09f941ba478ecd834e3e889f8b4a35c568b89a77deac2ae00d514e28d11"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/2770fe0cf62b10ef40d5db000a9347d61af82fdcd9722d125cc4b55ae635bfc1:child:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/2770fe0cf62b10ef40d5db000a9347d61af82fdcd9722d125cc4b55ae635bfc1",
+        "role": "child",
+        "source": "relation:mathscape:projection-relation/has-part/2770fe0cf62b10ef40d5db000a9347d61af82fdcd9722d125cc4b55ae635bfc1",
+        "target": "entity:mathscape:source-unit/ce804392ddd7f29983c28cb7797a6afc769b893451ed000c54f7a94c92f50eb6"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/2770fe0cf62b10ef40d5db000a9347d61af82fdcd9722d125cc4b55ae635bfc1:parent:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/2770fe0cf62b10ef40d5db000a9347d61af82fdcd9722d125cc4b55ae635bfc1",
+        "role": "parent",
+        "source": "entity:mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+        "target": "relation:mathscape:projection-relation/has-part/2770fe0cf62b10ef40d5db000a9347d61af82fdcd9722d125cc4b55ae635bfc1"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/2b48cc08f8294b53fec987b5d390e0314262ad266a802bceb35328be422c3cc0:child:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/2b48cc08f8294b53fec987b5d390e0314262ad266a802bceb35328be422c3cc0",
+        "role": "child",
+        "source": "relation:mathscape:projection-relation/has-part/2b48cc08f8294b53fec987b5d390e0314262ad266a802bceb35328be422c3cc0",
+        "target": "entity:mathscape:source-unit/6656c9b7a63b44e04ce329318c7106d481a478eae5aa73c047ecf4a995da5623"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/2b48cc08f8294b53fec987b5d390e0314262ad266a802bceb35328be422c3cc0:parent:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/2b48cc08f8294b53fec987b5d390e0314262ad266a802bceb35328be422c3cc0",
+        "role": "parent",
+        "source": "entity:mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+        "target": "relation:mathscape:projection-relation/has-part/2b48cc08f8294b53fec987b5d390e0314262ad266a802bceb35328be422c3cc0"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/64685377962cdb22e1fe5e5d57c878c753a7ab87dbf6fb34f5a91aa77495028d:child:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/64685377962cdb22e1fe5e5d57c878c753a7ab87dbf6fb34f5a91aa77495028d",
+        "role": "child",
+        "source": "relation:mathscape:projection-relation/has-part/64685377962cdb22e1fe5e5d57c878c753a7ab87dbf6fb34f5a91aa77495028d",
+        "target": "entity:mathscape:source-unit/1596f79d047873cc0ba56b3b27ca823824ca5f49acf6cc09d3f4f617bab7ed5d"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/64685377962cdb22e1fe5e5d57c878c753a7ab87dbf6fb34f5a91aa77495028d:parent:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/64685377962cdb22e1fe5e5d57c878c753a7ab87dbf6fb34f5a91aa77495028d",
+        "role": "parent",
+        "source": "entity:mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+        "target": "relation:mathscape:projection-relation/has-part/64685377962cdb22e1fe5e5d57c878c753a7ab87dbf6fb34f5a91aa77495028d"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/6836e23bbe8741c825a179f3863b1418f70beea386ecfe3360ad4c5c7762b8d0:child:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/6836e23bbe8741c825a179f3863b1418f70beea386ecfe3360ad4c5c7762b8d0",
+        "role": "child",
+        "source": "relation:mathscape:projection-relation/has-part/6836e23bbe8741c825a179f3863b1418f70beea386ecfe3360ad4c5c7762b8d0",
+        "target": "entity:mathscape:source-unit/ea4353677ffeb25d60ccbc96b37526cb6c114cd3c4e646aa7b5ac13e9de63b66"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/6836e23bbe8741c825a179f3863b1418f70beea386ecfe3360ad4c5c7762b8d0:parent:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/6836e23bbe8741c825a179f3863b1418f70beea386ecfe3360ad4c5c7762b8d0",
+        "role": "parent",
+        "source": "entity:mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+        "target": "relation:mathscape:projection-relation/has-part/6836e23bbe8741c825a179f3863b1418f70beea386ecfe3360ad4c5c7762b8d0"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/b6d0480a9b11c807c8dc983077cdb7293cb7c3e25e9bf8841eabd7e07a914730:child:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/b6d0480a9b11c807c8dc983077cdb7293cb7c3e25e9bf8841eabd7e07a914730",
+        "role": "child",
+        "source": "relation:mathscape:projection-relation/has-part/b6d0480a9b11c807c8dc983077cdb7293cb7c3e25e9bf8841eabd7e07a914730",
+        "target": "entity:mathscape:source-unit/6c81a05b87e1ca0a9e310a28dd244d43ca2a4e800549292e718fa15da10e7afd"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/b6d0480a9b11c807c8dc983077cdb7293cb7c3e25e9bf8841eabd7e07a914730:parent:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/b6d0480a9b11c807c8dc983077cdb7293cb7c3e25e9bf8841eabd7e07a914730",
+        "role": "parent",
+        "source": "entity:mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+        "target": "relation:mathscape:projection-relation/has-part/b6d0480a9b11c807c8dc983077cdb7293cb7c3e25e9bf8841eabd7e07a914730"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/fee962523f1a67bf1c44c348ab4b63f9a8dc9686dac1a02b144b88887669c5ce:child:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/fee962523f1a67bf1c44c348ab4b63f9a8dc9686dac1a02b144b88887669c5ce",
+        "role": "child",
+        "source": "relation:mathscape:projection-relation/has-part/fee962523f1a67bf1c44c348ab4b63f9a8dc9686dac1a02b144b88887669c5ce",
+        "target": "entity:mathscape:source-unit/528e8bcbd11e97f6f9158baf0fb228a4b6c3a5ccf79a08e311ad76bd1799b5cd"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/has-part/fee962523f1a67bf1c44c348ab4b63f9a8dc9686dac1a02b144b88887669c5ce:parent:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/has-part/fee962523f1a67bf1c44c348ab4b63f9a8dc9686dac1a02b144b88887669c5ce",
+        "role": "parent",
+        "source": "entity:mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+        "target": "relation:mathscape:projection-relation/has-part/fee962523f1a67bf1c44c348ab4b63f9a8dc9686dac1a02b144b88887669c5ce"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/in-theory/40a9e4d3200366c2b061d80cacf270d0192eb11d73b8aaaa47973b4dcdce87af:member:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/in-theory/40a9e4d3200366c2b061d80cacf270d0192eb11d73b8aaaa47973b4dcdce87af",
+        "role": "member",
+        "source": "entity:mathscape:representation-core/421ca09f941ba478ecd834e3e889f8b4a35c568b89a77deac2ae00d514e28d11",
+        "target": "relation:mathscape:projection-relation/in-theory/40a9e4d3200366c2b061d80cacf270d0192eb11d73b8aaaa47973b4dcdce87af"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/in-theory/40a9e4d3200366c2b061d80cacf270d0192eb11d73b8aaaa47973b4dcdce87af:theory:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/in-theory/40a9e4d3200366c2b061d80cacf270d0192eb11d73b8aaaa47973b4dcdce87af",
+        "role": "theory",
+        "source": "relation:mathscape:projection-relation/in-theory/40a9e4d3200366c2b061d80cacf270d0192eb11d73b8aaaa47973b4dcdce87af",
+        "target": "entity:mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/in-theory/5881c72cd5746e4e78e5c267531a25105df9380101744030a09282aa2825f612:member:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/in-theory/5881c72cd5746e4e78e5c267531a25105df9380101744030a09282aa2825f612",
+        "role": "member",
+        "source": "entity:mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32",
+        "target": "relation:mathscape:projection-relation/in-theory/5881c72cd5746e4e78e5c267531a25105df9380101744030a09282aa2825f612"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/in-theory/5881c72cd5746e4e78e5c267531a25105df9380101744030a09282aa2825f612:theory:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/in-theory/5881c72cd5746e4e78e5c267531a25105df9380101744030a09282aa2825f612",
+        "role": "theory",
+        "source": "relation:mathscape:projection-relation/in-theory/5881c72cd5746e4e78e5c267531a25105df9380101744030a09282aa2825f612",
+        "target": "entity:mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/in-theory/baff06babb83c6cc231b8c36174769d30e6bcb3356f36b923e76b0ccc94ee87e:member:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/in-theory/baff06babb83c6cc231b8c36174769d30e6bcb3356f36b923e76b0ccc94ee87e",
+        "role": "member",
+        "source": "entity:mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+        "target": "relation:mathscape:projection-relation/in-theory/baff06babb83c6cc231b8c36174769d30e6bcb3356f36b923e76b0ccc94ee87e"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/in-theory/baff06babb83c6cc231b8c36174769d30e6bcb3356f36b923e76b0ccc94ee87e:theory:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/in-theory/baff06babb83c6cc231b8c36174769d30e6bcb3356f36b923e76b0ccc94ee87e",
+        "role": "theory",
+        "source": "relation:mathscape:projection-relation/in-theory/baff06babb83c6cc231b8c36174769d30e6bcb3356f36b923e76b0ccc94ee87e",
+        "target": "entity:mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/in-theory/d5f1bd1db129b9295f381c902032c99937960e636d1679337c248c39d3533e78:member:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/in-theory/d5f1bd1db129b9295f381c902032c99937960e636d1679337c248c39d3533e78",
+        "role": "member",
+        "source": "entity:mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88",
+        "target": "relation:mathscape:projection-relation/in-theory/d5f1bd1db129b9295f381c902032c99937960e636d1679337c248c39d3533e78"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/in-theory/d5f1bd1db129b9295f381c902032c99937960e636d1679337c248c39d3533e78:theory:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/in-theory/d5f1bd1db129b9295f381c902032c99937960e636d1679337c248c39d3533e78",
+        "role": "theory",
+        "source": "relation:mathscape:projection-relation/in-theory/d5f1bd1db129b9295f381c902032c99937960e636d1679337c248c39d3533e78",
+        "target": "entity:mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/in-theory/e34eeb1136fc70ac64cb12ca69c1fca57e857155fa8437069bf14ec32d99c7e4:member:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/in-theory/e34eeb1136fc70ac64cb12ca69c1fca57e857155fa8437069bf14ec32d99c7e4",
+        "role": "member",
+        "source": "entity:mathscape:representation-core/bb9e86d69498f3e3f543cdb7908ecff3766436972bec1603200057500dd0cb66",
+        "target": "relation:mathscape:projection-relation/in-theory/e34eeb1136fc70ac64cb12ca69c1fca57e857155fa8437069bf14ec32d99c7e4"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/in-theory/e34eeb1136fc70ac64cb12ca69c1fca57e857155fa8437069bf14ec32d99c7e4:theory:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/in-theory/e34eeb1136fc70ac64cb12ca69c1fca57e857155fa8437069bf14ec32d99c7e4",
+        "role": "theory",
+        "source": "relation:mathscape:projection-relation/in-theory/e34eeb1136fc70ac64cb12ca69c1fca57e857155fa8437069bf14ec32d99c7e4",
+        "target": "entity:mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/19a265dbf8ea6e5694acb4f1b70cb26627e6fa37ed49b8c981d011cdaca1fa30:artifact:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/19a265dbf8ea6e5694acb4f1b70cb26627e6fa37ed49b8c981d011cdaca1fa30",
+        "role": "artifact",
+        "source": "relation:mathscape:projection-relation/located-in/19a265dbf8ea6e5694acb4f1b70cb26627e6fa37ed49b8c981d011cdaca1fa30",
+        "target": "entity:mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/19a265dbf8ea6e5694acb4f1b70cb26627e6fa37ed49b8c981d011cdaca1fa30:span:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/19a265dbf8ea6e5694acb4f1b70cb26627e6fa37ed49b8c981d011cdaca1fa30",
+        "role": "span",
+        "source": "entity:mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209",
+        "target": "relation:mathscape:projection-relation/located-in/19a265dbf8ea6e5694acb4f1b70cb26627e6fa37ed49b8c981d011cdaca1fa30"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/34ea85a8944e0851ca99782dcd07478d69cceb5d1c897020d7b7c1e20787163d:artifact:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/34ea85a8944e0851ca99782dcd07478d69cceb5d1c897020d7b7c1e20787163d",
+        "role": "artifact",
+        "source": "relation:mathscape:projection-relation/located-in/34ea85a8944e0851ca99782dcd07478d69cceb5d1c897020d7b7c1e20787163d",
+        "target": "entity:mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/34ea85a8944e0851ca99782dcd07478d69cceb5d1c897020d7b7c1e20787163d:span:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/34ea85a8944e0851ca99782dcd07478d69cceb5d1c897020d7b7c1e20787163d",
+        "role": "span",
+        "source": "entity:mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8",
+        "target": "relation:mathscape:projection-relation/located-in/34ea85a8944e0851ca99782dcd07478d69cceb5d1c897020d7b7c1e20787163d"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/5a65b5a4c7584543c89576f4f5c59e7591d37f25f53e21772aeb74214080f3ca:artifact:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/5a65b5a4c7584543c89576f4f5c59e7591d37f25f53e21772aeb74214080f3ca",
+        "role": "artifact",
+        "source": "relation:mathscape:projection-relation/located-in/5a65b5a4c7584543c89576f4f5c59e7591d37f25f53e21772aeb74214080f3ca",
+        "target": "entity:mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/5a65b5a4c7584543c89576f4f5c59e7591d37f25f53e21772aeb74214080f3ca:span:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/5a65b5a4c7584543c89576f4f5c59e7591d37f25f53e21772aeb74214080f3ca",
+        "role": "span",
+        "source": "entity:mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643",
+        "target": "relation:mathscape:projection-relation/located-in/5a65b5a4c7584543c89576f4f5c59e7591d37f25f53e21772aeb74214080f3ca"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/822a52c239afdd1d73382e141667b08e07a7f181251c466d3a051fec67f0088a:artifact:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/822a52c239afdd1d73382e141667b08e07a7f181251c466d3a051fec67f0088a",
+        "role": "artifact",
+        "source": "relation:mathscape:projection-relation/located-in/822a52c239afdd1d73382e141667b08e07a7f181251c466d3a051fec67f0088a",
+        "target": "entity:mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/822a52c239afdd1d73382e141667b08e07a7f181251c466d3a051fec67f0088a:span:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/822a52c239afdd1d73382e141667b08e07a7f181251c466d3a051fec67f0088a",
+        "role": "span",
+        "source": "entity:mathscape:source-span/b697392fd4cc6658fc8d293adeb92a179c32aaa294e3b16145f7c642f72a03a1",
+        "target": "relation:mathscape:projection-relation/located-in/822a52c239afdd1d73382e141667b08e07a7f181251c466d3a051fec67f0088a"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/ce7bfe68d3798b4f17d189d531545d9c3a4fd415225a66684ceccffa0afbe0cb:artifact:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/ce7bfe68d3798b4f17d189d531545d9c3a4fd415225a66684ceccffa0afbe0cb",
+        "role": "artifact",
+        "source": "relation:mathscape:projection-relation/located-in/ce7bfe68d3798b4f17d189d531545d9c3a4fd415225a66684ceccffa0afbe0cb",
+        "target": "entity:mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/ce7bfe68d3798b4f17d189d531545d9c3a4fd415225a66684ceccffa0afbe0cb:span:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/ce7bfe68d3798b4f17d189d531545d9c3a4fd415225a66684ceccffa0afbe0cb",
+        "role": "span",
+        "source": "entity:mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b",
+        "target": "relation:mathscape:projection-relation/located-in/ce7bfe68d3798b4f17d189d531545d9c3a4fd415225a66684ceccffa0afbe0cb"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/d1de8ff63de53a9a10fe4455fb39f162e520f1d5bdc5ac5286413de17ed85f04:artifact:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/d1de8ff63de53a9a10fe4455fb39f162e520f1d5bdc5ac5286413de17ed85f04",
+        "role": "artifact",
+        "source": "relation:mathscape:projection-relation/located-in/d1de8ff63de53a9a10fe4455fb39f162e520f1d5bdc5ac5286413de17ed85f04",
+        "target": "entity:mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/d1de8ff63de53a9a10fe4455fb39f162e520f1d5bdc5ac5286413de17ed85f04:span:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/d1de8ff63de53a9a10fe4455fb39f162e520f1d5bdc5ac5286413de17ed85f04",
+        "role": "span",
+        "source": "entity:mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a",
+        "target": "relation:mathscape:projection-relation/located-in/d1de8ff63de53a9a10fe4455fb39f162e520f1d5bdc5ac5286413de17ed85f04"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/d3bbce9256d647bba5e739c8a9ea251d4eb7ceeb22aba0142401925c1ad50534:artifact:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/d3bbce9256d647bba5e739c8a9ea251d4eb7ceeb22aba0142401925c1ad50534",
+        "role": "artifact",
+        "source": "relation:mathscape:projection-relation/located-in/d3bbce9256d647bba5e739c8a9ea251d4eb7ceeb22aba0142401925c1ad50534",
+        "target": "entity:mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/d3bbce9256d647bba5e739c8a9ea251d4eb7ceeb22aba0142401925c1ad50534:span:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/d3bbce9256d647bba5e739c8a9ea251d4eb7ceeb22aba0142401925c1ad50534",
+        "role": "span",
+        "source": "entity:mathscape:source-span/f3f77faf93f3d3f38ee8eeaa4940d3cf241ad89610df29179dcc385da87fc668",
+        "target": "relation:mathscape:projection-relation/located-in/d3bbce9256d647bba5e739c8a9ea251d4eb7ceeb22aba0142401925c1ad50534"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/ecd4fe6d6b1d66ffe2105ec0d6de01c1793bfb86ad8b2c38172144cb4e482f48:artifact:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/ecd4fe6d6b1d66ffe2105ec0d6de01c1793bfb86ad8b2c38172144cb4e482f48",
+        "role": "artifact",
+        "source": "relation:mathscape:projection-relation/located-in/ecd4fe6d6b1d66ffe2105ec0d6de01c1793bfb86ad8b2c38172144cb4e482f48",
+        "target": "entity:mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/located-in/ecd4fe6d6b1d66ffe2105ec0d6de01c1793bfb86ad8b2c38172144cb4e482f48:span:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/located-in/ecd4fe6d6b1d66ffe2105ec0d6de01c1793bfb86ad8b2c38172144cb4e482f48",
+        "role": "span",
+        "source": "entity:mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe",
+        "target": "relation:mathscape:projection-relation/located-in/ecd4fe6d6b1d66ffe2105ec0d6de01c1793bfb86ad8b2c38172144cb4e482f48"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/of-concept/4f3b3d8b333ee6e0a7d6e84ec6bd1748e7c1b021416e38b1608d0e117790f128:concept:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/of-concept/4f3b3d8b333ee6e0a7d6e84ec6bd1748e7c1b021416e38b1608d0e117790f128",
+        "role": "concept",
+        "source": "relation:mathscape:projection-relation/of-concept/4f3b3d8b333ee6e0a7d6e84ec6bd1748e7c1b021416e38b1608d0e117790f128",
+        "target": "entity:mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/of-concept/4f3b3d8b333ee6e0a7d6e84ec6bd1748e7c1b021416e38b1608d0e117790f128:representation:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/of-concept/4f3b3d8b333ee6e0a7d6e84ec6bd1748e7c1b021416e38b1608d0e117790f128",
+        "role": "representation",
+        "source": "entity:mathscape:representation-core/421ca09f941ba478ecd834e3e889f8b4a35c568b89a77deac2ae00d514e28d11",
+        "target": "relation:mathscape:projection-relation/of-concept/4f3b3d8b333ee6e0a7d6e84ec6bd1748e7c1b021416e38b1608d0e117790f128"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/of-concept/84d1e9d4d2e98824c1892869abc4b0b623894946af0861ae61dd91bf968af4ac:concept:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/of-concept/84d1e9d4d2e98824c1892869abc4b0b623894946af0861ae61dd91bf968af4ac",
+        "role": "concept",
+        "source": "relation:mathscape:projection-relation/of-concept/84d1e9d4d2e98824c1892869abc4b0b623894946af0861ae61dd91bf968af4ac",
+        "target": "entity:mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/of-concept/84d1e9d4d2e98824c1892869abc4b0b623894946af0861ae61dd91bf968af4ac:declaration:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/of-concept/84d1e9d4d2e98824c1892869abc4b0b623894946af0861ae61dd91bf968af4ac",
+        "role": "declaration",
+        "source": "entity:mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+        "target": "relation:mathscape:projection-relation/of-concept/84d1e9d4d2e98824c1892869abc4b0b623894946af0861ae61dd91bf968af4ac"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/scope-of/bbf81d3c62bd10d1715fe3e723b8f6ce1eb3e5ab1b9970bdf74c6e870e9864ee:anchor:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/scope-of/bbf81d3c62bd10d1715fe3e723b8f6ce1eb3e5ab1b9970bdf74c6e870e9864ee",
+        "role": "anchor",
+        "source": "relation:mathscape:projection-relation/scope-of/bbf81d3c62bd10d1715fe3e723b8f6ce1eb3e5ab1b9970bdf74c6e870e9864ee",
+        "target": "entity:mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/scope-of/bbf81d3c62bd10d1715fe3e723b8f6ce1eb3e5ab1b9970bdf74c6e870e9864ee:scope:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/scope-of/bbf81d3c62bd10d1715fe3e723b8f6ce1eb3e5ab1b9970bdf74c6e870e9864ee",
+        "role": "scope",
+        "source": "entity:mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+        "target": "relation:mathscape:projection-relation/scope-of/bbf81d3c62bd10d1715fe3e723b8f6ce1eb3e5ab1b9970bdf74c6e870e9864ee"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/scope-of/d44ea37feea3621385311ba5d84a31ab8b687979038acef6c5a47c8708f7b71a:anchor:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/scope-of/d44ea37feea3621385311ba5d84a31ab8b687979038acef6c5a47c8708f7b71a",
+        "role": "anchor",
+        "source": "relation:mathscape:projection-relation/scope-of/d44ea37feea3621385311ba5d84a31ab8b687979038acef6c5a47c8708f7b71a",
+        "target": "entity:mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/scope-of/d44ea37feea3621385311ba5d84a31ab8b687979038acef6c5a47c8708f7b71a:scope:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/scope-of/d44ea37feea3621385311ba5d84a31ab8b687979038acef6c5a47c8708f7b71a",
+        "role": "scope",
+        "source": "entity:mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+        "target": "relation:mathscape:projection-relation/scope-of/d44ea37feea3621385311ba5d84a31ab8b687979038acef6c5a47c8708f7b71a"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:projection-relation/uses-entity/aa552390ac4e04b029a171a8765edadba6d080c8dc8a6eb81cc4c010b1b490e1:used:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/uses-entity/aa552390ac4e04b029a171a8765edadba6d080c8dc8a6eb81cc4c010b1b490e1",
+        "role": "used",
+        "source": "relation:mathscape:projection-relation/uses-entity/aa552390ac4e04b029a171a8765edadba6d080c8dc8a6eb81cc4c010b1b490e1",
+        "target": "entity:mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:projection-relation/uses-entity/aa552390ac4e04b029a171a8765edadba6d080c8dc8a6eb81cc4c010b1b490e1:user:single",
+        "ordinal": null,
+        "relation_id": "mathscape:projection-relation/uses-entity/aa552390ac4e04b029a171a8765edadba6d080c8dc8a6eb81cc4c010b1b490e1",
+        "role": "user",
+        "source": "entity:mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+        "target": "relation:mathscape:projection-relation/uses-entity/aa552390ac4e04b029a171a8765edadba6d080c8dc8a6eb81cc4c010b1b490e1"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:representation-binding/592ce18a7527fe8c9636a8e37db89f18b0c26b074dae2c88a7de2b339121b512:dialect_scope:single",
+        "ordinal": null,
+        "relation_id": "mathscape:representation-binding/592ce18a7527fe8c9636a8e37db89f18b0c26b074dae2c88a7de2b339121b512",
+        "role": "dialect_scope",
+        "source": "entity:mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+        "target": "relation:mathscape:representation-binding/592ce18a7527fe8c9636a8e37db89f18b0c26b074dae2c88a7de2b339121b512"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:representation-binding/592ce18a7527fe8c9636a8e37db89f18b0c26b074dae2c88a7de2b339121b512:representation:single",
+        "ordinal": null,
+        "relation_id": "mathscape:representation-binding/592ce18a7527fe8c9636a8e37db89f18b0c26b074dae2c88a7de2b339121b512",
+        "role": "representation",
+        "source": "relation:mathscape:representation-binding/592ce18a7527fe8c9636a8e37db89f18b0c26b074dae2c88a7de2b339121b512",
+        "target": "entity:mathscape:representation-core/421ca09f941ba478ecd834e3e889f8b4a35c568b89a77deac2ae00d514e28d11"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:representation-binding/c7d7b2f8c68ef282010b2e5e88be51b9ec2bd6b1136f5ccc2f2f023c771b07a2:dialect_scope:single",
+        "ordinal": null,
+        "relation_id": "mathscape:representation-binding/c7d7b2f8c68ef282010b2e5e88be51b9ec2bd6b1136f5ccc2f2f023c771b07a2",
+        "role": "dialect_scope",
+        "source": "entity:mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+        "target": "relation:mathscape:representation-binding/c7d7b2f8c68ef282010b2e5e88be51b9ec2bd6b1136f5ccc2f2f023c771b07a2"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:representation-binding/c7d7b2f8c68ef282010b2e5e88be51b9ec2bd6b1136f5ccc2f2f023c771b07a2:representation:single",
+        "ordinal": null,
+        "relation_id": "mathscape:representation-binding/c7d7b2f8c68ef282010b2e5e88be51b9ec2bd6b1136f5ccc2f2f023c771b07a2",
+        "role": "representation",
+        "source": "relation:mathscape:representation-binding/c7d7b2f8c68ef282010b2e5e88be51b9ec2bd6b1136f5ccc2f2f023c771b07a2",
+        "target": "entity:mathscape:representation-core/bb9e86d69498f3e3f543cdb7908ecff3766436972bec1603200057500dd0cb66"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:representation-binding/e048962b5b35614afd4388d3b71411a29a15275dc4165b149ebd267bb6509fa0:dialect_scope:single",
+        "ordinal": null,
+        "relation_id": "mathscape:representation-binding/e048962b5b35614afd4388d3b71411a29a15275dc4165b149ebd267bb6509fa0",
+        "role": "dialect_scope",
+        "source": "entity:mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+        "target": "relation:mathscape:representation-binding/e048962b5b35614afd4388d3b71411a29a15275dc4165b149ebd267bb6509fa0"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:representation-binding/e048962b5b35614afd4388d3b71411a29a15275dc4165b149ebd267bb6509fa0:representation:single",
+        "ordinal": null,
+        "relation_id": "mathscape:representation-binding/e048962b5b35614afd4388d3b71411a29a15275dc4165b149ebd267bb6509fa0",
+        "role": "representation",
+        "source": "relation:mathscape:representation-binding/e048962b5b35614afd4388d3b71411a29a15275dc4165b149ebd267bb6509fa0",
+        "target": "entity:mathscape:representation-core/bb9e86d69498f3e3f543cdb7908ecff3766436972bec1603200057500dd0cb66"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:representation-binding/fff7283bb80d8ec1cdfa7f8c76741909124577e4d06b41009d401e45b33dd050:dialect_scope:single",
+        "ordinal": null,
+        "relation_id": "mathscape:representation-binding/fff7283bb80d8ec1cdfa7f8c76741909124577e4d06b41009d401e45b33dd050",
+        "role": "dialect_scope",
+        "source": "entity:mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+        "target": "relation:mathscape:representation-binding/fff7283bb80d8ec1cdfa7f8c76741909124577e4d06b41009d401e45b33dd050"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:representation-binding/fff7283bb80d8ec1cdfa7f8c76741909124577e4d06b41009d401e45b33dd050:representation:single",
+        "ordinal": null,
+        "relation_id": "mathscape:representation-binding/fff7283bb80d8ec1cdfa7f8c76741909124577e4d06b41009d401e45b33dd050",
+        "role": "representation",
+        "source": "relation:mathscape:representation-binding/fff7283bb80d8ec1cdfa7f8c76741909124577e4d06b41009d401e45b33dd050",
+        "target": "entity:mathscape:representation-core/421ca09f941ba478ecd834e3e889f8b4a35c568b89a77deac2ae00d514e28d11"
+      },
+      {
+        "directed": false,
+        "direction": "undirected",
+        "id": "incidence:mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4:evidence:0",
+        "ordinal": 0,
+        "relation_id": "mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4",
+        "role": "evidence",
+        "source": "relation:mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4",
+        "target": "entity:mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4:source:single",
+        "ordinal": null,
+        "relation_id": "mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4",
+        "role": "source",
+        "source": "entity:mathscape:source-unit/6c81a05b87e1ca0a9e310a28dd244d43ca2a4e800549292e718fa15da10e7afd",
+        "target": "relation:mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4:target:single",
+        "ordinal": null,
+        "relation_id": "mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4",
+        "role": "target",
+        "source": "relation:mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4",
+        "target": "entity:mathscape:source-unit/528e8bcbd11e97f6f9158baf0fb228a4b6c3a5ccf79a08e311ad76bd1799b5cd"
+      },
+      {
+        "directed": false,
+        "direction": "undirected",
+        "id": "incidence:mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a:evidence:0",
+        "ordinal": 0,
+        "relation_id": "mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a",
+        "role": "evidence",
+        "source": "relation:mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a",
+        "target": "entity:mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b"
+      },
+      {
+        "directed": true,
+        "direction": "into_relation",
+        "id": "incidence:mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a:source:single",
+        "ordinal": null,
+        "relation_id": "mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a",
+        "role": "source",
+        "source": "entity:mathscape:source-unit/ce804392ddd7f29983c28cb7797a6afc769b893451ed000c54f7a94c92f50eb6",
+        "target": "relation:mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a"
+      },
+      {
+        "directed": true,
+        "direction": "out_of_relation",
+        "id": "incidence:mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a:target:single",
+        "ordinal": null,
+        "relation_id": "mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a",
+        "role": "target",
+        "source": "relation:mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a",
+        "target": "entity:mathscape:source-unit/1596f79d047873cc0ba56b3b27ca823824ca5f49acf6cc09d3f4f617bab7ed5d"
+      }
+    ],
+    "lens": "landscape",
+    "nodes": [
+      {
+        "boundary": false,
+        "domain_id": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+        "domain_kind": "SourceArtifact",
+        "element_kind": "entity",
+        "id": "entity:mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+        "label": "灯塔母函数初步.md",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": null,
+        "relation_kind": null,
+        "summary": "text/markdown · 1025 bytes · available"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+        "domain_kind": "SourceArtifact",
+        "element_kind": "entity",
+        "id": "entity:mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+        "label": "星港母函数讲义.md",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": null,
+        "relation_kind": null,
+        "summary": "text/markdown · 1404 bytes · available"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:debt/46478c6f937dfaf31128105ad670f143d5c194d4d08dc32b8d553723f58b2de2",
+        "domain_kind": "Debt",
+        "element_kind": "entity",
+        "id": "entity:mathscape:debt/46478c6f937dfaf31128105ad670f143d5c194d4d08dc32b8d553723f58b2de2",
+        "label": "一笔账：若需要把形式幂级数结论代回实数 $t$ 求值，必…",
+        "layer": "rdtx",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "还欠着 · 若需要把形式幂级数结论代回实数 $t$ 求值，必须验证点 $t$ 落在《灯塔》要求的绝对收敛区间 $(-r, r)$ 内。"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+        "domain_kind": "DialectScope",
+        "element_kind": "entity",
+        "id": "entity:mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+        "label": "《灯塔》§1.3 的收敛生成函数约定",
+        "layer": "local_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "约定卡 · 正项标号数列 $(b_m)_{m \\ge 1}$ 一律从第 1 项起算；生成函数 $g(t)$ 定义为开区间 $(-r, r)$ 上的绝对收敛实函数 · 3 个局部符号"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+        "domain_kind": "DialectScope",
+        "element_kind": "entity",
+        "id": "entity:mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+        "label": "《星港》§2.1 的形式母函数约定",
+        "layer": "local_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "约定卡 · 数列 $(a_n)_{n \\ge 0}$ 从第 0 项 $a_0$ 起算；$A(x) \\in R[[x]]$ 为形式幂级数，不讨论实数收敛性 · 3 个局部符号"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:representation-core/421ca09f941ba478ecd834e3e889f8b4a35c568b89a77deac2ae00d514e28d11",
+        "domain_kind": "RepresentationCore",
+        "element_kind": "entity",
+        "id": "entity:mathscape:representation-core/421ca09f941ba478ecd834e3e889f8b4a35c568b89a77deac2ae00d514e28d11",
+        "label": "形式幂级数表示核 R[[X]]",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "表示核 · 承载：交换环 $R$ 上的形式幂级数环 $R[[X]]$ · 2 个算子 · mathlib：PowerSeries（未核对）"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:representation-core/bb9e86d69498f3e3f543cdb7908ecff3766436972bec1603200057500dd0cb66",
+        "domain_kind": "RepresentationCore",
+        "element_kind": "entity",
+        "id": "entity:mathscape:representation-core/bb9e86d69498f3e3f543cdb7908ecff3766436972bec1603200057500dd0cb66",
+        "label": "数列表示核 ℕ → R",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "表示核 · 承载：以自然数 $\\mathbb{N}$ 为下标的系数函数空间… · 1 个算子"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "entity",
+        "id": "entity:mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+        "label": "母函数与形式幂级数",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "理论 · mathlib：暂无对应名称"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "entity",
+        "id": "entity:mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+        "label": "形式几何级数逆元 (1 - X)∑Xⁿ = 1",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "精确说法 · 1 处排除边界 · mathlib：暂无对应名称"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "entity",
+        "id": "entity:mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32",
+        "label": "普通母函数",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "概念 · mathlib：暂无对应名称"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "entity",
+        "id": "entity:mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88",
+        "label": "有限几何级数求和（含 x=1 退化分支）",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "精确说法 · 2 个分支 · 1 处排除边界 · mathlib：geom_sum_eq（未核对）"
+      },
+      {
+        "boundary": true,
+        "domain_id": "mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a",
+        "domain_kind": "SourceSpan",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a",
+        "label": "来源范围",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "Markdown 字节范围 {\"end\":1388,\"start\":1086}"
+      },
+      {
+        "boundary": true,
+        "domain_id": "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209",
+        "domain_kind": "SourceSpan",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209",
+        "label": "来源范围",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "Markdown 字节范围 {\"end\":579,\"start\":297}"
+      },
+      {
+        "boundary": true,
+        "domain_id": "mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b",
+        "domain_kind": "SourceSpan",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b",
+        "label": "来源范围",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "Markdown 字节范围 {\"end\":1009,\"start\":814}"
+      },
+      {
+        "boundary": true,
+        "domain_id": "mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8",
+        "domain_kind": "SourceSpan",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8",
+        "label": "来源范围",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "Markdown 字节范围 {\"end\":774,\"start\":620}"
+      },
+      {
+        "boundary": true,
+        "domain_id": "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643",
+        "domain_kind": "SourceSpan",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643",
+        "label": "来源范围",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "Markdown 字节范围 {\"end\":1045,\"start\":699}"
+      },
+      {
+        "boundary": true,
+        "domain_id": "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe",
+        "domain_kind": "SourceSpan",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe",
+        "label": "来源范围",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "Markdown 字节范围 {\"end\":658,\"start\":305}"
+      },
+      {
+        "boundary": true,
+        "domain_id": "mathscape:source-span/b697392fd4cc6658fc8d293adeb92a179c32aaa294e3b16145f7c642f72a03a1",
+        "domain_kind": "SourceSpan",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-span/b697392fd4cc6658fc8d293adeb92a179c32aaa294e3b16145f7c642f72a03a1",
+        "label": "来源范围",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "Markdown 字节范围 {\"end\":264,\"start\":193}"
+      },
+      {
+        "boundary": true,
+        "domain_id": "mathscape:source-span/f3f77faf93f3d3f38ee8eeaa4940d3cf241ad89610df29179dcc385da87fc668",
+        "domain_kind": "SourceSpan",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-span/f3f77faf93f3d3f38ee8eeaa4940d3cf241ad89610df29179dcc385da87fc668",
+        "label": "来源范围",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "Markdown 字节范围 {\"end\":257,\"start\":192}"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:source-unit/1596f79d047873cc0ba56b3b27ca823824ca5f49acf6cc09d3f4f617bab7ed5d",
+        "domain_kind": "SourceSemanticUnit",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-unit/1596f79d047873cc0ba56b3b27ca823824ca5f49acf6cc09d3f4f617bab7ed5d",
+        "label": "命题 1.3.2 有限等比和公式（仅写 t≠1）",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "statement"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+        "domain_kind": "SourceSemanticUnit",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+        "label": "§2.1 普通母函数与有限几何和",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "section"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:source-unit/528e8bcbd11e97f6f9158baf0fb228a4b6c3a5ccf79a08e311ad76bd1799b5cd",
+        "domain_kind": "SourceSemanticUnit",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-unit/528e8bcbd11e97f6f9158baf0fb228a4b6c3a5ccf79a08e311ad76bd1799b5cd",
+        "label": "定义 2.1.1 普通母函数（形式幂级数 R[[x]]）",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "definition"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:source-unit/6656c9b7a63b44e04ce329318c7106d481a478eae5aa73c047ecf4a995da5623",
+        "domain_kind": "SourceSemanticUnit",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-unit/6656c9b7a63b44e04ce329318c7106d481a478eae5aa73c047ecf4a995da5623",
+        "label": "定理 2.1.2 有限几何级数（x≠1 与 x=1 双分支）",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "statement"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:source-unit/6c81a05b87e1ca0a9e310a28dd244d43ca2a4e800549292e718fa15da10e7afd",
+        "domain_kind": "SourceSemanticUnit",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-unit/6c81a05b87e1ca0a9e310a28dd244d43ca2a4e800549292e718fa15da10e7afd",
+        "label": "推论 2.1.3 形式逆元与实变数发散排除",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "statement"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+        "domain_kind": "SourceSemanticUnit",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+        "label": "§1.3 生成函数与等比求和",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "section"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:source-unit/ce804392ddd7f29983c28cb7797a6afc769b893451ed000c54f7a94c92f50eb6",
+        "domain_kind": "SourceSemanticUnit",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-unit/ce804392ddd7f29983c28cb7797a6afc769b893451ed000c54f7a94c92f50eb6",
+        "label": "注 1.3.3 |t|<1 收敛与 |t|≥1 发散边界",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "remark"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:source-unit/ea4353677ffeb25d60ccbc96b37526cb6c114cd3c4e646aa7b5ac13e9de63b66",
+        "domain_kind": "SourceSemanticUnit",
+        "element_kind": "entity",
+        "id": "entity:mathscape:source-unit/ea4353677ffeb25d60ccbc96b37526cb6c114cd3c4e646aa7b5ac13e9de63b66",
+        "label": "定义 1.3.1 实收敛区间上的生成函数 g(t)",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": null,
+        "summary": "definition"
+      },
+      {
+        "boundary": false,
+        "domain_id": null,
+        "domain_kind": null,
+        "element_kind": "group",
+        "id": "group:source-map-landscape",
+        "label": "来源图",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": null,
+        "relation_kind": null,
+        "summary": null
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444",
+        "domain_kind": "Alignment",
+        "element_kind": "relation",
+        "id": "relation:mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444",
+        "label": "特例：灯塔的实公比 t（t ≠ 1）对应共享定理常规分支的 x",
+        "layer": "alignment",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "aligns",
+        "summary": "对齐线 · 是特例 · 部分对上 · 覆盖分支：fraction_form · 对不上的部分：漏写 t = 1 退化分支（和为 N）"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913",
+        "domain_kind": "Alignment",
+        "element_kind": "relation",
+        "id": "relation:mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913",
+        "label": "说的就是它",
+        "layer": "alignment",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "aligns",
+        "summary": "对齐线 · 说的就是 · 已核对上下文"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823",
+        "domain_kind": "Alignment",
+        "element_kind": "relation",
+        "id": "relation:mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823",
+        "label": "说的就是它",
+        "layer": "alignment",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "aligns",
+        "summary": "对齐线 · 说的就是 · 已核对上下文 · 覆盖分支：fraction_form、constant_sum"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a",
+        "domain_kind": "Alignment",
+        "element_kind": "relation",
+        "id": "relation:mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a",
+        "label": "部分重合：仅在 |t| < 1 实收敛域成立，非形式环恒等式",
+        "layer": "alignment",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "aligns",
+        "summary": "对齐线 · 部分重合 · 部分对上 · 对不上的部分：仅在 |t| < 1 实收敛域成立，非形式环恒等式"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/contains-span/060be02a25da3b97025dfbe5787a8334adbc94b289ef786c8f260c1870cd5919",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/contains-span/060be02a25da3b97025dfbe5787a8334adbc94b289ef786c8f260c1870cd5919",
+        "label": "对应原文",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "contains_span",
+        "summary": "来源单元对应的原文范围"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/contains-span/6fd47b2c4c816e4413863fc8163dc2ed632f1a8f3f4b4f975ffd1d11021a776e",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/contains-span/6fd47b2c4c816e4413863fc8163dc2ed632f1a8f3f4b4f975ffd1d11021a776e",
+        "label": "对应原文",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "contains_span",
+        "summary": "来源单元对应的原文范围"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/contains-span/7b04e250fe7c8f4553dfc3cdba4b828aa86c9b63306cb6aec395b673afd40154",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/contains-span/7b04e250fe7c8f4553dfc3cdba4b828aa86c9b63306cb6aec395b673afd40154",
+        "label": "对应原文",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "contains_span",
+        "summary": "来源单元对应的原文范围"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/contains-span/8dc390594f40e3c51637ad533918a1e9bc078c6606f07138a59b268f3baba117",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/contains-span/8dc390594f40e3c51637ad533918a1e9bc078c6606f07138a59b268f3baba117",
+        "label": "对应原文",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "contains_span",
+        "summary": "来源单元对应的原文范围"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/contains-span/baf513dbaa6ea0798288706cf0f0b62911955f4d767a3cad3869a5cd2fc95161",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/contains-span/baf513dbaa6ea0798288706cf0f0b62911955f4d767a3cad3869a5cd2fc95161",
+        "label": "对应原文",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "contains_span",
+        "summary": "来源单元对应的原文范围"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/contains-span/c32a899ac73ca3dd3380fcffa47d95bf579bfb59f949095330d29fe4567ce25b",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/contains-span/c32a899ac73ca3dd3380fcffa47d95bf579bfb59f949095330d29fe4567ce25b",
+        "label": "对应原文",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "contains_span",
+        "summary": "来源单元对应的原文范围"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/contains-span/c6652df8f7116bd85ab15f367db1f88c8403c2e2c81263b033ea185f51dfd9f8",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/contains-span/c6652df8f7116bd85ab15f367db1f88c8403c2e2c81263b033ea185f51dfd9f8",
+        "label": "对应原文",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "contains_span",
+        "summary": "来源单元对应的原文范围"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/contains-span/ee2eb31ee5ed7eccc7dcc1237b02f39572bc858c7d7138d2b173795322ce6cdb",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/contains-span/ee2eb31ee5ed7eccc7dcc1237b02f39572bc858c7d7138d2b173795322ce6cdb",
+        "label": "对应原文",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "contains_span",
+        "summary": "来源单元对应的原文范围"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/debt-on/4ea60b663f2928f89f2fad538c6bc606cb52a3c283d1196703573c2c4a1407f2",
+        "domain_kind": "Debt",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/debt-on/4ea60b663f2928f89f2fad538c6bc606cb52a3c283d1196703573c2c4a1407f2",
+        "label": "挂账",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "debt_on",
+        "summary": "挂在对齐线「绑定为形式幂级数（剥离收敛半径）」上"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/has-part/2770fe0cf62b10ef40d5db000a9347d61af82fdcd9722d125cc4b55ae635bfc1",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/has-part/2770fe0cf62b10ef40d5db000a9347d61af82fdcd9722d125cc4b55ae635bfc1",
+        "label": "包含",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "has_part",
+        "summary": "来源单元的结构层级"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/has-part/2b48cc08f8294b53fec987b5d390e0314262ad266a802bceb35328be422c3cc0",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/has-part/2b48cc08f8294b53fec987b5d390e0314262ad266a802bceb35328be422c3cc0",
+        "label": "包含",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "has_part",
+        "summary": "来源单元的结构层级"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/has-part/64685377962cdb22e1fe5e5d57c878c753a7ab87dbf6fb34f5a91aa77495028d",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/has-part/64685377962cdb22e1fe5e5d57c878c753a7ab87dbf6fb34f5a91aa77495028d",
+        "label": "包含",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "has_part",
+        "summary": "来源单元的结构层级"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/has-part/6836e23bbe8741c825a179f3863b1418f70beea386ecfe3360ad4c5c7762b8d0",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/has-part/6836e23bbe8741c825a179f3863b1418f70beea386ecfe3360ad4c5c7762b8d0",
+        "label": "包含",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "has_part",
+        "summary": "来源单元的结构层级"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/has-part/b6d0480a9b11c807c8dc983077cdb7293cb7c3e25e9bf8841eabd7e07a914730",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/has-part/b6d0480a9b11c807c8dc983077cdb7293cb7c3e25e9bf8841eabd7e07a914730",
+        "label": "包含",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "has_part",
+        "summary": "来源单元的结构层级"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/has-part/fee962523f1a67bf1c44c348ab4b63f9a8dc9686dac1a02b144b88887669c5ce",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/has-part/fee962523f1a67bf1c44c348ab4b63f9a8dc9686dac1a02b144b88887669c5ce",
+        "label": "包含",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": "group:source-map-landscape",
+        "relation_kind": "has_part",
+        "summary": "来源单元的结构层级"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/in-theory/40a9e4d3200366c2b061d80cacf270d0192eb11d73b8aaaa47973b4dcdce87af",
+        "domain_kind": "RepresentationCore",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/in-theory/40a9e4d3200366c2b061d80cacf270d0192eb11d73b8aaaa47973b4dcdce87af",
+        "label": "属于理论",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "in_theory",
+        "summary": "表示核所在的理论"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/in-theory/5881c72cd5746e4e78e5c267531a25105df9380101744030a09282aa2825f612",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/in-theory/5881c72cd5746e4e78e5c267531a25105df9380101744030a09282aa2825f612",
+        "label": "属于理论",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "in_theory",
+        "summary": "共享对象所在的理论"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/in-theory/baff06babb83c6cc231b8c36174769d30e6bcb3356f36b923e76b0ccc94ee87e",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/in-theory/baff06babb83c6cc231b8c36174769d30e6bcb3356f36b923e76b0ccc94ee87e",
+        "label": "属于理论",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "in_theory",
+        "summary": "共享对象所在的理论"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/in-theory/d5f1bd1db129b9295f381c902032c99937960e636d1679337c248c39d3533e78",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/in-theory/d5f1bd1db129b9295f381c902032c99937960e636d1679337c248c39d3533e78",
+        "label": "属于理论",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "in_theory",
+        "summary": "共享对象所在的理论"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/in-theory/e34eeb1136fc70ac64cb12ca69c1fca57e857155fa8437069bf14ec32d99c7e4",
+        "domain_kind": "RepresentationCore",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/in-theory/e34eeb1136fc70ac64cb12ca69c1fca57e857155fa8437069bf14ec32d99c7e4",
+        "label": "属于理论",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "in_theory",
+        "summary": "表示核所在的理论"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/located-in/19a265dbf8ea6e5694acb4f1b70cb26627e6fa37ed49b8c981d011cdaca1fa30",
+        "domain_kind": "Evidence",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/located-in/19a265dbf8ea6e5694acb4f1b70cb26627e6fa37ed49b8c981d011cdaca1fa30",
+        "label": "来源于 Markdown",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": null,
+        "relation_kind": "located_in",
+        "summary": "SourceSpan Markdown 定位"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/located-in/34ea85a8944e0851ca99782dcd07478d69cceb5d1c897020d7b7c1e20787163d",
+        "domain_kind": "Evidence",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/located-in/34ea85a8944e0851ca99782dcd07478d69cceb5d1c897020d7b7c1e20787163d",
+        "label": "来源于 Markdown",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": null,
+        "relation_kind": "located_in",
+        "summary": "SourceSpan Markdown 定位"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/located-in/5a65b5a4c7584543c89576f4f5c59e7591d37f25f53e21772aeb74214080f3ca",
+        "domain_kind": "Evidence",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/located-in/5a65b5a4c7584543c89576f4f5c59e7591d37f25f53e21772aeb74214080f3ca",
+        "label": "来源于 Markdown",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": null,
+        "relation_kind": "located_in",
+        "summary": "SourceSpan Markdown 定位"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/located-in/822a52c239afdd1d73382e141667b08e07a7f181251c466d3a051fec67f0088a",
+        "domain_kind": "Evidence",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/located-in/822a52c239afdd1d73382e141667b08e07a7f181251c466d3a051fec67f0088a",
+        "label": "来源于 Markdown",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": null,
+        "relation_kind": "located_in",
+        "summary": "SourceSpan Markdown 定位"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/located-in/ce7bfe68d3798b4f17d189d531545d9c3a4fd415225a66684ceccffa0afbe0cb",
+        "domain_kind": "Evidence",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/located-in/ce7bfe68d3798b4f17d189d531545d9c3a4fd415225a66684ceccffa0afbe0cb",
+        "label": "来源于 Markdown",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": null,
+        "relation_kind": "located_in",
+        "summary": "SourceSpan Markdown 定位"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/located-in/d1de8ff63de53a9a10fe4455fb39f162e520f1d5bdc5ac5286413de17ed85f04",
+        "domain_kind": "Evidence",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/located-in/d1de8ff63de53a9a10fe4455fb39f162e520f1d5bdc5ac5286413de17ed85f04",
+        "label": "来源于 Markdown",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": null,
+        "relation_kind": "located_in",
+        "summary": "SourceSpan Markdown 定位"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/located-in/d3bbce9256d647bba5e739c8a9ea251d4eb7ceeb22aba0142401925c1ad50534",
+        "domain_kind": "Evidence",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/located-in/d3bbce9256d647bba5e739c8a9ea251d4eb7ceeb22aba0142401925c1ad50534",
+        "label": "来源于 Markdown",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": null,
+        "relation_kind": "located_in",
+        "summary": "SourceSpan Markdown 定位"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/located-in/ecd4fe6d6b1d66ffe2105ec0d6de01c1793bfb86ad8b2c38172144cb4e482f48",
+        "domain_kind": "Evidence",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/located-in/ecd4fe6d6b1d66ffe2105ec0d6de01c1793bfb86ad8b2c38172144cb4e482f48",
+        "label": "来源于 Markdown",
+        "layer": "source",
+        "lifecycle": null,
+        "parent": null,
+        "relation_kind": "located_in",
+        "summary": "SourceSpan Markdown 定位"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/of-concept/4f3b3d8b333ee6e0a7d6e84ec6bd1748e7c1b021416e38b1608d0e117790f128",
+        "domain_kind": "RepresentationCore",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/of-concept/4f3b3d8b333ee6e0a7d6e84ec6bd1748e7c1b021416e38b1608d0e117790f128",
+        "label": "编码对象",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "of_concept",
+        "summary": "该表示核所编码的数学对象"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/of-concept/84d1e9d4d2e98824c1892869abc4b0b623894946af0861ae61dd91bf968af4ac",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/of-concept/84d1e9d4d2e98824c1892869abc4b0b623894946af0861ae61dd91bf968af4ac",
+        "label": "归属概念",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "of_concept",
+        "summary": "精确说法所属的概念"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/scope-of/bbf81d3c62bd10d1715fe3e723b8f6ce1eb3e5ab1b9970bdf74c6e870e9864ee",
+        "domain_kind": "DialectScope",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/scope-of/bbf81d3c62bd10d1715fe3e723b8f6ce1eb3e5ab1b9970bdf74c6e870e9864ee",
+        "label": "约定适用于",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "scope_of",
+        "summary": "约定卡适用于这一节及其下的内容"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/scope-of/d44ea37feea3621385311ba5d84a31ab8b687979038acef6c5a47c8708f7b71a",
+        "domain_kind": "DialectScope",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/scope-of/d44ea37feea3621385311ba5d84a31ab8b687979038acef6c5a47c8708f7b71a",
+        "label": "约定适用于",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "scope_of",
+        "summary": "约定卡适用于这一节及其下的内容"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:projection-relation/uses-entity/aa552390ac4e04b029a171a8765edadba6d080c8dc8a6eb81cc4c010b1b490e1",
+        "domain_kind": "SemanticEntity",
+        "element_kind": "relation",
+        "id": "relation:mathscape:projection-relation/uses-entity/aa552390ac4e04b029a171a8765edadba6d080c8dc8a6eb81cc4c010b1b490e1",
+        "label": "引用对象",
+        "layer": "global_semantic",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "uses_entity",
+        "summary": "该共享对象引用的其他共享对象"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:representation-binding/592ce18a7527fe8c9636a8e37db89f18b0c26b074dae2c88a7de2b339121b512",
+        "domain_kind": "RepresentationBinding",
+        "element_kind": "relation",
+        "id": "relation:mathscape:representation-binding/592ce18a7527fe8c9636a8e37db89f18b0c26b074dae2c88a7de2b339121b512",
+        "label": "绑定为形式幂级数表示",
+        "layer": "alignment",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "binds_representation",
+        "summary": "表示绑定 · 已核对上下文 · 符号：A(x)、[x^n]"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:representation-binding/c7d7b2f8c68ef282010b2e5e88be51b9ec2bd6b1136f5ccc2f2f023c771b07a2",
+        "domain_kind": "RepresentationBinding",
+        "element_kind": "relation",
+        "id": "relation:mathscape:representation-binding/c7d7b2f8c68ef282010b2e5e88be51b9ec2bd6b1136f5ccc2f2f023c771b07a2",
+        "label": "绑定为数列表示（0 起算直连）",
+        "layer": "alignment",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "binds_representation",
+        "summary": "表示绑定 · 已核对上下文 · 符号：a_n"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:representation-binding/e048962b5b35614afd4388d3b71411a29a15275dc4165b149ebd267bb6509fa0",
+        "domain_kind": "RepresentationBinding",
+        "element_kind": "relation",
+        "id": "relation:mathscape:representation-binding/e048962b5b35614afd4388d3b71411a29a15275dc4165b149ebd267bb6509fa0",
+        "label": "绑定为数列表示（首项补 f(0)=0）",
+        "layer": "alignment",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "binds_representation",
+        "summary": "表示绑定 · 部分对上 · 符号：b_m"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:representation-binding/fff7283bb80d8ec1cdfa7f8c76741909124577e4d06b41009d401e45b33dd050",
+        "domain_kind": "RepresentationBinding",
+        "element_kind": "relation",
+        "id": "relation:mathscape:representation-binding/fff7283bb80d8ec1cdfa7f8c76741909124577e4d06b41009d401e45b33dd050",
+        "label": "绑定为形式幂级数（剥离收敛半径）",
+        "layer": "alignment",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "binds_representation",
+        "summary": "表示绑定 · 部分对上 · 符号：g(t)"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4",
+        "label": "解释",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "explains",
+        "summary": "来源关系 · 解释"
+      },
+      {
+        "boundary": false,
+        "domain_id": "mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a",
+        "domain_kind": "SourceUnitRelation",
+        "element_kind": "relation",
+        "id": "relation:mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a",
+        "label": "解释",
+        "layer": "source",
+        "lifecycle": "active",
+        "parent": "group:source-map-landscape",
+        "relation_kind": "explains",
+        "summary": "来源关系 · 解释"
+      }
+    ],
+    "schema_version": "mathscape.graph-projection.v1"
+  },
+  "label": "两本母函数教材（阶段二教程夹具）",
+  "learning": {
+    "materials": [
+      {
+        "artifact_id": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+        "conventions_detail": [
+          {
+            "is_baseline_match": false,
+            "key": "sequence_index_origin",
+            "scope_id": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+            "scope_label": "《灯塔》§1.3 的收敛生成函数约定",
+            "text": "正项标号数列 $(b_m)_{m \\ge 1}$ 一律从第 1 项起算"
+          },
+          {
+            "is_baseline_match": false,
+            "key": "other",
+            "scope_id": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+            "scope_label": "《灯塔》§1.3 的收敛生成函数约定",
+            "text": "生成函数 $g(t)$ 定义为开区间 $(-r, r)$ 上的绝对收敛实函数"
+          }
+        ],
+        "new_conventions": [
+          {
+            "scope_id": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+            "scope_label": "《灯塔》§1.3 的收敛生成函数约定",
+            "text": "正项标号数列 $(b_m)_{m \\ge 1}$ 一律从第 1 项起算"
+          },
+          {
+            "scope_id": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+            "scope_label": "《灯塔》§1.3 的收敛生成函数约定",
+            "text": "生成函数 $g(t)$ 定义为开区间 $(-r, r)$ 上的绝对收敛实函数"
+          }
+        ],
+        "open_debts": [
+          {
+            "debt_id": "mathscape:debt/46478c6f937dfaf31128105ad670f143d5c194d4d08dc32b8d553723f58b2de2",
+            "obligation": "若需要把形式幂级数结论代回实数 $t$ 求值，必须验证点 $t$ 落在《灯塔》要求的绝对收敛区间 $(-r, r)$ 内。",
+            "status": "open"
+          }
+        ],
+        "outline_units": [
+          {
+            "category": "unaligned",
+            "study_status": "unread",
+            "targets": [],
+            "unit_id": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+            "unit_kind": "section",
+            "unit_title": "§1.3 生成函数与等比求和"
+          },
+          {
+            "category": "unaligned",
+            "parent_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+            "study_status": "unread",
+            "targets": [],
+            "unit_id": "mathscape:source-unit/ea4353677ffeb25d60ccbc96b37526cb6c114cd3c4e646aa7b5ac13e9de63b66",
+            "unit_kind": "definition",
+            "unit_title": "定义 1.3.1 实收敛区间上的生成函数 g(t)"
+          },
+          {
+            "category": "seen_elsewhere",
+            "parent_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+            "study_status": "unread",
+            "targets": [
+              {
+                "alignment_id": "mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444",
+                "entity_id": "mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88",
+                "entity_label": "有限几何级数求和（含 x=1 退化分支）",
+                "only_differs_by": [
+                  "漏写 t = 1 退化分支（和为 N）"
+                ],
+                "relation": "specializes",
+                "seen_in": [
+                  "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2"
+                ]
+              }
+            ],
+            "unit_id": "mathscape:source-unit/1596f79d047873cc0ba56b3b27ca823824ca5f49acf6cc09d3f4f617bab7ed5d",
+            "unit_kind": "statement",
+            "unit_title": "命题 1.3.2 有限等比和公式（仅写 t≠1）"
+          },
+          {
+            "category": "seen_elsewhere",
+            "parent_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+            "study_status": "unread",
+            "targets": [
+              {
+                "alignment_id": "mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a",
+                "entity_id": "mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+                "entity_label": "形式几何级数逆元 (1 - X)∑Xⁿ = 1",
+                "only_differs_by": [
+                  "仅在 |t| < 1 实收敛域成立，非形式环恒等式"
+                ],
+                "relation": "overlaps_with",
+                "seen_in": [
+                  "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2"
+                ]
+              }
+            ],
+            "unit_id": "mathscape:source-unit/ce804392ddd7f29983c28cb7797a6afc769b893451ed000c54f7a94c92f50eb6",
+            "unit_kind": "remark",
+            "unit_title": "注 1.3.3 |t|<1 收敛与 |t|≥1 发散边界"
+          }
+        ],
+        "units": [
+          {
+            "alignment_id": "mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444",
+            "entity_id": "mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88",
+            "entity_label": "有限几何级数求和（含 x=1 退化分支）",
+            "label": "别的材料里见过",
+            "only_differs_by": [
+              "漏写 t = 1 退化分支（和为 N）"
+            ],
+            "relation": "specializes",
+            "seen_in": [
+              "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2"
+            ],
+            "unit_id": "mathscape:source-unit/1596f79d047873cc0ba56b3b27ca823824ca5f49acf6cc09d3f4f617bab7ed5d",
+            "unit_title": "命题 1.3.2 有限等比和公式（仅写 t≠1）"
+          },
+          {
+            "alignment_id": "mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a",
+            "entity_id": "mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+            "entity_label": "形式几何级数逆元 (1 - X)∑Xⁿ = 1",
+            "label": "别的材料里见过",
+            "only_differs_by": [
+              "仅在 |t| < 1 实收敛域成立，非形式环恒等式"
+            ],
+            "relation": "overlaps_with",
+            "seen_in": [
+              "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2"
+            ],
+            "unit_id": "mathscape:source-unit/ce804392ddd7f29983c28cb7797a6afc769b893451ed000c54f7a94c92f50eb6",
+            "unit_title": "注 1.3.3 |t|<1 收敛与 |t|≥1 发散边界"
+          }
+        ]
+      },
+      {
+        "artifact_id": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+        "conventions_detail": [
+          {
+            "is_baseline_match": false,
+            "key": "sequence_index_origin",
+            "scope_id": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+            "scope_label": "《星港》§2.1 的形式母函数约定",
+            "text": "数列 $(a_n)_{n \\ge 0}$ 从第 0 项 $a_0$ 起算"
+          },
+          {
+            "is_baseline_match": false,
+            "key": "notation",
+            "scope_id": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+            "scope_label": "《星港》§2.1 的形式母函数约定",
+            "text": "$A(x) \\in R[[x]]$ 为形式幂级数，不讨论实数收敛性"
+          }
+        ],
+        "new_conventions": [
+          {
+            "scope_id": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+            "scope_label": "《星港》§2.1 的形式母函数约定",
+            "text": "数列 $(a_n)_{n \\ge 0}$ 从第 0 项 $a_0$ 起算"
+          },
+          {
+            "scope_id": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+            "scope_label": "《星港》§2.1 的形式母函数约定",
+            "text": "$A(x) \\in R[[x]]$ 为形式幂级数，不讨论实数收敛性"
+          }
+        ],
+        "open_debts": [],
+        "outline_units": [
+          {
+            "category": "unaligned",
+            "study_status": "unread",
+            "targets": [],
+            "unit_id": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+            "unit_kind": "section",
+            "unit_title": "§2.1 普通母函数与有限几何和"
+          },
+          {
+            "category": "unaligned",
+            "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+            "study_status": "unread",
+            "targets": [],
+            "unit_id": "mathscape:source-unit/528e8bcbd11e97f6f9158baf0fb228a4b6c3a5ccf79a08e311ad76bd1799b5cd",
+            "unit_kind": "definition",
+            "unit_title": "定义 2.1.1 普通母函数（形式幂级数 R[[x]]）"
+          },
+          {
+            "category": "seen_elsewhere",
+            "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+            "study_status": "unread",
+            "targets": [
+              {
+                "alignment_id": "mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823",
+                "entity_id": "mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88",
+                "entity_label": "有限几何级数求和（含 x=1 退化分支）",
+                "only_differs_by": [],
+                "relation": "expresses",
+                "seen_in": [
+                  "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768"
+                ]
+              }
+            ],
+            "unit_id": "mathscape:source-unit/6656c9b7a63b44e04ce329318c7106d481a478eae5aa73c047ecf4a995da5623",
+            "unit_kind": "statement",
+            "unit_title": "定理 2.1.2 有限几何级数（x≠1 与 x=1 双分支）"
+          },
+          {
+            "category": "seen_elsewhere",
+            "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+            "study_status": "unread",
+            "targets": [
+              {
+                "alignment_id": "mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913",
+                "entity_id": "mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+                "entity_label": "形式几何级数逆元 (1 - X)∑Xⁿ = 1",
+                "only_differs_by": [],
+                "relation": "expresses",
+                "seen_in": [
+                  "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768"
+                ]
+              }
+            ],
+            "unit_id": "mathscape:source-unit/6c81a05b87e1ca0a9e310a28dd244d43ca2a4e800549292e718fa15da10e7afd",
+            "unit_kind": "statement",
+            "unit_title": "推论 2.1.3 形式逆元与实变数发散排除"
+          }
+        ],
+        "units": [
+          {
+            "alignment_id": "mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823",
+            "entity_id": "mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88",
+            "entity_label": "有限几何级数求和（含 x=1 退化分支）",
+            "label": "别的材料里见过",
+            "only_differs_by": [],
+            "relation": "expresses",
+            "seen_in": [
+              "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768"
+            ],
+            "unit_id": "mathscape:source-unit/6656c9b7a63b44e04ce329318c7106d481a478eae5aa73c047ecf4a995da5623",
+            "unit_title": "定理 2.1.2 有限几何级数（x≠1 与 x=1 双分支）"
+          },
+          {
+            "alignment_id": "mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913",
+            "entity_id": "mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+            "entity_label": "形式几何级数逆元 (1 - X)∑Xⁿ = 1",
+            "label": "别的材料里见过",
+            "only_differs_by": [],
+            "relation": "expresses",
+            "seen_in": [
+              "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768"
+            ],
+            "unit_id": "mathscape:source-unit/6c81a05b87e1ca0a9e310a28dd244d43ca2a4e800549292e718fa15da10e7afd",
+            "unit_title": "推论 2.1.3 形式逆元与实变数发散排除"
+          }
+        ]
+      }
+    ]
+  },
+  "note": "只读教程投影：由 generating-functions-two-books/objects.json 经真实的暂存、接受与地图投影生成（apps/mathscape-desktop 测试 stage2_generating_functions_fixture_accepts_projects_and_guards_retire）。教程只读这个文件，不写任何工作区。",
+  "objects": {
+    "a.jia.cor": {
+      "id": "mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913",
+      "kind": "alignment",
+      "payload": {
+        "evidence_spans": [
+          "mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a"
+        ],
+        "lost_information": [],
+        "map_label": null,
+        "parameter_map": [],
+        "plain_note": null,
+        "relation": "expresses",
+        "required_assumptions": [],
+        "source": "mathscape:source-unit/6c81a05b87e1ca0a9e310a28dd244d43ca2a4e800549292e718fa15da10e7afd",
+        "source_context": {
+          "dialect_scope": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2"
+        },
+        "status": "context_checked",
+        "target": "mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+        "target_context": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+        "term_index_map": [],
+        "trust": {
+          "alignment": "candidate",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "a.jia.thm": {
+      "id": "mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823",
+      "kind": "alignment",
+      "payload": {
+        "evidence_spans": [
+          "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+        ],
+        "lost_information": [],
+        "map_label": null,
+        "parameter_map": [],
+        "plain_note": "星港定理 2.1.2 同时完整陈述了 x ≠ 1 分式分支与 x = 1 退化常数分支。",
+        "relation": "expresses",
+        "required_assumptions": [],
+        "source": "mathscape:source-unit/6656c9b7a63b44e04ce329318c7106d481a478eae5aa73c047ecf4a995da5623",
+        "source_context": {
+          "dialect_scope": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2"
+        },
+        "status": "context_checked",
+        "target": "mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88",
+        "target_branches": [
+          "fraction_form",
+          "constant_sum"
+        ],
+        "target_context": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+        "term_index_map": [],
+        "trust": {
+          "alignment": "candidate",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "a.yi.prop": {
+      "id": "mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444",
+      "kind": "alignment",
+      "payload": {
+        "evidence_spans": [
+          "mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8"
+        ],
+        "lost_information": [
+          {
+            "claim": "灯塔命题 1.3.2 假设 t ≠ 1，未写出 t = 1 时和等于 N 的退化分支 constant_sum",
+            "direction": "target_has_source_lacks",
+            "see_also": null,
+            "short": "漏写 t = 1 退化分支（和为 N）"
+          }
+        ],
+        "map_label": null,
+        "parameter_map": [
+          {
+            "map": "灯塔的实公比 t（t ≠ 1）对应共享定理常规分支的 x",
+            "note": null,
+            "role": "statement_parameter",
+            "source": "t",
+            "source_range": "t ∈ ℝ, t ≠ 1",
+            "target": "x",
+            "target_range": "x ∈ ℝ"
+          }
+        ],
+        "plain_note": null,
+        "relation": "specializes",
+        "required_assumptions": [],
+        "source": "mathscape:source-unit/1596f79d047873cc0ba56b3b27ca823824ca5f49acf6cc09d3f4f617bab7ed5d",
+        "source_context": {
+          "dialect_scope": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a"
+        },
+        "status": "partially_aligned",
+        "target": "mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88",
+        "target_branches": [
+          "fraction_form"
+        ],
+        "target_context": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+        "term_index_map": [],
+        "trust": {
+          "alignment": "candidate",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "a.yi.rem": {
+      "id": "mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a",
+      "kind": "alignment",
+      "payload": {
+        "evidence_spans": [
+          "mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b"
+        ],
+        "lost_information": [
+          {
+            "claim": "灯塔注 1.3.3 讨论的是 |t| < 1 上的实级数极限，而共享定理是 R[[X]] 上的无条件形式乘法逆元",
+            "direction": "source_has_target_lacks",
+            "see_also": null,
+            "short": "仅在 |t| < 1 实收敛域成立，非形式环恒等式"
+          }
+        ],
+        "map_label": null,
+        "parameter_map": [],
+        "plain_note": null,
+        "relation": "overlaps_with",
+        "required_assumptions": [
+          {
+            "debt": "mathscape:debt/46478c6f937dfaf31128105ad670f143d5c194d4d08dc32b8d553723f58b2de2",
+            "text": "实数代值需要满足 |t| < 1 收敛条件"
+          }
+        ],
+        "source": "mathscape:source-unit/ce804392ddd7f29983c28cb7797a6afc769b893451ed000c54f7a94c92f50eb6",
+        "source_context": {
+          "dialect_scope": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a"
+        },
+        "status": "partially_aligned",
+        "target": "mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+        "target_context": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+        "term_index_map": [],
+        "trust": {
+          "alignment": "candidate",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "d.yi.analytic_radius": {
+      "id": "mathscape:debt/46478c6f937dfaf31128105ad670f143d5c194d4d08dc32b8d553723f58b2de2",
+      "kind": "debt",
+      "payload": {
+        "attached_to": "mathscape:representation-binding/fff7283bb80d8ec1cdfa7f8c76741909124577e4d06b41009d401e45b33dd050",
+        "debt_kind": "assumption_debt",
+        "evidence_spans": [
+          "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209",
+          "mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b"
+        ],
+        "failure_mode": "theorem",
+        "failure_note": "在收敛半径之外（如 |t| ≥ 1）直接代值会导致发散级数伪等式。",
+        "obligation": "若需要把形式幂级数结论代回实数 $t$ 求值，必须验证点 $t$ 落在《灯塔》要求的绝对收敛区间 $(-r, r)$ 内。",
+        "paid_by": [],
+        "payoff_hint": null,
+        "quantifier": "∀ t ∈ (-r, r), r > 0",
+        "status": "open"
+      }
+    },
+    "ds.jia": {
+      "id": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+      "kind": "dialect_scope",
+      "payload": {
+        "anchor_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+        "applies_to": "anchor_subtree",
+        "conventions": [
+          {
+            "evidence_spans": [
+              "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe"
+            ],
+            "explicitness": "explicit",
+            "key": "sequence_index_origin",
+            "subject": "a",
+            "text": "数列 $(a_n)_{n \\ge 0}$ 从第 0 项 $a_0$ 起算",
+            "value": 0
+          },
+          {
+            "evidence_spans": [
+              "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe"
+            ],
+            "explicitness": "explicit",
+            "key": "notation",
+            "subject": "A(x)",
+            "text": "$A(x) \\in R[[x]]$ 为形式幂级数，不讨论实数收敛性",
+            "value": "formal_power_series"
+          }
+        ],
+        "introduced_by_unit": "mathscape:source-unit/528e8bcbd11e97f6f9158baf0fb228a4b6c3a5ccf79a08e311ad76bd1799b5cd",
+        "label": "《星港》§2.1 的形式母函数约定",
+        "local_symbols": [
+          {
+            "domain": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$n \\in \\mathbb{N},\\ a_n \\in R$"
+            },
+            "evidence_spans": [
+              "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe"
+            ],
+            "meaning": "下标从 0 起的系数数列通项",
+            "role": "sequence",
+            "symbol": "a_n"
+          },
+          {
+            "domain": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$R[[x]]$"
+            },
+            "evidence_spans": [
+              "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe"
+            ],
+            "meaning": "数列 (a_n) 的普通母函数（形式幂级数）",
+            "role": "series",
+            "symbol": "A(x)"
+          },
+          {
+            "domain": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$R[[x]] \\to R$"
+            },
+            "evidence_spans": [
+              "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe"
+            ],
+            "meaning": "提取形式幂级数的第 n 次项系数",
+            "role": "operator",
+            "symbol": "[x^n]"
+          }
+        ],
+        "parent_scope": null
+      }
+    },
+    "ds.yi": {
+      "id": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+      "kind": "dialect_scope",
+      "payload": {
+        "anchor_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+        "applies_to": "anchor_subtree",
+        "conventions": [
+          {
+            "evidence_spans": [
+              "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209"
+            ],
+            "explicitness": "explicit",
+            "key": "sequence_index_origin",
+            "subject": "b",
+            "text": "正项标号数列 $(b_m)_{m \\ge 1}$ 一律从第 1 项起算",
+            "value": 1
+          },
+          {
+            "evidence_spans": [
+              "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209"
+            ],
+            "explicitness": "explicit",
+            "key": "other",
+            "subject": "g(t)",
+            "text": "生成函数 $g(t)$ 定义为开区间 $(-r, r)$ 上的绝对收敛实函数",
+            "value": "analytic_interval"
+          }
+        ],
+        "introduced_by_unit": "mathscape:source-unit/ea4353677ffeb25d60ccbc96b37526cb6c114cd3c4e646aa7b5ac13e9de63b66",
+        "label": "《灯塔》§1.3 的收敛生成函数约定",
+        "local_symbols": [
+          {
+            "domain": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$m \\ge 1,\\ b_m \\in \\mathbb{R}$"
+            },
+            "evidence_spans": [
+              "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209"
+            ],
+            "meaning": "下标从 1 起的实系数数列通项",
+            "role": "sequence",
+            "symbol": "b_m"
+          },
+          {
+            "domain": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$(-r, r) \\to \\mathbb{R}$"
+            },
+            "evidence_spans": [
+              "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209"
+            ],
+            "meaning": "收敛区间 (-r, r) 上由幂级数定义的生成函数",
+            "role": "function",
+            "symbol": "g(t)"
+          },
+          {
+            "domain": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$r > 0$"
+            },
+            "evidence_spans": [
+              "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209"
+            ],
+            "meaning": "保证幂级数绝对收敛的正半径参数",
+            "role": "constant",
+            "symbol": "r"
+          }
+        ],
+        "parent_scope": null
+      }
+    },
+    "e.geom_fin": {
+      "id": "mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88",
+      "kind": "semantic_entity",
+      "payload": {
+        "aliases": [
+          "有限等比求和",
+          "geom_sum_eq"
+        ],
+        "conventions": [],
+        "declaration": {
+          "assumptions": [
+            {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$N \\ge 1$"
+            }
+          ],
+          "binders": [
+            {
+              "name": "N",
+              "role": "universal",
+              "type": "ℕ"
+            },
+            {
+              "name": "x",
+              "role": "universal",
+              "type": "ℝ"
+            }
+          ],
+          "branches": [
+            {
+              "branch_id": "fraction_form",
+              "conclusion": {
+                "evidence_spans": [],
+                "format": "markdown+tex",
+                "text": "$\\sum_{k=0}^{N-1} x^k = \\frac{1 - x^N}{1 - x}$"
+              },
+              "evidence_spans": [
+                "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643",
+                "mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8"
+              ],
+              "guards": [
+                "regular_x_ne_1"
+              ],
+              "is_degenerate": false,
+              "label": "分式闭合式"
+            },
+            {
+              "branch_id": "constant_sum",
+              "conclusion": {
+                "evidence_spans": [],
+                "format": "markdown+tex",
+                "text": "$\\sum_{k=0}^{N-1} 1^k = N$"
+              },
+              "evidence_spans": [
+                "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+              ],
+              "guards": [
+                "degenerate_x_eq_1"
+              ],
+              "is_degenerate": true,
+              "label": "退化常数和"
+            }
+          ],
+          "declaration_kind": "theorem",
+          "definiens": null,
+          "exclusions": [
+            {
+              "case": {
+                "evidence_spans": [],
+                "format": "markdown+tex",
+                "text": "在 $x = 1$ 处代入分式 $\\frac{1 - x^N}{1 - x}$"
+              },
+              "evidence_spans": [
+                "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+              ],
+              "kind": "undefined",
+              "reason": "分母 1 - x = 0 使实数除法无定义，必须切入 constant_sum 退化分支。"
+            }
+          ],
+          "guard_partition": {
+            "note": "在实数域 ℝ 上 x ≠ 1 与 x = 1 互斥且穷尽全部公比取值。",
+            "status": "partition"
+          },
+          "guards": [
+            {
+              "evidence_spans": [
+                "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+              ],
+              "guard_id": "regular_x_ne_1",
+              "label": "常规公比（x ≠ 1）",
+              "predicate": {
+                "evidence_spans": [
+                  "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643",
+                  "mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8"
+                ],
+                "format": "markdown+tex",
+                "text": "$x \\neq 1$"
+              }
+            },
+            {
+              "evidence_spans": [
+                "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+              ],
+              "guard_id": "degenerate_x_eq_1",
+              "label": "单位公比退化（x = 1）",
+              "predicate": {
+                "evidence_spans": [
+                  "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+                ],
+                "format": "markdown+tex",
+                "text": "$x = 1$"
+              }
+            }
+          ],
+          "statement": {
+            "evidence_spans": [
+              "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+            ],
+            "format": "markdown+tex",
+            "text": "有限几何和 $\\sum_{k=0}^{N-1} x^k$ 按 $x \\neq 1$ 与 $x = 1$ 分两支给出精确值。"
+          },
+          "uses_entities": []
+        },
+        "description": null,
+        "home_theory": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+        "mathlib_baseline": {
+          "decl": "geom_sum_eq",
+          "module": "Mathlib.Algebra.GeomSum",
+          "note": "mathlib 中 geom_sum_eq 对应 x ≠ 1 分支，geom_sum_one 对应 x = 1 退化分支",
+          "relation_hint": null,
+          "status": "unchecked"
+        },
+        "plain_label": "有限几何级数求和（含 x=1 退化分支）",
+        "preferred_labels": [
+          {
+            "label": "有限几何级数求和公式",
+            "lang": "zh"
+          },
+          {
+            "label": "Finite geometric series sum",
+            "lang": "en"
+          }
+        ],
+        "problem_schema": null,
+        "semantic_kind": "declaration",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "e.geom_inf_fps": {
+      "id": "mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+      "kind": "semantic_entity",
+      "payload": {
+        "aliases": [
+          "(1 - X)⁻¹",
+          "形式等比级数"
+        ],
+        "conventions": [],
+        "declaration": {
+          "assumptions": [],
+          "binders": [
+            {
+              "name": "R",
+              "role": "parameter",
+              "type": "CommRing"
+            }
+          ],
+          "concept": "mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32",
+          "declaration_kind": "theorem",
+          "definiens": null,
+          "exclusions": [
+            {
+              "case": {
+                "evidence_spans": [],
+                "format": "markdown+tex",
+                "text": "实变数 $|x| \\ge 1$ 处的无穷级数求值 $\\sum_{n=0}^{\\infty} x^n$"
+              },
+              "evidence_spans": [
+                "mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a",
+                "mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b"
+              ],
+              "kind": "diverges",
+              "reason": "当 |x| ≥ 1 时实级数发散，不能将形式逆元恒等式当作实数值收敛等式使用。"
+            }
+          ],
+          "statement": {
+            "evidence_spans": [
+              "mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a"
+            ],
+            "format": "markdown+tex",
+            "text": "在形式幂级数环 $R[[X]]$ 中，$(1 - X)\\sum_{n=0}^{\\infty} X^n = 1$。"
+          },
+          "uses_entities": [
+            "mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32"
+          ]
+        },
+        "description": null,
+        "home_theory": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+        "mathlib_baseline": null,
+        "plain_label": "形式几何级数逆元 (1 - X)∑Xⁿ = 1",
+        "preferred_labels": [
+          {
+            "label": "形式几何级数乘法逆元",
+            "lang": "zh"
+          },
+          {
+            "label": "Formal geometric series inverse",
+            "lang": "en"
+          }
+        ],
+        "problem_schema": null,
+        "semantic_kind": "declaration",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "e.ogf_concept": {
+      "id": "mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32",
+      "kind": "semantic_entity",
+      "payload": {
+        "aliases": [
+          "生成函数",
+          "OGF"
+        ],
+        "conventions": [],
+        "declaration": null,
+        "description": "将下标数列编码为未定元幂次的级数对象。",
+        "home_theory": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+        "mathlib_baseline": null,
+        "plain_label": "普通母函数",
+        "preferred_labels": [
+          {
+            "label": "普通母函数",
+            "lang": "zh"
+          },
+          {
+            "label": "Ordinary generating function",
+            "lang": "en"
+          }
+        ],
+        "problem_schema": null,
+        "semantic_kind": "concept",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "e.theory": {
+      "id": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+      "kind": "semantic_entity",
+      "payload": {
+        "aliases": [
+          "普通母函数",
+          "生成函数",
+          "OGF",
+          "Formal power series"
+        ],
+        "conventions": [],
+        "declaration": null,
+        "description": "数列、截断几何和与形式幂级数之间的代数与分析边界专题。",
+        "home_theory": null,
+        "mathlib_baseline": null,
+        "plain_label": "母函数与形式幂级数",
+        "preferred_labels": [
+          {
+            "label": "母函数与形式幂级数",
+            "lang": "zh"
+          },
+          {
+            "label": "Generating functions and formal power series",
+            "lang": "en"
+          }
+        ],
+        "problem_schema": null,
+        "semantic_kind": "theory",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "jia.r.cor_explains": {
+      "id": "mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4",
+      "kind": null,
+      "payload": {
+        "relation": "explains",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "accepted",
+          "evidence": [],
+          "parse": "parsed",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "jia.s.cor": {
+      "id": "mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a",
+      "kind": "source_span",
+      "payload": {
+        "bounding_boxes": [],
+        "exact_text_artifact": null,
+        "granularity": "inline",
+        "layout": "other",
+        "markdown": {
+          "artifact": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+          "byte_range": {
+            "end": 1388,
+            "start": 1086
+          },
+          "displayed_lines": null
+        },
+        "marker_block_ids": [
+          "block:sha256:0481fc7752f09b6a0a987ffc2ed4be3220cc3d38dd5882d820ed1e147818f13e"
+        ],
+        "normalized_text_hash": "sha256:9ca14485000a29653f417277aa29a8e0bfdd60c671884258f3ff78d8125aeb3c",
+        "page": null
+      },
+      "quote": "**推论 2.1.3（形式逆元与收敛排除）**　在形式幂级数环 $R[[x]]$ 中，恒等式 $(1 - x)\\sum_{n=0}^{\\infty} x^n = 1$ 无条件成立；但若把 $\\sum_{n=0}^{\\infty} x^n$ 当作实变数无穷级数求值，则在 $|x| \\ge 1$ 处级数发散，不能代入分式 $\\frac{1}{1 - x}$。"
+    },
+    "jia.s.def": {
+      "id": "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe",
+      "kind": "source_span",
+      "payload": {
+        "bounding_boxes": [],
+        "exact_text_artifact": null,
+        "granularity": "inline",
+        "layout": "other",
+        "markdown": {
+          "artifact": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+          "byte_range": {
+            "end": 658,
+            "start": 305
+          },
+          "displayed_lines": null
+        },
+        "marker_block_ids": [
+          "block:sha256:6156401dd7d5f8348f1d85d64faf257e71c3b2c3a89451ad58de5f293a000537"
+        ],
+        "normalized_text_hash": "sha256:252b13de933bddc9bf449a11206362c6ad1409dad9fd7afc63f927b45481a862",
+        "page": null
+      },
+      "quote": "**定义 2.1.1（普通母函数）**　设数列 $(a_n)_{n \\ge 0}$ 取值于交换环 $R$。形式幂级数 $A(x) = \\sum_{n=0}^{\\infty} a_n x^n \\in R[[x]]$ 称为数列 $(a_n)_{n \\ge 0}$ 的普通母函数，记 $[x^n] A(x) = a_n$ 为第 $n$ 次项系数。形式幂级数只按各项系数比较相等，不讨论把 $x$ 代入实数后的收敛性。"
+    },
+    "jia.s.sec": {
+      "id": "mathscape:source-span/b697392fd4cc6658fc8d293adeb92a179c32aaa294e3b16145f7c642f72a03a1",
+      "kind": "source_span",
+      "payload": {
+        "bounding_boxes": [],
+        "exact_text_artifact": null,
+        "granularity": "inline",
+        "layout": "other",
+        "markdown": {
+          "artifact": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+          "byte_range": {
+            "end": 264,
+            "start": 193
+          },
+          "displayed_lines": null
+        },
+        "marker_block_ids": [
+          "block:sha256:ce36d600b9b66a7310a777e20d340b0f437c03126be2baadc4d58d0affb5fc3d"
+        ],
+        "normalized_text_hash": "sha256:8bb301a132aff5c1dcd977ee684b8194dfafdfac6eff45afcf3595dab0f1d120",
+        "page": null
+      },
+      "quote": "## 《星港母函数讲义》§2.1　普通母函数与有限几何和"
+    },
+    "jia.s.thm": {
+      "id": "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643",
+      "kind": "source_span",
+      "payload": {
+        "bounding_boxes": [],
+        "exact_text_artifact": null,
+        "granularity": "inline",
+        "layout": "other",
+        "markdown": {
+          "artifact": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+          "byte_range": {
+            "end": 1045,
+            "start": 699
+          },
+          "displayed_lines": null
+        },
+        "marker_block_ids": [
+          "block:sha256:19bad2ec6a5e44ec7de3464c5930b5511e80a350e6e1da5b52b30557a0a7270f"
+        ],
+        "normalized_text_hash": "sha256:5a7fabb026ff01d7161f2f4da6220d1efd182b6b57ac584a51b3335ab60efda5",
+        "page": null
+      },
+      "quote": "**定理 2.1.2（有限几何级数）**　设整数 $N \\ge 1$，实数 $x \\in \\mathbb{R}$，记有限和 $S_N(x) = \\sum_{k=0}^{N-1} x^k$。则分两种互斥完备的情形：(1) 当 $x \\neq 1$ 时，$S_N(x) = \\frac{1 - x^N}{1 - x}$；(2) 当 $x = 1$（退化边界）时，分母 $1 - x = 0$ 使分式无定义，逐项相加得 $S_N(1) = N$。"
+    },
+    "jia.u.cor": {
+      "id": "mathscape:source-unit/6c81a05b87e1ca0a9e310a28dd244d43ca2a4e800549292e718fa15da10e7afd",
+      "kind": "source_unit",
+      "payload": {
+        "completeness": "complete",
+        "dialect_binding": {
+          "status": "uncontextualized"
+        },
+        "display_title": "推论 2.1.3 形式逆元与实变数发散排除",
+        "edition_binding": {
+          "status": "unresolved"
+        },
+        "facts_pending": true,
+        "kind": "statement",
+        "local_references": [],
+        "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+        "resulting_dialect_scope": null,
+        "source_labels": [],
+        "source_spans": [
+          "mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a"
+        ],
+        "source_title": null,
+        "surface_content_artifact": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "accepted",
+          "evidence": [],
+          "parse": "parsed",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "jia.u.def": {
+      "id": "mathscape:source-unit/528e8bcbd11e97f6f9158baf0fb228a4b6c3a5ccf79a08e311ad76bd1799b5cd",
+      "kind": "source_unit",
+      "payload": {
+        "completeness": "complete",
+        "dialect_binding": {
+          "status": "uncontextualized"
+        },
+        "display_title": "定义 2.1.1 普通母函数（形式幂级数 R[[x]]）",
+        "edition_binding": {
+          "status": "unresolved"
+        },
+        "facts_pending": true,
+        "kind": "definition",
+        "local_references": [],
+        "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+        "resulting_dialect_scope": null,
+        "source_labels": [],
+        "source_spans": [
+          "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe"
+        ],
+        "source_title": null,
+        "surface_content_artifact": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "accepted",
+          "evidence": [],
+          "parse": "parsed",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "jia.u.sec": {
+      "id": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+      "kind": "source_unit",
+      "payload": {
+        "completeness": "complete",
+        "dialect_binding": {
+          "status": "uncontextualized"
+        },
+        "display_title": "§2.1 普通母函数与有限几何和",
+        "edition_binding": {
+          "status": "unresolved"
+        },
+        "facts_pending": true,
+        "kind": "section",
+        "local_references": [],
+        "parent_unit": null,
+        "resulting_dialect_scope": null,
+        "source_labels": [],
+        "source_spans": [
+          "mathscape:source-span/b697392fd4cc6658fc8d293adeb92a179c32aaa294e3b16145f7c642f72a03a1"
+        ],
+        "source_title": null,
+        "surface_content_artifact": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "accepted",
+          "evidence": [],
+          "parse": "parsed",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "jia.u.thm": {
+      "id": "mathscape:source-unit/6656c9b7a63b44e04ce329318c7106d481a478eae5aa73c047ecf4a995da5623",
+      "kind": "source_unit",
+      "payload": {
+        "completeness": "complete",
+        "dialect_binding": {
+          "status": "uncontextualized"
+        },
+        "display_title": "定理 2.1.2 有限几何级数（x≠1 与 x=1 双分支）",
+        "edition_binding": {
+          "status": "unresolved"
+        },
+        "facts_pending": true,
+        "kind": "statement",
+        "local_references": [],
+        "parent_unit": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+        "resulting_dialect_scope": null,
+        "source_labels": [],
+        "source_spans": [
+          "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+        ],
+        "source_title": null,
+        "surface_content_artifact": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "accepted",
+          "evidence": [],
+          "parse": "parsed",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "r.fps": {
+      "id": "mathscape:representation-core/421ca09f941ba478ecd834e3e889f8b4a35c568b89a77deac2ae00d514e28d11",
+      "kind": "representation_core",
+      "payload": {
+        "aliases": [
+          "FPS 表示",
+          "R[[X]]",
+          "PowerSeries"
+        ],
+        "binders": [
+          {
+            "name": "R",
+            "role": "parameter",
+            "type": "CommRing"
+          }
+        ],
+        "carrier": {
+          "evidence_spans": [],
+          "format": "markdown+tex",
+          "note": "Lean: PowerSeries R",
+          "text": "交换环 $R$ 上的形式幂级数环 $R[[X]]$"
+        },
+        "description": "母函数的标准代数承载表示，阶段三将在此与 R_seq 之间架设 OGF 双向运输边 T。",
+        "home_theory": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+        "invariants_and_domain": [
+          {
+            "evidence_spans": [],
+            "format": "markdown+tex",
+            "text": "纯代数形式比较：两级数相等当且仅当各次项系数全相等，不涉及将实数代入 $X$ 的分析收敛性。"
+          }
+        ],
+        "mathlib_baseline": {
+          "decl": "PowerSeries",
+          "module": "Mathlib.RingTheory.PowerSeries.Basic",
+          "note": "mathlib 中一元数据形式幂级数环",
+          "relation_hint": null,
+          "status": "unchecked"
+        },
+        "operations": [
+          {
+            "name": "coeff",
+            "note": "系数投影",
+            "signature": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "note": "PowerSeries.coeff R n",
+              "text": "$[X^n] F(X)$：提取第 $n$ 次项系数"
+            }
+          },
+          {
+            "name": "mul",
+            "note": "对应数列卷积",
+            "signature": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "note": "HMul.hMul",
+              "text": "$(F \\cdot G)(X)$：Cauchy 卷积乘法"
+            }
+          }
+        ],
+        "plain_label": "形式幂级数表示核 R[[X]]",
+        "preferred_labels": [
+          {
+            "label": "形式幂级数表示核",
+            "lang": "zh"
+          },
+          {
+            "label": "Formal power series representation",
+            "lang": "en"
+          }
+        ],
+        "represented_object": "mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        },
+        "uses_entities": [
+          "mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32"
+        ]
+      }
+    },
+    "r.seq": {
+      "id": "mathscape:representation-core/bb9e86d69498f3e3f543cdb7908ecff3766436972bec1603200057500dd0cb66",
+      "kind": "representation_core",
+      "payload": {
+        "aliases": [
+          "数列表示",
+          "ℕ → R"
+        ],
+        "binders": [
+          {
+            "name": "R",
+            "role": "parameter",
+            "type": "CommRing"
+          }
+        ],
+        "carrier": {
+          "evidence_spans": [],
+          "format": "markdown+tex",
+          "note": "Lean: ℕ → R",
+          "text": "以自然数 $\\mathbb{N}$ 为下标的系数函数空间 $\\mathbb{N} \\to R$"
+        },
+        "conventions": [
+          {
+            "basis": "mathlib",
+            "key": "sequence_index_origin",
+            "subject": "f",
+            "text": "共享数列表示默认从 $n = 0$ 起算",
+            "value": 0
+          }
+        ],
+        "description": "母函数编码前的离散数列承载表示。",
+        "home_theory": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+        "invariants_and_domain": [
+          {
+            "evidence_spans": [],
+            "format": "markdown+tex",
+            "text": "两个数列相等当且仅当对一切 $n \\in \\mathbb{N}$ 有 $f(n) = g(n)$。"
+          }
+        ],
+        "mathlib_baseline": null,
+        "operations": [
+          {
+            "name": "term",
+            "note": "逐项求值算子",
+            "signature": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$f(n)$：读取第 $n \\in \\mathbb{N}$ 项"
+            }
+          }
+        ],
+        "plain_label": "数列表示核 ℕ → R",
+        "preferred_labels": [
+          {
+            "label": "自然数下标数列表示核",
+            "lang": "zh"
+          },
+          {
+            "label": "Nat-indexed sequence representation",
+            "lang": "en"
+          }
+        ],
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "rb.jia.fps": {
+      "id": "mathscape:representation-binding/592ce18a7527fe8c9636a8e37db89f18b0c26b074dae2c88a7de2b339121b512",
+      "kind": "representation_binding",
+      "payload": {
+        "dialect_scope": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+        "evidence_spans": [
+          "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe"
+        ],
+        "map_label": "绑定为形式幂级数表示",
+        "plain_note": null,
+        "representation": "mathscape:representation-core/421ca09f941ba478ecd834e3e889f8b4a35c568b89a77deac2ae00d514e28d11",
+        "status": "context_checked",
+        "symbol_map": [
+          {
+            "local_symbol": "A(x)",
+            "note": "未定元 x 对应形式未定元 X",
+            "role": "series",
+            "target_expr": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$F \\in R[[X]]$"
+            }
+          },
+          {
+            "local_symbol": "[x^n]",
+            "note": "系数提取算子一一对应",
+            "role": "operator",
+            "target_expr": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$\\mathrm{coeff}_R(n) : R[[X]] \\to R$"
+            }
+          }
+        ],
+        "trust": {
+          "alignment": "candidate",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "rb.jia.seq": {
+      "id": "mathscape:representation-binding/c7d7b2f8c68ef282010b2e5e88be51b9ec2bd6b1136f5ccc2f2f023c771b07a2",
+      "kind": "representation_binding",
+      "payload": {
+        "dialect_scope": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+        "evidence_spans": [
+          "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe"
+        ],
+        "map_label": "绑定为数列表示（0 起算直连）",
+        "plain_note": null,
+        "representation": "mathscape:representation-core/bb9e86d69498f3e3f543cdb7908ecff3766436972bec1603200057500dd0cb66",
+        "status": "context_checked",
+        "symbol_map": [
+          {
+            "local_symbol": "a_n",
+            "note": "星港从 0 起算，直接恒等对应",
+            "role": "sequence",
+            "target_expr": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$f(n) \\in R$（$n \\ge 0$）"
+            }
+          }
+        ],
+        "trust": {
+          "alignment": "candidate",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "rb.yi.fps": {
+      "id": "mathscape:representation-binding/fff7283bb80d8ec1cdfa7f8c76741909124577e4d06b41009d401e45b33dd050",
+      "kind": "representation_binding",
+      "payload": {
+        "dialect_scope": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+        "evidence_spans": [
+          "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209"
+        ],
+        "index_and_domain_adaptations": [
+          {
+            "evidence_spans": [],
+            "format": "markdown+tex",
+            "text": "首项从 $m=1$ 起算对应常数项 $[X^0]F(X) = 0$；把实自变量 $t \\in (-r, r)$ 视作形式未定元 $X$。"
+          }
+        ],
+        "lost_information": [
+          {
+            "claim": "灯塔要求存在 r > 0 使 ∑ b_m t^m 在 (-r, r) 内绝对收敛；形式幂级数表示核不保留解析收敛域",
+            "direction": "source_has_target_lacks",
+            "see_also": null,
+            "short": "原书要求 (-r, r) 内绝对收敛"
+          }
+        ],
+        "map_label": "绑定为形式幂级数（剥离收敛半径）",
+        "plain_note": null,
+        "representation": "mathscape:representation-core/421ca09f941ba478ecd834e3e889f8b4a35c568b89a77deac2ae00d514e28d11",
+        "status": "partially_aligned",
+        "symbol_map": [
+          {
+            "local_symbol": "g(t)",
+            "note": "剥离收敛区间 (-r, r) 后提升为常数项为 0 的形式幂级数",
+            "role": "series",
+            "target_expr": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$F(X) = \\sum_{m \\ge 1} b_m X^m \\in \\mathbb{R}[[X]]$（$[X^0]F = 0$）"
+            }
+          }
+        ],
+        "trust": {
+          "alignment": "candidate",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "rb.yi.seq": {
+      "id": "mathscape:representation-binding/e048962b5b35614afd4388d3b71411a29a15275dc4165b149ebd267bb6509fa0",
+      "kind": "representation_binding",
+      "payload": {
+        "dialect_scope": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+        "evidence_spans": [
+          "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209"
+        ],
+        "index_and_domain_adaptations": [
+          {
+            "evidence_spans": [],
+            "format": "markdown+tex",
+            "text": "将 $(b_m)_{m \\ge 1}$ 延拓到 $\\mathbb{N}$：规定 $f(0) = 0$，对 $m \\ge 1$ 取 $f(m) = b_m$。"
+          }
+        ],
+        "map_label": "绑定为数列表示（首项补 f(0)=0）",
+        "plain_note": null,
+        "representation": "mathscape:representation-core/bb9e86d69498f3e3f543cdb7908ecff3766436972bec1603200057500dd0cb66",
+        "status": "partially_aligned",
+        "symbol_map": [
+          {
+            "local_symbol": "b_m",
+            "note": "灯塔无第 0 项，嵌入 ℕ → ℝ 时显式置零第 0 项",
+            "role": "sequence",
+            "target_expr": {
+              "evidence_spans": [],
+              "format": "markdown+tex",
+              "text": "$f(m) \\in \\mathbb{R}$（$m \\ge 1$），补 $f(0) = 0$"
+            }
+          }
+        ],
+        "trust": {
+          "alignment": "candidate",
+          "confidence": 0.0,
+          "curation": "raw",
+          "evidence": [],
+          "parse": "raw",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "yi.r.rem_explains": {
+      "id": "mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a",
+      "kind": null,
+      "payload": {
+        "relation": "explains",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "accepted",
+          "evidence": [],
+          "parse": "parsed",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "yi.s.def": {
+      "id": "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209",
+      "kind": "source_span",
+      "payload": {
+        "bounding_boxes": [],
+        "exact_text_artifact": null,
+        "granularity": "inline",
+        "layout": "other",
+        "markdown": {
+          "artifact": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+          "byte_range": {
+            "end": 579,
+            "start": 297
+          },
+          "displayed_lines": null
+        },
+        "marker_block_ids": [
+          "block:sha256:1a6fdca9daf4a5210bf9f6caf75d0eeaa897af95a65fb8f1cf6e9cac42173b18"
+        ],
+        "normalized_text_hash": "sha256:343b09ea3914662a72230950c1b18b0cf6c44bba9e6fb379affec35a2f65485d",
+        "page": null
+      },
+      "quote": "**定义 1.3.1**　本书的正项标号数列 $(b_m)_{m \\ge 1}$ 一律从第 1 项起算。若幂级数 $g(t) = \\sum_{m=1}^{\\infty} b_m t^m$ 在某开区间 $(-r, r)$（$r > 0$）内绝对收敛，则称该区间上的实函数 $g(t)$ 为数列 $(b_m)_{m \\ge 1}$ 的生成函数。"
+    },
+    "yi.s.prop": {
+      "id": "mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8",
+      "kind": "source_span",
+      "payload": {
+        "bounding_boxes": [],
+        "exact_text_artifact": null,
+        "granularity": "inline",
+        "layout": "other",
+        "markdown": {
+          "artifact": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+          "byte_range": {
+            "end": 774,
+            "start": 620
+          },
+          "displayed_lines": null
+        },
+        "marker_block_ids": [
+          "block:sha256:cc3562d53f519a2433cf10fe0db08cc0c12add84f62908b2ffc49a82d3902c46"
+        ],
+        "normalized_text_hash": "sha256:344358f02467fd214a6a5b84942074ce39ace0ce464ebe081acd221c0c37fb06",
+        "page": null
+      },
+      "quote": "**命题 1.3.2（有限等比和公式）**　对正整数 $N \\ge 1$ 与实数 $t \\neq 1$，有 $1 + t + t^2 + \\dots + t^{N-1} = \\frac{1 - t^N}{1 - t}$。"
+    },
+    "yi.s.rem": {
+      "id": "mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b",
+      "kind": "source_span",
+      "payload": {
+        "bounding_boxes": [],
+        "exact_text_artifact": null,
+        "granularity": "inline",
+        "layout": "other",
+        "markdown": {
+          "artifact": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+          "byte_range": {
+            "end": 1009,
+            "start": 814
+          },
+          "displayed_lines": null
+        },
+        "marker_block_ids": [
+          "block:sha256:4be4dfb38341799a08ac56f98d7834f8e90bf4f1280830e68853c5d001709224"
+        ],
+        "normalized_text_hash": "sha256:9a4306e03384868e2de7dc6c486792fa8ed17adb690aa3ee5f4dec7bb950361f",
+        "page": null
+      },
+      "quote": "**注 1.3.3**　令 $N \\to \\infty$，当 $|t| < 1$ 时有 $\\sum_{m=0}^{\\infty} t^m = \\frac{1}{1 - t}$；当 $|t| \\ge 1$ 时无穷等比级数发散，上式右端不再表示左端的级数和。"
+    },
+    "yi.s.sec": {
+      "id": "mathscape:source-span/f3f77faf93f3d3f38ee8eeaa4940d3cf241ad89610df29179dcc385da87fc668",
+      "kind": "source_span",
+      "payload": {
+        "bounding_boxes": [],
+        "exact_text_artifact": null,
+        "granularity": "inline",
+        "layout": "other",
+        "markdown": {
+          "artifact": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+          "byte_range": {
+            "end": 257,
+            "start": 192
+          },
+          "displayed_lines": null
+        },
+        "marker_block_ids": [
+          "block:sha256:c8e4d63b2bb8df235bf9047f9806282250f596e98c3bad9b2e879ba530996d7f"
+        ],
+        "normalized_text_hash": "sha256:66632182ee6ef257647afacfe5892f1524b0687cfd6fdd9e7e9683db34a34c9f",
+        "page": null
+      },
+      "quote": "## 《灯塔母函数初步》§1.3　生成函数与等比求和"
+    },
+    "yi.u.def": {
+      "id": "mathscape:source-unit/ea4353677ffeb25d60ccbc96b37526cb6c114cd3c4e646aa7b5ac13e9de63b66",
+      "kind": "source_unit",
+      "payload": {
+        "completeness": "complete",
+        "dialect_binding": {
+          "status": "uncontextualized"
+        },
+        "display_title": "定义 1.3.1 实收敛区间上的生成函数 g(t)",
+        "edition_binding": {
+          "status": "unresolved"
+        },
+        "facts_pending": true,
+        "kind": "definition",
+        "local_references": [],
+        "parent_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+        "resulting_dialect_scope": null,
+        "source_labels": [],
+        "source_spans": [
+          "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209"
+        ],
+        "source_title": null,
+        "surface_content_artifact": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "accepted",
+          "evidence": [],
+          "parse": "parsed",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "yi.u.prop": {
+      "id": "mathscape:source-unit/1596f79d047873cc0ba56b3b27ca823824ca5f49acf6cc09d3f4f617bab7ed5d",
+      "kind": "source_unit",
+      "payload": {
+        "completeness": "complete",
+        "dialect_binding": {
+          "status": "uncontextualized"
+        },
+        "display_title": "命题 1.3.2 有限等比和公式（仅写 t≠1）",
+        "edition_binding": {
+          "status": "unresolved"
+        },
+        "facts_pending": true,
+        "kind": "statement",
+        "local_references": [],
+        "parent_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+        "resulting_dialect_scope": null,
+        "source_labels": [],
+        "source_spans": [
+          "mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8"
+        ],
+        "source_title": null,
+        "surface_content_artifact": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "accepted",
+          "evidence": [],
+          "parse": "parsed",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "yi.u.rem": {
+      "id": "mathscape:source-unit/ce804392ddd7f29983c28cb7797a6afc769b893451ed000c54f7a94c92f50eb6",
+      "kind": "source_unit",
+      "payload": {
+        "completeness": "complete",
+        "dialect_binding": {
+          "status": "uncontextualized"
+        },
+        "display_title": "注 1.3.3 |t|<1 收敛与 |t|≥1 发散边界",
+        "edition_binding": {
+          "status": "unresolved"
+        },
+        "facts_pending": true,
+        "kind": "remark",
+        "local_references": [],
+        "parent_unit": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+        "resulting_dialect_scope": null,
+        "source_labels": [],
+        "source_spans": [
+          "mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b"
+        ],
+        "source_title": null,
+        "surface_content_artifact": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "accepted",
+          "evidence": [],
+          "parse": "parsed",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    },
+    "yi.u.sec": {
+      "id": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6",
+      "kind": "source_unit",
+      "payload": {
+        "completeness": "complete",
+        "dialect_binding": {
+          "status": "uncontextualized"
+        },
+        "display_title": "§1.3 生成函数与等比求和",
+        "edition_binding": {
+          "status": "unresolved"
+        },
+        "facts_pending": true,
+        "kind": "section",
+        "local_references": [],
+        "parent_unit": null,
+        "resulting_dialect_scope": null,
+        "source_labels": [],
+        "source_spans": [
+          "mathscape:source-span/f3f77faf93f3d3f38ee8eeaa4940d3cf241ad89610df29179dcc385da87fc668"
+        ],
+        "source_title": null,
+        "surface_content_artifact": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+        "trust": {
+          "alignment": "unmatched",
+          "confidence": 0.0,
+          "curation": "accepted",
+          "evidence": [],
+          "parse": "parsed",
+          "proof": "none",
+          "provenance": "located",
+          "reviewers": [
+            "mathscape-desktop-user"
+          ],
+          "segmentation": "proposed",
+          "typing": "unchecked"
+        }
+      }
+    }
+  },
+  "refs": {
+    "a.jia.cor": "mathscape:alignment/3dd4203c5ada2b24fc93f84338db4caa0664926b244f9344b387b50408d7b913",
+    "a.jia.thm": "mathscape:alignment/6613a4b823cc14ce23b29afe36caa43852cf6d252d77756b170e39935661b823",
+    "a.yi.prop": "mathscape:alignment/399164b2411bb72300b18ee0f47b1a4f0ca6b977e4d83ef521aa6faeb5d5e444",
+    "a.yi.rem": "mathscape:alignment/e71a2b4b8f1eb63c590389aff9609f01c3766ff73af21797479ebec4c1ccc89a",
+    "d.yi.analytic_radius": "mathscape:debt/46478c6f937dfaf31128105ad670f143d5c194d4d08dc32b8d553723f58b2de2",
+    "ds.jia": "mathscape:dialect-scope/abad142af606ad22653f1de67c3528016696d6141a0d3ca8274418c24c301da2",
+    "ds.yi": "mathscape:dialect-scope/04aa833235334a3da8d49c3991f18fdee12034bcf6d2eccf2f41e2c67beace6a",
+    "e.geom_fin": "mathscape:semantic-entity/b7ab0d9bf110f28a2668c7e7f27cf102428600282d790a833c846ef7c0732e88",
+    "e.geom_inf_fps": "mathscape:semantic-entity/30217a414004652341d67e56f6f3a1da4945f6507e27541e05e56f858fdf7e53",
+    "e.ogf_concept": "mathscape:semantic-entity/a88cd5f6d5432dec3e9a91b2dd95175645c11d46e3e87c23aa50594a7ce0ea32",
+    "e.theory": "mathscape:semantic-entity/230cb970be412d949d798cfedcfb2685f9c075ffa882df2b4e1d62b9a30e74d7",
+    "jia.r.cor_explains": "mathscape:source-relation/3489b675cb3f6dc9d95a253f5ae54c6396fafce0e01fa437775651ffb995bcb4",
+    "jia.s.cor": "mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a",
+    "jia.s.def": "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe",
+    "jia.s.sec": "mathscape:source-span/b697392fd4cc6658fc8d293adeb92a179c32aaa294e3b16145f7c642f72a03a1",
+    "jia.s.thm": "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643",
+    "jia.u.cor": "mathscape:source-unit/6c81a05b87e1ca0a9e310a28dd244d43ca2a4e800549292e718fa15da10e7afd",
+    "jia.u.def": "mathscape:source-unit/528e8bcbd11e97f6f9158baf0fb228a4b6c3a5ccf79a08e311ad76bd1799b5cd",
+    "jia.u.sec": "mathscape:source-unit/4bffd60101fb4f7c55d4a022f3b2b45df2f9037545db0342c452a5488cfd832e",
+    "jia.u.thm": "mathscape:source-unit/6656c9b7a63b44e04ce329318c7106d481a478eae5aa73c047ecf4a995da5623",
+    "r.fps": "mathscape:representation-core/421ca09f941ba478ecd834e3e889f8b4a35c568b89a77deac2ae00d514e28d11",
+    "r.seq": "mathscape:representation-core/bb9e86d69498f3e3f543cdb7908ecff3766436972bec1603200057500dd0cb66",
+    "rb.jia.fps": "mathscape:representation-binding/592ce18a7527fe8c9636a8e37db89f18b0c26b074dae2c88a7de2b339121b512",
+    "rb.jia.seq": "mathscape:representation-binding/c7d7b2f8c68ef282010b2e5e88be51b9ec2bd6b1136f5ccc2f2f023c771b07a2",
+    "rb.yi.fps": "mathscape:representation-binding/fff7283bb80d8ec1cdfa7f8c76741909124577e4d06b41009d401e45b33dd050",
+    "rb.yi.seq": "mathscape:representation-binding/e048962b5b35614afd4388d3b71411a29a15275dc4165b149ebd267bb6509fa0",
+    "yi.r.rem_explains": "mathscape:source-relation/38203e1dfe023d7e274f4567a573466f62318c5e822391edbf840aeeae62735a",
+    "yi.s.def": "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209",
+    "yi.s.prop": "mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8",
+    "yi.s.rem": "mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b",
+    "yi.s.sec": "mathscape:source-span/f3f77faf93f3d3f38ee8eeaa4940d3cf241ad89610df29179dcc385da87fc668",
+    "yi.u.def": "mathscape:source-unit/ea4353677ffeb25d60ccbc96b37526cb6c114cd3c4e646aa7b5ac13e9de63b66",
+    "yi.u.prop": "mathscape:source-unit/1596f79d047873cc0ba56b3b27ca823824ca5f49acf6cc09d3f4f617bab7ed5d",
+    "yi.u.rem": "mathscape:source-unit/ce804392ddd7f29983c28cb7797a6afc769b893451ed000c54f7a94c92f50eb6",
+    "yi.u.sec": "mathscape:source-unit/759d5076848a2d81bfbb8ffac29a502d99adc52782d0652d549b50f539b84be6"
+  },
+  "revisions": [
+    {
+      "change_set_id": "mathscape:change-set/78da1313b7c568ea0243233bc3f89e023c7a49b1d46ee6fc24f245375fc3dbc8",
+      "diff_v1_to_v2": [
+        {
+          "local_ref": "a.yi.prop",
+          "v1": {
+            "lost_information": [],
+            "relation": "expresses",
+            "target_branches": []
+          },
+          "v2": {
+            "lost_information": [
+              {
+                "claim": "灯塔命题 1.3.2 假设 t ≠ 1，未写出 t = 1 时和等于 N 的退化分支 constant_sum",
+                "direction": "target_has_source_lacks",
+                "short": "漏写 t = 1 退化分支（和为 N）"
+              }
+            ],
+            "relation": "specializes",
+            "target_branches": [
+              "fraction_form"
+            ]
+          }
+        }
+      ],
+      "state_after_v2": "superseded",
+      "summary": "v1 把《灯塔》命题 1.3.2 对齐为 expresses 且未填 target_branches，触发 branch_coverage_unspecified 提醒；用户反馈后 Agent 用 supersedes 提交 v2，改为 specializes 并只指向常规分支 fraction_form。",
+      "user_feedback": "灯塔命题 1.3.2 明确假设了 t ≠ 1，没有写出 t = 1 时和等于 N 的退化分支，不能写成完整表达整条定理。",
+      "version": 1
+    }
+  ],
+  "schema": "mathscape.tutorial-projection.v1"
+}

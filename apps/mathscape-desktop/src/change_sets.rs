@@ -3261,6 +3261,53 @@ mod tests {
             yi.open_debts
         );
 
+        // 4b. 只读教程第 2 集投影：由同一条真实暂存 → 接受 → 地图投影与学习视图生成。
+        let mut tut_refs = serde_json::Map::new();
+        let mut tut_payloads = serde_json::Map::new();
+        for change_set in objects["change_sets"].as_array().unwrap() {
+            for (local, fixture_id) in change_set["staged_ids"].as_object().unwrap() {
+                let id = ids[fixture_id.as_str().unwrap()].clone();
+                let object = semantic_payload(&fx, &id);
+                let proposed = change_set["proposed_objects"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|o| o["local_ref"] == local.as_str())
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let mut entry =
+                    json!({ "id": id, "kind": proposed["kind"], "payload": object["payload"] });
+                if let Some(quote) = proposed["payload"]["quote"].as_str() {
+                    entry["quote"] = json!(quote);
+                }
+                tut_payloads.insert(local.clone(), entry);
+                tut_refs.insert(local.clone(), json!(id));
+            }
+        }
+        let tut_projection = json!({
+            "schema": "mathscape.tutorial-projection.v1",
+            "label": "两本母函数教材（阶段二教程夹具）",
+            "note": "只读教程投影：由 generating-functions-two-books/objects.json 经真实的暂存、接受与地图投影生成（apps/mathscape-desktop 测试 stage2_generating_functions_fixture_accepts_projects_and_guards_retire）。教程只读这个文件，不写任何工作区。",
+            "fixture_version": objects["fixture_version"],
+            "artifacts": artifact,
+            "refs": tut_refs,
+            "objects": tut_payloads,
+            "graph": graph,
+            "learning": serde_json::to_value(&view).unwrap(),
+            "revisions": objects["revision_history"],
+        });
+        let tut_text = serde_json::to_string_pretty(&tut_projection).unwrap() + "\n";
+        let tut_path = dir.join("tutorial-projection.json");
+        if std::env::var_os("MATHSCAPE_UPDATE_TUTORIAL_PROJECTION").is_some() {
+            std::fs::write(&tut_path, &tut_text).unwrap();
+        } else {
+            let current = std::fs::read_to_string(&tut_path).unwrap_or_default();
+            assert!(
+                current == tut_text,
+                "generating-functions-two-books/tutorial-projection.json 过期：用 MATHSCAPE_UPDATE_TUTORIAL_PROJECTION=1 重跑本测试"
+            );
+        }
+
         // 5. Inspector 语义详情与用户专用 SetRepresentationBindingReview 审阅命令。
         let r_fps_id = actual("r.fps");
         let rb_yi_fps_id = actual("rb.yi.fps");
