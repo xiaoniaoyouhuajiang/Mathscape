@@ -654,23 +654,17 @@
   box-shadow: 12px 0 28px rgb(0 0 0 / 12%);
 }
 
-/* At desktop widths the sandbox banner also needs room in the top bar. */
-@media (min-width: 1181px) and (max-width: 1520px) {
+/* At desktop widths the sandbox banner shares space cleanly with right-aligned actions. */
+@media (max-width: 1480px) {
   .topbar:has(.sandbox-banner) .tagline { display: none; }
-  .topbar:has(.sandbox-banner) .view-menu-button { display: inline-flex; align-items: center; gap: 4px; }
-  .topbar:has(.sandbox-banner) .view-switch { display: none; }
-  .topbar:has(.sandbox-banner) .topbar-center.is-open .view-switch {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 50%;
-    z-index: 40;
-    transform: translateX(-50%);
-    display: grid;
-    min-width: 140px;
-    box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
-  }
-  .topbar:has(.sandbox-banner) .topbar-center.is-open .view-switch-button { text-align: left; margin-left: 0; }
-  .topbar:has(.sandbox-banner):has(.topbar-center.is-open) { position: relative; z-index: 30; }
+}
+
+@media (max-width: 1320px) {
+  .topbar:has(.sandbox-banner) .service-state { display: none; }
+}
+
+@media (max-width: 1120px) {
+  .topbar:has(.sandbox-banner) .sandbox-banner { max-width: 290px; }
 }
 
 /* A narrower map pane must not squeeze the map title into a vertical column. */
@@ -697,20 +691,89 @@
 .sandbox-dock-float {
   position: fixed;
   z-index: 61;
-  width: 48px;
-  height: 48px;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
   padding: 0;
-  border: 1px solid var(--ms-control-border);
+  border: 0;
   border-radius: 999px;
   color: var(--ms-text);
-  background: var(--ms-panel-raised);
-  box-shadow: 0 10px 28px rgb(0 0 0 / 40%);
+  background: transparent;
+  filter: drop-shadow(0 10px 22px rgb(0 0 0 / 45%));
   cursor: grab;
   touch-action: none;
   user-select: none;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), filter 160ms ease;
+}
+
+:root[data-theme="parchment"] .sandbox-dock-float {
+  filter: drop-shadow(0 8px 18px rgb(42 32 14 / 22%));
+}
+
+.sandbox-dock-float:hover:not(.is-dragging) {
+  transform: translateY(-2px) scale(1.04);
+}
+
+.sandbox-dock-float .pi-mascot-svg {
+  display: block;
+  width: 56px;
+  height: 56px;
+  pointer-events: none;
+}
+
+.pi-mascot-svg .pi-bot-variant {
+  display: none;
+}
+
+:root:not([data-theme]) .pi-mascot-svg .pi-bot-variant--obsidian,
+:root[data-theme="obsidian"] .pi-mascot-svg .pi-bot-variant--obsidian {
+  display: inline;
+}
+
+:root[data-theme="parchment"] .pi-mascot-svg .pi-bot-variant--parchment {
+  display: inline;
+}
+
+:root[data-theme="slate"] .pi-mascot-svg .pi-bot-variant--slate {
+  display: inline;
+}
+
+@keyframes ms-pibot-pulse {
+  0%, 100% { opacity: 0.72; transform: scale(0.94); }
+  50% { opacity: 1; transform: scale(1.14); }
+}
+
+.sandbox-dock-float.is-busy .pi-bot-spark,
+.sandbox-dock-float.is-busy .pi-bot-spark-halo {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ms-pibot-pulse 1.5s ease-in-out infinite;
+}
+
+.sandbox-dock-float.has-question::after {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--ms-panel-raised);
+  border-radius: 999px;
+  background: var(--ms-warning);
+  content: "";
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sandbox-dock-float {
+    transition: none;
+  }
+  .sandbox-dock-float:hover:not(.is-dragging) {
+    transform: none;
+  }
+  .sandbox-dock-float.is-busy .pi-bot-spark,
+  .sandbox-dock-float.is-busy .pi-bot-spark-halo {
+    animation: none;
+  }
 }
 
 .sandbox-dock-float[hidden] {

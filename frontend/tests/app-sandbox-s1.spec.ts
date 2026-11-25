@@ -117,6 +117,16 @@ test.describe("S1 sandbox shell", () => {
     await expect(dock).toBeHidden();
     const floatHandle = page.getByRole("button", { name: "展开沙箱对话" });
     await expect(floatHandle).toBeVisible();
+    await expect(floatHandle.locator("svg.pi-mascot-svg")).toBeVisible();
+    await expect(floatHandle.locator(".pi-bot-variant--obsidian")).toBeVisible();
+    await expect(floatHandle.locator(".pi-bot-variant--parchment")).toBeHidden();
+    await page.locator("#theme-toggle-button").click();
+    await expect(floatHandle.locator(".pi-bot-variant--parchment")).toBeVisible();
+    await expect(floatHandle.locator(".pi-bot-variant--obsidian")).toBeHidden();
+    await page.locator("#theme-toggle-button").click();
+    await expect(floatHandle.locator(".pi-bot-variant--slate")).toBeVisible();
+    await page.locator("#theme-toggle-button").click();
+    await expect(floatHandle.locator(".pi-bot-variant--obsidian")).toBeVisible();
     await floatHandle.click();
     await expect(dock).toBeVisible();
     await expect(dock).toHaveClass(/is-sidebar/);
@@ -252,9 +262,8 @@ test.describe("S1 sandbox shell", () => {
       return boxes.every((box, index) => !index || box.left >= boxes[index - 1].right - 1);
     });
     expect(headerFits).toBe(true);
-    await page.locator(".view-menu-button").click();
-    await expect(page.locator("#learning-view-button")).toBeVisible();
-    await page.keyboard.press("Escape");
+    await expect(page.locator(".topbar-actions #ink-button")).toBeVisible();
+    await expect(page.locator('.preset-button[data-preset="study"]')).toBeVisible();
 
     // The temporary source drawer remains usable without narrowing the content
     // or overwriting the normal directory preference.

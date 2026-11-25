@@ -63,6 +63,7 @@ import {
 } from "./cite";
 import { ChipComposer } from "./composer";
 import { mentionTargets } from "./composer-chips";
+import { createPiMascotSvg } from "./pi-mascot";
 import {
   compileRoundScenes,
   compileToolScene,
@@ -104,7 +105,7 @@ const DEFAULT_WIDTH = 460;
 const DEFAULT_HEIGHT = 520;
 const MIN_WIDTH = 320;
 const MIN_HEIGHT = 280;
-const HANDLE_SIZE = 48;
+const HANDLE_SIZE = 56;
 const NO_EXTRA_TARGETS: readonly CiteTarget[] = [];
 
 export interface TranscriptEntry {
@@ -548,7 +549,8 @@ export class SandboxDialogueDock {
 
     this.root.append(header, body, this.resizeHandle, this.sideResizeHandle);
 
-    this.floatHandle = el("button", "sandbox-dock-float", "对话");
+    this.floatHandle = el("button", "sandbox-dock-float", "");
+    this.floatHandle.append(createPiMascotSvg());
     this.floatHandle.type = "button";
     this.floatHandle.hidden = true;
     this.floatHandle.title = "展开沙箱对话（可拖动）";
@@ -637,7 +639,6 @@ export class SandboxDialogueDock {
       this.questionDrafts.clear();
     }
     this.title.textContent = `沙箱对话 · ${sessionId}`;
-    this.floatHandle.textContent = "对话";
     this.applyGeometry();
     void this.refreshStatus();
     try {
@@ -673,7 +674,6 @@ export class SandboxDialogueDock {
     }
     this.root.hidden = true;
     this.floatHandle.hidden = false;
-    this.floatHandle.textContent = "对话";
     this.applyGeometry();
   }
 
@@ -1804,6 +1804,8 @@ export class SandboxDialogueDock {
     const readonly = this.viewThreadId !== this.activeThreadId;
     this.root.classList.toggle("is-running", running || this.sending);
     this.root.classList.toggle("is-readonly-thread", readonly);
+    this.floatHandle.classList.toggle("is-busy", running || this.sending);
+    this.floatHandle.classList.toggle("has-question", this.pendingQuestions.length > 0);
     this.sendButton.disabled = running || this.sending || this.switchingThread || readonly || !this.sessionId;
     this.sendButton.textContent = running ? "进行中…" : "发送";
     this.cancelButton.hidden = !running;

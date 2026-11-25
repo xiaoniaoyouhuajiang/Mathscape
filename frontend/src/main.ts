@@ -536,8 +536,6 @@ const graphController = new GraphController(
       studyHud?.notifyGraphMounted();
     },
     onStudyPostureChanged: (active, initialMaterialId) => {
-      el.learningViewButton.classList.toggle("is-active", active);
-      el.learningViewButton.setAttribute("aria-pressed", String(active));
       if (active) {
         void studyHud?.activate(initialMaterialId);
       } else {
@@ -1049,7 +1047,6 @@ const toggleStudyFromTopbar = () => {
     else graphController.enterStudyPosture();
   })();
 };
-el.learningViewButton.addEventListener("click", toggleStudyFromTopbar);
 eventBus.on("open-learning-view", toggleStudyFromTopbar);
 
 eventBus.on("open-proposal-for-object", (detail) => {
