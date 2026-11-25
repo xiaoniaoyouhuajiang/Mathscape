@@ -376,18 +376,29 @@ test.describe("S1 sandbox shell", () => {
     await expect(floatHandle).toBeVisible();
     await expect.poll(dockedBottomRight).toBe(true);
 
-    // Drag Xiao-Pi to a custom spot and verify expanding + collapsing preserves that exact coordinate
+    // Drag Xiao-Pi to a custom spot and verify expanding + collapsing preserves that exact coordinate.
+    // Read CSS left/top rather than boundingBox() after mouseup because :hover applies transform: translateY(-2px) scale(1.04).
+    const readFloatPos = () =>
+      page.evaluate(() => {
+        const el = document.querySelector<HTMLElement>(".sandbox-dock-float")!;
+        const cs = getComputedStyle(el);
+        return { left: Math.round(parseFloat(cs.left)), top: Math.round(parseFloat(cs.top)) };
+      });
+
+    const originPos = await readFloatPos();
     const hb = (await floatHandle.boundingBox())!;
+    const startX = Math.round(hb.x + hb.width / 2);
+    const startY = Math.round(hb.y + hb.height / 2);
     const dx = -240;
     const dy = -180;
-    await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+    const targetPos = { left: originPos.left + dx, top: originPos.top + dy };
+
+    await page.mouse.move(startX, startY);
     await page.mouse.down();
-    await page.mouse.move(hb.x + hb.width / 2 + dx, hb.y + hb.height / 2 + dy, { steps: 5 });
+    await page.mouse.move(startX + dx, startY + dy, { steps: 5 });
     await page.mouse.up();
 
-    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.x)).toBe(Math.round(hb.x + dx));
-    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.y)).toBe(Math.round(hb.y + dy));
-    const draggedBox = (await floatHandle.boundingBox())!;
+    await expect.poll(readFloatPos).toEqual(targetPos);
 
     // Click Xiao-Pi to open dialogue, then collapse back to float: coordinate must NOT reset!
     await floatHandle.click();
@@ -396,14 +407,12 @@ test.describe("S1 sandbox shell", () => {
     await expect(floatHandle).toBeHidden();
     await dock.locator('button[title="收起为浮动入口"]').click();
     await expect(floatHandle).toBeVisible();
-    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.x)).toBe(Math.round(draggedBox.x));
-    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.y)).toBe(Math.round(draggedBox.y));
+    await expect.poll(readFloatPos).toEqual(targetPos);
 
     // Reload: coordinate stays persisted
     await page.reload();
     await expect(floatHandle).toBeVisible();
-    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.x)).toBe(Math.round(draggedBox.x));
-    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.y)).toBe(Math.round(draggedBox.y));
+    await expect.poll(readFloatPos).toEqual(targetPos);
   });
 
   test("a narrow window renders the sidebar preference as floating", async ({ page }) => {
