@@ -574,10 +574,13 @@ export class SandboxDialogueDock {
     this.syncControls();
     requestAnimationFrame(() => this.applyGeometry());
     const canvasPanel = this.layoutHost.querySelector<HTMLElement>(".canvas-panel");
-    if (canvasPanel && typeof ResizeObserver !== "undefined") {
-      new ResizeObserver(() => {
+    const legend = this.layoutHost.querySelector<HTMLElement>("#graph-legend");
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(() => {
         if (this.floatPos === null) this.applyGeometry();
-      }).observe(canvasPanel);
+      });
+      if (canvasPanel) observer.observe(canvasPanel);
+      if (legend) observer.observe(legend);
     }
     window.addEventListener("resize", () => this.clampIntoViewport());
   }
@@ -924,7 +927,12 @@ export class SandboxDialogueDock {
       dragging = undefined;
       target.classList.remove("is-dragging");
       savePos(this.pos);
-      if (markClickSuppress && moved) target.dataset.dragged = "1";
+      if (markClickSuppress && moved) {
+        target.dataset.dragged = "1";
+        setTimeout(() => {
+          target.dataset.dragged = "0";
+        }, 0);
+      }
     };
     target.addEventListener("pointerup", finish);
     target.addEventListener("pointercancel", finish);
@@ -969,6 +977,9 @@ export class SandboxDialogueDock {
       if (moved && this.floatPos) {
         savePos(this.floatPos, DIALOGUE_FLOAT_POS_KEY);
         target.dataset.dragged = "1";
+        setTimeout(() => {
+          target.dataset.dragged = "0";
+        }, 0);
       }
     };
     target.addEventListener("pointerup", finish);

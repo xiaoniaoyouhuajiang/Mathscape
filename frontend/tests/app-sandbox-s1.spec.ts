@@ -349,24 +349,32 @@ test.describe("S1 sandbox shell", () => {
   });
 
   test("Xiao-Pi float handle is visible on startup at map bottom-right and remembers dragged coordinates across expand/collapse", async ({ page }) => {
-    await page.setViewportSize({ width: 1360, height: 860 });
     const floatHandle = page.getByRole("button", { name: "展开沙箱对话" });
     await expect(floatHandle).toBeVisible();
 
-    const initialLayout = await page.evaluate(() => {
-      const canvas = document.querySelector<HTMLElement>(".canvas-panel")!.getBoundingClientRect();
-      const handle = document.querySelector<HTMLElement>(".sandbox-dock-float")!.getBoundingClientRect();
-      return { canvasRight: canvas.right, canvasBottom: canvas.bottom, canvasTop: canvas.top, canvasHeight: canvas.height, handle };
-    });
-    expect(initialLayout.handle.left + initialLayout.handle.width).toBeLessThanOrEqual(initialLayout.canvasRight);
-    expect(initialLayout.handle.left).toBeGreaterThan(initialLayout.canvasRight - 140);
-    expect(initialLayout.handle.top).toBeGreaterThan(initialLayout.canvasTop + initialLayout.canvasHeight * 0.6);
+    const dockedBottomRight = async () =>
+      page.evaluate(() => {
+        const canvas = document.querySelector<HTMLElement>(".canvas-panel")!.getBoundingClientRect();
+        const handle = document.querySelector<HTMLElement>(".sandbox-dock-float")!.getBoundingClientRect();
+        return (
+          handle.left + handle.width <= canvas.right &&
+          handle.left > canvas.right - 140 &&
+          handle.top > canvas.top + canvas.height * 0.6 &&
+          handle.top + handle.height <= canvas.bottom
+        );
+      });
+
+    // Startup at 1400×860 and subsequent viewport shrink to 1360×860 both keep Xiao-Pi anchored inside .canvas-panel bottom-right
+    await expect.poll(dockedBottomRight).toBe(true);
+    await page.setViewportSize({ width: 1360, height: 860 });
+    await expect.poll(dockedBottomRight).toBe(true);
 
     // Enter sandbox: Xiao-Pi is immediately visible without clicking topbar [对话] first
     await page.locator("#sandbox-button").click();
     page.once("dialog", (dialog) => void dialog.accept());
     await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "在本窗口打开…" }).click()]);
     await expect(floatHandle).toBeVisible();
+    await expect.poll(dockedBottomRight).toBe(true);
 
     // Drag Xiao-Pi to a custom spot and verify expanding + collapsing preserves that exact coordinate
     const hb = (await floatHandle.boundingBox())!;
@@ -377,9 +385,9 @@ test.describe("S1 sandbox shell", () => {
     await page.mouse.move(hb.x + hb.width / 2 + dx, hb.y + hb.height / 2 + dy, { steps: 5 });
     await page.mouse.up();
 
+    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.x)).toBe(Math.round(hb.x + dx));
+    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.y)).toBe(Math.round(hb.y + dy));
     const draggedBox = (await floatHandle.boundingBox())!;
-    expect(Math.round(draggedBox.x)).toBe(Math.round(hb.x + dx));
-    expect(Math.round(draggedBox.y)).toBe(Math.round(hb.y + dy));
 
     // Click Xiao-Pi to open dialogue, then collapse back to float: coordinate must NOT reset!
     await floatHandle.click();
@@ -388,16 +396,14 @@ test.describe("S1 sandbox shell", () => {
     await expect(floatHandle).toBeHidden();
     await dock.locator('button[title="收起为浮动入口"]').click();
     await expect(floatHandle).toBeVisible();
-    const restoredBox = (await floatHandle.boundingBox())!;
-    expect(Math.round(restoredBox.x)).toBe(Math.round(draggedBox.x));
-    expect(Math.round(restoredBox.y)).toBe(Math.round(draggedBox.y));
+    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.x)).toBe(Math.round(draggedBox.x));
+    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.y)).toBe(Math.round(draggedBox.y));
 
     // Reload: coordinate stays persisted
     await page.reload();
     await expect(floatHandle).toBeVisible();
-    const reloadedBox = (await floatHandle.boundingBox())!;
-    expect(Math.round(reloadedBox.x)).toBe(Math.round(draggedBox.x));
-    expect(Math.round(reloadedBox.y)).toBe(Math.round(draggedBox.y));
+    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.x)).toBe(Math.round(draggedBox.x));
+    await expect.poll(async () => Math.round((await floatHandle.boundingBox())!.y)).toBe(Math.round(draggedBox.y));
   });
 
   test("a narrow window renders the sidebar preference as floating", async ({ page }) => {
