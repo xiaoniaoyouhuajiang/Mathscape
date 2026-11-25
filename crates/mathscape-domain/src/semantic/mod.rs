@@ -31,14 +31,17 @@ pub const SEMANTIC_SCHEMA_VERSION: &str = "mathscape-semantic-1";
 /// 源码里核对名称后写入。
 pub const MATHLIB_BASELINE_ACTOR: &str = "system:mathlib-baseline";
 
-/// Stable id prefixes of server-generated semantic objects (contract S3).
+/// Stable id prefixes of server-generated semantic objects (contract S3 & S14).
 pub const SEMANTIC_ENTITY_ID_KIND: &str = "semantic-entity";
 pub const ALIGNMENT_ID_KIND: &str = "alignment";
 pub const DEBT_ID_KIND: &str = "debt";
 pub const DIALECT_SCOPE_ID_KIND: &str = "dialect-scope";
+pub const REPRESENTATION_CORE_ID_KIND: &str = "representation-core";
+pub const REPRESENTATION_BINDING_ID_KIND: &str = "representation-binding";
 
 /// Either layer's payload. Untagged: both inner enums carry their own
 /// `payload_kind` and their value spaces are disjoint.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum DomainPayload {
@@ -69,6 +72,8 @@ pub enum SemanticPayload {
     Alignment(Alignment),
     Debt(DebtRecord),
     DialectScope(DialectScope),
+    RepresentationCore(RepresentationCore),
+    RepresentationBinding(RepresentationBinding),
 }
 
 impl SemanticPayload {
@@ -79,6 +84,8 @@ impl SemanticPayload {
             "alignment" => EntityKind::Alignment,
             "debt" => EntityKind::Debt,
             "dialect_scope" => EntityKind::DialectScope,
+            "representation_core" => EntityKind::RepresentationCore,
+            "representation_binding" => EntityKind::RepresentationBinding,
             _ => return None,
         })
     }
@@ -91,10 +98,13 @@ impl EntityPayload for SemanticPayload {
             Self::Alignment(_) => EntityKind::Alignment,
             Self::Debt(_) => EntityKind::Debt,
             Self::DialectScope(_) => EntityKind::DialectScope,
+            Self::RepresentationCore(_) => EntityKind::RepresentationCore,
+            Self::RepresentationBinding(_) => EntityKind::RepresentationBinding,
         }
     }
-    // An alignment is a revisable entity that the map draws as an edge
-    // (contract S2.4), so every semantic payload has the entity shape.
+    // Alignments and representation bindings are revisable entities that the
+    // map draws as edges (contract S2.4, S14.4), so every semantic payload has
+    // the entity shape.
 }
 
 // ---------------------------------------------------------------- shared
@@ -206,6 +216,89 @@ pub struct Binder {
     pub role: BinderRole,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardPartitionStatus {
+    Partition,
+    DisjointPartial,
+    Overlapping,
+    Unspecified,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GuardPartition {
+    pub status: GuardPartitionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GuardSpec {
+    pub guard_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub predicate: StructuredText,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_spans: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeclarationBranch {
+    pub branch_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guards: Vec<String>,
+    #[serde(default)]
+    pub is_degenerate: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub binders: Vec<Binder>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assumptions: Vec<StructuredText>,
+    pub conclusion: StructuredText,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_spans: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProblemBranch {
+    pub branch_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guards: Vec<String>,
+    #[serde(default)]
+    pub is_degenerate: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<StructuredText>,
+    pub task: StructuredText,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_spans: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExclusionKind {
+    Undefined,
+    Diverges,
+    OutOfScope,
+    Counterexample,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExclusionSpec {
+    pub case: StructuredText,
+    pub kind: ExclusionKind,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_spans: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DeclarationBody {
@@ -218,6 +311,14 @@ pub struct DeclarationBody {
     pub statement: Option<StructuredText>,
     #[serde(default)]
     pub definiens: Option<StructuredText>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guards: Vec<GuardSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_partition: Option<GuardPartition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub branches: Vec<DeclarationBranch>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclusions: Vec<ExclusionSpec>,
     #[serde(default)]
     pub uses_entities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,7 +331,16 @@ pub struct ProblemSchemaBody {
     pub parameters: Vec<Binder>,
     #[serde(default)]
     pub assumptions: Vec<StructuredText>,
-    pub task: StructuredText,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<StructuredText>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guards: Vec<GuardSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_partition: Option<GuardPartition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub branches: Vec<ProblemBranch>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclusions: Vec<ExclusionSpec>,
     #[serde(default)]
     pub known_instances: Vec<Value>,
     #[serde(default)]
@@ -460,6 +570,7 @@ pub struct RequiredAssumption {
 pub enum LostDirection {
     TargetHasSourceLacks,
     SourceHasTargetLacks,
+    Both,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -481,6 +592,8 @@ pub struct AlignmentDraft {
     pub source_context: SourceContext,
     #[serde(default)]
     pub target_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_branches: Vec<String>,
     #[serde(default)]
     pub parameter_map: Vec<ParameterMapEntry>,
     #[serde(default)]
@@ -603,6 +716,31 @@ pub enum ScopeApplication {
     AnchorSubtree,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalSymbolRole {
+    Sequence,
+    Series,
+    Polynomial,
+    Function,
+    Operator,
+    Variable,
+    Index,
+    Constant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LocalSymbolEntry {
+    pub symbol: String,
+    pub role: LocalSymbolRole,
+    pub meaning: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<StructuredText>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_spans: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DialectScopeDraft {
@@ -615,12 +753,100 @@ pub struct DialectScopeDraft {
     #[serde(default)]
     pub introduced_by_unit: Option<String>,
     pub conventions: Vec<Convention>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_symbols: Vec<LocalSymbolEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DialectScope {
     #[serde(flatten)]
     pub draft: DialectScopeDraft,
+}
+
+// ------------------------------------------------------ RepresentationCore
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RepresentationOperation {
+    pub name: String,
+    pub signature: StructuredText,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RepresentationCoreDraft {
+    pub home_theory: String,
+    pub preferred_labels: Vec<PreferredLabel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub plain_label: Option<String>,
+    pub carrier: StructuredText,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub represented_object: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub binders: Vec<Binder>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operations: Vec<RepresentationOperation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invariants_and_domain: Vec<StructuredText>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conventions: Vec<Convention>,
+    #[serde(default)]
+    pub mathlib_baseline: Option<MathlibBaseline>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses_entities: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RepresentationCore {
+    #[serde(flatten)]
+    pub draft: RepresentationCoreDraft,
+    pub trust: TrustRecord,
+}
+
+// --------------------------------------------------- RepresentationBinding
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolBindingEntry {
+    pub local_symbol: String,
+    pub target_expr: StructuredText,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<LocalSymbolRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RepresentationBindingDraft {
+    pub dialect_scope: String,
+    pub representation: String,
+    pub symbol_map: Vec<SymbolBindingEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub index_and_domain_adaptations: Vec<StructuredText>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lost_information: Vec<LostInformation>,
+    pub evidence_spans: Vec<String>,
+    pub status: AlignmentReviewStatus,
+    #[serde(default)]
+    pub map_label: Option<String>,
+    #[serde(default)]
+    pub plain_note: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RepresentationBinding {
+    #[serde(flatten)]
+    pub draft: RepresentationBindingDraft,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed: Option<ReviewMark>,
+    pub trust: TrustRecord,
 }
 
 /// Default trust of a newly proposed semantic object (contract S7): nothing

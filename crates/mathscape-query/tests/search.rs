@@ -116,6 +116,7 @@ fn corpus() -> SearchCorpus {
                 home_theory_id: Some("theory-1".into()),
             },
         ],
+        representation_cores: vec![],
         canonical_markdown: vec![],
     }
 }

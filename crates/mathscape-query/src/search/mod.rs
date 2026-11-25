@@ -47,6 +47,7 @@ pub enum SearchKind {
     SourceUnit,
     Theory,
     SemanticEntity,
+    RepresentationCore,
     Material,
     Snapshot,
 }
@@ -59,6 +60,7 @@ impl SearchKind {
             Self::SourceUnit => "来源单元",
             Self::Theory => "理论",
             Self::SemanticEntity => "共享对象",
+            Self::RepresentationCore => "表示核",
             Self::Material => "材料",
             Self::Snapshot => "命名快照",
         }
@@ -130,13 +132,14 @@ impl SearchRegistry {
     }
 
     /// Built-in providers: notes, source units, theories, shared objects,
-    /// materials, named snapshots.
+    /// representation cores, materials, named snapshots.
     pub fn with_defaults() -> Self {
         let mut registry = Self::empty();
         registry.register(Box::new(providers::NoteProvider));
         registry.register(Box::new(providers::SourceUnitProvider));
         registry.register(Box::new(providers::TheoryProvider));
         registry.register(Box::new(providers::SemanticEntityProvider));
+        registry.register(Box::new(providers::RepresentationCoreProvider));
         registry.register(Box::new(providers::MaterialProvider));
         registry.register(Box::new(providers::SnapshotProvider));
         registry

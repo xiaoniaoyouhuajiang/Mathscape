@@ -6,9 +6,9 @@ skill 不能假设文档里写出的工具已经存在。每次启动一个工�
 
 通常包括：
 
-- `workspace.search`（支持 `note`、`source_unit`、`theory`、`semantic_entity`、`material`、`snapshot`，以及 `scope: "investigation"` 检索本会话暂存）
-- `graph.get`（支持来源层与语义层节点/关系，语义对象在 `semantic` 字段返回结构化内容）
-- `graph.neighborhood`（`edge_types` 除结构边和书内关系外，支持按需遍历 `aligns`、`in_theory`、`debt_on`、`scope_of`）
+- `workspace.search`（支持 `note`、`source_unit`、`theory`、`semantic_entity`、`representation_core`、`material`、`snapshot`，以及 `scope: "investigation"` 检索本会话暂存）
+- `graph.get`（支持来源层、语义层与表示层节点/关系，语义与表示对象在 `semantic` 字段返回结构化内容）
+- `graph.neighborhood`（`edge_types` 除结构边和书内关系外，支持按需遍历 `aligns`、`binds_representation`、`in_theory`、`debt_on`、`scope_of`、`uses_entity`、`of_concept`、`paid_by`）
 - `material.read`
 - `material.grep`
 - `material.locate`（把一段原文换成快照里的精确 `md_byte_range`，供 `propose_changes` 的 source_span 使用）
@@ -51,11 +51,10 @@ skill 不能假设文档里写出的工具已经存在。每次启动一个工�
 
 ## 语义层假定工具
 
-自 `mathscape-mcp/17` 起，共享对象、对齐线、一笔账和最小约定卡已经由 `propose_changes` 直接支持（`kind`：`semantic_entity`、`alignment`、`debt`、`dialect_scope`，见 SKILL.md §4.2），不需要下面的假定工具。
+自 `mathscape-mcp/17` 起，共享对象、对齐线、一笔账和最小约定卡已经由 `propose_changes` 直接支持；自 `mathscape-mcp/21` 起，多分支/守卫/排除（`guards`/`branches`/`exclusions`）、局部符号表（`local_symbols`）、表示核（`representation_core`）与表示绑定（`representation_binding`）也已由 `propose_changes` 原生支持，不需要单独假定工具。
 
 下面这些名字只是设计接口，不是当前 API：
 
-- `emir.upsert_representation_binding`
 - `emir.upsert_proof_context`
 - `emir.upsert_proof_state`
 - `rdtx.upsert_node`

@@ -13,6 +13,8 @@ export const unitKindLabel = lookup({
   solution: "解答", example: "例子", remark: "注记", method: "方法", notation: "记号", narrative: "叙述",
   concept: "共享概念", declaration: "精确说法", theory: "理论", problem_schema: "题型",
   alignment: "对齐线", debt: "一笔账", dialect_scope: "约定卡",
+  representation_core: t("semantic.kind.representation_core"),
+  representation_binding: t("semantic.kind.representation_binding"),
 });
 
 export const completenessLabel = lookup({
@@ -33,6 +35,7 @@ const knownRelationLabel = lookup({
   expresses: "说的就是它", specializes: "是特例", generalizes: "是推广", instance_of: "是实例",
   representation_of: "换一种表示", logically_equivalent: "逻辑等价", definitionally_equivalent: "定义等价",
   exact_realization: "精确实现", notation_for: "是记号", overlaps_with: "部分重合", incompatible_with: "对不上",
+  binds_representation: t("semantic.relation.binds_representation"),
   in_theory: "属于理论", debt_on: "挂账", scope_of: "约定适用于", uses_entity: "引用对象",
 });
 

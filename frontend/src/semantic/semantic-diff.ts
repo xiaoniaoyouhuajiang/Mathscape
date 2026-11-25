@@ -6,6 +6,7 @@
  */
 import { textElement } from "../core/dom";
 import { texToPlain } from "../graph/tex-plain";
+import { hasMessage, t } from "../i18n";
 import type { markdownRenderer } from "../reader/markdown";
 import type { PendingChangeSet, ProposalAnchor, ProposedObject } from "../review/proposal-model";
 
@@ -19,6 +20,7 @@ import {
   failureModeLabel,
   lostDirectionLabel,
   relationLabel,
+  representationBindingPlainLabel,
   semanticKindLabel,
   semanticObjectNoun,
 } from "./labels";
@@ -136,6 +138,19 @@ const FIELD_LABELS: Record<string, string> = {
   applies_to: "作用范围",
   display_title: "显示标题",
   parent: "上级单元",
+  target_branches: t("semantic.s2.targetBranches"),
+  exclusions: t("semantic.s2.exclusionsHeading"),
+  local_symbols: t("semantic.s3.localSymbolsHeading"),
+  carrier: t("semantic.s3.carrier"),
+  represented_object: t("semantic.s3.representedObject"),
+  binders: "Binders",
+  operations: t("semantic.s3.operationsHeading"),
+  invariants_and_domain: t("semantic.s3.invariantsHeading"),
+  dialect_scope: t("semantic.s3.dialectScope"),
+  representation: t("semantic.s3.representationCore"),
+  symbol_map: t("semantic.s3.symbolMapHeading"),
+  index_and_domain_adaptations: t("semantic.s3.adaptationsHeading"),
+  uses_entities: "Uses",
 };
 
 function formatBinders(binders: Json[]): string {
@@ -157,7 +172,11 @@ function formatDeclarationSummary(decl: Json): string {
   if (assumptions.length) parts.push(`前提：${assumptions.join("；")}`);
   const stmt = (decl.statement ?? decl.definiens) as Json | undefined;
   if (stmt && str(stmt.text)) parts.push(`核心式：${str(stmt.text)}`);
-  return parts.join(" ｜ ") || "—";
+  const branches = arr(decl.branches);
+  if (branches.length) parts.push(t("semantic.s2.branchCount", { count: branches.length }));
+  const exclusions = arr(decl.exclusions);
+  if (exclusions.length) parts.push(t("semantic.s2.exclusionCount", { count: exclusions.length }));
+  return parts.join(" | ") || "-";
 }
 
 function formatProblemSchemaSummary(ps: Json): string {
@@ -166,7 +185,11 @@ function formatProblemSchemaSummary(ps: Json): string {
   if (params.length) parts.push(`参数：${formatBinders(params)}`);
   const task = ps.task as Json | undefined;
   if (task && str(task.text)) parts.push(`任务：${str(task.text)}`);
-  return parts.join(" ｜ ") || "—";
+  const branches = arr(ps.branches);
+  if (branches.length) parts.push(t("semantic.s2.branchCount", { count: branches.length }));
+  const exclusions = arr(ps.exclusions);
+  if (exclusions.length) parts.push(t("semantic.s2.exclusionCount", { count: exclusions.length }));
+  return parts.join(" | ") || "-";
 }
 
 export function formatTermIndexEntry(entry: Json): string {
@@ -192,7 +215,7 @@ function formatFieldValue(
     if (key === "semantic_kind") return semanticKindLabel(value);
     if (key === "relation") return relationLabel(value);
     if (key === "failure_mode") return failureModeLabel(value);
-    if (["home_theory", "source", "target", "target_context", "attached_to", "anchor_unit", "parent"].includes(key)) {
+    if (["home_theory", "source", "target", "target_context", "attached_to", "anchor_unit", "parent", "represented_object", "dialect_scope", "representation"].includes(key)) {
       return resolveTitle(value);
     }
     return value.trim() || "（空）";
@@ -223,10 +246,37 @@ function formatFieldValue(
     }
     if (key === "evidence_spans") return `${value.length} 处原文范围`;
     if (key === "paid_by") return arr(value).map((r) => resolveTitle(str(r.ref))).join("、");
+    if (key === "uses_entities") return value.map(str).filter(Boolean).map((id) => resolveTitle(id!)).join(" / ");
+    if (key === "target_branches") return value.map(str).filter(Boolean).join(", ");
+    if (key === "local_symbols") {
+      return arr(value).map((s) => `${str(s.symbol) ?? "?"}: ${str(s.meaning) ?? ""}`).join(" | ");
+    }
+    if (key === "exclusions") {
+      return arr(value).map((ex) => {
+        const c = ex.case as Json | undefined;
+        return `${str(c?.text) ?? ""} (${str(ex.reason) ?? ""})`;
+      }).join(" | ");
+    }
+    if (key === "operations") {
+      return arr(value).map((op) => {
+        const sig = op.signature as Json | undefined;
+        return `${str(op.name) ?? "?"}: ${str(sig?.text) ?? ""}`;
+      }).join(" | ");
+    }
+    if (key === "invariants_and_domain" || key === "index_and_domain_adaptations") {
+      return arr(value).map((item) => str(item.text) ?? "").filter(Boolean).join(" | ");
+    }
+    if (key === "symbol_map") {
+      return arr(value).map((entry) => {
+        const dst = entry.target_expr as Json | undefined;
+        return `${str(entry.local_symbol) ?? "?"} -> ${str(dst?.text) ?? "?"}`;
+      }).join(" | ");
+    }
     return value.map((v) => formatFieldValue("", v, resolveTitle)).join("、");
   }
   if (typeof value === "object") {
     const obj = value as Json;
+    if (key === "carrier") return str(obj.text) ?? "—";
     if (key === "mathlib_baseline") {
       if (!str(obj.decl)) return str(obj.note) ?? "暂无对应名称";
       return `${str(obj.decl)}（${baselineStatusLabel(str(obj.status))}）${str(obj.note) ? ` · ${str(obj.note)}` : ""}`;
@@ -312,8 +362,9 @@ export interface SupersedesDiffSummary {
 
 function objectDisplayName(obj: ProposedObject, resolveTitle: (ref: string | null) => string): string {
   const body = effectiveProposalPayload(obj);
-  if (obj.kind === "semantic_entity") return entityPlainLabel(body);
+  if (obj.kind === "semantic_entity" || obj.kind === "representation_core") return entityPlainLabel(body);
   if (obj.kind === "alignment") return alignmentPlainLabel(body);
+  if (obj.kind === "representation_binding") return representationBindingPlainLabel(body);
   return str(body.display_title) ?? str(body.label) ?? str(body.obligation) ?? resolveTitle(obj.target_id ?? null) ?? obj.local_ref;
 }
 
@@ -423,7 +474,223 @@ export function renderFieldDiffTable(diffs: SemanticFieldDiff[], md: MarkdownRen
   return section;
 }
 
-/** 渲染一个 `SemanticEntity` 的完整形式化与可读内容（含 KaTeX 公式、变量绑定、前提、题型、约定与 mathlib）。 */
+function partitionStatusLabel(status: string | null): string {
+  const key = `semantic.s2.partition.${status ?? "unspecified"}`;
+  return hasMessage(key) ? t(key) : (status ?? "—");
+}
+
+function exclusionKindLabel(kind: string | null): string {
+  const key = `semantic.s2.exclusion.${kind ?? ""}`;
+  return hasMessage(key) ? t(key) : (kind ?? "—");
+}
+
+function symbolRoleLabel(role: string | null): string {
+  const key = `semantic.s3.symbolRole.${role ?? ""}`;
+  return hasMessage(key) ? t(key) : (role ?? "—");
+}
+
+function renderSegmentedBodySections(
+  md: MarkdownRenderer,
+  body: Json,
+  conclusionKey: "conclusion" | "task",
+  container: HTMLElement,
+): void {
+  const guards = arr(body.guards);
+  const guardLabelById = new Map<string, string>();
+  for (const g of guards) {
+    const gid = str(g.guard_id);
+    const pred = g.predicate as Json | undefined;
+    if (gid) guardLabelById.set(gid, str(g.label) ?? str(pred?.text) ?? gid);
+  }
+  const partition = body.guard_partition as Json | undefined;
+  if (partition && str(partition.status)) {
+    const partText = `${partitionStatusLabel(str(partition.status))}${str(partition.note) ? ` · ${str(partition.note)}` : ""}`;
+    container.append(kvRow(t("semantic.s2.guardPartition"), renderMathNode(md, partText, "semantic-value semantic-markdown")));
+  }
+  if (guards.length > 0) {
+    const ul = textElement("ul", "semantic-list semantic-guards-list", "");
+    for (const g of guards) {
+      const li = document.createElement("li");
+      const head = str(g.label) ?? str(g.guard_id) ?? "guard";
+      li.append(textElement("strong", "", `${head}: `));
+      const pred = g.predicate as Json | undefined;
+      if (pred && str(pred.text)) {
+        li.append(renderMathNode(md, str(pred.text)!, "semantic-markdown"));
+      }
+      ul.append(li);
+    }
+    container.append(kvRow(t("semantic.s2.guardsHeading"), ul));
+  }
+  const branches = arr(body.branches);
+  if (branches.length > 0) {
+    const branchList = textElement("div", "semantic-branches-list", "");
+    for (const b of branches) {
+      const box = textElement("div", `semantic-branch-item${b.is_degenerate ? " is-degenerate" : ""}`, "");
+      const header = textElement("div", "semantic-branch-header", "");
+      header.append(
+        textElement("strong", "", str(b.label) ?? str(b.branch_id) ?? "branch"),
+        textElement(
+          "small",
+          "semantic-tag",
+          b.is_degenerate ? t("semantic.s2.degenerateBadge") : t("semantic.s2.regularBadge"),
+        ),
+      );
+      const guardIds = Array.isArray(b.guards) ? b.guards.map(str).filter((v): v is string => !!v) : [];
+      if (guardIds.length > 0) {
+        const gNames = guardIds.map((id) => guardLabelById.get(id) ?? id).join(", ");
+        header.append(textElement("small", "semantic-muted", t("semantic.s2.branchGuards", { guards: gNames })));
+      }
+      box.append(header);
+      const concl = b[conclusionKey] as Json | undefined;
+      if (concl && str(concl.text)) {
+        box.append(renderMathNode(md, str(concl.text)!, "semantic-statement-box semantic-markdown"));
+      }
+      branchList.append(box);
+    }
+    container.append(kvRow(t("semantic.s2.branchesHeading"), branchList));
+  }
+  const exclusions = arr(body.exclusions);
+  if (exclusions.length > 0) {
+    const ul = textElement("ul", "semantic-list semantic-exclusions-list", "");
+    for (const ex of exclusions) {
+      const li = document.createElement("li");
+      li.append(textElement("small", "semantic-tag", exclusionKindLabel(str(ex.kind))));
+      const caseObj = ex.case as Json | undefined;
+      if (caseObj && str(caseObj.text)) {
+        li.append(renderMathNode(md, str(caseObj.text)!, "semantic-markdown"));
+      }
+      if (str(ex.reason)) {
+        li.append(renderMathNode(md, str(ex.reason)!, "semantic-muted semantic-markdown"));
+      }
+      ul.append(li);
+    }
+    container.append(kvRow(t("semantic.s2.exclusionsHeading"), ul));
+  }
+}
+
+export function renderLocalSymbolsCard(md: MarkdownRenderer, symbols: Json[]): HTMLElement {
+  const card = textElement("section", "semantic-card semantic-local-symbols-card", "");
+  card.append(textElement("h4", "", t("semantic.s3.localSymbolsHeading")));
+  const table = textElement("table", "semantic-table", "");
+  for (const sym of symbols) {
+    const tr = document.createElement("tr");
+    const symCell = renderMathNode(md, `$${str(sym.symbol) ?? "?"}$`, "semantic-td-cell");
+    const roleCell = textElement("td", "", symbolRoleLabel(str(sym.role)));
+    const meaningCell = document.createElement("td");
+    meaningCell.append(renderMathNode(md, str(sym.meaning) ?? "—", "semantic-markdown"));
+    const dom = sym.domain as Json | undefined;
+    if (dom && str(dom.text)) {
+      meaningCell.append(renderMathNode(md, str(dom.text)!, "semantic-muted semantic-markdown"));
+    }
+    tr.append(symCell, roleCell, meaningCell);
+    table.append(tr);
+  }
+  card.append(table);
+  return card;
+}
+
+export function renderRepresentationCoreCardBody(
+  md: MarkdownRenderer,
+  p: Json,
+  resolveTitle: (ref: string | null) => string,
+): HTMLElement {
+  const wrap = textElement("div", "semantic-entity-body", "");
+  wrap.append(kvRow(FIELD_LABELS.semantic_kind, t("semantic.kind.representation_core")));
+  const labels = arr(p.preferred_labels).map((l) => `${str(l.label) ?? ""} (${str(l.lang) ?? "?"})`);
+  if (labels.length) wrap.append(kvRow(FIELD_LABELS.preferred_labels, labels.join(" / ")));
+  const aliases = Array.isArray(p.aliases) ? p.aliases.map(str).filter((v): v is string => !!v) : [];
+  if (aliases.length) wrap.append(kvRow(FIELD_LABELS.aliases, aliases.join(", ")));
+  if (str(p.home_theory)) wrap.append(kvRow(FIELD_LABELS.home_theory, resolveTitle(str(p.home_theory))));
+  if (str(p.represented_object)) wrap.append(kvRow(t("semantic.s3.representedObject"), resolveTitle(str(p.represented_object))));
+  if (str(p.description)) {
+    wrap.append(kvRow(FIELD_LABELS.description, renderMathNode(md, str(p.description)!, "semantic-value semantic-markdown")));
+  }
+  const carrier = p.carrier as Json | undefined;
+  if (carrier && str(carrier.text)) {
+    const cNode = renderMathNode(md, str(carrier.text)!, "semantic-statement-box semantic-markdown");
+    if (str(carrier.note)) cNode.append(textElement("small", "semantic-muted", str(carrier.note)!));
+    wrap.append(kvRow(t("semantic.s3.carrier"), cNode));
+  }
+  const binders = arr(p.binders);
+  if (binders.length) {
+    wrap.append(kvRow(t("semantic.common.binders"), renderMathNode(md, formatBinders(binders), "semantic-value semantic-markdown")));
+  }
+  const ops = arr(p.operations);
+  if (ops.length > 0) {
+    const opsBox = textElement("section", "semantic-card", "");
+    opsBox.append(textElement("h4", "", t("semantic.s3.operationsHeading")));
+    const ul = textElement("ul", "semantic-list", "");
+    for (const op of ops) {
+      const li = document.createElement("li");
+      li.append(textElement("strong", "", `${str(op.name) ?? "op"}: `));
+      const sig = op.signature as Json | undefined;
+      if (sig && str(sig.text)) li.append(renderMathNode(md, str(sig.text)!, "semantic-markdown"));
+      if (str(op.note)) li.append(textElement("small", "semantic-muted", str(op.note)!));
+      ul.append(li);
+    }
+    opsBox.append(ul);
+    wrap.append(opsBox);
+  }
+  const invariants = arr(p.invariants_and_domain);
+  if (invariants.length > 0) {
+    const invBox = textElement("section", "semantic-card", "");
+    invBox.append(textElement("h4", "", t("semantic.s3.invariantsHeading")));
+    const ul = textElement("ul", "semantic-list", "");
+    for (const inv of invariants) {
+      if (!str(inv.text)) continue;
+      const li = document.createElement("li");
+      li.append(renderMathNode(md, str(inv.text)!, "semantic-markdown"));
+      ul.append(li);
+    }
+    invBox.append(ul);
+    wrap.append(invBox);
+  }
+  const baseline = p.mathlib_baseline as Json | null | undefined;
+  if (baseline) {
+    const bCard = textElement("section", "semantic-card semantic-baseline", "");
+    bCard.append(textElement("h4", "", FIELD_LABELS.mathlib_baseline));
+    if (!str(baseline.decl)) {
+      bCard.append(textElement("p", "semantic-muted", str(baseline.note) ?? t("semantic.common.baselineNone")));
+    } else {
+      bCard.append(
+        kvRow(t("semantic.common.baselineDecl"), str(baseline.decl)!),
+        kvRow(t("semantic.common.baselineStatus"), baselineStatusLabel(str(baseline.status) ?? "unchecked")),
+      );
+      if (str(baseline.module)) bCard.append(kvRow(t("semantic.common.baselineModule"), str(baseline.module)!));
+      if (str(baseline.note)) bCard.append(kvRow(t("semantic.common.baselineNote"), renderMathNode(md, str(baseline.note)!, "semantic-value semantic-markdown")));
+    }
+    wrap.append(bCard);
+  }
+  return wrap;
+}
+
+export function renderSymbolMapTable(md: MarkdownRenderer, entries: Json[]): HTMLElement {
+  const table = textElement("table", "semantic-table", "");
+  table.append(Object.assign(document.createElement("caption"), { textContent: t("semantic.s3.symbolMapHeading") }));
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  hr.append(
+    textElement("th", "", t("semantic.s3.localSymbolCol")),
+    textElement("th", "", ""),
+    textElement("th", "", t("semantic.s3.targetExprCol")),
+    textElement("th", "", t("semantic.s3.noteCol")),
+  );
+  thead.append(hr);
+  const tbody = document.createElement("tbody");
+  for (const entry of entries) {
+    const tr = document.createElement("tr");
+    const dst = entry.target_expr as Json | undefined;
+    tr.append(
+      renderMathNode(md, `$${str(entry.local_symbol) ?? "?"}$`, "semantic-td-cell"),
+      textElement("td", "", "↦"),
+      renderMathNode(md, str(dst?.text) ?? "—", "semantic-td-cell"),
+      renderMathNode(md, str(entry.note) ?? "—", "semantic-td-cell"),
+    );
+    tbody.append(tr);
+  }
+  table.append(thead, tbody);
+  return table;
+}
 export function renderSemanticEntityCardBody(
   md: MarkdownRenderer,
   p: Json,
@@ -471,6 +738,7 @@ export function renderSemanticEntityCardBody(
     if (defn && str(defn.text)) {
       declBox.append(kvRow("定义式", renderMathNode(md, str(defn.text)!, "semantic-statement-box semantic-markdown")));
     }
+    renderSegmentedBodySections(md, decl, "conclusion", declBox);
     if (str(decl.concept)) {
       declBox.append(kvRow("定义概念", resolveTitle(str(decl.concept))));
     }
@@ -505,6 +773,7 @@ export function renderSemanticEntityCardBody(
     if (task && str(task.text)) {
       schemaBox.append(kvRow("求解/求证任务", renderMathNode(md, str(task.text)!, "semantic-statement-box semantic-markdown")));
     }
+    renderSegmentedBodySections(md, schema, "task", schemaBox);
     const uses = Array.isArray(schema.uses_entities) ? schema.uses_entities.map(str).filter((v): v is string => !!v) : [];
     if (uses.length) {
       schemaBox.append(kvRow("涉及共享对象", uses.map((id) => resolveTitle(id)).join("、")));
@@ -574,8 +843,9 @@ function resolveAnyRefTitle(item: PendingChangeSet, rawRef: string | null): stri
   if (proposed) {
     const base = proposed.target_id ? item.baseObjects?.[proposed.target_id]?.payload ?? null : null;
     const p = effectiveProposalPayload(proposed, base);
-    if (proposed.kind === "semantic_entity") return entityPlainLabel(p);
+    if (proposed.kind === "semantic_entity" || proposed.kind === "representation_core") return entityPlainLabel(p);
     if (proposed.kind === "alignment") return alignmentPlainLabel(p);
+    if (proposed.kind === "representation_binding") return representationBindingPlainLabel(p);
     return str(p.display_title) ?? str(p.label) ?? str(p.obligation) ?? item.targetTitles?.[proposed.target_id ?? ""] ?? local;
   }
   return item.targetTitles?.[rawRef] ?? (rawRef.length > 32 ? `${rawRef.slice(0, 24)}…` : rawRef);
@@ -635,6 +905,14 @@ export function renderSemanticComparisonPanel(
     );
     if (str(p.plain_note)) {
       banner.append(renderMathNode(md, str(p.plain_note)!, "semantic-plain-note semantic-markdown"));
+    }
+    const targetBranches = Array.isArray(p.target_branches)
+      ? p.target_branches.map(str).filter((v): v is string => !!v)
+      : [];
+    if (targetBranches.length > 0) {
+      banner.append(
+        textElement("small", "semantic-tag", `${t("semantic.s2.targetBranches")}: ${targetBranches.join(", ")}`),
+      );
     }
     panel.append(banner);
 
@@ -775,7 +1053,7 @@ export function renderSemanticComparisonPanel(
     const lost = arr(p.lost_information);
     if (lost.length > 0) {
       const sec = textElement("section", "semantic-card semantic-lost-card", "");
-      sec.append(textElement("h4", "", "对不上的部分（Lost Information）"));
+      sec.append(textElement("h4", "", FIELD_LABELS.lost_information));
       const ul = textElement("ul", "semantic-list", "");
       for (const entry of lost) {
         const li = document.createElement("li");
@@ -856,7 +1134,105 @@ export function renderSemanticComparisonPanel(
       if (tags.length) row.append(textElement("small", "semantic-tag", tags.join(" · ")));
       card.append(row);
     }
+    const symbols = arr(p.local_symbols);
+    if (symbols.length > 0) {
+      card.append(renderLocalSymbolsCard(md, symbols));
+    }
     panel.append(card);
+    return panel;
+  }
+
+  if (object.kind === "representation_core") {
+    const card = textElement("section", "semantic-card", "");
+    card.append(
+      textElement("h4", "", `${semanticObjectNoun(object.kind)} · ${entityPlainLabel(p)}`),
+      renderRepresentationCoreCardBody(md, p, resolveTitle),
+    );
+    panel.append(card);
+    return panel;
+  }
+
+  if (object.kind === "representation_binding") {
+    const plain = representationBindingPlainLabel(p);
+    const banner = textElement("div", "semantic-alignment-banner", "");
+    banner.append(
+      textElement("span", "semantic-relation-pill", t("semantic.relation.binds_representation")),
+      textElement("strong", "", plain),
+      textElement("span", "semantic-status-pill", alignmentStatusLabel(str(p.status))),
+    );
+    if (str(p.plain_note)) {
+      banner.append(renderMathNode(md, str(p.plain_note)!, "semantic-plain-note semantic-markdown"));
+    }
+    panel.append(banner);
+
+    const grid = textElement("div", "semantic-side-by-side", "");
+    const leftCol = textElement("section", "semantic-pane semantic-pane-source", "");
+    const scopeRef = str(p.dialect_scope);
+    leftCol.append(
+      textElement("div", "semantic-pane-eyebrow", t("semantic.s3.dialectScope")),
+      textElement("h4", "semantic-pane-title", resolveTitle(scopeRef)),
+    );
+    const scopeObj = lookupObjectInProposalOrBase(item, scopeRef);
+    if (scopeObj) {
+      for (const conv of arr(scopeObj.payload.conventions)) {
+        if (str(conv.text)) {
+          leftCol.append(renderMathNode(md, `• ${str(conv.text)}`, "semantic-convention-inline semantic-markdown"));
+        }
+      }
+      const symbols = arr(scopeObj.payload.local_symbols);
+      if (symbols.length > 0) {
+        leftCol.append(renderLocalSymbolsCard(md, symbols));
+      }
+    }
+
+    const rightCol = textElement("section", "semantic-pane semantic-pane-target", "");
+    const repRef = str(p.representation);
+    rightCol.append(
+      textElement("div", "semantic-pane-eyebrow", t("semantic.s3.representationCore")),
+      textElement("h4", "semantic-pane-title", resolveTitle(repRef)),
+    );
+    const repObj = lookupObjectInProposalOrBase(item, repRef);
+    if (repObj) {
+      rightCol.append(renderRepresentationCoreCardBody(md, repObj.payload, resolveTitle));
+    }
+    grid.append(leftCol, rightCol);
+    panel.append(grid);
+
+    const mappings = textElement("div", "semantic-alignment-mappings", "");
+    const symbolMap = arr(p.symbol_map);
+    if (symbolMap.length > 0) {
+      mappings.append(renderSymbolMapTable(md, symbolMap));
+    }
+    const adaptations = arr(p.index_and_domain_adaptations);
+    if (adaptations.length > 0) {
+      const sec = textElement("section", "semantic-card", "");
+      sec.append(textElement("h4", "", t("semantic.s3.adaptationsHeading")));
+      const ul = textElement("ul", "semantic-list", "");
+      for (const ad of adaptations) {
+        if (!str(ad.text)) continue;
+        const li = document.createElement("li");
+        li.append(renderMathNode(md, str(ad.text)!, "semantic-markdown"));
+        ul.append(li);
+      }
+      sec.append(ul);
+      mappings.append(sec);
+    }
+    const lost = arr(p.lost_information);
+    if (lost.length > 0) {
+      const sec = textElement("section", "semantic-card semantic-lost-card", "");
+      sec.append(textElement("h4", "", FIELD_LABELS.lost_information));
+      const ul = textElement("ul", "semantic-list", "");
+      for (const entry of lost) {
+        const li = document.createElement("li");
+        const head = `${str(entry.short) ?? ""}${entry.direction ? ` · ${lostDirectionLabel(str(entry.direction))}` : ""}`;
+        li.append(textElement("strong", "", head));
+        if (str(entry.claim)) li.append(renderMathNode(md, str(entry.claim)!, "semantic-markdown"));
+        ul.append(li);
+      }
+      sec.append(ul);
+      mappings.append(sec);
+    }
+    if (mappings.childElementCount > 0) panel.append(mappings);
     return panel;
   }
 

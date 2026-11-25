@@ -405,3 +405,28 @@ impl SearchProvider for SemanticEntityProvider {
             .collect()
     }
 }
+
+/// Shared representation cores (`RepresentationCore`) by plain label, preferred labels, aliases and mathlib decl.
+pub struct RepresentationCoreProvider;
+
+impl SearchProvider for RepresentationCoreProvider {
+    fn kind(&self) -> SearchKind {
+        SearchKind::RepresentationCore
+    }
+    fn candidates(&self, corpus: &SearchCorpus) -> Vec<SearchCandidate> {
+        let theory_titles: BTreeMap<&str, String> = corpus
+            .semantic_entities
+            .iter()
+            .filter(|row| {
+                !retired(&row.lifecycle) && row.semantic_kind.as_deref() == Some("theory")
+            })
+            .map(|row| (row.object_id.as_str(), semantic_entity_title(row)))
+            .collect();
+        corpus
+            .representation_cores
+            .iter()
+            .filter(|row| !retired(&row.lifecycle))
+            .map(|row| semantic_entity_candidate(row, &theory_titles))
+            .collect()
+    }
+}

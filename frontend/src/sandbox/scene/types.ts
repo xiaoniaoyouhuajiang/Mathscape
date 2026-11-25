@@ -175,12 +175,14 @@ export type ProposeVisualKind =
   | "concept"
   | "declaration"
   | "problem_schema"
+  | "representation_core"
   | "debt"
   | "dialect_scope";
 
 export type ProposeRelationKind =
   | "source_relation"
   | "alignment"
+  | "binds_representation"
   | "in_theory"
   | "uses_entity"
   | "debt_on"

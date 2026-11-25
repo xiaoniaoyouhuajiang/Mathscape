@@ -10,26 +10,35 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mathscape_domain::{
     AlignmentChanges, AlignmentDraft, AlignmentRelation, DebtChanges, DebtDraft,
-    DialectScopeChanges, DialectScopeDraft, MapEditObject, MapEditSnapshot, SemanticEntityChanges,
-    SemanticEntityDraft, UserChangeOperation,
+    DialectScopeChanges, DialectScopeDraft, MapEditObject, MapEditSnapshot,
+    RepresentationBindingChanges, RepresentationBindingDraft, RepresentationCoreChanges,
+    RepresentationCoreDraft, SemanticEntityChanges, SemanticEntityDraft, UserChangeOperation,
 };
 use serde_json::Value;
 
 use super::{Diagnostic, Level, ProposeArgs, ProposedObject};
 
-pub(super) const SEMANTIC_KINDS: [&str; 4] =
-    ["semantic_entity", "alignment", "debt", "dialect_scope"];
+pub(super) const SEMANTIC_KINDS: [&str; 6] = [
+    "semantic_entity",
+    "alignment",
+    "debt",
+    "dialect_scope",
+    "representation_core",
+    "representation_binding",
+];
 
 pub(super) fn is_semantic(kind: &str) -> bool {
     SEMANTIC_KINDS.contains(&kind)
 }
 
-/// Stable-id kind segment of a newly created object (contract S3).
+/// Stable-id kind segment of a newly created object (contract S3 & S14).
 pub(super) fn id_kind(kind: &str) -> &'static str {
     match kind {
         "semantic_entity" => mathscape_domain::SEMANTIC_ENTITY_ID_KIND,
         "alignment" => mathscape_domain::ALIGNMENT_ID_KIND,
         "debt" => mathscape_domain::DEBT_ID_KIND,
+        "representation_core" => mathscape_domain::REPRESENTATION_CORE_ID_KIND,
+        "representation_binding" => mathscape_domain::REPRESENTATION_BINDING_ID_KIND,
         _ => mathscape_domain::DIALECT_SCOPE_ID_KIND,
     }
 }
@@ -40,16 +49,20 @@ fn entity_kind(kind: &str) -> &'static str {
         "semantic_entity" => "SemanticEntity",
         "alignment" => "Alignment",
         "debt" => "Debt",
+        "representation_core" => "RepresentationCore",
+        "representation_binding" => "RepresentationBinding",
         _ => "DialectScope",
     }
 }
 
 /// Keys whose string values (or arrays of strings) are object references
-/// in semantic payloads (contract S4.5).
-pub(super) const REFERENCE_KEYS: [&str; 12] = [
+/// in semantic payloads (contract S4.5 & S14).
+pub(super) const REFERENCE_KEYS: [&str; 14] = [
     "home_theory",
     "uses_entities",
     "concept",
+    "represented_object",
+    "representation",
     "target_context",
     "dialect_scope",
     "debt",
@@ -61,7 +74,7 @@ pub(super) const REFERENCE_KEYS: [&str; 12] = [
     "parent_scope",
 ];
 
-const EDITABLE: [(&str, &[&str]); 4] = [
+const EDITABLE: [(&str, &[&str]); 6] = [
     (
         "semantic_entity",
         &[
@@ -73,6 +86,7 @@ const EDITABLE: [(&str, &[&str]); 4] = [
             "mathlib_baseline",
             "description",
             "uses_entities",
+            "exclusions",
         ],
     ),
     (
@@ -81,6 +95,7 @@ const EDITABLE: [(&str, &[&str]); 4] = [
             "relation",
             "source_context",
             "target_context",
+            "target_branches",
             "parameter_map",
             "term_index_map",
             "required_assumptions",
@@ -101,7 +116,37 @@ const EDITABLE: [(&str, &[&str]); 4] = [
             "payoff_hint",
         ],
     ),
-    ("dialect_scope", &["label", "conventions"]),
+    ("dialect_scope", &["label", "conventions", "local_symbols"]),
+    (
+        "representation_core",
+        &[
+            "home_theory",
+            "preferred_labels",
+            "aliases",
+            "plain_label",
+            "carrier",
+            "represented_object",
+            "binders",
+            "operations",
+            "invariants_and_domain",
+            "conventions",
+            "mathlib_baseline",
+            "uses_entities",
+            "description",
+        ],
+    ),
+    (
+        "representation_binding",
+        &[
+            "symbol_map",
+            "index_and_domain_adaptations",
+            "lost_information",
+            "evidence_spans",
+            "status",
+            "map_label",
+            "plain_note",
+        ],
+    ),
 ];
 
 fn error(code: &str, message: impl Into<String>, local_ref: &str) -> Diagnostic {
@@ -199,7 +244,7 @@ pub(super) fn precheck(object: &ProposedObject, snapshot: &MapEditSnapshot) -> V
             lr,
         ));
     }
-    if object.kind == "alignment"
+    if matches!(object.kind.as_str(), "alignment" | "representation_binding")
         && let Some(status) = body.get("status").and_then(Value::as_str)
         && !matches!(
             status,
@@ -214,7 +259,9 @@ pub(super) fn precheck(object: &ProposedObject, snapshot: &MapEditSnapshot) -> V
     {
         out.push(error(
             "forbidden_alignment_status",
-            format!("an Agent cannot set alignment status {status}; reviewed / accepted are explicit user actions"),
+            format!(
+                "an Agent cannot set status {status}; reviewed / accepted are explicit user actions"
+            ),
             lr,
         ));
     }
@@ -228,7 +275,10 @@ pub(super) fn precheck(object: &ProposedObject, snapshot: &MapEditSnapshot) -> V
             lr,
         ));
     }
-    if object.kind == "semantic_entity" {
+    if matches!(
+        object.kind.as_str(),
+        "semantic_entity" | "representation_core"
+    ) {
         let baseline = body.get("mathlib_baseline");
         // In changes the baseline is a FieldChange {action, value}.
         let baseline = baseline
@@ -281,7 +331,17 @@ pub(super) fn precheck(object: &ProposedObject, snapshot: &MapEditSnapshot) -> V
         ("debt", "create") => serde_json::from_value::<DebtDraft>(resolved).err(),
         ("debt", _) => serde_json::from_value::<DebtChanges>(resolved).err(),
         ("dialect_scope", "create") => serde_json::from_value::<DialectScopeDraft>(resolved).err(),
-        _ => serde_json::from_value::<DialectScopeChanges>(resolved).err(),
+        ("dialect_scope", _) => serde_json::from_value::<DialectScopeChanges>(resolved).err(),
+        ("representation_core", "create") => {
+            serde_json::from_value::<RepresentationCoreDraft>(resolved).err()
+        }
+        ("representation_core", _) => {
+            serde_json::from_value::<RepresentationCoreChanges>(resolved).err()
+        }
+        ("representation_binding", "create") => {
+            serde_json::from_value::<RepresentationBindingDraft>(resolved).err()
+        }
+        _ => serde_json::from_value::<RepresentationBindingChanges>(resolved).err(),
     };
     if let Some(e) = parsed {
         let code = if e.to_string().contains("same_as") {
@@ -390,6 +450,24 @@ pub(super) fn compile(
             draft: serde_json::from_value(body(&object.payload)?).map_err(parse)?,
         },
         ("dialect_scope", "edit") => UserChangeOperation::EditDialectScope {
+            object_id,
+            expected_revision: expected()?,
+            changes: serde_json::from_value(body(&object.changes)?).map_err(parse)?,
+        },
+        ("representation_core", "create") => UserChangeOperation::CreateRepresentationCore {
+            object_id,
+            draft: serde_json::from_value(body(&object.payload)?).map_err(parse)?,
+        },
+        ("representation_core", "edit") => UserChangeOperation::EditRepresentationCore {
+            object_id,
+            expected_revision: expected()?,
+            changes: serde_json::from_value(body(&object.changes)?).map_err(parse)?,
+        },
+        ("representation_binding", "create") => UserChangeOperation::CreateRepresentationBinding {
+            object_id,
+            draft: serde_json::from_value(body(&object.payload)?).map_err(parse)?,
+        },
+        ("representation_binding", "edit") => UserChangeOperation::EditRepresentationBinding {
             object_id,
             expected_revision: expected()?,
             changes: serde_json::from_value(body(&object.changes)?).map_err(parse)?,

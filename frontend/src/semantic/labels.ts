@@ -9,9 +9,12 @@ import { getLocale, hasMessage, t } from "../i18n";
 const lookup = (table: Record<string, string>, fallback: string) => (value: string | null | undefined): string =>
   (value && table[value]) || fallback;
 
-export const semanticKindLabel = lookup({
-  concept: "概念", declaration: "精确说法", theory: "理论", problem_schema: "题型",
-}, "共享对象");
+export const semanticKindLabel = (value: string | null | undefined): string => {
+  if (value === "representation_core") return t("semantic.kind.representation_core");
+  return lookup({
+    concept: "概念", declaration: "精确说法", theory: "理论", problem_schema: "题型",
+  }, "共享对象")(value);
+};
 
 export const relationLabel = lookup({
   expresses: "说的就是", specializes: "是特例", generalizes: "是推广", instance_of: "是实例",
@@ -66,15 +69,24 @@ export const SEMANTIC_REVIEW_CODES = new Set([
   "uncontextualized", "duplicate_alignment", "inferred_convention", "mathlib_baseline_unchecked",
   "multi_target_change_set", "theory_aliases_missing", "theory_name_too_specific",
   "label_lang_missing", "possible_duplicate_name", "duplicate_mathlib_decl",
+  "branch_coverage_unspecified", "duplicate_representation_binding",
 ]);
 
-export const SEMANTIC_PROPOSAL_KINDS = new Set(["semantic_entity", "alignment", "debt", "dialect_scope"]);
-export const SEMANTIC_DOMAIN_KINDS = new Set(["SemanticEntity", "Alignment", "Debt", "DialectScope"]);
+export const SEMANTIC_PROPOSAL_KINDS = new Set([
+  "semantic_entity", "alignment", "debt", "dialect_scope", "representation_core", "representation_binding",
+]);
+export const SEMANTIC_DOMAIN_KINDS = new Set([
+  "SemanticEntity", "Alignment", "Debt", "DialectScope", "RepresentationCore", "RepresentationBinding",
+]);
 
-export const semanticObjectNoun = lookup({
-  semantic_entity: "共享对象", alignment: "对齐线", debt: "一笔账", dialect_scope: "约定卡",
-  SemanticEntity: "共享对象", Alignment: "对齐线", Debt: "一笔账", DialectScope: "约定卡",
-}, "语义对象");
+export const semanticObjectNoun = (value: string | null | undefined): string => {
+  if (value === "representation_core" || value === "RepresentationCore") return t("semantic.kind.representation_core");
+  if (value === "representation_binding" || value === "RepresentationBinding") return t("semantic.kind.representation_binding");
+  return lookup({
+    semantic_entity: "共享对象", alignment: "对齐线", debt: "一笔账", dialect_scope: "约定卡",
+    SemanticEntity: "共享对象", Alignment: "对齐线", Debt: "一笔账", DialectScope: "约定卡",
+  }, "语义对象")(value);
+};
 
 type Json = Record<string, unknown>;
 const str = (value: unknown): string | null => typeof value === "string" ? value : null;
@@ -103,6 +115,14 @@ export function alignmentPlainLabel(payload: Json): string {
     case "overlaps_with": return withNote("部分重合", lost);
     default: return str(payload.map_label) ?? relationLabel(relation);
   }
+}
+
+export function representationBindingPlainLabel(payload: Json): string {
+  const custom = str(payload.map_label)?.trim();
+  if (custom) return custom;
+  const lost = str(arr(payload.lost_information)[0]?.short)?.trim();
+  if (lost) return t("semantic.binding.plainWithDiff", { diff: lost });
+  return t("semantic.binding.plainDefault");
 }
 
 type DisplayLang = "zh" | "en";

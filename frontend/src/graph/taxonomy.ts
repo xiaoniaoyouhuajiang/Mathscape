@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { FOCUS_CONTRACTION_KIND } from "./focus";
 import type { IncidenceNode } from "./projection";
 
@@ -23,9 +24,11 @@ export type NodeTypeKey =
   | "focus_contraction"
   | "shared_entity"
   | "shared_theory"
+  | "representation_core"
   | "dialect_scope"
   | "debt"
   | "alignment_relation"
+  | "representation_binding"
   | "semantic_link"
   | "unknown_entity"
   | "unknown_relation";
@@ -217,6 +220,17 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
     backgroundOpacity: 0.25,
     fontSize: 11,
   },
+  representation_core: {
+    label: t("semantic.kind.representation_core"),
+    shape: "hexagon",
+    width: 19,
+    height: 17,
+    background: "var(--ms-map-node-core)",
+    border: "var(--ms-star-gold)",
+    borderStyle: "solid",
+    backgroundOpacity: 0.85,
+    fontSize: 11,
+  },
   dialect_scope: {
     label: "约定卡",
     shape: "rectangle",
@@ -241,6 +255,17 @@ export const NODE_TYPES: Record<NodeTypeKey, NodeTypeVisual> = {
   },
   alignment_relation: {
     label: "对齐线",
+    shape: "diamond",
+    width: 18,
+    height: 18,
+    background: "var(--ms-star-gold)",
+    border: "var(--ms-star-gold)",
+    borderStyle: "solid",
+    backgroundOpacity: 0.25,
+    fontSize: 10,
+  },
+  representation_binding: {
+    label: t("semantic.kind.representation_binding"),
     shape: "diamond",
     width: 18,
     height: 18,
@@ -327,7 +352,9 @@ const DOMAIN_KIND_LABELS: Record<string, string> = {
   Evidence: "证据关系",
   FocusContraction: "已折叠的派生路径",
   SemanticEntity: "共享对象",
+  RepresentationCore: t("semantic.kind.representation_core"),
   Alignment: "对齐线",
+  RepresentationBinding: t("semantic.kind.representation_binding"),
   Debt: "一笔账",
   DialectScope: "约定卡",
   InkNote: "手稿",
@@ -351,7 +378,10 @@ export function nodeTypeKey(node: IncidenceNode): NodeTypeKey {
         return "focus_contraction";
       case "Alignment":
         return "alignment_relation";
+      case "RepresentationBinding":
+        return "representation_binding";
       case "SemanticEntity":
+      case "RepresentationCore":
       case "Debt":
       case "DialectScope":
         return "semantic_link";
@@ -368,6 +398,8 @@ export function nodeTypeKey(node: IncidenceNode): NodeTypeKey {
       return artifactTypeKey(node.summary);
     case "SemanticEntity":
       return node.summary?.startsWith("理论") ? "shared_theory" : "shared_entity";
+    case "RepresentationCore":
+      return "representation_core";
     case "DialectScope":
       return "dialect_scope";
     case "Debt":

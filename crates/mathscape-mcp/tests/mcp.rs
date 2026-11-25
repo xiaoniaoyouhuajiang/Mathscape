@@ -903,7 +903,7 @@ fn phase2_source_proposals_stage_and_read_back_without_changing_the_map() {
             "rationale": "尝试写入尚未支持的节点种类",
             "proposed_objects": [{
                 "local_ref": "entity",
-                "kind": "representation_binding",
+                "kind": "transport_edge",
                 "op": "create",
                 "payload": {}
             }]
@@ -3495,4 +3495,278 @@ fn user_ask_persists_pending_question_and_blocks_same_round_propose_changes() {
     let (staged, is_error) = call(&round2, "propose_changes", proposal);
     assert!(!is_error, "{staged}");
     assert_eq!(staged["status"], "staged", "{staged}");
+}
+
+fn emir_gf_fixture_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/emir/generating-functions-two-books")
+}
+
+#[test]
+fn stage2_generating_functions_fixture_stages_searches_and_bridges_representations() {
+    let dir = emir_gf_fixture_dir();
+    let objects: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("objects.json")).unwrap()).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("ws");
+    let mut pool = ArtifactPool::create(&root).unwrap();
+    for artifact in objects["artifacts"].as_object().unwrap().values() {
+        let file = artifact["file"].as_str().unwrap();
+        let bytes = std::fs::read(dir.join(file)).unwrap();
+        let id = import(
+            &mut pool,
+            bytes,
+            "text/markdown",
+            std::path::Path::new(file)
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            None,
+        );
+        assert_eq!(id, artifact["artifact_id"], "artifact id of {file}");
+    }
+    drop(pool);
+    let workspace = McpWorkspace::open(&root)
+        .unwrap()
+        .with_round(Some("gf-round-1".into()))
+        .with_capability_runner(Box::new(NothingInstalled));
+    let server = McpServer::new(workspace);
+
+    let mut ids = std::collections::BTreeMap::new();
+    let mut by_local = std::collections::BTreeMap::new();
+    for change_set in objects["change_sets"].as_array().unwrap() {
+        let mut proposed = change_set["proposed_objects"].clone();
+        remap_ids(&mut proposed, &ids);
+        let mut relations = change_set["proposed_relations"].clone();
+        remap_ids(&mut relations, &ids);
+        let (result, is_error) = call(
+            &server,
+            "propose_changes",
+            json!({
+                "request_id": change_set["request_id"],
+                "rationale": change_set["rationale"],
+                "target_object": change_set["target_object"],
+                "proposed_objects": proposed,
+                "proposed_relations": relations,
+            }),
+        );
+        assert!(!is_error, "{}: {result}", change_set["request_id"]);
+        assert_eq!(
+            result["status"], "staged",
+            "{}: {result}",
+            change_set["request_id"]
+        );
+        let diag_codes = codes(&result);
+        assert!(
+            !diag_codes.contains(&"multi_target_change_set".to_owned()),
+            "unexpected multi_target_change_set in {}: {result}",
+            change_set["request_id"]
+        );
+        assert!(
+            !diag_codes.contains(&"label_lang_missing".to_owned()),
+            "unexpected label_lang_missing in {}: {result}",
+            change_set["request_id"]
+        );
+        let expected = change_set["staged_ids"].as_object().unwrap();
+        for (local_ref, fixture_id) in expected {
+            let actual = result["staged_ids"][local_ref]
+                .as_str()
+                .unwrap_or_else(|| panic!("{local_ref} not staged: {result}"));
+            let prefix = fixture_id.as_str().unwrap().rsplit_once('/').unwrap().0;
+            assert!(actual.starts_with(prefix), "{local_ref}: {actual}");
+            ids.insert(fixture_id.as_str().unwrap().to_owned(), actual.to_owned());
+            by_local.insert(local_ref.clone(), actual.to_owned());
+        }
+    }
+
+    let r_fps_id = by_local["r.fps"].clone();
+    let rb_yi_fps_id = by_local["rb.yi.fps"].clone();
+    let e_geom_fin_id = by_local["e.geom_fin"].clone();
+    let jia_sec_id = by_local["jia.u.sec"].clone();
+    let yi_sec_id = by_local["yi.u.sec"].clone();
+
+    // 1. workspace.search finds staged RepresentationCore by mathlib_baseline.decl.
+    let (rep_search, err) = call(
+        &server,
+        "workspace.search",
+        json!({
+            "query": "PowerSeries",
+            "kinds": ["representation_core"],
+            "scope": "investigation"
+        }),
+    );
+    assert!(!err, "{rep_search}");
+    assert_eq!(rep_search["groups"][0]["kind"], "representation_core");
+    assert_eq!(rep_search["groups"][0]["hits"][0]["id"], r_fps_id);
+
+    // 2. graph.get resolves RepresentationCore, RepresentationBinding, and multi-branch SemanticEntity.
+    let (got_core, err) = call(
+        &server,
+        "graph.get",
+        json!({ "node_id": r_fps_id, "scope": "investigation" }),
+    );
+    assert!(!err, "{got_core}");
+    assert_eq!(got_core["node"]["kind"], "representation_core");
+    assert_eq!(
+        got_core["node"]["edge_summary"]["binds_representation"]["in"],
+        2
+    );
+    assert_eq!(got_core["node"]["edge_summary"]["in_theory"]["out"], 1);
+    assert_eq!(got_core["node"]["edge_summary"]["of_concept"]["out"], 1);
+    // Debt hung on rb.yi.fps attaches visually to r.fps!
+    assert_eq!(got_core["node"]["edge_summary"]["debt_on"]["in"], 1);
+
+    let (got_binding, err) = call(
+        &server,
+        "graph.get",
+        json!({ "node_id": rb_yi_fps_id, "scope": "investigation" }),
+    );
+    assert!(!err, "{got_binding}");
+    assert_eq!(got_binding["node"]["kind"], "relation");
+    assert_eq!(got_binding["node"]["relation"], "binds_representation");
+    assert_eq!(
+        got_binding["node"]["semantic"]["symbol_map"][0]["local_symbol"],
+        "g(t)"
+    );
+
+    let (got_geom, err) = call(
+        &server,
+        "graph.get",
+        json!({ "node_id": e_geom_fin_id, "scope": "investigation" }),
+    );
+    assert!(!err, "{got_geom}");
+    assert_eq!(
+        got_geom["node"]["semantic"]["declaration"]["branches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // 3. Default heuristic 2-hop neighborhood bridges Book A's section across shared R to Book B's section!
+    let (hood, err) = call(
+        &server,
+        "graph.neighborhood",
+        json!({
+            "node_id": jia_sec_id,
+            "depth": 2,
+            "preset": "heuristic",
+            "scope": "investigation"
+        }),
+    );
+    assert!(!err, "{hood}");
+    let reached: Vec<&str> = hood["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|n| n["id"].as_str())
+        .collect();
+    assert!(
+        reached.contains(&r_fps_id.as_str()),
+        "expected r.fps in neighborhood: {hood}"
+    );
+    assert!(
+        reached.contains(&yi_sec_id.as_str()),
+        "expected Book B section reached via shared R in depth=2: {hood}"
+    );
+
+    // 4. Negative & review diagnostic checks in a follow-up proposal:
+    //    - bad guard ref -> invalid_guard_ref
+    //    - bad target_branches -> invalid_branch_ref
+    //    - duplicate local symbol -> duplicate_local_symbol
+    let (bad_guard, err) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "gf-bad-guard",
+            "rationale": "bad guard ref check",
+            "proposed_objects": [{
+                "local_ref": "e.bad",
+                "kind": "semantic_entity",
+                "op": "create",
+                "payload": {
+                    "semantic_kind": "declaration",
+                    "home_theory": by_local["e.theory"],
+                    "preferred_labels": [
+                        { "lang": "zh", "label": "坏守卫测试" },
+                        { "lang": "en", "label": "Bad guard test" }
+                    ],
+                    "declaration": {
+                        "declaration_kind": "theorem",
+                        "guards": [{ "guard_id": "g1", "predicate": { "text": "$x > 0$" } }],
+                        "branches": [{
+                            "branch_id": "b1",
+                            "guards": ["nonexistent_guard"],
+                            "conclusion": { "text": "$x > 0$" }
+                        }]
+                    }
+                }
+            }]
+        }),
+    );
+    assert!(!err);
+    assert_eq!(bad_guard["status"], "blocked", "{bad_guard}");
+    assert!(
+        codes(&bad_guard).contains(&"invalid_guard_ref".to_owned()),
+        "{bad_guard}"
+    );
+
+    let (bad_branch, err) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "gf-bad-branch-align",
+            "rationale": "bad target_branches check",
+            "proposed_objects": [{
+                "local_ref": "a.bad",
+                "kind": "alignment",
+                "op": "create",
+                "payload": {
+                    "source": by_local["yi.u.prop"],
+                    "target": e_geom_fin_id,
+                    "relation": "specializes",
+                    "source_context": { "dialect_scope": by_local["ds.yi"] },
+                    "target_branches": ["missing_branch"],
+                    "evidence_spans": [by_local["yi.s.prop"]],
+                    "status": "retrieved_candidate"
+                }
+            }]
+        }),
+    );
+    assert!(!err);
+    assert_eq!(bad_branch["status"], "blocked", "{bad_branch}");
+    assert!(
+        codes(&bad_branch).contains(&"invalid_branch_ref".to_owned()),
+        "{bad_branch}"
+    );
+
+    let (warn_branch, err) = call(
+        &server,
+        "propose_changes",
+        json!({
+            "request_id": "gf-warn-branch-coverage",
+            "rationale": "unspecified branch coverage warn check",
+            "target_object": e_geom_fin_id,
+            "proposed_objects": [{
+                "local_ref": "a.warn",
+                "kind": "alignment",
+                "op": "create",
+                "payload": {
+                    "source": by_local["yi.u.rem"],
+                    "target": e_geom_fin_id,
+                    "relation": "expresses",
+                    "source_context": { "dialect_scope": by_local["ds.yi"] },
+                    "evidence_spans": [by_local["yi.s.rem"]],
+                    "status": "retrieved_candidate"
+                }
+            }]
+        }),
+    );
+    assert!(!err);
+    assert_eq!(warn_branch["status"], "staged", "{warn_branch}");
+    assert!(
+        codes(&warn_branch).contains(&"branch_coverage_unspecified".to_owned()),
+        "{warn_branch}"
+    );
 }

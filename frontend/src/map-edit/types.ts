@@ -104,6 +104,13 @@ export type UserChangeOperation =
       status: string;
       note: string | null;
     }
+  | {
+      operation: "set_representation_binding_review";
+      object_id: string;
+      expected_revision: string;
+      status: string;
+      note: string | null;
+    }
   /** 用户专用：确认已还清、免除（需理由）或重新打开一笔账。 */
   | {
       operation: "set_debt_settlement";

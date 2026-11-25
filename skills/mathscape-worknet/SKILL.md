@@ -3,7 +3,7 @@ name: mathscape-worknet
 description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、对象卡、表示、证明上下文、失败见证）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
 metadata:
   version: "0.7.5"
-  tool_schema_version: "mathscape-mcp/20"
+  tool_schema_version: "mathscape-mcp/21"
 ---
 
 # Mathscape 数学地图构建 skill v0.7.5

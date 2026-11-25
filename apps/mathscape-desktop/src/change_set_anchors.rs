@@ -420,7 +420,9 @@ impl<'a> AnchorContext<'a> {
         {
             "source_semantic_unit" | "SourceSemanticUnit" => "source_unit",
             "semantic_entity" | "SemanticEntity" => "semantic_entity",
+            "representation_core" | "RepresentationCore" => "representation_core",
             "alignment" | "Alignment" => "alignment",
+            "representation_binding" | "RepresentationBinding" => "representation_binding",
             "debt" | "Debt" => "debt",
             "dialect_scope" | "DialectScope" => "dialect_scope",
             "source_span" | "SourceSpan" => "source_span",

@@ -93,7 +93,12 @@ pub const USER_ASK: &str = "user.ask";
 /// `/20`: new non-blocking `user.ask` (16 tools) for structured user
 /// clarification (`pending_questions` + `next: "end_turn"` + same-round
 /// `awaiting_user` guard on `propose_changes`).
-pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/20";
+/// `/21`: Stage 2 (S2 complete + S3 first half): `propose_changes` supports
+/// cohesive `guards` / `branches` / `exclusions`, `target_branches`,
+/// `local_symbols`, `representation_core` and `representation_binding`;
+/// `workspace.search` adds `representation_core`; `graph.get` /
+/// `graph.neighborhood` add `representation_core` and `binds_representation`.
+pub const TOOL_SCHEMA_VERSION: &str = "mathscape-mcp/21";
 
 /// sha256 of the serialized [`tool_definitions`] with object keys sorted (so
 /// the value does not depend on serde_json's `preserve_order` feature), for
@@ -315,8 +320,8 @@ mod schema_version_tests {
     /// tool name, description or schema changes the fingerprint: bump
     /// `TOOL_SCHEMA_VERSION` (and the skill frontmatter) and re-pin.
     const PINNED: (&str, &str) = (
-        "mathscape-mcp/20",
-        "6d535acf1299b5be506b04f2557d85736842cfcccacf9355e0c23bdc7a6509d9",
+        "mathscape-mcp/21",
+        "1ff8d0e5607165909bcc8c70742c1e5c59f06820deb5cb2bea82ef2e5c00f87e",
     );
 
     #[test]

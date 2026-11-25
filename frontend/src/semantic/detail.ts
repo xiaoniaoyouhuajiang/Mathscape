@@ -7,6 +7,7 @@
  *   仅对已接受对象开放，与「接受提案」严格分开。
  */
 import { textElement } from "../core/dom";
+import { t } from "../i18n";
 import { commitMapChange, generateRequestId, getEditContext, planMapChange } from "../map-edit/api";
 import type { UserChangeOperation } from "../map-edit/types";
 import { markdownRenderer } from "../reader/markdown";
@@ -21,14 +22,18 @@ import {
   failureModeLabel,
   lostDirectionLabel,
   relationLabel,
+  representationBindingPlainLabel,
   semanticObjectNoun,
 } from "./labels";
 import {
   computePayloadRevisionDiff,
   formatTermIndexEntry,
   renderFieldDiffTable,
+  renderLocalSymbolsCard,
   renderMathNode,
+  renderRepresentationCoreCardBody,
   renderSemanticEntityCardBody,
+  renderSymbolMapTable,
 } from "./semantic-diff";
 
 type Json = Record<string, unknown>;
@@ -210,6 +215,12 @@ export function renderSemanticDetail(detail: SemanticObjectDetail, deps: Semanti
     if (str(p.plain_note)) {
       root.append(row("补充说明", renderMathNode(sharedMd, str(p.plain_note)!, "semantic-value semantic-markdown")));
     }
+    const targetBranches = Array.isArray(p.target_branches)
+      ? p.target_branches.map(str).filter((v): v is string => !!v)
+      : [];
+    if (targetBranches.length > 0) {
+      root.append(row(t("semantic.s2.targetBranches"), targetBranches.join(", ")));
+    }
     const params = arr(p.parameter_map);
     if (params.length) {
       const table = textElement("table", "semantic-table", "");
@@ -332,7 +343,118 @@ export function renderSemanticDetail(detail: SemanticObjectDetail, deps: Semanti
   if (detail.kind === "DialectScope") {
     root.append(row("适用于", `${resolveTitle(str(p.anchor_unit))} 及其下的内容`));
     root.append(conventionsCard(arr(p.conventions), str(p.label) ?? "约定卡"));
+    const localSymbols = arr(p.local_symbols);
+    if (localSymbols.length > 0) {
+      root.append(renderLocalSymbolsCard(sharedMd, localSymbols));
+    }
     root.append(feedback(str(p.label) ?? "约定卡"));
+  }
+
+  if (detail.kind === "RepresentationCore") {
+    const name = entityPlainLabel(p);
+    root.append(renderRepresentationCoreCardBody(sharedMd, p, resolveTitle));
+    const baseline = p.mathlib_baseline as Json | null | undefined;
+    const checked = baseline?.checked as Json | undefined;
+    if (checked) {
+      const checkInfo = textElement("section", "semantic-card semantic-baseline-check", "");
+      checkInfo.append(
+        row(t("semantic.common.checkedAt"), `profile ${str(checked.profile_id) ?? "?"} · mathlib ${str(checked.mathlib_version) ?? "?"}`),
+      );
+      if (str(checked.location)) checkInfo.append(row(t("semantic.common.sourceLoc"), str(checked.location)!));
+      root.append(checkInfo);
+    }
+    if (!isStaged) {
+      const recheckWrap = textElement("div", "semantic-actions", "");
+      const recheck = actionButton(t("semantic.common.recheckBtn"), () => {
+        recheck.disabled = true;
+        void deps.recheck().finally(() => {
+          recheck.disabled = false;
+        });
+      });
+      recheckWrap.append(
+        recheck,
+        textElement(
+          "p",
+          "semantic-muted",
+          baseline && str(baseline.decl)
+            ? t("semantic.common.recheckStatusHint", { status: baselineStatusLabel(str(baseline.status) ?? "unchecked") })
+            : t("semantic.common.recheckAllHint"),
+        ),
+      );
+      root.append(recheckWrap);
+    } else {
+      root.append(textElement("p", "semantic-muted", t("semantic.s3.stagedCoreHint")));
+    }
+    root.append(feedback(name));
+  }
+
+  if (detail.kind === "RepresentationBinding") {
+    const plain = representationBindingPlainLabel(p);
+    root.append(
+      row(t("semantic.common.plainLabel"), plain),
+      row(t("semantic.s3.dialectScope"), resolveTitle(str(p.dialect_scope))),
+      row(t("semantic.s3.representationCore"), resolveTitle(str(p.representation))),
+      row(t("semantic.common.baselineStatus"), alignmentStatusLabel(str(p.status))),
+    );
+    if (str(p.plain_note)) {
+      root.append(row(t("semantic.s3.noteCol"), renderMathNode(sharedMd, str(p.plain_note)!, "semantic-value semantic-markdown")));
+    }
+    const symbolMap = arr(p.symbol_map);
+    if (symbolMap.length > 0) {
+      root.append(renderSymbolMapTable(sharedMd, symbolMap));
+    }
+    const adaptations = arr(p.index_and_domain_adaptations);
+    if (adaptations.length > 0) {
+      root.append(textElement("h4", "", t("semantic.s3.adaptationsHeading")));
+      const ul = textElement("ul", "semantic-list", "");
+      for (const ad of adaptations) {
+        if (!str(ad.text)) continue;
+        const li = document.createElement("li");
+        li.append(renderMathNode(sharedMd, str(ad.text)!, "semantic-markdown"));
+        ul.append(li);
+      }
+      root.append(ul);
+    }
+    const lost = arr(p.lost_information);
+    if (lost.length > 0) {
+      const ul = textElement("ul", "semantic-list", "");
+      for (const entry of lost) {
+        const li = document.createElement("li");
+        const head = `${str(entry.short) ?? ""}${entry.direction ? ` (${lostDirectionLabel(str(entry.direction))})` : ""}`;
+        li.append(textElement("strong", "", head));
+        if (str(entry.claim)) li.append(renderMathNode(sharedMd, str(entry.claim)!, "semantic-markdown"));
+        ul.append(li);
+      }
+      root.append(ul);
+    }
+    if (!retired && !isStaged) {
+      const actions = textElement("div", "semantic-actions", "");
+      actions.append(textElement("span", "semantic-muted", t("semantic.common.reviewPrompt")));
+      const review = (status: string, label: string) =>
+        actionButton(label, () =>
+          void runUserOperation(
+            detail.object_id,
+            (revision) => ({
+              operation: "set_representation_binding_review",
+              object_id: detail.object_id,
+              expected_revision: revision,
+              status,
+              note: null,
+            }),
+            t("semantic.s3.reviewBindingReason", { label }),
+            deps,
+          ),
+        );
+      actions.append(
+        review("semantically_reviewed", t("semantic.common.reviewedBtn")),
+        review("accepted", t("semantic.common.acceptedBtn")),
+        review("rejected", t("semantic.common.rejectedBtn")),
+      );
+      root.append(actions);
+    } else if (isStaged) {
+      root.append(textElement("p", "semantic-muted", t("semantic.s3.stagedBindingHint")));
+    }
+    root.append(feedback(str(p.map_label) ?? plain, plain));
   }
 
   if (detail.debts.length) {

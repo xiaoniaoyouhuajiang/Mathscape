@@ -1,0 +1,1150 @@
+{
+  "fixture": "emir-generating-functions-two-books",
+  "fixture_version": "0.1",
+  "label": "阶段二（S2 完整 + S3 前半）双书母函数与退化边界黄金夹具",
+  "investigation_id": "fixture-investigation/emir-generating-functions-two-books",
+  "artifacts": {
+    "jia": {
+      "file": "materials/星港母函数讲义.md",
+      "artifact_id": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+      "role": "canonical Markdown 快照（占位）"
+    },
+    "yi": {
+      "file": "materials/灯塔母函数初步.md",
+      "artifact_id": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+      "role": "canonical Markdown 快照（占位）"
+    }
+  },
+  "id_rules": {
+    "change_set_id": "mathscape:change-set/sha256(investigation_id \\0 request_id)",
+    "new_object": "mathscape:<kind>/sha256(change_set_id \\0 local_ref)",
+    "kinds": {
+      "source_unit": "source-unit",
+      "source_relation": "source-relation",
+      "semantic_entity": "semantic-entity",
+      "alignment": "alignment",
+      "debt": "debt",
+      "dialect_scope": "dialect-scope",
+      "representation_core": "representation-core",
+      "representation_binding": "representation-binding"
+    }
+  },
+  "change_sets": [
+    {
+      "request_id": "fixture-req/src-jia",
+      "change_set_id": "mathscape:change-set/7e3e5051b0f6b482873e20b74e3f53f710a35d186771f8ba7cba6b5b0bb5c966",
+      "version": 1,
+      "target_object": "jia.u.sec",
+      "rationale": "登记《星港母函数讲义》§2.1，并记录形式幂级数约定与局部符号表（a_n, A(x), [x^n]）。",
+      "proposed_objects": [
+        {
+          "local_ref": "jia.s.sec",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+            "md_byte_range": {
+              "start": 193,
+              "end": 264
+            },
+            "granularity": "inline",
+            "quote": "## 《星港母函数讲义》§2.1　普通母函数与有限几何和"
+          }
+        },
+        {
+          "local_ref": "jia.s.def",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+            "md_byte_range": {
+              "start": 305,
+              "end": 658
+            },
+            "granularity": "inline",
+            "quote": "**定义 2.1.1（普通母函数）**　设数列 $(a_n)_{n \\ge 0}$ 取值于交换环 $R$。形式幂级数 $A(x) = \\sum_{n=0}^{\\infty} a_n x^n \\in R[[x]]$ 称为数列 $(a_n)_{n \\ge 0}$ 的普通母函数，记 $[x^n] A(x) = a_n$ 为第 $n$ 次项系数。形式幂级数只按各项系数比较相等，不讨论把 $x$ 代入实数后的收敛性。"
+          }
+        },
+        {
+          "local_ref": "jia.s.thm",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+            "md_byte_range": {
+              "start": 699,
+              "end": 1045
+            },
+            "granularity": "inline",
+            "quote": "**定理 2.1.2（有限几何级数）**　设整数 $N \\ge 1$，实数 $x \\in \\mathbb{R}$，记有限和 $S_N(x) = \\sum_{k=0}^{N-1} x^k$。则分两种互斥完备的情形：(1) 当 $x \\neq 1$ 时，$S_N(x) = \\frac{1 - x^N}{1 - x}$；(2) 当 $x = 1$（退化边界）时，分母 $1 - x = 0$ 使分式无定义，逐项相加得 $S_N(1) = N$。"
+          }
+        },
+        {
+          "local_ref": "jia.s.cor",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/8c9f86d28c98fb9e035d731c68fbef9d407634b6d917fbade7266c528d91e4b2",
+            "md_byte_range": {
+              "start": 1086,
+              "end": 1388
+            },
+            "granularity": "inline",
+            "quote": "**推论 2.1.3（形式逆元与收敛排除）**　在形式幂级数环 $R[[x]]$ 中，恒等式 $(1 - x)\\sum_{n=0}^{\\infty} x^n = 1$ 无条件成立；但若把 $\\sum_{n=0}^{\\infty} x^n$ 当作实变数无穷级数求值，则在 $|x| \\ge 1$ 处级数发散，不能代入分式 $\\frac{1}{1 - x}$。"
+          }
+        },
+        {
+          "local_ref": "jia.u.sec",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "section",
+            "display_title": "§2.1 普通母函数与有限几何和",
+            "parent": null,
+            "source_spans": [
+              "$new:jia.s.sec"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "jia.u.def",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "definition",
+            "display_title": "定义 2.1.1 普通母函数（形式幂级数 R[[x]]）",
+            "parent": "$new:jia.u.sec",
+            "source_spans": [
+              "$new:jia.s.def"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "jia.u.thm",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "statement",
+            "display_title": "定理 2.1.2 有限几何级数（x≠1 与 x=1 双分支）",
+            "parent": "$new:jia.u.sec",
+            "source_spans": [
+              "$new:jia.s.thm"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "jia.u.cor",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "statement",
+            "display_title": "推论 2.1.3 形式逆元与实变数发散排除",
+            "parent": "$new:jia.u.sec",
+            "source_spans": [
+              "$new:jia.s.cor"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "ds.jia",
+          "kind": "dialect_scope",
+          "op": "create",
+          "payload": {
+            "label": "《星港》§2.1 的形式母函数约定",
+            "anchor_unit": "$new:jia.u.sec",
+            "applies_to": "anchor_subtree",
+            "parent_scope": null,
+            "introduced_by_unit": "$new:jia.u.def",
+            "conventions": [
+              {
+                "key": "sequence_index_origin",
+                "subject": "a",
+                "value": 0,
+                "text": "数列 $(a_n)_{n \\ge 0}$ 从第 0 项 $a_0$ 起算",
+                "explicitness": "explicit",
+                "evidence_spans": [
+                  "$new:jia.s.def"
+                ]
+              },
+              {
+                "key": "notation",
+                "subject": "A(x)",
+                "value": "formal_power_series",
+                "text": "$A(x) \\in R[[x]]$ 为形式幂级数，不讨论实数收敛性",
+                "explicitness": "explicit",
+                "evidence_spans": [
+                  "$new:jia.s.def"
+                ]
+              }
+            ],
+            "local_symbols": [
+              {
+                "symbol": "a_n",
+                "role": "sequence",
+                "meaning": "下标从 0 起的系数数列通项",
+                "domain": {
+                  "text": "$n \\in \\mathbb{N},\\ a_n \\in R$"
+                },
+                "evidence_spans": [
+                  "$new:jia.s.def"
+                ]
+              },
+              {
+                "symbol": "A(x)",
+                "role": "series",
+                "meaning": "数列 (a_n) 的普通母函数（形式幂级数）",
+                "domain": {
+                  "text": "$R[[x]]$"
+                },
+                "evidence_spans": [
+                  "$new:jia.s.def"
+                ]
+              },
+              {
+                "symbol": "[x^n]",
+                "role": "operator",
+                "meaning": "提取形式幂级数的第 n 次项系数",
+                "domain": {
+                  "text": "$R[[x]] \\to R$"
+                },
+                "evidence_spans": [
+                  "$new:jia.s.def"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "proposed_relations": [
+        {
+          "local_ref": "jia.r.cor_explains",
+          "kind": "source_relation",
+          "op": "create",
+          "relation": "explains",
+          "source": "$new:jia.u.cor",
+          "target": "$new:jia.u.def",
+          "evidence_spans": [
+            "$new:jia.s.cor"
+          ]
+        }
+      ],
+      "unresolved": [],
+      "staged_ids": {
+        "jia.s.sec": "mathscape:source-span/b697392fd4cc6658fc8d293adeb92a179c32aaa294e3b16145f7c642f72a03a1",
+        "jia.s.def": "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe",
+        "jia.s.thm": "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643",
+        "jia.s.cor": "mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a",
+        "jia.u.sec": "mathscape:source-unit/92d9f901bdaa4dc4444c56317928b472fa5c626ff30099c9b96541514ceb3936",
+        "jia.u.def": "mathscape:source-unit/dc5213fd8c72e09159cf389da5ccd3f5456d4b8806338c636d1bd7606a85b14e",
+        "jia.u.thm": "mathscape:source-unit/ce755bbd6af45ed9986398911762422f088abc56fd64ac70e63f1fc06d64100b",
+        "jia.u.cor": "mathscape:source-unit/ee31940a43bf677b0ef4a0d2e678a294d51daf97c38c43bf959e285327080014",
+        "ds.jia": "mathscape:dialect-scope/2e1ef33324a7f4f1e207180015ad57bd98f839e16b1e1f3002a12ad635ef7671",
+        "jia.r.cor_explains": "mathscape:source-relation/0221e3681dbf0dafffe1893c206d7ded5ef44814cb5f365126e6346d07e975a3"
+      }
+    },
+    {
+      "request_id": "fixture-req/src-yi",
+      "change_set_id": "mathscape:change-set/8a606d04fd4587870f9481b545f386fbb52d725c0ee8a058cbf07c2145fd2a91",
+      "version": 1,
+      "target_object": "yi.u.sec",
+      "rationale": "登记《灯塔母函数初步》§1.3，并记录从 1 起算及实收敛生成函数局部符号表（b_m, g(t), r）。",
+      "proposed_objects": [
+        {
+          "local_ref": "yi.s.sec",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+            "md_byte_range": {
+              "start": 192,
+              "end": 257
+            },
+            "granularity": "inline",
+            "quote": "## 《灯塔母函数初步》§1.3　生成函数与等比求和"
+          }
+        },
+        {
+          "local_ref": "yi.s.def",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+            "md_byte_range": {
+              "start": 297,
+              "end": 579
+            },
+            "granularity": "inline",
+            "quote": "**定义 1.3.1**　本书的正项标号数列 $(b_m)_{m \\ge 1}$ 一律从第 1 项起算。若幂级数 $g(t) = \\sum_{m=1}^{\\infty} b_m t^m$ 在某开区间 $(-r, r)$（$r > 0$）内绝对收敛，则称该区间上的实函数 $g(t)$ 为数列 $(b_m)_{m \\ge 1}$ 的生成函数。"
+          }
+        },
+        {
+          "local_ref": "yi.s.prop",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+            "md_byte_range": {
+              "start": 620,
+              "end": 774
+            },
+            "granularity": "inline",
+            "quote": "**命题 1.3.2（有限等比和公式）**　对正整数 $N \\ge 1$ 与实数 $t \\neq 1$，有 $1 + t + t^2 + \\dots + t^{N-1} = \\frac{1 - t^N}{1 - t}$。"
+          }
+        },
+        {
+          "local_ref": "yi.s.rem",
+          "kind": "source_span",
+          "op": "create",
+          "payload": {
+            "artifact_id": "mathscape:artifact/sha256/770b4a1b3741d038e5a3c405dd07844200da1f0a89e914a1718e5b4f23db1768",
+            "md_byte_range": {
+              "start": 814,
+              "end": 1009
+            },
+            "granularity": "inline",
+            "quote": "**注 1.3.3**　令 $N \\to \\infty$，当 $|t| < 1$ 时有 $\\sum_{m=0}^{\\infty} t^m = \\frac{1}{1 - t}$；当 $|t| \\ge 1$ 时无穷等比级数发散，上式右端不再表示左端的级数和。"
+          }
+        },
+        {
+          "local_ref": "yi.u.sec",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "section",
+            "display_title": "§1.3 生成函数与等比求和",
+            "parent": null,
+            "source_spans": [
+              "$new:yi.s.sec"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "yi.u.def",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "definition",
+            "display_title": "定义 1.3.1 实收敛区间上的生成函数 g(t)",
+            "parent": "$new:yi.u.sec",
+            "source_spans": [
+              "$new:yi.s.def"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "yi.u.prop",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "statement",
+            "display_title": "命题 1.3.2 有限等比和公式（仅写 t≠1）",
+            "parent": "$new:yi.u.sec",
+            "source_spans": [
+              "$new:yi.s.prop"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "yi.u.rem",
+          "kind": "source_unit",
+          "op": "create",
+          "payload": {
+            "kind": "remark",
+            "display_title": "注 1.3.3 |t|<1 收敛与 |t|≥1 发散边界",
+            "parent": "$new:yi.u.sec",
+            "source_spans": [
+              "$new:yi.s.rem"
+            ],
+            "completeness": "complete"
+          }
+        },
+        {
+          "local_ref": "ds.yi",
+          "kind": "dialect_scope",
+          "op": "create",
+          "payload": {
+            "label": "《灯塔》§1.3 的收敛生成函数约定",
+            "anchor_unit": "$new:yi.u.sec",
+            "applies_to": "anchor_subtree",
+            "parent_scope": null,
+            "introduced_by_unit": "$new:yi.u.def",
+            "conventions": [
+              {
+                "key": "sequence_index_origin",
+                "subject": "b",
+                "value": 1,
+                "text": "正项标号数列 $(b_m)_{m \\ge 1}$ 一律从第 1 项起算",
+                "explicitness": "explicit",
+                "evidence_spans": [
+                  "$new:yi.s.def"
+                ]
+              },
+              {
+                "key": "other",
+                "subject": "g(t)",
+                "value": "analytic_interval",
+                "text": "生成函数 $g(t)$ 定义为开区间 $(-r, r)$ 上的绝对收敛实函数",
+                "explicitness": "explicit",
+                "evidence_spans": [
+                  "$new:yi.s.def"
+                ]
+              }
+            ],
+            "local_symbols": [
+              {
+                "symbol": "b_m",
+                "role": "sequence",
+                "meaning": "下标从 1 起的实系数数列通项",
+                "domain": {
+                  "text": "$m \\ge 1,\\ b_m \\in \\mathbb{R}$"
+                },
+                "evidence_spans": [
+                  "$new:yi.s.def"
+                ]
+              },
+              {
+                "symbol": "g(t)",
+                "role": "function",
+                "meaning": "收敛区间 (-r, r) 上由幂级数定义的生成函数",
+                "domain": {
+                  "text": "$(-r, r) \\to \\mathbb{R}$"
+                },
+                "evidence_spans": [
+                  "$new:yi.s.def"
+                ]
+              },
+              {
+                "symbol": "r",
+                "role": "constant",
+                "meaning": "保证幂级数绝对收敛的正半径参数",
+                "domain": {
+                  "text": "$r > 0$"
+                },
+                "evidence_spans": [
+                  "$new:yi.s.def"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "proposed_relations": [
+        {
+          "local_ref": "yi.r.rem_explains",
+          "kind": "source_relation",
+          "op": "create",
+          "relation": "explains",
+          "source": "$new:yi.u.rem",
+          "target": "$new:yi.u.prop",
+          "evidence_spans": [
+            "$new:yi.s.rem"
+          ]
+        }
+      ],
+      "unresolved": [],
+      "staged_ids": {
+        "yi.s.sec": "mathscape:source-span/f3f77faf93f3d3f38ee8eeaa4940d3cf241ad89610df29179dcc385da87fc668",
+        "yi.s.def": "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209",
+        "yi.s.prop": "mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8",
+        "yi.s.rem": "mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b",
+        "yi.u.sec": "mathscape:source-unit/e1b651422415921708b66ec3ee239f17f79951025cffb62f072187bc5d98a276",
+        "yi.u.def": "mathscape:source-unit/7d2d8f328028a0e40f97d3f364ab7aed95cf187b8d0a23e4ac3d1b4443c3998e",
+        "yi.u.prop": "mathscape:source-unit/e352e60525ab9845f38e73cc89e4bea194d3ee531632a4909f67f93446da8000",
+        "yi.u.rem": "mathscape:source-unit/ea0c9c9737a3a9ea50b2cac1d4df395ef65b0526d38ec4604040a41678f90ce1",
+        "ds.yi": "mathscape:dialect-scope/bbf993c9b6f08ddbee7323adee4286e08aead3d55004653971e8f9f4c8352bb7",
+        "yi.r.rem_explains": "mathscape:source-relation/24c528748e2e4c470ac74610c5e9a84bebe08ae2fee6acdbba28e5c33e276713"
+      }
+    },
+    {
+      "request_id": "fixture-req/rep-seq",
+      "change_set_id": "mathscape:change-set/b2f7f2b5c30f74a50428f67010e0c90ebbe7aee212d3eb0eb34afa7879ba4eed",
+      "version": 1,
+      "target_object": "r.seq",
+      "rationale": "建立母函数理论与数列表示核 R_seq，并将《星港》（0 起算）与《灯塔》（1 起算补零）各自的约定卡绑定到 R_seq。",
+      "proposed_objects": [
+        {
+          "local_ref": "e.theory",
+          "kind": "semantic_entity",
+          "op": "create",
+          "payload": {
+            "semantic_kind": "theory",
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "母函数与形式幂级数"
+              },
+              {
+                "lang": "en",
+                "label": "Generating functions and formal power series"
+              }
+            ],
+            "aliases": [
+              "普通母函数",
+              "生成函数",
+              "OGF",
+              "Formal power series"
+            ],
+            "plain_label": "母函数与形式幂级数",
+            "description": "数列、截断几何和与形式幂级数之间的代数与分析边界专题。"
+          }
+        },
+        {
+          "local_ref": "r.seq",
+          "kind": "representation_core",
+          "op": "create",
+          "payload": {
+            "home_theory": "$new:e.theory",
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "自然数下标数列表示核"
+              },
+              {
+                "lang": "en",
+                "label": "Nat-indexed sequence representation"
+              }
+            ],
+            "aliases": [
+              "数列表示",
+              "ℕ → R"
+            ],
+            "plain_label": "数列表示核 ℕ → R",
+            "carrier": {
+              "text": "以自然数 $\\mathbb{N}$ 为下标的系数函数空间 $\\mathbb{N} \\to R$",
+              "note": "Lean: ℕ → R"
+            },
+            "binders": [
+              {
+                "name": "R",
+                "type": "CommRing",
+                "role": "parameter"
+              }
+            ],
+            "operations": [
+              {
+                "name": "term",
+                "signature": {
+                  "text": "$f(n)$：读取第 $n \\in \\mathbb{N}$ 项"
+                },
+                "note": "逐项求值算子"
+              }
+            ],
+            "invariants_and_domain": [
+              {
+                "text": "两个数列相等当且仅当对一切 $n \\in \\mathbb{N}$ 有 $f(n) = g(n)$。"
+              }
+            ],
+            "conventions": [
+              {
+                "key": "sequence_index_origin",
+                "subject": "f",
+                "value": 0,
+                "text": "共享数列表示默认从 $n = 0$ 起算",
+                "basis": "mathlib"
+              }
+            ],
+            "description": "母函数编码前的离散数列承载表示。"
+          }
+        },
+        {
+          "local_ref": "rb.jia.seq",
+          "kind": "representation_binding",
+          "op": "create",
+          "payload": {
+            "dialect_scope": "mathscape:dialect-scope/2e1ef33324a7f4f1e207180015ad57bd98f839e16b1e1f3002a12ad635ef7671",
+            "representation": "$new:r.seq",
+            "symbol_map": [
+              {
+                "local_symbol": "a_n",
+                "target_expr": {
+                  "text": "$f(n) \\in R$（$n \\ge 0$）"
+                },
+                "role": "sequence",
+                "note": "星港从 0 起算，直接恒等对应"
+              }
+            ],
+            "evidence_spans": [
+              "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe"
+            ],
+            "status": "context_checked",
+            "map_label": "绑定为数列表示（0 起算直连）"
+          }
+        },
+        {
+          "local_ref": "rb.yi.seq",
+          "kind": "representation_binding",
+          "op": "create",
+          "payload": {
+            "dialect_scope": "mathscape:dialect-scope/bbf993c9b6f08ddbee7323adee4286e08aead3d55004653971e8f9f4c8352bb7",
+            "representation": "$new:r.seq",
+            "symbol_map": [
+              {
+                "local_symbol": "b_m",
+                "target_expr": {
+                  "text": "$f(m) \\in \\mathbb{R}$（$m \\ge 1$），补 $f(0) = 0$"
+                },
+                "role": "sequence",
+                "note": "灯塔无第 0 项，嵌入 ℕ → ℝ 时显式置零第 0 项"
+              }
+            ],
+            "index_and_domain_adaptations": [
+              {
+                "text": "将 $(b_m)_{m \\ge 1}$ 延拓到 $\\mathbb{N}$：规定 $f(0) = 0$，对 $m \\ge 1$ 取 $f(m) = b_m$。"
+              }
+            ],
+            "evidence_spans": [
+              "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209"
+            ],
+            "status": "partially_aligned",
+            "map_label": "绑定为数列表示（首项补 f(0)=0）"
+          }
+        }
+      ],
+      "proposed_relations": [],
+      "unresolved": [],
+      "staged_ids": {
+        "e.theory": "mathscape:semantic-entity/0205f321459866594dca127b143171768567fae2865750f26136a5d991867d59",
+        "r.seq": "mathscape:representation-core/3a07a6a98b71ec1959e852a4079e19e59a41b0ad85f277bf1dc54fde9f3c2f57",
+        "rb.jia.seq": "mathscape:representation-binding/dc7c46722e432f6f36106080efb2f30f230c4f1aba4f09b67c7a6735aede906f",
+        "rb.yi.seq": "mathscape:representation-binding/e4d0f60e351710db2f17d371ab7ea2ac700c6863f8aac2abf7017f76b4bb4393"
+      }
+    },
+    {
+      "request_id": "fixture-req/rep-fps",
+      "change_set_id": "mathscape:change-set/8e1ae48845f3184d0b98e9a9ba7f019a967ee98334a475251243bc7bebdafd3e",
+      "version": 1,
+      "target_object": "r.fps",
+      "rationale": "建立形式幂级数表示核 R_fps，绑定两本书的母函数记号，并把《灯塔》实收敛半径要求挂为表示绑定上的账目。",
+      "proposed_objects": [
+        {
+          "local_ref": "e.ogf_concept",
+          "kind": "semantic_entity",
+          "op": "create",
+          "payload": {
+            "semantic_kind": "concept",
+            "home_theory": "mathscape:semantic-entity/0205f321459866594dca127b143171768567fae2865750f26136a5d991867d59",
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "普通母函数"
+              },
+              {
+                "lang": "en",
+                "label": "Ordinary generating function"
+              }
+            ],
+            "aliases": [
+              "生成函数",
+              "OGF"
+            ],
+            "plain_label": "普通母函数",
+            "description": "将下标数列编码为未定元幂次的级数对象。"
+          }
+        },
+        {
+          "local_ref": "r.fps",
+          "kind": "representation_core",
+          "op": "create",
+          "payload": {
+            "home_theory": "mathscape:semantic-entity/0205f321459866594dca127b143171768567fae2865750f26136a5d991867d59",
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "形式幂级数表示核"
+              },
+              {
+                "lang": "en",
+                "label": "Formal power series representation"
+              }
+            ],
+            "aliases": [
+              "FPS 表示",
+              "R[[X]]",
+              "PowerSeries"
+            ],
+            "plain_label": "形式幂级数表示核 R[[X]]",
+            "carrier": {
+              "text": "交换环 $R$ 上的形式幂级数环 $R[[X]]$",
+              "note": "Lean: PowerSeries R"
+            },
+            "represented_object": "$new:e.ogf_concept",
+            "binders": [
+              {
+                "name": "R",
+                "type": "CommRing",
+                "role": "parameter"
+              }
+            ],
+            "operations": [
+              {
+                "name": "coeff",
+                "signature": {
+                  "text": "$[X^n] F(X)$：提取第 $n$ 次项系数",
+                  "note": "PowerSeries.coeff R n"
+                },
+                "note": "系数投影"
+              },
+              {
+                "name": "mul",
+                "signature": {
+                  "text": "$(F \\cdot G)(X)$：Cauchy 卷积乘法",
+                  "note": "HMul.hMul"
+                },
+                "note": "对应数列卷积"
+              }
+            ],
+            "invariants_and_domain": [
+              {
+                "text": "纯代数形式比较：两级数相等当且仅当各次项系数全相等，不涉及将实数代入 $X$ 的分析收敛性。"
+              }
+            ],
+            "mathlib_baseline": {
+              "decl": "PowerSeries",
+              "module": "Mathlib.RingTheory.PowerSeries.Basic",
+              "status": "unchecked",
+              "note": "mathlib 中一元数据形式幂级数环"
+            },
+            "uses_entities": [
+              "$new:e.ogf_concept"
+            ],
+            "description": "母函数的标准代数承载表示，阶段三将在此与 R_seq 之间架设 OGF 双向运输边 T。"
+          }
+        },
+        {
+          "local_ref": "rb.jia.fps",
+          "kind": "representation_binding",
+          "op": "create",
+          "payload": {
+            "dialect_scope": "mathscape:dialect-scope/2e1ef33324a7f4f1e207180015ad57bd98f839e16b1e1f3002a12ad635ef7671",
+            "representation": "$new:r.fps",
+            "symbol_map": [
+              {
+                "local_symbol": "A(x)",
+                "target_expr": {
+                  "text": "$F \\in R[[X]]$"
+                },
+                "role": "series",
+                "note": "未定元 x 对应形式未定元 X"
+              },
+              {
+                "local_symbol": "[x^n]",
+                "target_expr": {
+                  "text": "$\\mathrm{coeff}_R(n) : R[[X]] \\to R$"
+                },
+                "role": "operator",
+                "note": "系数提取算子一一对应"
+              }
+            ],
+            "evidence_spans": [
+              "mathscape:source-span/ae6cf0e812ef857b08a4e96e1ba7814d06274c6dedbf9e12fa51352fd512cafe"
+            ],
+            "status": "context_checked",
+            "map_label": "绑定为形式幂级数表示"
+          }
+        },
+        {
+          "local_ref": "rb.yi.fps",
+          "kind": "representation_binding",
+          "op": "create",
+          "payload": {
+            "dialect_scope": "mathscape:dialect-scope/bbf993c9b6f08ddbee7323adee4286e08aead3d55004653971e8f9f4c8352bb7",
+            "representation": "$new:r.fps",
+            "symbol_map": [
+              {
+                "local_symbol": "g(t)",
+                "target_expr": {
+                  "text": "$F(X) = \\sum_{m \\ge 1} b_m X^m \\in \\mathbb{R}[[X]]$（$[X^0]F = 0$）"
+                },
+                "role": "series",
+                "note": "剥离收敛区间 (-r, r) 后提升为常数项为 0 的形式幂级数"
+              }
+            ],
+            "index_and_domain_adaptations": [
+              {
+                "text": "首项从 $m=1$ 起算对应常数项 $[X^0]F(X) = 0$；把实自变量 $t \\in (-r, r)$ 视作形式未定元 $X$。"
+              }
+            ],
+            "lost_information": [
+              {
+                "short": "原书要求 (-r, r) 内绝对收敛",
+                "claim": "灯塔要求存在 r > 0 使 ∑ b_m t^m 在 (-r, r) 内绝对收敛；形式幂级数表示核不保留解析收敛域",
+                "direction": "source_has_target_lacks"
+              }
+            ],
+            "evidence_spans": [
+              "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209"
+            ],
+            "status": "partially_aligned",
+            "map_label": "绑定为形式幂级数（剥离收敛半径）"
+          }
+        },
+        {
+          "local_ref": "d.yi.analytic_radius",
+          "kind": "debt",
+          "op": "create",
+          "payload": {
+            "debt_kind": "assumption_debt",
+            "attached_to": "$new:rb.yi.fps",
+            "status": "open",
+            "obligation": "若需要把形式幂级数结论代回实数 $t$ 求值，必须验证点 $t$ 落在《灯塔》要求的绝对收敛区间 $(-r, r)$ 内。",
+            "quantifier": "∀ t ∈ (-r, r), r > 0",
+            "failure_mode": "theorem",
+            "failure_note": "在收敛半径之外（如 |t| ≥ 1）直接代值会导致发散级数伪等式。",
+            "evidence_spans": [
+              "mathscape:source-span/58a5c30dfe87060a09f3f3d0066c8899e9a08f963976210ca5bfd2a0522f8209",
+              "mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b"
+            ]
+          }
+        }
+      ],
+      "proposed_relations": [],
+      "unresolved": [],
+      "staged_ids": {
+        "e.ogf_concept": "mathscape:semantic-entity/0ca5ed6775d930d3df6061fc37959d5e2ae3826809b1a4e858a6ae46c88e906d",
+        "r.fps": "mathscape:representation-core/bbc6f6bfda48d5ad4d3adfa666ad1014c61f6fd7f0b1c6d13da75fac52018e02",
+        "rb.jia.fps": "mathscape:representation-binding/990e4e9c6e0686a71f3a97eea2ea5cda322814d5d90285276585e151e5226c9f",
+        "rb.yi.fps": "mathscape:representation-binding/634fb566f1f95cf85a69ea5fa96b9699356e2c9ea13b3f6d6b76d4ca6a3c1906",
+        "d.yi.analytic_radius": "mathscape:debt/d3d5e5aa979cca5ea3eedaf6a77dcbb00b3df0faf7df3f9d15c5eebe50cc0c13"
+      }
+    },
+    {
+      "request_id": "fixture-req/geom-fin",
+      "change_set_id": "mathscape:change-set/78da1313b7c568ea0243233bc3f89e023c7a49b1d46ee6fc24f245375fc3dbc8",
+      "version": 1,
+      "target_object": "e.geom_fin",
+      "rationale": "建立带完整守卫、双分支（x≠1 常规分式与 x=1 退化常数）与分母排除说明的有限几何级数定理，并分别用分支感知对齐连接两本书。",
+      "proposed_objects": [
+        {
+          "local_ref": "e.geom_fin",
+          "kind": "semantic_entity",
+          "op": "create",
+          "payload": {
+            "semantic_kind": "declaration",
+            "home_theory": "mathscape:semantic-entity/0205f321459866594dca127b143171768567fae2865750f26136a5d991867d59",
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "有限几何级数求和公式"
+              },
+              {
+                "lang": "en",
+                "label": "Finite geometric series sum"
+              }
+            ],
+            "aliases": [
+              "有限等比求和",
+              "geom_sum_eq"
+            ],
+            "plain_label": "有限几何级数求和（含 x=1 退化分支）",
+            "mathlib_baseline": {
+              "decl": "geom_sum_eq",
+              "module": "Mathlib.Algebra.GeomSum",
+              "status": "unchecked",
+              "note": "mathlib 中 geom_sum_eq 对应 x ≠ 1 分支，geom_sum_one 对应 x = 1 退化分支"
+            },
+            "declaration": {
+              "declaration_kind": "theorem",
+              "binders": [
+                {
+                  "name": "N",
+                  "type": "ℕ",
+                  "role": "universal"
+                },
+                {
+                  "name": "x",
+                  "type": "ℝ",
+                  "role": "universal"
+                }
+              ],
+              "assumptions": [
+                {
+                  "text": "$N \\ge 1$"
+                }
+              ],
+              "statement": {
+                "text": "有限几何和 $\\sum_{k=0}^{N-1} x^k$ 按 $x \\neq 1$ 与 $x = 1$ 分两支给出精确值。",
+                "evidence_spans": [
+                  "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+                ]
+              },
+              "guards": [
+                {
+                  "guard_id": "regular_x_ne_1",
+                  "label": "常规公比（x ≠ 1）",
+                  "predicate": {
+                    "text": "$x \\neq 1$",
+                    "evidence_spans": [
+                      "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643",
+                      "mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8"
+                    ]
+                  },
+                  "evidence_spans": [
+                    "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+                  ]
+                },
+                {
+                  "guard_id": "degenerate_x_eq_1",
+                  "label": "单位公比退化（x = 1）",
+                  "predicate": {
+                    "text": "$x = 1$",
+                    "evidence_spans": [
+                      "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+                    ]
+                  },
+                  "evidence_spans": [
+                    "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+                  ]
+                }
+              ],
+              "guard_partition": {
+                "status": "partition",
+                "note": "在实数域 ℝ 上 x ≠ 1 与 x = 1 互斥且穷尽全部公比取值。"
+              },
+              "branches": [
+                {
+                  "branch_id": "fraction_form",
+                  "label": "分式闭合式",
+                  "guards": [
+                    "regular_x_ne_1"
+                  ],
+                  "is_degenerate": false,
+                  "conclusion": {
+                    "text": "$\\sum_{k=0}^{N-1} x^k = \\frac{1 - x^N}{1 - x}$"
+                  },
+                  "evidence_spans": [
+                    "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643",
+                    "mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8"
+                  ]
+                },
+                {
+                  "branch_id": "constant_sum",
+                  "label": "退化常数和",
+                  "guards": [
+                    "degenerate_x_eq_1"
+                  ],
+                  "is_degenerate": true,
+                  "conclusion": {
+                    "text": "$\\sum_{k=0}^{N-1} 1^k = N$"
+                  },
+                  "evidence_spans": [
+                    "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+                  ]
+                }
+              ],
+              "exclusions": [
+                {
+                  "case": {
+                    "text": "在 $x = 1$ 处代入分式 $\\frac{1 - x^N}{1 - x}$"
+                  },
+                  "kind": "undefined",
+                  "reason": "分母 1 - x = 0 使实数除法无定义，必须切入 constant_sum 退化分支。",
+                  "evidence_spans": [
+                    "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+                  ]
+                }
+              ],
+              "uses_entities": []
+            }
+          }
+        },
+        {
+          "local_ref": "a.jia.thm",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/ce755bbd6af45ed9986398911762422f088abc56fd64ac70e63f1fc06d64100b",
+            "target": "$new:e.geom_fin",
+            "relation": "expresses",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/2e1ef33324a7f4f1e207180015ad57bd98f839e16b1e1f3002a12ad635ef7671"
+            },
+            "target_context": "mathscape:semantic-entity/0205f321459866594dca127b143171768567fae2865750f26136a5d991867d59",
+            "target_branches": [
+              "fraction_form",
+              "constant_sum"
+            ],
+            "evidence_spans": [
+              "mathscape:source-span/8cb636498e730a55f32073bb5d35d18148a10587c1700ddb60ea7230eb6b8643"
+            ],
+            "status": "context_checked",
+            "plain_note": "星港定理 2.1.2 同时完整陈述了 x ≠ 1 分式分支与 x = 1 退化常数分支。"
+          }
+        },
+        {
+          "local_ref": "a.yi.prop",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/e352e60525ab9845f38e73cc89e4bea194d3ee531632a4909f67f93446da8000",
+            "target": "$new:e.geom_fin",
+            "relation": "specializes",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/bbf993c9b6f08ddbee7323adee4286e08aead3d55004653971e8f9f4c8352bb7"
+            },
+            "target_context": "mathscape:semantic-entity/0205f321459866594dca127b143171768567fae2865750f26136a5d991867d59",
+            "target_branches": [
+              "fraction_form"
+            ],
+            "parameter_map": [
+              {
+                "source": "t",
+                "target": "x",
+                "role": "statement_parameter",
+                "map": "灯塔的实公比 t（t ≠ 1）对应共享定理常规分支的 x",
+                "source_range": "t ∈ ℝ, t ≠ 1",
+                "target_range": "x ∈ ℝ"
+              }
+            ],
+            "lost_information": [
+              {
+                "short": "漏写 t = 1 退化分支（和为 N）",
+                "claim": "灯塔命题 1.3.2 假设 t ≠ 1，未写出 t = 1 时和等于 N 的退化分支 constant_sum",
+                "direction": "target_has_source_lacks"
+              }
+            ],
+            "evidence_spans": [
+              "mathscape:source-span/7564ed3ad7e2bdd030fade0e62062da84e660671ef0689d6af0cdf42c470d7b8"
+            ],
+            "status": "partially_aligned"
+          }
+        }
+      ],
+      "proposed_relations": [],
+      "unresolved": [],
+      "staged_ids": {
+        "e.geom_fin": "mathscape:semantic-entity/4c34df825309f22394ee589f40e481a032d694c74aa1693c719ccf4ccc8ac466",
+        "a.jia.thm": "mathscape:alignment/7b202e355ad5c40d06eff941bdebe3228634f98bab64fe9084a554a1559a80d4",
+        "a.yi.prop": "mathscape:alignment/c06f7b76c0c9dd0e88387d546a9d104a64d4610ea2d917dab99832efb57fed21"
+      }
+    },
+    {
+      "request_id": "fixture-req/geom-inf",
+      "change_set_id": "mathscape:change-set/50eb76593a5fba1771e83ef1fb34bce21ccfa8122db0eab6db19495f3cafccef",
+      "version": 1,
+      "target_object": "e.geom_inf_fps",
+      "rationale": "建立形式几何级数逆元恒等式及其 |x| ≥ 1 实分析发散排除边界，并关联两本书的推论与注记。",
+      "proposed_objects": [
+        {
+          "local_ref": "e.geom_inf_fps",
+          "kind": "semantic_entity",
+          "op": "create",
+          "payload": {
+            "semantic_kind": "declaration",
+            "home_theory": "mathscape:semantic-entity/0205f321459866594dca127b143171768567fae2865750f26136a5d991867d59",
+            "preferred_labels": [
+              {
+                "lang": "zh",
+                "label": "形式几何级数乘法逆元"
+              },
+              {
+                "lang": "en",
+                "label": "Formal geometric series inverse"
+              }
+            ],
+            "aliases": [
+              "(1 - X)⁻¹",
+              "形式等比级数"
+            ],
+            "plain_label": "形式几何级数逆元 (1 - X)∑Xⁿ = 1",
+            "declaration": {
+              "declaration_kind": "theorem",
+              "concept": "mathscape:semantic-entity/0ca5ed6775d930d3df6061fc37959d5e2ae3826809b1a4e858a6ae46c88e906d",
+              "binders": [
+                {
+                  "name": "R",
+                  "type": "CommRing",
+                  "role": "parameter"
+                }
+              ],
+              "statement": {
+                "text": "在形式幂级数环 $R[[X]]$ 中，$(1 - X)\\sum_{n=0}^{\\infty} X^n = 1$。",
+                "evidence_spans": [
+                  "mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a"
+                ]
+              },
+              "exclusions": [
+                {
+                  "case": {
+                    "text": "实变数 $|x| \\ge 1$ 处的无穷级数求值 $\\sum_{n=0}^{\\infty} x^n$"
+                  },
+                  "kind": "diverges",
+                  "reason": "当 |x| ≥ 1 时实级数发散，不能将形式逆元恒等式当作实数值收敛等式使用。",
+                  "evidence_spans": [
+                    "mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a",
+                    "mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b"
+                  ]
+                }
+              ],
+              "uses_entities": [
+                "mathscape:semantic-entity/0ca5ed6775d930d3df6061fc37959d5e2ae3826809b1a4e858a6ae46c88e906d"
+              ]
+            }
+          }
+        },
+        {
+          "local_ref": "a.jia.cor",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/ee31940a43bf677b0ef4a0d2e678a294d51daf97c38c43bf959e285327080014",
+            "target": "$new:e.geom_inf_fps",
+            "relation": "expresses",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/2e1ef33324a7f4f1e207180015ad57bd98f839e16b1e1f3002a12ad635ef7671"
+            },
+            "target_context": "mathscape:semantic-entity/0205f321459866594dca127b143171768567fae2865750f26136a5d991867d59",
+            "evidence_spans": [
+              "mathscape:source-span/26ee272aab6832898a4fae4fb268610b9a5c66530cc98fbc395683f606ee9b3a"
+            ],
+            "status": "context_checked"
+          }
+        },
+        {
+          "local_ref": "a.yi.rem",
+          "kind": "alignment",
+          "op": "create",
+          "payload": {
+            "source": "mathscape:source-unit/ea0c9c9737a3a9ea50b2cac1d4df395ef65b0526d38ec4604040a41678f90ce1",
+            "target": "$new:e.geom_inf_fps",
+            "relation": "overlaps_with",
+            "source_context": {
+              "dialect_scope": "mathscape:dialect-scope/bbf993c9b6f08ddbee7323adee4286e08aead3d55004653971e8f9f4c8352bb7"
+            },
+            "target_context": "mathscape:semantic-entity/0205f321459866594dca127b143171768567fae2865750f26136a5d991867d59",
+            "required_assumptions": [
+              {
+                "text": "实数代值需要满足 |t| < 1 收敛条件",
+                "debt": "mathscape:debt/d3d5e5aa979cca5ea3eedaf6a77dcbb00b3df0faf7df3f9d15c5eebe50cc0c13"
+              }
+            ],
+            "lost_information": [
+              {
+                "short": "仅在 |t| < 1 实收敛域成立，非形式环恒等式",
+                "claim": "灯塔注 1.3.3 讨论的是 |t| < 1 上的实级数极限，而共享定理是 R[[X]] 上的无条件形式乘法逆元",
+                "direction": "source_has_target_lacks"
+              }
+            ],
+            "evidence_spans": [
+              "mathscape:source-span/60f335dda5dc0856cc53ee708a2ed79627eb4ef21f497237d1b321ca4ec8e94b"
+            ],
+            "status": "partially_aligned"
+          }
+        }
+      ],
+      "proposed_relations": [],
+      "unresolved": [],
+      "staged_ids": {
+        "e.geom_inf_fps": "mathscape:semantic-entity/98ae05651c48b1cee70eaf23dc4c5a8ab7d28cb425626c27a14b092afd375ab8",
+        "a.jia.cor": "mathscape:alignment/5fe229408439a0ab163c415f69ab178239fd6f5bb5822c6b0781eceb34818fbd",
+        "a.yi.rem": "mathscape:alignment/887eb6d21e118ed3c59d24f5aba739cf332b17fb6ff2f6928b457ade577f22cb"
+      }
+    }
+  ]
+}

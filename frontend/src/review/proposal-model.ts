@@ -6,7 +6,7 @@
  * decides acceptability — it only groups, selects and explains.
  */
 import type { AnchoredMarkdown } from "../reader/selection";
-import { alignmentPlainLabel, entityPlainLabel, reviewItemLabel } from "../semantic/labels";
+import { alignmentPlainLabel, entityPlainLabel, representationBindingPlainLabel, reviewItemLabel } from "../semantic/labels";
 import { collectSemanticSpanRefs } from "../semantic/review-model";
 import { effectiveProposalPayload, unwrapFieldChange } from "../semantic/semantic-diff";
 import { t } from "../i18n";
@@ -500,7 +500,7 @@ function semanticNodeTitle(object: ProposedObject, fields: Record<string, unknow
   if (object.op !== "create" && object.target_id && targetTitles?.[object.target_id]) {
     return targetTitles[object.target_id];
   }
-  if (object.kind === "semantic_entity") return entityPlainLabel(fields);
+  if (object.kind === "semantic_entity" || object.kind === "representation_core") return entityPlainLabel(fields);
   if (object.kind === "dialect_scope") return typeof fields.label === "string" ? fields.label : object.local_ref;
   if (object.kind === "debt") return typeof fields.obligation === "string" ? fields.obligation : object.local_ref;
   return object.local_ref;
@@ -526,10 +526,10 @@ interface SemanticEdgeSpec {
 function extractSemanticEdges(objects: ProposedObject[], baseObjects?: Record<string, BaseObjectView>): SemanticEdgeSpec[] {
   const alignmentTargets = new Map<string, string>();
   for (const object of objects) {
-    if (object.kind === "alignment" && object.op !== "retire") {
+    if ((object.kind === "alignment" || object.kind === "representation_binding") && object.op !== "retire") {
       const base = object.target_id ? baseObjects?.[object.target_id]?.payload : null;
       const fields = effectiveProposalPayload(object, base);
-      const target = newRef(fields.target);
+      const target = newRef(object.kind === "representation_binding" ? fields.representation : fields.target);
       if (target) alignmentTargets.set(object.local_ref, target);
     }
   }
@@ -550,6 +550,38 @@ function extractSemanticEdges(objects: ProposedObject[], baseObjects?: Record<st
           op: object.op,
           label: alignmentPlainLabel(fields),
           evidenceRefs: collectSemanticSpanRefs(fields),
+        });
+      }
+    } else if (object.kind === "representation_binding") {
+      const source = newRef(fields.dialect_scope) ?? object.target_id ?? "";
+      const target = newRef(fields.representation) ?? "";
+      if (source && target) {
+        out.push({
+          ref: object.local_ref,
+          source,
+          target,
+          relation: "binds_representation",
+          op: object.op,
+          label: representationBindingPlainLabel(fields),
+          evidenceRefs: collectSemanticSpanRefs(fields),
+        });
+      }
+    } else if (object.kind === "representation_core") {
+      const home = newRef(fields.home_theory);
+      const selfRef = object.op === "create" ? object.local_ref : (object.target_id ?? object.local_ref);
+      if (home && selfRef) {
+        out.push({ ref: `${object.local_ref}:in_theory`, source: selfRef, target: home, relation: "in_theory", op: object.op, evidenceRefs: [] });
+      }
+      const repObj = newRef(fields.represented_object);
+      if (repObj && selfRef && repObj !== selfRef) {
+        out.push({ ref: `${object.local_ref}:of_concept`, source: selfRef, target: repObj, relation: "of_concept", op: object.op, evidenceRefs: [] });
+      }
+      if (selfRef && Array.isArray(fields.uses_entities)) {
+        fields.uses_entities.forEach((raw, idx) => {
+          const dep = newRef(raw);
+          if (dep && dep !== selfRef && dep !== repObj) {
+            out.push({ ref: `${object.local_ref}:uses:${idx}`, source: selfRef, target: dep, relation: "uses_entity", op: object.op, evidenceRefs: [] });
+          }
         });
       }
     } else if (object.kind === "semantic_entity") {
@@ -699,7 +731,7 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
     set.add(artifact);
   };
   for (const object of objects) {
-    if (!["semantic_entity", "dialect_scope", "debt", "alignment"].includes(object.kind)) continue;
+    if (!["semantic_entity", "representation_core", "dialect_scope", "debt", "alignment", "representation_binding"].includes(object.kind)) continue;
     const fields = (object.op === "edit" ? object.changes : object.payload) ?? {};
     const semAnchors = collectSemanticSpanRefs(fields).flatMap(ref => anchors.get(ref) ?? []);
     if (semAnchors[0]?.artifact) objectArtifact.set(object.local_ref, semAnchors[0].artifact);
@@ -707,12 +739,16 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
       const src = newRef(fields.source);
       const srcArt = src ? unitGroup.get(src) ?? objectArtifact.get(src) : undefined;
       if (srcArt) objectArtifact.set(object.local_ref, srcArt);
+    } else if (object.kind === "representation_binding") {
+      const src = newRef(fields.dialect_scope);
+      const srcArt = src ? unitGroup.get(src) ?? objectArtifact.get(src) : undefined;
+      if (srcArt) objectArtifact.set(object.local_ref, srcArt);
     } else if (object.kind === "dialect_scope") {
       const anc = newRef(fields.anchor_unit);
       const ancArt = anc ? unitGroup.get(anc) ?? objectArtifact.get(anc) : undefined;
       if (ancArt) objectArtifact.set(object.local_ref, ancArt);
     }
-    if (object.kind === "alignment" || semAnchors.length === 0) continue;
+    if (object.kind === "alignment" || object.kind === "representation_binding" || semAnchors.length === 0) continue;
     const byArtifact = new Map<string, ProposalAnchor[]>();
     for (const anchor of semAnchors) {
       const list = byArtifact.get(anchor.artifact) ?? [];
@@ -779,7 +815,7 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
   }
   const semanticObjectsByRef = new Map(
     objects
-      .filter(o => ["semantic_entity", "dialect_scope", "debt"].includes(o.kind))
+      .filter(o => ["semantic_entity", "representation_core", "dialect_scope", "debt"].includes(o.kind))
       .map(o => [o.op === "create" ? o.local_ref : (o.target_id ?? o.local_ref), o]),
   );
   const ensureSemanticNodeInGroup = (group: ProposalReviewProjection, ref: string) => {
@@ -803,7 +839,16 @@ export function proposalReviewProjection(item: PendingChangeSet): ProposalReview
       source_excerpt: typeof fields.description === "string" ? fields.description : "",
     });
   };
-  for (const edge of extractSemanticEdges(objects, item.baseObjects)) {
+  const semanticEdges = extractSemanticEdges(objects, item.baseObjects);
+  for (const edge of semanticEdges) {
+    for (const anchor of edge.evidenceRefs.flatMap(ref => anchors.get(ref) ?? [])) {
+      recordSemanticHome(edge.source, anchor.artifact);
+      recordSemanticHome(edge.target, anchor.artifact);
+    }
+    if (unitGroup.has(edge.source)) recordSemanticHome(edge.target, unitGroup.get(edge.source)!);
+    if (unitGroup.has(edge.target)) recordSemanticHome(edge.source, unitGroup.get(edge.target)!);
+  }
+  for (const edge of semanticEdges) {
     const evidence = edge.evidenceRefs.flatMap(ref => anchors.get(ref) ?? []);
     const homeArtifacts = new Set<string | null>();
     for (const anchor of evidence) homeArtifacts.add(anchor.artifact);
@@ -921,7 +966,7 @@ export function proposalOverview(item: PendingChangeSet, groups: ProposalReviewP
     titles.set(unit.unit_ref, unit.display_title ?? unit.unit_ref);
   }));
   for (const object of objects) {
-    if (!["semantic_entity", "dialect_scope", "debt"].includes(object.kind)) continue;
+    if (!["semantic_entity", "representation_core", "dialect_scope", "debt"].includes(object.kind)) continue;
     const fields = (object.op === "edit" ? object.changes : object.payload) ?? {};
     const key = object.op === "create" ? object.local_ref : (object.target_id ?? object.local_ref);
     if (!titles.has(key)) titles.set(key, semanticNodeTitle(object, fields, item.targetTitles));
@@ -965,7 +1010,7 @@ export function proposalOverview(item: PendingChangeSet, groups: ProposalReviewP
     const best = overviewGroups[defaultGroup];
     if (group.units + group.relations > best.units + best.relations) defaultGroup = group.index;
   });
-  const semanticNodes = objects.filter(object => ["semantic_entity", "dialect_scope", "debt"].includes(object.kind)).length;
+  const semanticNodes = objects.filter(object => ["semantic_entity", "representation_core", "dialect_scope", "debt"].includes(object.kind)).length;
   return {
     units: objects.filter(object => object.kind === "source_unit").length,
     semanticNodes,

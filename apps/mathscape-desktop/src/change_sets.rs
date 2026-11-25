@@ -355,8 +355,23 @@ fn view(
     // retiring/editing one) also have their titles resolved.
     let mut extra_ids = Vec::new();
     for base in base_objects.values() {
-        if matches!(base.kind.as_str(), "alignment" | "source_relation") {
+        if matches!(
+            base.kind.as_str(),
+            "alignment" | "source_relation" | "Alignment" | "SourceUnitRelation"
+        ) {
             for end in ["source", "target"] {
+                if let Some(end_id) = base.payload.get(end).and_then(Value::as_str)
+                    && !ids.iter().any(|existing| existing == end_id)
+                    && !extra_ids.iter().any(|existing| existing == end_id)
+                {
+                    extra_ids.push(end_id.to_owned());
+                }
+            }
+        } else if matches!(
+            base.kind.as_str(),
+            "representation_binding" | "RepresentationBinding"
+        ) {
+            for end in ["dialect_scope", "representation"] {
                 if let Some(end_id) = base.payload.get(end).and_then(Value::as_str)
                     && !ids.iter().any(|existing| existing == end_id)
                     && !extra_ids.iter().any(|existing| existing == end_id)
@@ -561,6 +576,32 @@ fn staged_title(
             end_title("source"),
             label,
             end_title("target")
+        ));
+    }
+    if base.kind == "representation_binding" {
+        let end_title = |key: &str| -> String {
+            let Some(end_id) = base.payload.get(key).and_then(Value::as_str) else {
+                return "?".into();
+            };
+            anchors
+                .head_title(end_id)
+                .or_else(|| {
+                    staged_object(versions, end_id)
+                        .and_then(|o| payload_short_title(&o.payload, anchors.lang()))
+                })
+                .unwrap_or_else(|| end_id.to_owned())
+        };
+        let label = base
+            .payload
+            .get("map_label")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("绑定为");
+        return Some(format!(
+            "{} —{}→ {}",
+            end_title("dialect_scope"),
+            label,
+            end_title("representation")
         ));
     }
     payload_short_title(&base.payload, anchors.lang())
@@ -3069,5 +3110,328 @@ mod tests {
                 "tutorial-projection.json 过期：用 MATHSCAPE_UPDATE_TUTORIAL_PROJECTION=1 重跑本测试"
             );
         }
+    }
+
+    /// 夹具 fixtures/emir/generating-functions-two-books（契约 S14）：6 个 change set
+    /// 暂存、队列解析、一次接受、地图投影（RepresentationCore + binds_representation）、
+    /// 学习视图挂账（挂在 RepresentationBinding 上的解析收敛半径账）、对象级审阅与退役级联。
+    #[test]
+    fn stage2_generating_functions_fixture_accepts_projects_and_guards_retire() {
+        use mathscape_domain::{
+            AlignmentReviewStatus, DisplayLang, ImpactPlanStatus, UserChangeOperation,
+            UserChangeRequest,
+        };
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/emir/generating-functions-two-books");
+        let objects: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("objects.json")).unwrap()).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("ws");
+        let mut pool = ArtifactPool::create(&root).unwrap();
+        let mut artifact = std::collections::BTreeMap::new();
+        for (key, entry) in objects["artifacts"].as_object().unwrap() {
+            let bytes = std::fs::read(dir.join(entry["file"].as_str().unwrap())).unwrap();
+            let metadata = ArtifactMetadata::new(
+                None,
+                MediaType::parse("text/markdown").unwrap(),
+                std::path::Path::new(entry["file"].as_str().unwrap())
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_owned),
+                None,
+                RightsRecord::new(RightsStatus::NotAssessed, vec![], None).unwrap(),
+            );
+            let id = pool
+                .import_bytes(&bytes, metadata, ActorRef::parse("test").unwrap())
+                .unwrap()
+                .stable_id()
+                .to_string();
+            assert_eq!(id, entry["artifact_id"]);
+            artifact.insert(key.clone(), id);
+        }
+        drop(pool);
+        let fx = Fx {
+            _dir: temp,
+            root,
+            md: artifact["jia"].clone(),
+        };
+
+        let mut ids = std::collections::BTreeMap::new();
+        let mut selections = Vec::new();
+        for change_set in objects["change_sets"].as_array().unwrap() {
+            let mut body = json!({
+                "request_id": change_set["request_id"],
+                "rationale": change_set["rationale"],
+                "target_object": change_set["target_object"],
+                "proposed_objects": change_set["proposed_objects"],
+                "proposed_relations": change_set["proposed_relations"],
+            });
+            remap_ids(&mut body, &ids);
+            let result = propose(&fx, body);
+            assert_eq!(result["status"], "staged", "{result}");
+            for (local, fixture_id) in change_set["staged_ids"].as_object().unwrap() {
+                ids.insert(
+                    fixture_id.as_str().unwrap().to_owned(),
+                    staged_id(&result, local),
+                );
+            }
+            selections.push(sel(&result));
+        }
+
+        let actual = |local: &str| -> String {
+            let fixture_id = objects["change_sets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find_map(|cs| cs["staged_ids"][local].as_str())
+                .unwrap();
+            ids[fixture_id].clone()
+        };
+
+        // 1. 在接受前核对队列视图：RepresentationCore 目标标题与跨提案 DialectScope base_objects 完整解析。
+        let pending_queue = list_queue(&fx.root, INV, Default::default()).unwrap();
+        let rep_fps_view = pending_queue
+            .items
+            .iter()
+            .find(|item| item.proposal["target_object"] == "r.fps")
+            .expect("rep-fps pending view");
+        assert_eq!(
+            rep_fps_view.target_object_title.as_deref(),
+            Some("形式幂级数表示核 R[[X]]")
+        );
+        let ds_yi_id = actual("ds.yi");
+        let theory_id = actual("e.theory");
+        assert_eq!(
+            rep_fps_view
+                .target_titles
+                .get(&ds_yi_id)
+                .map(String::as_str),
+            Some("《灯塔》§1.3 的收敛生成函数约定")
+        );
+        assert!(rep_fps_view.base_objects.contains_key(&ds_yi_id));
+        assert!(rep_fps_view.base_objects.contains_key(&theory_id));
+
+        // 2. 一次性接受全部 6 个提案。
+        accept(&fx, selections).unwrap();
+        assert_eq!(commit_count(&fx), 1);
+
+        // 3. 地图投影包含 RepresentationCore 节点、binds_representation 绑定关系与 represents 关联。
+        let desktop_snapshot = crate::DesktopService::open(&fx.root)
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        let graph = serde_json::to_value(&desktop_snapshot.landscape_graph).unwrap();
+        let nodes = graph["nodes"].as_array().unwrap();
+        let rep_core_nodes: Vec<&Value> = nodes
+            .iter()
+            .filter(|n| n["element_kind"] == "entity" && n["domain_kind"] == "RepresentationCore")
+            .collect();
+        assert_eq!(rep_core_nodes.len(), 2, "{rep_core_nodes:?}");
+        let binding_rels: Vec<&Value> = nodes
+            .iter()
+            .filter(|n| {
+                n["element_kind"] == "relation"
+                    && n["domain_kind"] == "RepresentationBinding"
+                    && n["relation_kind"] == "binds_representation"
+            })
+            .collect();
+        assert_eq!(binding_rels.len(), 4, "{binding_rels:?}");
+        assert!(
+            nodes.iter().any(|n| n["element_kind"] == "relation"
+                && n["domain_kind"] == "RepresentationCore"
+                && n["relation_kind"] == "of_concept"
+                && n["label"] == "编码对象"),
+            "missing represented_object of_concept relation in landscape_graph"
+        );
+
+        // 4. 学习视图：挂在 rb.yi.fps 上的解析收敛半径账归属到《灯塔》的 open_debts。
+        let store = open_store(&fx.root).unwrap();
+        let map_snap = store.map_edit_snapshot().unwrap();
+        let view = mathscape_orchestrator::semantic_view::learning_view(&map_snap);
+        let yi = view
+            .materials
+            .iter()
+            .find(|m| m.artifact_id == artifact["yi"])
+            .expect("yi in learning view");
+        let debt_id = actual("d.yi.analytic_radius");
+        assert!(
+            yi.open_debts.iter().any(|d| d.debt_id == debt_id),
+            "expected RepresentationBinding debt in yi.open_debts: {:?}",
+            yi.open_debts
+        );
+
+        // 5. Inspector 语义详情与用户专用 SetRepresentationBindingReview 审阅命令。
+        let r_fps_id = actual("r.fps");
+        let rb_yi_fps_id = actual("rb.yi.fps");
+        let r_fps_detail = mathscape_orchestrator::semantic_view::semantic_object_detail(
+            &map_snap,
+            &r_fps_id,
+            DisplayLang::Zh,
+        )
+        .expect("r.fps detail");
+        assert_eq!(r_fps_detail.kind, "RepresentationCore");
+        assert_eq!(
+            r_fps_detail.payload["mathlib_baseline"]["decl"],
+            "PowerSeries"
+        );
+
+        let rb_detail = mathscape_orchestrator::semantic_view::semantic_object_detail(
+            &map_snap,
+            &rb_yi_fps_id,
+            DisplayLang::Zh,
+        )
+        .expect("rb.yi.fps detail");
+        assert_eq!(rb_detail.kind, "RepresentationBinding");
+        assert_eq!(rb_detail.debts.len(), 1);
+        assert_eq!(rb_detail.debts[0]["object_id"], debt_id);
+
+        let rb_rev = map_snap
+            .objects
+            .iter()
+            .find(|o| o.object_id == rb_yi_fps_id)
+            .unwrap()
+            .revision
+            .clone();
+        drop(store);
+        let service = crate::DesktopService::open(&fx.root).unwrap();
+        let user_req = UserChangeRequest {
+            request_id: "mathscape:edit-req/review-rb-yi-fps".into(),
+            base_commit: map_snap.base_commit.clone(),
+            reason: "用户确认灯塔母函数表示绑定".into(),
+            operations: vec![UserChangeOperation::SetRepresentationBindingReview {
+                object_id: rb_yi_fps_id.clone(),
+                expected_revision: rb_rev,
+                status: AlignmentReviewStatus::Accepted,
+                note: Some("确认首项补零与剥离收敛域处理".into()),
+            }],
+        };
+        let impact = crate::map_edit::plan(&service, user_req.clone()).unwrap();
+        assert_eq!(
+            impact.status,
+            ImpactPlanStatus::Ready,
+            "{:?}",
+            impact.diagnostics
+        );
+        crate::map_edit::commit(&service, user_req, impact.plan_fingerprint).unwrap();
+        let reviewed_rb = semantic_payload(&fx, &rb_yi_fps_id);
+        assert_eq!(reviewed_rb["payload"]["status"], "accepted");
+        assert_eq!(reviewed_rb["payload"]["trust"]["alignment"], "accepted");
+        assert_eq!(
+            reviewed_rb["payload"]["reviewed"]["note"],
+            "确认首项补零与剥离收敛域处理"
+        );
+
+        // 6. 退役守卫与账目级联：当 rb.jia.fps / rb.yi.fps 仍活跃时，退役 r.fps 被阻塞；
+        //    退役 rb.yi.fps 可正常暂存并在队列中列出级联作废的 d.yi.analytic_radius。
+        let latest_snap = open_store(&fx.root).unwrap().map_edit_snapshot().unwrap();
+        let r_fps_rev = latest_snap
+            .objects
+            .iter()
+            .find(|o| o.object_id == r_fps_id)
+            .unwrap()
+            .revision
+            .clone();
+        let blocked_retire = propose(
+            &fx,
+            json!({
+                "request_id": "retire-r-fps-while-bound",
+                "rationale": "测试被活跃绑定引用的表示核不可直接退役",
+                "target_object": r_fps_id,
+                "proposed_objects": [{
+                    "local_ref": "retire.r.fps",
+                    "kind": "representation_core",
+                    "op": "retire",
+                    "target_id": r_fps_id,
+                    "expected_revision": r_fps_rev,
+                }],
+            }),
+        );
+        assert_eq!(blocked_retire["status"], "blocked", "{blocked_retire}");
+        assert!(
+            blocked_retire["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|d| d["code"] != "missing_revision_guard"),
+            "{blocked_retire}"
+        );
+
+        let reviewed_rb_rev = latest_snap
+            .objects
+            .iter()
+            .find(|o| o.object_id == rb_yi_fps_id)
+            .unwrap()
+            .revision
+            .clone();
+        // 单独退役 rb.yi.fps 时，因 a.yi.geom_inf 的 required_assumptions 引用了挂在 rb.yi.fps 上的账，
+        // 引擎跨对象识别传递依赖并阻塞。
+        let blocked_retire_rb_alone = propose(
+            &fx,
+            json!({
+                "request_id": "retire-rb-yi-fps-alone",
+                "rationale": "测试挂账被其他对齐线引用时不可孤立退役表示绑定",
+                "target_object": rb_yi_fps_id,
+                "proposed_objects": [{
+                    "local_ref": "retire.rb.yi.fps",
+                    "kind": "representation_binding",
+                    "op": "retire",
+                    "target_id": rb_yi_fps_id,
+                    "expected_revision": reviewed_rb_rev,
+                }],
+            }),
+        );
+        assert_eq!(
+            blocked_retire_rb_alone["status"], "blocked",
+            "{blocked_retire_rb_alone}"
+        );
+
+        // 一并退役依赖该账的 a.yi.rem 与 rb.yi.fps，即可正常暂存并级联作废 d.yi.analytic_radius。
+        let a_yi_rem_id = actual("a.yi.rem");
+        let a_yi_rem_rev = latest_snap
+            .objects
+            .iter()
+            .find(|o| o.object_id == a_yi_rem_id)
+            .unwrap()
+            .revision
+            .clone();
+        let staged_retire_rb = propose(
+            &fx,
+            json!({
+                "request_id": "retire-rb-yi-fps",
+                "rationale": "退役灯塔无穷几何和对齐线及 FPS 表示绑定，验证挂账级联作废",
+                "target_object": rb_yi_fps_id,
+                "proposed_objects": [
+                    {
+                        "local_ref": "retire.a.yi.rem",
+                        "kind": "alignment",
+                        "op": "retire",
+                        "target_id": a_yi_rem_id,
+                        "expected_revision": a_yi_rem_rev,
+                    },
+                    {
+                        "local_ref": "retire.rb.yi.fps",
+                        "kind": "representation_binding",
+                        "op": "retire",
+                        "target_id": rb_yi_fps_id,
+                        "expected_revision": reviewed_rb_rev,
+                    },
+                ],
+            }),
+        );
+        assert_eq!(staged_retire_rb["status"], "staged", "{staged_retire_rb}");
+        let retire_queue = list_queue(&fx.root, INV, Default::default()).unwrap();
+        let retire_item = retire_queue
+            .items
+            .iter()
+            .find(|item| item.proposal["request_id"] == "retire-rb-yi-fps")
+            .expect("retire-rb-yi-fps item");
+        assert_eq!(
+            retire_item.retire_cascades.get(&rb_yi_fps_id),
+            Some(&vec![debt_id.clone()])
+        );
+        accept(&fx, vec![sel(&staged_retire_rb)]).unwrap();
+        let cascaded_debt = semantic_payload(&fx, &debt_id);
+        assert_eq!(cascaded_debt["payload"]["status"], "obsolete");
     }
 }

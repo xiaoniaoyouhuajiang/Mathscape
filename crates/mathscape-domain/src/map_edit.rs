@@ -80,9 +80,35 @@ pub enum UserChangeOperation {
         expected_revision: String,
         changes: DialectScopeChanges,
     },
+    CreateRepresentationCore {
+        object_id: String,
+        draft: RepresentationCoreDraft,
+    },
+    EditRepresentationCore {
+        object_id: String,
+        expected_revision: String,
+        changes: RepresentationCoreChanges,
+    },
+    CreateRepresentationBinding {
+        object_id: String,
+        draft: RepresentationBindingDraft,
+    },
+    EditRepresentationBinding {
+        object_id: String,
+        expected_revision: String,
+        changes: RepresentationBindingChanges,
+    },
     /// User-only: explicit alignment review on the review page. Never the
     /// side effect of accepting a proposal; no proposal compiles to it.
     SetAlignmentReview {
+        object_id: String,
+        expected_revision: String,
+        status: AlignmentReviewStatus,
+        #[serde(default)]
+        note: Option<String>,
+    },
+    /// User-only: explicit representation binding review in the Inspector.
+    SetRepresentationBindingReview {
         object_id: String,
         expected_revision: String,
         status: AlignmentReviewStatus,
@@ -122,7 +148,12 @@ impl UserChangeOperation {
             | Self::EditDebt { object_id, .. }
             | Self::CreateDialectScope { object_id, .. }
             | Self::EditDialectScope { object_id, .. }
+            | Self::CreateRepresentationCore { object_id, .. }
+            | Self::EditRepresentationCore { object_id, .. }
+            | Self::CreateRepresentationBinding { object_id, .. }
+            | Self::EditRepresentationBinding { object_id, .. }
             | Self::SetAlignmentReview { object_id, .. }
+            | Self::SetRepresentationBindingReview { object_id, .. }
             | Self::SetDebtSettlement { object_id, .. }
             | Self::RecordMathlibBaseline { object_id, .. } => object_id,
         }
@@ -132,7 +163,9 @@ impl UserChangeOperation {
     pub fn is_user_only(&self) -> bool {
         matches!(
             self,
-            Self::SetAlignmentReview { .. } | Self::SetDebtSettlement { .. }
+            Self::SetAlignmentReview { .. }
+                | Self::SetRepresentationBindingReview { .. }
+                | Self::SetDebtSettlement { .. }
         )
     }
     /// Operations only the server itself authors.
@@ -148,7 +181,9 @@ impl UserChangeOperation {
             | Self::CreateSemanticEntity { object_id, .. }
             | Self::CreateAlignment { object_id, .. }
             | Self::CreateDebt { object_id, .. }
-            | Self::CreateDialectScope { object_id, .. } => Some(object_id),
+            | Self::CreateDialectScope { object_id, .. }
+            | Self::CreateRepresentationCore { object_id, .. }
+            | Self::CreateRepresentationBinding { object_id, .. } => Some(object_id),
             _ => None,
         }
     }
@@ -175,7 +210,16 @@ impl UserChangeOperation {
             | Self::EditDialectScope {
                 expected_revision, ..
             }
+            | Self::EditRepresentationCore {
+                expected_revision, ..
+            }
+            | Self::EditRepresentationBinding {
+                expected_revision, ..
+            }
             | Self::SetAlignmentReview {
+                expected_revision, ..
+            }
+            | Self::SetRepresentationBindingReview {
                 expected_revision, ..
             }
             | Self::SetDebtSettlement {

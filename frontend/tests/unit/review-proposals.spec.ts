@@ -317,5 +317,43 @@ describe("proposal overview across snapshots", () => {
     expect(overview.relationList.find(r => r.ref === "a_thm1")?.source.title).toBe("定理 1（原文单元）");
     expect(overview.groups.map(g => g.pages)).toEqual([{ from: 8, to: 8 }, { from: 13, to: 13 }, { from: 33, to: 33 }]);
   });
+
+  it("projects Stage 2 representation_core and representation_binding onto snapshot groups and overview", () => {
+    const proposal = item("S2");
+    proposal.proposal.proposed_objects = [
+      { local_ref: "s1", kind: "source_span", op: "create", payload: { artifact_id: "md-1", md_byte_range: { start: 0, end: 8 }, granularity: "inline", quote: "形式幂级数" } },
+      { local_ref: "r_fps", kind: "representation_core", op: "create", payload: {
+        home_theory: "mathscape:semantic-entity/theory",
+        represented_object: "mathscape:semantic-entity/ogf",
+        plain_label: "形式幂级数表示核 R[[X]]",
+        preferred_labels: [{ lang: "zh", label: "形式幂级数表示核" }],
+        carrier: { text: "R[[X]]" },
+      } },
+      { local_ref: "rb_1", kind: "representation_binding", op: "create", payload: {
+        dialect_scope: "mathscape:dialect-scope/ds1",
+        representation: "$new:r_fps",
+        symbol_map: [{ local_symbol: "A(x)", target_expr: { text: "F ∈ R[[X]]" } }],
+        evidence_spans: ["$new:s1"],
+        status: "context_checked",
+      } },
+    ];
+    proposal.anchors = [anchor("s1", "md-1", 0, 8, { page: { pdf_page_index: 1, page_number: 2 } })];
+    proposal.targetTitles = {
+      "mathscape:semantic-entity/theory": "母函数与形式幂级数",
+      "mathscape:semantic-entity/ogf": "普通母函数",
+      "mathscape:dialect-scope/ds1": "《星港》§2.1 约定",
+    };
+
+    const groups = proposalReviewProjection(proposal);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].units.map((u) => u.unit_ref)).toContain("r_fps");
+    expect(groups[0].relations.map((r) => r.relation)).toEqual(
+      expect.arrayContaining(["in_theory", "of_concept", "binds_representation"]),
+    );
+    const overview = proposalOverview(proposal, groups);
+    expect(overview.semanticNodes).toBe(1);
+    expect(overview.relationList.find((r) => r.ref === "rb_1")?.source.title).toBe("《星港》§2.1 约定");
+    expect(overview.relationList.find((r) => r.ref === "rb_1")?.target.title).toContain("形式幂级数表示核");
+  });
 });
 

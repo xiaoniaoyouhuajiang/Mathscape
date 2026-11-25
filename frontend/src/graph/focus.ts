@@ -366,7 +366,7 @@ function evaluateTypedHop(
 
     case NodeMode.SectionContext:
       if (relKind === "scope_of" && backward) {
-        return { cost: 0, nextMode: NodeMode.Sink };
+        return { cost: 0, nextMode: lens === "heuristic" ? NodeMode.Full : NodeMode.Sink };
       }
       if (relKind === "has_part" && backward) {
         return { cost: 0, nextMode: NodeMode.SectionContext };
@@ -439,8 +439,11 @@ function evaluateTypedHop(
 
         case "context_attach":
           if (relKind === "scope_of") {
-            if (backward) return { cost: 0, nextMode: NodeMode.Sink };
+            if (backward) {
+              return { cost: 0, nextMode: lens === "heuristic" ? NodeMode.Full : NodeMode.Sink };
+            }
             if (currentIsSeed) return { cost: 1, nextMode: NodeMode.Full };
+            if (lens === "heuristic") return { cost: 0, nextMode: NodeMode.SectionContext };
             return null;
           }
           if (relKind === "debt_on" && lens === "heuristic") {
