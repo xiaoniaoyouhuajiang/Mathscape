@@ -12,10 +12,12 @@ import { reducedMotion as defaultReducedMotion } from "../core/motion";
 import { mountCytoscapeGraph } from "../graph/cytoscape";
 import { SCENE_TIMING } from "../graph/scene-player";
 import { EDGE_TYPES, NODE_TYPES, type NodeTypeVisual } from "../graph/taxonomy";
+import { graphPalette } from "../graph/theme";
 import { LABEL_HOVER, LABEL_RECESS, LABEL_HOVER_STYLE, LABEL_RECESS_STYLE, refreshLabels, syncNodeLabel } from "../graph/label-hover";
 import { texToPlain, truncatePlain } from "../graph/tex-plain";
 import { t } from "../i18n";
 import { EP2_TYPE_NOTES } from "../i18n/tutorial-ep2-copy";
+import { getTheme } from "../shell/theme-manager";
 import { inlineMathHtml, markdownHtml } from "./math";
 import { TUTORIAL_EP2_TITLE, buildEpisode2Shots } from "./episode2";
 import type { TutorialEpisodeId, TutorialProjection } from "./projection";
@@ -23,12 +25,10 @@ import { loadEpisodeProjection, tutorialGraph } from "./projection";
 import type { ShotExtra, TutorialShot } from "./script";
 import { TYPE_NOTES, buildTutorialShots, stripTypePrefix } from "./script";
 
-export const TUTORIAL_TITLE = "教程：两本书讲的是不是同一个东西";
+export const TUTORIAL_TITLE = "教程（一）：两本书讲的是不是同一个东西";
 
 /** 两条派生虚线：材料 → 从它切出来的那条定义（只标两个“中心”）。 */
 const DERIVED: Record<string, string> = { jia: "jia.u.def", yi: "yi.u.def" };
-const DERIVED_COLOR = "#7fc5c6";
-const BINDING_COLOR = "#b794f4";
 
 const SEMANTIC_KIND: Record<string, { name: string; code: string }> = {
   concept: { name: TYPE_NOTES.concept.name, code: "concept" },
@@ -160,9 +160,9 @@ export class TutorialPlayer {
     this.root = el("section", "tutorial-overlay");
     this.root.hidden = true;
     this.root.setAttribute("role", "dialog");
-    this.root.setAttribute("aria-label", TUTORIAL_TITLE);
+    this.root.setAttribute("aria-label", t("tutorial.ep1.menuTitle"));
     const header = el("header", "tutorial-header");
-    this.titleEl = el("strong", "tutorial-title", TUTORIAL_TITLE);
+    this.titleEl = el("strong", "tutorial-title", t("tutorial.ep1.menuTitle"));
     const switcher = el("div", "tutorial-episodes");
     switcher.setAttribute("role", "group");
     switcher.setAttribute("aria-label", t("tutorial.switcherLabel"));
@@ -241,7 +241,7 @@ export class TutorialPlayer {
   async open(episode: TutorialEpisodeId = "ep1"): Promise<void> {
     this.clearTimers();
     this.episode = episode;
-    const activeTitle = episode === "ep2" ? TUTORIAL_EP2_TITLE : TUTORIAL_TITLE;
+    const activeTitle = episode === "ep2" ? TUTORIAL_EP2_TITLE : t("tutorial.ep1.menuTitle");
     this.titleEl.textContent = activeTitle;
     this.root.setAttribute("aria-label", activeTitle);
     for (const id of ["ep1", "ep2"] as const) {
@@ -273,14 +273,41 @@ export class TutorialPlayer {
       labelHover: { isFull: (node) => node.hasClass(FOCUS) },
     });
     this.decorate(this.core);
-    this.core.style().selector(`.${HIDDEN}`).style({ display: "none" })
+    this.applyTutorialStyles(this.core);
+    this.core.on("appearancechange", () => {
+      if (!this.core) return;
+      this.applyTutorialStyles(this.core);
+      this.renderLegend(this.core, this.currentShot() ?? undefined);
+      refreshLabels(this.core, this.core.elements() as unknown as Parameters<typeof refreshLabels>[1]);
+    });
+    // 悬停由 mountCytoscapeGraph 绑定：完整标签浮到最上层，邻接短标签暂时避让。
+    this.core.autoungrabify(true);
+    // 画面上对象少时（前两镜）不要放得太大，节点标签留在画布里。
+    this.core.maxZoom(1.4);
+    this.go(0);
+    this.setPlaying(!this.reduced());
+  }
+
+  private applyTutorialStyles(core: Core): void {
+    const p = graphPalette();
+    const light = getTheme() === "parchment";
+    const derivedColor = light ? "#2a7a7c" : "#7fc5c6";
+    const derivedPillText = light ? "#1b595b" : "#7fc5c6";
+    const derivedPillBorder = light ? "#5e9da3" : "#2f5b5c";
+    const bindingColor = p.candidate;
+    const bindingPillText = light ? "#4a2f75" : "#ebd9ff";
+    const bindingPillBorder = light ? "#8d71b8" : "#6b4ca8";
+    const pillText = light ? p.text : "#ffe6a6";
+    const pillBorder = light ? "#c59b57" : "#6e5a2a";
+
+    core.style().selector(`.${HIDDEN}`).style({ display: "none" })
       .selector("edge.tutorial-derived-edge").style({
-        label: "data(label)", width: 1.6, "line-style": "dashed", "line-color": DERIVED_COLOR,
-        "target-arrow-color": DERIVED_COLOR, "target-arrow-shape": "triangle", color: DERIVED_COLOR, "font-size": "9px",
+        label: "data(label)", width: 1.6, "line-style": "dashed", "line-color": derivedColor,
+        "target-arrow-color": derivedColor, "target-arrow-shape": "triangle", color: derivedColor, "font-size": "9px",
       })
       .selector("edge.tutorial-binding-edge").style({
-        "line-style": "dashed", "line-dash-pattern": [8, 4, 2, 4], "line-color": BINDING_COLOR,
-        "target-arrow-color": BINDING_COLOR, color: BINDING_COLOR,
+        "line-style": "dashed", "line-dash-pattern": [8, 4, 2, 4], "line-color": bindingColor,
+        "target-arrow-color": bindingColor, color: bindingColor,
       })
       .selector(`.${DIM}`).style({ opacity: 0.35 })
       // 节点：默认一行短名（小字、不换行），焦点 / 悬停才显示〔类型〕+ 全名。
@@ -291,36 +318,35 @@ export class TutorialPlayer {
         "text-background-shape": "roundrectangle", "text-background-padding": "3px", "z-index": 1,
       })
       .selector(`node.${FOCUS}, node.${LABEL_HOVER}`).style(LABEL_HOVER_STYLE)
-      .selector(`node.${FOCUS}`).style({ "border-width": 4, "border-color": "#ffd89a", "underlay-color": "#ffd89a", "underlay-opacity": 0.25, "underlay-padding": 6, "z-index": 30 })
-      .selector(`node.${SEEN}`).style({ "border-width": 4, "border-color": "#7fd0a8", "underlay-color": "#7fd0a8", "underlay-opacity": 0.3, "underlay-padding": 6, "z-index": 32 })
-      .selector(`node.${FRESH}`).style({ "border-width": 4, "border-color": "#ffd89a", "underlay-color": "#e8c15a", "underlay-opacity": 0.32, "underlay-padding": 6, "z-index": 32 })
-      .selector(`node.${ACCENT}`).style({ "border-width": 3, "border-color": "#9eb6ff", "underlay-color": "#9eb6ff", "underlay-opacity": 0.22, "underlay-padding": 5, "z-index": 28, opacity: 1 })
-      .selector(`node.${ROW_FOCUS}`).style({ "underlay-color": "#ffffff", "underlay-opacity": 0.35, "underlay-padding": 8, "z-index": 50, opacity: 1 })
+      .selector(`node.${FOCUS}`).style({ "border-width": 4, "border-color": p.gold, "underlay-color": p.gold, "underlay-opacity": 0.25, "underlay-padding": 6, "z-index": 30 })
+      .selector(`node.${SEEN}`).style({ "border-width": 4, "border-color": p.success, "underlay-color": p.success, "underlay-opacity": 0.28, "underlay-padding": 6, "z-index": 32 })
+      .selector(`node.${FRESH}`).style({ "border-width": 4, "border-color": p.gold, "underlay-color": p.gold, "underlay-opacity": 0.3, "underlay-padding": 6, "z-index": 32 })
+      .selector(`node.${ACCENT}`).style({ "border-width": 3, "border-color": p.accent, "underlay-color": p.accent, "underlay-opacity": 0.22, "underlay-padding": 5, "z-index": 28, opacity: 1 })
+      .selector(`node.${ROW_FOCUS}`).style({ "underlay-color": p.accent, "underlay-opacity": light ? 0.28 : 0.35, "underlay-padding": 8, "z-index": 50, opacity: 1 })
       .selector(`node.${LABEL_HOVER}`).style({ "z-index": 1000, "z-index-compare": "manual", "z-compound-depth": "top", opacity: 1 })
       .selector(`.${LABEL_RECESS}`).style(LABEL_RECESS_STYLE)
-      // 连线：默认不显示文字；这一镜要读的线（或悬停的线）才显示，水平放、垫深色圆角底。
+      // 连线：默认不显示文字；这一镜要读的线（或悬停的线）才显示，水平放、垫与当前主题一致的圆角底，关闭文字描边防止亮色主题反色泛白。
       .selector("edge").style({ label: "", "text-rotation": "none", "z-index": 0 })
       .selector(`edge.${EDGE_FOCUS}`).style({ width: 3.2, opacity: 1 })
       .selector(`edge.${EDGE_LABELED}, edge.${LABEL_HOVER}, edge.${ROW_FOCUS}`).style({
         label: "data(label)", "font-size": "12px", "text-wrap": "wrap", "text-max-width": "220px",
-        color: "#ffe6a6", "text-background-color": "#0c131a", "text-background-opacity": 0.94,
+        "text-opacity": 1, "text-outline-width": 0,
+        color: pillText, "text-background-color": p.panel, "text-background-opacity": 0.96,
         "text-background-shape": "roundrectangle", "text-background-padding": "3px",
-        "text-border-color": "#6e5a2a", "text-border-width": 1, "text-border-opacity": 1, "z-index": 20,
+        "text-border-color": pillBorder, "text-border-width": 1, "text-border-opacity": 1, "z-index": 20,
       })
       .selector(`edge.${LABEL_HOVER}`).style({ opacity: 1, "z-index": 1000, "z-index-compare": "manual", "z-compound-depth": "top" })
       .selector(`edge.${ROW_FOCUS}`).style({ opacity: 1, width: 3.4, "z-index": 40 })
-      .selector(`edge.tutorial-derived-edge.${EDGE_LABELED}`).style({ color: DERIVED_COLOR, "text-border-color": "#2f5b5c" })
+      .selector(`edge.tutorial-derived-edge.${EDGE_LABELED}, edge.tutorial-derived-edge.${LABEL_HOVER}, edge.tutorial-derived-edge.${ROW_FOCUS}`).style({
+        color: derivedPillText, "text-border-color": derivedPillBorder,
+      })
       .selector(`edge.tutorial-binding-edge.${EDGE_LABELED}, edge.tutorial-binding-edge.${LABEL_HOVER}, edge.tutorial-binding-edge.${ROW_FOCUS}`).style({
-        color: "#ebd9ff", "text-border-color": "#6b4ca8",
+        color: bindingPillText, "text-border-color": bindingPillBorder,
+      })
+      .selector(`edge.debt-edge.${EDGE_LABELED}, edge.debt-edge.${LABEL_HOVER}, edge.debt-edge.${ROW_FOCUS}`).style({
+        color: p.warning, "text-border-color": p.warning,
       })
       .update();
-    // 悬停由 mountCytoscapeGraph 绑定：完整标签用和焦点一样的深色底，浮到最上层；
-    // 会挡住它的邻接短标签暂时藏起。
-    this.core.autoungrabify(true);
-    // 画面上对象少时（前两镜）不要放得太大，节点标签留在画布里。
-    this.core.maxZoom(1.4);
-    this.go(0);
-    this.setPlaying(!this.reduced());
   }
 
   close(): void {
@@ -587,10 +613,11 @@ export class TutorialPlayer {
       if (visibleEdges.some((item) => match(item.classes()))) items.push(this.legendItem(this.edgeSwatch(color, dashed), text));
     };
     const has = (name: string) => (classes: string[]) => classes.includes(name);
-    edge(has("tutorial-derived-edge"), DERIVED_COLOR, true, "派生（虚线：来自哪份材料）");
+    const derivedSwatch = getTheme() === "parchment" ? "#2a7a7c" : "#7fc5c6";
+    edge(has("tutorial-derived-edge"), derivedSwatch, true, "派生（虚线：来自哪份材料）");
     edge((classes) => classes.includes("semantic-edge") && !special.some((name) => classes.includes(name)), EDGE_TYPES.relation.color, false, "书内关系（箭头表示方向）");
     edge((classes) => classes.includes("alignment-edge") && !classes.includes("tutorial-binding-edge"), EDGE_TYPES.alignment.color, false, "对齐线 alignment（线上：关系类型 · 白话）");
-    edge(has("tutorial-binding-edge"), BINDING_COLOR, true, t("tutorial.legend.representationBinding"));
+    edge(has("tutorial-binding-edge"), "var(--ms-candidate)", true, t("tutorial.legend.representationBinding"));
     edge(has("semantic-link-edge"), EDGE_TYPES.relation.color, true, "属于理论 / 约定适用于");
     edge(has("debt-edge"), EDGE_TYPES.debt.color, true, "挂账");
     if (shot?.legendNote) {

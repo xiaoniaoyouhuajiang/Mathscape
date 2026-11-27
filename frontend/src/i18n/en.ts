@@ -207,7 +207,7 @@ export const en: Messages = {
   "semantic.common.reviewedBtn": "Reviewed",
   "semantic.common.acceptedBtn": "Confirm",
   "semantic.common.rejectedBtn": "Reject",
-  "tutorial.ep1.menuTitle": "Tutorial: Are Two Books Talking About the Same Thing?",
+  "tutorial.ep1.menuTitle": "Tutorial (I): Are Two Books Talking About the Same Thing?",
   "tutorial.ep1.short": "Ep 1 · Two-Book Alignment",
   "tutorial.ep2.menuTitle": "Tutorial (II): Degenerate Branches & Representations",
   "tutorial.ep2.short": "Ep 2 · Branches & Representations",

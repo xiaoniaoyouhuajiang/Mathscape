@@ -131,7 +131,7 @@ export class AppShell {
         <div class="help-menu">
           <button id="help-button" class="icon-button" type="button" title="帮助" aria-label="帮助" aria-haspopup="menu" aria-expanded="false" aria-controls="help-menu"><span aria-hidden="true">?</span></button>
           <div id="help-menu" class="help-menu-list" role="menu" hidden>
-            <button id="tutorial-menu-item" type="button" role="menuitem">教程：两本书讲的是不是同一个东西</button>
+            <button id="tutorial-menu-item" type="button" role="menuitem">${t("tutorial.ep1.menuTitle")}</button>
             <button id="tutorial-ep2-menu-item" type="button" role="menuitem">${t("tutorial.ep2.menuTitle")}</button>
           </div>
         </div>

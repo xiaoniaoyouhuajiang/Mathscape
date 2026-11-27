@@ -209,7 +209,7 @@ export const zhCN = {
   "semantic.common.reviewedBtn": "我看过了",
   "semantic.common.acceptedBtn": "我确认",
   "semantic.common.rejectedBtn": "我否决",
-  "tutorial.ep1.menuTitle": "教程：两本书讲的是不是同一个东西",
+  "tutorial.ep1.menuTitle": "教程（一）：两本书讲的是不是同一个东西",
   "tutorial.ep1.short": "第 1 集 · 两本书对齐",
   "tutorial.ep2.menuTitle": "教程（二）：退化边界与换一种表示",
   "tutorial.ep2.short": "第 2 集 · 分支与表示核",

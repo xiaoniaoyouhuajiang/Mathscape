@@ -4,7 +4,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-const TITLE = "教程：两本书讲的是不是同一个东西";
+const TITLE = "教程（一）：两本书讲的是不是同一个东西";
 const EP2_TITLE = "教程（二）：退化边界与换一种表示";
 
 /** 记录教程打开期间的全部 Tauri 命令。 */
@@ -543,6 +543,84 @@ test.describe("tutorial episode 2 (branches & representations)", () => {
         ]);
       }
       if (i < 9) await dialog.locator(".tutorial-next").click();
+    }
+  });
+
+  test("warm parchment theme renders crisp non-inverted edge pills on focus and hover in both episodes", async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("mathscape.theme", "parchment");
+      localStorage.setItem("mathscape:reduce-motion", "on");
+    });
+    await page.goto("/tests/app.html");
+    await expect(page.locator("#ink-button")).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "parchment");
+
+    await page.locator("#help-button").click();
+    const menu = page.getByRole("menu");
+    await expect(menu.getByRole("menuitem")).toHaveText([TITLE, EP2_TITLE]);
+    await menu.getByRole("menuitem", { name: EP2_TITLE }).click();
+
+    const dialog = page.getByRole("dialog", { name: EP2_TITLE });
+    await expect(dialog).toBeVisible();
+    // Advance to shot 7 ("branch-align") where alignment edges are labeled and binding edges can be hovered.
+    for (let i = 0; i < 6; i++) await dialog.locator(".tutorial-next").click();
+    await expect(dialog.locator(".tutorial-card")).toHaveAttribute("data-shot", "branch-align");
+
+    const checkParchmentEdges = () => page.evaluate(() => {
+      type Ele = {
+        visible(): boolean;
+        style(k: string): string;
+        numericStyle(k: string): number;
+        hasClass(c: string): boolean;
+        addClass(c: string): void;
+        removeClass(c: string): void;
+        data(k: string): string;
+      };
+      const cy = (document.querySelector(".tutorial-map") as unknown as { _cyreg: { cy: { edges(): Ele[] } } })._cyreg.cy;
+      const parseRgb = (raw: string): [number, number, number] => {
+        const nums = raw.match(/\d+/g)?.map(Number) ?? [0, 0, 0];
+        return [nums[0] ?? 0, nums[1] ?? 0, nums[2] ?? 0];
+      };
+      const luminance = ([r, g, b]: [number, number, number]) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+      // Also simulate hovering an unlabeled visible edge (e.g. RepresentationBinding or earlier Alignment).
+      const unlabeled = cy.edges().filter((e) => e.visible() && !e.hasClass("tutorial-edge-labeled") && Boolean(e.data("label")))[0];
+      if (unlabeled) unlabeled.addClass("label-hover");
+      const active = cy.edges().filter((e) => e.visible() && (e.hasClass("tutorial-edge-labeled") || e.hasClass("label-hover")));
+      const samples = active.map((e) => {
+        const bg = parseRgb(e.style("text-background-color"));
+        const fg = parseRgb(e.style("color"));
+        return {
+          label: e.data("label"),
+          outlineWidth: e.numericStyle("text-outline-width"),
+          bgLum: luminance(bg),
+          fgLum: luminance(fg),
+        };
+      });
+      if (unlabeled) unlabeled.removeClass("label-hover");
+      return samples;
+    });
+
+    const ep2Samples = await checkParchmentEdges();
+    expect(ep2Samples.length).toBeGreaterThanOrEqual(3);
+    for (const s of ep2Samples) {
+      expect(s.outlineWidth, s.label).toBe(0);
+      expect(s.bgLum, `${s.label} pill background should be light parchment`).toBeGreaterThan(0.85);
+      expect(s.fgLum, `${s.label} pill text should be dark ink`).toBeLessThan(0.38);
+    }
+
+    // Switch to Episode 1 inside Parchment and verify its edge pills as well.
+    await dialog.locator('.tutorial-episode-btn[data-episode="ep1"]').click();
+    const ep1Dialog = page.getByRole("dialog", { name: TITLE });
+    for (let i = 0; i < 6; i++) await ep1Dialog.locator(".tutorial-next").click();
+    await expect(ep1Dialog.locator(".tutorial-card")).toHaveAttribute("data-shot", "cassini");
+
+    const ep1Samples = await checkParchmentEdges();
+    expect(ep1Samples.length).toBeGreaterThanOrEqual(3);
+    for (const s of ep1Samples) {
+      expect(s.outlineWidth, s.label).toBe(0);
+      expect(s.bgLum, `${s.label} pill background should be light parchment`).toBeGreaterThan(0.85);
+      expect(s.fgLum, `${s.label} pill text should be dark ink`).toBeLessThan(0.38);
     }
   });
 });
