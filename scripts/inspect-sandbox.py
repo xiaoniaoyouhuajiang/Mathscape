@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Read-only debugger for Mathscape sandbox sessions, threads, and proposals.
 
-Inspects a sandbox session without mutating any file or creating SQLite WAL/SHM
-sidecars (`mode=ro`). Combines four local sources in one view:
+Inspects a sandbox session without mutating any file. A database whose app is
+closed (no `-wal` file) is opened `immutable=1`, so no WAL/SHM sidecars appear;
+a live one is opened `mode=ro` next to the sidecars the app already keeps.
+Combines four local sources in one view:
   1. `session.json`    — threads, active thread, backend, skill & MCP schema version
   2. `harness.jsonl`   — per-round launch config (skill path, Lean profile root)
   3. `transcript.jsonl` + `events.jsonl` — user/agent turns & tool-call timeline
@@ -25,6 +27,8 @@ import json
 import os
 import sqlite3
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -33,14 +37,23 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DEV_WORKSPACE = REPO_ROOT / ".mathscape-dev" / "workspace"
 
 
-def open_readonly_db(db_path: Path) -> sqlite3.Connection:
+@contextmanager
+def open_readonly_db(db_path: Path) -> Iterator[sqlite3.Connection]:
     if not db_path.is_file():
         raise FileNotFoundError(f"SQLite database not found: {db_path}")
-    uri = f"{db_path.resolve().as_uri()}?mode=ro"
+    db_path = db_path.resolve()
+    # WAL databases opened `mode=ro` create (and keep) -wal/-shm sidecars and fail in
+    # read-only directories. Without a -wal file nobody is writing, so `immutable=1`
+    # reads the file as-is.
+    live = db_path.with_name(db_path.name + "-wal").exists()
+    uri = f"{db_path.as_uri()}?{'mode=ro' if live else 'immutable=1'}"
     conn = sqlite3.connect(uri, uri=True)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA query_only = ON")
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only = ON")
+        yield conn
+    finally:
+        conn.close()
 
 
 def resolve_workspace_root(explicit: str | None) -> Path:
@@ -105,8 +118,13 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 out.append(json.loads(line))
+            except json.JSONDecodeError:
+                # The app may be appending this line right now.
+                continue
     return out
 
 
@@ -591,12 +609,18 @@ def verify_source_spans(
     mother_workspace: Path,
     proposed_objects: list[dict[str, Any]],
     compiled_ops: list[dict[str, Any]],
+    staged_ids: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    compiled_by_span_idx: dict[int, dict[str, Any]] = {}
     span_ops = [op for op in compiled_ops if op.get("operation") == "create_source_span"]
     span_objs = [o for o in proposed_objects if o.get("kind") == "source_span"]
-    for i, op in enumerate(span_ops):
-        compiled_by_span_idx[i] = op
+    span_ops_by_id = {str(op["object_id"]): op for op in span_ops if op.get("object_id")}
+
+    def compiled_span_op(i: int, obj: dict[str, Any]) -> dict[str, Any]:
+        object_id = obj.get("target_id") or (staged_ids or {}).get(str(obj.get("local_ref")))
+        if object_id:
+            return span_ops_by_id.get(str(object_id)) or {}
+        # Older results without staged ids: fall back to proposal order.
+        return span_ops[i] if i < len(span_ops) else {}
 
     artifact_cache: dict[str, bytes | None] = {}
     checks: list[dict[str, Any]] = []
@@ -609,7 +633,7 @@ def verify_source_spans(
         if aid not in artifact_cache:
             artifact_cache[aid] = find_artifact_bytes(conn, sandbox_workspace, mother_workspace, aid)
         raw = artifact_cache[aid]
-        page_info = ((compiled_by_span_idx.get(i) or {}).get("draft") or {}).get("page") or {}
+        page_info = (compiled_span_op(i, obj).get("draft") or {}).get("page") or {}
         pdf_page = page_info.get("pdf_page_index")
 
         if raw is None:
@@ -768,6 +792,7 @@ def cmd_proposal(args: argparse.Namespace) -> int:
                             workspace,
                             prop.get("proposed_objects") or [],
                             res.get("compiled_operations") or [],
+                            res.get("staged_ids") or {},
                         ),
                         "proposal": prop,
                         "result": res,
