@@ -1,5 +1,6 @@
 import { mountDetailResizer } from "./panel-resizer";
 import { requiredElement } from "../core/dom";
+import { t } from "../i18n";
 import { mountThemeToggle } from "./theme-manager";
 
 export interface AppElements {
@@ -51,6 +52,7 @@ export interface AppElements {
   helpButton: HTMLButtonElement;
   helpMenu: HTMLElement;
   tutorialMenuItem: HTMLButtonElement;
+  tutorialEp2MenuItem: HTMLButtonElement;
   /** Outer overlay that may host the N3c split layout. */
   inkWorkspace: HTMLElement;
   inkSplitReader: HTMLElement;
@@ -129,7 +131,8 @@ export class AppShell {
         <div class="help-menu">
           <button id="help-button" class="icon-button" type="button" title="帮助" aria-label="帮助" aria-haspopup="menu" aria-expanded="false" aria-controls="help-menu"><span aria-hidden="true">?</span></button>
           <div id="help-menu" class="help-menu-list" role="menu" hidden>
-            <button id="tutorial-menu-item" type="button" role="menuitem">教程：两本书讲的是不是同一个东西</button>
+            <button id="tutorial-menu-item" type="button" role="menuitem">${t("tutorial.ep1.menuTitle")}</button>
+            <button id="tutorial-ep2-menu-item" type="button" role="menuitem">${t("tutorial.ep2.menuTitle")}</button>
           </div>
         </div>
         <button id="import-pdf" class="primary-button" type="button">
@@ -326,6 +329,7 @@ export class AppShell {
       helpButton: requiredElement<HTMLButtonElement>("#help-button", root),
       helpMenu: requiredElement<HTMLElement>("#help-menu", root),
       tutorialMenuItem: requiredElement<HTMLButtonElement>("#tutorial-menu-item", root),
+      tutorialEp2MenuItem: requiredElement<HTMLButtonElement>("#tutorial-ep2-menu-item", root),
       inkWorkspace: requiredElement<HTMLElement>("#ink-workspace", root),
       inkSplitReader: requiredElement<HTMLElement>("#ink-split-reader", root),
       inkSplitResizer: requiredElement<HTMLElement>("#ink-split-resizer", root),

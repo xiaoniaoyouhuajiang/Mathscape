@@ -27,6 +27,7 @@
 | `criteria-stable` | 相对稳定声明和剩余风险 | 阅读包 `inputs/criteria/STABLE-v0.5.1.md` | α/β 未正式等价、Folland 端点待核等 |
 | `map-edit-draft` | Agent 构图与写入边界 | `docs/map-edit-contract-draft.md` 或阅读包 `inputs/map-edit-contract-draft.md` | 设计草案，区分已确认和假定工具 |
 | `phase2-write` | propose → staged/blocked → 用户接受 | `docs/phase2-write-contract.md` | Phase2-0 只编译来源层写入 |
+| `semantic-write` | 语义层与表示层写入契约 | `docs/semantic-write-contract.md` | S1–S3 前半：共享对象、内聚多分支/守卫/排除、约定卡符号表、表示核与表示绑定 |
 | `artifact-staging` | 文件产物暂存 | `docs/artifact-staging-contract.md` | `artifact.stage` 的实际边界 |
 
 ## 3. 案例索引

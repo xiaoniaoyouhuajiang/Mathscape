@@ -1746,6 +1746,15 @@ pub fn review_items(
                     context.contains(&c.object_id) && entity_dependencies(c).contains(&o.object_id)
                 })
             })
+            .filter(|o| {
+                // A RepresentationCore encoding the target itself (or a concept in
+                // the target's direct context) is part of the target's representation
+                // bundle rather than an unrelated second target.
+                !(o.kind == "RepresentationCore"
+                    && o.payload["payload"]["represented_object"]
+                        .as_str()
+                        .is_some_and(|rep| rep == target || context.contains(rep)))
+            })
             .count();
         if extra > 0 {
             item(
@@ -1939,5 +1948,108 @@ mod name_tests {
         assert!(missing_label_langs(&labels("zh", "en")).is_empty());
         assert_eq!(missing_label_langs(&labels("zh-CN", "en")), vec!["中文"]);
         assert_eq!(missing_label_langs(&labels("zh", "en-US")), vec!["英文"]);
+    }
+
+    #[test]
+    fn representation_core_for_target_or_its_concept_is_not_extra_target() {
+        let obj = |id: &str, kind: &str, payload: Value| MapEditObject {
+            object_id: id.to_owned(),
+            revision: "sha256:rev".to_owned(),
+            kind: kind.to_owned(),
+            lifecycle: "active".to_owned(),
+            payload: json!({ "payload_kind": kind, "payload": payload }),
+            endpoints: vec![],
+        };
+        let bilingual = json!([
+            { "lang": "zh", "label": "名称" },
+            { "lang": "en", "label": "Name" }
+        ]);
+        let mut final_map = BTreeMap::from([
+            (
+                "e.theory".to_owned(),
+                obj(
+                    "e.theory",
+                    "SemanticEntity",
+                    json!({
+                        "semantic_kind": "theory",
+                        "preferred_labels": bilingual,
+                        "aliases": ["a", "b"]
+                    }),
+                ),
+            ),
+            (
+                "e.concept".to_owned(),
+                obj(
+                    "e.concept",
+                    "SemanticEntity",
+                    json!({
+                        "semantic_kind": "concept",
+                        "home_theory": "e.theory",
+                        "preferred_labels": bilingual
+                    }),
+                ),
+            ),
+            (
+                "e.thm".to_owned(),
+                obj(
+                    "e.thm",
+                    "SemanticEntity",
+                    json!({
+                        "semantic_kind": "declaration",
+                        "home_theory": "e.theory",
+                        "preferred_labels": bilingual,
+                        "declaration": {
+                            "declaration_kind": "theorem",
+                            "concept": "e.concept",
+                            "statement": { "text": "$f(x)$" }
+                        }
+                    }),
+                ),
+            ),
+            (
+                "r.fps".to_owned(),
+                obj(
+                    "r.fps",
+                    "RepresentationCore",
+                    json!({
+                        "home_theory": "e.theory",
+                        "preferred_labels": bilingual,
+                        "represented_object": "e.concept",
+                        "carrier": { "text": "$R[[X]]$" }
+                    }),
+                ),
+            ),
+        ]);
+        let own = BTreeSet::from([
+            "e.concept".to_owned(),
+            "e.thm".to_owned(),
+            "r.fps".to_owned(),
+        ]);
+        let items = review_items(&final_map, &own, Some("e.thm"));
+        assert!(
+            items.iter().all(|i| i.code != "multi_target_change_set"),
+            "unexpected multi_target_change_set when r.fps represents target's concept: {items:?}"
+        );
+
+        // An unrelated RepresentationCore (not representing target or its context) still triggers the hint.
+        final_map.insert(
+            "r.unrelated".to_owned(),
+            obj(
+                "r.unrelated",
+                "RepresentationCore",
+                json!({
+                    "home_theory": "e.theory",
+                    "preferred_labels": bilingual,
+                    "carrier": { "text": "$\\mathbb{C}$" }
+                }),
+            ),
+        );
+        let mut own_with_unrelated = own;
+        own_with_unrelated.insert("r.unrelated".to_owned());
+        let items2 = review_items(&final_map, &own_with_unrelated, Some("e.thm"));
+        assert!(
+            items2.iter().any(|i| i.code == "multi_target_change_set"),
+            "expected multi_target_change_set for unrelated RepresentationCore: {items2:?}"
+        );
     }
 }

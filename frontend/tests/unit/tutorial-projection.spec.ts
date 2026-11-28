@@ -4,12 +4,16 @@ import { describe, expect, it } from "vitest";
 import { toCytoscapeElements } from "../../src/graph/cytoscape";
 import { alignmentPlainLabel } from "../../src/semantic/labels";
 import { TUTORIAL_PROJECTION_SCHEMA, tutorialGraph, type TutorialProjection } from "../../src/tutorial/projection";
+import { buildEpisode2Shots, geomFiniteSum } from "../../src/tutorial/episode2";
 import { inlineMathHtml, markdownHtml } from "../../src/tutorial/math";
 import { MATHLIB_WIKI_URL, buildTutorialShots, debtAxisLine, debtsAttachedTo, fib, shotText } from "../../src/tutorial/script";
 import { formatMergedUnitDetail, mergeLearningUnits } from "../../src/semantic/learning-view";
 
 const projection = JSON.parse(
   readFileSync(resolve(__dirname, "../../../fixtures/emir/fibonacci-two-books/tutorial-projection.json"), "utf8"),
+) as TutorialProjection;
+const ep2Projection = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../fixtures/emir/generating-functions-two-books/tutorial-projection.json"), "utf8"),
 ) as TutorialProjection;
 const BANNED = ["平移", "错开", "滑动"];
 /** 面向软件用户：不出现开发视角的说法和代号（书名「星港」里的“星”除外）。 */
@@ -223,5 +227,124 @@ describe("tutorial text rendering", () => {
     expect(html).toContain('href="https://en.wikipedia.org/wiki/Lean_(proof_assistant)#Libraries"');
     expect(html).not.toContain("<b>");
     expect(html).not.toContain('href="javascript');
+  });
+});
+
+describe("tutorial episode 2 (fixtures/emir/generating-functions-two-books)", () => {
+  const shots = buildEpisode2Shots(ep2Projection);
+
+  it("projects Stage 2 branches, local symbols, representation cores, and bindings cleanly", () => {
+    expect(ep2Projection.schema).toBe(TUTORIAL_PROJECTION_SCHEMA);
+    expect(ep2Projection.label).toBe("两本母函数教材（阶段二教程夹具）");
+    expect(ep2Projection.revisions?.length).toBe(1);
+    const kinds = Object.values(ep2Projection.objects).map((o) => o.kind);
+    expect(kinds.filter((k) => k === "alignment")).toHaveLength(4);
+    expect(kinds.filter((k) => k === "representation_core")).toHaveLength(2);
+    expect(kinds.filter((k) => k === "representation_binding")).toHaveLength(4);
+    expect(kinds.filter((k) => k === "dialect_scope")).toHaveLength(2);
+    expect(kinds.filter((k) => k === "semantic_entity")).toHaveLength(4);
+    expect(kinds.filter((k) => k === "debt")).toHaveLength(1);
+
+    for (const object of Object.values(ep2Projection.objects)) {
+      const p = object.payload as { trust?: { proof?: string }; status?: string; mathlib_baseline?: { status?: string } | null };
+      if (object.kind === "alignment" || object.kind === "representation_binding") {
+        expect(p.trust?.proof).toBe("none");
+      }
+      if (object.kind === "debt") expect(p.status).toBe("open");
+      if ((object.kind === "semantic_entity" || object.kind === "representation_core") && p.mathlib_baseline) {
+        expect(p.mathlib_baseline.status).toBe("unchecked");
+      }
+    }
+
+    const relations = ep2Projection.graph.nodes.filter((n) => n.element_kind === "relation" && n.domain_kind === "Alignment");
+    expect(relations).toHaveLength(4);
+    for (const node of relations) {
+      const object = Object.values(ep2Projection.objects).find((o) => o.id === node.domain_id)!;
+      expect(node.label).toBe(alignmentPlainLabel(object.payload));
+    }
+
+    const graph = tutorialGraph(ep2Projection);
+    expect(graph.nodes.some((n) => n.domain_kind === "SourceSpan")).toBe(false);
+    const elements = toCytoscapeElements(graph, "semantic");
+    const types = new Set(elements.map((e) => e.data.nodeType).filter(Boolean));
+    for (const type of ["shared_entity", "shared_theory", "representation_core", "debt", "dialect_scope", "semantic_unit"]) {
+      expect(types).toContain(type);
+    }
+  });
+
+  it("builds all ten storyboard shots with resolvable refs and zero banned or leaked strings", () => {
+    expect(shots.map((s) => s.id)).toEqual([
+      "intro", "spans", "local-symbols", "rep-seq", "rep-fps", "branches", "branch-align", "revision", "exclusions", "recap",
+    ]);
+    for (const shot of shots) {
+      for (const local of [...shot.reveal, ...shot.focus, ...(shot.seen ?? []), ...(shot.accent ?? [])]) {
+        const resolved = local.startsWith("artifact:") ? ep2Projection.artifacts[local.slice(9)]
+          : local.startsWith("derived:") ? ep2Projection.artifacts[local.slice(8)] : ep2Projection.refs[local];
+        expect(resolved, `${shot.id}: ${local}`).toBeTruthy();
+      }
+      for (const line of shotText(shot)) {
+        for (const word of BANNED) expect(line, shot.id).not.toContain(word);
+        for (const word of USER_BANNED) expect(line, shot.id).not.toMatch(word);
+        expect(line, shot.id).not.toMatch(/mathscape:|undefined|\[object/);
+      }
+    }
+  });
+
+  it("derives symbol tables, representation bindings, cohesive branches, exclusions, and revision from the fixture", () => {
+    expect(geomFiniteSum(4, 2)).toEqual({ branchId: "fraction_form", value: 15, fractionDefined: true });
+    expect(geomFiniteSum(4, 1)).toEqual({ branchId: "constant_sum", value: 4, fractionDefined: false });
+
+    const symbols = shots.find((s) => s.id === "local-symbols")!.extra!;
+    expect(symbols.kind).toBe("symbols");
+    if (symbols.kind === "symbols") {
+      expect(symbols.scopes).toHaveLength(2);
+      expect(symbols.scopes[0].rows.map((r) => r.symbol)).toEqual(["$a_n$", "$A(x)$", "$[x^n]$"]);
+      expect(symbols.scopes[1].rows.map((r) => r.symbol)).toEqual(["$b_m$", "$g(t)$", "$r$"]);
+    }
+
+    const fpsBindings = shots.find((s) => s.id === "rep-fps")!.extra!;
+    expect(fpsBindings.kind).toBe("bindings");
+    if (fpsBindings.kind === "bindings") {
+      const yiBinding = fpsBindings.items.find((i) => i.bindingLocal === "rb.yi.fps")!;
+      expect(yiBinding.lost.join("")).toContain("(-r, r) 内绝对收敛");
+      expect(yiBinding.debt).toContain("绝对收敛区间");
+    }
+
+    const branches = shots.find((s) => s.id === "branches")!.extra!;
+    expect(branches.kind).toBe("branches");
+    if (branches.kind === "branches") {
+      expect(branches.branches.map((b) => [b.branchId, b.isDegenerate])).toEqual([
+        ["fraction_form", false],
+        ["constant_sum", true],
+      ]);
+      expect(branches.exclusions[0].kindLabel).toBe("无定义");
+      expect(branches.evaluations?.map((e) => e.note)).toEqual([
+        expect.stringContaining("= 15"),
+        expect.stringContaining("= 4"),
+      ]);
+    }
+
+    const exclusions = shots.find((s) => s.id === "exclusions")!.extra!;
+    expect(exclusions.kind).toBe("branches");
+    if (exclusions.kind === "branches") {
+      expect(exclusions.branches).toEqual([]);
+      expect(exclusions.exclusions).toHaveLength(1);
+      expect(exclusions.exclusions[0].kindLabel).toBe("发散");
+    }
+
+    const revision = shots.find((s) => s.id === "revision")!.extra!;
+    expect(revision.kind).toBe("revision");
+    if (revision.kind === "revision") {
+      expect(revision.v1.relation).toBe("expresses");
+      expect(revision.v2.relation).toBe("specializes");
+      expect(revision.v2.lost).toContain("constant_sum");
+    }
+
+    const recap = shots.find((s) => s.id === "recap")!.extra!;
+    expect(recap.kind).toBe("learning");
+    if (recap.kind === "learning") {
+      expect(recap.summary).toBe("新的 0 · 别的材料里见过 2 · 新约定 2 · 未还清的账 1");
+      expect(recap.footerNote).toContain("双向运输边 T");
+    }
   });
 });

@@ -2,11 +2,11 @@
 
 # 逐类创建、调整与废弃规则
 
-以下“创建”都表示提出草案，实际写入走 `propose_changes` → `staged/blocked` → 用户 `accept/discard`。已开放写入的包括来源层（`source_span`、`source_unit`、`source_relation`）与语义层第一期对象（`semantic_entity`、`alignment`、`debt`、`dialect_scope`）；其余 R/D/T/X 与证明状态工具仍标为【假定】。任何 `edit` / `retire` 都带 `target_id` 和 `expected_revision`；不要自带正式 id。
+以下“创建”都表示提出草案，实际写入走 `propose_changes` → `staged/blocked` → 用户 `accept/discard`。已开放写入的包括来源层（`source_span`、`source_unit`、`source_relation`）、语义层（`semantic_entity` 含内聚 `guards`/`branches`/`exclusions`、`alignment` 含 `target_branches`、`debt`、`dialect_scope` 含 `local_symbols`）与表示层前半（`representation_core`、`representation_binding`）；其余证明网级 D/T/X 与证明状态工具仍标为【假定】。任何 `edit` / `retire` 都带 `target_id` 和 `expected_revision`；不要自带正式 id。
 
 ## 通用前置
 
-先用 `workspace.search`（查理论与共享对象时可带 `kinds: ["theory"]` / `["semantic_entity"]` 和 `scope: "investigation"`）、`graph.get`、必要时 `graph.neighborhood` 和 `material.read` 找到来源与邻域，避免重复建同名对象。所有对象带来源证据、revision、scope 和 rationale（`propose_changes.rationale` 首句必须以 `【来源锚定】`、`【跨书对齐】`、`【题型提炼】`、`【概念/定理升格】`、`【纠错重连】` 或 `【补账/销账】` 开头）。没有 locator 就不能声称已核对原文。遇到跨章节同名编号指代歧义、升格粒度不明或超范围旧边清理时，先调用 `user.ask` 请用户确认并结束本轮，严禁猜测硬连。`proves` 是来源中的证明关系，不是内核证书。
+先用 `workspace.search`（查理论、共享对象与表示核时可带 `kinds: ["theory"]` / `["semantic_entity"]` / `["representation_core"]` 和 `scope: "investigation"`）、`graph.get`、必要时 `graph.neighborhood` 和 `material.read` 找到来源与邻域，避免重复建同名对象。所有对象带来源证据、revision、scope 和 rationale（`propose_changes.rationale` 首句必须以 `【来源锚定】`、`【跨书对齐】`、`【表示建模】`、`【题型提炼】`、`【概念/定理升格】`、`【纠错重连】` 或 `【补账/销账】` 开头）。没有 locator 就不能声称已核对原文。遇到跨章节同名编号指代歧义、升格粒度不明或超范围旧边清理时，先调用 `user.ask` 请用户确认并结束本轮，严禁猜测硬连。`proves` 是来源中的证明关系，不是内核证书。
 
 ## 来源层
 
@@ -38,39 +38,39 @@
 - **常见错误**：把两本书的 `SourceSemanticUnit` 直接合并；把 `parameter_map`（第几条命题）说成数列错开；把 Alignment 当 T；自设 `accepted` 或 `trust`；用具体算式给理论起名。
 - **工具**：已确认 `propose_changes`（`kind: "semantic_entity" | "alignment"`，支持 `create` / `edit` / `retire`）、`workspace.search`、`graph.get`、`graph.neighborhood`（`edge_types: ["aligns", "in_theory"]`）。
 
-### DialectScope（约定卡）
+### DialectScope（约定卡与局部符号表）
 
-- **什么时候创建**：来源在某一节范围内固定编号起点（如从第 1 项起编）、符号约定或术语叫法（如把 Fibonacci 数列叫“兔子数列”）时创建；锚定在章节 `section` 单元上（`applies_to: "anchor_subtree"`），其下所有子单元自动复用。
-- **前置条件**：来源范围可定位，每条约定至少有一条 `evidence_spans`；没有约定卡时对齐线写 `uncontextualized` 并注明原因，不要用空壳约定冒充已解析。
-- **关键字段**：`label`、`anchor_unit`、`applies_to`、`introduced_by_unit`、`conventions`（含 `key`、`subject`、`value`、`text`、`explicitness`、`evidence_spans`）。
-- **常见错误**：每一步证明复制一份 scope；用 ProofContext 的临时假设污染来源方言；推断出来的约定（`inferred`）不标明。
-- **工具**：已确认 `propose_changes`（`kind: "dialect_scope"`，支持 `create` / `edit` / `retire`）、`graph.get`、`graph.neighborhood`（`edge_types: ["scope_of"]`）。
+- **什么时候创建**：来源在某一节范围内固定编号起点（如从第 1 项起编）、符号约定、术语叫法，或需要为后续 `RepresentationBinding` 登记局部符号（如 $a_n$、$A(x)$、$[x^n]$）时创建；锚定在章节 `section` 单元上（`applies_to: "anchor_subtree"`），其下所有子单元自动复用。若本书上层章节已有约定卡，优先用 `parent_scope` 继承，避免重复抄写全书约定。
+- **前置条件**：来源范围可定位，`conventions` 至少 1 条且每条带 `evidence_spans`；没有约定卡时对齐线写 `uncontextualized` 并注明原因，不要用空壳约定冒充已解析。
+- **关键字段**：`label`、`anchor_unit`、`applies_to`、`parent_scope`、`introduced_by_unit`、`conventions`（含 `key`、`subject`、`value`、`text`、`explicitness`、`evidence_spans`）、`local_symbols`（含唯一 `symbol`、`role`、`meaning`、可选 `domain` 与 `evidence_spans`）。
+- **常见错误**：每一步证明复制一份 scope；漏挂已有章级 `parent_scope`；用 ProofContext 的临时假设污染来源方言；推断出来的约定（`inferred`）不标明。
+- **工具**：已确认 `propose_changes`（`kind: "dialect_scope"`，放 `proposed_objects`，支持 `create` / `edit` / `retire`）、`graph.get`、`graph.neighborhood`（`edge_types: ["scope_of"]`）。
 
-### guard_registry 与实例 guard
+### 内聚守卫、分支与排除边界（`guards` / `branches` / `exclusions`）
 
-- **什么时候创建**：对象存在分支划分、覆盖/互斥条件或把定理重新用于新载体/新测度时创建。泛 guard 和实例 guard 都要入 registry；如 T12 的 T1@λΦ 是独立实例。
-- **前置条件**：对象卡已列分支；能说明谓词、覆盖哪些分支、两两互斥性和 overlap。overlap 不是互斥分割，要逐重叠支检查。
-- **关键字段**：guard_id、predicate、覆盖分支、mutually_exclusive、covering、overlap、实例化参数、被哪些核心边消费。
-- **常见错误**：把 guard 记成 Debt；实例边只引用源 guard；把 overlap 当互斥；用一个 G-fin 代替 T1@λΦ。
-- **工具**：rdtx.upsert_guard【假定】。
+- **什么时候创建**：目标定理或题型存在互斥/重叠情形划分（如有限等比和的 $x \neq 1$ 常规分式与 $x = 1$ 退化常数和）、或存在必须排除的无定义/发散/超范围边界（如实级数 $|x| \ge 1$ 发散、分母为零、齐次定理不覆盖非齐次自由项）时，直接内聚写在 `semantic_entity` 的 `declaration` 或 `problem_schema` 内。
+- **前置条件**：确认每条 `branches[].conclusion`（或 `task`）都是真正的数学命题而非操作提示语；能说明 `guard_partition`（`partition | disjoint_partial | overlapping | unspecified`）；共享对象文本已完全去除单书公式编号（如 `(80)`、`(83)`）。
+- **关键字段**：`guards`（`guard_id`、`label`、`predicate`）、`guard_partition`、`branches`（`branch_id`、`guards`、`is_degenerate`、`binders`、`assumptions`/`constraints`、`conclusion`/`task`）、`exclusions`（`case`、`kind`: `undefined | diverges | out_of_scope | counterexample`、`reason`）；对齐线用 `target_branches` 指向所覆盖的 `branch_id`。
+- **常见错误**：把同一结论的两条证明方法写成 `guards`；把“某情形不能直接套本定理”的说明文字伪装成第二条 `branch`（应进 `exclusions`）；同一情形既建 `branch` 又建 `exclusion`；对齐多分支对象时漏写 `target_branches` 与 `lost_information`。
+- **工具**：已确认 `propose_changes`（内嵌于 `kind: "semantic_entity"` 与 `kind: "alignment"` 的 `target_branches`）；证明路线级实例守卫 `rdtx.upsert_guard` 仍为【假定】。
 
 ## 表示和证明结构
 
-### RepresentationBinding
+### RepresentationBinding（表示绑定）
 
-- **什么时候创建**：一个来源 DialectScope 要复用共享 Theory 中的某个 R 时创建；每种方言保留自己的符号映射和边界适配。
-- **前置条件**：R 已存在或同提案创建；知道 binder 映射、边界重编号和适用 profile；不等价的 R 不静默合并。
-- **关键字段**：dialect_scope、theory_ref、R_ref、局部→共享符号映射、量词/类型适配、证据、revision。
-- **常见错误**：把 binding 当运输证明；只因名称相同就复用 R；漏记 n>n_0 与 n≥N 的边界适配。
-- **工具**：emir.upsert_representation_binding【假定】。
+- **什么时候创建**：一张来源 `DialectScope` 需要将本节局部符号映射到某个共享 `RepresentationCore` 的载体与算子上时创建；同一张约定卡可分别通过多条绑定连向不同表示核（如同时绑定数列表示核 $R_{\text{seq}}$ 与形式幂级数表示核 $R_{\text{fps}}$）。
+- **前置条件**：目标 `RepresentationCore` 与来源 `DialectScope` 已存在或同提案创建；被映射的 `local_symbol` 已在 `DialectScope.local_symbols`（或父约定卡）中声明。
+- **关键字段**：`dialect_scope`、`representation`、`symbol_map`（`>= 1`，`local_symbol` $\to$ 目标载体数学表达式 `target_expr`）、`index_and_domain_adaptations`（下标偏移或首项补零说明）、`lost_information`（如剥离实收敛半径）、`evidence_spans`（`>= 1`）、`status`（候选态）、`map_label`；因剥离定义域产生的待核条件可新建 `debt` 直接挂在该 `representation_binding` 上。
+- **常见错误**：误放进 `proposed_relations`（应放 `proposed_objects`）；把 `target_expr` 写成“特征多项式”之类自然语言名词而非目标载体表达式；把表示绑定当跨表示运输证明；漏记首项补零或收敛域剥离。
+- **工具**：已确认 `propose_changes`（`kind: "representation_binding"`，放 `proposed_objects`，支持 `create` / `edit` / `retire`）、`graph.get`、`graph.neighborhood`（`edge_types: ["binds_representation"]`）。
 
-### R 节点
+### RepresentationCore（表示核 R）
 
-- **什么时候创建**：一个被核心 D/T 边消费的表示、载体或算子集合出现时创建；同一表示只建一个可复用 R。
-- **前置条件**：对象卡已说明它服务的分支；写清 carrier 三元组 (base carrier, semantic payload, operator set)，必要时写 primary_class/secondary_features（C3 > C4 > C2 > C5 > C1 > C0）。
-- **关键字段**：R id、分支/对象、carrier_type、隐含载荷、合法对象与算子、量词域、代表元、绑定和来源。
-- **常见错误**：改名就新建 R；把源定义和新算子混在一个 R；由 X 生成且被核心边消费的中间载体不登记独立 R。
-- **工具**：rdtx.upsert_node(rdtx_kind=R)【假定】。
+- **什么时候创建**：定理或解法跨越了真正不同的数学承载空间与算子集合（如离散数列空间 $\mathbb{N} \to R$、形式幂级数环 $R[[X]]$、部分分式空间、多项式定积分载体）时创建；先通过 `workspace.search { kinds: ["representation_core"], scope: "investigation" }` 查重，同一表示只建一个可复用 `RepresentationCore`。
+- **前置条件**：写清承载空间 `carrier`、核心合法算子 `operations` 与等价判据/合法域 `invariants_and_domain`；`preferred_labels` 具备中英双语标签；`represented_object` 与载体真实普适度一致。
+- **关键字段**：`home_theory`、`preferred_labels`、`plain_label`、`aliases`、`carrier`、`represented_object`、`binders`、`operations`（`name`、`signature`、`note`）、`invariants_and_domain`、`conventions`、`mathlib_baseline`（`status: "unchecked"`）、`uses_entities`、`description`。
+- **常见错误**：同一表示内的代数递推或归纳法硬拆成第二个表示核；把普适载体（如普通母函数）窄绑到特例子概念上；改个变量名就重复新建表示核。
+- **工具**：已确认 `propose_changes`（`kind: "representation_core"`，放 `proposed_objects`，支持 `create` / `edit` / `retire`）、`workspace.search`、`graph.get`、`graph.neighborhood`（`edge_types: ["binds_representation", "in_theory", "of_concept"]`）。
 
 ### X（宏）
 

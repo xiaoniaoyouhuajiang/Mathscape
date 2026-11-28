@@ -1146,5 +1146,37 @@
         "a.yi.rem": "mathscape:alignment/887eb6d21e118ed3c59d24f5aba739cf332b17fb6ff2f6928b457ade577f22cb"
       }
     }
+  ],
+  "revision_history": [
+    {
+      "change_set_id": "mathscape:change-set/78da1313b7c568ea0243233bc3f89e023c7a49b1d46ee6fc24f245375fc3dbc8",
+      "version": 1,
+      "state_after_v2": "superseded",
+      "user_feedback": "灯塔命题 1.3.2 明确假设了 t ≠ 1，没有写出 t = 1 时和等于 N 的退化分支，不能写成完整表达整条定理。",
+      "summary": "v1 把《灯塔》命题 1.3.2 对齐为 expresses 且未填 target_branches，触发 branch_coverage_unspecified 提醒；用户反馈后 Agent 用 supersedes 提交 v2，改为 specializes 并只指向常规分支 fraction_form。",
+      "diff_v1_to_v2": [
+        {
+          "local_ref": "a.yi.prop",
+          "v1": {
+            "relation": "expresses",
+            "target_branches": [],
+            "lost_information": []
+          },
+          "v2": {
+            "relation": "specializes",
+            "target_branches": [
+              "fraction_form"
+            ],
+            "lost_information": [
+              {
+                "short": "漏写 t = 1 退化分支（和为 N）",
+                "claim": "灯塔命题 1.3.2 假设 t ≠ 1，未写出 t = 1 时和等于 N 的退化分支 constant_sum",
+                "direction": "target_has_source_lacks"
+              }
+            ]
+          }
+        }
+      ]
+    }
   ]
 }

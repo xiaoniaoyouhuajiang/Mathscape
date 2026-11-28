@@ -45,3 +45,9 @@
 - `references/runtime-capabilities.md` 增加「Mathscape 沙箱运行时」一节，写明沙箱当前挂载的工具、scratch 写入边界和 Lean 草稿检查方式。
 - 工具名与仓库中的 MCP 工具表由测试 `skill_pack` 校验，改工具或改 skill 时两边需要同步。
 
+## 仓库版变更（v0.8.0）
+
+- 对齐 `mathscape-mcp/21`（Stage 2：S2 完整 + S3 前半），在 `SKILL.md` §4.1–§4.3 与 `references/creation-rules.md` 中补齐内聚多分支/守卫/排除边界（`guards`、`guard_partition`、`branches`、`exclusions`、`target_branches`）、约定卡局部符号表（`local_symbols`）、表示核（`representation_core`）与表示绑定（`representation_binding`）的完整建模规范。
+- 吸收沙箱实测典型反例：明确 `proposed_objects` 与 `proposed_relations` 槽位边界、禁止把过程性不适用提示写成 `branches`、禁止在共享对象内残留单书公式编号、规范 `symbol_map` 的数学目标表达式与跨解析快照章节父链处理。
+
+

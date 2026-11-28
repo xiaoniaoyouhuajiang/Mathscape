@@ -4,7 +4,8 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-const TITLE = "教程：两本书讲的是不是同一个东西";
+const TITLE = "教程（一）：两本书讲的是不是同一个东西";
+const EP2_TITLE = "教程（二）：退化边界与换一种表示";
 
 /** 记录教程打开期间的全部 Tauri 命令。 */
 async function recordInvokes(page: Page) {
@@ -374,5 +375,252 @@ test.describe("teaser tutorial", () => {
     expect(hovered.nodes.filter((n) => n.row).length).toBeGreaterThan(0);
     expect(hovered.nodes.some((n) => n.row && n.label.includes("定义 2.4.1"))).toBe(true);
     await expect(card.locator(".tutorial-learning-units li.is-active")).toHaveCount(1);
+  });
+});
+
+test.describe("tutorial episode 2 (branches & representations)", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 860 });
+  });
+
+  async function openEpisode2(page: Page) {
+    await page.locator("#help-button").click();
+    const menu = page.getByRole("menu");
+    await expect(menu).toBeVisible();
+    await menu.getByRole("menuitem", { name: EP2_TITLE }).click();
+    const dialog = page.getByRole("dialog", { name: EP2_TITLE });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator(".tutorial-counter")).toContainText("第 1 / 10 镜");
+    return dialog;
+  }
+
+  test("plays all ten shots from the help menu, supports episode switching, and never writes", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("mathscape:reduce-motion", "on"));
+    await page.goto("/tests/app.html");
+    await expect(page.locator("#ink-button")).toBeVisible();
+    await recordInvokes(page);
+
+    const dialog = await openEpisode2(page);
+    await expect(dialog.locator('.tutorial-episode-btn[data-episode="ep2"]')).toHaveAttribute("aria-pressed", "true");
+
+    // Switch to Episode 1 and back to Episode 2 via header switcher pills.
+    await dialog.locator('.tutorial-episode-btn[data-episode="ep1"]').click();
+    const ep1Dialog = page.getByRole("dialog", { name: TITLE });
+    await expect(ep1Dialog.locator(".tutorial-counter")).toContainText("第 1 / 13 镜");
+    await ep1Dialog.locator('.tutorial-episode-btn[data-episode="ep2"]').click();
+    await expect(dialog.locator(".tutorial-counter")).toContainText("第 1 / 10 镜");
+
+    const next = dialog.locator(".tutorial-next");
+    const card = dialog.locator(".tutorial-card");
+    const seen: string[] = [];
+    const texts: string[] = [];
+
+    for (let i = 0; i < 10; i++) {
+      const shot = (await card.getAttribute("data-shot"))!;
+      seen.push(shot);
+      texts.push(`${await card.innerText()}\n${await dialog.locator(".tutorial-caption").innerText()}\n${await dialog.locator(".tutorial-legend").innerText()}`);
+
+      if (shot === "spans") {
+        await expect(card.locator(".tutorial-material-body strong").first()).toContainText("定义 2.1.1");
+        await expect(card.locator(".tutorial-material-body .katex").first()).toBeVisible();
+        await expect(card.locator(".tutorial-material-file")).toHaveText(["星港母函数讲义.md", "灯塔母函数初步.md"]);
+      }
+      if (shot === "local-symbols") {
+        await expect(card.locator(".tutorial-symbol-scope")).toHaveCount(2);
+        await expect(card.locator('.tutorial-symbol-scope[data-scope="ds.jia"] .katex').first()).toBeVisible();
+      }
+      if (shot === "rep-seq") {
+        await expect(dialog.locator(".tutorial-legend")).toContainText("表示核 representation core");
+        await expect(dialog.locator(".tutorial-legend")).toContainText("表示绑定 binds_representation");
+        await expect(card.locator('.tutorial-binding-card[data-binding="rb.yi.seq"]')).toContainText("f(0)");
+      }
+      if (shot === "rep-fps") {
+        await expect(card.locator(".tutorial-binding-debt")).toContainText("绝对收敛区间");
+        const link = card.locator("a.tutorial-link").first();
+        await expect(link).toHaveAttribute("href", "https://en.wikipedia.org/wiki/Lean_(proof_assistant)#Libraries");
+      }
+      if (shot === "branches") {
+        const deg = card.locator('.tutorial-branch-card.is-degenerate[data-branch="constant_sum"]');
+        await expect(deg).toBeVisible();
+        await expect(deg.locator(".tutorial-branch-badge")).toHaveText("退化边界");
+        await expect(card.locator(".tutorial-exclusion-badge")).toHaveText("无定义");
+        await expect(card.locator(".tutorial-branch-evals")).toContainText("= 15");
+        await expect(card.locator(".tutorial-branch-evals")).toContainText("= 4");
+      }
+      if (shot === "revision") {
+        await expect(card.locator(".tutorial-revision-step.is-v1 code")).toHaveText("expresses");
+        await expect(card.locator(".tutorial-revision-step.is-v2 code")).toHaveText("specializes");
+        await expect(card.locator(".tutorial-feedback-demo")).toBeDisabled();
+      }
+      if (shot === "exclusions") {
+        await expect(card.locator(".tutorial-branch-card")).toHaveCount(0);
+        await expect(card.locator(".tutorial-exclusion-badge")).toHaveText("发散");
+      }
+      if (i < 9) await next.click();
+    }
+
+    expect(seen).toEqual([
+      "intro", "spans", "local-symbols", "rep-seq", "rep-fps", "branches", "branch-align", "revision", "exclusions", "recap",
+    ]);
+    await expect(card.locator(".tutorial-learning-summary")).toContainText("未还清的账 1");
+    await expect(card.locator(".tutorial-stage-preview")).toContainText("双向运输边 T");
+
+    const rows = card.locator(".tutorial-learning-units li");
+    await expect(rows).toHaveCount(2);
+    await rows.filter({ hasText: "命题 1.3.2" }).hover();
+    await expect(card.locator(".tutorial-learning-units li.is-active")).toHaveCount(1);
+
+    const all = texts.join("\n");
+    for (const word of ["平移", "错开", "滑动", "甲", "乙", "虚构", "示例材料", "还没在本机核对", "**"]) {
+      expect(all).not.toContain(word);
+    }
+    expect(all).not.toMatch(/星(?!港)/);
+
+    await dialog.locator(".tutorial-close").click();
+    await expect(dialog).toBeHidden();
+    const writes = (await invokes(page)).filter((cmd) => /commit|plan|accept|propose|write|record|recheck|import|create|append|set_|delete|save/.test(cmd));
+    expect(writes).toEqual([]);
+  });
+
+  test("Episode 2 map labels never overlap and RepresentationCore / RepresentationBinding render properly", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("mathscape:reduce-motion", "on"));
+    await page.goto("/tests/app.html");
+    await expect(page.locator("#ink-button")).toBeVisible();
+    const dialog = await openEpisode2(page);
+    const card = dialog.locator(".tutorial-card");
+
+    const measure = () => page.evaluate(() => {
+      type Box = { x1: number; x2: number; y1: number; y2: number; w: number; h: number };
+      type Ele = {
+        boundingBox(o: object): Box; data(k: string): string; visible(): boolean; hasClass(c: string): boolean;
+        style(k: string): string; id(): string;
+      };
+      type Coll = { filter(f: (e: Ele) => boolean): Ele[] };
+      const cy = (document.querySelector(".tutorial-map") as unknown as { _cyreg: { cy: { nodes(): Coll; edges(): Coll } } })._cyreg.cy;
+      const box = (e: Ele) => e.boundingBox({ includeNodes: false, includeEdges: false, includeLabels: true, includeOverlays: false, includeUnderlays: false });
+      const hit = (a: Box, b: Box) => a.x1 < b.x2 && b.x1 < a.x2 && a.y1 < b.y2 && b.y1 < a.y2;
+      const nodes = cy.nodes().filter((n) => n.visible() && Boolean(n.data("label")));
+      const labeledEdges = cy.edges().filter((e) => e.visible() && e.style("label") !== "");
+      const overlaps: string[] = [];
+      for (const f of nodes.filter((n) => n.hasClass("tutorial-focus"))) {
+        for (const o of nodes) if (o !== f && hit(box(f), box(o))) overlaps.push(`${f.data("label")} × ${o.data("label")}`);
+        for (const e of labeledEdges) if (hit(box(f), box(e))) overlaps.push(`${f.data("label")} × ${e.data("label")}`);
+      }
+      const repCores = nodes
+        .filter((n) => n.data("domainKind") === "RepresentationCore" && n.hasClass("tutorial-focus"))
+        .map((n) => ({ label: n.data("label"), h: box(n).h }));
+      return {
+        overlaps,
+        repCores,
+        edges: labeledEdges.map((e) => ({ focus: e.hasClass("tutorial-edge-focus"), rotation: e.style("text-rotation"), label: e.data("label") })),
+        raw: nodes.filter((n) => /[$\\]/.test(n.data("label"))).map((n) => n.data("label")),
+      };
+    });
+
+    for (let i = 0; i < 10; i++) {
+      const shot = (await card.getAttribute("data-shot"))!;
+      await page.waitForTimeout(150);
+      const m = await measure();
+      expect(m.overlaps, shot).toEqual([]);
+      expect(m.raw, shot).toEqual([]);
+      for (const edge of m.edges) {
+        expect(edge.focus, `${shot}: ${edge.label}`).toBe(true);
+        expect(edge.rotation).toBe("none");
+      }
+      if (shot === "rep-seq") {
+        expect(m.repCores).toHaveLength(1);
+        expect(m.repCores[0].label).toBe("〔表示核 · representation core〕\n数列表示核 ℕ → R");
+        expect(m.repCores[0].h).toBeGreaterThan(26);
+        expect(m.edges.map((e) => e.label).sort()).toEqual([
+          "binds_representation\n绑定为数列表示（0 起算直连）",
+          "binds_representation\n绑定为数列表示（首项补 f(0)=0）",
+        ]);
+      }
+      if (shot === "branch-align") {
+        expect(m.edges.map((e) => e.label).sort()).toEqual([
+          "expresses\n说的就是它",
+          "specializes\n特例：灯塔的实公比 t（t≠1）对应共享定理常规分支的 x",
+        ]);
+      }
+      if (i < 9) await dialog.locator(".tutorial-next").click();
+    }
+  });
+
+  test("warm parchment theme renders crisp non-inverted edge pills on focus and hover in both episodes", async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("mathscape.theme", "parchment");
+      localStorage.setItem("mathscape:reduce-motion", "on");
+    });
+    await page.goto("/tests/app.html");
+    await expect(page.locator("#ink-button")).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "parchment");
+
+    await page.locator("#help-button").click();
+    const menu = page.getByRole("menu");
+    await expect(menu.getByRole("menuitem")).toHaveText([TITLE, EP2_TITLE]);
+    await menu.getByRole("menuitem", { name: EP2_TITLE }).click();
+
+    const dialog = page.getByRole("dialog", { name: EP2_TITLE });
+    await expect(dialog).toBeVisible();
+    // Advance to shot 7 ("branch-align") where alignment edges are labeled and binding edges can be hovered.
+    for (let i = 0; i < 6; i++) await dialog.locator(".tutorial-next").click();
+    await expect(dialog.locator(".tutorial-card")).toHaveAttribute("data-shot", "branch-align");
+
+    const checkParchmentEdges = () => page.evaluate(() => {
+      type Ele = {
+        visible(): boolean;
+        style(k: string): string;
+        numericStyle(k: string): number;
+        hasClass(c: string): boolean;
+        addClass(c: string): void;
+        removeClass(c: string): void;
+        data(k: string): string;
+      };
+      const cy = (document.querySelector(".tutorial-map") as unknown as { _cyreg: { cy: { edges(): Ele[] } } })._cyreg.cy;
+      const parseRgb = (raw: string): [number, number, number] => {
+        const nums = raw.match(/\d+/g)?.map(Number) ?? [0, 0, 0];
+        return [nums[0] ?? 0, nums[1] ?? 0, nums[2] ?? 0];
+      };
+      const luminance = ([r, g, b]: [number, number, number]) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+      // Also simulate hovering an unlabeled visible edge (e.g. RepresentationBinding or earlier Alignment).
+      const unlabeled = cy.edges().filter((e) => e.visible() && !e.hasClass("tutorial-edge-labeled") && Boolean(e.data("label")))[0];
+      if (unlabeled) unlabeled.addClass("label-hover");
+      const active = cy.edges().filter((e) => e.visible() && (e.hasClass("tutorial-edge-labeled") || e.hasClass("label-hover")));
+      const samples = active.map((e) => {
+        const bg = parseRgb(e.style("text-background-color"));
+        const fg = parseRgb(e.style("color"));
+        return {
+          label: e.data("label"),
+          outlineWidth: e.numericStyle("text-outline-width"),
+          bgLum: luminance(bg),
+          fgLum: luminance(fg),
+        };
+      });
+      if (unlabeled) unlabeled.removeClass("label-hover");
+      return samples;
+    });
+
+    const ep2Samples = await checkParchmentEdges();
+    expect(ep2Samples.length).toBeGreaterThanOrEqual(3);
+    for (const s of ep2Samples) {
+      expect(s.outlineWidth, s.label).toBe(0);
+      expect(s.bgLum, `${s.label} pill background should be light parchment`).toBeGreaterThan(0.85);
+      expect(s.fgLum, `${s.label} pill text should be dark ink`).toBeLessThan(0.38);
+    }
+
+    // Switch to Episode 1 inside Parchment and verify its edge pills as well.
+    await dialog.locator('.tutorial-episode-btn[data-episode="ep1"]').click();
+    const ep1Dialog = page.getByRole("dialog", { name: TITLE });
+    for (let i = 0; i < 6; i++) await ep1Dialog.locator(".tutorial-next").click();
+    await expect(ep1Dialog.locator(".tutorial-card")).toHaveAttribute("data-shot", "cassini");
+
+    const ep1Samples = await checkParchmentEdges();
+    expect(ep1Samples.length).toBeGreaterThanOrEqual(3);
+    for (const s of ep1Samples) {
+      expect(s.outlineWidth, s.label).toBe(0);
+      expect(s.bgLum, `${s.label} pill background should be light parchment`).toBeGreaterThan(0.85);
+      expect(s.fgLum, `${s.label} pill text should be dark ink`).toBeLessThan(0.38);
+    }
   });
 });

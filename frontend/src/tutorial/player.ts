@@ -12,19 +12,23 @@ import { reducedMotion as defaultReducedMotion } from "../core/motion";
 import { mountCytoscapeGraph } from "../graph/cytoscape";
 import { SCENE_TIMING } from "../graph/scene-player";
 import { EDGE_TYPES, NODE_TYPES, type NodeTypeVisual } from "../graph/taxonomy";
+import { graphPalette } from "../graph/theme";
 import { LABEL_HOVER, LABEL_RECESS, LABEL_HOVER_STYLE, LABEL_RECESS_STYLE, refreshLabels, syncNodeLabel } from "../graph/label-hover";
 import { texToPlain, truncatePlain } from "../graph/tex-plain";
+import { t } from "../i18n";
+import { EP2_TYPE_NOTES } from "../i18n/tutorial-ep2-copy";
+import { getTheme } from "../shell/theme-manager";
 import { inlineMathHtml, markdownHtml } from "./math";
-import type { TutorialProjection } from "./projection";
-import { loadTutorialProjection, tutorialGraph } from "./projection";
+import { TUTORIAL_EP2_TITLE, buildEpisode2Shots } from "./episode2";
+import type { TutorialEpisodeId, TutorialProjection } from "./projection";
+import { loadEpisodeProjection, tutorialGraph } from "./projection";
 import type { ShotExtra, TutorialShot } from "./script";
 import { TYPE_NOTES, buildTutorialShots, stripTypePrefix } from "./script";
 
-export const TUTORIAL_TITLE = "教程：两本书讲的是不是同一个东西";
+export const TUTORIAL_TITLE = "教程（一）：两本书讲的是不是同一个东西";
 
 /** 两条派生虚线：材料 → 从它切出来的那条定义（只标两个“中心”）。 */
 const DERIVED: Record<string, string> = { jia: "jia.u.def", yi: "yi.u.def" };
-const DERIVED_COLOR = "#7fc5c6";
 
 const SEMANTIC_KIND: Record<string, { name: string; code: string }> = {
   concept: { name: TYPE_NOTES.concept.name, code: "concept" },
@@ -97,6 +101,29 @@ const TUTORIAL_LAYOUT: Record<string, [number, number]> = {
   "d.puzzle.all_k": [COL.debt, 240],
 };
 
+/** 第 2 集固定布局：保证焦点多行标签与表示绑定/对齐线水平胶囊互不遮挡。 */
+const TUTORIAL_EP2_LAYOUT: Record<string, [number, number]> = {
+  "artifact:jia": [-560, -460],
+  "artifact:yi": [-560, 180],
+  "jia.u.sec": [-300, -260],
+  "yi.u.sec": [-300, 380],
+  "ds.jia": [0, -600],
+  "jia.u.def": [0, -460],
+  "jia.u.thm": [0, -310],
+  "jia.u.cor": [0, -110],
+  "ds.yi": [0, 40],
+  "yi.u.def": [0, 180],
+  "yi.u.prop": [0, 310],
+  "yi.u.rem": [0, 510],
+  "e.theory": [520, -640],
+  "e.ogf_concept": [560, -500],
+  "r.seq": [480, -420],
+  "r.fps": [480, -260],
+  "e.geom_fin": [560, -20],
+  "e.geom_inf_fps": [560, 260],
+  "d.yi.analytic_radius": [920, -120],
+};
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = ""): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -106,6 +133,8 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text 
 
 export class TutorialPlayer {
   readonly root: HTMLElement;
+  private readonly titleEl: HTMLElement;
+  private readonly episodeButtons: Record<TutorialEpisodeId, HTMLButtonElement>;
   private readonly canvas: HTMLElement;
   private readonly card: HTMLElement;
   private readonly legend: HTMLElement;
@@ -116,6 +145,8 @@ export class TutorialPlayer {
   private readonly prevButton: HTMLButtonElement;
   private readonly nextButton: HTMLButtonElement;
   private core: Core | null = null;
+  private episode: TutorialEpisodeId = "ep1";
+  private readonly projections = new Map<TutorialEpisodeId, TutorialProjection>();
   private projection: TutorialProjection | null = null;
   private shots: TutorialShot[] = [];
   private index = -1;
@@ -129,9 +160,25 @@ export class TutorialPlayer {
     this.root = el("section", "tutorial-overlay");
     this.root.hidden = true;
     this.root.setAttribute("role", "dialog");
-    this.root.setAttribute("aria-label", TUTORIAL_TITLE);
+    this.root.setAttribute("aria-label", t("tutorial.ep1.menuTitle"));
     const header = el("header", "tutorial-header");
-    header.append(el("strong", "tutorial-title", TUTORIAL_TITLE));
+    this.titleEl = el("strong", "tutorial-title", t("tutorial.ep1.menuTitle"));
+    const switcher = el("div", "tutorial-episodes");
+    switcher.setAttribute("role", "group");
+    switcher.setAttribute("aria-label", t("tutorial.switcherLabel"));
+    const ep1Btn = el("button", "tutorial-episode-btn is-active", t("tutorial.ep1.short"));
+    const ep2Btn = el("button", "tutorial-episode-btn", t("tutorial.ep2.short"));
+    ep1Btn.type = "button";
+    ep2Btn.type = "button";
+    ep1Btn.dataset.episode = "ep1";
+    ep2Btn.dataset.episode = "ep2";
+    ep1Btn.setAttribute("aria-pressed", "true");
+    ep2Btn.setAttribute("aria-pressed", "false");
+    ep1Btn.addEventListener("click", () => { if (this.episode !== "ep1") void this.open("ep1"); });
+    ep2Btn.addEventListener("click", () => { if (this.episode !== "ep2") void this.open("ep2"); });
+    this.episodeButtons = { ep1: ep1Btn, ep2: ep2Btn };
+    switcher.append(ep1Btn, ep2Btn);
+    header.append(this.titleEl, switcher);
     this.provenance = el("span", "tutorial-provenance");
     this.counter = el("span", "tutorial-counter");
     const close = el("button", "tutorial-close", "关闭教程");
@@ -187,29 +234,80 @@ export class TutorialPlayer {
     return this.shots[this.index] ?? null;
   }
 
-  async open(): Promise<void> {
+  currentEpisode(): TutorialEpisodeId {
+    return this.episode;
+  }
+
+  async open(episode: TutorialEpisodeId = "ep1"): Promise<void> {
+    this.clearTimers();
+    this.episode = episode;
+    const activeTitle = episode === "ep2" ? TUTORIAL_EP2_TITLE : t("tutorial.ep1.menuTitle");
+    this.titleEl.textContent = activeTitle;
+    this.root.setAttribute("aria-label", activeTitle);
+    for (const id of ["ep1", "ep2"] as const) {
+      const active = id === episode;
+      this.episodeButtons[id].classList.toggle("is-active", active);
+      this.episodeButtons[id].setAttribute("aria-pressed", String(active));
+    }
     this.root.hidden = false;
     this.root.tabIndex = -1;
     this.root.focus();
-    if (!this.projection) {
+    let projection = this.projections.get(episode) ?? null;
+    if (!projection) {
       this.caption.textContent = "正在载入教程…";
       try {
-        this.projection = await (this.deps.load ?? loadTutorialProjection)();
+        const loader = episode === "ep1" && this.deps.load
+          ? this.deps.load
+          : () => loadEpisodeProjection(episode);
+        projection = await loader();
       } catch (error) {
         this.caption.textContent = `教程载入失败：${error instanceof Error ? error.message : String(error)}`;
         return;
       }
-      this.shots = buildTutorialShots(this.projection);
+      this.projections.set(episode, projection);
     }
+    this.projection = projection;
+    this.shots = episode === "ep2" ? buildEpisode2Shots(projection) : buildTutorialShots(projection);
     this.core?.destroy();
     this.core = mountCytoscapeGraph(this.canvas, tutorialGraph(this.projection), "semantic", {
       labelHover: { isFull: (node) => node.hasClass(FOCUS) },
     });
     this.decorate(this.core);
-    this.core.style().selector(`.${HIDDEN}`).style({ display: "none" })
+    this.applyTutorialStyles(this.core);
+    this.core.on("appearancechange", () => {
+      if (!this.core) return;
+      this.applyTutorialStyles(this.core);
+      this.renderLegend(this.core, this.currentShot() ?? undefined);
+      refreshLabels(this.core, this.core.elements() as unknown as Parameters<typeof refreshLabels>[1]);
+    });
+    // 悬停由 mountCytoscapeGraph 绑定：完整标签浮到最上层，邻接短标签暂时避让。
+    this.core.autoungrabify(true);
+    // 画面上对象少时（前两镜）不要放得太大，节点标签留在画布里。
+    this.core.maxZoom(1.4);
+    this.go(0);
+    this.setPlaying(!this.reduced());
+  }
+
+  private applyTutorialStyles(core: Core): void {
+    const p = graphPalette();
+    const light = getTheme() === "parchment";
+    const derivedColor = light ? "#2a7a7c" : "#7fc5c6";
+    const derivedPillText = light ? "#1b595b" : "#7fc5c6";
+    const derivedPillBorder = light ? "#5e9da3" : "#2f5b5c";
+    const bindingColor = p.candidate;
+    const bindingPillText = light ? "#4a2f75" : "#ebd9ff";
+    const bindingPillBorder = light ? "#8d71b8" : "#6b4ca8";
+    const pillText = light ? p.text : "#ffe6a6";
+    const pillBorder = light ? "#c59b57" : "#6e5a2a";
+
+    core.style().selector(`.${HIDDEN}`).style({ display: "none" })
       .selector("edge.tutorial-derived-edge").style({
-        label: "data(label)", width: 1.6, "line-style": "dashed", "line-color": DERIVED_COLOR,
-        "target-arrow-color": DERIVED_COLOR, "target-arrow-shape": "triangle", color: DERIVED_COLOR, "font-size": "9px",
+        label: "data(label)", width: 1.6, "line-style": "dashed", "line-color": derivedColor,
+        "target-arrow-color": derivedColor, "target-arrow-shape": "triangle", color: derivedColor, "font-size": "9px",
+      })
+      .selector("edge.tutorial-binding-edge").style({
+        "line-style": "dashed", "line-dash-pattern": [8, 4, 2, 4], "line-color": bindingColor,
+        "target-arrow-color": bindingColor, color: bindingColor,
       })
       .selector(`.${DIM}`).style({ opacity: 0.35 })
       // 节点：默认一行短名（小字、不换行），焦点 / 悬停才显示〔类型〕+ 全名。
@@ -220,33 +318,35 @@ export class TutorialPlayer {
         "text-background-shape": "roundrectangle", "text-background-padding": "3px", "z-index": 1,
       })
       .selector(`node.${FOCUS}, node.${LABEL_HOVER}`).style(LABEL_HOVER_STYLE)
-      .selector(`node.${FOCUS}`).style({ "border-width": 4, "border-color": "#ffd89a", "underlay-color": "#ffd89a", "underlay-opacity": 0.25, "underlay-padding": 6, "z-index": 30 })
-      .selector(`node.${SEEN}`).style({ "border-width": 4, "border-color": "#7fd0a8", "underlay-color": "#7fd0a8", "underlay-opacity": 0.3, "underlay-padding": 6, "z-index": 32 })
-      .selector(`node.${FRESH}`).style({ "border-width": 4, "border-color": "#ffd89a", "underlay-color": "#e8c15a", "underlay-opacity": 0.32, "underlay-padding": 6, "z-index": 32 })
-      .selector(`node.${ACCENT}`).style({ "border-width": 3, "border-color": "#9eb6ff", "underlay-color": "#9eb6ff", "underlay-opacity": 0.22, "underlay-padding": 5, "z-index": 28, opacity: 1 })
-      .selector(`node.${ROW_FOCUS}`).style({ "underlay-color": "#ffffff", "underlay-opacity": 0.35, "underlay-padding": 8, "z-index": 50, opacity: 1 })
+      .selector(`node.${FOCUS}`).style({ "border-width": 4, "border-color": p.gold, "underlay-color": p.gold, "underlay-opacity": 0.25, "underlay-padding": 6, "z-index": 30 })
+      .selector(`node.${SEEN}`).style({ "border-width": 4, "border-color": p.success, "underlay-color": p.success, "underlay-opacity": 0.28, "underlay-padding": 6, "z-index": 32 })
+      .selector(`node.${FRESH}`).style({ "border-width": 4, "border-color": p.gold, "underlay-color": p.gold, "underlay-opacity": 0.3, "underlay-padding": 6, "z-index": 32 })
+      .selector(`node.${ACCENT}`).style({ "border-width": 3, "border-color": p.accent, "underlay-color": p.accent, "underlay-opacity": 0.22, "underlay-padding": 5, "z-index": 28, opacity: 1 })
+      .selector(`node.${ROW_FOCUS}`).style({ "underlay-color": p.accent, "underlay-opacity": light ? 0.28 : 0.35, "underlay-padding": 8, "z-index": 50, opacity: 1 })
       .selector(`node.${LABEL_HOVER}`).style({ "z-index": 1000, "z-index-compare": "manual", "z-compound-depth": "top", opacity: 1 })
       .selector(`.${LABEL_RECESS}`).style(LABEL_RECESS_STYLE)
-      // 连线：默认不显示文字；这一镜要读的线（或悬停的线）才显示，水平放、垫深色圆角底。
+      // 连线：默认不显示文字；这一镜要读的线（或悬停的线）才显示，水平放、垫与当前主题一致的圆角底，关闭文字描边防止亮色主题反色泛白。
       .selector("edge").style({ label: "", "text-rotation": "none", "z-index": 0 })
       .selector(`edge.${EDGE_FOCUS}`).style({ width: 3.2, opacity: 1 })
       .selector(`edge.${EDGE_LABELED}, edge.${LABEL_HOVER}, edge.${ROW_FOCUS}`).style({
         label: "data(label)", "font-size": "12px", "text-wrap": "wrap", "text-max-width": "220px",
-        color: "#ffe6a6", "text-background-color": "#0c131a", "text-background-opacity": 0.94,
+        "text-opacity": 1, "text-outline-width": 0,
+        color: pillText, "text-background-color": p.panel, "text-background-opacity": 0.96,
         "text-background-shape": "roundrectangle", "text-background-padding": "3px",
-        "text-border-color": "#6e5a2a", "text-border-width": 1, "text-border-opacity": 1, "z-index": 20,
+        "text-border-color": pillBorder, "text-border-width": 1, "text-border-opacity": 1, "z-index": 20,
       })
       .selector(`edge.${LABEL_HOVER}`).style({ opacity: 1, "z-index": 1000, "z-index-compare": "manual", "z-compound-depth": "top" })
       .selector(`edge.${ROW_FOCUS}`).style({ opacity: 1, width: 3.4, "z-index": 40 })
-      .selector(`edge.tutorial-derived-edge.${EDGE_LABELED}`).style({ color: DERIVED_COLOR, "text-border-color": "#2f5b5c" })
+      .selector(`edge.tutorial-derived-edge.${EDGE_LABELED}, edge.tutorial-derived-edge.${LABEL_HOVER}, edge.tutorial-derived-edge.${ROW_FOCUS}`).style({
+        color: derivedPillText, "text-border-color": derivedPillBorder,
+      })
+      .selector(`edge.tutorial-binding-edge.${EDGE_LABELED}, edge.tutorial-binding-edge.${LABEL_HOVER}, edge.tutorial-binding-edge.${ROW_FOCUS}`).style({
+        color: bindingPillText, "text-border-color": bindingPillBorder,
+      })
+      .selector(`edge.debt-edge.${EDGE_LABELED}, edge.debt-edge.${LABEL_HOVER}, edge.debt-edge.${ROW_FOCUS}`).style({
+        color: p.warning, "text-border-color": p.warning,
+      })
       .update();
-    // 悬停由 mountCytoscapeGraph 绑定：完整标签用和焦点一样的深色底，浮到最上层；
-    // 会挡住它的邻接短标签暂时藏起。
-    this.core.autoungrabify(true);
-    // 画面上对象少时（前两镜）不要放得太大，节点标签留在画布里。
-    this.core.maxZoom(1.4);
-    this.go(0);
-    this.setPlaying(!this.reduced());
   }
 
   close(): void {
@@ -311,6 +411,7 @@ export class TutorialPlayer {
         else if (domainKind === "SourceSemanticUnit") type = TYPE_NOTES.unit.name;
         else if (domainKind === "DialectScope") type = `${TYPE_NOTES.dialect.name} · dialect scope`;
         else if (domainKind === "Debt") type = `${TYPE_NOTES.debt.name} · debt`;
+        else if (domainKind === "RepresentationCore") type = `${EP2_TYPE_NOTES.representationCore.name} · representation core`;
         else if (domainKind === "SemanticEntity") {
           const kind = SEMANTIC_KIND[String(byId.get(node.data("domainId"))?.payload.semantic_kind ?? "")];
           if (kind) type = `${kind.name} · ${kind.code}`;
@@ -332,6 +433,11 @@ export class TutorialPlayer {
         node.data({ fullLabel: `〔${type}〕\n${body}`, compactLabel: compact, label: compact });
       });
       core.edges(".alignment-edge").forEach((edge) => {
+        if (edge.data("domainKind") === "RepresentationBinding") {
+          edge.addClass("tutorial-binding-edge");
+          edge.data("label", `binds_representation\n${edge.data("label")}`);
+          return;
+        }
         const relation = String(byId.get(edge.data("relationId"))?.payload.relation ?? "");
         // 两行：关系类型代码 / 白话。
         if (relation) edge.data("label", `${relation}\n${edge.data("label")}`);
@@ -349,15 +455,16 @@ export class TutorialPlayer {
     });
   }
 
-  /** 按 TUTORIAL_LAYOUT 摆放；表里没有的节点（夹具以后加的）留在力导向的位置。 */
+  /** 按对应剧集的固定坐标表摆放；表里没有的节点留在力导向的位置。 */
   private layout(core: Core): void {
     const projection = this.projection!;
+    const coords = this.episode === "ep2" ? TUTORIAL_EP2_LAYOUT : TUTORIAL_LAYOUT;
     const local = new Map<string, string>();
     for (const [key, id] of Object.entries(projection.refs)) local.set(id, key);
     for (const [key, id] of Object.entries(projection.artifacts)) local.set(id, `artifact:${key}`);
     core.nodes().forEach((node: NodeSingular) => {
       const key = local.get(String(node.data("domainId") ?? ""));
-      const at = key ? TUTORIAL_LAYOUT[key] : undefined;
+      const at = key ? coords[key] : undefined;
       if (at) node.position({ x: at[0], y: at[1] });
     });
     // 汇合点（多端关系）放在它连着的节点中间。
@@ -498,16 +605,19 @@ export class TutorialPlayer {
       items.push(this.legendItem(this.nodeSwatch(NODE_TYPES.shared_entity), `共享对象：${shared.join(" · ")}`));
     }
     node("shared_theory", `${TYPE_NOTES.theory.name} theory`);
+    node("representation_core", t("tutorial.legend.representationCore"));
     node("dialect_scope", `${TYPE_NOTES.dialect.name} dialect scope`);
     node("debt", `${TYPE_NOTES.debt.name} debt`);
-    const special = ["tutorial-derived-edge", "alignment-edge", "debt-edge", "semantic-link-edge", "evidence-edge"];
+    const special = ["tutorial-derived-edge", "tutorial-binding-edge", "alignment-edge", "debt-edge", "semantic-link-edge", "evidence-edge"];
     const edge = (match: (classes: string[]) => boolean, color: string, dashed: boolean, text: string) => {
       if (visibleEdges.some((item) => match(item.classes()))) items.push(this.legendItem(this.edgeSwatch(color, dashed), text));
     };
     const has = (name: string) => (classes: string[]) => classes.includes(name);
-    edge(has("tutorial-derived-edge"), DERIVED_COLOR, true, "派生（虚线：来自哪份材料）");
+    const derivedSwatch = getTheme() === "parchment" ? "#2a7a7c" : "#7fc5c6";
+    edge(has("tutorial-derived-edge"), derivedSwatch, true, "派生（虚线：来自哪份材料）");
     edge((classes) => classes.includes("semantic-edge") && !special.some((name) => classes.includes(name)), EDGE_TYPES.relation.color, false, "书内关系（箭头表示方向）");
-    edge(has("alignment-edge"), EDGE_TYPES.alignment.color, false, "对齐线 alignment（线上：关系类型 · 白话）");
+    edge((classes) => classes.includes("alignment-edge") && !classes.includes("tutorial-binding-edge"), EDGE_TYPES.alignment.color, false, "对齐线 alignment（线上：关系类型 · 白话）");
+    edge(has("tutorial-binding-edge"), "var(--ms-candidate)", true, t("tutorial.legend.representationBinding"));
     edge(has("semantic-link-edge"), EDGE_TYPES.relation.color, true, "属于理论 / 约定适用于");
     edge(has("debt-edge"), EDGE_TYPES.debt.color, true, "挂账");
     if (shot?.legendNote) {
@@ -694,13 +804,142 @@ export class TutorialPlayer {
         wrap.append(ul);
         for (const convention of extra.conventions) {
           const row = el("p", "tutorial-learning-convention");
-          row.append(el("span", "tutorial-learning-label is-convention", "新约定"), document.createTextNode(` ${convention.text}`));
+          row.append(el("span", "tutorial-learning-label is-convention", "新约定"), this.html("span", "", ` ${inlineMathHtml(convention.text)}`));
           bind(row, convention.focus);
           wrap.append(row);
         }
         const summary = el("p", "tutorial-learning-summary", extra.summary);
         bind(summary, extra.summaryFocus);
         wrap.append(summary);
+        if (extra.footerNote) {
+          wrap.append(el("p", "tutorial-extra-note tutorial-stage-preview", extra.footerNote));
+        }
+        return wrap;
+      }
+      case "symbols": {
+        const wrap = el("div", "tutorial-extra tutorial-symbols");
+        wrap.append(el("h4", "tutorial-extra-heading", t("tutorial.extra.symbolsHeading")));
+        for (const scope of extra.scopes) {
+          const section = el("section", "tutorial-symbol-scope");
+          section.dataset.scope = scope.scopeLocal;
+          section.append(el("strong", "tutorial-symbol-scope-title", scope.title));
+          const table = el("table", "tutorial-symbol-table");
+          const thead = el("tr");
+          thead.append(
+            el("th", "", t("tutorial.extra.symbolCol")),
+            el("th", "", t("tutorial.extra.roleCol")),
+            el("th", "", t("tutorial.extra.domainCol")),
+            el("th", "", t("tutorial.extra.meaningCol")),
+          );
+          table.append(thead);
+          for (const row of scope.rows) {
+            const tr = el("tr");
+            tr.append(
+              this.html("td", "is-symbol", inlineMathHtml(row.symbol)),
+              el("td", "is-role", row.role),
+              this.html("td", "is-domain", inlineMathHtml(row.domain)),
+              this.html("td", "is-meaning", inlineMathHtml(row.meaning)),
+            );
+            table.append(tr);
+          }
+          section.append(table);
+          wrap.append(section);
+        }
+        return wrap;
+      }
+      case "bindings": {
+        const wrap = el("div", "tutorial-extra tutorial-bindings");
+        const coreBox = el("div", "tutorial-binding-core");
+        coreBox.append(
+          this.html("p", "tutorial-binding-carrier", `${t("tutorial.extra.carrierLabel")}: ${inlineMathHtml(extra.carrier)}`),
+        );
+        if (extra.operations.length) {
+          const ops = el("ul", "tutorial-binding-ops");
+          for (const op of extra.operations) ops.append(this.html("li", "", inlineMathHtml(op)));
+          coreBox.append(ops);
+        }
+        wrap.append(coreBox);
+        for (const item of extra.items) {
+          const card = el("article", "tutorial-binding-card");
+          card.dataset.binding = item.bindingLocal;
+          const head = el("header", "tutorial-binding-head");
+          head.append(el("span", "tutorial-badge", item.book), el("strong", "", item.mapLabel));
+          card.append(head);
+          const mappings = el("ul", "tutorial-binding-mappings");
+          for (const m of item.mappings) {
+            mappings.append(this.html("li", "", inlineMathHtml(`${m.symbol} → ${m.targetExpr}${m.note ? ` · ${m.note}` : ""}`)));
+          }
+          card.append(mappings);
+          for (const adapt of item.adaptations) {
+            card.append(this.html("p", "tutorial-binding-meta", `${t("tutorial.extra.adaptLabel")}: ${inlineMathHtml(adapt)}`));
+          }
+          for (const lost of item.lost) {
+            card.append(this.html("p", "tutorial-binding-meta is-lost", `${t("tutorial.extra.lostLabel")}: ${inlineMathHtml(lost)}`));
+          }
+          if (item.debt) {
+            card.append(this.html("p", "tutorial-binding-debt", `${t("tutorial.extra.debtLabel")}: ${inlineMathHtml(item.debt)}`));
+          }
+          wrap.append(card);
+        }
+        return wrap;
+      }
+      case "branches": {
+        const wrap = el("div", "tutorial-extra tutorial-branches");
+        if (extra.partitionNote) {
+          const banner = el("div", "tutorial-partition-banner");
+          banner.append(
+            el("span", "tutorial-badge", t("tutorial.extra.partitionBadge")),
+            this.html("span", "", inlineMathHtml(extra.partitionNote)),
+          );
+          wrap.append(banner);
+        }
+        if (extra.branches.length) {
+          const listWrap = el("div", "tutorial-branch-list");
+          for (const branch of extra.branches) {
+            const card = el("article", `tutorial-branch-card${branch.isDegenerate ? " is-degenerate" : ""}`);
+            card.dataset.branch = branch.branchId;
+            const head = el("header", "tutorial-branch-head");
+            head.append(
+              el("code", "", branch.branchId),
+              el("strong", "", branch.label),
+              el(
+                "span",
+                `tutorial-branch-badge${branch.isDegenerate ? " is-degenerate" : ""}`,
+                t(branch.isDegenerate ? "semantic.s2.degenerateBadge" : "semantic.s2.regularBadge"),
+              ),
+              this.html("span", "tutorial-branch-guard", inlineMathHtml(branch.guardPredicate)),
+            );
+            card.append(head, this.html("div", "tutorial-branch-conclusion", inlineMathHtml(branch.conclusion)));
+            listWrap.append(card);
+          }
+          wrap.append(listWrap);
+        }
+        if (extra.exclusions.length) {
+          const exWrap = el("div", "tutorial-exclusion-list");
+          exWrap.append(el("h4", "tutorial-extra-heading", t("semantic.s2.exclusionsHeading")));
+          for (const ex of extra.exclusions) {
+            const card = el("article", "tutorial-exclusion-card");
+            const head = el("div", "tutorial-exclusion-head");
+            head.append(el("span", "tutorial-exclusion-badge", ex.kindLabel), this.html("span", "", inlineMathHtml(ex.caseText)));
+            card.append(head, this.html("p", "tutorial-extra-note", inlineMathHtml(ex.reason)));
+            exWrap.append(card);
+          }
+          wrap.append(exWrap);
+        }
+        if (extra.evaluations?.length) {
+          const evalWrap = el("div", "tutorial-branch-evals");
+          evalWrap.append(el("h4", "tutorial-extra-heading", t("tutorial.extra.evalHeading")));
+          for (const ev of extra.evaluations) {
+            const row = el("div", "tutorial-eval-row");
+            row.append(
+              el("strong", "", ev.label),
+              this.html("span", "tutorial-eval-formula", inlineMathHtml(ev.formula)),
+              this.html("span", "tutorial-extra-note", inlineMathHtml(ev.note)),
+            );
+            evalWrap.append(row);
+          }
+          wrap.append(evalWrap);
+        }
         return wrap;
       }
     }

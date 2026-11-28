@@ -1,12 +1,12 @@
 ---
 name: mathscape-worknet
-description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、对象卡、表示、证明上下文、失败见证）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
+description: 在 Mathscape 工作区中帮助用户搭建可回溯的数学地图（来源锚定、多分支守卫、约定卡符号表、表示核与表示绑定、欠账与证明上下文）。用户在 Mathscape 沙箱或调查中请求阅读材料、整理对象或构建工作网时使用。
 metadata:
-  version: "0.7.5"
+  version: "0.8.0"
   tool_schema_version: "mathscape-mcp/21"
 ---
 
-# Mathscape 数学地图构建 skill v0.7.5
+# Mathscape 数学地图构建 skill v0.8.0
 
 这份 skill 给在 Mathscape 工作区中帮助用户搭建数学地图的 Agent 使用。它的任务很简单：从用户关心的原文、手稿或问题出发，逐步整理出可回溯的数学理解，并把仍然不确定的地方留下来。
 
@@ -48,9 +48,9 @@ D 不是跨表示的万能边，T 不是改名，X 不能隐藏需要证明的�
 默认的读法是：
 
 ```text
-workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 scope: "investigation" 查本会话暂存）
-  → graph.get（支持来源节点、共享对象、对齐线、一笔账、约定卡）
-  → graph.neighborhood（默认即启用 preset: "heuristic" 跨书启发邻域：0 步长附着文件溯源/约定卡/挂账，1 步长走书内证明与跨书语义桥 aligns/uses_entity/of_concept/paid_by，并在非种子 Theory 书架与外部材料封面上自动止步防爆炸；推荐 depth: 2 触发跨书联想；若仅看单书结构可传 preset: "structural"，仅看抽象语义网可传 preset: "semantic_only"）
+workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"] / ["representation_core"]，以及 scope: "investigation" 查本会话暂存）
+  → graph.get（支持来源节点、共享对象、表示核、对齐线、表示绑定、一笔账、约定卡）
+  → graph.neighborhood（默认即启用 preset: "heuristic" 跨书启发邻域：0 步长附着文件溯源/约定卡/挂账，1 步长走书内证明与跨书语义桥 aligns/binds_representation/uses_entity/of_concept/paid_by，并在非种子 Theory 书架与外部材料封面上自动止步防爆炸；推荐 depth: 2 触发跨书联想；若仅看单书结构可传 preset: "structural"，仅看抽象语义网可传 preset: "semantic_only"）
   → material.read / material.grep
   → ink.page_image 或 pdf.page_image（需要看版式或手稿时）
 ```
@@ -142,13 +142,17 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
 
 `artifact.stage` 是受 round 约束的文件暂存能力。它可以保存对象卡、工作网草案、Lean 文件和检查报告，但不会登记正式 Artifact、地图节点或关系。
 
-`propose_changes`、`get_change_set`、`list_change_sets` 和 `user.ask` 只有在本轮工具列表中实际出现时才能调用。共享对象、对齐线、一笔账和约定卡直接用 `propose_changes` 提（§4.2）；其余语义层的 `emir.upsert_*`、`rdtx.upsert_*`、`rdtx.record_failure` 等目前属于契约草案，必须作为 `propose_changes` 的薄封装，不能另开一条绕过用户接受的写路径。
+`propose_changes`、`get_change_set`、`list_change_sets` 和 `user.ask` 只有在本轮工具列表中实际出现时才能调用。共享对象（含内聚多分支 `guards`/`branches`/`exclusions`）、约定卡（含局部符号表 `local_symbols`）、表示核（`representation_core`）、表示绑定（`representation_binding`）、对齐线和一笔账直接用 `propose_changes` 提（§4.2）；其余证明网层的 `emir.upsert_proof_*`、`rdtx.upsert_*`、`rdtx.record_failure` 等目前属于契约草案，未来也只能作为 `propose_changes` 的薄封装，不能另开一条绕过用户接受的写路径。
 
-### 4.1 `propose_changes` 怎么写（`mathscape-mcp/17`）
+### 4.1 `propose_changes` 怎么写（`mathscape-mcp/21`）
 
 只在本轮工具列表里有 `propose_changes` 时使用。它只产生 `staged` 或 `blocked` 的提案，从不改正式地图；`staged` 的对象会以「未审批」样式出现在用户地图上，用户之后在 Desktop 统一接受或丢弃。接受只表示写入地图，不代表数学上已验证，也不会提升 Trust。
 
-一次提案 = 一个 change set，用户整批接受或丢弃，不会只接受其中几项。`request_id` 用于幂等：同一 `request_id` 重发同样内容得到原结果，内容不同会报错。`rationale` 首句必须带上显式建图动机标签（如 `【来源锚定】`、`【跨书对齐】`、`【题型提炼】`、`【概念/定理升格】`、`【纠错重连】`、`【补账/销账】`，详见 §4.3），让用户在审核面板一眼看清本次变更的立意。
+一次提案 = 一个 change set，用户整批接受或丢弃，不会只接受其中几项。`request_id` 用于幂等：同一 `request_id` 重发同样内容得到原结果，内容不同会报错。`rationale` 首句必须带上显式建图动机标签（如 `【来源锚定】`、`【跨书对齐】`、`【表示建模】`、`【题型提炼】`、`【概念/定理升格】`、`【纠错重连】`、`【补账/销账】`，详见 §4.3），让用户在审核面板一眼看清本次变更的立意。
+
+**槽位铁律（`proposed_objects` vs `proposed_relations`）**：
+- `proposed_relations` **只放书内来源关系 `source_relation`**（顶层字段 `relation` / `source` / `target` / `evidence_spans`，没有 `payload` 包装）；
+- **所有其他条目**——包括 `source_span`、`source_unit`、`semantic_entity`、`dialect_scope`、`representation_core`、`alignment`、`representation_binding`、`debt`——**一律放进 `proposed_objects`**（字段放在 `payload` 或 `changes` 内）。把 `alignment` 或 `representation_binding` 误塞进 `proposed_relations` 会直接触发 `invalid_arg: unknown field payload`。
 
 **来源片段 `source_span`**：只给定位，服务端补齐身份、hash、块和页。
 
@@ -196,6 +200,7 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
 - 修改已有对象用 `op: "edit"`，带 `target_id`、`expected_revision` 和 `changes`。
 - **连错的书内关系可以提议退役**：`{ "local_ref": "x", "kind": "source_relation", "op": "retire", "target_id": "<关系 id>", "expected_revision": "<rev>" }`，只带这两个字段，放 `proposed_relations`（放 `proposed_objects` 也收）。关系连错了就退役它再建对的，不要只用 edit 把几条错关系改指同一个目标。来源单元和原文证据仍不能提议退役，需要时告诉用户在 Desktop 里处理（语义层对象的退役见 4.2）。
 - 书内关系的 create / edit 只放 `proposed_relations`；放进 `proposed_objects` 会报 `wrong_slot`。
+- **单快照父子约束（避免 `mixed_source_context` / `cross_source_parent`）**：每个 `source_unit` 及其 `parent` 链必须属于**同一个 Markdown 解析快照**（同一个 `artifact_id`）。一本 PDF 分多批页段解析时，若某节标题在快照 A（如第 57–62 页）而本轮定理在快照 B（如第 63–68 页），请将该定理单元在快照 B 内设为 `parent: null` 并在 `unresolved` 中说明“节标题位于另一解析快照，暂未跨快照挂父节点”——**严禁**为了硬凑章节节点而截取定理或定义正文里的半句话冒充 `section` 锚点。
 - 顺序随意：服务端在最终图上统一校验，子单元写在父单元前面也可以。
 
 **引用规则**：
@@ -207,7 +212,7 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
 
 **修订**：同一个沙箱对话通常延续同一条 Codex 线程，之前轮次的工具结果仍在你的上下文里；但线程可能在换机器、长时间闲置或版本升级后被恢复甚至降级为转录重建（届时会有「上下文已降级」提示），而且早先的结果可能已过时。所以不要凭记忆里的旧提案 id 或状态行事。**重提或修改之前的提案前，先调用 `list_change_sets`**（只列本调查 = 本沙箱会话的提案，新的在前；`pending_only: true` 只看 staged/blocked）。按 `title`、`request_id` 和 `active.blocking_codes` 找到要改的那份，把它的 `supersedes` 对象原样放进 `propose_changes`，重新提交**整份**提案；需要看旧内容时再用 `get_change_set` 读回。这样得到的是同一个 change set 的下一个版本（v2、v3…），旧版本被折叠；不带 `supersedes` 就会新建一个独立提案，旧的 blocked 版本还留在用户的审核队列里。`supersedes` 为 null 表示该提案已被接受或丢弃，不能再修订，需要的话新建提案。同名 `local_ref` 得到同一个 id。被替换的提案上，依赖它的其他提案会转为 `blocked`（`dependency_superseded`，更深一层是 `dependency_blocked`），不会自动改指新版本，需要你读回后重新提交。
 
-**汇报数量以返回结果为准**：告诉用户「提了多少单元 / 关系 / 证据」时，只按本次 `propose_changes` 的返回（或 `get_change_set` 读回）计数，不要凭记忆或按你打算写的条目估算。`staged` 时数 `staged_ids` 的值：前缀 `mathscape:source-unit/` 是单元、`mathscape:source-relation/` 是关系、`mathscape:source-span/` 是证据，`mathscape:semantic-entity/` 是共享对象、`mathscape:alignment/` 是对齐线、`mathscape:debt/` 是一笔账、`mathscape:dialect-scope/` 是约定卡（`compiled_operations` 的条数应与之相同，可用来核对）；同时说明 `change_set_id` 与 `version`。`blocked` 时没有 `staged_ids`，只能说「提交了 N 条、全部未暂存」，并列出阻塞码。只说本次提案的数字；与地图里已有对象或其他提案的关系要单独说明，不要加进总数。审核界面按快照分组显示，一份提案可能跨多个快照，用户看到的总数以整份提案为准。
+**汇报数量以返回结果为准**：告诉用户「提了多少单元 / 关系 / 证据」时，只按本次 `propose_changes` 的返回（或 `get_change_set` 读回）计数，不要凭记忆或按你打算写的条目估算。`staged` 时数 `staged_ids` 的值：前缀 `mathscape:source-unit/` 是单元、`mathscape:source-relation/` 是关系、`mathscape:source-span/` 是证据，`mathscape:semantic-entity/` 是共享对象、`mathscape:representation-core/` 是表示核、`mathscape:alignment/` 是对齐线、`mathscape:representation-binding/` 是表示绑定、`mathscape:debt/` 是一笔账、`mathscape:dialect-scope/` 是约定卡（`compiled_operations` 的条数应与之相同，可用来核对）；同时说明 `change_set_id` 与 `version`。`blocked` 时没有 `staged_ids`，只能说「提交了 N 条、全部未暂存」，并列出阻塞码。只说本次提案的数字；与地图里已有对象或其他提案的关系要单独说明，不要加进总数。审核界面按快照分组显示，一份提案可能跨多个快照，用户看到的总数以整份提案为准。
 
 **常见诊断码**（`blocked` 时整份提案保留，改好后用 `supersedes` 重提）：
 
@@ -232,33 +237,69 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
 
 `span_already_exists`（info）、`page_granularity_available`（info：这个 inline 范围能落到唯一一页，改用 `page` 才会存页码）、`span_granularity_ignored`（warn）和 `head_integrity`（warn）不阻塞提案。`head_integrity` 表示工作区里**已有**、且本提案没有碰到的对象本身有问题（`target_id` 是该对象）：它与本提案无关，不要为此修改或重提提案，在交接时告诉用户即可。只有本提案及其依赖的提案新增或修改的对象出错，才会让提案 blocked。诊断里 `local_ref` 指本提案的条目，`target_id` 指地图对象 id。
 
-### 4.2 语义层：共享对象、对齐线、一笔账、约定卡（`mathscape-mcp/17`）
+### 4.2 语义层与表示层：共享对象、多分支守卫、约定卡符号表、表示核与表示绑定（`mathscape-mcp/21`）
 
-契约见 `docs/semantic-write-contract.md`。语义对象和来源对象一样只进暂存，用户接受后才写入地图；**接受不提升任何可信度**。语义对象全部写在 `proposed_objects` 里，引用本次新建项一律写 `$new:<local_ref>`（不接受裸 `local_ref`），引用已有或其他暂存提案的对象写稳定 id。
+契约见 `docs/semantic-write-contract.md`。语义层与表示层对象和来源对象一样只进暂存，用户接受后才写入地图；**接受不提升任何可信度**。所有语义与表示对象一律写在 `proposed_objects` 里，引用本次新建项写 `$new:<local_ref>`（不接受裸 `local_ref`），引用已有或其他暂存提案的对象写稳定 id。
 
 | `kind` | 白话 | 用途 |
 | --- | --- | --- |
-| `semantic_entity` | 共享对象（概念 / 精确说法 / 理论 / 题型） | `semantic_kind` 只能是 `concept`、`declaration`、`theory`、`problem_schema`；`theory` 本身 `home_theory` 必须为空，其余三种都要有 `home_theory`（指向一个 theory） |
-| `alignment` | 对齐线 | 某条来源单元（`source`）说的就是 / 是特例 / 部分重合于某个共享对象（`target`）；至少 1 条 `evidence_spans` |
-| `debt` | 一笔账 | 还欠的证明或检查，挂在对齐线或共享对象上（`attached_to`），写明 `quantifier`（量词）和 `failure_mode`（不还清会坏在哪） |
-| `dialect_scope` | 约定卡 | 一本书 / 一节的编号与叫法约定（`anchor_unit` 是 section 单元，`applies_to: "anchor_subtree"`） |
+| `semantic_entity` | 共享对象（概念 / 精确说法 / 理论 / 题型） | `semantic_kind` 只能是 `concept`、`declaration`、`theory`、`problem_schema`；`theory` 本身 `home_theory` 必须为空，其余三种都要有 `home_theory`（指向一个 theory）；`declaration` 与 `problem_schema` 支持内聚写 `guards`、`guard_partition`、`branches`、`exclusions` |
+| `representation_core` | 表示核（R） | 承载某种数学表示的共享空间与合法算子（`home_theory`、`preferred_labels`、`carrier` 必填；可选 `represented_object`、`operations`、`invariants_and_domain`）；主地图上显示为六边形节点 |
+| `dialect_scope` | 约定卡 | 一本书 / 一节的编号与叫法约定（`anchor_unit` 指向章节或锚点单元，`conventions` `>= 1`），并可通过 `local_symbols` 声明局部符号表，通过 `parent_scope` 继承上级章节约定卡 |
+| `alignment` | 对齐线 | 某条来源单元（`source`）与共享对象（`target`）之间的语义关系；多分支目标可用 `target_branches` 精确指向所覆盖的分支 id；至少 1 条 `evidence_spans` |
+| `representation_binding` | 表示绑定 | 把某张约定卡（`dialect_scope`）里的局部符号映射到某个表示核（`representation`）的目标载体上（`symbol_map` `>= 1`、`evidence_spans` `>= 1`） |
+| `debt` | 一笔账 | 还欠的证明或边界检查，可挂在 `alignment`、`semantic_entity`、`representation_core` 或 `representation_binding` 上（`attached_to`），写明 `quantifier` 和 `failure_mode` |
 
 **理论（`theory`）怎么建、怎么用（专题书架三原则）**：
 
-1. **先找书架，没有再搭**：建任何共享对象前，先调用 `workspace.search { query, kinds: ["theory"], scope: "investigation" }` 查地图上已有的和本会话已暂存的理论。有能装下它的专题就直接复用，不要重复新建。
-2. **按「一类专题」起人话名字，附上同义检索词**：理论只是一个回答“这几个概念和定理大概是哪一块儿的”专题书架（尺度类似课本一章/一个专题，如「线性递推数列」「矩阵与特征值」「数列极限」）。保持扁平（不建父子理论树），**不要用单个概念名或具体算式给理论起名**（如不要建「卡特兰数理论」或带 `=`、`$` 的绕口令名字），并填好 `aliases`（中英文常见叫法，3 个左右），方便后面再搜到它。
-3. **同专题挂一起，以后可搬家**：关于某类对象的定理、恒等式（如关于 Fibonacci 数列的 Cassini 恒等式）直接跟该对象挂在同一个主理论书架下；跨专题引用直接写在 `uses_entities` 里。每条精确说法的前提与约定跟对象自己走，如果以后地图大了想拆分或重组书架，可以用 `edit` 修改非 theory 对象的 `home_theory` 平滑迁过去。
+1. **先找书架，没有再搭**：建任何共享对象或表示核前，先调用 `workspace.search { query, kinds: ["theory"], scope: "investigation" }` 查地图上已有的和本会话已暂存的理论。有能装下它的专题就直接复用，不要重复新建。
+2. **按「一类专题」起人话名字，附上同义检索词**：理论只是一个回答“这几个概念和定理大概是哪一块儿的”专题书架（尺度类似课本一章/一个专题，如「线性递推数列」「母函数与形式幂级数」「数列极限」）。保持扁平（不建父子理论树），**不要用单个概念名或具体算式给理论起名**（如不要建「卡特兰数理论」或带 `=`、`$` 的绕口令名字），并填好 `aliases`（中英文常见叫法，3 个左右），方便后面再搜到它。
+3. **同专题挂一起，以后可搬家**：关于某类对象的定理、恒等式与表示核直接跟该对象挂在同一个主理论书架下；跨专题引用直接写在 `uses_entities` 里。每条精确说法的前提与约定跟对象自己走，如果以后地图大了想拆分或重组书架，可以用 `edit` 修改非 theory 对象或表示核的 `home_theory` 平滑迁过去。
+
+**S2 内聚多分支、守卫与排除边界（`guards` / `branches` / `exclusions`）三原则**：
+
+1. **内聚不拆碎，证明路线 $\neq$ `guards`**：多分支与退化边界直接写在单个 `declaration` 或 `problem_schema` 内部（`guards` 定局部 `guard_id` 与谓词，`guard_partition` 标 `partition | disjoint_partial | overlapping | unspecified`，`branches` 定 `branch_id`、`guards`、`is_degenerate` 与各自 `conclusion` / `task`），不在地图上拆成零碎节点。**同一结论的两条证明方法（如积分法 vs 数学归纳法）不是分支，绝不能写成 `guards`。**
+2. **不适用禁区进 `exclusions`，严禁造「过程说明伪分支」**：每条 `branches[].conclusion`（或 `task`）都必须是**实质数学命题或待求结论**（如 $x \neq 1$ 时和为 $\frac{1-x^N}{1-x}$，$x = 1$ 退化分支和为 $N$）。凡属本定理不覆盖或无定义的外部情形（如齐次递推定理面对带自由项 $+g_n$ 的非齐次递推、实级数在 $|x| \ge 1$ 发散、分母为零），**只能写进 `exclusions`**（`kind`: `undefined | diverges | out_of_scope | counterexample` + `reason`），**严禁为了凑双分支而在 `branches` 里写“本定理不能直接用，需先移项修正”这类操作提示文字**，更不要把同一情形同时写进 `branches` 和 `exclusions` 自相矛盾。
+3. **跨书共享对象必须去语境化（严禁裸写书内公式号）**：`semantic_entity` 与 `representation_core` 面向多本教材共享，其 `statement`、`assumptions`、`branches`、`carrier` 中**严禁残留「满足关系 (80)」「其中系数由式 (83) 确定」这类单本书内部的公式/定理编号**。必须把被引用式子的数学内容（如 $b_j = a_j - \sum_{i=1}^j c_i a_{j-i}$）自包含写出；书内编号只留在 `source_unit`、`dialect_scope` 或 `alignment` 说明中。
+
+**S3 前半：约定卡局部符号表、表示核与表示绑定三原则**：
+
+1. **先查上级约定卡（`parent_scope`），再声明 `local_symbols`**：建章节 `dialect_scope` 前，先查同一材料是否已有章级或全书级约定卡；若有则填 `parent_scope: "<已有约定卡 id>"` 继承公共约定（如 `sequence_index_origin`），不要置 `null` 孤立重建。本节用到的核心记号在 `local_symbols` 中逐项登记（`symbol`、`role`: `sequence | series | polynomial | function | operator | variable | index | constant`、`meaning`、可选 `domain`）。
+2. **表示核（`representation_core`）对准真实载体层级**：建前先 `workspace.search { query, kinds: ["representation_core"], scope: "investigation" }` 查重。`carrier` 写明承载空间（如数列空间 $\mathbb{N} \to R$、形式幂级数环 $R[[X]]$），`operations` 写该载体允许的核心算子（如系数提取 `coeff`、移位、卷积乘法），`invariants_and_domain` 写等价判据与域边界。`represented_object` 要与载体普适度匹配：任意数列的普通母函数载体不要窄绑到“线性循环数列”这种特例子概念上。
+3. **`symbol_map` 必须是「已声明局部符号 $\to$ 目标载体数学表达式」**：`representation_binding.symbol_map` 的 `local_symbol` 应取自 `dialect_scope.local_symbols`（或父约定卡），`target_expr` 必须写成目标 `representation_core.carrier` 中的数学表达式（如 `$F \in R[[X]]$`、`$\mathrm{coeff}_R(n) : R[[X]] \to R$`），**严禁把“特征多项式”这类自然语言名词直接塞进 `target_expr`**。下标起点偏移或补零写进 `index_and_domain_adaptations`；剥离实收敛半径等条件损失写进 `lost_information`，并把待核收敛域直接作为 `debt` 挂在该 `representation_binding` 上（`attached_to: "$new:rb.xxx"`）。
+
+```json
+{ "local_ref": "rb.yi.fps", "kind": "representation_binding", "op": "create",
+  "payload": { "dialect_scope": "mathscape:dialect-scope/…",
+               "representation": "$new:r.fps",
+               "symbol_map": [
+                 { "local_symbol": "g(t)", "role": "series",
+                   "target_expr": { "text": "$F(X) = \\sum_{m \\ge 1} b_m X^m \\in \\mathbb{R}[[X]]$（$[X^0]F = 0$）" },
+                   "note": "剥离收敛区间 (-r, r) 后提升为常数项为 0 的形式幂级数" }
+               ],
+               "index_and_domain_adaptations": [
+                 { "text": "首项从 $m=1$ 起算对应 $[X^0]F(X)=0$；实自变量 $t$ 视作形式未定元 $X$。" }
+               ],
+               "lost_information": [
+                 { "short": "原书要求 (-r, r) 内绝对收敛",
+                   "claim": "形式幂级数表示核不保留实解析收敛域",
+                   "direction": "source_has_target_lacks" }
+               ],
+               "evidence_spans": [ "mathscape:source-span/…" ],
+               "status": "partially_aligned",
+               "map_label": "绑定为形式幂级数（剥离收敛半径）" } }
+```
 
 写法要点：
 
-- **共享对象一律中英双名**：四种共享对象的 `preferred_labels` 都要同时写 `{ "lang": "zh", … }` 和 `{ "lang": "en", … }`（`lang` 只写 `zh` / `en`，不写 `zh-CN`），不管材料和用户用什么语言；英文名用标准术语，有 mathlib 名称时参照它。缺任一种是 `label_lang_missing`。名称或别名和已有的同类 theory / concept 撞上会得到 `possible_duplicate_name`，mathlib 名称和已有的同类 concept / declaration 撞上会得到 `duplicate_mathlib_decl`：先确认是不是同一个，是就复用已有对象。
-- **共享对象按 mathlib 的写法**，在 `conventions` 里注明约定（如 `sequence_index_origin`，F₀ = 0），可在 `mathlib_baseline` 里写对应的 mathlib 名称。`mathlib_baseline.status` 只能写 `unchecked`：`confirmed` / `not_found` 只由服务端在用户本机的 mathlib 里查过之后写入。不确定名字时先用 `mathlib.search` 查；查不到就 `decl: null` 并在 `note` 里说明。也可以填 `aliases` 记录中英文常见别称。
-- **关系**只有 11 种：`expresses`、`specializes`、`generalizes`、`instance_of`、`representation_of`、`logically_equivalent`、`definitionally_equivalent`、`exact_realization`、`notation_for`、`overlaps_with`、`incompatible_with`。**没有 `same_as`**（`same_as_forbidden`）。两边不完全一样时写 `overlaps_with` 或 `specializes`，并在 `lost_information` 里写清对不上的部分。
+- **共享对象与表示核一律中英双名**：四种 `semantic_entity` 及 `representation_core` 的 `preferred_labels` 都要同时写 `{ "lang": "zh", … }` 和 `{ "lang": "en", … }`（`lang` 只写 `zh` / `en`，不写 `zh-CN`），不管材料和用户用什么语言；英文名用标准术语，有 mathlib 名称时参照它。缺任一种是 `label_lang_missing`。名称或别名和已有的同类 theory / concept / representation_core 撞上会得到 `possible_duplicate_name`，mathlib 名称撞上会得到 `duplicate_mathlib_decl`：先确认是不是同一个，是就复用已有对象。
+- **共享对象与表示核按 mathlib 参照基线写约定**：在 `conventions` 里注明约定（如 `sequence_index_origin`），可在 `mathlib_baseline` 里写对应的 mathlib 名称。`mathlib_baseline.status` 只能写 `unchecked`：`confirmed` / `not_found` 只由服务端在用户本机的 mathlib 里查过之后写入。不确定名字时先用 `mathlib.search` 查；查不到就 `decl: null` 并在 `note` 里说明。
+- **对齐关系与 `target_branches`**：对齐 `relation` 只有 11 种：`expresses`、`specializes`、`generalizes`、`instance_of`、`representation_of`、`logically_equivalent`、`definitionally_equivalent`、`exact_realization`、`notation_for`、`overlaps_with`、`incompatible_with`。**没有 `same_as`**（`same_as_forbidden`）。当目标含多个 `branches` 时，用 `target_branches: ["fraction_form"]` 标明本来源实际覆盖的分支；若来源漏掉了退化分支（如只写 $t \neq 1$ 未写 $t = 1$），应选 `specializes` 并在 `lost_information` 写清缺漏分支（若写成 `expresses` 且不填 `target_branches` 与 `lost_information`，会触发 `branch_coverage_unspecified` 提醒）。
 - **参数对照与数列逐项对照分开写**：`parameter_map` 是“第几条恒等式 / 第几个参数对第几条”（如灯塔的第 n 条 ＝ 共享的第 n+1 条，`role: statement_parameter`）；`term_index_map` 是数列的项对项（`index_shift: 0` 表示 f_k = F_k，数列没有错开）。向用户解释时不要说“下标平移”“数列错开”。
-- **状态只写到候选为止**：对齐线 `status` 只能是 `unmatched`、`retrieved_candidate`、`context_checked`、`partially_aligned`、`ambiguous`、`disputed`、`incompatible`；`semantically_reviewed` / `accepted` 只能由用户在审核页确认。账的 `status` 只能是 `open`，或在你认为已还清时用 edit 改为 `claimed_paid` 并在 `paid_by` 里引用还清它的对象；`paid` / `waived` 只有用户能设。任何地方都不要写 `trust`（`forbidden_trust_claim`）。
-- **一个提案围绕一个目标**：填 `target_object`（本次某个 `local_ref` 或已有 id），提案里放这个共享对象、它第一次需要的上下文（理论、概念）、连到它的对齐线和挂在上面的账。
-- **edit 只改白名单字段**（`identity_field_edit`）：共享对象可改名称、`aliases`、白话标签、`home_theory`（把非 theory 对象迁到另一个理论书架）、约定的说明文字（不能改约定的值）、mathlib 基线（仍是 unchecked）、`description`、`uses_entities`；对齐线不能改 `source` / `target`；账不能改 `attached_to` / `debt_kind`；约定卡不能改 `anchor_unit`。要改精确说法的陈述、前提、变量或约定值就新建对象。
-- **语义对象可以提议退役**：`{ "local_ref": "x", "kind": "alignment", "op": "retire", "target_id": "<id>", "expected_revision": "<rev>" }`。仍需用户接受；挂在被退役对象上的账会自动标为已失效；还有活动对齐线指向的共享对象不能单独退役。
+- **状态只写到候选为止**：对齐线与表示绑定的 `status` 只能是 `unmatched`、`retrieved_candidate`、`context_checked`、`partially_aligned`、`ambiguous`、`disputed`、`incompatible`；`semantically_reviewed` / `accepted` 只能由用户在审核页确认。账的 `status` 只能是 `open`，或在你认为已还清时用 edit 改为 `claimed_paid` 并在 `paid_by` 里引用还清它的对象；`paid` / `waived` 只有用户能设。任何地方都不要写 `trust`（`forbidden_trust_claim`）。
+- **一个提案围绕一个目标**：填 `target_object`（本次某个 `local_ref` 或已有 id），提案里放这个目标对象、它直接依赖的上下文（理论、概念、服务该目标/概念的表示核）、连到它的对齐线/表示绑定和挂在上面的账。
+- **edit 只改白名单字段**（`identity_field_edit`）：`semantic_entity` 可改名称、`aliases`、白话标签、`home_theory`、约定的说明文字（不能改约定值）、mathlib 基线（unchecked）、`description`、`uses_entities`、`exclusions`；`representation_core` 可改全部描述与算子字段；`dialect_scope` 不能改 `anchor_unit`（可增改 `conventions` 与 `local_symbols`）；`alignment` 不能改 `source` / `target`（可改 `target_branches` 等）；`representation_binding` 不能改 `dialect_scope` / `representation`；`debt` 不能改 `attached_to` / `debt_kind`。要改精确说法的陈述、分支或变量就新建对象。
+- **语义与表示对象可以提议退役**：`{ "local_ref": "x", "kind": "alignment", "op": "retire", "target_id": "<id>", "expected_revision": "<rev>" }`。仍需用户接受；挂在被退役对象（含 `representation_core` / `representation_binding`）上的账会自动级联为已失效；仍有活跃 `alignment` 指向的共享对象、或仍有活跃 `representation_binding` 指向的 `representation_core` 不能单独退役。
 
 ```json
 { "local_ref": "a.yi.thm", "kind": "alignment", "op": "create",
@@ -277,31 +318,33 @@ workspace.search（可指定 kinds: ["theory"] / ["semantic_entity"]，以及 sc
                "map_label": "特例：乙的第 n 条 ＝ 共享的第 n+1 条" } }
 ```
 
-语义层的阻塞码：`kind_not_supported`、`operation_not_supported`、`invalid_arg`、`invalid_relation`、`same_as_forbidden`、`invalid_reference_kind`、`missing_required_field`、`forbidden_trust_claim`、`forbidden_alignment_status`、`forbidden_debt_status`、`forbidden_baseline_status`、`identity_field_edit`、`revision_conflict`、`inactive_or_invalid_reference`，以及 4.1 的引用与依赖码。`relation_detail_missing`、`overlap_scope_missing`、`certificate_debt_suggested`、`dialect_scope_mismatch`、`duplicate_alignment`、`theory_name_too_specific`、`label_lang_missing`、`possible_duplicate_name`、`duplicate_mathlib_decl`（warn）和 `uncontextualized`、`inferred_convention`、`mathlib_baseline_unchecked`、`multi_target_change_set`、`theory_aliases_missing`（info）是给用户看的审核项，不阻塞；用户可能在对话里引用它们（「反馈给 agent」），那时读回提案再用 `supersedes` 修订。
+语义与表示层的阻塞码：`kind_not_supported`、`operation_not_supported`、`invalid_arg`、`invalid_relation`、`same_as_forbidden`、`invalid_reference_kind`、`missing_required_field`、`forbidden_trust_claim`、`forbidden_alignment_status`、`forbidden_debt_status`、`forbidden_baseline_status`、`identity_field_edit`、`revision_conflict`、`inactive_or_invalid_reference`、`invalid_guard_ref`、`duplicate_guard_id`、`duplicate_branch_id`、`invalid_branch_ref`、`duplicate_local_symbol`，以及 4.1 的引用与依赖码。`relation_detail_missing`、`overlap_scope_missing`、`certificate_debt_suggested`、`dialect_scope_mismatch`、`duplicate_alignment`、`duplicate_representation_binding`、`branch_coverage_unspecified`、`theory_name_too_specific`、`label_lang_missing`、`possible_duplicate_name`、`duplicate_mathlib_decl`（warn）和 `uncontextualized`、`inferred_convention`、`mathlib_baseline_unchecked`、`multi_target_change_set`、`theory_aliases_missing`（info）是给用户看的审核项，不阻塞；用户可能在对话里引用它们（「反馈给 agent」），那时读回提案再用 `supersedes` 修订。
 
-### 4.3 建图动机判别、三层升格准则与 `user.ask` 追问规范（`mathscape-mcp/20`）
+### 4.3 建图动机判别、三层升格准则与 `user.ask` 追问规范（`mathscape-mcp/21`）
 
 在动手调 `propose_changes` 之前，先按下面三层判别树确定**为什么建、建在哪一层**，杜绝“为单道练习硬造共享实体”与“跨章节瞎猜硬连关系”两类污染：
 
 1. **第一层：留在来源层（`source_unit` + `source_relation`）**
    - 当只是登记单本书内的章节、定义、定理、证明、例题或单道常规习题，或者某道题只是直接引用/应用本书某个已明确的定理或方法单元（`cites` / `applies_method` / `solves` / `proves`），且没有跨书对照或通用题型复用需求时，**只建来源单元与来源关系**。
    - **禁止**为每一道普通练习单独造一个一次性的 `problem_schema` 或 `declaration` 充数。
-2. **第二层：升格到语义层（`semantic_entity` + `alignment`）**
-   - 满足以下明确建图动机之一时才升格（建前必须先 `workspace.search` 查已有 `theory` 与 `semantic_entity`，能复用绝不重造）：
-     - **跨书 / 跨手稿对齐**：两份材料（或教材与手写演算）表达同一概念、定理或恒等式，需要对齐记号约定、下标起点或参数对应；
-     - **可复用题型提炼（`problem_schema`）**：至少能覆盖两道及以上具体题目，或用户明确要求把一类反复出现的解题套路（如“有限数列母函数消元求组合和”“特征根法解常系数线性递推”）抽成方法骨架；
-     - **形式化基线或精确契约锚定（`concept` / `declaration`）**：需要挂接 mathlib 声明、拆清易混量词与边界条件，或作为多条对齐线与挂账的公共锚点。
+2. **第二层：升格到语义与表示层（`semantic_entity` / `representation_core` + `alignment` / `representation_binding`）**
+   - 满足以下明确建图动机之一时才升格（建前必须先 `workspace.search` 查已有 `theory`、`semantic_entity` 与 `representation_core`，能复用绝不重造）：
+     - **跨书 / 跨手稿对齐**：两份材料（或教材与手写演算）表达同一概念、定理或恒等式，需要对齐记号约定、下标起点、退化分支覆盖（`target_branches`）或参数对应；
+     - **表示载体建模（`representation_core` + `representation_binding`）**：定理或解法真正发生了承载空间切换（如离散数列 $\leftrightarrow$ 形式幂级数、真分式 $\leftrightarrow$ 部分分式和、离散组合和 $\leftrightarrow$ $[0,1]$ 多项式定积分），需要把局部方言符号绑定到可复用表示核上；若只是同一表示内的代数变形或数学归纳，不另建第二个表示核；
+     - **可复用题型提炼（`problem_schema`）**：至少能覆盖两道及以上具体题目，或用户明确要求把一类反复出现的解题套路抽成方法骨架；
+     - **形式化基线或精确契约锚定（`concept` / `declaration`）**：需要挂接 mathlib 声明、拆清互斥守卫与退化/排除边界（`guards` / `branches` / `exclusions`），或作为多条对齐线与挂账的公共锚点。
 3. **第三层：挂账或停下追问（`debt` / `user.ask`）**
-   - 原文省略了隐含前提、但数学指向清晰无歧义 → 正常建边并挂 `debt` 记录所缺假设；
+   - 原文省略了隐含前提或剥离了收敛域、但数学指向清晰无歧义 → 正常建边并挂 `debt` 记录所缺假设；
    - 原文**指代不明或范围存疑** → **宁停勿猜**，先查上下文邻域，仍不能唯一确定时立即调用 `user.ask` 请用户确认。
 
 **`propose_changes.rationale` 首句动机标签（必填）**：
 
 每次提交提案时，`rationale` 第一句必须以下列标签之一开头，简明交代立意：
 - `【来源锚定】`：登记原文片段、书内单元与书内结构关系；
-- `【跨书对齐】`：连接不同材料/手稿中的同一数学对象并注明参数或记号映射；
+- `【跨书对齐】`：连接不同材料/手稿中的同一数学对象并注明参数、分支或记号映射；
+- `【表示建模】`：建立或复用 `representation_core`、补充 `dialect_scope.local_symbols` 并建立 `representation_binding`；
 - `【题型提炼】`：提炼跨题复用的 `problem_schema` 并将具体题目对齐上去；
-- `【概念/定理升格】`：建立共享 `concept` / `declaration` / `theory` 或补充 mathlib 基线；
+- `【概念/定理升格】`：建立共享 `concept` / `declaration` / `theory`（含内聚多分支与排除项）或补充 mathlib 基线；
 - `【纠错重连】`：退役错误书内关系、错误对齐、错题型或错账，并重连到正确目标；
 - `【补账/销账】`：补充隐含假设 `debt` 或提交 `claimed_paid` 偿还证据。
 
@@ -379,6 +422,11 @@ Agent 不得：
 
 - 没读原文就先画网；
 - 把每个来源短语都做成对象卡；
+- 把同一结论的不同证明路线写成 `guards`，或把不适用情形的过程提示文字塞进 `branches[].conclusion`（应进 `exclusions`）；
+- 在 `semantic_entity` / `representation_core` 中残留「关系 (80)」「式 (83)」等单本书内编号，未能自包含去语境化；
+- 把 `alignment` / `representation_binding` 误放进 `proposed_relations`（应放 `proposed_objects`）；
+- `representation_binding.symbol_map` 引用未在 `dialect_scope.local_symbols` 声明的记号，或把自然语言名词当 `target_expr`；
+- 跨解析快照硬造半句话 `section` 锚点（应保持单快照父链并在 `unresolved` 说明）；
 - 把 guard、Debt 和 lemma 写成同一种东西；
 - 用 D 跨表示；
 - 用 X 藏住关键保持引理；
