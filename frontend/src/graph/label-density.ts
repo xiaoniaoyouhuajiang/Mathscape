@@ -1,12 +1,10 @@
 import type { Core, EdgeSingular, NodeCollection, NodeSingular } from "cytoscape";
-import { getMapStyle } from "../shell/map-style";
 import { labelBox, LABEL_HOVER, refreshLabels, type LabelBox, type LabelEle, type LabelSet } from "./label-hover";
 import { placeMapLabels, type MapLabel, type LabelSegment } from "./label-placement";
 export type { MapLabel } from "./label-placement";
 
 export const AUTO_LABEL_HIDDEN = "is-auto-label-hidden";
 const SCALE_KEY = "mathscape.labelScale";
-const DENSE_MAP_SIZE = 32;
 const OFFSET_KEY = "mathscape.labelOffset";
 const ZERO_OFFSET = { x: 0, y: 0 };
 
@@ -42,7 +40,7 @@ function priority(node: NodeSingular): number {
   }
 }
 
-/** The study outline already has a designed label hierarchy; leave it alone. */
+/** Declutter small maps too: a few long theorem names can fill a narrow canvas. */
 export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
   let frame: number | null = null;
   let applying = false;
@@ -52,8 +50,8 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
     applying = true;
     try {
       const nodes = core.nodes(':visible').filter(node => node.data("elementKind") !== "junction") as NodeCollection;
-      const dense = getMapStyle() === "constellation" && enabled() && nodes.length >= DENSE_MAP_SIZE;
-      const scale = dense ? Math.max(1, 1 / core.zoom()) : 1;
+      const organic = enabled();
+      const scale = Math.max(1, 1 / core.zoom());
       if (core.scratch(SCALE_KEY) !== scale) {
         core.scratch(SCALE_KEY, scale);
         // Font mappings alone leave Cytoscape's label/wrap textures at their
@@ -61,14 +59,32 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
         refreshLabels(core, core.nodes() as unknown as LabelSet, schedule);
         return;
       }
-      if (!dense) {
-        core.nodes().removeClass(AUTO_LABEL_HIDDEN);
-        const shifted = core.nodes().filter(node => mapLabelOffset(node).x !== 0 || mapLabelOffset(node).y !== 0);
-        shifted.forEach(node => { node.scratch(OFFSET_KEY, { x: 0, y: 0 }); });
-        if (shifted.nonempty()) refreshLabels(core, shifted as unknown as LabelSet);
+      const zoom = core.zoom(), pan = core.pan();
+      const container = core.container();
+      const hud = container?.parentElement?.querySelector<HTMLElement>("#study-hud");
+      const top = !organic && hud && !hud.hidden && container
+        ? Math.max(12, hud.getBoundingClientRect().bottom - container.getBoundingClientRect().top + 12)
+        : 12;
+      const viewport = { x1: 12, y1: top, x2: core.width() - 12, y2: core.height() - 12, w: core.width() - 24, h: core.height() - top - 12 };
+      if (!organic) {
+        // The spine/orbits already allocate a reading lane for every title.
+        // Do not let the organic priority filter hide outline rows or move
+        // their names to a distant cluster perimeter.
+        let shifted = core.collection();
+        core.batch(() => {
+          core.nodes().removeClass(AUTO_LABEL_HIDDEN);
+          nodes.forEach(node => {
+            const old = mapLabelOffset(node), box = labelBox(node as unknown as LabelEle);
+            const left = box.x1 * zoom + pan.x - old.x, width = box.w * zoom;
+            const x = node.hasClass("is-out-of-focus") ? 0 : Math.max(viewport.x1, Math.min(left, viewport.x2 - width)) - left;
+            if (Math.abs(x - old.x) < 0.1 && old.y === 0) return;
+            node.scratch(OFFSET_KEY, { x, y: 0 });
+            shifted = shifted.union(node);
+          });
+        });
+        if (shifted.nonempty()) refreshLabels(core, shifted as unknown as LabelSet, schedule);
         return;
       }
-      const zoom = core.zoom(), pan = core.pan();
       const labels: MapLabel[] = [];
       const baseBoxes = new Map<string, LabelBox>();
       const bodies = nodes.map(node => {
@@ -108,6 +124,8 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
         const p = node.renderedPosition(), hw = node.renderedOuterWidth() / 2, hh = node.renderedOuterHeight() / 2;
         const at = (x: number, y: number): LabelBox => ({ x1: x, x2: x + base.w, y1: y, y2: y + base.h, w: base.w, h: base.h });
         const alternatives = [at(p.x - base.w / 2, p.y - hh - 12 - base.h), at(p.x - hw - 12 - base.w, p.y - base.h / 2), at(p.x + hw + 12, p.y - base.h / 2)];
+        // Keep captions near the canvas edge in an inward slot.
+        alternatives.push(at(Math.max(viewport.x1, Math.min(base.x1, viewport.x2 - base.w)), Math.max(viewport.y1, Math.min(base.y1, viewport.y2 - base.h))));
         // Keep a readable identity for every constellation. A short annotation
         // leader ties perimeter captions to their actual glyph (not a new edge).
         const cluster = clusterBounds.get(node.id());
@@ -129,7 +147,7 @@ export function bindMapLabelDensity(core: Core, enabled: () => boolean): void {
           protected: protectedLabel,
         });
       });
-      const placements = placeMapLabels(labels, bodies, edges, 12);
+      const placements = placeMapLabels(labels, bodies, edges, 12, viewport);
       let shifted = core.collection();
       core.batch(() => { nodes.forEach(node => {
         const placed = placements.get(node.id()), base = baseBoxes.get(node.id());

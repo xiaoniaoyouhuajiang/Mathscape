@@ -32,6 +32,9 @@ import {
   type LabelSet,
 } from "./label-hover";
 import { graphLabelText, texToPlain } from "./tex-plain";
+import { wrapGraphLabel } from "./label-wrap";
+
+const wrappedLabel = (ele: { data(name: string): unknown }): string => wrapGraphLabel(String(ele.data("label") ?? ""));
 
 export type RenderMode = "semantic" | "hyperedge";
 
@@ -436,7 +439,7 @@ function graphStyles(): StylesheetJson {
         "border-color": resolveGraphColor(visual.border),
         "border-style": visual.borderStyle,
         "border-width": constellation ? 1 : 1.5,
-        "font-size": constellation ? (node: NodeSingular) => (mapLabelScale(node) > 1 ? Math.max(11, visual.fontSize) : visual.fontSize) * mapLabelScale(node) : `${visual.fontSize}px`,
+        "font-size": (node: NodeSingular) => Math.max(12, visual.fontSize) * mapLabelScale(node),
       },
     };
   });
@@ -445,9 +448,10 @@ function graphStyles(): StylesheetJson {
     {
       selector: "node",
       style: {
-        label: "data(label)",
-        "text-wrap": constellation ? (node: NodeSingular) => mapLabelScale(node) > 1 ? "ellipsis" : "wrap" : "wrap",
-        "text-max-width": constellation ? (node: NodeSingular) => `${(node.data("nodeType") === "pdf" && mapLabelScale(node) > 1 ? 120 : 150) * mapLabelScale(node)}px` : "150px",
+        label: wrappedLabel,
+        "text-wrap": "wrap",
+        "text-overflow-wrap": "whitespace",
+        "text-max-width": (node: NodeSingular) => `${150 * mapLabelScale(node)}px`,
         "text-events": "yes",
         "font-size": "11px",
         "background-color": t.accent,
@@ -462,8 +466,8 @@ function graphStyles(): StylesheetJson {
         "text-outline-color": t.canvas,
         "text-outline-width": 2,
         "text-valign": "bottom",
-        "text-margin-x": constellation ? (node: NodeSingular) => mapLabelOffset(node).x / node.cy().zoom() : 0,
-        "text-margin-y": constellation ? (node: NodeSingular) => 14 * mapLabelScale(node) + mapLabelOffset(node).y / node.cy().zoom() : 7,
+        "text-margin-x": (node: NodeSingular) => mapLabelOffset(node).x / node.cy().zoom(),
+        "text-margin-y": (node: NodeSingular) => (constellation ? 14 : 7) * mapLabelScale(node) + mapLabelOffset(node).y / node.cy().zoom(),
       },
     },
     ...nodeTypeStyles,
@@ -543,7 +547,7 @@ function graphStyles(): StylesheetJson {
     {
       selector: "edge.semantic-edge",
       style: {
-        label: "data(label)",
+        label: wrappedLabel,
         "line-color": t.edge,
         "target-arrow-color": t.edge,
         color: t.text,
@@ -552,7 +556,7 @@ function graphStyles(): StylesheetJson {
     {
       selector: "edge.evidence-edge",
       style: {
-        label: "data(label)",
+        label: wrappedLabel,
         width: constellation ? 0.8 : 1.2,
         opacity: constellation ? 0.07 : 1,
         "line-style": "dashed",
@@ -613,7 +617,7 @@ function graphStyles(): StylesheetJson {
     {
       selector: "edge.contracted-edge",
       style: {
-        label: "data(label)",
+        label: wrappedLabel,
         width: 1.6,
         "line-style": "dotted",
         "line-color": t.edge,
@@ -653,7 +657,6 @@ function graphStyles(): StylesheetJson {
         // Pending titles include an explicit status badge: keep that longer
         // label below the node, not in the neighboring node's horizontal slot.
         "text-halign": "center", "text-valign": "bottom",
-        ...(constellation ? {} : { "text-margin-x": 0, "text-margin-y": 7 }),
       },
     },
     {
@@ -774,7 +777,7 @@ function graphStyles(): StylesheetJson {
     {
       selector: "edge.scene-ghost-edge",
       style: {
-        label: "data(label)",
+        label: wrappedLabel,
         width: 1.6,
         "line-style": "dashed",
         "line-color": t.candidate,
@@ -838,35 +841,33 @@ function graphStyles(): StylesheetJson {
       },
     },
     {
+      selector: "node.spine-header-node, node.spine-unit-node, node.spine-scope-node, node.orbit-semantic-node, node.orbit-outer-node",
+      style: {
+        "font-size": (node: NodeSingular) => Number(node.data("studyFontSize") ?? 13) * mapLabelScale(node),
+        "text-max-width": (node: NodeSingular) => `${Number(node.data("studyLabelWidth") ?? 180) * mapLabelScale(node)}px`,
+        "line-height": 1.3,
+        "text-valign": "center",
+        "text-halign": "left",
+        "text-margin-x": (node: NodeSingular) => -10 * mapLabelScale(node) + mapLabelOffset(node).x / node.cy().zoom(),
+        "text-margin-y": (node: NodeSingular) => mapLabelOffset(node).y / node.cy().zoom(),
+        "text-background-opacity": 1,
+        "text-background-padding": "3px",
+      },
+    },
+    {
+      selector: "node.is-compact-study",
+      style: {
+        width: 12,
+        height: 12,
+        "text-margin-x": (node: NodeSingular) => -6 * mapLabelScale(node) + mapLabelOffset(node).x / node.cy().zoom(),
+      },
+    },
+    {
       selector: "node.spine-header-node",
       style: {
         "border-width": 2.5,
         "border-color": t.accent,
-        "text-max-width": "260px",
-        "font-size": "12px",
         color: t.text,
-      },
-    },
-    {
-      selector: "node.spine-unit-node",
-      style: {
-        "text-valign": "center",
-        "text-halign": "right",
-        "text-margin-x": 10,
-        "text-max-width": "240px",
-      },
-    },
-    {
-      selector: "node.orbit-semantic-node",
-      style: {
-        "text-max-width": "210px",
-        "font-size": "12px",
-      },
-    },
-    {
-      selector: "node.orbit-outer-node",
-      style: {
-        "text-max-width": "210px",
       },
     },
     {

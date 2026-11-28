@@ -470,7 +470,7 @@ export class GraphController {
           this.visibleNodeKinds = new Set(PRESET_NODE_KINDS[preset]);
           this.syncCheckboxesToFilter();
           this.persistFilter();
-          this.renderCurrentGraph();
+          this.renderCurrentGraph(undefined, { fit: true });
         }
       };
     });
@@ -655,7 +655,12 @@ export class GraphController {
 
     const landscape = activityGraph(snapshot.landscape_graph, this.showRetired);
     const rect = this.elements.graphContainer.getBoundingClientRect();
-    const viewport = { width: rect.width, height: rect.height };
+    // Seed organic geometry from the stable panel, not the changing legend
+    // row. Otherwise the first render (empty legend) and 整理布局 (wrapped
+    // legend) produce different coordinates. Camera fitting still uses the
+    // actual canvas, and study lanes use its live, legend-excluding bounds.
+    const panel = this.elements.graphContainer.parentElement?.getBoundingClientRect();
+    const viewport = { width: rect.width, height: panel ? Math.max(rect.height, panel.bottom - rect.top) : rect.height };
     this.basePositions = resolveIncrementalPositions(
       landscape,
       options?.forceRelayout ? new Map() : this.basePositions,
@@ -739,7 +744,9 @@ export class GraphController {
       node.hasClass(SELECTED_PRIMARY_CLASS) ||
       node.hasClass(FOCUS_ROOT_CLASS) ||
       node.hasClass("spine-unit-node") ||
+      node.hasClass("spine-scope-node") ||
       node.hasClass("orbit-semantic-node") ||
+      node.hasClass("orbit-outer-node") ||
       node.hasClass("spine-header-node");
 
     if (this.graphCore !== null) {
@@ -760,6 +767,31 @@ export class GraphController {
       );
       this.bindGraphInteractions(this.graphCore);
       bindMapLabelDensity(this.graphCore, () => !this.studyActive);
+      const core = this.graphCore;
+      let resizeFrame: number | null = null;
+      let size = { width: core.width(), height: core.height() };
+      // Cytoscape also resizes itself for native window/container changes;
+      // those do not go through GraphController.resize(). Fit the live scope
+      // after dock/toolbar resizing, without moving pinned organic nodes.
+      core.on("resize", () => {
+        if (resizeFrame !== null) return;
+        resizeFrame = requestAnimationFrame(() => {
+          resizeFrame = null;
+          if (core.destroyed()) return;
+          const next = { width: core.width(), height: core.height() };
+          const changed = next.width !== size.width || next.height !== size.height;
+          size = next;
+          // Shell updates also dispatch resize with identical dimensions;
+          // those must preserve the user's deliberate pan/zoom.
+          if (!changed || next.width <= 0 || next.height <= 0) return;
+          if (this.studyActive) this.choreographer.refit(core, true);
+          else {
+            this.choreographer.finishNow();
+            this.fitInFocusElements();
+          }
+        });
+      });
+      core.one("destroy", () => { if (resizeFrame !== null) cancelAnimationFrame(resizeFrame); });
     } else {
       syncCytoscapeGraph(this.graphCore, this.displayedGraph, this.renderMode, {
         positions: posture.positions,
@@ -781,25 +813,28 @@ export class GraphController {
     this.inkOverlayResult = applyInkOverlay(this.graphCore, this.inkOverlay, this.showInkNotes);
     applyErrataReviewOverlay(this.graphCore, this.errataReviewOverlay);
     this.applyEffectiveFocusAndSelection();
-    this.choreographer.applyPosture(
-      this.graphCore,
-      posture,
-      priorPositions,
-      priorElementIds,
-      { forceSnap: options?.forceRelayout },
-    );
-
     // Sync full/compact labels across posture transitions (Study Spine shows full chapter/theorem titles)
     let changedLabels = this.graphCore.collection();
     this.graphCore.nodes().forEach((node) => {
       if (node.data("elementKind") === "junction" || node.hasClass(INK_NOTE_NODE_CLASS)) return;
-      if (syncNodeLabel(node, node.hasClass(LABEL_HOVER) || isFullLabelNode(node))) {
+      const full = node.hasClass(LABEL_HOVER) || node.hasClass(SELECTED_PRIMARY_CLASS) || node.hasClass(FOCUS_ROOT_CLASS) ||
+        (posture.nodeClasses.get(node.id()) ?? []).some(cls =>
+          cls === "spine-unit-node" || cls === "spine-scope-node" || cls === "orbit-semantic-node" || cls === "orbit-outer-node" || cls === "spine-header-node");
+      if (syncNodeLabel(node, full)) {
         changedLabels = changedLabels.union(node);
       }
     });
     if (changedLabels.nonempty()) {
       refreshLabels(this.graphCore, changedLabels as unknown as LabelSet);
     }
+
+    this.choreographer.applyPosture(
+      this.graphCore,
+      posture,
+      priorPositions,
+      priorElementIds,
+      { forceSnap: options?.forceRelayout, resetViewport: options?.fit },
+    );
 
     this.renderInkToggle();
     this.renderLegend(this.graphCore);

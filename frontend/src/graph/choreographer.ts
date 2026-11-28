@@ -12,12 +12,15 @@
  *    newly mounted elements bloom in smoothly at their exact deterministic
  *    slot coordinates without flashing the rest of the canvas.
  */
-import type { Core, NodeSingular } from "cytoscape";
+import type { Core, NodeCollection, NodeSingular } from "cytoscape";
 import { reducedMotion } from "../core/motion";
 import { INK_NOTE_NODE_CLASS } from "./ink-overlay";
 import type { MapPoint } from "./layout";
 import { ease, lerp, satelliteShift } from "./scene-clump";
 import type { CameraTarget, MapPostureSpec } from "./study-posture";
+import { layoutStudyLanes, type StudyLaneLabel } from "./study-viewport";
+import { labelBox, refreshLabels, type LabelEle, type LabelSet } from "./label-hover";
+import { mapLabelScale } from "./label-density";
 
 export const POSTURE_MORPH_MS = 420;
 export const INCREMENTAL_BLOOM_MS = 220;
@@ -25,6 +28,7 @@ export const INCREMENTAL_BLOOM_MS = 220;
 export const STUDY_POSTURE_NODE_CLASSES = [
   "spine-header-node",
   "spine-unit-node",
+  "spine-scope-node",
   "orbit-semantic-node",
   "orbit-outer-node",
   "study-status-mastered",
@@ -67,6 +71,100 @@ export class GraphChoreographer {
   private bloomTimer: number | null = null;
   /** Saved organic camera viewport before entering Study Posture so Local -> Global restores smoothly. */
   private savedOrganicViewport: ViewportState | null = null;
+  private posture: MapPostureSpec | null = null;
+
+  private settleStudy(core: Core): void {
+    const posture = this.posture;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!core.destroyed() && this.posture === posture && !this.isAnimating()) this.refit(core, false, false);
+    }));
+  }
+
+  refit(core: Core, resized = false, settle = true): void {
+    if (!this.posture || this.posture.id === "organic") return;
+    this.finishNow();
+    // A pre-study camera belongs to the old canvas size. After a dock/window
+    // resize, returning to organic must fit the current canvas instead.
+    if (resized) this.savedOrganicViewport = null;
+    this.layoutSpine(core, this.posture);
+    core.batch(() => core.nodes().forEach(node => {
+      const position = this.posture?.positions.get(node.id());
+      if (position && !node.hasClass(INK_NOTE_NODE_CLASS)) node.position(position);
+    }));
+    const viewport = this.resolveCameraViewport(core, { kind: "target", camera: this.posture.camera, positions: this.posture.positions });
+    if (viewport) core.viewport(viewport);
+    if (settle) this.settleStudy(core);
+  }
+
+  private studyViewport(core: Core) {
+    const pad = 20, container = core.container();
+    const hud = container?.parentElement?.querySelector<HTMLElement>("#study-hud");
+    const top = hud && !hud.hidden && container
+      ? Math.max(pad, hud.getBoundingClientRect().bottom - container.getBoundingClientRect().top + pad)
+      : pad;
+    return { x1: pad, x2: core.width() - pad, y1: top, y2: core.height() - pad };
+  }
+
+  private layoutSpine(core: Core, posture: MapPostureSpec): void {
+    if (!posture.id.startsWith("study:material:")) return;
+    const viewport = this.studyViewport(core);
+    const width = Math.max(300, viewport.x2 - viewport.x1), height = Math.max(120, viewport.y2 - viewport.y1);
+    const nodes = core.nodes().filter(node => posture.inScopeNodeIds?.has(node.id()) === true && node.data("elementKind") !== "junction") as NodeCollection;
+    const compact = width < 600;
+    nodes.toggleClass("is-compact-study", compact);
+    nodes.forEach(node => { node.data("studyFontSize", width < 480 ? 12 : 13); });
+    const laneOf = (node: NodeSingular): 0 | 1 | 2 => node.hasClass("orbit-outer-node") ? 2 : node.hasClass("orbit-semantic-node") ? 1 : 0;
+    const rows = nodes.map(node => {
+      const p = posture.positions.get(node.id()) ?? node.position();
+      const order = node.hasClass("spine-header-node") ? -2e6 : node.hasClass("spine-scope-node") ? -1e6 + p.y : p.y;
+      const savedIndent = node.scratch("studyIndent") as { posture: string; value: number } | undefined;
+      const indent = savedIndent?.posture === posture.id ? savedIndent.value : node.hasClass("spine-unit-node") ? Math.max(0, p.x) / 66 * 6 : 0;
+      node.scratch("studyIndent", { posture: posture.id, value: indent });
+      return { node, id: node.id(), lane: laneOf(node), order, indent };
+    });
+    const measure = (columns: readonly number[]) => {
+      nodes.forEach(node => { node.data("studyLabelWidth", Math.max(64, columns[laneOf(node)] - (compact ? 30 : 42))); });
+      // Measure safe wrapping at the actual reading width, independent of the
+      // previous camera's font compensation. Never shrink study text to fit.
+      refreshLabels(core, nodes as unknown as LabelSet);
+      let horizontalOverflow = 0;
+      const labels: StudyLaneLabel[] = rows.map(row => {
+        const box = labelBox(row.node as unknown as LabelEle), scale = mapLabelScale(row.node);
+        horizontalOverflow = Math.max(horizontalOverflow, box.w / scale - (columns[row.lane] - 20));
+        return { ...row, height: Math.max(24, box.h / scale + 6) };
+      });
+      const heights = [0, 1, 2].map(lane => {
+        const items = labels.filter(row => row.lane === lane);
+        return items.reduce((sum, row) => sum + row.height, 0) + Math.max(0, items.length - 1) * 14;
+      });
+      const score = Math.max(0, ...heights.map(h => h - height)) + Math.max(0, horizontalOverflow) * 4;
+      return { labels, score };
+    };
+    let columns = [width / 3, width / 3, width / 3];
+    let best = measure(columns);
+    // A dock-narrowed outline has many more rows than either orbit. Borrow
+    // spare orbit width before allowing a caption to continue below the page.
+    if (best.score > 0) {
+      for (const ratios of [[0.4, 0.27, 0.33], [0.44, 0.25, 0.31], [0.48, 0.23, 0.29], [0.4, 0.2, 0.4], [0.42, 0.2, 0.38], [0.45, 0.2, 0.35], [0.5, 0.23, 0.27], [0.52, 0.23, 0.25], [0.36, 0.24, 0.4], [0.33, 0.24, 0.43], [0.3, 0.24, 0.46], [0.27, 0.23, 0.5]]) {
+        const candidate = ratios.map(ratio => ratio * width), measured = measure(candidate);
+        if (measured.score < best.score) { columns = candidate; best = measured; }
+        if (best.score === 0) break;
+      }
+      best = measure(columns);
+    }
+    // Each measured row already includes 6px of caption padding; an 8px
+    // compact row gap still leaves 14px between the actual captions.
+    const minGap = best.score > 0 ? 8 : 14;
+    for (const [id, position] of layoutStudyLanes(best.labels, width, height, { columns, minGap, compact })) posture.positions.set(id, position);
+    core.nodes().filter(node => node.data("elementKind") === "junction").forEach(node => {
+      const ends = node.connectedEdges().connectedNodes().not(node).toArray();
+      const points = ends.map(end => posture.positions.get(end.id())).filter((p): p is MapPoint => p !== undefined);
+      if (points.length) posture.positions.set(node.id(), { x: points.reduce((sum, p) => sum + p.x, 0) / points.length, y: points.reduce((sum, p) => sum + p.y, 0) / points.length });
+    });
+    // This is a readable page, not a thumbnail of the entire document. Longer
+    // outlines continue below it and remain reachable by normal panning.
+    posture.camera = { kind: "framing_box", box: { x1: 0, y1: 0, x2: width, y2: height }, maxZoom: 1 };
+  }
 
   getPostureId(): string {
     return this.lastPostureId;
@@ -111,9 +209,11 @@ export class GraphChoreographer {
     posture: MapPostureSpec,
     priorPositions: ReadonlyMap<string, MapPoint>,
     priorElementIds: ReadonlySet<string>,
-    options: { animate?: boolean; forceSnap?: boolean } = {},
+    options: { animate?: boolean; forceSnap?: boolean; resetViewport?: boolean } = {},
   ): void {
     this.finishNow();
+
+    this.posture = posture;
 
     const wasOrganic = this.lastPostureId === "organic";
     const isOrganic = posture.id === "organic";
@@ -128,7 +228,7 @@ export class GraphChoreographer {
 
     // 1. Apply semantic posture classes & spine Bezier arc attributes
     core.batch(() => {
-      core.nodes().removeClass(ALL_STUDY_NODE_CLASS_STR);
+      core.nodes().removeClass(`${ALL_STUDY_NODE_CLASS_STR} is-compact-study`);
       core.edges().removeClass(ALL_STUDY_EDGE_CLASS_STR);
 
       for (const [nodeId, clsList] of posture.nodeClasses) {
@@ -166,6 +266,8 @@ export class GraphChoreographer {
       });
     });
 
+    this.layoutSpine(core, posture);
+
     const allowAnim =
       options.animate !== false &&
       !options.forceSnap &&
@@ -176,7 +278,7 @@ export class GraphChoreographer {
     // 2. If staying in the same posture (e.g. checkbox toggle, signal toggle, study mark update),
     //    keep camera untouched so the user's scroll position never jumps, bloom newly added elements,
     //    and gently nudge any orbit nodes whose relaxed slot shifted.
-    if (!postureChanged) {
+    if (!postureChanged && !options.forceSnap) {
       if (!isOrganic) {
         core.batch(() => {
           core.nodes().forEach((node) => {
@@ -246,9 +348,18 @@ export class GraphChoreographer {
     };
     const toVp = this.resolveCameraViewport(
       core,
-      isOrganic && this.savedOrganicViewport
+      isOrganic && this.savedOrganicViewport && !options.resetViewport
         ? { kind: "saved", vp: this.savedOrganicViewport }
-        : { kind: "target", camera: posture.camera, positions: posture.positions },
+        : {
+            kind: "target",
+            // A resized study canvas invalidates the saved organic camera.
+            // Organic normally preserves the viewport; that must not preserve
+            // the study page's 1:1 framing when returning to the source map.
+            camera: isOrganic && !wasOrganic && !this.savedOrganicViewport
+              ? { kind: "fit_elements", padding: 56, elementIds: posture.inScopeNodeIds ?? undefined }
+              : posture.camera,
+            positions: posture.positions,
+          },
     );
     if (isOrganic) {
       this.savedOrganicViewport = null;
@@ -272,6 +383,7 @@ export class GraphChoreographer {
           });
         }
       });
+      if (t >= 1 && !isOrganic) this.settleStudy(core);
     };
 
     if (!allowAnim || (moves.length === 0 && !toVp)) {
@@ -336,24 +448,8 @@ export class GraphChoreographer {
     if (camera.kind === "preserve") return null;
 
     if (camera.kind === "framing_box") {
-      const pad = camera.padding ?? 40;
-      const bw = Math.max(120, camera.box.x2 - camera.box.x1);
-      const bh = Math.max(120, camera.box.y2 - camera.box.y1);
-      const availW = Math.max(120, w - pad * 2);
-      const availH = Math.max(120, h - pad * 2);
-      const rawZoom = Math.min(availW / bw, availH / bh);
-      const zoom = Math.min(
-        camera.maxZoom ?? 1.05,
-        Math.max(camera.minZoom ?? 0.75, rawZoom),
-      );
-      const cx = (camera.box.x1 + camera.box.x2) / 2;
-      // Measure actual `#study-hud` height dynamically so the spine header always breathes cleanly below it
-      const hudEl = core.container()?.parentElement?.querySelector<HTMLElement>("#study-hud");
-      const hudHeight = hudEl && !hudEl.hidden ? hudEl.offsetHeight : 44;
-      const topScreenOffset = Math.max(96, hudHeight + 48);
-      const panX = w / 2 - cx * zoom;
-      const panY = topScreenOffset - camera.box.y1 * zoom;
-      return { zoom, pan: { x: panX, y: panY } };
+      const viewport = this.studyViewport(core);
+      return { zoom: 1, pan: { x: viewport.x1, y: viewport.y1 } };
     }
 
     // `fit_elements`: compute target bounding box from `positions`

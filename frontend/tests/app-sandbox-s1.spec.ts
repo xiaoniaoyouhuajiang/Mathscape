@@ -1,5 +1,16 @@
 import { expect, test } from "@playwright/test";
 
+// A dock width change now deliberately refits the source camera. Snapshot
+// scene-player state only after that resize, not while its RAF is pending.
+async function settleMapResize(page: import("@playwright/test").Page) {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    const cy = (document.querySelector("#graph") as unknown as { _cyreg: { cy: { resize(): void } } })._cyreg.cy;
+    cy.resize();
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  });
+}
+
 test.describe("S1 sandbox shell", () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1400, height: 860 });
@@ -923,6 +934,7 @@ test.describe("S1 sandbox shell", () => {
     await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
     const dock = page.getByRole("complementary", { name: "沙箱对话" });
     await expect(dock).toHaveClass(/is-sidebar/);
+    await settleMapResize(page);
     const unitId = await page.evaluate(() => window.appHarness.citeUnitId);
     await page.evaluate(() => { Object.assign(window.appHarness.sandboxRound, { cite: true, delayMs: 30, gapMs: 1200 }); });
     const viewBefore = await page.evaluate(() => window.appHarness.viewport());
@@ -985,6 +997,7 @@ test.describe("S1 sandbox shell", () => {
     await page.locator(".topbar .sandbox-banner").getByRole("button", { name: "对话" }).click();
     const dock = page.getByRole("complementary", { name: "沙箱对话" });
     await expect(dock).toHaveClass(/is-sidebar/);
+    await settleMapResize(page);
     await page.evaluate((value) => { Object.assign(window.appHarness.sandboxRound, value); }, round);
     return dock;
   }

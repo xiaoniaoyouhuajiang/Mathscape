@@ -20,15 +20,16 @@ test("large maps declutter readable names without removing or moving objects", a
   const positions = await page.evaluate(() => window.appHarness.graphPaint().nodes.map(node => ({ id: node.id, position: node.position })));
   await page.evaluate(() => window.appHarness.zoomTo(0.25));
   await expect.poll(() => page.evaluate(() => window.appHarness.graphPaint().nodes.filter(node => Number(node.labelOpacity) === 0).length)).toBeGreaterThan(0);
+  // Resize fitting and zoom compensation settle on separate animation frames.
+  await expect.poll(() => page.evaluate(() => Math.min(...window.appHarness.graphPaint().nodes.map(node => node.renderedFontSize)))).toBeGreaterThanOrEqual(12 - 1e-9);
   const paint = await page.evaluate(() => window.appHarness.graphPaint());
   expect(paint.nodes.some(node => Number(node.labelOpacity) > 0)).toBe(true);
-  expect(paint.nodes.every(node => node.renderedFontSize >= 10)).toBe(true);
   expect(paint.nodes.map(node => ({ id: node.id, position: node.position }))).toEqual(positions);
   const hidden = paint.nodes.find(node => Number(node.labelOpacity) === 0)!;
   await page.evaluate(id => window.appHarness.selectNode(id), hidden.id);
   await expect.poll(() => page.evaluate(id => Number(window.appHarness.graphPaint().nodes.find(node => node.id === id)!.labelOpacity), hidden.id)).toBe(1);
   await page.evaluate(() => window.appHarness.zoomTo(2));
-  await expect.poll(() => page.evaluate(() => window.appHarness.graphPaint().nodes[0].renderedFontSize)).toBe(22);
+  await expect.poll(() => page.evaluate(() => window.appHarness.graphPaint().nodes[0].renderedFontSize)).toBe(24);
   expect(await page.evaluate(() => window.appHarness.graphPaint().nodes.length)).toBe(70);
 });
 

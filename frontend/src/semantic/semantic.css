@@ -130,6 +130,11 @@
 .study-signal-pill.is-active { border-color: var(--ms-accent); background: var(--ms-accent-bg); color: var(--ms-accent); font-weight: 600; }
 .study-drawer-toggle.is-active { border-color: var(--ms-accent); background: var(--ms-selected); color: var(--ms-accent); }
 .study-hud-right { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Keep the reading HUD to two compact rows beside a sandbox sidebar. */
+@container (max-width: 650px) {
+  .study-material-select { max-width: 220px; }
+  .study-signal-pills, .study-hud-right { display: contents; }
+}
 .study-staged-check { font-size: 11px; color: var(--ms-text-secondary); display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
 .study-exit-btn { border-color: var(--ms-control-border); background: var(--ms-panel-raised); color: var(--ms-text); }
 .study-exit-btn:hover { background: var(--ms-selected); }

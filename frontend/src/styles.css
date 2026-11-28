@@ -324,8 +324,8 @@ code {
   container-type: inline-size;
   position: relative;
   display: grid;
-  /* A stable footer keeps changing legend contents from moving the map. */
-  grid-template-rows: max-content minmax(0, 1fr) 64px;
+  /* Let the compact legend wrap without clipping its last explanation. */
+  grid-template-rows: max-content minmax(0, 1fr) auto;
   background-color: var(--ms-canvas);
   background-image:
     radial-gradient(circle at 50% 45%, var(--ms-map-nebula), transparent 58%),
@@ -453,18 +453,19 @@ code {
   z-index: 2;
   display: flex;
   flex-wrap: wrap;
-  gap: 7px 14px;
+  gap: 5px 12px;
   max-width: 100%;
-  margin: 0 16px 14px;
-  max-height: 50px;
-  overflow: auto;
+  margin: 0 16px 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   align-self: start;
-  padding: 8px 11px;
+  padding: 6px 11px;
   border: 1px solid var(--ms-border);
   border-radius: 8px;
   color: var(--ms-text-muted);
   background: var(--ms-panel-deep);
   font-size: 10px;
+  line-height: 1.3;
   pointer-events: auto;
 }
 
@@ -474,6 +475,7 @@ code {
 
 .legend-item {
   display: inline-flex;
+  max-width: 100%;
   align-items: center;
   gap: 6px;
 }
