@@ -131,12 +131,12 @@ function buildBranchesPanel(
   }
   const branches = list(decl.branches).map((b) => {
     const guardIds = Array.isArray(b.guards) ? (b.guards as unknown[]).map(str) : [];
-    const firstGuard = guardsById.get(guardIds[0] ?? "");
+    const guards = guardIds.flatMap((id) => guardsById.get(id) ?? []);
     return {
       branchId: str(b.branch_id),
       label: str(b.label),
-      guardPredicate: firstGuard?.predicate ?? "",
-      guardLabel: firstGuard?.label ?? "",
+      guardPredicate: guards.map((g) => g.predicate).filter(Boolean).join("；"),
+      guardLabel: guards.map((g) => g.label).filter(Boolean).join("、"),
       conclusion: str(record(b.conclusion).text),
       isDegenerate: Boolean(b.is_degenerate),
     };

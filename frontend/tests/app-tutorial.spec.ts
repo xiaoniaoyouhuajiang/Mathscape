@@ -394,6 +394,47 @@ test.describe("tutorial episode 2 (branches & representations)", () => {
     return dialog;
   }
 
+  test("switching back to Episode 1 while Episode 2 is still loading keeps Episode 1", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("mathscape:reduce-motion", "on"));
+    await page.goto("/tests/app.html");
+    await expect(page.locator("#ink-button")).toBeVisible();
+    const dialog = await openTutorial(page);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let requested = false;
+    await page.route(/tutorial-projection/, async (route) => {
+      requested = true;
+      await held;
+      await route.continue();
+    });
+    await dialog.locator('.tutorial-episode-btn[data-episode="ep2"]').click();
+    await expect.poll(() => requested).toBe(true);
+    await page.getByRole("dialog", { name: EP2_TITLE }).locator('.tutorial-episode-btn[data-episode="ep1"]').click();
+    const ep1 = page.getByRole("dialog", { name: TITLE });
+    await expect(ep1.locator(".tutorial-counter")).toContainText("第 1 / 13 镜");
+    const shot = await ep1.locator(".tutorial-card").getAttribute("data-shot");
+    release();
+    await page.waitForTimeout(500);
+    await expect(ep1).toBeVisible();
+    await expect(ep1.locator(".tutorial-counter")).toContainText("第 1 / 13 镜");
+    await expect(ep1.locator(".tutorial-card")).toHaveAttribute("data-shot", shot!);
+    await expect(ep1.locator('.tutorial-episode-btn[data-episode="ep1"]')).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("a failed Episode 2 load clears the previous episode's shot", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("mathscape:reduce-motion", "on"));
+    await page.goto("/tests/app.html");
+    await expect(page.locator("#ink-button")).toBeVisible();
+    const dialog = await openTutorial(page);
+    await page.route(/tutorial-projection/, (route) => route.abort());
+    await dialog.locator('.tutorial-episode-btn[data-episode="ep2"]').click();
+    const ep2 = page.getByRole("dialog", { name: EP2_TITLE });
+    await expect(ep2.locator(".tutorial-caption")).toContainText("教程载入失败");
+    await expect(ep2.locator(".tutorial-counter")).toHaveText("");
+    await expect(ep2.locator(".tutorial-card")).toBeEmpty();
+    await expect(ep2.locator(".tutorial-map canvas")).toHaveCount(0);
+  });
+
   test("plays all ten shots from the help menu, supports episode switching, and never writes", async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem("mathscape:reduce-motion", "on"));
     await page.goto("/tests/app.html");

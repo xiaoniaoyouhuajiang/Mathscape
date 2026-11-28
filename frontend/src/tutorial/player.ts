@@ -148,6 +148,7 @@ export class TutorialPlayer {
   private episode: TutorialEpisodeId = "ep1";
   private readonly projections = new Map<TutorialEpisodeId, TutorialProjection>();
   private projection: TutorialProjection | null = null;
+  private openRequest = 0;
   private shots: TutorialShot[] = [];
   private index = -1;
   private playing = false;
@@ -239,6 +240,7 @@ export class TutorialPlayer {
   }
 
   async open(episode: TutorialEpisodeId = "ep1"): Promise<void> {
+    const request = ++this.openRequest;
     this.clearTimers();
     this.episode = episode;
     const activeTitle = episode === "ep2" ? TUTORIAL_EP2_TITLE : t("tutorial.ep1.menuTitle");
@@ -261,10 +263,23 @@ export class TutorialPlayer {
           : () => loadEpisodeProjection(episode);
         projection = await loader();
       } catch (error) {
+        if (request !== this.openRequest) return;
+        this.setPlaying(false);
+        this.core?.destroy();
+        this.core = null;
+        this.projection = null;
+        this.shots = [];
+        this.index = -1;
+        this.card.replaceChildren();
+        this.legend.replaceChildren();
+        this.counter.textContent = "";
+        this.provenance.textContent = "";
         this.caption.textContent = `教程载入失败：${error instanceof Error ? error.message : String(error)}`;
         return;
       }
       this.projections.set(episode, projection);
+      // A later open() (e.g. switching back to the other episode) owns the player now.
+      if (request !== this.openRequest) return;
     }
     this.projection = projection;
     this.shots = episode === "ep2" ? buildEpisode2Shots(projection) : buildTutorialShots(projection);
@@ -350,6 +365,7 @@ export class TutorialPlayer {
   }
 
   close(): void {
+    this.openRequest += 1;
     this.clearTimers();
     this.playing = false;
     this.root.hidden = true;

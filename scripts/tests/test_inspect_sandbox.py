@@ -231,6 +231,49 @@ class InspectSandboxTests(unittest.TestCase):
         after_files = sorted(p.name for p in self.db_path.parent.iterdir())
         self.assertEqual(before_files, after_files)
 
+    def test_closed_wal_database_leaves_no_sidecars_even_in_readonly_dir(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        self.assertEqual(conn.execute("PRAGMA journal_mode = WAL").fetchone()[0], "wal")
+        conn.close()
+        db_dir = self.db_path.parent
+        before_files = sorted(p.name for p in db_dir.iterdir())
+        self.assertNotIn("mathscape.sqlite3-wal", before_files)
+
+        db_dir.chmod(0o555)
+        try:
+            prop_json = json.loads(self.run_cli("proposal", "cs123456", "--json"))
+            self.assertEqual(prop_json["inspected_versions"][0]["span_verification"][0]["status"], "exact_match")
+            self.run_cli("list")
+        finally:
+            db_dir.chmod(0o755)
+        self.assertEqual(before_files, sorted(p.name for p in db_dir.iterdir()))
+
+    def test_partially_written_transcript_line_is_skipped(self) -> None:
+        with (self.sdir / "transcript.jsonl").open("a", encoding="utf-8") as f:
+            f.write('{"thread_id": "d1", "role": "user", "te')
+        self.assertIn("mathscape.propose_changes", self.run_cli("thread", "d1"))
+
+    def test_span_pages_follow_staged_ids_not_order(self) -> None:
+        span = lambda ref: {
+            "local_ref": ref,
+            "kind": "source_span",
+            "op": "create",
+            "payload": {"artifact_id": self.artifact_id, "md_byte_range": {"start": 0, "end": self.md_len}},
+        }
+        with inspect_sandbox.open_readonly_db(self.db_path) as conn:
+            checks = inspect_sandbox.verify_source_spans(
+                conn,
+                self.sdir / "workspace",
+                self.ws,
+                [span("s.a"), span("s.b")],
+                [
+                    {"operation": "create_source_span", "object_id": "span/b", "draft": {"page": {"pdf_page_index": 2}}},
+                    {"operation": "create_source_span", "object_id": "span/a", "draft": {"page": {"pdf_page_index": 1}}},
+                ],
+                {"s.a": "span/a", "s.b": "span/b"},
+            )
+        self.assertEqual([c["pdf_page_index"] for c in checks], [1, 2])
+
 
 if __name__ == "__main__":
     unittest.main()

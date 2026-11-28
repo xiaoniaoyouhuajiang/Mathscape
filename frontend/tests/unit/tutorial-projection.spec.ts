@@ -290,6 +290,21 @@ describe("tutorial episode 2 (fixtures/emir/generating-functions-two-books)", ()
     }
   });
 
+  it("shows every guard of a branch, not only the first", () => {
+    const multi = structuredClone(ep2Projection) as TutorialProjection;
+    const decl = (multi.objects["e.geom_fin"].payload as { declaration: { guards: Record<string, unknown>[]; branches: { branch_id: string; guards: string[] }[] } }).declaration;
+    decl.guards.push({ guard_id: "x_ne_0", label: "非零公比", predicate: { text: "$x \\neq 0$" } });
+    decl.branches.find((b) => b.branch_id === "fraction_form")!.guards.push("x_ne_0");
+    const panel = buildEpisode2Shots(multi).find((s) => s.id === "branches")!.extra!;
+    expect(panel.kind).toBe("branches");
+    if (panel.kind === "branches") {
+      const regular = panel.branches.find((b) => b.branchId === "fraction_form")!;
+      expect(regular.guardPredicate).toContain("x \\neq 0");
+      expect(regular.guardPredicate.split("；")).toHaveLength(2);
+      expect(regular.guardLabel).toBe("常规公比（x ≠ 1）、非零公比");
+    }
+  });
+
   it("derives symbol tables, representation bindings, cohesive branches, exclusions, and revision from the fixture", () => {
     expect(geomFiniteSum(4, 2)).toEqual({ branchId: "fraction_form", value: 15, fractionDefined: true });
     expect(geomFiniteSum(4, 1)).toEqual({ branchId: "constant_sum", value: 4, fractionDefined: false });

@@ -1737,6 +1737,23 @@ pub fn review_items(
             .unwrap_or_default()
             .into_iter()
             .collect();
+        // A RepresentationCore encoding the target itself (or an object in the
+        // target's direct context) belongs to the target's representation bundle,
+        // together with its own dependencies (e.g. its home theory).
+        let bundle: BTreeSet<String> = entities
+            .iter()
+            .filter(|o| {
+                o.kind == "RepresentationCore"
+                    && o.payload["payload"]["represented_object"]
+                        .as_str()
+                        .is_some_and(|rep| rep == target || context.contains(rep))
+            })
+            .flat_map(|o| {
+                entity_dependencies(o)
+                    .into_iter()
+                    .chain(std::iter::once(o.object_id.clone()))
+            })
+            .collect();
         let extra = entities
             .iter()
             .filter(|o| o.object_id != target && !context.contains(&o.object_id))
@@ -1746,15 +1763,7 @@ pub fn review_items(
                     context.contains(&c.object_id) && entity_dependencies(c).contains(&o.object_id)
                 })
             })
-            .filter(|o| {
-                // A RepresentationCore encoding the target itself (or a concept in
-                // the target's direct context) is part of the target's representation
-                // bundle rather than an unrelated second target.
-                !(o.kind == "RepresentationCore"
-                    && o.payload["payload"]["represented_object"]
-                        .as_str()
-                        .is_some_and(|rep| rep == target || context.contains(rep)))
-            })
+            .filter(|o| !bundle.contains(&o.object_id))
             .count();
         if extra > 0 {
             item(
@@ -2044,6 +2053,32 @@ mod name_tests {
                 }),
             ),
         );
+        // The core's own home theory, created in the same change set, belongs to the bundle too.
+        final_map.insert(
+            "e.fps_theory".to_owned(),
+            obj(
+                "e.fps_theory",
+                "SemanticEntity",
+                json!({
+                    "semantic_kind": "theory",
+                    "preferred_labels": [
+                        { "lang": "zh", "label": "形式幂级数" },
+                        { "lang": "en", "label": "Formal power series" }
+                    ],
+                    "aliases": ["FPS", "R[[X]]"]
+                }),
+            ),
+        );
+        final_map.get_mut("r.fps").unwrap().payload["payload"]["home_theory"] =
+            json!("e.fps_theory");
+        let mut own = own;
+        own.insert("e.fps_theory".to_owned());
+        let items = review_items(&final_map, &own, Some("e.thm"));
+        assert!(
+            items.iter().all(|i| i.code != "multi_target_change_set"),
+            "unexpected multi_target_change_set when r.fps lives in its own new theory: {items:?}"
+        );
+
         let mut own_with_unrelated = own;
         own_with_unrelated.insert("r.unrelated".to_owned());
         let items2 = review_items(&final_map, &own_with_unrelated, Some("e.thm"));
